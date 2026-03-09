@@ -12,6 +12,7 @@ import { SessionPool } from '../pi/session-pool.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import type { ClientMessage, ServerMessage, ImageContent } from './protocol.js';
 import { config } from '../config.js';
+import { validateCsrfToken } from '../security/csrf.js';
 
 export interface WebSocketClient {
   id: string;
@@ -190,6 +191,38 @@ export class WebSocketConnectionManager {
       case 'extension_ui_response':
         await this.handleExtensionUiResponse(clientId, message);
         break;
+
+      case 'auth': {
+        const client = this.clients.get(clientId);
+        if (!client?.userId) {
+          this.sendMessage(clientId, {
+            type: 'error',
+            message: 'Not authenticated',
+            code: 'UNAUTHORIZED'
+          });
+          break;
+        }
+
+        // Validate CSRF token
+        const valid = validateCsrfToken(client.userId, message.csrfToken);
+        if (!valid) {
+          this.sendMessage(clientId, {
+            type: 'error',
+            message: 'Invalid CSRF token',
+            code: 'UNAUTHORIZED'
+          });
+          // Disconnect client on invalid CSRF
+          this.handleDisconnect(clientId);
+          break;
+        }
+
+        // CSRF validation successful
+        this.sendMessage(clientId, {
+          type: 'connection_status',
+          status: 'authenticated'
+        });
+        break;
+      }
 
       default:
         this.sendMessage(clientId, {

@@ -2,7 +2,8 @@
 
 import { useAuth } from '../hooks/useAuth';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000/ws';
+// Use Vite proxy in development, or direct URL in production
+const WS_URL = import.meta.env.VITE_WS_URL || '/ws';
 
 export type WebSocketStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
 

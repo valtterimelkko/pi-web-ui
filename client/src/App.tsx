@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useAuth, checkAuthStatus } from './hooks/useAuth';
 import { LoginForm } from './components/Auth/LoginForm';
 import { Sidebar } from './components/Sidebar';
@@ -13,9 +13,16 @@ import { useWebSocket } from './hooks/useWebSocket';
 function App() {
   const isAuthenticated = useAuth((state) => state.isAuthenticated);
   const [isChecking, setIsChecking] = useState(true);
+  const hasChecked = useRef(false);
   
   useEffect(() => {
-    checkAuthStatus().then(() => setIsChecking(false));
+    // Prevent duplicate calls in React StrictMode
+    if (hasChecked.current) return;
+    hasChecked.current = true;
+    
+    checkAuthStatus().then(() => {
+      setIsChecking(false);
+    });
   }, []);
   
   if (isChecking) {

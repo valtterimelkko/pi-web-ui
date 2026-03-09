@@ -12,6 +12,11 @@ export function useWebSocket() {
       onMessage: handleServerMessage,
       onStatusChange: (status: WebSocketStatus) => {
         console.log('WebSocket status:', status);
+        // Fetch sessions when connected
+        if (status === 'connected') {
+          console.log('Fetching sessions...');
+          client.send({ type: 'get_sessions' });
+        }
       },
       onError: (error) => {
         console.error('WebSocket error:', error);
