@@ -24,7 +24,7 @@ export type ClientMessage =
   | { type: 'set_model'; modelId: string }
   | { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' }
   | { type: 'compact'; customInstructions?: string }
-  | { type: 'extension_ui_response'; id: string; value?: unknown; confirmed?: boolean; cancelled?: boolean };
+  | { type: 'extension_ui_response'; response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean } };
 
 // Session information for listing
 export interface SessionInfo {
@@ -73,7 +73,7 @@ export type ServerMessage =
   | { type: 'auto_retry_start'; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: 'auto_retry_end'; success: boolean; attempt: number; finalError?: string }
   | { type: 'extension_error'; extensionPath: string; event: string; error: string }
-  | { type: 'extension_ui_request'; id: string; method: string; [key: string]: unknown }
+  | { type: 'extension_ui_request'; request: { id: string; type: 'confirm' | 'select' | 'input' | 'editor'; method: string; params: Record<string, unknown>; timeout: number } }
   // CLI Session Watcher events
   | { type: 'session_update'; changeType: 'add' | 'change' | 'unlink'; path: string; sessionId?: string; cwd?: string; info?: SessionInfo };
 

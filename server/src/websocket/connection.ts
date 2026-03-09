@@ -395,11 +395,11 @@ export class WebSocketConnectionManager {
 
   private async handleExtensionUiResponse(
     clientId: string,
-    message: { type: 'extension_ui_response'; id: string; value?: unknown; confirmed?: boolean; cancelled?: boolean }
+    message: { type: 'extension_ui_response'; response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean } }
   ): Promise<void> {
-    // Extension UI responses are handled by the extension system
-    // This will be implemented in Wave 5
-    console.log(`Extension UI response from ${clientId}:`, message);
+    const { getExtensionUIHandler } = await import('../pi/extension-ui-handler.js');
+    const handler = getExtensionUIHandler();
+    handler.handleResponse(message.response);
   }
 
   private handleDisconnect(clientId: string): void {

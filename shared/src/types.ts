@@ -160,3 +160,20 @@ export interface ErrorEvent {
   stack?: string;
   code?: string;
 }
+
+// Extension UI Types
+
+export interface ExtensionUIRequest {
+  id: string;
+  type: 'confirm' | 'select' | 'input' | 'editor';
+  method: string;
+  params: Record<string, unknown>;
+  timeout: number;
+}
+
+export interface ExtensionUIResponse {
+  id: string;
+  approved?: boolean;
+  value?: unknown;
+  cancelled?: boolean;
+}

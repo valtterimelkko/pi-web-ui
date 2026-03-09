@@ -27,6 +27,14 @@ export interface Message {
   };
 }
 
+interface ExtensionUIRequest {
+  id: string;
+  type: 'confirm' | 'select' | 'input' | 'editor';
+  method: string;
+  params: Record<string, unknown>;
+  timeout: number;
+}
+
 interface SessionState {
   sessions: Session[];
   currentSessionId: string | null;
@@ -34,6 +42,7 @@ interface SessionState {
   isStreaming: boolean;
   isLoading: boolean;
   error: string | null;
+  extensionUIRequest: ExtensionUIRequest | null;
 
   // Actions
   setSessions: (sessions: Session[]) => void;
@@ -44,6 +53,7 @@ interface SessionState {
   setLoading: (isLoading: boolean) => void;
   setError: (error: string | null) => void;
   clearMessages: () => void;
+  setExtensionUIRequest: (request: ExtensionUIRequest | null) => void;
   
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -58,6 +68,9 @@ export const useSessionStore = create<SessionState>()(
       isStreaming: false,
       isLoading: false,
       error: null,
+      extensionUIRequest: null,
+
+      setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
 
       setSessions: (sessions) => set({ sessions }),
 
@@ -227,6 +240,11 @@ export const useSessionStore = create<SessionState>()(
                 }
               });
             }
+            break;
+          }
+
+          case 'extension_ui_request': {
+            set({ extensionUIRequest: msg.request as ExtensionUIRequest });
             break;
           }
         }

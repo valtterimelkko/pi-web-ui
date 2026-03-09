@@ -144,8 +144,8 @@ describe('Message Handlers', () => {
     });
 
     it('should validate extension_ui_response messages', () => {
-      expect(validateMessage({ type: 'extension_ui_response', id: '123' })).toBeNull();
-      expect(validateMessage({ type: 'extension_ui_response' } as ClientMessage)).toBe('Missing id');
+      expect(validateMessage({ type: 'extension_ui_response', response: { id: '123' } })).toBeNull();
+      expect(validateMessage({ type: 'extension_ui_response', response: {} } as ClientMessage)).toBe('Missing response.id');
     });
   });
 

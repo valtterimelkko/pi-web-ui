@@ -116,7 +116,7 @@ export function validateMessage(message: ClientMessage): string | null {
       break;
 
     case 'extension_ui_response':
-      if (!message.id) return 'Missing id';
+      if (!message.response?.id) return 'Missing response.id';
       break;
   }
 
