@@ -250,9 +250,121 @@ See [SECURITY.md](./SECURITY.md) for detailed security documentation.
 
 See [API.md](./API.md) for WebSocket protocol and REST API documentation.
 
-## Deployment
+## Production Deployment
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for production deployment instructions.
+### Current Production Setup
+
+The Pi Web UI is deployed at: **https://pi.letsautomate.work**
+
+**Server Configuration:**
+- Runs as systemd service (`pi-web-ui.service`)
+- Port: 3456 (internal)
+- Reverse proxy: Caddy (Docker container)
+- Auto-restart on crash and system reboot
+
+### Service Management
+
+The application runs as a systemd service. Here are the commands to manage it:
+
+```bash
+# Check service status
+sudo systemctl status pi-web-ui
+
+# Start the service
+sudo systemctl start pi-web-ui
+
+# Stop the service
+sudo systemctl stop pi-web-ui
+
+# Restart the service
+sudo systemctl restart pi-web-ui
+
+# View logs
+sudo journalctl -u pi-web-ui -f
+
+# Enable auto-start on boot
+sudo systemctl enable pi-web-ui
+
+# Disable auto-start on boot
+sudo systemctl disable pi-web-ui
+```
+
+### Default Login Credentials
+
+**URL:** https://pi.letsautomate.work
+
+**Password:** `ChangeMeNow123!`
+
+⚠️ **IMPORTANT:** Change the password immediately after first login by editing `/root/pi-web-ui/.env.production` and restarting the service.
+
+### Updating the Application
+
+To update the application after code changes:
+
+```bash
+cd /root/pi-web-ui
+
+# Pull latest changes (if using git)
+git pull origin master
+
+# Rebuild the application
+npm run build
+
+# Restart the service
+sudo systemctl restart pi-web-ui
+
+# Check status
+sudo systemctl status pi-web-ui
+```
+
+### Caddy Configuration
+
+The Caddy reverse proxy configuration is located at:
+`/root/n8n-docker-caddy/caddy_config/Caddyfile`
+
+The Pi Web UI is configured with WebSocket support and security headers. To reload Caddy after configuration changes:
+
+```bash
+docker exec n8n-docker-caddy-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+```
+
+### Environment Variables
+
+Production environment variables are stored in:
+`/root/pi-web-ui/.env.production`
+
+Key variables:
+- `PORT=3456` - Internal server port
+- `NODE_ENV=production` - Production mode
+- `AUTH_PASSWORD` - Login password (CHANGE THIS!)
+- `ALLOWED_ORIGINS=https://pi.letsautomate.work` - CORS origins
+- `JWT_SECRET` - JWT signing secret
+
+### Troubleshooting Production
+
+**Service won't start:**
+```bash
+# Check logs
+sudo journalctl -u pi-web-ui -n 50
+
+# Verify build exists
+ls -la /root/pi-web-ui/server/dist/
+ls -la /root/pi-web-ui/client/dist/
+
+# Check port availability
+sudo lsof -i :3456
+```
+
+**WebSocket connection issues:**
+- Check Caddy logs: `docker logs n8n-docker-caddy-caddy-1`
+- Verify ALLOWED_ORIGINS includes `https://pi.letsautomate.work`
+
+**Permission errors:**
+- Ensure service runs as root (for Pi SDK access): `User=root` in service file
+
+---
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for additional deployment instructions.
 
 ## Troubleshooting
 

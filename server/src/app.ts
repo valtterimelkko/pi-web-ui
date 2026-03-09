@@ -8,6 +8,11 @@ import sessionsRoutes from './routes/sessions.js';
 import modelsRoutes from './routes/models.js';
 import filesRoutes from './routes/files.js';
 import extensionsRoutes from './routes/extensions.js';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 export interface AppWithWs {
   app: express.Application;
@@ -55,6 +60,17 @@ export function createApp(): express.Application {
 
   // Extension management routes
   app.use('/api/extensions', extensionsRoutes);
+
+  // Serve static files from client/dist in production
+  if (config.nodeEnv === 'production') {
+    const staticPath = join(__dirname, '../../client/dist');
+    app.use(express.static(staticPath));
+    
+    // Serve index.html for all non-API routes (SPA support)
+    app.get('*', (_req, res) => {
+      res.sendFile(join(staticPath, 'index.html'));
+    });
+  }
 
   return app;
 }

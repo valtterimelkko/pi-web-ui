@@ -1,0 +1,30 @@
+[Unit]
+Description=Pi Web UI - Web Interface for Pi Coding Agent
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/pi-web-ui
+Environment=NODE_ENV=production
+EnvironmentFile=/root/pi-web-ui/.env.production
+
+# Start the server
+ExecStart=/usr/bin/node server/dist/index.js
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-web-ui
+
+[Install]
+WantedBy=multi-user.target
