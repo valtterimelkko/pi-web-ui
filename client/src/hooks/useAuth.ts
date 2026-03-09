@@ -1,0 +1,108 @@
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+
+interface AuthState {
+  isAuthenticated: boolean;
+  csrfToken: string | null;
+  expiresIn: number | null;
+  login: (password: string) => Promise<{ success: boolean; error?: string }>;
+  logout: () => Promise<void>;
+  refresh: () => Promise<void>;
+  setCsrfToken: (token: string) => void;
+}
+
+const API_BASE = '/api';
+
+export const useAuth = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      isAuthenticated: false,
+      csrfToken: null,
+      expiresIn: null,
+      
+      login: async (password: string) => {
+        try {
+          const response = await fetch(`${API_BASE}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password }),
+            credentials: 'include', // Important for cookies
+          });
+          
+          const data = await response.json();
+          
+          if (!response.ok) {
+            return { success: false, error: data.error || 'Login failed' };
+          }
+          
+          set({
+            isAuthenticated: true,
+            csrfToken: data.csrfToken,
+            expiresIn: data.expiresIn,
+          });
+          
+          return { success: true };
+        } catch (error) {
+          return { success: false, error: 'Network error' };
+        }
+      },
+      
+      logout: async () => {
+        try {
+          await fetch(`${API_BASE}/auth/logout`, {
+            method: 'POST',
+            credentials: 'include',
+          });
+        } catch (error) {
+          console.error('Logout error:', error);
+        } finally {
+          set({ isAuthenticated: false, csrfToken: null, expiresIn: null });
+        }
+      },
+      
+      refresh: async () => {
+        try {
+          // Get refresh token from cookie (automatic)
+          const response = await fetch(`${API_BASE}/auth/refresh`, {
+            method: 'POST',
+            credentials: 'include',
+          });
+          
+          if (!response.ok) {
+            set({ isAuthenticated: false, csrfToken: null });
+            return;
+          }
+          
+          const data = await response.json();
+          set({
+            isAuthenticated: true,
+            csrfToken: data.csrfToken,
+            expiresIn: data.expiresIn,
+          });
+        } catch (error) {
+          set({ isAuthenticated: false, csrfToken: null });
+        }
+      },
+      
+      setCsrfToken: (token: string) => {
+        set({ csrfToken: token });
+      },
+    }),
+    {
+      name: 'pi-web-ui-auth',
+      partialize: (state) => ({ csrfToken: state.csrfToken }),
+    }
+  )
+);
+
+// Check auth status on load
+export async function checkAuthStatus(): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/auth/me`, {
+      credentials: 'include',
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
