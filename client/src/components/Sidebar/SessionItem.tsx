@@ -48,7 +48,8 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
       onMouseEnter={() => setShowActions(true)}
       onMouseLeave={() => setShowActions(false)}
       className={`
-        group relative p-3 rounded-lg cursor-pointer transition-all
+        group relative p-3 rounded-lg cursor-pointer transition-all duration-200
+        hover:translate-x-1
         ${isActive 
           ? 'bg-violet-600/20 border border-violet-600/50' 
           : 'hover:bg-slate-800 border border-transparent'

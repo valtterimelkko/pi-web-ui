@@ -138,9 +138,16 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
 
           {/* Message content */}
           <div
-            className={`px-4 py-3 rounded-2xl ${config.bubbleBg} ${config.bubbleText} ${
-              isUser ? 'rounded-br-md' : 'rounded-bl-md'
-            }`}
+            className={`
+              max-w-3xl px-4 py-3 rounded-2xl transition-all duration-200
+              hover:shadow-lg hover:shadow-black/20
+              ${isUser 
+                ? 'bg-violet-600 text-white rounded-br-md hover:bg-violet-500' 
+                : isTool
+                  ? 'bg-amber-900/30 border border-amber-800/50 rounded-bl-md'
+                  : 'bg-slate-800 text-slate-100 rounded-bl-md hover:bg-slate-750'
+              }
+            `}
           >
             {isStreamingThis ? (
               <StreamingText text={displayText} />

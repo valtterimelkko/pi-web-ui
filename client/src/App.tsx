@@ -6,6 +6,7 @@ import { ChatView } from './components/Chat';
 import { ExtensionDialog } from './components/Extensions';
 import { SettingsModal } from './components/Settings';
 import { StatusBar } from './components/StatusBar';
+import { ToastContainer } from './components/common';
 import { useSessionStore } from './store/sessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 
@@ -55,6 +56,7 @@ function AuthenticatedApp() {
         }}
       />
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <ToastContainer />
     </div>
   );
 }
