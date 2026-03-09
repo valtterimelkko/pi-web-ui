@@ -1,4 +1,7 @@
 import dotenv from 'dotenv';
+import path from 'path';
+import os from 'os';
+
 dotenv.config();
 
 export interface ServerConfig {
@@ -12,6 +15,7 @@ export interface ServerConfig {
   rateLimitWindowMs: number;
   rateLimitMax: number;
   piAgentDir: string;
+  sessionDir: string | undefined;
 }
 
 export const config: ServerConfig = {
@@ -26,5 +30,6 @@ export const config: ServerConfig = {
   authPassword: process.env.AUTH_PASSWORD || 'dev-password',
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10), // 15 minutes
   rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
-  piAgentDir: process.env.PI_AGENT_DIR || process.env.HOME + '/.pi/agent',
+  piAgentDir: process.env.PI_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent'),
+  sessionDir: process.env.SESSION_DIR || undefined,
 };

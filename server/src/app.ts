@@ -4,6 +4,15 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
 import authRoutes from './routes/auth.js';
+import sessionsRoutes from './routes/sessions.js';
+import modelsRoutes from './routes/models.js';
+import filesRoutes from './routes/files.js';
+import extensionsRoutes from './routes/extensions.js';
+
+export interface AppWithWs {
+  app: express.Application;
+  getWebSocketStats: () => { connectedClients: number } | null;
+}
 
 export function createApp(): express.Application {
   const app = express();
@@ -34,6 +43,18 @@ export function createApp(): express.Application {
 
   // Auth routes
   app.use('/api/auth', authRoutes);
+
+  // Session management routes
+  app.use('/api/sessions', sessionsRoutes);
+
+  // Model management routes
+  app.use('/api/models', modelsRoutes);
+
+  // File browser routes
+  app.use('/api/files', filesRoutes);
+
+  // Extension management routes
+  app.use('/api/extensions', extensionsRoutes);
 
   return app;
 }

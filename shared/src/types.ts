@@ -18,6 +18,19 @@ export interface Session {
 
 export type SessionStatus = 'idle' | 'processing' | 'waiting' | 'error';
 
+// Pi SDK Session Info (mirrors SDK SessionInfo structure)
+export interface SessionInfo {
+  id: string;
+  path: string;
+  cwd: string;
+  name?: string;
+  parentSessionPath?: string;
+  createdAt: Date;
+  lastActivity: Date;
+  messageCount: number;
+  firstMessage: string;
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
