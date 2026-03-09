@@ -5,7 +5,7 @@ import { createServer } from 'http';
 import { createApp } from './app.js';
 import { config } from './config.js';
 import { WebSocketConnectionManager } from './websocket/index.js';
-import { initializePiService } from './pi/index.js';
+import { initializePiService, startSessionWatcher, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
 
 const app = createApp();
 const server = createServer(app);
@@ -32,6 +32,33 @@ async function initialize(): Promise<void> {
       }
     });
 
+    // Initialize CLI session watcher
+    const sessionWatcher = startSessionWatcher();
+    
+    sessionWatcher.on('session_update', (event: SessionChangeEvent & { info?: SessionInfo }) => {
+      // Broadcast to all connected WebSocket clients
+      wsManager!.broadcast({
+        type: 'session_update',
+        changeType: event.type,
+        path: event.path,
+        sessionId: event.sessionId,
+        cwd: event.cwd,
+        info: event.info ? {
+          id: event.info.id,
+          path: event.info.path,
+          cwd: event.info.cwd,
+          firstMessage: event.info.firstMessage,
+          messageCount: event.info.messageCount,
+          createdAt: event.info.createdAt.toISOString(),
+          lastActivity: event.info.lastActivity.toISOString(),
+        } : undefined,
+      });
+    });
+
+    sessionWatcher.on('error', (error: Error) => {
+      console.error('SessionWatcher error:', error);
+    });
+
     console.log('WebSocket server ready at /ws');
   } catch (error) {
     console.error('Failed to initialize:', error);
@@ -54,6 +81,10 @@ async function start(): Promise<void> {
 // Graceful shutdown
 async function shutdown(): Promise<void> {
   console.log('Shutting down...');
+
+  // Stop session watcher
+  const { stopSessionWatcher } = await import('./pi/index.js');
+  await stopSessionWatcher();
 
   if (wsManager) {
     await wsManager.close();

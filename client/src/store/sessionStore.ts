@@ -199,6 +199,36 @@ export const useSessionStore = create<SessionState>()(
               isLoading: false,
             });
             break;
+
+          case 'session_update': {
+            const { type, sessionId, info } = msg as {
+              type: 'add' | 'change' | 'unlink';
+              sessionId: string;
+              info?: Session;
+            };
+            
+            if (type === 'unlink') {
+              // Remove deleted session
+              set((state) => ({
+                sessions: state.sessions.filter((s) => s.id !== sessionId),
+              }));
+            } else if (info) {
+              // Add or update session
+              set((state) => {
+                const existingIndex = state.sessions.findIndex((s) => s.id === info.id);
+                if (existingIndex >= 0) {
+                  // Update existing
+                  const newSessions = [...state.sessions];
+                  newSessions[existingIndex] = info;
+                  return { sessions: newSessions };
+                } else {
+                  // Add new
+                  return { sessions: [info, ...state.sessions] };
+                }
+              });
+            }
+            break;
+          }
         }
       },
     }),

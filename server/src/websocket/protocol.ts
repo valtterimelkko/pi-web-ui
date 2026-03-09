@@ -73,7 +73,9 @@ export type ServerMessage =
   | { type: 'auto_retry_start'; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: 'auto_retry_end'; success: boolean; attempt: number; finalError?: string }
   | { type: 'extension_error'; extensionPath: string; event: string; error: string }
-  | { type: 'extension_ui_request'; id: string; method: string; [key: string]: unknown };
+  | { type: 'extension_ui_request'; id: string; method: string; [key: string]: unknown }
+  // CLI Session Watcher events
+  | { type: 'session_update'; changeType: 'add' | 'change' | 'unlink'; path: string; sessionId?: string; cwd?: string; info?: SessionInfo };
 
 // Message type guards
 export function isClientMessage(data: unknown): data is ClientMessage {

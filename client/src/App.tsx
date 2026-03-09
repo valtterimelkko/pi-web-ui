@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth, checkAuthStatus } from './hooks/useAuth';
 import { LoginForm } from './components/Auth/LoginForm';
+import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/Chat';
 
 function App() {
@@ -24,12 +25,10 @@ function App() {
   }
   
   return (
-    <div className="min-h-screen bg-slate-950 text-white">
-      <div className="flex h-screen">
-        {/* Main content area */}
-        <main className="flex-1 h-full">
-          <ChatView />
-        </main>
+    <div className="h-screen flex bg-slate-950">
+      <Sidebar />
+      <div className="flex-1">
+        <ChatView />
       </div>
     </div>
   );

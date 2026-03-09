@@ -421,6 +421,18 @@ export class WebSocketConnectionManager {
     this.sendMessage(clientId, message as ServerMessage);
   }
 
+  /**
+   * Broadcast a message to all connected clients
+   */
+  broadcast(message: unknown): void {
+    const serialized = JSON.stringify(message);
+    for (const client of this.clients.values()) {
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(serialized);
+      }
+    }
+  }
+
   private generateClientId(): string {
     return `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }

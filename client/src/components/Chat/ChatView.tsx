@@ -1,14 +1,26 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSessionStore } from '../../store';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
-import { Sparkles } from 'lucide-react';
+import { TreeView, type TreeEntry } from '../Tree';
+import { Sparkles, GitBranch } from 'lucide-react';
 
 export function ChatView() {
   const messages = useSessionStore((state) => state.messages);
   const isStreaming = useSessionStore((state) => state.isStreaming);
   const isLoading = useSessionStore((state) => state.isLoading);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
+  const [showTreeView, setShowTreeView] = useState(false);
+
+  // Convert messages to tree entries
+  const treeEntries: TreeEntry[] = messages.map((msg, index) => ({
+    id: msg.id,
+    role: msg.role,
+    content: typeof msg.content === 'string' ? msg.content : '',
+    timestamp: msg.timestamp,
+    parentId: index > 0 ? messages[index - 1].id : undefined,
+    children: index < messages.length - 1 ? [messages[index + 1].id] : [],
+  }));
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -49,6 +61,13 @@ export function ChatView() {
         </div>
         
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowTreeView(true)}
+            className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+            title="View conversation tree"
+          >
+            <GitBranch className="w-5 h-5 text-slate-400" />
+          </button>
           <div className={`flex items-center gap-2 text-sm ${getStatusColor()}`}>
             <span className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-amber-400 animate-pulse' : isLoading ? 'bg-blue-400' : 'bg-emerald-400'}`} />
             <span className="font-medium">{getStatusText()}</span>
@@ -70,6 +89,26 @@ export function ChatView() {
           <MessageInput disabled={!currentSessionId || isLoading} />
         </div>
       </div>
+
+      {/* Tree View Modal */}
+      {showTreeView && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="w-full max-w-2xl mx-4">
+            <TreeView
+              entries={treeEntries}
+              onClose={() => setShowTreeView(false)}
+              onNavigate={(id) => {
+                // Handle navigation to specific entry
+                console.log('Navigate to:', id);
+              }}
+              onFork={(id) => {
+                // Handle forking at entry
+                console.log('Fork at:', id);
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
