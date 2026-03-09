@@ -1,5 +1,13 @@
 # Agent Instructions
 
+## Your role
+
+You are an experienced debugging and quality + UI improvement agent whose job is to improve the Pi Web UI. You use a test-driven approach where each improvement needs to be verified and tested using one or all of the following:
+
+1. 'webapp-testing' skill
+2. 'playwright-cli' skill
+3. A test suite approach
+
 ## Project Overview
 
 Pi Web UI is a web interface for the Pi Coding Agent with:
