@@ -335,10 +335,18 @@ export class WebSocketConnectionManager {
   ): Promise<void> {
     const clientSession = await this.sessionPool.switchClientSession(clientId, message.sessionPath);
 
+    // Get model and context usage from the session
+    const model = clientSession.session.model;
+    const contextUsage = clientSession.session.getContextUsage();
+
     this.sendMessage(clientId, {
       type: 'session_switched',
       sessionId: clientSession.sessionId,
       sessionPath: clientSession.session.sessionFile || '',
+      model: model ? `${model.provider}/${model.id}` : undefined,
+      contextWindow: contextUsage?.contextWindow ?? undefined,
+      contextUsed: contextUsage?.tokens ?? undefined,
+      contextPercent: contextUsage?.percent ?? undefined,
     });
   }
 

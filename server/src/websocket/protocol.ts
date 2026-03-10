@@ -80,7 +80,7 @@ export type ServerMessage =
   | { type: 'error'; message: string; code?: string }
   | { type: 'sessions_list'; sessions: SessionInfo[] }
   | { type: 'session_created'; sessionId: string; sessionPath: string }
-  | { type: 'session_switched'; sessionId: string; sessionPath: string }
+  | { type: 'session_switched'; sessionId: string; sessionPath: string; model?: string; contextWindow?: number; contextUsed?: number; contextPercent?: number }
   | { type: 'session_tree'; tree: TreeNode[] }
   | { type: 'session_info'; stats: SessionStats }
   | { type: 'model_changed'; modelId: string }
