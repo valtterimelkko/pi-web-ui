@@ -41,7 +41,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
     : 'No Model';
 
   return (
-    <div className="h-10 bg-slate-900 border-t border-slate-800 flex items-center px-4 gap-6">
+    <footer className="h-10 bg-slate-900 border-t border-slate-800 flex items-center px-4 gap-6">
       {/* Connection Status */}
       <div className="flex items-center gap-2">
         <div className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-amber-400 animate-pulse' : 'bg-green-400'}`} />
@@ -68,14 +68,14 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
             style={{ width: `${Math.min(contextPercent, 100)}%` }}
           />
         </div>
-        <span className="text-xs text-slate-500">{contextPercent}%</span>
+        <span className="text-xs text-slate-400">{contextPercent}%</span>
       </div>
 
       {/* Session Info */}
       {currentSession && (
         <div className="flex items-center gap-2 ml-auto">
-          <Clock className="w-3.5 h-3.5 text-slate-500" />
-          <span className="text-xs text-slate-500">
+          <Clock className="w-3.5 h-3.5 text-slate-400" />
+          <span className="text-xs text-slate-400">
             {currentSession.messageCount} messages
           </span>
           <button
@@ -130,6 +130,6 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
         isOpen={showSessionInfo} 
         onClose={() => setShowSessionInfo(false)} 
       />
-    </div>
+    </footer>
   );
 }
