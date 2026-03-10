@@ -80,7 +80,7 @@ export function ChatView() {
         {/* Message List */}
         <div 
           id="chat-scroll-area"
-          className="flex-1 overflow-y-auto"
+          className="flex-1 overflow-y-auto overflow-x-hidden"
         >
           <MessageList messages={messages} />
         </div>

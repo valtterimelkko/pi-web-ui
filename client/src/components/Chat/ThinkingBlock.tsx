@@ -42,7 +42,7 @@ export function ThinkingBlock({ content, isOpen = true, onToggle }: ThinkingBloc
       {/* Content */}
       {isExpanded && (
         <div className="px-4 py-3 border-t border-amber-700/20">
-          <p className="text-sm text-amber-100/80 whitespace-pre-wrap leading-relaxed">
+          <p className="text-sm text-amber-100/80 whitespace-pre-wrap leading-relaxed break-words overflow-hidden">
             {content}
           </p>
         </div>
