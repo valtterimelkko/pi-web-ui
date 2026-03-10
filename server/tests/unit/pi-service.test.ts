@@ -9,6 +9,8 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
       subscribe: vi.fn(),
       setModel: vi.fn(),
       dispose: vi.fn(),
+      bindExtensions: vi.fn().mockResolvedValue(undefined),
+      sessionManager: {},
     },
   }),
   SessionManager: {
@@ -56,6 +58,7 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
   })),
   DefaultResourceLoader: vi.fn().mockImplementation(() => ({
     reload: vi.fn().mockResolvedValue(undefined),
+    getExtensions: vi.fn().mockReturnValue({ extensions: [], errors: [] }),
   })),
 }));
 

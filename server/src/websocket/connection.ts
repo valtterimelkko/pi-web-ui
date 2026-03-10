@@ -35,6 +35,9 @@ export class WebSocketConnectionManager {
     this.sessionPool = new SessionPool(this.piService);
     this.eventForwarder = new EventForwarder(this.sendToClient.bind(this));
 
+    // Set up Web UI context provider for extension binding
+    this.sessionPool.setWebUIContextProvider(this.getWebUIContext.bind(this));
+
     this.setupServer();
   }
 
@@ -548,6 +551,21 @@ export class WebSocketConnectionManager {
 
   private sendToClient(clientId: string, message: unknown): void {
     this.sendMessage(clientId, message as ServerMessage);
+  }
+
+  /**
+   * Get Web UI context for a client (used by extension binding)
+   */
+  private getWebUIContext(clientId: string): { sendToClient: (message: unknown) => void; clientId: string } | undefined {
+    const client = this.clients.get(clientId);
+    if (!client) return undefined;
+
+    return {
+      clientId,
+      sendToClient: (message: unknown) => {
+        this.sendToClient(clientId, message);
+      },
+    };
   }
 
   /**
