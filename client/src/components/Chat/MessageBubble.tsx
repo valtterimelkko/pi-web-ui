@@ -22,35 +22,53 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
   const isTool = message.role === 'tool';
   const isAssistant = message.role === 'assistant';
 
-  // Extract thinking blocks from content
-  const extractThinking = (content: string): { text: string; thinking: string | null } => {
-    const thinkingMatch = content.match(/<thinking>([\s\S]*?)<\/thinking>/);
-    if (thinkingMatch) {
-      const thinking = thinkingMatch[1].trim();
-      const text = content.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trim();
-      return { text, thinking };
-    }
-    return { text: content, thinking: null };
-  };
-
-  // Get content as string
-  const getContentString = (): string => {
-    if (typeof message.content === 'string') {
-      return message.content;
-    }
+  // Process content to extract text and thinking
+  const processContent = (): { text: string; thinking: string | null } => {
+    // Handle array content (new format from SDK)
     if (Array.isArray(message.content)) {
-      return message.content
-        .map((part) => {
-          if (part.type === 'text') return part.text || '';
-          return '';
-        })
-        .join('');
+      let textParts: string[] = [];
+      let thinkingParts: string[] = [];
+      
+      for (const part of message.content) {
+        if (part.type === 'text' && part.text) {
+          textParts.push(part.text);
+        } else if (part.type === 'thinking' && part.thinking) {
+          thinkingParts.push(part.thinking);
+        }
+      }
+      
+      // Also check for <thinking> tags in text (old format)
+      const fullText = textParts.join('');
+      const thinkingMatch = fullText.match(/<thinking>([\s\S]*?)<\/thinking>/);
+      if (thinkingMatch) {
+        return {
+          text: fullText.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trim(),
+          thinking: thinkingMatch[1].trim(),
+        };
+      }
+      
+      return {
+        text: fullText,
+        thinking: thinkingParts.length > 0 ? thinkingParts.join('\n\n') : null,
+      };
     }
-    return '';
+    
+    // Handle string content (may have <thinking> tags)
+    if (typeof message.content === 'string') {
+      const thinkingMatch = message.content.match(/<thinking>([\s\S]*?)<\/thinking>/);
+      if (thinkingMatch) {
+        return {
+          text: message.content.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trim(),
+          thinking: thinkingMatch[1].trim(),
+        };
+      }
+      return { text: message.content, thinking: null };
+    }
+    
+    return { text: '', thinking: null };
   };
 
-  const contentString = getContentString();
-  const { text: displayText, thinking } = extractThinking(contentString);
+  const { text: displayText, thinking } = processContent();
   const hasThinking = !!thinking;
   const isStreamingThis = isLast && isStreaming && isAssistant;
 

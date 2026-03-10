@@ -184,7 +184,7 @@ export const useSessionStore = create<SessionState>()(
             const newMessage: Message = {
               id: messageData.id || `msg_${Date.now()}`,
               role: messageData.role as 'user' | 'assistant' | 'tool',
-              content: messageData.content as string,
+              content: messageData.content as Message['content'],
               timestamp: Date.now(),
             };
             get().addMessage(newMessage);
@@ -194,19 +194,46 @@ export const useSessionStore = create<SessionState>()(
           case 'message_update': {
             // Update streaming content
             const { message: msgData, assistantMessageEvent } = msg as {
-              message?: { id: string };
+              message?: { id: string; content?: Message['content'] };
               assistantMessageEvent?: { type: string; delta?: string };
             };
             
-            if (msgData?.id && assistantMessageEvent?.type === 'text_delta') {
+            if (msgData?.id && assistantMessageEvent) {
               const existingMsg = get().messages.find(m => m.id === msgData.id);
               if (existingMsg) {
-                const currentContent = typeof existingMsg.content === 'string' 
-                  ? existingMsg.content 
-                  : '';
-                get().updateMessage(msgData.id, {
-                  content: currentContent + (assistantMessageEvent.delta || ''),
-                });
+                // Get existing content array or create new one
+                let contentArray: Array<{ type: string; text?: string; thinking?: string }>;
+                if (Array.isArray(existingMsg.content)) {
+                  contentArray = [...existingMsg.content];
+                } else if (typeof existingMsg.content === 'string') {
+                  contentArray = existingMsg.content ? [{ type: 'text', text: existingMsg.content }] : [];
+                } else {
+                  contentArray = [];
+                }
+
+                const eventType = assistantMessageEvent.type;
+                const delta = assistantMessageEvent.delta;
+
+                // Handle text content (text_delta)
+                if (eventType === 'text_delta') {
+                  const lastEntry = contentArray[contentArray.length - 1];
+                  if (lastEntry && lastEntry.type === 'text') {
+                    lastEntry.text = (lastEntry.text || '') + delta;
+                  } else {
+                    contentArray.push({ type: 'text', text: delta });
+                  }
+                  get().updateMessage(msgData.id, { content: contentArray });
+                }
+                // Handle thinking content (thinking_delta)
+                else if (eventType === 'thinking_delta') {
+                  const lastEntry = contentArray[contentArray.length - 1];
+                  if (lastEntry && lastEntry.type === 'thinking') {
+                    lastEntry.thinking = (lastEntry.thinking || '') + delta;
+                  } else {
+                    contentArray.push({ type: 'thinking', thinking: delta });
+                  }
+                  get().updateMessage(msgData.id, { content: contentArray });
+                }
               }
             }
             break;
