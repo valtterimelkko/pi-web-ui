@@ -40,6 +40,14 @@ export interface SessionInfo {
   lastActivity?: string;
 }
 
+// Session message for loading chat history
+export interface SessionMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string | Array<{ type: string; text?: string; thinking?: string }>;
+  timestamp: number;
+}
+
 // Session statistics for get_session_info
 export interface SessionStats {
   sessionFile?: string | undefined;
@@ -80,7 +88,7 @@ export type ServerMessage =
   | { type: 'error'; message: string; code?: string }
   | { type: 'sessions_list'; sessions: SessionInfo[] }
   | { type: 'session_created'; sessionId: string; sessionPath: string }
-  | { type: 'session_switched'; sessionId: string; sessionPath: string; model?: string; contextWindow?: number; contextUsed?: number; contextPercent?: number }
+  | { type: 'session_switched'; sessionId: string; sessionPath: string; model?: string; contextWindow?: number; contextUsed?: number; contextPercent?: number; messages?: SessionMessage[] }
   | { type: 'session_tree'; tree: TreeNode[] }
   | { type: 'session_info'; stats: SessionStats }
   | { type: 'model_changed'; modelId: string }
