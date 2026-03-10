@@ -129,11 +129,11 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
   if (isTool && message.toolCall) {
     return (
       <div className={`flex ${config.align}`}>
-        <div className="flex gap-3 max-w-[85%]">
+        <div className="flex gap-3 max-w-[85%] min-w-0">
           <div className={`flex-shrink-0 w-8 h-8 rounded-lg ${config.bgColor} flex items-center justify-center`}>
             <Icon className={`w-4 h-4 ${config.textColor}`} />
           </div>
-          <div className="flex-1 space-y-2">
+          <div className="flex-1 space-y-2 min-w-0">
             <ToolCallCard
               name={message.toolCall.name}
               args={message.toolCall.args}
@@ -150,14 +150,14 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
 
   return (
     <div className={`flex ${config.align}`}>
-      <div className={`flex gap-3 max-w-[85%] ${isUser ? 'flex-row-reverse' : ''}`}>
+      <div className={`flex gap-3 max-w-[85%] min-w-0 ${isUser ? 'flex-row-reverse' : ''}`}>
         {/* Avatar */}
         <div className={`flex-shrink-0 w-8 h-8 rounded-lg ${config.bgColor} flex items-center justify-center`}>
           <Icon className={`w-4 h-4 ${config.textColor}`} />
         </div>
 
         {/* Bubble */}
-        <div className="flex flex-col space-y-1">
+        <div className="flex flex-col space-y-1 min-w-0">
           {/* Thinking block */}
           {hasThinking && (
             <ThinkingBlock
@@ -171,7 +171,7 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
           <div
             className={`
               relative max-w-3xl px-4 py-3 rounded-2xl transition-all duration-200
-              hover:shadow-lg hover:shadow-black/20 group
+              hover:shadow-lg hover:shadow-black/20 group break-words overflow-hidden
               ${isUser 
                 ? 'bg-violet-600 text-white rounded-br-md hover:bg-violet-500' 
                 : isTool
