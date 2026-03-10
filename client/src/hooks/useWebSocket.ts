@@ -72,6 +72,10 @@ export function useWebSocket() {
     return sendMessage({ type: 'get_sessions' });
   }, [sendMessage]);
 
+  const setModel = useCallback((modelId: string) => {
+    return sendMessage({ type: 'set_model', modelId });
+  }, [sendMessage]);
+
   return {
     sendMessage,
     sendPrompt,
@@ -81,5 +85,6 @@ export function useWebSocket() {
     createNewSession,
     switchSession,
     getSessions,
+    setModel,
   };
 }

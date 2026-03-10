@@ -1,5 +1,8 @@
 import { X, Settings2 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { api } from '../../lib/api';
+import { useWebSocket } from '../../hooks/useWebSocket';
+import { useSessionStore } from '../../store';
 import { ModelSelector, type Model } from './ModelSelector';
 import { ThinkingLevelSelector, type ThinkingLevel } from './ThinkingLevelSelector';
 
@@ -8,17 +11,43 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-// Mock models - in production, fetch from /api/models
-const mockModels: Model[] = [
-  { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'Anthropic', contextWindow: 200000, maxTokens: 4096 },
-  { id: 'anthropic/claude-opus-4', name: 'Claude Opus 4', provider: 'Anthropic', contextWindow: 200000, maxTokens: 4096 },
-  { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'OpenAI', contextWindow: 128000, maxTokens: 4096 },
-];
-
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
-  const [currentModel, setCurrentModel] = useState(mockModels[0].id);
+  const [models, setModels] = useState<Model[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [currentModel, setCurrentModel] = useState<string>('');
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('medium');
   const [showThinking, setShowThinking] = useState(true);
+  const { setModel } = useWebSocket();
+  const storeCurrentModel = useSessionStore((state) => state.currentModel);
+
+  // Fetch models on mount
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const fetchModels = async () => {
+      try {
+        const response = await api.get('/api/models') as { models: Model[] };
+        const modelList = response.models || [];
+        setModels(modelList);
+        // Set current model from store or default to first model
+        const initialModel = storeCurrentModel || (modelList[0]?.id ?? '');
+        setCurrentModel(initialModel);
+      } catch (error) {
+        console.error('Failed to fetch models:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchModels();
+  }, [isOpen, storeCurrentModel]);
+
+  const handleSave = () => {
+    if (currentModel) {
+      setModel(currentModel);
+    }
+    onClose();
+  };
 
   if (!isOpen) return null;
 
@@ -44,11 +73,15 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           {/* Model Selection */}
           <section>
             <h3 className="text-sm font-medium text-slate-400 mb-3">Model</h3>
-            <ModelSelector
-              models={mockModels}
-              currentModel={currentModel}
-              onSelect={setCurrentModel}
-            />
+            {isLoading ? (
+              <div className="text-slate-400 text-sm">Loading models...</div>
+            ) : (
+              <ModelSelector
+                models={models}
+                currentModel={currentModel}
+                onSelect={setCurrentModel}
+              />
+            )}
           </section>
 
           {/* Thinking Level */}
@@ -90,7 +123,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             Cancel
           </button>
           <button
-            onClick={onClose}
+            onClick={handleSave}
             className="px-4 py-2 bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
           >
             Save Changes
