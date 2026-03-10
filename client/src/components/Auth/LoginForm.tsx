@@ -24,7 +24,7 @@ export function LoginForm() {
   };
   
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+    <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="bg-slate-900 border border-slate-800 rounded-lg shadow-xl p-8">
           <div className="flex items-center justify-center mb-8">
@@ -84,6 +84,6 @@ export function LoginForm() {
           Pi Coding Agent Web Interface
         </p>
       </div>
-    </div>
+    </main>
   );
 }

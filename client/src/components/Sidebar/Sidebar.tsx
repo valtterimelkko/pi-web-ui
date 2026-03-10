@@ -46,7 +46,7 @@ export function Sidebar() {
         onClick={toggleSidebar}
       />
       
-      <div className="fixed inset-y-0 left-0 w-[280px] md:relative md:w-80 h-full bg-slate-900 border-r border-slate-800 flex flex-col z-50 animate-in slide-in-from-left duration-200">
+      <aside className="fixed inset-y-0 left-0 w-[280px] md:relative md:w-80 h-full bg-slate-900 border-r border-slate-800 flex flex-col z-50 animate-in slide-in-from-left duration-200">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-800">
           <h2 className="text-lg font-semibold text-slate-200">Sessions</h2>
@@ -89,7 +89,7 @@ export function Sidebar() {
             currentSessionId={currentSessionId}
           />
         </div>
-      </div>
+      </aside>
     </>
   );
 }
