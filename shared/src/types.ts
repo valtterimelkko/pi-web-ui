@@ -183,3 +183,14 @@ export interface ExtensionUIResponse {
   value?: unknown;
   cancelled?: boolean;
 }
+
+// Session switched message type
+export interface SessionSwitchedMessage {
+  type: 'session_switched';
+  sessionId: string;
+  sessionPath: string;
+  model?: string;
+  contextWindow?: number;
+  contextUsed?: number;
+  contextPercent?: number;
+}

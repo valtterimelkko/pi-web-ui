@@ -10,7 +10,7 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ onOpenSettings }: StatusBarProps) {
-  const { isStreaming, sessions, currentSessionId, currentModel, messages } = useSessionStore();
+  const { isStreaming, sessions, currentSessionId, currentModel, messages, contextPercent, contextUsed, contextWindow } = useSessionStore();
   const currentSession = sessions.find((s) => s.id === currentSessionId);
   const [isExporting, setIsExporting] = useState(false);
   const [showSessionInfo, setShowSessionInfo] = useState(false);
@@ -38,7 +38,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
   // Format model name for display
   const displayModelName = currentModel 
     ? currentModel.split('/').pop()?.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-    : 'Claude Sonnet';
+    : 'No Model';
 
   return (
     <div className="h-10 bg-slate-900 border-t border-slate-800 flex items-center px-4 gap-6">
@@ -60,12 +60,15 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
       </button>
 
       {/* Context Usage */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2" title={contextWindow > 0 ? `${contextUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens` : 'Context usage'}>
         <Activity className="w-3.5 h-3.5 text-blue-400" />
         <div className="w-20 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-          <div className="w-1/3 h-full bg-blue-400 rounded-full" />
+          <div 
+            className="h-full bg-blue-400 rounded-full transition-all duration-300"
+            style={{ width: `${Math.min(contextPercent, 100)}%` }}
+          />
         </div>
-        <span className="text-xs text-slate-500">33%</span>
+        <span className="text-xs text-slate-500">{contextPercent}%</span>
       </div>
 
       {/* Session Info */}

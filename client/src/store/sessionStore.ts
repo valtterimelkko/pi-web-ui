@@ -69,6 +69,10 @@ interface SessionState {
   error: string | null;
   extensionUIRequest: ExtensionUIRequest | null;
   sessionInfo: SessionStats | null;
+  // Context usage tracking
+  contextPercent: number;
+  contextUsed: number;
+  contextWindow: number;
 
   // Actions
   setSessions: (sessions: Session[]) => void;
@@ -99,6 +103,9 @@ export const useSessionStore = create<SessionState>()(
       error: null,
       extensionUIRequest: null,
       sessionInfo: null,
+      contextPercent: 0,
+      contextUsed: 0,
+      contextWindow: 0,
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),
@@ -145,12 +152,24 @@ export const useSessionStore = create<SessionState>()(
             set({ currentSessionId: msg.sessionId as string });
             break;
 
-          case 'session_switched':
+          case 'session_switched': {
+            const switchMsg = msg as unknown as {
+              sessionId: string;
+              model?: string;
+              contextWindow?: number;
+              contextUsed?: number;
+              contextPercent?: number;
+            };
             set({ 
-              currentSessionId: msg.sessionId as string,
+              currentSessionId: switchMsg.sessionId,
+              currentModel: switchMsg.model ?? null,
               messages: [],
+              contextPercent: switchMsg.contextPercent ?? 0,
+              contextUsed: switchMsg.contextUsed ?? 0,
+              contextWindow: switchMsg.contextWindow ?? 0,
             });
             break;
+          }
 
           case 'agent_start':
             set({ isStreaming: true, isLoading: false });
