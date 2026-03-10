@@ -54,7 +54,7 @@ export function ChatView() {
             <h1 className="text-lg font-semibold text-slate-100">
               Chat
             </h1>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-slate-400">
               {currentSessionId ? 'Session active' : 'No session'}
             </p>
           </div>
@@ -66,7 +66,7 @@ export function ChatView() {
             className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
             title="View conversation tree"
           >
-            <GitBranch className="w-5 h-5 text-slate-400" />
+            <GitBranch className="w-5 h-5 text-slate-300" />
           </button>
           <div className={`flex items-center gap-2 text-sm ${getStatusColor()}`}>
             <span className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-amber-400 animate-pulse' : isLoading ? 'bg-blue-400' : 'bg-emerald-400'}`} />
@@ -75,20 +75,23 @@ export function ChatView() {
         </div>
       </header>
 
-      {/* Message List */}
-      <div 
-        id="chat-scroll-area"
-        className="flex-1 overflow-y-auto"
-      >
-        <MessageList messages={messages} />
-      </div>
-
-      {/* Message Input */}
-      <div className="border-t border-slate-800 bg-slate-900/50 backdrop-blur-sm">
-        <div className="max-w-4xl mx-auto p-4">
-          <MessageInput disabled={!currentSessionId || isLoading} />
+      {/* Main content area with landmark */}
+      <main className="flex-1 flex flex-col overflow-hidden">
+        {/* Message List */}
+        <div 
+          id="chat-scroll-area"
+          className="flex-1 overflow-y-auto"
+        >
+          <MessageList messages={messages} />
         </div>
-      </div>
+
+        {/* Message Input */}
+        <div className="border-t border-slate-800 bg-slate-900/50 backdrop-blur-sm">
+          <div className="max-w-4xl mx-auto p-4">
+            <MessageInput disabled={!currentSessionId || isLoading} />
+          </div>
+        </div>
+      </main>
 
       {/* Tree View Modal */}
       {showTreeView && (

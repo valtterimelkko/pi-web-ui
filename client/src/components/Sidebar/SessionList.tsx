@@ -36,7 +36,10 @@ export function SessionList({ sessions, currentSessionId }: SessionListProps) {
   return (
     <div
       ref={containerRef}
-      className="h-full overflow-y-auto p-2 space-y-1"
+      role="list"
+      aria-label="Sessions"
+      tabIndex={0}
+      className="h-full overflow-y-auto p-2 space-y-1 focus:outline-none focus:ring-2 focus:ring-violet-600/20"
       style={{
         scrollbarWidth: 'thin',
         scrollbarColor: 'rgba(148, 163, 184, 0.3) transparent',

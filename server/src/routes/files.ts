@@ -116,7 +116,7 @@ router.get('/read', async (req: Request, res: Response) => {
     
     // Check file size
     const stat = await fs.stat(validatedPath);
-    const maxSize = 50 * 1024; // 50KB limit
+    const maxSize = 200 * 1024; // Increased to 200KB limit
     
     if (stat.size > maxSize) {
       // For large files, only read the beginning

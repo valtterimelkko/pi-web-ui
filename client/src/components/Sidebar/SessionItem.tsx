@@ -51,11 +51,15 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      const trimmedName = editName.trim();
-      if (trimmedName) {
-        setSessionName(session.id, trimmedName);
+      if (isEditing) {
+        const trimmedName = editName.trim();
+        if (trimmedName) {
+          setSessionName(session.id, trimmedName);
+        }
+        setIsEditing(false);
+      } else {
+        handleClick();
       }
-      setIsEditing(false);
     } else if (e.key === 'Escape') {
       setIsEditing(false);
       setEditName(session.name || '');
@@ -84,11 +88,14 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
   return (
     <div
       onClick={handleClick}
+      onKeyDown={handleKeyDown}
       onMouseEnter={() => setShowActions(true)}
       onMouseLeave={() => setShowActions(false)}
+      role="listitem"
+      tabIndex={0}
       className={`
-        group relative p-3 rounded-lg cursor-pointer transition-all duration-200
-        hover:translate-x-1
+        group relative p-3 rounded-lg cursor-pointer transition-all duration-200 outline-none
+        hover:translate-x-1 focus:ring-2 focus:ring-violet-600/50
         ${isActive 
           ? 'bg-violet-600/20 border border-violet-600/50' 
           : 'hover:bg-slate-800 border border-transparent'
@@ -143,23 +150,23 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
                 {displayName}
               </p>
               {session.name && session.firstMessage && (
-                <p className="text-xs text-slate-500 truncate mt-0.5">
+                <p className="text-xs text-slate-400 truncate mt-0.5">
                   {session.firstMessage}
                 </p>
               )}
             </>
           )}
           <div className="flex items-center gap-2 mt-1">
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               {session.messageCount} messages
             </span>
-            <span className="text-xs text-slate-600">•</span>
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-500">•</span>
+            <span className="text-xs text-slate-400">
               {getRelativeTime(session.lastActivity || session.createdAt || new Date())}
             </span>
           </div>
           {session.cwd && (
-            <p className="text-xs text-slate-600 truncate mt-1" title={session.cwd}>
+            <p className="text-xs text-slate-400 truncate mt-1" title={session.cwd}>
               {session.cwd}
             </p>
           )}
