@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { useUIStore } from './uiStore';
 
 export interface Session {
   id: string;
@@ -7,6 +8,7 @@ export interface Session {
   firstMessage: string;
   messageCount: number;
   cwd: string;
+  name?: string;
   createdAt?: string;
   lastActivity?: string;
 }
@@ -35,6 +37,28 @@ interface ExtensionUIRequest {
   timeout: number;
 }
 
+export interface SessionStats {
+  sessionFile: string | undefined;
+  sessionId: string;
+  userMessages: number;
+  assistantMessages: number;
+  toolCalls: number;
+  toolResults: number;
+  totalMessages: number;
+  tokens: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+  cost: number;
+  model?: string;
+  contextWindow?: number;
+  contextUsed?: number;
+  contextPercent?: number;
+}
+
 interface SessionState {
   sessions: Session[];
   currentSessionId: string | null;
@@ -44,6 +68,7 @@ interface SessionState {
   isLoading: boolean;
   error: string | null;
   extensionUIRequest: ExtensionUIRequest | null;
+  sessionInfo: SessionStats | null;
 
   // Actions
   setSessions: (sessions: Session[]) => void;
@@ -56,6 +81,7 @@ interface SessionState {
   setError: (error: string | null) => void;
   clearMessages: () => void;
   setExtensionUIRequest: (request: ExtensionUIRequest | null) => void;
+  setSessionInfo: (info: SessionStats | null) => void;
   
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -72,8 +98,10 @@ export const useSessionStore = create<SessionState>()(
       isLoading: false,
       error: null,
       extensionUIRequest: null,
+      sessionInfo: null,
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
+      setSessionInfo: (info) => set({ sessionInfo: info }),
       setCurrentModel: (modelId) => set({ currentModel: modelId }),
 
       setSessions: (sessions) => set({ sessions }),
@@ -254,6 +282,33 @@ export const useSessionStore = create<SessionState>()(
 
           case 'model_changed': {
             set({ currentModel: msg.modelId as string });
+            break;
+          }
+
+          case 'session_info': {
+            const { stats } = msg as unknown as { stats: SessionStats };
+            set({ sessionInfo: stats });
+            break;
+          }
+
+          case 'compaction_result': {
+            const { tokensBefore } = msg as unknown as { summary: string; tokensBefore: number };
+            // Show toast notification
+            useUIStore.getState().addToast({
+              type: 'success',
+              message: `Context compacted successfully! ${tokensBefore} tokens summarized.`,
+            });
+            break;
+          }
+
+          case 'session_name_updated':
+          case 'session_name_changed': {
+            const nameMsg = msg as unknown as { sessionId: string; name: string };
+            set((state) => ({
+              sessions: state.sessions.map((s) =>
+                s.id === nameMsg.sessionId ? { ...s, name: nameMsg.name } : s
+              ),
+            }));
             break;
           }
         }

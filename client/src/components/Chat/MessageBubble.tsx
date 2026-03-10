@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { User, Bot, Wrench } from 'lucide-react';
+import { User, Bot, Wrench, Copy, Check } from 'lucide-react';
 import type { Message } from '../../store';
+import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolCallCard } from '../Tools/ToolCallCard';
+import { copyToClipboard } from '../../lib/clipboard';
 
 interface MessageBubbleProps {
   message: Message;
@@ -14,6 +16,7 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message, isLast }: MessageBubbleProps) {
   const [showThinking, setShowThinking] = useState(true);
+  const [copied, setCopied] = useState(false);
   const isStreaming = useSessionStore((state) => state.isStreaming);
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
@@ -50,6 +53,16 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
   const { text: displayText, thinking } = extractThinking(contentString);
   const hasThinking = !!thinking;
   const isStreamingThis = isLast && isStreaming && isAssistant;
+
+  // Handle copy message
+  const handleCopy = async () => {
+    if (!displayText) return;
+    const success = await copyToClipboard(displayText, 'Message copied to clipboard');
+    if (success) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   // Format timestamp
   const formatTime = (timestamp: number): string => {
@@ -139,8 +152,8 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
           {/* Message content */}
           <div
             className={`
-              max-w-3xl px-4 py-3 rounded-2xl transition-all duration-200
-              hover:shadow-lg hover:shadow-black/20
+              relative max-w-3xl px-4 py-3 rounded-2xl transition-all duration-200
+              hover:shadow-lg hover:shadow-black/20 group
               ${isUser 
                 ? 'bg-violet-600 text-white rounded-br-md hover:bg-violet-500' 
                 : isTool
@@ -149,6 +162,27 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
               }
             `}
           >
+            {/* Copy button - show on hover for assistant messages */}
+            {isAssistant && !isStreamingThis && displayText && (
+              <button
+                onClick={handleCopy}
+                className={`
+                  absolute top-2 right-2 p-1.5 rounded-md transition-all duration-200
+                  ${copied 
+                    ? 'bg-green-600 text-white' 
+                    : 'bg-slate-700 text-slate-400 opacity-0 group-hover:opacity-100 hover:bg-slate-600 hover:text-slate-200'
+                  }
+                `}
+                title={copied ? 'Copied!' : 'Copy message'}
+              >
+                {copied ? (
+                  <Check className="w-3.5 h-3.5" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+              </button>
+            )}
+
             {isStreamingThis ? (
               <StreamingText text={displayText} />
             ) : (
@@ -196,6 +230,3 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
     </div>
   );
 }
-
-// Import useSessionStore at the top
-import { useSessionStore } from '../../store';

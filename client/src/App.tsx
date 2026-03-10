@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useAuth, checkAuthStatus } from './hooks/useAuth';
+import { useCopyShortcut } from './hooks/useCopyShortcut';
 import { LoginForm } from './components/Auth/LoginForm';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/Chat';
@@ -45,6 +46,9 @@ function AuthenticatedApp() {
   const extensionUIRequest = useSessionStore((state) => state.extensionUIRequest);
   const setExtensionUIRequest = useSessionStore((state) => state.setExtensionUIRequest);
   const { sendMessage } = useWebSocket();
+  
+  // Enable keyboard shortcut for copying last message (Ctrl+Shift+C)
+  useCopyShortcut();
 
   return (
     <div className="h-screen flex bg-slate-950">

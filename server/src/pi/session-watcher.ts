@@ -16,6 +16,7 @@ export interface SessionInfo {
   cwd: string;
   firstMessage: string;
   messageCount: number;
+  name?: string;
   createdAt: Date;
   lastActivity: Date;
 }
@@ -218,12 +219,16 @@ export class SessionWatcher extends EventEmitter {
       }
     }
 
+    // Load custom name from metadata
+    const metadata = await this.getSessionMetadata(filePath);
+
     return {
       id: this.extractSessionId(filePath),
       path: filePath,
       cwd: this.extractCwd(filePath),
       firstMessage: firstMessage || 'New session',
       messageCount,
+      name: metadata.name,
       createdAt: createdAt || new Date(),
       lastActivity: lastActivity || new Date(),
     };
@@ -254,6 +259,59 @@ export class SessionWatcher extends EventEmitter {
     }
 
     return sessions.sort((a, b) => b.lastActivity.getTime() - a.lastActivity.getTime());
+  }
+
+  /**
+   * Set a custom name for a session by storing metadata alongside the session file
+   */
+  async setSessionName(sessionPath: string, name: string): Promise<void> {
+    const fs = await import('fs/promises');
+    const metadataPath = this.getMetadataPath(sessionPath);
+
+    try {
+      // Read existing metadata or create new
+      let metadata: { name?: string; updatedAt: string } = { updatedAt: new Date().toISOString() };
+      try {
+        const existing = await fs.readFile(metadataPath, 'utf-8');
+        metadata = JSON.parse(existing);
+      } catch {
+        // File doesn't exist or is invalid, use defaults
+      }
+
+      // Update name
+      metadata.name = name;
+      metadata.updatedAt = new Date().toISOString();
+
+      // Write back
+      await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+    } catch (error) {
+      console.error(`Failed to set session name for ${sessionPath}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get session metadata (including custom name)
+   */
+  async getSessionMetadata(sessionPath: string): Promise<{ name?: string }> {
+    const fs = await import('fs/promises');
+    const metadataPath = this.getMetadataPath(sessionPath);
+
+    try {
+      const content = await fs.readFile(metadataPath, 'utf-8');
+      const metadata = JSON.parse(content);
+      return { name: metadata.name };
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Get the metadata file path for a session
+   */
+  private getMetadataPath(sessionPath: string): string {
+    // Store metadata as a .meta.json file alongside the session
+    return sessionPath.replace('.jsonl', '.meta.json');
   }
 }
 

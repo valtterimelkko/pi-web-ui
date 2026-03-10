@@ -49,6 +49,7 @@ async function initialize(): Promise<void> {
           cwd: event.info.cwd,
           firstMessage: event.info.firstMessage,
           messageCount: event.info.messageCount,
+          name: event.info.name,
           createdAt: event.info.createdAt.toISOString(),
           lastActivity: event.info.lastActivity.toISOString(),
         } : undefined,

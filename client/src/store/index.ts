@@ -1,3 +1,3 @@
-export { useSessionStore, type Session, type Message } from './sessionStore';
+export { useSessionStore, type Session, type Message, type SessionStats } from './sessionStore';
 export { useChatStore } from './chatStore';
 export { useUIStore } from './uiStore';

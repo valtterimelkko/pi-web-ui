@@ -144,9 +144,29 @@ export class WebSocketClient {
 
 // Singleton instance
 let wsClient: WebSocketClient | null = null;
+let isConnecting = false;
 
 export function createWebSocketClient(options: WebSocketClientOptions): WebSocketClient {
-  wsClient = new WebSocketClient(options);
+  // Return existing instance if it exists and is connected or connecting
+  if (wsClient) {
+    const status = wsClient.getStatus();
+    if (status === 'connected' || status === 'connecting' || isConnecting) {
+      return wsClient;
+    }
+    // If disconnected, disconnect and create new
+    wsClient.disconnect();
+  }
+  
+  isConnecting = true;
+  wsClient = new WebSocketClient({
+    ...options,
+    onStatusChange: (status) => {
+      if (status === 'connected' || status === 'disconnected') {
+        isConnecting = false;
+      }
+      options.onStatusChange?.(status);
+    },
+  });
   return wsClient;
 }
 

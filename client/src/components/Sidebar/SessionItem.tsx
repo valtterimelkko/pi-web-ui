@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MessageSquare, Trash2, MoreVertical, Terminal } from 'lucide-react';
+import { MessageSquare, Trash2, Edit2, Terminal, Check, X } from 'lucide-react';
 import type { Session } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 
@@ -9,11 +9,13 @@ interface SessionItemProps {
 }
 
 export function SessionItem({ session, isActive }: SessionItemProps) {
-  const { switchSession } = useWebSocket();
+  const { switchSession, setSessionName } = useWebSocket();
   const [showActions, setShowActions] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(session.name || '');
 
   const handleClick = () => {
-    if (!isActive) {
+    if (!isActive && !isEditing) {
       switchSession(session.path);
     }
   };
@@ -23,6 +25,40 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
     if (confirm('Delete this session? This cannot be undone.')) {
       // TODO: Implement delete via API
       console.log('Delete session:', session.id);
+    }
+  };
+
+  const handleStartEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsEditing(true);
+    setEditName(session.name || '');
+  };
+
+  const handleCancelEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsEditing(false);
+    setEditName(session.name || '');
+  };
+
+  const handleSaveEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const trimmedName = editName.trim();
+    if (trimmedName) {
+      setSessionName(session.id, trimmedName);
+    }
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      const trimmedName = editName.trim();
+      if (trimmedName) {
+        setSessionName(session.id, trimmedName);
+      }
+      setIsEditing(false);
+    } else if (e.key === 'Escape') {
+      setIsEditing(false);
+      setEditName(session.name || '');
     }
   };
 
@@ -41,6 +77,9 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
     if (diffDays < 7) return `${diffDays}d ago`;
     return then.toLocaleDateString();
   };
+
+  // Get display name (custom name or first message)
+  const displayName = session.name || session.firstMessage || 'New session';
 
   return (
     <div
@@ -71,9 +110,45 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
 
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-slate-200 truncate">
-            {session.firstMessage || 'New session'}
-          </p>
+          {isEditing ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onClick={(e) => e.stopPropagation()}
+                className="flex-1 px-2 py-1 text-sm bg-slate-800 border border-violet-500/50 rounded text-slate-200 focus:outline-none focus:border-violet-500"
+                placeholder="Session name"
+                autoFocus
+              />
+              <button
+                onClick={handleSaveEdit}
+                className="p-1 hover:bg-violet-600/20 rounded transition-colors"
+                title="Save"
+              >
+                <Check className="w-4 h-4 text-green-400" />
+              </button>
+              <button
+                onClick={handleCancelEdit}
+                className="p-1 hover:bg-red-600/20 rounded transition-colors"
+                title="Cancel"
+              >
+                <X className="w-4 h-4 text-red-400" />
+              </button>
+            </div>
+          ) : (
+            <>
+              <p className={`text-sm font-medium truncate ${session.name ? 'text-violet-300' : 'text-slate-200'}`}>
+                {displayName}
+              </p>
+              {session.name && session.firstMessage && (
+                <p className="text-xs text-slate-500 truncate mt-0.5">
+                  {session.firstMessage}
+                </p>
+              )}
+            </>
+          )}
           <div className="flex items-center gap-2 mt-1">
             <span className="text-xs text-slate-500">
               {session.messageCount} messages
@@ -91,8 +166,15 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
         </div>
 
         {/* Actions */}
-        {showActions && (
+        {showActions && !isEditing && (
           <div className="flex items-center gap-1">
+            <button
+              onClick={handleStartEdit}
+              className="p-1.5 hover:bg-violet-600/20 rounded transition-colors"
+              title="Rename session"
+            >
+              <Edit2 className="w-4 h-4 text-slate-400 hover:text-violet-400" />
+            </button>
             <button
               onClick={handleDelete}
               className="p-1.5 hover:bg-red-600/20 rounded transition-colors"

@@ -2,6 +2,7 @@ import { useRef, useState, useCallback } from 'react';
 import { Send, Paperclip, X } from 'lucide-react';
 import { useChatStore, useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { CompactModal } from './CompactModal';
 
 interface MessageInputProps {
   disabled?: boolean;
@@ -24,6 +25,7 @@ export function MessageInput({ disabled }: MessageInputProps) {
   const { sendPrompt } = useWebSocket();
   
   const [isFocused, setIsFocused] = useState(false);
+  const [showCompactModal, setShowCompactModal] = useState(false);
 
   // Auto-resize textarea
   const adjustTextareaHeight = () => {
@@ -43,6 +45,18 @@ export function MessageInput({ disabled }: MessageInputProps) {
     const message = inputValue.trim();
     if (!message || disabled || isStreaming) return;
 
+    // Handle slash commands
+    if (message === '/compact') {
+      setShowCompactModal(true);
+      setInputValue('');
+      clearFiles();
+      // Reset textarea height
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+      return;
+    }
+
     // TODO: Handle file uploads (convert to base64 images)
     const images: unknown[] = [];
     
@@ -57,9 +71,12 @@ export function MessageInput({ disabled }: MessageInputProps) {
   }, [inputValue, disabled, isStreaming, sendPrompt, setInputValue, clearFiles]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      handleSend();
+    if (e.key === 'Enter') {
+      // Allow Shift+Enter for new line, otherwise send
+      if (!e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
     }
   };
 
@@ -189,6 +206,9 @@ export function MessageInput({ disabled }: MessageInputProps) {
           <div className="text-violet-400 font-medium">Drop files here</div>
         </div>
       )}
+
+      {/* Compact Modal */}
+      <CompactModal isOpen={showCompactModal} onClose={() => setShowCompactModal(false)} />
     </div>
   );
 }

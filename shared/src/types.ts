@@ -31,6 +31,12 @@ export interface SessionInfo {
   firstMessage: string;
 }
 
+// Session metadata for storing custom names
+export interface SessionMetadata {
+  name?: string;
+  updatedAt: Date;
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
