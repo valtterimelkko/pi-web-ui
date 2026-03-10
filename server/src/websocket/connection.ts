@@ -283,6 +283,8 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    // Extension commands are handled by the SDK automatically
+
     await clientSession.session.prompt(message.message, {
       images: message.images,
     });
@@ -558,6 +560,7 @@ export class WebSocketConnectionManager {
    */
   private getWebUIContext(clientId: string): { sendToClient: (message: unknown) => void; clientId: string } | undefined {
     const client = this.clients.get(clientId);
+    // DEBUG: console.log(`[getWebUIContext] clientId=${clientId}, found=${!!client}`);
     if (!client) return undefined;
 
     return {

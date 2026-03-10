@@ -45,6 +45,8 @@ function generateRequestId(): string {
  */
 export function createWebUIContext(webUI: WebUIContext): ExtensionUIContext {
   const handler = getExtensionUIHandler();
+  
+  // UI context created for client
 
   return {
     // Show a selector and return the user's choice

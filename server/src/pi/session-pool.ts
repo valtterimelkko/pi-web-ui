@@ -37,6 +37,7 @@ export class SessionPool {
 
     // Get Web UI context for extension binding
     const webUIContext = this.getWebUIContext?.(clientId);
+    // DEBUG: console.log(`[SessionPool] Creating session for ${clientId}, webUIContext=${!!webUIContext}`);
     
     const session = await this.piService.createSession({
       ...options,
@@ -63,10 +64,14 @@ export class SessionPool {
   async switchClientSession(clientId: string, sessionPath: string): Promise<ClientSession> {
     const existing = this.clientSessions.get(clientId);
     
+    // Get Web UI context for extension binding
+    const webUIContext = this.getWebUIContext?.(clientId);
+    
     // Create new session pointing to existing file
     const session = await this.piService.createSession({
       clientId,
       sessionPath,
+      webUIContext,
     });
 
     const clientSession: ClientSession = {
