@@ -6,8 +6,13 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ onOpenSettings }: StatusBarProps) {
-  const { isStreaming, sessions, currentSessionId } = useSessionStore();
+  const { isStreaming, sessions, currentSessionId, currentModel } = useSessionStore();
   const currentSession = sessions.find((s) => s.id === currentSessionId);
+
+  // Format model name for display
+  const displayModelName = currentModel 
+    ? currentModel.split('/').pop()?.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+    : 'Claude Sonnet';
 
   return (
     <div className="h-10 bg-slate-900 border-t border-slate-800 flex items-center px-4 gap-6">
@@ -25,7 +30,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
         className="flex items-center gap-2 hover:bg-slate-800 px-2 py-1 rounded transition-colors"
       >
         <Zap className="w-3.5 h-3.5 text-violet-400" />
-        <span className="text-xs text-slate-400">Claude Sonnet</span>
+        <span className="text-xs text-slate-400">{displayModelName}</span>
       </button>
 
       {/* Context Usage */}
