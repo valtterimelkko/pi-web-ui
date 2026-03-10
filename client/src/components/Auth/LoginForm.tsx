@@ -80,7 +80,7 @@ export function LoginForm() {
           </form>
         </div>
         
-        <p className="text-center text-slate-500 text-sm mt-6">
+        <p className="text-center text-slate-400 text-sm mt-6">
           Pi Coding Agent Web Interface
         </p>
       </div>

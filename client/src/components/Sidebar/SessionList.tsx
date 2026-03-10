@@ -26,7 +26,7 @@ export function SessionList({ sessions, currentSessionId }: SessionListProps) {
       <div className="flex flex-col items-center justify-center h-full p-4 text-center">
         <div className="text-4xl mb-3">💬</div>
         <p className="text-slate-400 text-sm">No sessions found</p>
-        <p className="text-slate-500 text-xs mt-1">
+        <p className="text-slate-400 text-xs mt-1">
           Create a new session to get started
         </p>
       </div>

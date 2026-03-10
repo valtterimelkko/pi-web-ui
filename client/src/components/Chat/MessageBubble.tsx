@@ -139,7 +139,7 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
               args={message.toolCall.args}
               result={message.toolResult}
             />
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               {formatTime(message.timestamp)}
             </span>
           </div>
@@ -240,7 +240,7 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
           </div>
 
           {/* Timestamp */}
-          <span className={`text-xs text-slate-500 ${isUser ? 'text-right' : ''}`}>
+          <span className={`text-xs text-slate-400 ${isUser ? 'text-right' : ''}`}>
             {formatTime(message.timestamp)}
           </span>
         </div>

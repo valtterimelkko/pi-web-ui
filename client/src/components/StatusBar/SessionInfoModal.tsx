@@ -111,7 +111,7 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                         {sessionInfo.contextPercent}%
                       </span>
                     </div>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-slate-400">
                       {formatNumber(sessionInfo.contextUsed || 0)} / {formatNumber(sessionInfo.contextWindow || 0)} tokens
                     </p>
                   </div>
@@ -126,22 +126,22 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                 </div>
                 <div className="pl-6 grid grid-cols-2 gap-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-slate-500">Input:</span>
+                    <span className="text-slate-400">Input:</span>
                     <span className="text-slate-300">{formatNumber(sessionInfo.tokens.input)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-500">Output:</span>
+                    <span className="text-slate-400">Output:</span>
                     <span className="text-slate-300">{formatNumber(sessionInfo.tokens.output)}</span>
                   </div>
                   {sessionInfo.tokens.cacheRead > 0 && (
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Cache Read:</span>
+                      <span className="text-slate-400">Cache Read:</span>
                       <span className="text-slate-300">{formatNumber(sessionInfo.tokens.cacheRead)}</span>
                     </div>
                   )}
                   {sessionInfo.tokens.cacheWrite > 0 && (
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Cache Write:</span>
+                      <span className="text-slate-400">Cache Write:</span>
                       <span className="text-slate-300">{formatNumber(sessionInfo.tokens.cacheWrite)}</span>
                     </div>
                   )}
@@ -171,16 +171,16 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                 </div>
                 <div className="pl-6 grid grid-cols-2 gap-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-slate-500">User:</span>
+                    <span className="text-slate-400">User:</span>
                     <span className="text-slate-300">{sessionInfo.userMessages}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-500">Assistant:</span>
+                    <span className="text-slate-400">Assistant:</span>
                     <span className="text-slate-300">{sessionInfo.assistantMessages}</span>
                   </div>
                   {sessionInfo.toolCalls > 0 && (
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Tool Calls:</span>
+                      <span className="text-slate-400">Tool Calls:</span>
                       <span className="text-slate-300">{sessionInfo.toolCalls}</span>
                     </div>
                   )}
@@ -193,7 +193,7 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
 
               {/* Session ID */}
               <div className="pt-2 border-t border-slate-800">
-                <p className="text-xs text-slate-500 text-center font-mono">
+                <p className="text-xs text-slate-400 text-center font-mono">
                   Session ID: {sessionInfo.sessionId}
                 </p>
               </div>
