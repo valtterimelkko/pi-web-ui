@@ -47,6 +47,11 @@ This project was developed in 6 waves over approximately 5 weeks:
 - Settings modal with theme toggle
 - Status bar with connection and context usage
 - File browser with secure path validation
+- **4 Custom Extensions:**
+  - Enhanced Plan Mode with wave-based analysis
+  - Subagent delegation tool
+  - Todo management system
+  - Web search and fetch tools
 
 **Wave 6: Polish, Testing & Documentation**
 - Toast notifications and loading states
@@ -73,6 +78,113 @@ This project was developed in 6 waves over approximately 5 weeks:
 - 🔌 **Extension support**: Full extension UI protocol (confirm/select/input/editor)
 - 📂 **File browser**: Secure file browsing and preview
 - 🎨 **Beautiful UI**: Dark theme with animations and micro-interactions
+- 🤖 **AI-powered tools**: Web search, subagent delegation, todo management, and planning mode
+
+## Installed Extensions
+
+The Pi Web UI comes with four powerful extensions pre-installed and ready to use:
+
+### 1. Enhanced Plan Mode (`/plan`)
+
+A comprehensive planning mode for complex tasks requiring careful analysis and execution planning.
+
+**Slash Commands:**
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `/plan [description]` | - | Enter planning mode with wave-based analysis |
+| `/approve` | `/a` | Approve the current plan |
+| `/modify` | `/m` | Request plan modifications |
+| `/reject` | `/r` | Cancel planning mode |
+| `/execute` | - | Start execution after approval |
+| `/cancel` | - | Abort planning |
+| `/status` | - | Show current plan status |
+| `/plans` | - | List all saved plans |
+| `/continue` | - | Continue from a saved plan |
+| `/done` | - | Mark plan as complete |
+
+**Features:**
+- Wave-based analysis using subagent tool
+- YAML frontmatter plan schema
+- Risk assessment matrix
+- 4-option execution selection
+- Plan lifecycle management
+
+### 2. Subagent Tool
+
+Delegate tasks to specialized agents with isolated context windows.
+
+**Tool:** `subagent`
+
+**Usage:**
+```json
+// Single task
+{ "agent": "coder", "task": "Refactor the auth module" }
+
+// Parallel tasks
+{ "tasks": [
+  { "agent": "coder", "task": "Fix bug A" },
+  { "agent": "coder", "task": "Fix bug B" }
+]}
+
+// Chained tasks
+{ "chain": [
+  { "agent": "analyst", "task": "Analyze codebase" },
+  { "agent": "coder", "task": "Implement based on: {previous}" }
+]}
+```
+
+**Features:**
+- Single, parallel, and chain execution modes
+- Isolated context windows for each subagent
+- JSON mode for structured output
+- Usage statistics tracking (tokens, cost)
+
+### 3. Todo Management (`/todos`)
+
+Manage tasks and todos within your sessions.
+
+**Slash Command:**
+
+| Command | Description |
+|---------|-------------|
+| `/todos` | Open the todo list viewer |
+
+**Tool:** `todo`
+
+**Actions:**
+- `list` - Show all todos
+- `add` - Create a new todo (requires `text` parameter)
+- `toggle` - Mark todo as done/undone (requires `id` parameter)
+- `clear` - Remove all completed todos
+
+**Features:**
+- State stored in session entries (branching-aware)
+- Visual todo list with completion tracking
+- Keyboard shortcuts (Esc to close)
+
+### 4. Web Tools
+
+Search and fetch web content directly from the chat.
+
+**Slash Command:**
+
+| Command | Description |
+|---------|-------------|
+| `/webtools-clear-cache` | Clear the web tools cache |
+
+**Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `web_search` | Search the web using DuckDuckGo |
+| `web_fetch` | Fetch web pages and convert to markdown |
+
+**Features:**
+- 15-minute result caching
+- HTML to Markdown conversion
+- Private IP blocking for security
+- Truncation for large content (50KB/2000 lines)
 
 ## Quick Start
 
@@ -163,6 +275,38 @@ npm run test:coverage
 | `Ctrl + Enter` | Send message |
 | `Esc` | Close modals |
 | `Ctrl + B` | Toggle sidebar |
+
+### Using Extensions
+
+Extensions add powerful capabilities to your conversations:
+
+**Planning Complex Tasks:**
+```
+/plan Create a user authentication system with JWT tokens
+```
+The agent will enter plan mode, analyze the task in waves, and present a structured plan with risk assessment.
+
+**Delegating to Subagents:**
+Simply ask the agent to use subagents:
+```
+Analyze this codebase for security issues using subagents
+```
+
+**Managing Todos:**
+```
+Add a todo: Review the authentication middleware
+```
+View all todos with `/todos`
+
+**Web Search:**
+```
+Search for the latest React best practices
+```
+
+**Fetching Web Pages:**
+```
+Fetch and summarize https://example.com/docs
+```
 
 ### Session Management
 

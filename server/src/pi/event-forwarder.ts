@@ -10,6 +10,7 @@ export interface ForwardedEvent {
 
 export class EventForwarder {
   private wsSender: WebSocketSender;
+  private currentMessageId: string | null = null;
 
   constructor(wsSender: WebSocketSender) {
     this.wsSender = wsSender;
@@ -19,6 +20,10 @@ export class EventForwarder {
     // Map Pi SDK event to WebSocket message format
     const message = this.mapEventToMessage(event);
     this.wsSender(clientId, message);
+  }
+
+  private generateId(): string {
+    return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
   private mapEventToMessage(event: AgentSessionEvent): ForwardedEvent {
@@ -49,26 +54,38 @@ export class EventForwarder {
           toolResults: event.toolResults,
         };
 
-      case 'message_start':
+      case 'message_start': {
+        // Generate a unique ID for this message stream
+        this.currentMessageId = this.generateId();
+        // Add ID to the message object
+        const messageWithId = {
+          ...event.message,
+          id: this.currentMessageId,
+        };
         return {
           ...base,
           type: 'message_start',
-          message: event.message,
+          message: messageWithId,
         };
+      }
 
       case 'message_update':
+        // Include the current message ID so client can correlate updates
         return {
           ...base,
           type: 'message_update',
-          message: event.message,
+          message: { id: this.currentMessageId },
           assistantMessageEvent: event.assistantMessageEvent,
         };
 
       case 'message_end':
+        // Include the current message ID and clear it
+        const endMessageId = this.currentMessageId;
+        this.currentMessageId = null;
         return {
           ...base,
           type: 'message_end',
-          message: event.message,
+          message: { id: endMessageId },
         };
 
       case 'tool_execution_start':
