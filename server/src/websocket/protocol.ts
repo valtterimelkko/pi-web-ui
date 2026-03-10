@@ -19,12 +19,14 @@ export type ClientMessage =
   | { type: 'switch_session'; sessionPath: string }
   | { type: 'get_sessions'; cwd?: string }
   | { type: 'get_session_tree'; sessionId: string }
+  | { type: 'get_session_info' }
   | { type: 'fork'; entryId: string }
   | { type: 'navigate_tree'; entryId: string; summarize?: boolean }
   | { type: 'set_model'; modelId: string }
   | { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' }
   | { type: 'compact'; customInstructions?: string }
-  | { type: 'extension_ui_response'; response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean } };
+  | { type: 'extension_ui_response'; response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean } }
+  | { type: 'set_session_name'; sessionId: string; name: string };
 
 // Session information for listing
 export interface SessionInfo {
@@ -33,8 +35,33 @@ export interface SessionInfo {
   firstMessage: string;
   messageCount: number;
   cwd: string;
+  name?: string;
   createdAt?: string;
   lastActivity?: string;
+}
+
+// Session statistics for get_session_info
+export interface SessionStats {
+  sessionFile?: string | undefined;
+  sessionId?: string;
+  userMessages?: number;
+  assistantMessages?: number;
+  toolCalls?: number;
+  toolResults?: number;
+  totalMessages?: number;
+  messageCount?: number;
+  tokens?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+  cost?: number;
+  model?: string;
+  contextWindow?: number;
+  contextUsed?: number;
+  contextPercent?: number;
 }
 
 // Tree node for session history navigation
@@ -55,6 +82,7 @@ export type ServerMessage =
   | { type: 'session_created'; sessionId: string; sessionPath: string }
   | { type: 'session_switched'; sessionId: string; sessionPath: string }
   | { type: 'session_tree'; tree: TreeNode[] }
+  | { type: 'session_info'; stats: SessionStats }
   | { type: 'model_changed'; modelId: string }
   | { type: 'thinking_level_changed'; level: string }
   | { type: 'compaction_result'; summary: string; tokensBefore: number }
@@ -76,7 +104,9 @@ export type ServerMessage =
   | { type: 'extension_error'; extensionPath: string; event: string; error: string }
   | { type: 'extension_ui_request'; request: { id: string; type: 'confirm' | 'select' | 'input' | 'editor'; method: string; params: Record<string, unknown>; timeout: number } }
   // CLI Session Watcher events
-  | { type: 'session_update'; changeType: 'add' | 'change' | 'unlink'; path: string; sessionId?: string; cwd?: string; info?: SessionInfo };
+  | { type: 'session_update'; changeType: 'add' | 'change' | 'unlink'; path: string; sessionId?: string; cwd?: string; info?: SessionInfo }
+  | { type: 'session_name_updated'; sessionId: string; name: string }
+  | { type: 'session_name_changed'; sessionId: string; name: string };
 
 // Message type guards
 export function isClientMessage(data: unknown): data is ClientMessage {

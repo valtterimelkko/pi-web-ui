@@ -4,10 +4,12 @@ import { WebSocketClient, createWebSocketClient, type WebSocketStatus } from '..
 
 export function useWebSocket() {
   const clientRef = useRef<WebSocketClient | null>(null);
-  const handleServerMessage = useSessionStore((state) => state.handleServerMessage);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
 
   useEffect(() => {
+    // Get the handler from the store directly to avoid re-subscription
+    const handleServerMessage = useSessionStore.getState().handleServerMessage;
+    
     const client = createWebSocketClient({
       onMessage: handleServerMessage,
       onStatusChange: (status: WebSocketStatus) => {
@@ -24,12 +26,18 @@ export function useWebSocket() {
     });
 
     clientRef.current = client;
-    client.connect();
+    
+    // Only connect if not already connected/connecting
+    const status = client.getStatus();
+    if (status !== 'connected' && status !== 'connecting') {
+      client.connect();
+    }
 
     return () => {
-      client.disconnect();
+      // Don't disconnect on unmount to keep connection alive across component re-renders
+      // The WebSocket singleton will manage its own lifecycle
     };
-  }, [handleServerMessage]);
+  }, []); // Empty dependency array - only run once on mount
 
   const sendMessage = useCallback((message: unknown) => {
     return clientRef.current?.send(message) ?? false;
@@ -76,6 +84,18 @@ export function useWebSocket() {
     return sendMessage({ type: 'set_model', modelId });
   }, [sendMessage]);
 
+  const sendCompact = useCallback((customInstructions?: string) => {
+    return sendMessage({ type: 'compact', customInstructions });
+  }, [sendMessage]);
+
+  const getSessionInfo = useCallback(() => {
+    return sendMessage({ type: 'get_session_info' });
+  }, [sendMessage]);
+
+  const setSessionName = useCallback((sessionId: string, name: string) => {
+    return sendMessage({ type: 'set_session_name', sessionId, name });
+  }, [sendMessage]);
+
   return {
     sendMessage,
     sendPrompt,
@@ -86,5 +106,8 @@ export function useWebSocket() {
     switchSession,
     getSessions,
     setModel,
+    sendCompact,
+    getSessionInfo,
+    setSessionName,
   };
 }

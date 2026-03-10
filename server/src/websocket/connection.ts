@@ -42,6 +42,8 @@ export class WebSocketConnectionManager {
     this.wss.on('connection', (ws: WebSocket, req: IncomingMessage, authResult: WsAuthResult) => {
       const clientId = this.generateClientId();
 
+      console.log(`WebSocket client ${clientId} connected, auth success: ${authResult.success}, userId: ${authResult.user?.userId}`);
+
       const client: WebSocketClient = {
         id: clientId,
         ws,
@@ -77,15 +79,20 @@ export class WebSocketConnectionManager {
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     // Validate origin first
     const origin = req.headers.origin;
+    console.log(`WebSocket upgrade request from origin: ${origin}, allowed: ${config.allowedOrigins}`);
+    
     if (!origin || !config.allowedOrigins.includes(origin)) {
+      console.log(`Origin not allowed: ${origin}`);
       socket.destroy();
       return;
     }
 
     // Authenticate
     const authResult = authenticateWebSocket(req);
+    console.log(`WebSocket auth result: ${authResult.success}, userId: ${authResult.user?.userId}`);
 
     if (!authResult.success) {
+      console.log('WebSocket auth failed, destroying socket');
       socket.destroy();
       return;
     }
@@ -97,7 +104,23 @@ export class WebSocketConnectionManager {
 
   private async handleMessage(clientId: string, data: Buffer): Promise<void> {
     const client = this.clients.get(clientId);
-    if (!client || !client.isAuthenticated) {
+    if (!client) {
+      console.log(`Message from unknown client: ${clientId}`);
+      return;
+    }
+
+    let message: ClientMessage;
+    try {
+      message = JSON.parse(data.toString()) as ClientMessage;
+      console.log(`Received message from ${clientId}: ${message.type}, auth: ${client.isAuthenticated}`);
+    } catch {
+      this.sendMessage(clientId, { type: 'error', message: 'Invalid JSON', code: 'INVALID_JSON' });
+      return;
+    }
+
+    // Allow 'auth' messages even if not authenticated yet
+    if (!client.isAuthenticated && message.type !== 'auth') {
+      this.sendMessage(clientId, { type: 'error', message: 'Not authenticated', code: 'UNAUTHORIZED' });
       return;
     }
 
@@ -108,14 +131,6 @@ export class WebSocketConnectionManager {
         message: 'Rate limit exceeded',
         code: 'RATE_LIMIT',
       });
-      return;
-    }
-
-    let message: ClientMessage;
-    try {
-      message = JSON.parse(data.toString()) as ClientMessage;
-    } catch {
-      this.sendMessage(clientId, { type: 'error', message: 'Invalid JSON', code: 'INVALID_JSON' });
       return;
     }
 
@@ -168,6 +183,10 @@ export class WebSocketConnectionManager {
         await this.handleGetSessionTree(clientId, message);
         break;
 
+      case 'get_session_info':
+        await this.handleGetSessionInfo(clientId);
+        break;
+
       case 'fork':
         await this.handleFork(clientId, message);
         break;
@@ -190,6 +209,10 @@ export class WebSocketConnectionManager {
 
       case 'extension_ui_response':
         await this.handleExtensionUiResponse(clientId, message);
+        break;
+
+      case 'set_session_name':
+        await this.handleSetSessionName(clientId, message);
         break;
 
       case 'auth': {
@@ -215,6 +238,9 @@ export class WebSocketConnectionManager {
           this.handleDisconnect(clientId);
           break;
         }
+
+        // Mark client as authenticated
+        client.isAuthenticated = true;
 
         // CSRF validation successful
         this.sendMessage(clientId, {
@@ -325,6 +351,7 @@ export class WebSocketConnectionManager {
         firstMessage: s.firstMessage,
         messageCount: s.messageCount,
         cwd: s.cwd,
+        name: s.name,
         createdAt: s.createdAt?.toISOString?.() ?? String(s.createdAt),
         lastActivity: s.lastActivity?.toISOString?.() ?? String(s.lastActivity),
       })),
@@ -340,6 +367,37 @@ export class WebSocketConnectionManager {
     this.sendMessage(clientId, {
       type: 'session_tree',
       tree: [],
+    });
+  }
+
+  private async handleGetSessionInfo(clientId: string): Promise<void> {
+    const clientSession = this.sessionPool.getClientSession(clientId);
+    if (!clientSession) {
+      this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    const stats = clientSession.session.getSessionStats();
+    const contextUsage = clientSession.session.getContextUsage();
+    const model = clientSession.session.model;
+
+    this.sendMessage(clientId, {
+      type: 'session_info',
+      stats: {
+        sessionFile: clientSession.sessionId,
+        sessionId: clientSession.sessionId,
+        userMessages: stats.userMessages ?? 0,
+        assistantMessages: stats.assistantMessages ?? 0,
+        toolCalls: stats.toolCalls ?? 0,
+        toolResults: stats.toolResults ?? 0,
+        totalMessages: stats.totalMessages ?? 0,
+        tokens: stats.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        cost: stats.cost ?? 0,
+        model: model ? `${model.provider}/${model.id}` : undefined,
+        contextWindow: contextUsage?.contextWindow,
+        contextUsed: contextUsage?.tokens ?? undefined,
+        contextPercent: contextUsage?.percent ?? undefined,
+      },
     });
   }
 
@@ -433,6 +491,44 @@ export class WebSocketConnectionManager {
     const { getExtensionUIHandler } = await import('../pi/extension-ui-handler.js');
     const handler = getExtensionUIHandler();
     handler.handleResponse(message.response);
+  }
+
+  private async handleSetSessionName(
+    clientId: string,
+    message: { type: 'set_session_name'; sessionId: string; name: string }
+  ): Promise<void> {
+    const { getSessionWatcher } = await import('../pi/session-watcher.js');
+    const watcher = getSessionWatcher();
+
+    // Find the session by ID to get its path
+    const sessions = await watcher.listSessions();
+    const session = sessions.find(s => s.id === message.sessionId);
+
+    if (!session) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: `Session not found: ${message.sessionId}`,
+        code: 'SESSION_NOT_FOUND',
+      });
+      return;
+    }
+
+    // Update the session metadata with the new name
+    await watcher.setSessionName(session.path, message.name);
+
+    // Broadcast the update to all clients
+    this.broadcast({
+      type: 'session_name_updated',
+      sessionId: message.sessionId,
+      name: message.name,
+    });
+
+    // Confirm to the sender
+    this.sendMessage(clientId, {
+      type: 'session_name_changed',
+      sessionId: message.sessionId,
+      name: message.name,
+    });
   }
 
   private handleDisconnect(clientId: string): void {
