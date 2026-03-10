@@ -1,5 +1,6 @@
 import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 import type { PiService, CreateSessionOptions } from './pi-service.js';
+import type { WebUIContext } from './extension-ui-adapter.js';
 
 export interface ClientSession {
   clientId: string;
@@ -12,9 +13,19 @@ export interface ClientSession {
 export class SessionPool {
   private clientSessions: Map<string, ClientSession> = new Map();
   private piService: PiService;
+  private getWebUIContext?: (clientId: string) => WebUIContext | undefined;
 
   constructor(piService: PiService) {
     this.piService = piService;
+    // Set session pool reference in PiService for extension command context
+    this.piService.setSessionPool(this);
+  }
+
+  /**
+   * Set a function to retrieve WebUIContext for clients
+   */
+  setWebUIContextProvider(getContext: (clientId: string) => WebUIContext | undefined): void {
+    this.getWebUIContext = getContext;
   }
 
   async createClientSession(clientId: string, options: Omit<CreateSessionOptions, 'clientId'>): Promise<ClientSession> {
@@ -24,9 +35,13 @@ export class SessionPool {
       return existing;
     }
 
+    // Get Web UI context for extension binding
+    const webUIContext = this.getWebUIContext?.(clientId);
+    
     const session = await this.piService.createSession({
       ...options,
       clientId,
+      webUIContext,
     });
 
     const clientSession: ClientSession = {

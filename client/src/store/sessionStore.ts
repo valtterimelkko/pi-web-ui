@@ -280,6 +280,17 @@ export const useSessionStore = create<SessionState>()(
             break;
           }
 
+          case 'notification': {
+            const { notification } = msg as unknown as {
+              notification: { message: string; type: 'info' | 'warning' | 'error' };
+            };
+            useUIStore.getState().addToast({
+              type: notification.type,
+              message: notification.message,
+            });
+            break;
+          }
+
           case 'model_changed': {
             set({ currentModel: msg.modelId as string });
             break;

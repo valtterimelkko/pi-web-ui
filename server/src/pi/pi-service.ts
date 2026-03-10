@@ -9,6 +9,8 @@ import {
 } from '@mariozechner/pi-coding-agent';
 import { config } from '../config.js';
 import type { SessionInfo } from '@pi-web-ui/shared';
+import { createWebUIContext, createCommandContextActions, type WebUIContext, type CommandActionContext } from './extension-ui-adapter.js';
+import type { SessionPool } from './session-pool.js';
 
 export interface CreateSessionOptions {
   clientId: string;
@@ -16,6 +18,7 @@ export interface CreateSessionOptions {
   sessionPath?: string;
   continueRecent?: boolean;
   inMemory?: boolean;
+  webUIContext?: WebUIContext;
 }
 
 export class PiService {
@@ -25,6 +28,12 @@ export class PiService {
   private sessions: Map<string, AgentSession> = new Map();
   private clientSessionMap: Map<string, string> = new Map(); // clientId -> sessionId
   private eventHandlers: Map<string, (event: AgentSessionEvent) => void> = new Map();
+  private sessionPool: SessionPool | null = null;
+  private clientWebUIContexts: Map<string, WebUIContext> = new Map(); // clientId -> WebUIContext
+
+  setSessionPool(sessionPool: SessionPool): void {
+    this.sessionPool = sessionPool;
+  }
 
   constructor() {
     this.authStorage = AuthStorage.create(config.piAgentDir
@@ -40,6 +49,25 @@ export class PiService {
 
   async initialize(): Promise<void> {
     await this.resourceLoader.reload();
+    
+    // Log loaded extensions for debugging
+    const extensions = this.resourceLoader.getExtensions();
+    if (extensions.extensions.length > 0) {
+      console.log('Loaded extensions:');
+      extensions.extensions.forEach(ext => {
+        console.log(`  - ${ext.path}`);
+        if (ext.commands.size > 0) {
+          console.log(`    Commands: ${Array.from(ext.commands.keys()).join(', ')}`);
+        }
+        if (ext.tools.size > 0) {
+          console.log(`    Tools: ${Array.from(ext.tools.keys()).join(', ')}`);
+        }
+      });
+    }
+    if (extensions.errors.length > 0) {
+      console.error('Extension loading errors:');
+      extensions.errors.forEach(err => console.error(`  - ${err.path}: ${err.error}`));
+    }
   }
 
   async createSession(options: CreateSessionOptions): Promise<AgentSession> {
@@ -76,6 +104,35 @@ export class PiService {
         handler(event);
       }
     });
+
+    // Bind extensions with Web UI context if provided
+    if (options.webUIContext) {
+      this.clientWebUIContexts.set(options.clientId, options.webUIContext);
+      
+      const uiContext = createWebUIContext(options.webUIContext);
+      const commandContext = createCommandContextActions({
+        clientId: options.clientId,
+        sessionId: session.sessionId,
+        piService: {
+          removeClient: this.removeClient.bind(this),
+          cleanup: this.cleanup.bind(this),
+        },
+        sessionPool: this.sessionPool || {
+          createClientSession: async () => ({ sessionId: '', session: {} }),
+          switchClientSession: async () => ({ sessionId: '', session: {} }),
+          removeClient: () => {},
+        },
+        getSessionManager: () => session.sessionManager,
+      });
+
+      // Bind extensions asynchronously (don't block session creation)
+      void session.bindExtensions({
+        uiContext,
+        commandContextActions: commandContext,
+      }).catch((error) => {
+        console.error('Failed to bind extensions:', error);
+      });
+    }
 
     this.sessions.set(session.sessionId, session);
     return session;
@@ -175,6 +232,21 @@ export class PiService {
       this.clientSessionMap.delete(clientId);
     }
     this.eventHandlers.delete(clientId);
+    this.clientWebUIContexts.delete(clientId);
+  }
+
+  /**
+   * Set the Web UI context for a client (used for extension binding)
+   */
+  setClientWebUIContext(clientId: string, webUIContext: WebUIContext): void {
+    this.clientWebUIContexts.set(clientId, webUIContext);
+  }
+
+  /**
+   * Get the Web UI context for a client
+   */
+  getClientWebUIContext(clientId: string): WebUIContext | undefined {
+    return this.clientWebUIContexts.get(clientId);
   }
 
   async cleanup(): Promise<void> {
