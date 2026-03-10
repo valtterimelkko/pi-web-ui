@@ -38,6 +38,7 @@ interface ExtensionUIRequest {
 interface SessionState {
   sessions: Session[];
   currentSessionId: string | null;
+  currentModel: string | null;
   messages: Message[];
   isStreaming: boolean;
   isLoading: boolean;
@@ -47,6 +48,7 @@ interface SessionState {
   // Actions
   setSessions: (sessions: Session[]) => void;
   setCurrentSession: (sessionId: string | null) => void;
+  setCurrentModel: (modelId: string) => void;
   addMessage: (message: Message) => void;
   updateMessage: (id: string, updates: Partial<Message>) => void;
   setStreaming: (isStreaming: boolean) => void;
@@ -64,6 +66,7 @@ export const useSessionStore = create<SessionState>()(
     (set, get) => ({
       sessions: [],
       currentSessionId: null,
+      currentModel: null,
       messages: [],
       isStreaming: false,
       isLoading: false,
@@ -71,6 +74,7 @@ export const useSessionStore = create<SessionState>()(
       extensionUIRequest: null,
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
+      setCurrentModel: (modelId) => set({ currentModel: modelId }),
 
       setSessions: (sessions) => set({ sessions }),
 
@@ -245,6 +249,11 @@ export const useSessionStore = create<SessionState>()(
 
           case 'extension_ui_request': {
             set({ extensionUIRequest: msg.request as ExtensionUIRequest });
+            break;
+          }
+
+          case 'model_changed': {
+            set({ currentModel: msg.modelId as string });
             break;
           }
         }
