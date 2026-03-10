@@ -1,6 +1,7 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
+import { readFile } from 'fs/promises';
 import {
   authenticateWebSocket,
   type WsAuthResult,
@@ -10,7 +11,7 @@ import { detectPromptInjection } from '../security/prompt-injection.js';
 import { getPiService, type PiService } from '../pi/index.js';
 import { SessionPool } from '../pi/session-pool.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
-import type { ClientMessage, ServerMessage, ImageContent } from './protocol.js';
+import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
 import { config } from '../config.js';
 import { validateCsrfToken } from '../security/csrf.js';
 
@@ -339,6 +340,9 @@ export class WebSocketConnectionManager {
     const model = clientSession.session.model;
     const contextUsage = clientSession.session.getContextUsage();
 
+    // Load session messages from file
+    const messages = await this.loadSessionMessages(message.sessionPath);
+
     this.sendMessage(clientId, {
       type: 'session_switched',
       sessionId: clientSession.sessionId,
@@ -347,7 +351,94 @@ export class WebSocketConnectionManager {
       contextWindow: contextUsage?.contextWindow ?? undefined,
       contextUsed: contextUsage?.tokens ?? undefined,
       contextPercent: contextUsage?.percent ?? undefined,
+      messages,
     });
+  }
+
+  /**
+   * Load messages from a session file (JSONL format)
+   */
+  private async loadSessionMessages(sessionPath: string): Promise<SessionMessage[]> {
+    try {
+      if (!sessionPath) {
+        return [];
+      }
+
+      // Read the session file
+      const fileContent = await readFile(sessionPath, 'utf-8');
+      const lines = fileContent.split('\n').filter(line => line.trim());
+      
+      const messages: SessionMessage[] = [];
+
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line) as Record<string, unknown>;
+          
+          // Only process message entries
+          if (entry.type !== 'message') {
+            continue;
+          }
+
+          const messageData = entry.message as Record<string, unknown> | undefined;
+          if (!messageData) {
+            continue;
+          }
+
+          const role = messageData.role as string;
+          
+          // Only include user and assistant messages
+          if (role !== 'user' && role !== 'assistant') {
+            continue;
+          }
+
+          // Parse content
+          const content = messageData.content as Array<{ type: string; text?: string; thinking?: string }> | undefined;
+          const timestamp = messageData.timestamp as number | undefined;
+
+          // Transform content to client format
+          let transformedContent: SessionMessage['content'];
+          if (Array.isArray(content)) {
+            // Filter out signature fields from thinking blocks and map content
+            transformedContent = content
+              .filter(item => item.type === 'text' || item.type === 'thinking')
+              .map(item => {
+                if (item.type === 'thinking') {
+                  return { 
+                    type: 'thinking', 
+                    thinking: item.thinking || '' 
+                  };
+                }
+                return { 
+                  type: 'text', 
+                  text: item.text || '' 
+                };
+              });
+          } else {
+            transformedContent = '';
+          }
+
+          messages.push({
+            id: (entry.id as string) || `msg_${timestamp || Date.now()}`,
+            role: role as 'user' | 'assistant',
+            content: transformedContent,
+            timestamp: timestamp || Date.now(),
+          });
+        } catch (parseError) {
+          // Skip invalid lines but continue processing
+          console.warn(`Failed to parse session line: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
+        }
+      }
+
+      return messages;
+    } catch (error) {
+      // Handle file reading errors gracefully
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        console.warn(`Session file not found: ${sessionPath}`);
+      } else {
+        console.warn(`Failed to load session messages from ${sessionPath}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+      return [];
+    }
   }
 
   private async handleGetSessions(

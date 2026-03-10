@@ -159,11 +159,27 @@ export const useSessionStore = create<SessionState>()(
               contextWindow?: number;
               contextUsed?: number;
               contextPercent?: number;
+              messages?: Array<{
+                id: string;
+                role: 'user' | 'assistant';
+                content: string | Array<{ type: string; text?: string; thinking?: string }>;
+                timestamp: number;
+              }>;
             };
+            
+            // Transform server messages to client Message format
+            const serverMessages = switchMsg.messages || [];
+            const clientMessages: Message[] = serverMessages.map((serverMsg) => ({
+              id: serverMsg.id,
+              role: serverMsg.role,
+              content: serverMsg.content,
+              timestamp: serverMsg.timestamp,
+            }));
+            
             set({ 
               currentSessionId: switchMsg.sessionId,
               currentModel: switchMsg.model ?? null,
-              messages: [],
+              messages: clientMessages,
               contextPercent: switchMsg.contextPercent ?? 0,
               contextUsed: switchMsg.contextUsed ?? 0,
               contextWindow: switchMsg.contextWindow ?? 0,
