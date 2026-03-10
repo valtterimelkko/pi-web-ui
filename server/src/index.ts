@@ -70,7 +70,7 @@ async function initialize(): Promise<void> {
 async function start(): Promise<void> {
   await initialize();
 
-  server.listen(config.port, () => {
+  server.listen(config.port, '0.0.0.0', () => {
     console.log(`Pi Web UI Server running on port ${config.port}`);
     console.log(`Health check: http://localhost:${config.port}/health`);
     console.log(`WebSocket: ws://localhost:${config.port}/ws`);
