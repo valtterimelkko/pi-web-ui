@@ -1,0 +1,200 @@
+- generic [ref=e2]:
+  - generic [ref=e5]:
+    - generic [ref=e7]:
+      - generic:
+        - link "Kimi":
+          - /url: https://www.kimi.com/code
+          - img "Kimi"
+        - button "Expand sidebar":
+          - img
+      - generic [ref=e8]:
+        - complementary [ref=e9]:
+          - generic [ref=e10]:
+            - generic [ref=e12]:
+              - link "Kimi Kimi Code" [ref=e427] [cursor=pointer]:
+                - /url: https://www.kimi.com/code
+                - img "Kimi" [ref=e428]
+                - generic [ref=e15]: Kimi Code
+              - generic [ref=e16]: v1.19.0
+            - generic [ref=e17]:
+              - heading "Sessions" [level=4] [ref=e429]
+              - generic [ref=e19]:
+                - button "Refresh sessions" [ref=e430] [cursor=pointer]:
+                  - img [ref=e21]
+                - button "New Session" [ref=e431] [cursor=pointer]:
+                  - img [ref=e27]
+            - generic [ref=e28]:
+              - generic [ref=e29]:
+                - img [ref=e30]
+                - textbox "Search sessions..." [ref=e432]
+              - group [ref=e34]:
+                - radio "List view" [ref=e433]:
+                  - img
+                - radio "Grouped view" [checked] [active] [ref=e434]:
+                  - img
+            - generic [ref=e37]:
+              - list [ref=e509]:
+                - listitem [ref=e510]:
+                  - generic [ref=e511]:
+                    - generic [ref=e512]:
+                      - button "/root/pi-web-ui (6)" [expanded] [ref=e513] [cursor=pointer]:
+                        - img [ref=e514]
+                        - generic [ref=e516]: /root/pi-web-ui
+                        - generic [ref=e517]: (6)
+                      - button "New session in /root/pi-web-ui" [ref=e518] [cursor=pointer]:
+                        - img [ref=e519]
+                    - list [ref=e521]:
+                      - listitem [ref=e522]:
+                        - button "Please describe this interface in 3 bullet... 2m ago" [ref=e524] [cursor=pointer]:
+                          - paragraph [ref=e525]: Please describe this interface in 3 bullet...
+                          - generic [ref=e526]: 2m ago
+                      - listitem [ref=e527]:
+                        - button "/yolo 6m ago" [ref=e529] [cursor=pointer]:
+                          - paragraph [ref=e530]: /yolo
+                          - generic [ref=e531]: 6m ago
+                      - listitem [ref=e532]:
+                        - button "Untitled 26m ago" [ref=e534] [cursor=pointer]:
+                          - paragraph [ref=e535]: Untitled
+                          - generic [ref=e536]: 26m ago
+                      - listitem [ref=e537]:
+                        - button "/yolo 32m ago" [ref=e539] [cursor=pointer]:
+                          - paragraph [ref=e540]: /yolo
+                          - generic [ref=e541]: 32m ago
+                      - listitem [ref=e542]:
+                        - button "Untitled 33m ago" [ref=e544] [cursor=pointer]:
+                          - paragraph [ref=e545]: Untitled
+                          - generic [ref=e546]: 33m ago
+                      - listitem [ref=e547]:
+                        - button "/yolo 35m ago" [ref=e549] [cursor=pointer]:
+                          - paragraph [ref=e550]: /yolo
+                          - generic [ref=e551]: 35m ago
+                - listitem [ref=e552]:
+                  - generic [ref=e554]:
+                    - button "/root/79tower (2)" [ref=e555] [cursor=pointer]:
+                      - img [ref=e556]
+                      - generic [ref=e558]: /root/79tower
+                      - generic [ref=e559]: (2)
+                    - button "New session in /root/79tower" [ref=e560] [cursor=pointer]:
+                      - img [ref=e561]
+                - listitem [ref=e562]:
+                  - generic [ref=e564]:
+                    - button "/root (1)" [ref=e565] [cursor=pointer]:
+                      - img [ref=e566]
+                      - generic [ref=e568]: /root
+                      - generic [ref=e569]: (1)
+                    - button "New session in /root" [ref=e570] [cursor=pointer]:
+                      - img [ref=e571]
+                - listitem [ref=e572]:
+                  - generic [ref=e574]:
+                    - button "/root/about-me (1)" [ref=e575] [cursor=pointer]:
+                      - img [ref=e576]
+                      - generic [ref=e578]: /root/about-me
+                      - generic [ref=e579]: (1)
+                    - button "New session in /root/about-me" [ref=e580] [cursor=pointer]:
+                      - img [ref=e581]
+                - listitem [ref=e582]:
+                  - generic [ref=e584]:
+                    - button "/root/buildersuite-frontend (1)" [ref=e585] [cursor=pointer]:
+                      - img [ref=e586]
+                      - generic [ref=e588]: /root/buildersuite-frontend
+                      - generic [ref=e589]: (1)
+                    - button "New session in /root/buildersuite-frontend" [ref=e590] [cursor=pointer]:
+                      - img [ref=e591]
+              - button "Archived 100" [ref=e446] [cursor=pointer]:
+                - img [ref=e105]
+                - img [ref=e107]
+                - generic [ref=e110]: Archived
+                - generic [ref=e111]: "100"
+        - generic [ref=e112]:
+          - button "Switch to dark mode" [ref=e447] [cursor=pointer]:
+            - img
+          - button "Collapse sidebar" [ref=e448] [cursor=pointer]:
+            - img [ref=e116]
+    - generic [ref=e122]:
+      - generic [ref=e123]:
+        - button "Please describe this interface in 3 bullet..." [ref=e449] [cursor=pointer]
+        - generic [ref=e215]:
+          - button "Session info" [ref=e450]:
+            - img [ref=e217]
+          - button "Search messages" [ref=e451] [cursor=pointer]:
+            - img [ref=e220]
+          - button "Unfold all blocks" [ref=e452] [cursor=pointer]:
+            - img [ref=e224]
+      - log [ref=e125]:
+        - generic [ref=e287]:
+          - generic [ref=e291]: Please describe this interface in 3 bullet points and include a short JavaScript code block that logs hello.
+          - generic [ref=e301]:
+            - button "Thought for 4s" [expanded] [ref=e453] [cursor=pointer]:
+              - img [ref=e303]
+              - generic [ref=e306]: Thought for 4s
+              - img [ref=e308]
+            - generic [ref=e345]:
+              - paragraph [ref=e346]: The user is asking me to describe "this interface" in 3 bullet points and include a short JavaScript code block that logs hello.
+              - paragraph [ref=e347]: "However, looking at the conversation, there's no interface shown or described. The user might be referring to:"
+              - list [ref=e348]:
+                - listitem [ref=e349]: The Pi Web UI interface that was described in the AGENTS.md file
+                - listitem [ref=e350]: Some interface they showed in a previous message that I don't see
+                - listitem [ref=e351]: The n8n MCP tools interface described in the system
+              - paragraph [ref=e352]: Given the context with all the n8n-mcp tools and the Pi Web UI AGENTS.md, I should probably clarify what interface they're referring to. But since they said "this interface", maybe they're referring to something visible in their current context that I should know about.
+              - paragraph [ref=e353]: Actually, looking more carefully - the user might be testing me or referring to the Kimi Code CLI interface itself, or perhaps they have a screenshot/context I'm not seeing.
+              - paragraph [ref=e354]: Since I don't have a clear picture of what "this interface" refers to, I should ask for clarification. However, if I had to guess based on the project context (Pi Web UI), I could describe that interface.
+              - paragraph [ref=e355]: But the safest approach is to ask the user what interface they're referring to, as I don't see any specific interface described or shown in the current conversation that would be "this interface".
+              - paragraph [ref=e356]: Wait - actually, the user might be referring to the interface shown in the working directory or the project structure. Or they might have a specific UI in mind.
+              - paragraph [ref=e357]: Let me ask for clarification.
+          - generic [ref=e317]:
+            - generic [ref=e323]:
+              - paragraph [ref=e324]: "I don't see a specific interface described or shown in your message. Could you clarify which interface you'd like me to describe? For example:"
+              - list [ref=e325]:
+                - listitem [ref=e326]:
+                  - text: The Pi Web UI (the project in
+                  - code [ref=e327]: /root/pi-web-ui
+                  - text: "- a web interface for the Pi Coding Agent with React frontend, WebSocket communication, and JWT authentication)"
+                - listitem [ref=e328]: An n8n workflow interface you have in mind
+                - listitem [ref=e329]: A screenshot or image you're looking at
+                - listitem [ref=e330]: Or something else entirely?
+              - paragraph [ref=e331]: Once you clarify, I'll provide the 3 bullet points and JavaScript code block you requested.
+            - generic [ref=e332]:
+              - button "Copy" [ref=e454] [cursor=pointer]:
+                - img
+                - generic [ref=e334]: Copy
+              - button "Fork session" [ref=e455] [cursor=pointer]:
+                - img
+                - generic [ref=e336]: Fork session
+        - button [ref=e358] [cursor=pointer]:
+          - img
+      - generic [ref=e231]:
+        - generic [ref=e233]:
+          - status [ref=e234]:
+            - generic [ref=e337]: Awaiting input
+          - button "+0 -0 177 files" [ref=e592] [cursor=pointer]:
+            - img [ref=e239]
+            - generic [ref=e243]:
+              - generic [ref=e244]: "+0"
+              - generic [ref=e245]: "-0"
+            - generic [ref=e246]: 177 files
+            - img [ref=e247]
+          - button "Model context usage 9.3% context" [ref=e457]:
+            - img "Model context usage" [ref=e458]
+            - generic [ref=e253]: 9.3% context
+        - group [ref=e255]:
+          - generic [ref=e256]:
+            - button "Expand input" [ref=e459] [cursor=pointer]:
+              - img [ref=e258]
+            - textbox "Ask anything, / for commands, @ to mention files" [ref=e460]
+          - group [ref=e266]:
+            - generic [ref=e268]:
+              - button "Attach files" [ref=e461] [cursor=pointer]:
+                - img
+              - button "Change global model" [ref=e462] [cursor=pointer]:
+                - img
+                - generic [ref=e272]: kimi-code/kimi-for-coding
+              - generic [ref=e274]:
+                - generic [ref=e275]: Thinking
+                - switch "Toggle global thinking" [checked] [ref=e463]
+                - checkbox [checked]
+            - button "Submit" [ref=e464] [cursor=pointer]:
+              - img
+  - region "Notifications alt+T"
+  - generic [ref=e136]:
+    - heading "Create New Session" [level=2] [ref=e465]
+    - paragraph [ref=e138]: Search directories or type a new path

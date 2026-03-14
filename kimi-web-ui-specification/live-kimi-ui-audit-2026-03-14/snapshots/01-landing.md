@@ -1,0 +1,99 @@
+- generic [ref=e2]:
+  - generic [ref=e5]:
+    - generic [ref=e7]:
+      - generic:
+        - link "Kimi":
+          - /url: https://www.kimi.com/code
+          - img "Kimi"
+        - button "Expand sidebar":
+          - img
+      - generic [ref=e8]:
+        - complementary [ref=e9]:
+          - generic [ref=e10]:
+            - generic [ref=e12]:
+              - link "Kimi Kimi Code" [ref=e13] [cursor=pointer]:
+                - /url: https://www.kimi.com/code
+                - img "Kimi" [ref=e14]
+                - generic [ref=e15]: Kimi Code
+              - generic [ref=e16]: v1.19.0
+            - generic [ref=e17]:
+              - heading "Sessions" [level=4] [ref=e18]
+              - generic [ref=e19]:
+                - button "Refresh sessions" [ref=e20] [cursor=pointer]:
+                  - img [ref=e21]
+                - button "New Session" [ref=e26] [cursor=pointer]:
+                  - img [ref=e27]
+            - generic [ref=e28]:
+              - generic [ref=e29]:
+                - img [ref=e30]
+                - textbox "Search sessions..." [ref=e33]
+              - group [ref=e34]:
+                - radio "List view" [checked] [ref=e35]:
+                  - img
+                - radio "Grouped view" [ref=e36]:
+                  - img
+            - generic [ref=e37]:
+              - generic [ref=e41]:
+                - button "/yolo 1m ago" [ref=e44] [cursor=pointer]:
+                  - generic [ref=e45]:
+                    - paragraph [ref=e46]: /yolo
+                    - generic [ref=e47]: 1m ago
+                - button "Untitled 21m ago" [ref=e50] [cursor=pointer]:
+                  - generic [ref=e51]:
+                    - paragraph [ref=e52]: Untitled
+                    - generic [ref=e53]: 21m ago
+                - button "/yolo 28m ago" [ref=e56] [cursor=pointer]:
+                  - generic [ref=e57]:
+                    - paragraph [ref=e58]: /yolo
+                    - generic [ref=e59]: 28m ago
+                - button "Untitled 29m ago" [ref=e62] [cursor=pointer]:
+                  - generic [ref=e63]:
+                    - paragraph [ref=e64]: Untitled
+                    - generic [ref=e65]: 29m ago
+                - button "/yolo 30m ago" [ref=e68] [cursor=pointer]:
+                  - generic [ref=e69]:
+                    - paragraph [ref=e70]: /yolo
+                    - generic [ref=e71]: 30m ago
+                - button "/yolo 4h ago" [ref=e74] [cursor=pointer]:
+                  - generic [ref=e75]:
+                    - paragraph [ref=e76]: /yolo
+                    - generic [ref=e77]: 4h ago
+                - button "Untitled 10h ago" [ref=e80] [cursor=pointer]:
+                  - generic [ref=e81]:
+                    - paragraph [ref=e82]: Untitled
+                    - generic [ref=e83]: 10h ago
+                - button "/yolo 2d ago" [ref=e86] [cursor=pointer]:
+                  - generic [ref=e87]:
+                    - paragraph [ref=e88]: /yolo
+                    - generic [ref=e89]: 2d ago
+                - button "/yolo 12d ago" [ref=e92] [cursor=pointer]:
+                  - generic [ref=e93]:
+                    - paragraph [ref=e94]: /yolo
+                    - generic [ref=e95]: 12d ago
+                - button "/yolo 13d ago" [ref=e98] [cursor=pointer]:
+                  - generic [ref=e99]:
+                    - paragraph [ref=e100]: /yolo
+                    - generic [ref=e101]: 13d ago
+              - button "Archived 100" [ref=e104] [cursor=pointer]:
+                - img [ref=e105]
+                - img [ref=e107]
+                - generic [ref=e110]: Archived
+                - generic [ref=e111]: "100"
+        - generic [ref=e112]:
+          - button "Switch to dark mode" [ref=e114] [cursor=pointer]:
+            - img
+          - button "Collapse sidebar" [ref=e115] [cursor=pointer]:
+            - img [ref=e116]
+    - log [ref=e125]:
+      - generic [ref=e126]:
+        - img [ref=e128]
+        - generic [ref=e131]:
+          - paragraph [ref=e132]: Create a session to begin
+          - paragraph [ref=e133]: Click the + button in the sidebar to start a new session
+        - button "Create new session" [ref=e134] [cursor=pointer]:
+          - img
+          - generic [ref=e135]: Create new session
+  - region "Notifications alt+T"
+  - generic [ref=e136]:
+    - heading "Create New Session" [level=2] [ref=e137]
+    - paragraph [ref=e138]: Search directories or type a new path
