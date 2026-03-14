@@ -1,0 +1,257 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - link:
+                  - /url: https://www.kimi.com/code
+                  - img
+                - button:
+                  - img
+              - generic:
+                - complementary:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: https://www.kimi.com/code
+                          - img
+                          - generic: Kimi Code
+                        - generic: v1.19.0
+                    - generic:
+                      - heading [level=4]: Sessions
+                      - generic:
+                        - button:
+                          - img
+                        - button:
+                          - img
+                    - generic:
+                      - generic:
+                        - img
+                        - textbox:
+                          - /placeholder: Search sessions...
+                      - group:
+                        - radio [checked]:
+                          - img
+                        - radio:
+                          - img
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: Please describe this interface in 3 bullet...
+                                      - generic: 2m ago
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: /yolo
+                                      - generic: 6m ago
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: Untitled
+                                      - generic: 26m ago
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: /yolo
+                                      - generic: 32m ago
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: Untitled
+                                      - generic: 33m ago
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: /yolo
+                                      - generic: 35m ago
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: /yolo
+                                      - generic: 4h ago
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: Untitled
+                                      - generic: 10h ago
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: /yolo
+                                      - generic: 2d ago
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: /yolo
+                                      - generic: 12d ago
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - generic:
+                                      - paragraph: /yolo
+                                      - generic: 13d ago
+                      - generic:
+                        - generic:
+                          - button:
+                            - img
+                            - img
+                            - generic: Archived
+                            - generic: "100"
+                - generic:
+                  - generic:
+                    - button:
+                      - img
+                  - button:
+                    - img
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - button: Please describe this interface in 3 bullet...
+                    - generic:
+                      - button:
+                        - img
+                      - button:
+                        - img
+                      - button:
+                        - img
+                  - generic:
+                    - log:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic: Please describe this interface in 3 bullet points and include a short JavaScript code block that logs hello.
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - button [expanded]:
+                                        - img
+                                        - generic: Thought for 4s
+                                        - img
+                                      - generic:
+                                        - generic:
+                                          - paragraph: The user is asking me to describe "this interface" in 3 bullet points and include a short JavaScript code block that logs hello.
+                                          - paragraph: "However, looking at the conversation, there's no interface shown or described. The user might be referring to:"
+                                          - list:
+                                            - listitem: The Pi Web UI interface that was described in the AGENTS.md file
+                                            - listitem: Some interface they showed in a previous message that I don't see
+                                            - listitem: The n8n MCP tools interface described in the system
+                                          - paragraph: Given the context with all the n8n-mcp tools and the Pi Web UI AGENTS.md, I should probably clarify what interface they're referring to. But since they said "this interface", maybe they're referring to something visible in their current context that I should know about.
+                                          - paragraph: Actually, looking more carefully - the user might be testing me or referring to the Kimi Code CLI interface itself, or perhaps they have a screenshot/context I'm not seeing.
+                                          - paragraph: Since I don't have a clear picture of what "this interface" refers to, I should ask for clarification. However, if I had to guess based on the project context (Pi Web UI), I could describe that interface.
+                                          - paragraph: But the safest approach is to ask the user what interface they're referring to, as I don't see any specific interface described or shown in the current conversation that would be "this interface".
+                                          - paragraph: Wait - actually, the user might be referring to the interface shown in the working directory or the project structure. Or they might have a specific UI in mind.
+                                          - paragraph: Let me ask for clarification.
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic:
+                                        - generic:
+                                          - paragraph: "I don't see a specific interface described or shown in your message. Could you clarify which interface you'd like me to describe? For example:"
+                                          - list:
+                                            - listitem:
+                                              - text: The Pi Web UI (the project in
+                                              - code: /root/pi-web-ui
+                                              - text: "- a web interface for the Pi Coding Agent with React frontend, WebSocket communication, and JWT authentication)"
+                                            - listitem: An n8n workflow interface you have in mind
+                                            - listitem: A screenshot or image you're looking at
+                                            - listitem: Or something else entirely?
+                                          - paragraph: Once you clarify, I'll provide the 3 bullet points and JavaScript code block you requested.
+                                  - generic:
+                                    - button:
+                                      - img
+                                      - generic: Copy
+                                    - button:
+                                      - img
+                                      - generic: Fork session
+                      - button:
+                        - img
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - status:
+                              - generic: Awaiting input
+                            - button:
+                              - img
+                              - generic:
+                                - generic: "+0"
+                                - generic: "-0"
+                              - generic: 177 files
+                              - img
+                            - button:
+                              - img
+                              - generic: 9.3% context
+                        - generic:
+                          - group:
+                            - generic:
+                              - button:
+                                - img
+                              - generic:
+                                - generic:
+                                  - textbox:
+                                    - /placeholder: Ask anything, / for commands, @ to mention files
+                            - group:
+                              - generic:
+                                - generic:
+                                  - button:
+                                    - img
+                                  - button [expanded]:
+                                    - img
+                                    - generic: kimi-code/kimi-for-coding
+                                  - generic:
+                                    - generic: Thinking
+                                    - switch [checked]
+                                    - checkbox [checked]
+                              - button:
+                                - img
+    - region "Notifications alt+T"
+    - generic:
+      - heading [level=2]: Create New Session
+      - paragraph: Search directories or type a new path
+  - dialog "Select global model" [ref=e663]:
+    - heading "Select global model" [level=2] [ref=e664]
+    - generic [ref=e665]:
+      - generic [ref=e667]:
+        - img [ref=e668]
+        - combobox [expanded] [active] [ref=e671]
+      - listbox "Suggestions" [ref=e672]:
+        - generic [ref=e673]:
+          - generic [ref=e674]: Models
+          - group "Models" [ref=e675]:
+            - option "kimi-code/kimi-for-coding managed:kimi-code" [selected] [ref=e676]:
+              - img
+              - generic "kimi-code/kimi-for-coding (managed:kimi-code)" [ref=e677]: kimi-code/kimi-for-coding
+              - generic [ref=e678]: managed:kimi-code
+    - button "Close" [ref=e679]:
+      - img
+      - generic [ref=e680]: Close
