@@ -200,25 +200,59 @@ export class PiService {
   }
 
   async setModel(sessionId: string, modelId: string): Promise<void> {
+    console.log(`[PiService.setModel] Setting model for session ${sessionId} to ${modelId}`);
+    
     const session = this.sessions.get(sessionId);
     if (!session) {
+      console.error(`[PiService.setModel] Session not found: ${sessionId}`);
       throw new Error(`Session not found: ${sessionId}`);
     }
+    
+    console.log(`[PiService.setModel] Found session: ${session.sessionId}, file: ${session.sessionFile || 'N/A'}`);
+    console.log(`[PiService.setModel] Current model before change: ${session.model ? `${session.model.provider}/${session.model.id}` : 'none'}`);
     
     // Parse modelId format "provider/model-name"
     const [provider, ...modelParts] = modelId.split('/');
     const modelName = modelParts.join('/');
     
     if (!provider || !modelName) {
+      console.error(`[PiService.setModel] Invalid model ID format: ${modelId}`);
       throw new Error(`Invalid model ID format: ${modelId}. Expected "provider/model-name"`);
     }
     
+    console.log(`[PiService.setModel] Looking up model: provider=${provider}, name=${modelName}`);
+    
     const model = this.modelRegistry.find(provider, modelName);
     if (!model) {
+      console.error(`[PiService.setModel] Model not found in registry: ${modelId}`);
+      console.log(`[PiService.setModel] Available models will be logged on next getAvailableModels call`);
       throw new Error(`Model not found: ${modelId}`);
     }
     
-    await session.setModel(model);
+    console.log(`[PiService.setModel] Found model in registry: ${JSON.stringify(model)}`);
+    
+    try {
+      await session.setModel(model);
+      console.log(`[PiService.setModel] session.setModel() completed successfully`);
+      
+      // Verification: read back the model to confirm it was set
+      const verifiedModel = session.model;
+      if (!verifiedModel) {
+        console.error(`[PiService.setModel] Verification failed: session.model is null after setModel`);
+        throw new Error('Model change verification failed: session.model is null after setModel');
+      }
+      
+      const expectedModelId = model.id || modelName;
+      if (verifiedModel.id !== expectedModelId || verifiedModel.provider !== provider) {
+        console.error(`[PiService.setModel] Verification failed: expected ${provider}/${expectedModelId}, got ${verifiedModel.provider}/${verifiedModel.id}`);
+        throw new Error(`Model change verification failed: expected ${provider}/${expectedModelId}, got ${verifiedModel.provider}/${verifiedModel.id}`);
+      }
+      
+      console.log(`[PiService.setModel] Verification passed: model is now ${verifiedModel.provider}/${verifiedModel.id}`);
+    } catch (error) {
+      console.error(`[PiService.setModel] Error during session.setModel() or verification:`, error);
+      throw error;
+    }
   }
 
   removeClient(clientId: string): void {

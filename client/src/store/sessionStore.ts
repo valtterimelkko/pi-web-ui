@@ -354,7 +354,14 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'model_changed': {
-            set({ currentModel: msg.modelId as string });
+            const modelId = msg.modelId as string;
+            const modelName = modelId.split('/').pop()?.replace(/-/g, ' ') || modelId;
+            set({ currentModel: modelId });
+            // Show success toast
+            useUIStore.getState().addToast({
+              type: 'success',
+              message: `Model changed to ${modelName}`,
+            });
             break;
           }
 

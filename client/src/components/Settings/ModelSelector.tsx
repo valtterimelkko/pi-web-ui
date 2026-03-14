@@ -214,10 +214,11 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
   const hasSearchQuery = search.trim().length > 0;
 
   return (
-    <div className="relative">
+    <div className="relative" data-testid="model-selector">
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="w-full flex items-center justify-between p-3 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"
+        data-testid="model-selector-trigger"
       >
         <div className="flex items-center gap-3">
           <div className={`w-8 h-8 rounded flex items-center justify-center ${selectedProviderStyle.bgColor}`}>
@@ -236,7 +237,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 right-0 mt-2 bg-slate-800 rounded-lg border border-slate-700 shadow-xl z-50 max-h-96 overflow-hidden flex flex-col">
+        <div className="absolute top-full left-0 right-0 mt-2 bg-slate-800 rounded-lg border border-slate-700 shadow-xl z-50 max-h-96 overflow-hidden flex flex-col" data-testid="model-selector-dropdown">
           <div className="p-3 border-b border-slate-700">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -247,6 +248,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                 placeholder="Search models..."
                 className="w-full pl-9 pr-3 py-2 bg-slate-900 rounded text-sm text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-600"
                 autoFocus
+                data-testid="model-selector-search"
               />
             </div>
           </div>
@@ -266,6 +268,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                       w-full px-3 py-2.5 flex items-center gap-3 hover:bg-slate-700 transition-colors
                       ${currentModel === model.id ? 'bg-violet-600/20' : ''}
                     `}
+                    data-testid="model-option"
                   >
                     <div className={`w-6 h-6 rounded flex items-center justify-center ${providerStyle.bgColor}`}>
                       <ProviderIcon className={`w-3 h-3 ${providerStyle.color}`} />
@@ -295,7 +298,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                 
                 return (
                   <div key={provider}>
-                    <div className={`px-3 py-2 text-xs font-medium uppercase bg-slate-900/50 flex items-center gap-2 ${providerStyle.color}`}>
+                    <div className={`px-3 py-2 text-xs font-medium uppercase bg-slate-900/50 flex items-center gap-2 ${providerStyle.color}`} data-testid="provider-header">
                       <ProviderIcon className="w-3 h-3" />
                       {provider}
                     </div>

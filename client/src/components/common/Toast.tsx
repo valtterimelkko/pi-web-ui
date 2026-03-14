@@ -48,6 +48,7 @@ function Toast({ toast, onClose }: ToastProps) {
         text-white min-w-[300px] animate-in slide-in-from-right
         ${colors[toast.type]}
       `}
+      data-testid={`toast-${toast.type}`}
     >
       <Icon className="w-5 h-5 flex-shrink-0" />
       <span className="flex-1">{toast.message}</span>

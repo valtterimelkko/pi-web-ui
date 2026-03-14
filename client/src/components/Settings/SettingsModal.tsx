@@ -1,8 +1,8 @@
-import { X, Settings2 } from 'lucide-react';
+import { X, Settings2, AlertCircle } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { useSessionStore } from '../../store';
+import { useSessionStore, useUIStore } from '../../store';
 import { ModelSelector, type Model } from './ModelSelector';
 import { ThinkingLevelSelector, type ThinkingLevel } from './ThinkingLevelSelector';
 
@@ -17,8 +17,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [currentModel, setCurrentModel] = useState<string>('');
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('medium');
   const [showThinking, setShowThinking] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const { setModel } = useWebSocket();
   const storeCurrentModel = useSessionStore((state) => state.currentModel);
+  const errorMessage = useSessionStore((state) => state.error);
 
   // Fetch models on mount
   useEffect(() => {
@@ -42,17 +45,47 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     fetchModels();
   }, [isOpen, storeCurrentModel]);
 
+  // Clear error when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setError(null);
+    }
+  }, [isOpen]);
+
+  // Listen for error messages from the store (WebSocket errors)
+  useEffect(() => {
+    if (errorMessage && isOpen) {
+      // Check if this is a model-related error
+      if (errorMessage.includes('model') || errorMessage.includes('Model')) {
+        setError(errorMessage);
+        setIsSaving(false);
+      }
+    }
+  }, [errorMessage, isOpen]);
+
   const handleSave = () => {
     if (currentModel) {
+      setIsSaving(true);
+      setError(null);
       setModel(currentModel);
+      
+      // Wait a bit for the WebSocket response
+      setTimeout(() => {
+        setIsSaving(false);
+        // Only close if no error occurred
+        if (!error) {
+          onClose();
+        }
+      }, 1000);
+    } else {
+      onClose();
     }
-    onClose();
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" data-testid="settings-modal">
       <div className="bg-slate-900 rounded-xl border border-slate-700 w-full max-w-lg mx-4">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-800">
@@ -70,6 +103,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
         {/* Content */}
         <div className="p-6 space-y-6">
+          {/* Error Message */}
+          {error && (
+            <div className="bg-red-900/30 border border-red-700 rounded-lg p-3 flex items-start gap-2" data-testid="model-error">
+              <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm text-red-200 font-medium">Failed to change model</p>
+                <p className="text-xs text-red-300">{error}</p>
+              </div>
+            </div>
+          )}
+
           {/* Model Selection */}
           <section>
             <h3 className="text-sm font-medium text-slate-400 mb-3">Model</h3>
@@ -118,15 +162,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         <div className="flex justify-end gap-3 p-4 border-t border-slate-800">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-slate-400 hover:text-slate-200 transition-colors"
+            disabled={isSaving}
+            className="px-4 py-2 text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
-            className="px-4 py-2 bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
+            disabled={isSaving || !currentModel}
+            className="px-4 py-2 bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Save Changes
+            {isSaving ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
       </div>

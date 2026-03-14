@@ -54,6 +54,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
       <button
         onClick={onOpenSettings}
         className="flex items-center gap-2 hover:bg-slate-800 px-2 py-1 rounded transition-colors"
+        data-testid="model-indicator"
       >
         <Zap className="w-3.5 h-3.5 text-violet-400" />
         <span className="text-xs text-slate-400">{displayModelName}</span>
