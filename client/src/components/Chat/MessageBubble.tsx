@@ -14,10 +14,26 @@ interface MessageBubbleProps {
   isLast?: boolean;
 }
 
+// Format model name for display (remove provider prefix, capitalize)
+function formatModelName(modelId: string | null): string {
+  if (!modelId) return 'AI';
+  
+  // Remove provider prefix (e.g., "github-copilot/gpt-5.4" -> "gpt-5.4")
+  const parts = modelId.split('/');
+  const name = parts.length > 1 ? parts.slice(1).join('/') : modelId;
+  
+  // Capitalize and format
+  return name
+    .split('-')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 export function MessageBubble({ message, isLast }: MessageBubbleProps) {
   const [showThinking, setShowThinking] = useState(true);
   const [copied, setCopied] = useState(false);
   const isStreaming = useSessionStore((state) => state.isStreaming);
+  const currentModel = useSessionStore((state) => state.currentModel);
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
   const isAssistant = message.role === 'assistant';
@@ -151,9 +167,16 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
   return (
     <div className={`flex ${config.align}`}>
       <div className={`flex gap-3 max-w-[85%] min-w-0 ${isUser ? 'flex-row-reverse' : ''}`}>
-        {/* Avatar */}
-        <div className={`flex-shrink-0 w-8 h-8 rounded-lg ${config.bgColor} flex items-center justify-center`}>
-          <Icon className={`w-4 h-4 ${config.textColor}`} />
+        {/* Avatar with model badge for assistant messages */}
+        <div className="flex flex-col items-center gap-1">
+          <div className={`flex-shrink-0 w-8 h-8 rounded-lg ${config.bgColor} flex items-center justify-center`}>
+            <Icon className={`w-4 h-4 ${config.textColor}`} />
+          </div>
+          {isAssistant && (
+            <span className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">
+              {formatModelName(currentModel)}
+            </span>
+          )}
         </div>
 
         {/* Bubble */}

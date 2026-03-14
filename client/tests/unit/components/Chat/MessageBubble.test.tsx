@@ -5,9 +5,13 @@ import type { Message } from '../../../src/store';
 
 // Mock the useSessionStore hook
 vi.mock('../../../src/store', () => ({
-  useSessionStore: () => ({
-    isStreaming: false,
-  }),
+  useSessionStore: (selector?: (state: { isStreaming: boolean; currentModel: string | null }) => unknown) => {
+    const state = {
+      isStreaming: false,
+      currentModel: 'github-copilot/claude-sonnet-4',
+    };
+    return selector ? selector(state) : state;
+  },
 }));
 
 describe('MessageBubble', () => {
