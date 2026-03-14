@@ -80,19 +80,108 @@ function formatModelName(modelId: string): string {
     .join(' ');
 }
 
+// Scoring constants for search relevance
+const SCORE_EXACT_MATCH = 3;
+const SCORE_STARTS_WITH = 2;
+const SCORE_INCLUDES = 1;
+
+interface ScoredModel extends Model {
+  score: number;
+}
+
+// Highlight matched text in search results
+function HighlightedText({ text, query }: { text: string; query: string }) {
+  if (!query.trim()) {
+    return <>{text}</>;
+  }
+
+  const normalizedQuery = query.toLowerCase();
+  const normalizedText = text.toLowerCase();
+  const parts: Array<{ text: string; isMatch: boolean }> = [];
+  
+  let lastIndex = 0;
+  let index = normalizedText.indexOf(normalizedQuery);
+  
+  while (index !== -1) {
+    // Add text before match
+    if (index > lastIndex) {
+      parts.push({ text: text.slice(lastIndex, index), isMatch: false });
+    }
+    // Add matched text
+    parts.push({ text: text.slice(index, index + query.length), isMatch: true });
+    lastIndex = index + query.length;
+    index = normalizedText.indexOf(normalizedQuery, lastIndex);
+  }
+  
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push({ text: text.slice(lastIndex), isMatch: false });
+  }
+
+  return (
+    <>
+      {parts.map((part, i) => (
+        part.isMatch ? (
+          <mark key={i} className="bg-violet-500/30 text-violet-200 rounded px-0.5">
+            {part.text}
+          </mark>
+        ) : (
+          <span key={i}>{part.text}</span>
+        )
+      ))}
+    </>
+  );
+}
+
 export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorProps) {
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
 
+  // Smart filtering with scoring and sorting by relevance
   const filteredModels = useMemo(() => {
-    const query = search.toLowerCase();
-    return models.filter(
-      (m) =>
-        m.name.toLowerCase().includes(query) ||
-        m.provider.toLowerCase().includes(query)
-    );
+    const query = search.toLowerCase().trim();
+    
+    if (!query) {
+      // No search query, return all models with score 0 (will be grouped by provider)
+      return models.map(m => ({ ...m, score: 0 }));
+    }
+
+    const scoredModels: ScoredModel[] = [];
+
+    for (const model of models) {
+      const nameLower = model.name.toLowerCase();
+      const providerLower = model.provider.toLowerCase();
+      let score = 0;
+
+      // Check name matches
+      if (nameLower === query) {
+        score += SCORE_EXACT_MATCH;
+      } else if (nameLower.startsWith(query)) {
+        score += SCORE_STARTS_WITH;
+      } else if (nameLower.includes(query)) {
+        score += SCORE_INCLUDES;
+      }
+
+      // Check provider matches (add to existing score)
+      if (providerLower === query) {
+        score += SCORE_EXACT_MATCH;
+      } else if (providerLower.startsWith(query)) {
+        score += SCORE_STARTS_WITH;
+      } else if (providerLower.includes(query)) {
+        score += SCORE_INCLUDES;
+      }
+
+      // Only include models with at least one match
+      if (score > 0) {
+        scoredModels.push({ ...model, score });
+      }
+    }
+
+    // Sort by score descending (highest relevance first)
+    return scoredModels.sort((a, b) => b.score - a.score);
   }, [models, search]);
 
+  // Group models by provider when there's no search, or show flat list when searching
   const groupedModels = useMemo(() => {
     const groups: Record<string, Model[]> = {};
     for (const model of filteredModels) {
@@ -119,6 +208,10 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
     setIsOpen(false);
     setSearch('');
   };
+
+  // When searching, show results as a flat list sorted by relevance
+  // When not searching, group by provider
+  const hasSearchQuery = search.trim().length > 0;
 
   return (
     <div className="relative">
@@ -159,42 +252,80 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
           </div>
 
           <div className="overflow-y-auto flex-1">
-            {Object.entries(groupedModels).map(([provider, providerModels]) => {
-              const providerStyle = getProviderStyle(provider);
-              const ProviderIcon = providerStyle.icon;
-              
-              return (
-                <div key={provider}>
-                  <div className={`px-3 py-2 text-xs font-medium uppercase bg-slate-900/50 flex items-center gap-2 ${providerStyle.color}`}>
-                    <ProviderIcon className="w-3 h-3" />
-                    {provider}
+            {hasSearchQuery ? (
+              // Flat list when searching, sorted by relevance
+              filteredModels.map((model) => {
+                const providerStyle = getProviderStyle(model.provider);
+                const ProviderIcon = providerStyle.icon;
+                
+                return (
+                  <button
+                    key={model.id}
+                    onClick={() => handleSelect(model.id)}
+                    className={`
+                      w-full px-3 py-2.5 flex items-center gap-3 hover:bg-slate-700 transition-colors
+                      ${currentModel === model.id ? 'bg-violet-600/20' : ''}
+                    `}
+                  >
+                    <div className={`w-6 h-6 rounded flex items-center justify-center ${providerStyle.bgColor}`}>
+                      <ProviderIcon className={`w-3 h-3 ${providerStyle.color}`} />
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="text-sm text-slate-200">
+                        <HighlightedText text={model.name} query={search} />
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        <HighlightedText text={model.provider} query={search} />
+                        {' · '}
+                        {model.contextWindow.toLocaleString()} context
+                        {model.description && ` · ${model.description}`}
+                      </p>
+                    </div>
+                    {currentModel === model.id && (
+                      <Check className="w-4 h-4 text-violet-400" />
+                    )}
+                  </button>
+                );
+              })
+            ) : (
+              // Grouped by provider when not searching
+              Object.entries(groupedModels).map(([provider, providerModels]) => {
+                const providerStyle = getProviderStyle(provider);
+                const ProviderIcon = providerStyle.icon;
+                
+                return (
+                  <div key={provider}>
+                    <div className={`px-3 py-2 text-xs font-medium uppercase bg-slate-900/50 flex items-center gap-2 ${providerStyle.color}`}>
+                      <ProviderIcon className="w-3 h-3" />
+                      {provider}
+                    </div>
+                    {providerModels.map((model) => (
+                      <button
+                        key={model.id}
+                        onClick={() => handleSelect(model.id)}
+                        className={`
+                          w-full px-3 py-2.5 flex items-center gap-3 hover:bg-slate-700 transition-colors
+                          ${currentModel === model.id ? 'bg-violet-600/20' : ''}
+                        `}
+                      >
+                        <div className="flex-1 text-left">
+                          <p className="text-sm text-slate-200">{model.name}</p>
+                          <p className="text-xs text-slate-400">
+                            {model.contextWindow.toLocaleString()} context
+                            {model.description && ` · ${model.description}`}
+                          </p>
+                        </div>
+                        {currentModel === model.id && (
+                          <Check className="w-4 h-4 text-violet-400" />
+                        )}
+                      </button>
+                    ))}
                   </div>
-                  {providerModels.map((model) => (
-                    <button
-                      key={model.id}
-                      onClick={() => handleSelect(model.id)}
-                      className={`
-                        w-full px-3 py-2.5 flex items-center gap-3 hover:bg-slate-700 transition-colors
-                        ${currentModel === model.id ? 'bg-violet-600/20' : ''}
-                      `}
-                    >
-                      <div className="flex-1 text-left">
-                        <p className="text-sm text-slate-200">{model.name}</p>
-                        <p className="text-xs text-slate-400">
-                          {model.contextWindow.toLocaleString()} context
-                          {model.description && ` · ${model.description}`}
-                        </p>
-                      </div>
-                      {currentModel === model.id && (
-                        <Check className="w-4 h-4 text-violet-400" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              );
-            })}
+                );
+              })
+            )}
             
-            {Object.keys(groupedModels).length === 0 && (
+            {filteredModels.length === 0 && (
               <div className="px-3 py-4 text-center text-sm text-slate-400">
                 No models found matching &quot;{search}&quot;
               </div>
