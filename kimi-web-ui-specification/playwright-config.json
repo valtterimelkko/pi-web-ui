@@ -1,6 +1,0 @@
-{
-  "browser": "chromium",
-  "launchOptions": {
-    "args": ["--no-sandbox", "--disable-setuid-sandbox"]
-  }
-}
