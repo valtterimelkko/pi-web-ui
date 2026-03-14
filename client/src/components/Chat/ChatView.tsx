@@ -43,7 +43,7 @@ export function ChatView() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-950">
+    <div className="flex flex-col h-full bg-slate-950" data-testid="chat-interface">
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/50 backdrop-blur-sm">
         <div className="flex items-center gap-3">

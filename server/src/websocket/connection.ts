@@ -529,26 +529,44 @@ export class WebSocketConnectionManager {
   private async handleSetModel(clientId: string, message: { type: 'set_model'; modelId: string }): Promise<void> {
     const clientSession = this.sessionPool.getClientSession(clientId);
     if (!clientSession) {
+      console.error(`[handleSetModel] No active session for client ${clientId}`);
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
+
+    console.log(`[handleSetModel] Client ${clientId}, session ${clientSession.sessionId}, requested model: ${message.modelId}`);
+    console.log(`[handleSetModel] Session file: ${clientSession.session.sessionFile || 'N/A'}`);
 
     // Parse model ID (format: provider/model-name)
     const [provider, ...modelParts] = message.modelId.split('/');
     const modelId = modelParts.join('/');
 
     if (!provider || !modelId) {
+      console.error(`[handleSetModel] Invalid model ID format: ${message.modelId}`);
       this.sendMessage(clientId, { type: 'error', message: 'Invalid model ID format', code: 'INVALID_MESSAGE' });
       return;
     }
 
-    // Use pi service to set model
-    await this.piService.setModel(clientSession.sessionId, message.modelId);
+    try {
+      // Use pi service to set model
+      await this.piService.setModel(clientSession.sessionId, message.modelId);
+      
+      console.log(`[handleSetModel] Model change successful for session ${clientSession.sessionId}`);
 
-    this.sendMessage(clientId, {
-      type: 'model_changed',
-      modelId: message.modelId,
-    });
+      this.sendMessage(clientId, {
+        type: 'model_changed',
+        modelId: message.modelId,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[handleSetModel] Failed to set model for session ${clientSession.sessionId}:`, errorMessage);
+      
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: `Failed to change model: ${errorMessage}`,
+        code: 'MODEL_CHANGE_FAILED',
+      });
+    }
   }
 
   private async handleSetThinkingLevel(
