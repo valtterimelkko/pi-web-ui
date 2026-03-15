@@ -170,12 +170,15 @@ router.get('/read', async (req: Request, res: Response) => {
 router.post('/upload', async (req: Request, res: Response) => {
   try {
     const contentType = req.headers['content-type'] || '';
-    const fileName = req.headers['x-filename'] as string;
+    const rawFileName = req.headers['x-filename'] as string;
 
-    if (!fileName) {
+    if (!rawFileName) {
       res.status(400).json({ error: 'x-filename header is required' });
       return;
     }
+
+    // Decode URL-encoded filename (client sends encodeURIComponent)
+    const fileName = decodeURIComponent(rawFileName);
 
     // Sanitize filename (remove path separators and dots at the start)
     const sanitizedName = path.basename(fileName).replace(/^\.+/, '');
