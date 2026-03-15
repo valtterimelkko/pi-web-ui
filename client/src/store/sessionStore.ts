@@ -40,6 +40,7 @@ interface ExtensionUIRequest {
 export interface SessionStats {
   sessionFile: string | undefined;
   sessionId: string;
+  cwd?: string;
   userMessages: number;
   assistantMessages: number;
   toolCalls: number;
@@ -73,6 +74,8 @@ interface SessionState {
   contextPercent: number;
   contextUsed: number;
   contextWindow: number;
+  // Archive state (persisted)
+  archivedSessionPaths: string[];
 
   // Actions
   setSessions: (sessions: Session[]) => void;
@@ -86,6 +89,9 @@ interface SessionState {
   clearMessages: () => void;
   setExtensionUIRequest: (request: ExtensionUIRequest | null) => void;
   setSessionInfo: (info: SessionStats | null) => void;
+  archiveSession: (sessionPath: string) => void;
+  unarchiveSession: (sessionPath: string) => void;
+  isSessionArchived: (sessionPath: string) => boolean;
   
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -106,10 +112,25 @@ export const useSessionStore = create<SessionState>()(
       contextPercent: 0,
       contextUsed: 0,
       contextWindow: 0,
+      archivedSessionPaths: [],
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),
       setCurrentModel: (modelId) => set({ currentModel: modelId }),
+
+      archiveSession: (sessionPath) => set((state) => ({
+        archivedSessionPaths: state.archivedSessionPaths.includes(sessionPath)
+          ? state.archivedSessionPaths
+          : [...state.archivedSessionPaths, sessionPath],
+      })),
+
+      unarchiveSession: (sessionPath) => set((state) => ({
+        archivedSessionPaths: state.archivedSessionPaths.filter(p => p !== sessionPath),
+      })),
+
+      isSessionArchived: (sessionPath) => {
+        return get().archivedSessionPaths.includes(sessionPath);
+      },
 
       setSessions: (sessions) => set({ sessions }),
 
@@ -405,6 +426,7 @@ export const useSessionStore = create<SessionState>()(
       name: 'pi-web-ui-session',
       partialize: (state) => ({ 
         sessions: state.sessions,
+        archivedSessionPaths: state.archivedSessionPaths,
       }),
     }
   )

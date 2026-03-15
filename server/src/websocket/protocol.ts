@@ -52,6 +52,7 @@ export interface SessionMessage {
 export interface SessionStats {
   sessionFile?: string | undefined;
   sessionId?: string;
+  cwd?: string;
   userMessages?: number;
   assistantMessages?: number;
   toolCalls?: number;

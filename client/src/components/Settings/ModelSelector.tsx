@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Search, Check, ChevronDown, Github, Sparkles, Cpu, Brain, Zap } from 'lucide-react';
+import { Search, Check, ChevronDown, Github, Sparkles, Cpu, Brain, Zap, Triangle } from 'lucide-react';
 
 export interface Model {
   id: string;
@@ -18,6 +18,12 @@ interface ModelSelectorProps {
 
 // Provider icons and colors for visual distinction
 const providerStyles: Record<string, { icon: typeof Github; color: string; bgColor: string; label: string }> = {
+  'anthropic': {
+    icon: Triangle,
+    color: 'text-amber-600',
+    bgColor: 'bg-amber-50',
+    label: 'Anthropic',
+  },
   'github-copilot': {
     icon: Github,
     color: 'text-purple-600',
@@ -58,6 +64,7 @@ const providerStyles: Record<string, { icon: typeof Github; color: string; bgCol
 
 function getProviderStyle(provider: string) {
   const key = provider.toLowerCase();
+  if (key.includes('anthropic') || key.includes('claude')) return providerStyles['anthropic'];
   if (key.includes('github') || key.includes('copilot')) return providerStyles['github-copilot'];
   if (key.includes('kimi')) return providerStyles['kimi'];
   if (key.includes('openai') || key.includes('gpt')) return providerStyles['openai'];

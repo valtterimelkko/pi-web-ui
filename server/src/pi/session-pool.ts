@@ -86,8 +86,17 @@ export class SessionPool {
       webUIContext,
     });
 
-    // Use existing cwd or default
-    const cwd = existing?.cwd || process.cwd();
+    // Look up the proper cwd from the sessions list
+    let cwd = existing?.cwd || process.cwd();
+    try {
+      const allSessions = await this.piService.listAllSessions();
+      const sessionInfo = allSessions.find(s => s.path === sessionPath);
+      if (sessionInfo?.cwd) {
+        cwd = sessionInfo.cwd;
+      }
+    } catch {
+      // Fallback to existing cwd
+    }
 
     const clientSession: ClientSession = {
       clientId,

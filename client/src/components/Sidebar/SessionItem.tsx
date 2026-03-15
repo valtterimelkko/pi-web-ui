@@ -1,15 +1,19 @@
 import { useState } from 'react';
-import { Trash2, Edit2, Check, X } from 'lucide-react';
+import { Trash2, Edit2, Check, X, Archive, ArchiveRestore } from 'lucide-react';
 import type { Session } from '../../store';
+import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 
 interface SessionItemProps {
   session: Session;
   isActive: boolean;
+  isArchived?: boolean;
 }
 
-export function SessionItem({ session, isActive }: SessionItemProps) {
+export function SessionItem({ session, isActive, isArchived }: SessionItemProps) {
   const { switchSession, setSessionName } = useWebSocket();
+  const archiveSession = useSessionStore(state => state.archiveSession);
+  const unarchiveSession = useSessionStore(state => state.unarchiveSession);
   const [showActions, setShowActions] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(session.name || '');
@@ -138,12 +142,32 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
             {/* Actions: hover on desktop; always visible for active session */}
             {(showActions || isActive) ? (
               <>
+                {!isArchived && (
+                  <button
+                    onClick={handleStartEdit}
+                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                    title="Rename session"
+                  >
+                    <Edit2 className="w-3 h-3 text-gray-400" />
+                  </button>
+                )}
                 <button
-                  onClick={handleStartEdit}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isArchived) {
+                      unarchiveSession(session.path);
+                    } else {
+                      archiveSession(session.path);
+                    }
+                  }}
                   className="p-1 hover:bg-gray-200 rounded transition-colors"
-                  title="Rename session"
+                  title={isArchived ? 'Restore from archive' : 'Archive session'}
                 >
-                  <Edit2 className="w-3 h-3 text-gray-400" />
+                  {isArchived ? (
+                    <ArchiveRestore className="w-3 h-3 text-teal-500" />
+                  ) : (
+                    <Archive className="w-3 h-3 text-gray-400" />
+                  )}
                 </button>
                 <button
                   onClick={handleDelete}
