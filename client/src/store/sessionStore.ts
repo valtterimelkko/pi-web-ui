@@ -149,7 +149,14 @@ export const useSessionStore = create<SessionState>()(
             break;
 
           case 'session_created':
-            set({ currentSessionId: msg.sessionId as string });
+            set({ 
+              currentSessionId: msg.sessionId as string,
+              messages: [], // Clear messages for new session
+              contextPercent: 0,
+              contextUsed: 0,
+              contextWindow: 0,
+              sessionInfo: null,
+            });
             break;
 
           case 'session_switched': {
