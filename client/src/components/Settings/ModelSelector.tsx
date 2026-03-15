@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react';
 import { Search, Check, ChevronDown, Github, Sparkles, Cpu, Brain, Zap } from 'lucide-react';
-import { useUIStore } from '../../store/uiStore';
 
 export interface Model {
   id: string;
@@ -191,19 +190,20 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
     return groups;
   }, [filteredModels]);
 
-  const selectedModel = models.find((m) => m.id === currentModel);
+  // Parse currentModel (format: provider/model-id) to find the selected model
+  const selectedModel = currentModel 
+    ? models.find((m) => `${m.provider}/${m.id}` === currentModel)
+    : undefined;
   const selectedProviderStyle = selectedModel ? getProviderStyle(selectedModel.provider) : providerStyles['default'];
   const SelectedIcon = selectedProviderStyle.icon;
 
-  const handleSelect = (modelId: string) => {
-    if (modelId !== currentModel) {
-      onSelect(modelId);
-      const model = models.find((m) => m.id === modelId);
-      const modelName = model?.name || formatModelName(modelId);
-      useUIStore.getState().addToast({
-        type: 'success',
-        message: `Model changed to ${modelName}`,
-      });
+  const handleSelect = (modelId: string, provider: string) => {
+    // Construct full qualified model ID (provider/model-id format expected by server)
+    const qualifiedModelId = `${provider}/${modelId}`;
+    
+    if (qualifiedModelId !== currentModel) {
+      onSelect(qualifiedModelId);
+      // Note: Toast is shown by sessionStore when server confirms model_changed
     }
     setIsOpen(false);
     setSearch('');
@@ -262,11 +262,11 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                 
                 return (
                   <button
-                    key={model.id}
-                    onClick={() => handleSelect(model.id)}
+                    key={`${model.provider}/${model.id}`}
+                    onClick={() => handleSelect(model.id, model.provider)}
                     className={`
                       w-full px-3 py-2.5 flex items-center gap-3 hover:bg-slate-700 transition-colors
-                      ${currentModel === model.id ? 'bg-violet-600/20' : ''}
+                      ${currentModel === `${model.provider}/${model.id}` ? 'bg-violet-600/20' : ''}
                     `}
                     data-testid="model-option"
                   >
@@ -284,7 +284,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                         {model.description && ` · ${model.description}`}
                       </p>
                     </div>
-                    {currentModel === model.id && (
+                    {currentModel === `${model.provider}/${model.id}` && (
                       <Check className="w-4 h-4 text-violet-400" />
                     )}
                   </button>
@@ -305,10 +305,10 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                     {providerModels.map((model) => (
                       <button
                         key={model.id}
-                        onClick={() => handleSelect(model.id)}
+                        onClick={() => handleSelect(model.id, provider)}
                         className={`
                           w-full px-3 py-2.5 flex items-center gap-3 hover:bg-slate-700 transition-colors
-                          ${currentModel === model.id ? 'bg-violet-600/20' : ''}
+                          ${currentModel === `${provider}/${model.id}` ? 'bg-violet-600/20' : ''}
                         `}
                       >
                         <div className="flex-1 text-left">
@@ -318,7 +318,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                             {model.description && ` · ${model.description}`}
                           </p>
                         </div>
-                        {currentModel === model.id && (
+                        {currentModel === `${provider}/${model.id}` && (
                           <Check className="w-4 h-4 text-violet-400" />
                         )}
                       </button>
