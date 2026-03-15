@@ -109,7 +109,7 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
             onChange={(e) => setEditName(e.target.value)}
             onKeyDown={handleKeyDown}
             onClick={(e) => e.stopPropagation()}
-            className="flex-1 px-2 py-1 text-sm bg-white border border-gray-300 rounded text-gray-900 focus:outline-none focus:border-teal-500"
+            className="flex-1 px-2 py-1 text-sm bg-white border border-gray-300 rounded text-gray-900 focus:outline-none focus:border-teal-500 text-base"
             placeholder="Session name"
             autoFocus
           />
@@ -135,8 +135,8 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
           </p>
 
           <div className="flex items-center gap-1 flex-shrink-0">
-            {/* Hover actions */}
-            {showActions && (
+            {/* Actions: hover on desktop; always visible for active session */}
+            {(showActions || isActive) ? (
               <>
                 <button
                   onClick={handleStartEdit}
@@ -153,9 +153,7 @@ export function SessionItem({ session, isActive }: SessionItemProps) {
                   <Trash2 className="w-3 h-3 text-gray-400" />
                 </button>
               </>
-            )}
-            {/* Timestamp */}
-            {!showActions && (
+            ) : (
               <span className="text-[11px] text-gray-400">
                 {getRelativeTime(session.lastActivity || session.createdAt || new Date())}
               </span>

@@ -206,11 +206,11 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
           onKeyDown={handleKeyDown}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
-          placeholder={disabled ? 'Select a session to start chatting...' : 'Ask anything, / for commands, @ to mention files'}
+          placeholder={disabled ? 'Select a session to start chatting...' : 'Ask anything, / for commands'}
           disabled={disabled}
           rows={1}
-          className="w-full bg-transparent px-4 py-3 text-gray-900 placeholder-gray-400 resize-none outline-none min-h-[48px] max-h-[200px]"
-          style={{ lineHeight: '1.5' }}
+          className="w-full bg-transparent px-4 py-3 text-gray-900 placeholder-gray-400 resize-none outline-none min-h-[48px] max-h-[120px] sm:max-h-[200px] text-base"
+          style={{ lineHeight: '1.5', overscrollBehavior: 'contain' }}
         />
 
         {/* Toolbar */}
@@ -242,12 +242,13 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
               title="Change model"
             >
               <Settings2 className="w-3.5 h-3.5" />
-              <span>{displayModelName}</span>
+              <span className="max-w-[80px] truncate">{displayModelName}</span>
             </button>
 
             {/* Thinking toggle */}
             <div className="flex items-center gap-1.5">
-              <span className="text-xs text-gray-500">Thinking</span>
+              <span className="hidden sm:inline text-xs text-gray-500">Thinking</span>
+              <span className="sm:hidden text-xs text-gray-500">Think</span>
               <button
                 onClick={toggleThinking}
                 className={`w-8 h-4.5 rounded-full transition-colors relative ${

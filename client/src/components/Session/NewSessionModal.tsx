@@ -145,7 +145,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
               type="text"
               defaultValue={currentPath}
               placeholder="Enter path..."
-              className="flex-1 px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 placeholder-gray-400 border border-gray-200 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+              className="flex-1 px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 placeholder-gray-400 border border-gray-200 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-base"
             />
             <button
               type="submit"
