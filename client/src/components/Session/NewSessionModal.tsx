@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog } from 'lucide-react';
+import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog, ArrowUp } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface NewSessionModalProps {
@@ -8,18 +8,17 @@ interface NewSessionModalProps {
   onCreateSession: (cwd?: string) => void;
 }
 
-interface DirectoryInfo {
-  path: string;
+interface DirectoryItem {
   name: string;
-  isDirectory: boolean;
+  path: string;
 }
 
 export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSessionModalProps) {
-  const [currentPath, setCurrentPath] = useState<string>('/');
-  const [directories, setDirectories] = useState<DirectoryInfo[]>([]);
+  const [currentPath, setCurrentPath] = useState<string>('/root');
+  const [parentPath, setParentPath] = useState<string | null>(null);
+  const [directories, setDirectories] = useState<DirectoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pathHistory, setPathHistory] = useState<string[]>(['/']);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Fetch directories for the current path
@@ -28,20 +27,26 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
     setError(null);
     try {
       const response = await api.get(`/api/files/browse?path=${encodeURIComponent(path)}`) as {
-        entries: Array<{ name: string; path: string; isDirectory: boolean }>;
-        currentPath: string;
+        path: string;
+        parent: string | null;
+        items: Array<{ name: string; type: string; path: string }>;
       };
       
       // Filter only directories and sort alphabetically
-      const dirs = (response.entries || [])
-        .filter((entry) => entry.isDirectory)
+      const dirs = (response.items || [])
+        .filter((entry) => entry.type === 'directory')
+        .map((entry) => ({
+          name: entry.name,
+          path: entry.path,
+        }))
         .sort((a, b) => a.name.localeCompare(b.name));
       
       setDirectories(dirs);
-      setCurrentPath(response.currentPath || path);
+      setCurrentPath(response.path || path);
+      setParentPath(response.parent);
     } catch (err) {
       console.error('Failed to fetch directories:', err);
-      setError('Failed to load directories. Please check the path.');
+      setError('Access denied or path not found. Try a different path.');
       setDirectories([]);
     } finally {
       setIsLoading(false);
@@ -51,21 +56,18 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   // Load initial directory
   useEffect(() => {
     if (isOpen) {
-      fetchDirectories('/');
+      // Start from /root which is always allowed
+      fetchDirectories('/root');
     }
   }, [isOpen]);
 
-  const handleNavigate = (dir: DirectoryInfo) => {
-    const newPath = dir.path;
-    setPathHistory((prev) => [...prev, newPath]);
-    fetchDirectories(newPath);
+  const handleNavigate = (dir: DirectoryItem) => {
+    fetchDirectories(dir.path);
   };
 
   const handleNavigateUp = () => {
-    if (pathHistory.length > 1) {
-      const newHistory = pathHistory.slice(0, -1);
-      setPathHistory(newHistory);
-      fetchDirectories(newHistory[newHistory.length - 1]);
+    if (parentPath) {
+      fetchDirectories(parentPath);
     }
   };
 
@@ -154,19 +156,14 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         <div className="flex-1 overflow-hidden flex flex-col">
           {/* Breadcrumb / Current Path */}
           <div className="px-4 py-2 bg-slate-800/50 border-b border-slate-800 flex items-center gap-2">
-            <button
-              onClick={() => fetchDirectories('/')}
-              className="p-1 hover:bg-slate-700 rounded transition-colors"
-              title="Go to root"
-            >
-              <Folder className="w-4 h-4 text-slate-400" />
-            </button>
-            {pathHistory.length > 1 && (
+            <Folder className="w-4 h-4 text-violet-400" />
+            {parentPath && (
               <button
                 onClick={handleNavigateUp}
-                className="p-1 hover:bg-slate-700 rounded transition-colors text-sm text-slate-400"
+                className="p-1 hover:bg-slate-700 rounded transition-colors"
+                title="Go up"
               >
-                ..
+                <ArrowUp className="w-4 h-4 text-slate-400" />
               </button>
             )}
             <ChevronRight className="w-4 h-4 text-slate-600" />
@@ -180,10 +177,18 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
                 <Loader2 className="w-6 h-6 text-violet-400 animate-spin" />
               </div>
             ) : error ? (
-              <div className="text-center py-8 text-red-400 text-sm">{error}</div>
+              <div className="text-center py-8">
+                <p className="text-red-400 text-sm mb-4">{error}</p>
+                <button
+                  onClick={() => fetchDirectories('/root')}
+                  className="text-violet-400 text-sm hover:underline"
+                >
+                  Reset to /root
+                </button>
+              </div>
             ) : directories.length === 0 ? (
               <div className="text-center py-8 text-slate-400 text-sm">
-                No subdirectories found
+                No subdirectories found. Use this folder or enter a custom path.
               </div>
             ) : (
               <div className="space-y-1">
@@ -206,7 +211,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 p-4 border-t border-slate-800">
           <p className="text-xs text-slate-500">
-            Selected: <span className="text-slate-400">{currentPath}</span>
+            Selected: <span className="text-slate-400 font-mono">{currentPath}</span>
           </p>
           <div className="flex gap-3">
             <button

@@ -404,7 +404,6 @@ export const useSessionStore = create<SessionState>()(
     {
       name: 'pi-web-ui-session',
       partialize: (state) => ({ 
-        currentSessionId: state.currentSessionId,
         sessions: state.sessions,
       }),
     }
