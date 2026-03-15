@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useSessionStore } from '../../store';
+import { useChatStore } from '../../store/chatStore';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { TreeView, type TreeEntry } from '../Tree';
 import { NewSessionModal } from '../Session';
-import { Info, Search, ChevronsUpDown } from 'lucide-react';
+import { Info, ChevronsUpDown, PanelRight } from 'lucide-react';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
 
@@ -24,6 +25,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const { createNewSession } = useWebSocket();
 
   // Get current session name
+  const { sidebarOpen, toggleSidebar } = useChatStore();
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const sessionTitle = currentSession?.name || currentSession?.firstMessage || 'New Session';
 
@@ -51,14 +53,27 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
 
   return (
     <div className="flex flex-col h-full bg-white" data-testid="chat-interface">
-      {/* Header */}
-      {currentSessionId && (
-        <header className="flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white">
-          <h1 className="text-sm font-medium text-gray-900 truncate max-w-md">
-            {sessionTitle}
-          </h1>
+      {/* Header - always shown */}
+      <header className="flex items-center gap-2 px-2 py-2 border-b border-gray-200 bg-white min-w-0">
+        {/* Sidebar toggle */}
+        {!sidebarOpen && (
+          <button
+            onClick={toggleSidebar}
+            className="flex-shrink-0 p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            title="Open sidebar"
+          >
+            <PanelRight className="w-5 h-5 text-gray-500" />
+          </button>
+        )}
 
-          <div className="flex items-center gap-1">
+        {/* Session title */}
+        <h1 className="flex-1 min-w-0 text-sm font-medium text-gray-900 truncate px-2">
+          {currentSessionId ? sessionTitle : ''}
+        </h1>
+
+        {/* Right actions – only when session active */}
+        {currentSessionId && (
+          <div className="flex items-center gap-1 flex-shrink-0">
             <button
               onClick={() => setShowSessionInfo(true)}
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
@@ -74,15 +89,15 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
               <ChevronsUpDown className="w-4 h-4 text-gray-400" />
             </button>
           </div>
-        </header>
-      )}
+        )}
+      </header>
 
       {/* Main content area */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Message List */}
         <div
           id="chat-scroll-area"
-          className="flex-1 overflow-y-auto overflow-x-hidden"
+          className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain"
         >
           <MessageList
             messages={messages}
@@ -92,7 +107,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         </div>
 
         {/* Message Input */}
-        <div className="bg-white">
+        <div className="bg-white pb-safe">
           <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
             <MessageInput disabled={!currentSessionId || isLoading} onOpenSettings={onOpenSettings} />
           </div>

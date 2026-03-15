@@ -122,19 +122,19 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
             ? 'bg-gray-100 rounded-lg p-4 text-gray-900'
             : isTool
               ? 'bg-gray-50 border border-gray-200 rounded-lg p-4'
-              : 'pl-4 border-l-2 border-teal-400 text-gray-900'
+              : 'pl-4 pr-8 border-l-2 border-teal-400 text-gray-900'
           }
         `}
       >
-        {/* Copy button - show on hover for assistant messages */}
+        {/* Copy button - always visible on mobile, hover-only on desktop */}
         {isAssistant && !isStreamingThis && displayText && (
           <button
             onClick={handleCopy}
             className={`
-              absolute top-2 right-2 p-1.5 rounded-md transition-all duration-200
+              absolute top-1 right-1 p-1.5 rounded-md transition-all duration-200
               ${copied
                 ? 'bg-green-100 text-green-600'
-                : 'bg-gray-100 text-gray-500 opacity-0 group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700'
+                : 'bg-gray-100 text-gray-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700'
               }
             `}
             title={copied ? 'Copied!' : 'Copy message'}

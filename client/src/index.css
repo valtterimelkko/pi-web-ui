@@ -222,3 +222,8 @@ html {
 .dark .prose a { color: #2dd4bf !important; }
 .dark .prose strong { color: #f1f5f9 !important; }
 .dark .prose code { color: #e2e8f0 !important; background-color: #1e293b !important; }
+
+/* iOS safe area – prevents content being hidden behind home indicator */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
