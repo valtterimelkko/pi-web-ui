@@ -209,7 +209,7 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
           placeholder={disabled ? 'Select a session to start chatting...' : 'Ask anything, / for commands'}
           disabled={disabled}
           rows={1}
-          className="w-full bg-transparent px-4 py-3 text-gray-900 placeholder-gray-400 resize-none outline-none min-h-[48px] max-h-[120px] sm:max-h-[200px] text-base"
+          className="w-full bg-transparent px-4 py-3 text-gray-900 placeholder-gray-400 resize-none outline-none min-h-[72px] sm:min-h-[48px] max-h-[120px] sm:max-h-[200px] text-sm"
           style={{ lineHeight: '1.5', overscrollBehavior: 'contain' }}
         />
 
