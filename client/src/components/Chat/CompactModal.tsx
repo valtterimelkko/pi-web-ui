@@ -16,7 +16,7 @@ export function CompactModal({ isOpen, onClose }: CompactModalProps) {
   const handleCompact = () => {
     const instructions = customInstructions.trim() || undefined;
     const success = sendCompact(instructions);
-    
+
     if (success) {
       addToast({
         type: 'info',
@@ -28,7 +28,7 @@ export function CompactModal({ isOpen, onClose }: CompactModalProps) {
         message: 'Failed to start compaction. No active session?',
       });
     }
-    
+
     setCustomInstructions('');
     onClose();
   };
@@ -47,13 +47,13 @@ export function CompactModal({ isOpen, onClose }: CompactModalProps) {
         <>
           <button
             onClick={handleClose}
-            className="px-4 py-2 text-sm text-slate-300 hover:text-slate-100 transition-colors"
+            className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
           >
             Cancel
           </button>
           <button
             onClick={handleCompact}
-            className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-sm rounded-lg transition-colors"
+            className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white text-sm rounded-lg transition-colors"
           >
             Compact
           </button>
@@ -61,13 +61,13 @@ export function CompactModal({ isOpen, onClose }: CompactModalProps) {
       }
     >
       <div className="space-y-4">
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-gray-500">
           Compaction summarizes the conversation to free up context window.
           This helps maintain performance in long conversations.
         </p>
-        
+
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-2">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
             Custom Instructions (optional)
           </label>
           <textarea
@@ -75,9 +75,9 @@ export function CompactModal({ isOpen, onClose }: CompactModalProps) {
             onChange={(e) => setCustomInstructions(e.target.value)}
             placeholder="e.g., Focus on preserving technical details about the API implementation..."
             rows={3}
-            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-400 text-sm resize-none focus:outline-none focus:border-violet-500"
+            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 text-sm resize-none focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20"
           />
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-gray-400">
             Leave empty to use default summarization behavior.
           </p>
         </div>

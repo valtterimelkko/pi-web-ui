@@ -1,4 +1,4 @@
-import { Bot, PlusCircle } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import type { Message } from '../../store';
 import { MessageBubble } from './MessageBubble';
 
@@ -12,34 +12,31 @@ export function MessageList({ messages, hasSession, onCreateSession }: MessageLi
   if (messages.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-8 text-center">
-        <div className="p-4 bg-slate-800/50 rounded-2xl mb-4">
-          <Bot className="w-12 h-12 text-violet-400" />
-        </div>
-        
+        <Sparkles className="w-10 h-10 text-gray-300 mb-4" />
+
         {!hasSession ? (
           <>
-            <h2 className="text-xl font-semibold text-slate-100 mb-2">
-              No Active Session
+            <h2 className="text-lg font-medium text-gray-900 mb-2">
+              Create a session to begin
             </h2>
-            <p className="text-slate-400 max-w-md mb-6">
-              Create a new session to start chatting with the AI assistant.
+            <p className="text-gray-500 max-w-md mb-6 text-sm">
+              Start a new coding session to interact with the AI assistant.
             </p>
             {onCreateSession && (
               <button
                 onClick={onCreateSession}
-                className="flex items-center gap-2 px-6 py-3 bg-violet-600 hover:bg-violet-700 rounded-xl text-white font-medium transition-colors"
+                className="px-6 py-2.5 bg-gray-900 hover:bg-gray-800 rounded-full text-white text-sm font-medium transition-colors"
               >
-                <PlusCircle className="w-5 h-5" />
-                Start New Session
+                Create new session
               </button>
             )}
           </>
         ) : (
           <>
-            <h2 className="text-xl font-semibold text-slate-100 mb-2">
+            <h2 className="text-lg font-medium text-gray-900 mb-2">
               Ready to help
             </h2>
-            <p className="text-slate-400 max-w-md">
+            <p className="text-gray-500 max-w-md text-sm">
               Start a conversation by typing a message below. I can help you with coding, analysis, and more.
             </p>
           </>
@@ -49,7 +46,7 @@ export function MessageList({ messages, hasSession, onCreateSession }: MessageLi
   }
 
   return (
-    <div className="flex flex-col space-y-6 p-4 sm:p-6 lg:p-8">
+    <div className="flex flex-col space-y-4 p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
       {messages.map((message, index) => (
         <MessageBubble
           key={message.id}

@@ -8,16 +8,20 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Pi brand colors
+        // Pi brand colors - teal/ocean blue accent
         pi: {
-          primary: '#6366f1',
-          secondary: '#8b5cf6',
-          accent: '#f59e0b',
-          dark: '#0f172a',
-          darker: '#020617',
+          primary: '#0D9488',    // teal-600
+          hover: '#0F766E',      // teal-700
+          light: '#F0FDFA',      // teal-50
+          dark: '#111827',       // gray-900
+          surface: '#FFFFFF',
+          sidebar: '#F9FAFB',    // gray-50
+          border: '#E5E7EB',     // gray-200
+          code: '#F9FAFB',       // gray-50
         },
       },
       fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],
       },
     },

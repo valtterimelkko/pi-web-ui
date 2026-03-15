@@ -6,13 +6,13 @@ interface TreeBranchProps {
 export function TreeBranch({ depth, isLast }: TreeBranchProps) {
   return (
     <div
-      className="absolute left-0 top-0 bottom-0 w-px bg-slate-700"
+      className="absolute left-0 top-0 bottom-0 w-px bg-gray-200"
       style={{
         left: `${depth * 24 + 14}px`,
       }}
     >
       {!isLast && (
-        <div className="absolute left-0 top-6 right-0 h-px bg-slate-700" />
+        <div className="absolute left-0 top-6 right-0 h-px bg-gray-200" />
       )}
     </div>
   );

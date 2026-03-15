@@ -7,42 +7,42 @@ export function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const login = useAuth((state) => state.login);
-  
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setIsLoading(true);
-    
+
     const result = await login(password);
-    
+
     setIsLoading(false);
-    
+
     if (!result.success) {
       setError(result.error || 'Login failed');
       setPassword('');
     }
   };
-  
+
   return (
-    <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+    <main className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <div className="bg-slate-900 border border-slate-800 rounded-lg shadow-xl p-8">
+        <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-8">
           <div className="flex items-center justify-center mb-8">
-            <div className="p-3 bg-violet-600 rounded-lg">
+            <div className="p-3 bg-gray-900 rounded-lg">
               <Lock className="w-8 h-8 text-white" />
             </div>
           </div>
-          
-          <h1 className="text-2xl font-bold text-white text-center mb-2">
+
+          <h1 className="text-2xl font-bold text-gray-900 text-center mb-2">
             Pi Web UI
           </h1>
-          <p className="text-slate-400 text-center mb-8">
+          <p className="text-gray-500 text-center mb-8">
             Enter your password to continue
           </p>
-          
+
           <form onSubmit={handleSubmit}>
             <div className="mb-4">
-              <label htmlFor="password" className="block text-sm font-medium text-slate-300 mb-2">
+              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
                 Password
               </label>
               <input
@@ -50,23 +50,23 @@ export function LoginForm() {
                 id="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
                 placeholder="Enter password"
                 disabled={isLoading}
                 autoFocus
               />
             </div>
-            
+
             {error && (
-              <div className="mb-4 p-3 bg-red-900/50 border border-red-800 rounded-lg text-red-200 text-sm">
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
                 {error}
               </div>
             )}
-            
+
             <button
               type="submit"
               disabled={isLoading || !password}
-              className="w-full py-3 px-4 bg-violet-600 hover:bg-violet-700 disabled:bg-violet-800 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+              className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
             >
               {isLoading ? (
                 <>
@@ -79,8 +79,8 @@ export function LoginForm() {
             </button>
           </form>
         </div>
-        
-        <p className="text-center text-slate-400 text-sm mt-6">
+
+        <p className="text-center text-gray-400 text-sm mt-6">
           Pi Coding Agent Web Interface
         </p>
       </div>

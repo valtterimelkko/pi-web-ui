@@ -43,9 +43,9 @@ export function TreeNode({
       <div
         className={`
           group flex items-center gap-2 py-2 px-3 rounded-lg cursor-pointer transition-colors
-          ${isCurrent 
-            ? 'bg-violet-600/20 border border-violet-600/50' 
-            : 'hover:bg-slate-800 border border-transparent'
+          ${isCurrent
+            ? 'bg-teal-50 border border-teal-200'
+            : 'hover:bg-gray-50 border border-transparent'
           }
         `}
         style={{ marginLeft: `${depth * 24}px` }}
@@ -59,41 +59,42 @@ export function TreeNode({
           }}
           className={`
             w-5 h-5 flex items-center justify-center rounded transition-colors
-            ${hasChildren ? 'hover:bg-slate-700' : 'invisible'}
+            ${hasChildren ? 'hover:bg-gray-200' : 'invisible'}
           `}
         >
           {hasChildren && (isExpanded ? (
-            <ChevronDown className="w-4 h-4 text-slate-400" />
+            <ChevronDown className="w-4 h-4 text-gray-400" />
           ) : (
-            <ChevronRight className="w-4 h-4 text-slate-400" />
+            <ChevronRight className="w-4 h-4 text-gray-400" />
           ))}
         </button>
 
         {/* Icon */}
         <div className={`
           w-6 h-6 rounded flex items-center justify-center
-          ${entry.role === 'user' ? 'bg-blue-600' : 'bg-violet-600'}
+          ${entry.role === 'user' ? 'bg-gray-200' : 'bg-teal-100'}
         `}>
           {entry.role === 'user' ? (
-            <User className="w-3.5 h-3.5 text-white" />
+            <User className="w-3.5 h-3.5 text-gray-600" />
           ) : (
-            <MessageSquare className="w-3.5 h-3.5 text-white" />
+            <MessageSquare className="w-3.5 h-3.5 text-teal-600" />
           )}
         </div>
 
         {/* Content preview */}
         <div className="flex-1 min-w-0">
-          <p className="text-sm text-slate-300 truncate">
+          <p className="text-sm text-gray-700 truncate">
             {entry.label || entry.content.slice(0, 60) || 'Empty message'}
-          </p>          <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-xs text-slate-500">
+          </p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-xs text-gray-400">
               {new Date(entry.timestamp).toLocaleTimeString([], {
                 hour: '2-digit',
                 minute: '2-digit',
               })}
             </span>
             {hasBranches && (
-              <span className="text-xs text-amber-400 flex items-center gap-1">
+              <span className="text-xs text-teal-600 flex items-center gap-1">
                 <GitFork className="w-3 h-3" />
                 {entry.branches!.length} branch{entry.branches!.length !== 1 ? 'es' : ''}
               </span>
@@ -102,25 +103,24 @@ export function TreeNode({
         </div>
 
         {/* Actions */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
-        >
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           {onFork && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onFork(entry.id);
               }}
-              className="p-1.5 hover:bg-violet-600/20 rounded transition-colors"
+              className="p-1.5 hover:bg-teal-100 rounded transition-colors"
               title="Fork from here"
             >
-              <GitFork className="w-4 h-4 text-violet-400" />
+              <GitFork className="w-4 h-4 text-teal-600" />
             </button>
           )}
         </div>
 
         {/* Current indicator */}
         {isCurrent && (
-          <div className="w-2 h-2 bg-violet-500 rounded-full" />
+          <div className="w-2 h-2 bg-teal-500 rounded-full" />
         )}
       </div>
 

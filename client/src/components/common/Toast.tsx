@@ -10,10 +10,10 @@ const icons = {
 };
 
 const colors = {
-  info: 'bg-blue-600',
-  success: 'bg-green-600',
-  warning: 'bg-amber-600',
-  error: 'bg-red-600',
+  info: 'bg-blue-50 text-blue-800 border border-blue-200',
+  success: 'bg-green-50 text-green-800 border border-green-200',
+  warning: 'bg-amber-50 text-amber-800 border border-amber-200',
+  error: 'bg-red-50 text-red-800 border border-red-200',
 };
 
 export function ToastContainer() {
@@ -45,14 +45,14 @@ function Toast({ toast, onClose }: ToastProps) {
     <div
       className={`
         flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg
-        text-white min-w-[300px] animate-in slide-in-from-right
+        min-w-[300px] animate-in slide-in-from-right
         ${colors[toast.type]}
       `}
       data-testid={`toast-${toast.type}`}
     >
       <Icon className="w-5 h-5 flex-shrink-0" />
-      <span className="flex-1">{toast.message}</span>
-      <button onClick={onClose} className="p-1 hover:bg-white/20 rounded transition-colors">
+      <span className="flex-1 text-sm">{toast.message}</span>
+      <button onClick={onClose} className="p-1 hover:bg-black/10 rounded transition-colors">
         <X className="w-4 h-4" />
       </button>
     </div>

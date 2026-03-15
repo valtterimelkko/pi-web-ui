@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lightbulb, ChevronDown } from 'lucide-react';
+import { Sparkles, ChevronDown } from 'lucide-react';
 
 interface ThinkingBlockProps {
   content: string;
@@ -7,7 +7,7 @@ interface ThinkingBlockProps {
   onToggle?: () => void;
 }
 
-export function ThinkingBlock({ content, isOpen = true, onToggle }: ThinkingBlockProps) {
+export function ThinkingBlock({ content, isOpen = false, onToggle }: ThinkingBlockProps) {
   const [internalOpen, setInternalOpen] = useState(isOpen);
   const isControlled = onToggle !== undefined;
   const isExpanded = isControlled ? isOpen : internalOpen;
@@ -21,19 +21,19 @@ export function ThinkingBlock({ content, isOpen = true, onToggle }: ThinkingBloc
   };
 
   return (
-    <div className="border border-amber-700/30 rounded-xl overflow-hidden bg-amber-950/20">
+    <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-50">
       {/* Header */}
       <button
         onClick={handleToggle}
-        className="w-full flex items-center justify-between px-4 py-2.5 bg-amber-900/20 hover:bg-amber-900/30 transition-colors"
+        className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-100 transition-colors"
         type="button"
       >
         <div className="flex items-center gap-2">
-          <Lightbulb className="w-4 h-4 text-amber-400" />
-          <span className="text-sm font-medium text-amber-200">Thinking</span>
+          <Sparkles className="w-3.5 h-3.5 text-gray-400" />
+          <span className="text-xs font-medium text-gray-500">Thinking</span>
         </div>
         <ChevronDown
-          className={`w-4 h-4 text-amber-400 transition-transform duration-200 ${
+          className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${
             isExpanded ? '' : '-rotate-90'
           }`}
         />
@@ -41,8 +41,8 @@ export function ThinkingBlock({ content, isOpen = true, onToggle }: ThinkingBloc
 
       {/* Content */}
       {isExpanded && (
-        <div className="px-4 py-3 border-t border-amber-700/20">
-          <p className="text-sm text-amber-100/80 whitespace-pre-wrap leading-relaxed break-words overflow-hidden">
+        <div className="px-3 py-2 border-t border-gray-200">
+          <p className="text-sm text-gray-600 whitespace-pre-wrap leading-relaxed break-words overflow-hidden">
             {content}
           </p>
         </div>

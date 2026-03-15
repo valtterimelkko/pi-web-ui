@@ -21,7 +21,6 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch directories for the current path
   const fetchDirectories = async (path: string) => {
     setIsLoading(true);
     setError(null);
@@ -31,8 +30,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         parent: string | null;
         items: Array<{ name: string; type: string; path: string }>;
       };
-      
-      // Filter only directories and sort alphabetically
+
       const dirs = (response.items || [])
         .filter((entry) => entry.type === 'directory')
         .map((entry) => ({
@@ -40,7 +38,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
           path: entry.path,
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
-      
+
       setDirectories(dirs);
       setCurrentPath(response.path || path);
       setParentPath(response.parent);
@@ -53,10 +51,8 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
     }
   };
 
-  // Load initial directory
   useEffect(() => {
     if (isOpen) {
-      // Start from /root which is always allowed
       fetchDirectories('/root');
     }
   }, [isOpen]);
@@ -88,34 +84,42 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
     onClose();
   };
 
+  // Close on Escape
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    if (isOpen) window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
-  // Common workspace suggestions
   const quickWorkspaces = [
     { path: '/root', label: 'Root Home', icon: Home },
     { path: '/root/pi-web-ui', label: 'Pi Web UI', icon: FolderCog },
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" data-testid="new-session-modal">
-      <div className="bg-slate-900 rounded-xl border border-slate-700 w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" data-testid="new-session-modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl border border-gray-200 shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-800">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <div>
-            <h2 className="text-lg font-semibold text-slate-100">New Session</h2>
-            <p className="text-sm text-slate-400">Select a workspace folder for your new session</p>
+            <h2 className="text-lg font-semibold text-gray-900">Create New Session</h2>
+            <p className="text-sm text-gray-500">Select a workspace folder for your new session</p>
           </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
           >
-            <X className="w-5 h-5 text-slate-400" />
+            <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
 
         {/* Quick Select */}
-        <div className="p-4 border-b border-slate-800">
-          <p className="text-xs text-slate-500 uppercase mb-2">Quick Select</p>
+        <div className="p-4 border-b border-gray-200">
+          <p className="text-xs text-gray-400 uppercase font-medium mb-2">Quick Select</p>
           <div className="flex flex-wrap gap-2">
             {quickWorkspaces.map((workspace) => {
               const Icon = workspace.icon;
@@ -123,9 +127,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
                 <button
                   key={workspace.path}
                   onClick={() => handleQuickSelect(workspace.path)}
-                  className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-slate-300 transition-colors"
+                  className="flex items-center gap-2 px-3 py-2 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-700 transition-colors"
                 >
-                  <Icon className="w-4 h-4 text-violet-400" />
+                  <Icon className="w-4 h-4 text-teal-600" />
                   <span>{workspace.label}</span>
                 </button>
               );
@@ -134,18 +138,18 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         </div>
 
         {/* Path Input */}
-        <div className="p-4 border-b border-slate-800">
+        <div className="p-4 border-b border-gray-200">
           <form onSubmit={handlePathSubmit} className="flex gap-2">
             <input
               ref={inputRef}
               type="text"
               defaultValue={currentPath}
               placeholder="Enter path..."
-              className="flex-1 px-3 py-2 bg-slate-800 rounded-lg text-sm text-slate-200 placeholder-slate-500 border border-slate-700 focus:border-violet-500 focus:outline-none"
+              className="flex-1 px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 placeholder-gray-400 border border-gray-200 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
             />
             <button
               type="submit"
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-200 transition-colors"
+              className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-700 transition-colors border border-gray-200"
             >
               Go
             </button>
@@ -154,53 +158,53 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
 
         {/* Directory Browser */}
         <div className="flex-1 overflow-hidden flex flex-col">
-          {/* Breadcrumb / Current Path */}
-          <div className="px-4 py-2 bg-slate-800/50 border-b border-slate-800 flex items-center gap-2">
-            <Folder className="w-4 h-4 text-violet-400" />
+          {/* Breadcrumb */}
+          <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-2">
+            <Folder className="w-4 h-4 text-teal-600" />
             {parentPath && (
               <button
                 onClick={handleNavigateUp}
-                className="p-1 hover:bg-slate-700 rounded transition-colors"
+                className="p-1 hover:bg-gray-200 rounded transition-colors"
                 title="Go up"
               >
-                <ArrowUp className="w-4 h-4 text-slate-400" />
+                <ArrowUp className="w-4 h-4 text-gray-400" />
               </button>
             )}
-            <ChevronRight className="w-4 h-4 text-slate-600" />
-            <span className="text-sm text-slate-300 truncate flex-1">{currentPath}</span>
+            <ChevronRight className="w-4 h-4 text-gray-300" />
+            <span className="text-sm text-gray-700 truncate flex-1">{currentPath}</span>
           </div>
 
           {/* Directory List */}
           <div className="flex-1 overflow-y-auto p-2">
             {isLoading ? (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="w-6 h-6 text-violet-400 animate-spin" />
+                <Loader2 className="w-6 h-6 text-teal-600 animate-spin" />
               </div>
             ) : error ? (
               <div className="text-center py-8">
-                <p className="text-red-400 text-sm mb-4">{error}</p>
+                <p className="text-red-500 text-sm mb-4">{error}</p>
                 <button
                   onClick={() => fetchDirectories('/root')}
-                  className="text-violet-400 text-sm hover:underline"
+                  className="text-teal-600 text-sm hover:underline"
                 >
                   Reset to /root
                 </button>
               </div>
             ) : directories.length === 0 ? (
-              <div className="text-center py-8 text-slate-400 text-sm">
+              <div className="text-center py-8 text-gray-400 text-sm">
                 No subdirectories found. Use this folder or enter a custom path.
               </div>
             ) : (
-              <div className="space-y-1">
+              <div className="space-y-0.5">
                 {directories.map((dir) => (
                   <button
                     key={dir.path}
                     onClick={() => handleNavigate(dir)}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-slate-800 rounded-lg transition-colors text-left"
+                    className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 rounded-lg transition-colors text-left"
                   >
-                    <FolderOpen className="w-5 h-5 text-violet-400" />
-                    <span className="text-sm text-slate-200 truncate">{dir.name}</span>
-                    <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
+                    <FolderOpen className="w-5 h-5 text-teal-600" />
+                    <span className="text-sm text-gray-700 truncate">{dir.name}</span>
+                    <ChevronRight className="w-4 h-4 text-gray-300 ml-auto" />
                   </button>
                 ))}
               </div>
@@ -209,20 +213,20 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-3 p-4 border-t border-slate-800">
-          <p className="text-xs text-slate-500">
-            Selected: <span className="text-slate-400 font-mono">{currentPath}</span>
+        <div className="flex items-center justify-between gap-3 p-4 border-t border-gray-200">
+          <p className="text-xs text-gray-400">
+            Selected: <span className="text-gray-600 font-mono">{currentPath}</span>
           </p>
           <div className="flex gap-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-slate-400 hover:text-slate-200 transition-colors"
+              className="px-4 py-2 text-gray-500 hover:text-gray-700 transition-colors"
             >
               Cancel
             </button>
             <button
               onClick={handleSelectAndCreate}
-              className="px-4 py-2 bg-violet-600 hover:bg-violet-700 rounded-lg text-white transition-colors"
+              className="px-4 py-2 bg-gray-900 hover:bg-gray-800 rounded-lg text-white transition-colors"
             >
               Create Session
             </button>

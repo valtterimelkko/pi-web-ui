@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { User, Bot, Wrench, Copy, Check } from 'lucide-react';
+import { Copy, Check } from 'lucide-react';
 import type { Message } from '../../store';
 import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
@@ -14,37 +14,20 @@ interface MessageBubbleProps {
   isLast?: boolean;
 }
 
-// Format model name for display (remove provider prefix, capitalize)
-function formatModelName(modelId: string | null): string {
-  if (!modelId) return 'AI';
-  
-  // Remove provider prefix (e.g., "github-copilot/gpt-5.4" -> "gpt-5.4")
-  const parts = modelId.split('/');
-  const name = parts.length > 1 ? parts.slice(1).join('/') : modelId;
-  
-  // Capitalize and format
-  return name
-    .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
 export function MessageBubble({ message, isLast }: MessageBubbleProps) {
-  const [showThinking, setShowThinking] = useState(true);
+  const [showThinking, setShowThinking] = useState(false);
   const [copied, setCopied] = useState(false);
   const isStreaming = useSessionStore((state) => state.isStreaming);
-  const currentModel = useSessionStore((state) => state.currentModel);
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
   const isAssistant = message.role === 'assistant';
 
   // Process content to extract text and thinking
   const processContent = (): { text: string; thinking: string | null } => {
-    // Handle array content (new format from SDK)
     if (Array.isArray(message.content)) {
       let textParts: string[] = [];
       let thinkingParts: string[] = [];
-      
+
       for (const part of message.content) {
         if (part.type === 'text' && part.text) {
           textParts.push(part.text);
@@ -52,8 +35,7 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
           thinkingParts.push(part.thinking);
         }
       }
-      
-      // Also check for <thinking> tags in text (old format)
+
       const fullText = textParts.join('');
       const thinkingMatch = fullText.match(/<thinking>([\s\S]*?)<\/thinking>/);
       if (thinkingMatch) {
@@ -62,14 +44,13 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
           thinking: thinkingMatch[1].trim(),
         };
       }
-      
+
       return {
         text: fullText,
         thinking: thinkingParts.length > 0 ? thinkingParts.join('\n\n') : null,
       };
     }
-    
-    // Handle string content (may have <thinking> tags)
+
     if (typeof message.content === 'string') {
       const thinkingMatch = message.content.match(/<thinking>([\s\S]*?)<\/thinking>/);
       if (thinkingMatch) {
@@ -80,7 +61,7 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
       }
       return { text: message.content, thinking: null };
     }
-    
+
     return { text: '', thinking: null };
   };
 
@@ -88,7 +69,6 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
   const hasThinking = !!thinking;
   const isStreamingThis = isLast && isStreaming && isAssistant;
 
-  // Handle copy message
   const handleCopy = async () => {
     if (!displayText) return;
     const success = await copyToClipboard(displayText, 'Message copied to clipboard');
@@ -98,7 +78,6 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
     }
   };
 
-  // Format timestamp
   const formatTime = (timestamp: number): string => {
     return new Date(timestamp).toLocaleTimeString('en-US', {
       hour: '2-digit',
@@ -106,168 +85,110 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
     });
   };
 
-  // Get avatar icon and styles based on role
-  const getAvatarConfig = () => {
-    if (isUser) {
-      return {
-        icon: User,
-        bgColor: 'bg-violet-600',
-        textColor: 'text-white',
-        bubbleBg: 'bg-violet-600',
-        bubbleText: 'text-white',
-        align: 'justify-end',
-      };
-    }
-    if (isTool) {
-      return {
-        icon: Wrench,
-        bgColor: 'bg-amber-600',
-        textColor: 'text-white',
-        bubbleBg: 'bg-amber-900/30 border border-amber-700/50',
-        bubbleText: 'text-amber-100',
-        align: 'justify-start',
-      };
-    }
-    return {
-      icon: Bot,
-      bgColor: 'bg-slate-700',
-      textColor: 'text-slate-300',
-      bubbleBg: 'bg-slate-800 border border-slate-700',
-      bubbleText: 'text-slate-100',
-      align: 'justify-start',
-    };
-  };
-
-  const config = getAvatarConfig();
-  const Icon = config.icon;
-
   // Render tool call card for tool messages
   if (isTool && message.toolCall) {
     return (
-      <div className={`flex ${config.align}`}>
-        <div className="flex gap-3 max-w-[85%] min-w-0">
-          <div className={`flex-shrink-0 w-8 h-8 rounded-lg ${config.bgColor} flex items-center justify-center`}>
-            <Icon className={`w-4 h-4 ${config.textColor}`} />
-          </div>
-          <div className="flex-1 space-y-2 min-w-0">
-            <ToolCallCard
-              name={message.toolCall.name}
-              args={message.toolCall.args}
-              result={message.toolResult}
-            />
-            <span className="text-xs text-slate-400">
-              {formatTime(message.timestamp)}
-            </span>
-          </div>
-        </div>
+      <div className="w-full">
+        <ToolCallCard
+          name={message.toolCall.name}
+          args={message.toolCall.args}
+          result={message.toolResult}
+        />
+        <span className="text-xs text-gray-400 mt-1 block">
+          {formatTime(message.timestamp)}
+        </span>
       </div>
     );
   }
 
   return (
-    <div className={`flex ${config.align}`}>
-      <div className={`flex gap-3 max-w-[85%] min-w-0 ${isUser ? 'flex-row-reverse' : ''}`}>
-        {/* Avatar with model badge for assistant messages */}
-        <div className="flex flex-col items-center gap-1">
-          <div className={`flex-shrink-0 w-8 h-8 rounded-lg ${config.bgColor} flex items-center justify-center`}>
-            <Icon className={`w-4 h-4 ${config.textColor}`} />
-          </div>
-          {isAssistant && (
-            <span className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">
-              {formatModelName(currentModel)}
-            </span>
-          )}
+    <div className="w-full">
+      {/* Thinking block */}
+      {hasThinking && (
+        <div className="mb-2">
+          <ThinkingBlock
+            content={thinking}
+            isOpen={showThinking}
+            onToggle={() => setShowThinking(!showThinking)}
+          />
         </div>
+      )}
 
-        {/* Bubble */}
-        <div className="flex flex-col space-y-1 min-w-0">
-          {/* Thinking block */}
-          {hasThinking && (
-            <ThinkingBlock
-              content={thinking}
-              isOpen={showThinking}
-              onToggle={() => setShowThinking(!showThinking)}
-            />
-          )}
-
-          {/* Message content */}
-          <div
+      {/* Message content */}
+      <div
+        className={`
+          relative group break-words overflow-hidden
+          ${isUser
+            ? 'bg-gray-100 rounded-lg p-4 text-gray-900'
+            : isTool
+              ? 'bg-gray-50 border border-gray-200 rounded-lg p-4'
+              : 'pl-4 border-l-2 border-teal-400 text-gray-900'
+          }
+        `}
+      >
+        {/* Copy button - show on hover for assistant messages */}
+        {isAssistant && !isStreamingThis && displayText && (
+          <button
+            onClick={handleCopy}
             className={`
-              relative max-w-3xl px-4 py-3 rounded-2xl transition-all duration-200
-              hover:shadow-lg hover:shadow-black/20 group break-words overflow-hidden
-              ${isUser 
-                ? 'bg-violet-600 text-white rounded-br-md hover:bg-violet-500' 
-                : isTool
-                  ? 'bg-amber-900/30 border border-amber-800/50 rounded-bl-md'
-                  : 'bg-slate-800 text-slate-100 rounded-bl-md hover:bg-slate-750'
+              absolute top-2 right-2 p-1.5 rounded-md transition-all duration-200
+              ${copied
+                ? 'bg-green-100 text-green-600'
+                : 'bg-gray-100 text-gray-500 opacity-0 group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700'
               }
             `}
+            title={copied ? 'Copied!' : 'Copy message'}
           >
-            {/* Copy button - show on hover for assistant messages */}
-            {isAssistant && !isStreamingThis && displayText && (
-              <button
-                onClick={handleCopy}
-                className={`
-                  absolute top-2 right-2 p-1.5 rounded-md transition-all duration-200
-                  ${copied 
-                    ? 'bg-green-600 text-white' 
-                    : 'bg-slate-700 text-slate-400 opacity-0 group-hover:opacity-100 hover:bg-slate-600 hover:text-slate-200'
-                  }
-                `}
-                title={copied ? 'Copied!' : 'Copy message'}
-              >
-                {copied ? (
-                  <Check className="w-3.5 h-3.5" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5" />
-                )}
-              </button>
-            )}
-
-            {isStreamingThis ? (
-              <StreamingText text={displayText} />
+            {copied ? (
+              <Check className="w-3.5 h-3.5" />
             ) : (
-              <div className="prose prose-invert prose-sm max-w-none">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    code({ inline, className, children, ...props }: { inline?: boolean; className?: string; children?: React.ReactNode }) {
-                      const match = /language-(\w+)/.exec(className || '');
-                      return !inline ? (
-                        <pre className="bg-slate-950 rounded-lg p-3 overflow-x-auto my-2">
-                          <code className={match ? `language-${match[1]}` : ''} {...props}>
-                            {children}
-                          </code>
-                        </pre>
-                      ) : (
-                        <code className="bg-slate-950 px-1.5 py-0.5 rounded text-sm" {...props}>
-                          {children}
-                        </code>
-                      );
-                    },
-                    p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
-                    ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
-                    ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
-                    li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-                    a: ({ children, href }) => (
-                      <a href={href} className="text-violet-400 hover:text-violet-300 underline" target="_blank" rel="noopener noreferrer">
-                        {children}
-                      </a>
-                    ),
-                  }}
-                >
-                  {displayText}
-                </ReactMarkdown>
-              </div>
+              <Copy className="w-3.5 h-3.5" />
             )}
-          </div>
+          </button>
+        )}
 
-          {/* Timestamp */}
-          <span className={`text-xs text-slate-400 ${isUser ? 'text-right' : ''}`}>
-            {formatTime(message.timestamp)}
-          </span>
-        </div>
+        {isStreamingThis ? (
+          <StreamingText text={displayText} />
+        ) : (
+          <div className="prose prose-sm max-w-none prose-gray">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                code({ inline, className, children, ...props }: { inline?: boolean; className?: string; children?: React.ReactNode }) {
+                  const match = /language-(\w+)/.exec(className || '');
+                  return !inline ? (
+                    <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-x-auto my-2">
+                      <code className={match ? `language-${match[1]}` : ''} {...props}>
+                        {children}
+                      </code>
+                    </pre>
+                  ) : (
+                    <code className="bg-gray-100 text-gray-800 px-1 py-0.5 rounded text-sm" {...props}>
+                      {children}
+                    </code>
+                  );
+                },
+                p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+                ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                a: ({ children, href }) => (
+                  <a href={href} className="text-teal-600 hover:text-teal-700 underline" target="_blank" rel="noopener noreferrer">
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {displayText}
+            </ReactMarkdown>
+          </div>
+        )}
       </div>
+
+      {/* Timestamp */}
+      <span className="text-xs text-gray-400 mt-1 block">
+        {formatTime(message.timestamp)}
+      </span>
     </div>
   );
 }
