@@ -9,6 +9,10 @@ export interface UploadedFile {
   mimeType: string;
 }
 
+export interface WebUIPreferences {
+  archivedSessionPaths?: string[];
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -88,3 +92,30 @@ export const api = {
   exportSession,
   uploadFile,
 };
+
+/**
+ * Fetch web UI preferences from the server.
+ */
+export async function getPreferences(): Promise<WebUIPreferences> {
+  return apiGet('/api/preferences') as Promise<WebUIPreferences>;
+}
+
+/**
+ * Merge-patch web UI preferences on the server.
+ * Only the supplied keys are updated; others are left unchanged.
+ */
+export async function patchPreferences(updates: Partial<WebUIPreferences>): Promise<WebUIPreferences> {
+  const response = await fetch(`${API_URL}/api/preferences`, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+    throw new ApiError(response.status, error.error || `HTTP ${response.status}`);
+  }
+
+  return response.json() as Promise<WebUIPreferences>;
+}
