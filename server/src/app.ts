@@ -8,6 +8,7 @@ import sessionsRoutes from './routes/sessions.js';
 import modelsRoutes from './routes/models.js';
 import filesRoutes from './routes/files.js';
 import extensionsRoutes from './routes/extensions.js';
+import preferencesRoutes from './routes/preferences.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -63,6 +64,9 @@ export function createApp(): express.Application {
 
   // Extension management routes
   app.use('/api/extensions', extensionsRoutes);
+
+  // Web UI preferences (archive state, etc.)
+  app.use('/api/preferences', preferencesRoutes);
 
   // Serve static files from client/dist in production
   if (config.nodeEnv === 'production') {

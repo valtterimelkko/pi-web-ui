@@ -56,10 +56,16 @@ function AuthenticatedApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const extensionUIRequest = useSessionStore((state) => state.extensionUIRequest);
   const setExtensionUIRequest = useSessionStore((state) => state.setExtensionUIRequest);
+  const initPreferences = useSessionStore((state) => state.initPreferences);
   const { sendMessage } = useWebSocket();
 
   // Enable keyboard shortcut for copying last message (Ctrl+Shift+C)
   useCopyShortcut();
+
+  // Load server-side preferences (archive state, etc.) on mount
+  useEffect(() => {
+    initPreferences();
+  }, [initPreferences]);
 
   return (
     <div className="h-screen flex bg-white dark:bg-gray-950">

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useUIStore } from './uiStore';
+import { getPreferences, patchPreferences } from '../lib/api';
 
 export interface Session {
   id: string;
@@ -92,6 +93,7 @@ interface SessionState {
   archiveSession: (sessionPath: string) => void;
   unarchiveSession: (sessionPath: string) => void;
   isSessionArchived: (sessionPath: string) => boolean;
+  initPreferences: () => Promise<void>;
   
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -118,18 +120,42 @@ export const useSessionStore = create<SessionState>()(
       setSessionInfo: (info) => set({ sessionInfo: info }),
       setCurrentModel: (modelId) => set({ currentModel: modelId }),
 
-      archiveSession: (sessionPath) => set((state) => ({
-        archivedSessionPaths: state.archivedSessionPaths.includes(sessionPath)
-          ? state.archivedSessionPaths
-          : [...state.archivedSessionPaths, sessionPath],
-      })),
+      archiveSession: (sessionPath) => {
+        set((state) => ({
+          archivedSessionPaths: state.archivedSessionPaths.includes(sessionPath)
+            ? state.archivedSessionPaths
+            : [...state.archivedSessionPaths, sessionPath],
+        }));
+        // Fire-and-forget sync to server so all devices stay in sync
+        patchPreferences({ archivedSessionPaths: get().archivedSessionPaths }).catch((e) => {
+          console.warn('Failed to sync archive state to server:', e);
+        });
+      },
 
-      unarchiveSession: (sessionPath) => set((state) => ({
-        archivedSessionPaths: state.archivedSessionPaths.filter(p => p !== sessionPath),
-      })),
+      unarchiveSession: (sessionPath) => {
+        set((state) => ({
+          archivedSessionPaths: state.archivedSessionPaths.filter(p => p !== sessionPath),
+        }));
+        patchPreferences({ archivedSessionPaths: get().archivedSessionPaths }).catch((e) => {
+          console.warn('Failed to sync archive state to server:', e);
+        });
+      },
 
       isSessionArchived: (sessionPath) => {
         return get().archivedSessionPaths.includes(sessionPath);
+      },
+
+      initPreferences: async () => {
+        try {
+          const serverPrefs = await getPreferences();
+          if (serverPrefs.archivedSessionPaths !== undefined) {
+            // Server is the source of truth — overrides localStorage cache
+            set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
+          }
+        } catch (e) {
+          // Non-fatal: fall back to whatever is already in localStorage
+          console.warn('Failed to load preferences from server, using local cache:', e);
+        }
       },
 
       setSessions: (sessions) => set({ sessions }),
