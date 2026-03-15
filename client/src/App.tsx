@@ -62,7 +62,7 @@ function AuthenticatedApp() {
   useCopyShortcut();
 
   return (
-    <div className="h-[100dvh] flex bg-white dark:bg-gray-950">
+    <div className="h-screen flex bg-white dark:bg-gray-950">
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden">
         <ChatView onOpenSettings={() => setSettingsOpen(true)} />

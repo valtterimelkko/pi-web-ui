@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useSessionStore } from '../../store';
-import { useChatStore } from '../../store/chatStore';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { TreeView, type TreeEntry } from '../Tree';
 import { NewSessionModal } from '../Session';
-import { Info, ChevronsUpDown, PanelRight } from 'lucide-react';
+import { Info, ChevronsUpDown } from 'lucide-react';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
 
@@ -25,7 +24,6 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const { createNewSession } = useWebSocket();
 
   // Get current session name
-  const { sidebarOpen, toggleSidebar } = useChatStore();
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const sessionTitle = currentSession?.name || currentSession?.firstMessage || 'New Session';
 
@@ -55,19 +53,8 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
     <div className="flex flex-col h-full bg-white" data-testid="chat-interface">
       {/* Header - always shown */}
       <header className="flex items-center gap-2 px-2 py-2 border-b border-gray-200 bg-white min-w-0">
-        {/* Sidebar toggle */}
-        {!sidebarOpen && (
-          <button
-            onClick={toggleSidebar}
-            className="flex-shrink-0 p-2 hover:bg-gray-100 rounded-lg transition-colors"
-            title="Open sidebar"
-          >
-            <PanelRight className="w-5 h-5 text-gray-500" />
-          </button>
-        )}
-
-        {/* Session title */}
-        <h1 className="flex-1 min-w-0 text-sm font-medium text-gray-900 truncate px-2">
+        {/* Session title — left-padded to clear the fixed sidebar toggle button */}
+        <h1 className="flex-1 min-w-0 text-sm font-medium text-gray-900 truncate pl-12 pr-2">
           {currentSessionId ? sessionTitle : ''}
         </h1>
 
@@ -79,14 +66,14 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               title="Session info"
             >
-              <Info className="w-4 h-4 text-gray-400" />
+              <Info className="w-5 h-5 text-gray-600" />
             </button>
             <button
               onClick={() => setShowTreeView(true)}
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               title="View conversation tree"
             >
-              <ChevronsUpDown className="w-4 h-4 text-gray-400" />
+              <ChevronsUpDown className="w-5 h-5 text-gray-600" />
             </button>
           </div>
         )}
