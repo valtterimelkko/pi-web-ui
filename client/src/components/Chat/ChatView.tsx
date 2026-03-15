@@ -3,7 +3,9 @@ import { useSessionStore } from '../../store';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { TreeView, type TreeEntry } from '../Tree';
+import { NewSessionModal } from '../Session';
 import { Sparkles, GitBranch } from 'lucide-react';
+import { useWebSocket } from '../../hooks/useWebSocket';
 
 export function ChatView() {
   const messages = useSessionStore((state) => state.messages);
@@ -11,6 +13,8 @@ export function ChatView() {
   const isLoading = useSessionStore((state) => state.isLoading);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const [showTreeView, setShowTreeView] = useState(false);
+  const [showNewSessionModal, setShowNewSessionModal] = useState(false);
+  const { createNewSession } = useWebSocket();
 
   // Convert messages to tree entries
   const treeEntries: TreeEntry[] = messages.map((msg, index) => ({
@@ -40,6 +44,10 @@ export function ChatView() {
     if (isStreaming) return 'text-amber-400';
     if (isLoading) return 'text-blue-400';
     return 'text-emerald-400';
+  };
+
+  const handleCreateSession = (cwd?: string) => {
+    createNewSession(cwd);
   };
 
   return (
@@ -82,7 +90,11 @@ export function ChatView() {
           id="chat-scroll-area"
           className="flex-1 overflow-y-auto overflow-x-hidden"
         >
-          <MessageList messages={messages} />
+          <MessageList 
+            messages={messages} 
+            hasSession={!!currentSessionId}
+            onCreateSession={() => setShowNewSessionModal(true)}
+          />
         </div>
 
         {/* Message Input */}
@@ -112,6 +124,13 @@ export function ChatView() {
           </div>
         </div>
       )}
+
+      {/* New Session Modal */}
+      <NewSessionModal
+        isOpen={showNewSessionModal}
+        onClose={() => setShowNewSessionModal(false)}
+        onCreateSession={handleCreateSession}
+      />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { useChatStore } from '../../store/chatStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { SessionList } from './SessionList';
 import { SessionFilters } from './SessionFilters';
+import { NewSessionModal } from '../Session';
 
 export function Sidebar() {
   const { sessions, currentSessionId } = useSessionStore();
@@ -12,6 +13,7 @@ export function Sidebar() {
   const { createNewSession } = useWebSocket();
   const [filter, setFilter] = useState('');
   const [cwdFilter, setCwdFilter] = useState<string | null>(null);
+  const [showNewSessionModal, setShowNewSessionModal] = useState(false);
 
   const filteredSessions = sessions.filter((session) => {
     const matchesText = !filter || 
@@ -25,6 +27,10 @@ export function Sidebar() {
 
   // Get unique CWDs for filter dropdown
   const uniqueCwds = Array.from(new Set(sessions.map(s => s.cwd)));
+
+  const handleCreateSession = (cwd?: string) => {
+    createNewSession(cwd);
+  };
 
   if (!sidebarOpen) {
     return (
@@ -52,7 +58,7 @@ export function Sidebar() {
           <h2 className="text-lg font-semibold text-slate-200">Sessions</h2>
           <div className="flex gap-2">
             <button
-              onClick={() => createNewSession()}
+              onClick={() => setShowNewSessionModal(true)}
               className="p-2 bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
               title="New session"
             >
@@ -90,6 +96,13 @@ export function Sidebar() {
           />
         </div>
       </aside>
+
+      {/* New Session Modal */}
+      <NewSessionModal
+        isOpen={showNewSessionModal}
+        onClose={() => setShowNewSessionModal(false)}
+        onCreateSession={handleCreateSession}
+      />
     </>
   );
 }
