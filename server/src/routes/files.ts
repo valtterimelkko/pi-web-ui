@@ -178,10 +178,14 @@ router.post('/upload', async (req: Request, res: Response) => {
     }
 
     // Decode URL-encoded filename (client sends encodeURIComponent)
-    const fileName = decodeURIComponent(rawFileName);
+    const decodedFileName = decodeURIComponent(rawFileName);
 
-    // Sanitize filename (remove path separators and dots at the start)
-    const sanitizedName = path.basename(fileName).replace(/^\.+/, '');
+    // Sanitize: strip path separators, leading dots, then replace spaces and
+    // shell-special characters with underscores so the path is safe to embed
+    // in bash commands that the AI agent may construct.
+    const sanitizedName = path.basename(decodedFileName)
+      .replace(/^\.+/, '')                        // no leading dots
+      .replace(/[\s<>:"|?*\\]/g, '_');            // spaces & shell-unsafe → _
     if (!sanitizedName) {
       res.status(400).json({ error: 'Invalid filename' });
       return;
