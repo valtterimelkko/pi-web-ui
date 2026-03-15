@@ -319,9 +319,13 @@ export class WebSocketConnectionManager {
   }
 
   private async handleNewSession(clientId: string, message: { type: 'new_session'; cwd?: string }): Promise<void> {
+    console.log(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}`);
+    
     const clientSession = await this.sessionPool.createClientSession(clientId, {
       cwd: message.cwd,
     });
+
+    console.log(`[handleNewSession] Session created: ${clientSession.sessionId}, sessionFile=${clientSession.session.sessionFile || 'N/A'}`);
 
     this.sendMessage(clientId, {
       type: 'session_created',
