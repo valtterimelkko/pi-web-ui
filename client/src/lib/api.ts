@@ -1,6 +1,14 @@
 // Use relative URL in production (same origin), or VITE_API_URL in development
 const API_URL = import.meta.env.VITE_API_URL || '';
 
+export interface UploadedFile {
+  path: string;
+  name: string;
+  savedName: string;
+  size: number;
+  mimeType: string;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -53,7 +61,30 @@ export async function exportSession(sessionId: string): Promise<void> {
   window.URL.revokeObjectURL(url);
 }
 
+/**
+ * Upload a file to the server. Returns the server-side path and metadata.
+ */
+export async function uploadFile(file: File): Promise<UploadedFile> {
+  const response = await fetch(`${API_URL}/api/files/upload`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': file.type || 'application/octet-stream',
+      'x-filename': encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Upload failed' }));
+    throw new ApiError(response.status, error.error || `HTTP ${response.status}`);
+  }
+
+  return response.json() as Promise<UploadedFile>;
+}
+
 export const api = {
   get: apiGet,
   exportSession,
+  uploadFile,
 };

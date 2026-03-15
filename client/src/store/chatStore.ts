@@ -1,9 +1,17 @@
 import { create } from 'zustand';
 
+export interface UploadedFileInfo {
+  file: File;
+  serverPath: string;
+  uploading: boolean;
+  error?: string;
+}
+
 interface ChatState {
   // Input state
   inputValue: string;
   selectedFiles: File[];
+  uploadedFiles: UploadedFileInfo[];
   isDragging: boolean;
   showThinking: boolean;
   
@@ -20,11 +28,15 @@ interface ChatState {
   toggleThinking: () => void;
   toggleSidebar: () => void;
   setActiveToolCall: (id: string | null) => void;
+  addUploadedFile: (info: UploadedFileInfo) => void;
+  updateUploadedFile: (index: number, updates: Partial<UploadedFileInfo>) => void;
+  clearUploadedFiles: () => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
   inputValue: '',
   selectedFiles: [],
+  uploadedFiles: [],
   isDragging: false,
   showThinking: true,
   sidebarOpen: true,
@@ -38,9 +50,10 @@ export const useChatStore = create<ChatState>((set) => ({
   
   removeFile: (index) => set((state) => ({
     selectedFiles: state.selectedFiles.filter((_, i) => i !== index),
+    uploadedFiles: state.uploadedFiles.filter((_, i) => i !== index),
   })),
   
-  clearFiles: () => set({ selectedFiles: [] }),
+  clearFiles: () => set({ selectedFiles: [], uploadedFiles: [] }),
   
   setIsDragging: (isDragging) => set({ isDragging }),
   
@@ -49,4 +62,14 @@ export const useChatStore = create<ChatState>((set) => ({
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   
   setActiveToolCall: (id) => set({ activeToolCall: id }),
+
+  addUploadedFile: (info) => set((state) => ({
+    uploadedFiles: [...state.uploadedFiles, info],
+  })),
+
+  updateUploadedFile: (index, updates) => set((state) => ({
+    uploadedFiles: state.uploadedFiles.map((f, i) => i === index ? { ...f, ...updates } : f),
+  })),
+
+  clearUploadedFiles: () => set({ uploadedFiles: [] }),
 }));

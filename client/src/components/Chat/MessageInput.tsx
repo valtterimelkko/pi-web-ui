@@ -1,9 +1,10 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { Send, Paperclip, X, Settings2, ArrowUpRight } from 'lucide-react';
+import { Send, Paperclip, X, Settings2, ArrowUpRight, Loader2 } from 'lucide-react';
 import { useChatStore, useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
 import { SlashPalette } from './SlashPalette';
+import { uploadFile } from '../../lib/api';
 
 interface MessageInputProps {
   disabled?: boolean;
@@ -16,6 +17,7 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
 
   const inputValue = useChatStore((state) => state.inputValue);
   const selectedFiles = useChatStore((state) => state.selectedFiles);
+  const uploadedFiles = useChatStore((state) => state.uploadedFiles);
   const isDragging = useChatStore((state) => state.isDragging);
   const showThinking = useChatStore((state) => state.showThinking);
   const toggleThinking = useChatStore((state) => state.toggleThinking);
@@ -24,6 +26,8 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   const removeFile = useChatStore((state) => state.removeFile);
   const clearFiles = useChatStore((state) => state.clearFiles);
   const setIsDragging = useChatStore((state) => state.setIsDragging);
+  const addUploadedFile = useChatStore((state) => state.addUploadedFile);
+  const updateUploadedFile = useChatStore((state) => state.updateUploadedFile);
 
   const isStreaming = useSessionStore((state) => state.isStreaming);
   const currentModel = useSessionStore((state) => state.currentModel);
@@ -63,10 +67,14 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
 
   const handleSend = useCallback(() => {
     const message = inputValue.trim();
-    if (!message || disabled || isStreaming) return;
+    if (!message && uploadedFiles.length === 0) return;
+    if (disabled || isStreaming) return;
+    if (!message && uploadedFiles.length === 0) return;
+
+    const finalMessage = message || '';
 
     // Handle slash commands
-    if (message === '/compact') {
+    if (finalMessage === '/compact') {
       setShowCompactModal(true);
       setInputValue('');
       clearFiles();
@@ -76,9 +84,31 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
       return;
     }
 
+    // Check if any files are still uploading
+    const pendingUploads = uploadedFiles.filter(f => f.uploading);
+    if (pendingUploads.length > 0) {
+      // Wait for uploads to complete
+      return;
+    }
+
+    // Build message with file context
+    const successfulUploads = uploadedFiles.filter(f => f.serverPath && !f.error);
+    let promptMessage = finalMessage;
+    
+    if (successfulUploads.length > 0) {
+      const filePaths = successfulUploads.map(f => f.serverPath).join('\n');
+      const fileNote = successfulUploads.length === 1
+        ? `I've uploaded a file. Please read it at: ${filePaths}`
+        : `I've uploaded ${successfulUploads.length} files. Please read them at:\n${filePaths}`;
+      
+      promptMessage = finalMessage
+        ? `${fileNote}\n\n${finalMessage}`
+        : fileNote;
+    }
+
     const images: unknown[] = [];
 
-    sendPrompt(message, images);
+    sendPrompt(promptMessage, images);
     setInputValue('');
     clearFiles();
     setShowSlashPalette(false);
@@ -86,7 +116,7 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-  }, [inputValue, disabled, isStreaming, sendPrompt, setInputValue, clearFiles]);
+  }, [inputValue, uploadedFiles, disabled, isStreaming, sendPrompt, setInputValue, clearFiles]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter') {
@@ -123,19 +153,47 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
 
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
-      addFiles(files);
+      handleFilesAdded(files);
     }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length > 0) {
-      addFiles(files);
+      handleFilesAdded(files);
     }
     e.target.value = '';
   };
 
-  const canSend = inputValue.trim().length > 0 && !disabled && !isStreaming;
+  const handleFilesAdded = (files: File[]) => {
+    addFiles(files);
+    // Upload each file immediately
+    files.forEach((file) => {
+      const uploadIndex = useChatStore.getState().uploadedFiles.length;
+      addUploadedFile({ file, serverPath: '', uploading: true });
+      
+      uploadFile(file)
+        .then((result) => {
+          // Find the index in the current state
+          const currentUploaded = useChatStore.getState().uploadedFiles;
+          const idx = currentUploaded.findIndex(u => u.file === file && u.uploading);
+          if (idx >= 0) {
+            updateUploadedFile(idx, { serverPath: result.path, uploading: false });
+          }
+        })
+        .catch((err) => {
+          const currentUploaded = useChatStore.getState().uploadedFiles;
+          const idx = currentUploaded.findIndex(u => u.file === file && u.uploading);
+          if (idx >= 0) {
+            updateUploadedFile(idx, { uploading: false, error: err.message || 'Upload failed' });
+          }
+        });
+    });
+  };
+
+  const hasUploads = uploadedFiles.some(f => f.serverPath && !f.uploading);
+  const isAnyUploading = uploadedFiles.some(f => f.uploading);
+  const canSend = (inputValue.trim().length > 0 || hasUploads) && !disabled && !isStreaming && !isAnyUploading;
 
   return (
     <div className="relative">
@@ -179,22 +237,41 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
         {/* File attachments preview */}
         {selectedFiles.length > 0 && (
           <div className="flex flex-wrap gap-2 p-3 border-b border-gray-200">
-            {selectedFiles.map((file, index) => (
-              <div
-                key={index}
-                className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg text-sm text-gray-600"
-              >
-                <Paperclip className="w-3.5 h-3.5 text-gray-400" />
-                <span className="max-w-[150px] truncate">{file.name}</span>
-                <button
-                  onClick={() => removeFile(index)}
-                  className="p-0.5 hover:bg-gray-200 rounded transition-colors"
-                  type="button"
+            {selectedFiles.map((file, index) => {
+              const uploadInfo = uploadedFiles[index];
+              const isUploading = uploadInfo?.uploading;
+              const hasError = uploadInfo?.error;
+              const isSuccess = uploadInfo?.serverPath && !uploadInfo.uploading;
+              
+              return (
+                <div
+                  key={index}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm ${
+                    hasError ? 'bg-red-50 text-red-600' :
+                    isSuccess ? 'bg-green-50 text-green-700' :
+                    'bg-gray-100 text-gray-600'
+                  }`}
                 >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
+                  {isUploading ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-500" />
+                  ) : (
+                    <Paperclip className={`w-3.5 h-3.5 ${hasError ? 'text-red-400' : isSuccess ? 'text-green-500' : 'text-gray-400'}`} />
+                  )}
+                  <span className="max-w-[150px] truncate" title={isSuccess ? uploadInfo.serverPath : file.name}>
+                    {file.name}
+                  </span>
+                  {isUploading && <span className="text-xs text-teal-500">uploading...</span>}
+                  {hasError && <span className="text-xs text-red-400" title={uploadInfo.error}>failed</span>}
+                  <button
+                    onClick={() => removeFile(index)}
+                    className="p-0.5 hover:bg-gray-200 rounded transition-colors"
+                    type="button"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
 

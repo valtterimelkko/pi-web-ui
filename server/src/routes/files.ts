@@ -3,6 +3,18 @@ import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { apiLimiter } from '../security/rate-limit.js';
 import fs from 'fs/promises';
 import path from 'path';
+import { createWriteStream, mkdirSync } from 'fs';
+import { randomUUID } from 'crypto';
+
+// Upload directory
+const UPLOAD_DIR = '/tmp/pi-uploads';
+
+// Ensure upload directory exists
+try {
+  mkdirSync(UPLOAD_DIR, { recursive: true });
+} catch {
+  // Directory may already exist
+}
 
 const router = Router();
 
@@ -151,6 +163,60 @@ router.get('/read', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error reading file:', error);
     res.status(500).json({ error: 'Failed to read file' });
+  }
+});
+
+// POST /api/files/upload - Upload a file to /tmp/pi-uploads/
+router.post('/upload', async (req: Request, res: Response) => {
+  try {
+    const contentType = req.headers['content-type'] || '';
+    const fileName = req.headers['x-filename'] as string;
+
+    if (!fileName) {
+      res.status(400).json({ error: 'x-filename header is required' });
+      return;
+    }
+
+    // Sanitize filename (remove path separators and dots at the start)
+    const sanitizedName = path.basename(fileName).replace(/^\.+/, '');
+    if (!sanitizedName) {
+      res.status(400).json({ error: 'Invalid filename' });
+      return;
+    }
+
+    // Generate unique filename
+    const uniqueId = randomUUID().split('-')[0];
+    const ext = path.extname(sanitizedName);
+    const base = path.basename(sanitizedName, ext);
+    const savedName = `${base}-${uniqueId}${ext}`;
+    const savedPath = path.join(UPLOAD_DIR, savedName);
+
+    // Ensure upload directory exists
+    await fs.mkdir(UPLOAD_DIR, { recursive: true });
+
+    // Stream the request body to file
+    await new Promise<void>((resolve, reject) => {
+      const writeStream = createWriteStream(savedPath);
+      req.on('error', reject);
+      writeStream.on('error', reject);
+      writeStream.on('finish', resolve);
+      req.pipe(writeStream);
+    });
+
+    // Get file size
+    const stat = await fs.stat(savedPath);
+
+    res.json({
+      success: true,
+      path: savedPath,
+      name: sanitizedName,
+      savedName,
+      size: stat.size,
+      mimeType: contentType.split(';')[0] || 'application/octet-stream',
+    });
+  } catch (error) {
+    console.error('Error uploading file:', error);
+    res.status(500).json({ error: 'Failed to upload file' });
   }
 });
 

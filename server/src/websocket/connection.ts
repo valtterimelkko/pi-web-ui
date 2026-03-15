@@ -494,6 +494,7 @@ export class WebSocketConnectionManager {
       stats: {
         sessionFile: clientSession.session.sessionFile,
         sessionId: clientSession.sessionId,
+        cwd: clientSession.cwd,
         userMessages: stats.userMessages ?? 0,
         assistantMessages: stats.assistantMessages ?? 0,
         toolCalls: stats.toolCalls ?? 0,

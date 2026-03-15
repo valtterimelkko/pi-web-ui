@@ -1,4 +1,4 @@
-import { X, Info, FileText, Coins, Activity, MessageSquare, Cpu } from 'lucide-react';
+import { X, Info, FileText, Coins, Activity, MessageSquare, Cpu, FolderOpen } from 'lucide-react';
 import { useEffect } from 'react';
 import { useSessionStore, type SessionStats } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -60,11 +60,22 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
             </div>
           ) : (
             <>
-              {/* Session Path */}
+              {/* Working Directory */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-gray-500 text-sm">
+                  <FolderOpen className="w-4 h-4" />
+                  <span>Working Directory</span>
+                </div>
+                <p className="text-xs text-gray-700 bg-gray-50 p-2 rounded break-all font-mono">
+                  {sessionInfo.cwd || 'N/A'}
+                </p>
+              </div>
+
+              {/* Session File */}
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-gray-500 text-sm">
                   <FileText className="w-4 h-4" />
-                  <span>Session Path</span>
+                  <span>Session File</span>
                 </div>
                 <p className="text-xs text-gray-700 bg-gray-50 p-2 rounded break-all font-mono">
                   {sessionInfo.sessionFile || 'N/A'}
