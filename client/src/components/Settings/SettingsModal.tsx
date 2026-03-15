@@ -32,7 +32,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         const response = await api.get('/api/models') as { models: Model[] };
         const modelList = response.models || [];
         setModels(modelList);
-        // Set current model from store or default to first model
         const initialModel = storeCurrentModel || (modelList[0]?.id ?? '');
         setCurrentModel(initialModel);
       } catch (error) {
@@ -45,17 +44,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     fetchModels();
   }, [isOpen, storeCurrentModel]);
 
-  // Clear error when modal opens
   useEffect(() => {
     if (isOpen) {
       setError(null);
     }
   }, [isOpen]);
 
-  // Listen for error messages from the store (WebSocket errors)
   useEffect(() => {
     if (errorMessage && isOpen) {
-      // Check if this is a model-related error
       if (errorMessage.includes('model') || errorMessage.includes('Model')) {
         setError(errorMessage);
         setIsSaving(false);
@@ -68,11 +64,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       setIsSaving(true);
       setError(null);
       setModel(currentModel);
-      
-      // Wait a bit for the WebSocket response
+
       setTimeout(() => {
         setIsSaving(false);
-        // Only close if no error occurred
         if (!error) {
           onClose();
         }
@@ -82,22 +76,31 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     }
   };
 
+  // Close on escape
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    if (isOpen) window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" data-testid="settings-modal">
-      <div className="bg-slate-900 rounded-xl border border-slate-700 w-full max-w-lg mx-4">
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" data-testid="settings-modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl border border-gray-200 shadow-xl w-full max-w-lg mx-4">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-800">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <div className="flex items-center gap-3">
-            <Settings2 className="w-6 h-6 text-violet-400" />
-            <h2 className="text-xl font-semibold text-slate-100">Settings</h2>
+            <Settings2 className="w-5 h-5 text-teal-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Settings</h2>
           </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
           >
-            <X className="w-5 h-5 text-slate-400" />
+            <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
 
@@ -105,20 +108,20 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         <div className="p-6 space-y-6">
           {/* Error Message */}
           {error && (
-            <div className="bg-red-900/30 border border-red-700 rounded-lg p-3 flex items-start gap-2" data-testid="model-error">
-              <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2" data-testid="model-error">
+              <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
               <div>
-                <p className="text-sm text-red-200 font-medium">Failed to change model</p>
-                <p className="text-xs text-red-300">{error}</p>
+                <p className="text-sm text-red-700 font-medium">Failed to change model</p>
+                <p className="text-xs text-red-600">{error}</p>
               </div>
             </div>
           )}
 
           {/* Model Selection */}
           <section>
-            <h3 className="text-sm font-medium text-slate-400 mb-3">Model</h3>
+            <h3 className="text-sm font-medium text-gray-500 mb-3">Model</h3>
             {isLoading ? (
-              <div className="text-slate-400 text-sm">Loading models...</div>
+              <div className="text-gray-400 text-sm">Loading models...</div>
             ) : (
               <ModelSelector
                 models={models}
@@ -139,17 +142,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           {/* Toggle Options */}
           <section className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-slate-300">Show Thinking Blocks</span>
+              <span className="text-gray-700">Show Thinking Blocks</span>
               <button
                 onClick={() => setShowThinking(!showThinking)}
                 className={`
                   w-12 h-6 rounded-full transition-colors relative
-                  ${showThinking ? 'bg-violet-600' : 'bg-slate-700'}
+                  ${showThinking ? 'bg-teal-500' : 'bg-gray-300'}
                 `}
               >
                 <span
                   className={`
-                    absolute top-1 w-4 h-4 rounded-full bg-white transition-transform
+                    absolute top-1 w-4 h-4 rounded-full bg-white transition-transform shadow-sm
                     ${showThinking ? 'left-7' : 'left-1'}
                   `}
                 />
@@ -159,18 +162,18 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-3 p-4 border-t border-slate-800">
+        <div className="flex justify-end gap-3 p-4 border-t border-gray-200">
           <button
             onClick={onClose}
             disabled={isSaving}
-            className="px-4 py-2 text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-gray-500 hover:text-gray-700 transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
             disabled={isSaving || !currentModel}
-            className="px-4 py-2 bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSaving ? 'Saving...' : 'Save Changes'}
           </button>

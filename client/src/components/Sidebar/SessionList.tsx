@@ -24,9 +24,8 @@ export function SessionList({ sessions, currentSessionId }: SessionListProps) {
   if (sessions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-4 text-center">
-        <div className="text-4xl mb-3">💬</div>
-        <p className="text-slate-400 text-sm">No sessions found</p>
-        <p className="text-slate-400 text-xs mt-1">
+        <p className="text-gray-400 text-sm">No sessions found</p>
+        <p className="text-gray-400 text-xs mt-1">
           Create a new session to get started
         </p>
       </div>
@@ -39,10 +38,10 @@ export function SessionList({ sessions, currentSessionId }: SessionListProps) {
       role="list"
       aria-label="Sessions"
       tabIndex={0}
-      className="h-full overflow-y-auto p-2 space-y-1 focus:outline-none focus:ring-2 focus:ring-violet-600/20"
+      className="h-full overflow-y-auto px-2 py-1 space-y-0.5 focus:outline-none"
       style={{
         scrollbarWidth: 'thin',
-        scrollbarColor: 'rgba(148, 163, 184, 0.3) transparent',
+        scrollbarColor: 'rgba(209, 213, 219, 0.5) transparent',
       }}
     >
       {sessions.map((session) => (

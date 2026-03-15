@@ -25,7 +25,6 @@ export function ExtensionDialog({ request, onResponse }: ExtensionDialogProps) {
   const [inputValue, setInputValue] = useState('');
   const [selectedValue, setSelectedValue] = useState<unknown>(null);
 
-  // Reset state when request changes
   useEffect(() => {
     setInputValue('');
     setSelectedValue(null);
@@ -56,12 +55,12 @@ export function ExtensionDialog({ request, onResponse }: ExtensionDialogProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-slate-900 rounded-xl border border-slate-700 w-full max-w-md mx-4 shadow-xl">
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl border border-gray-200 w-full max-w-md mx-4 shadow-xl">
         {/* Header */}
-        <div className="flex items-center gap-3 p-4 border-b border-slate-800">
-          <AlertCircle className="w-6 h-6 text-violet-400" />
-          <h3 className="text-lg font-semibold text-slate-100">
+        <div className="flex items-center gap-3 p-4 border-b border-gray-200">
+          <AlertCircle className="w-6 h-6 text-teal-600" />
+          <h3 className="text-lg font-semibold text-gray-900">
             Extension Request
           </h3>
         </div>
@@ -95,10 +94,10 @@ export function ExtensionDialog({ request, onResponse }: ExtensionDialogProps) {
         </div>
 
         {/* Actions */}
-        <div className="flex justify-end gap-2 p-4 border-t border-slate-800">
+        <div className="flex justify-end gap-2 p-4 border-t border-gray-200">
           <button
             onClick={handleCancel}
-            className="px-4 py-2 text-slate-400 hover:text-slate-200 transition-colors"
+            className="px-4 py-2 text-gray-500 hover:text-gray-700 transition-colors"
           >
             Cancel
           </button>
@@ -106,14 +105,14 @@ export function ExtensionDialog({ request, onResponse }: ExtensionDialogProps) {
             <>
               <button
                 onClick={handleReject}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors"
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors text-gray-700"
               >
                 <X className="w-4 h-4 inline mr-1" />
                 No
               </button>
               <button
                 onClick={handleApprove}
-                className="px-4 py-2 bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
+                className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white rounded-lg transition-colors"
               >
                 <Check className="w-4 h-4 inline mr-1" />
                 Yes
@@ -124,7 +123,7 @@ export function ExtensionDialog({ request, onResponse }: ExtensionDialogProps) {
             <button
               onClick={handleApprove}
               disabled={!selectedValue && !inputValue}
-              className="px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-lg transition-colors"
+              className="px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
             >
               <Check className="w-4 h-4 inline mr-1" />
               Confirm
@@ -140,9 +139,9 @@ export function ExtensionDialog({ request, onResponse }: ExtensionDialogProps) {
 function ConfirmContent({ params }: { params: Record<string, unknown> }) {
   return (
     <div>
-      <p className="text-slate-300">{params.message as string}</p>
+      <p className="text-gray-700">{params.message as string}</p>
       {!!params.details && (
-        <pre className="mt-3 p-3 bg-slate-800 rounded text-sm text-slate-400 overflow-auto max-h-40">
+        <pre className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded text-sm text-gray-600 overflow-auto max-h-40">
           {JSON.stringify(params.details, null, 2)}
         </pre>
       )}
@@ -163,7 +162,7 @@ function SelectContent({
 
   return (
     <div className="space-y-2">
-      <p className="text-slate-300 mb-3">{params.message as string}</p>
+      <p className="text-gray-700 mb-3">{params.message as string}</p>
       {options.map((option) => (
         <button
           key={String(option.value)}
@@ -171,12 +170,12 @@ function SelectContent({
           className={`
             w-full p-3 rounded-lg text-left transition-colors
             ${value === option.value
-              ? 'bg-violet-600/30 border border-violet-600'
-              : 'bg-slate-800 hover:bg-slate-700 border border-transparent'
+              ? 'bg-teal-50 border border-teal-500'
+              : 'bg-gray-50 hover:bg-gray-100 border border-gray-200'
             }
           `}
         >
-          <span className="text-slate-200">{String(option.label)}</span>
+          <span className="text-gray-900">{String(option.label)}</span>
         </button>
       ))}
     </div>
@@ -194,7 +193,7 @@ function InputContent({
 }) {
   return (
     <div>
-      <label className="block text-sm text-slate-400 mb-2">
+      <label className="block text-sm text-gray-500 mb-2">
         {params.label as string}
       </label>
       <input
@@ -202,7 +201,7 @@ function InputContent({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={params.placeholder as string}
-        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-violet-600"
+        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
       />
     </div>
   );
@@ -219,14 +218,14 @@ function EditorContent({
 }) {
   return (
     <div>
-      <label className="block text-sm text-slate-400 mb-2">
+      <label className="block text-sm text-gray-500 mb-2">
         {params.label as string}
       </label>
       <textarea
         value={value || (params.defaultValue as string) || ''}
         onChange={(e) => onChange(e.target.value)}
         rows={10}
-        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-violet-600 resize-none"
+        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none"
       />
     </div>
   );

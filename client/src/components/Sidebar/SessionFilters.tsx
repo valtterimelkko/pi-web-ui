@@ -1,4 +1,4 @@
-import { Search, Folder, X } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 
 interface SessionFiltersProps {
   filter: string;
@@ -16,38 +16,37 @@ export function SessionFilters({
   uniqueCwds,
 }: SessionFiltersProps) {
   return (
-    <div className="p-4 space-y-3 border-b border-slate-800">
+    <div className="px-3 py-2 space-y-2">
       {/* Text search */}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
         <input
           type="text"
           value={filter}
           onChange={(e) => onFilterChange(e.target.value)}
           placeholder="Search sessions..."
           aria-label="Search sessions"
-          className="w-full pl-10 pr-8 py-2 bg-slate-800 rounded-lg text-sm text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-600"
+          className="w-full pl-8 pr-7 py-1.5 bg-white border border-gray-200 rounded-md text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
         />
         {filter && (
           <button
             onClick={() => onFilterChange('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2"
+            className="absolute right-2 top-1/2 -translate-y-1/2"
             aria-label="Clear search"
           >
-            <X className="w-4 h-4 text-slate-400 hover:text-slate-200" />
+            <X className="w-3.5 h-3.5 text-gray-400 hover:text-gray-600" />
           </button>
         )}
       </div>
 
       {/* CWD filter */}
-      {uniqueCwds.length > 0 && (
-        <div className="flex items-center gap-2">
-          <Folder className="w-4 h-4 text-slate-400" />
+      {uniqueCwds.length > 1 && (
+        <div className="flex items-center gap-1.5">
           <select
             value={cwdFilter || ''}
             onChange={(e) => onCwdFilterChange(e.target.value || null)}
             aria-label="Filter by project"
-            className="flex-1 bg-slate-800 rounded-lg text-sm text-slate-200 py-1.5 px-3 focus:outline-none focus:ring-2 focus:ring-violet-600"
+            className="flex-1 bg-white border border-gray-200 rounded-md text-xs text-gray-600 py-1.5 px-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
           >
             <option value="">All projects</option>
             {uniqueCwds.map((cwd) => (
@@ -59,10 +58,10 @@ export function SessionFilters({
           {cwdFilter && (
             <button
               onClick={() => onCwdFilterChange(null)}
-              className="p-1.5 hover:bg-slate-800 rounded"
+              className="p-1 hover:bg-gray-200 rounded"
               aria-label="Clear project filter"
             >
-              <X className="w-4 h-4 text-slate-400" />
+              <X className="w-3.5 h-3.5 text-gray-400" />
             </button>
           )}
         </div>

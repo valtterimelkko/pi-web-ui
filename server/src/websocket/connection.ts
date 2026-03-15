@@ -492,7 +492,7 @@ export class WebSocketConnectionManager {
     this.sendMessage(clientId, {
       type: 'session_info',
       stats: {
-        sessionFile: clientSession.sessionId,
+        sessionFile: clientSession.session.sessionFile,
         sessionId: clientSession.sessionId,
         userMessages: stats.userMessages ?? 0,
         assistantMessages: stats.assistantMessages ?? 0,

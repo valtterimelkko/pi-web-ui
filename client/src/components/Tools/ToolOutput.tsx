@@ -29,20 +29,20 @@ export function ToolOutput({ content, type = 'text', isError, maxHeight = 400 }:
   };
 
   return (
-    <div className="rounded-lg overflow-hidden border border-slate-700">
+    <div className="rounded-lg overflow-hidden border border-gray-200">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between px-3 py-2 bg-slate-800/50 hover:bg-slate-800"
+        className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100"
       >
-        <span className="text-xs font-medium text-slate-400 uppercase">{type}</span>
-        {isExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+        <span className="text-xs font-medium text-gray-500 uppercase">{type}</span>
+        {isExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
       </button>
-      
+
       {isExpanded && (
-        <pre 
+        <pre
           className={`
             text-xs font-mono p-3 overflow-auto
-            ${isError ? 'bg-red-900/20 text-red-200' : 'bg-slate-950 text-slate-300'}
+            ${isError ? 'bg-red-50 text-red-700' : 'bg-gray-50 text-gray-700'}
           `}
           style={{ maxHeight }}
         >
@@ -54,11 +54,9 @@ export function ToolOutput({ content, type = 'text', isError, maxHeight = 400 }:
 }
 
 function renderTree(content: string): string {
-  // Simple tree rendering - could be enhanced
   return content;
 }
 
 function renderDiff(content: string): string {
-  // Simple diff rendering - could be enhanced with colors
   return content;
 }

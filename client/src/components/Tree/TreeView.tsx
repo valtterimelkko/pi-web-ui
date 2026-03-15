@@ -34,7 +34,6 @@ export function TreeView({
     () => new Set(entries.map((e) => e.id))
   );
 
-  // Build tree structure from flat entries
   const entryMap = new Map(entries.map((e) => [e.id, e]));
   const rootEntries = entries.filter((e) => !e.parentId);
 
@@ -53,28 +52,28 @@ export function TreeView({
   if (entries.length === 0) {
     return (
       <div className="p-8 text-center">
-        <GitBranch className="w-12 h-12 text-slate-600 mx-auto mb-4" />
-        <p className="text-slate-400">No conversation tree available</p>
+        <GitBranch className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+        <p className="text-gray-400">No conversation tree available</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-slate-900 rounded-lg border border-slate-800">
+    <div className="bg-white rounded-lg border border-gray-200 shadow-xl">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-slate-800">
+      <div className="flex items-center justify-between p-4 border-b border-gray-200">
         <div className="flex items-center gap-2">
-          <GitBranch className="w-5 h-5 text-violet-400" />
-          <h3 className="text-lg font-semibold text-slate-200">
+          <GitBranch className="w-5 h-5 text-teal-600" />
+          <h3 className="text-lg font-semibold text-gray-900">
             Conversation Tree
           </h3>
         </div>
         {onClose && (
           <button
             onClick={onClose}
-            className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
           >
-            <X className="w-5 h-5 text-slate-400" />
+            <X className="w-5 h-5 text-gray-400" />
           </button>
         )}
       </div>
@@ -99,8 +98,8 @@ export function TreeView({
       </div>
 
       {/* Stats */}
-      <div className="px-4 py-3 border-t border-slate-800 text-sm text-slate-500">
-        {entries.length} entries • {rootEntries.length} root(s)
+      <div className="px-4 py-3 border-t border-gray-200 text-sm text-gray-400">
+        {entries.length} entries
       </div>
     </div>
   );

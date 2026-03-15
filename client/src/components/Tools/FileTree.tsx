@@ -16,7 +16,7 @@ interface FileTreeProps {
 
 export function FileTree({ items, onFileClick }: FileTreeProps) {
   return (
-    <div className="bg-slate-950 rounded-lg border border-slate-800 p-2">
+    <div className="bg-gray-50 rounded-lg border border-gray-200 p-2">
       {items.map((item) => (
         <TreeNode key={item.path} item={item} depth={0} onFileClick={onFileClick} />
       ))}
@@ -44,33 +44,33 @@ function TreeNode({ item, depth, onFileClick }: TreeNodeProps) {
             onFileClick?.(item.path);
           }
         }}
-        className="w-full flex items-center gap-1.5 px-2 py-1 rounded hover:bg-slate-800 text-left"
+        className="w-full flex items-center gap-1.5 px-2 py-1 rounded hover:bg-gray-100 text-left"
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
         {isDirectory ? (
           <>
             {isExpanded ? (
-              <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+              <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
             ) : (
-              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+              <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
             )}
             {isExpanded ? (
-              <FolderOpen className="w-4 h-4 text-amber-400" />
+              <FolderOpen className="w-4 h-4 text-teal-500" />
             ) : (
-              <Folder className="w-4 h-4 text-amber-400" />
+              <Folder className="w-4 h-4 text-teal-500" />
             )}
           </>
         ) : (
           <>
             <span className="w-3.5" />
-            <FileText className="w-4 h-4 text-slate-400" />
+            <FileText className="w-4 h-4 text-gray-400" />
           </>
         )}
-        
-        <span className="text-sm text-slate-300">{item.name}</span>
-        
+
+        <span className="text-sm text-gray-700">{item.name}</span>
+
         {item.size !== undefined && item.size > 0 && (
-          <span className="text-xs text-slate-500 ml-auto">
+          <span className="text-xs text-gray-400 ml-auto">
             {formatSize(item.size)}
           </span>
         )}
@@ -79,10 +79,10 @@ function TreeNode({ item, depth, onFileClick }: TreeNodeProps) {
       {isDirectory && isExpanded && item.children && (
         <div>
           {item.children.map((child) => (
-            <TreeNode 
-              key={child.path} 
-              item={child} 
-              depth={depth + 1} 
+            <TreeNode
+              key={child.path}
+              item={child}
+              depth={depth + 1}
               onFileClick={onFileClick}
             />
           ))}
