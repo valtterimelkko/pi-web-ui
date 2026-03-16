@@ -11,12 +11,16 @@ interface SessionItemProps {
 }
 
 export function SessionItem({ session, isActive, isArchived }: SessionItemProps) {
-  const { switchSession, setSessionName } = useWebSocket();
+  const { switchSession } = useWebSocket();
   const archiveSession = useSessionStore(state => state.archiveSession);
   const unarchiveSession = useSessionStore(state => state.unarchiveSession);
+  const getSessionDisplayName = useSessionStore(state => state.getSessionDisplayName);
+  const setSessionDisplayName = useSessionStore(state => state.setSessionDisplayName);
   const [showActions, setShowActions] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(session.name || '');
+  // Use web UI display name if set, otherwise fall back to session name or first message
+  const webUIDisplayName = getSessionDisplayName(session.path);
+  const [editName, setEditName] = useState(webUIDisplayName || session.name || '');
 
   const handleClick = () => {
     if (!isActive && !isEditing) {
@@ -35,20 +39,20 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
   const handleStartEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsEditing(true);
-    setEditName(session.name || '');
+    setEditName(webUIDisplayName || session.name || '');
   };
 
   const handleCancelEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsEditing(false);
-    setEditName(session.name || '');
+    setEditName(webUIDisplayName || session.name || '');
   };
 
   const handleSaveEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
     const trimmedName = editName.trim();
     if (trimmedName) {
-      setSessionName(session.id, trimmedName);
+      setSessionDisplayName(session.path, trimmedName);
     }
     setIsEditing(false);
   };
@@ -58,7 +62,7 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
       if (isEditing) {
         const trimmedName = editName.trim();
         if (trimmedName) {
-          setSessionName(session.id, trimmedName);
+          setSessionDisplayName(session.path, trimmedName);
         }
         setIsEditing(false);
       } else {
@@ -66,7 +70,7 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
       }
     } else if (e.key === 'Escape') {
       setIsEditing(false);
-      setEditName(session.name || '');
+      setEditName(webUIDisplayName || session.name || '');
     }
   };
 
@@ -86,8 +90,8 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
     return then.toLocaleDateString();
   };
 
-  // Get display name (custom name or first message)
-  const displayName = session.name || session.firstMessage || 'New session';
+  // Get display name (web UI custom name > session name > first message)
+  const displayName = webUIDisplayName || session.name || session.firstMessage || 'New session';
 
   return (
     <div

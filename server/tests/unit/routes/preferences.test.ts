@@ -170,4 +170,100 @@ describe('Preferences Route', () => {
       expect(res.body.archivedSessionPaths).toEqual(paths);
     });
   });
+
+  // ── sessionDisplayNames ───────────────────────────────────────────────────
+
+  describe('sessionDisplayNames', () => {
+    it('returns empty sessionDisplayNames when no prefs file exists', async () => {
+      const res = await request(app).get('/api/preferences');
+      expect(res.status).toBe(200);
+      expect(res.body.archivedSessionPaths).toEqual([]);
+    });
+
+    it('persists and retrieves sessionDisplayNames', async () => {
+      const displayNames = {
+        '/sessions/foo.jsonl': 'My Custom Name',
+        '/sessions/bar.jsonl': 'Another Name',
+      };
+
+      const res = await request(app)
+        .patch('/api/preferences')
+        .send({ sessionDisplayNames: displayNames });
+
+      expect(res.status).toBe(200);
+      expect(res.body.sessionDisplayNames).toEqual(displayNames);
+
+      // Verify the file was actually written
+      const onDisk = JSON.parse(await fs.readFile(tmpFile, 'utf-8'));
+      expect(onDisk.sessionDisplayNames).toEqual(displayNames);
+    });
+
+    it('merges sessionDisplayNames with archivedSessionPaths', async () => {
+      // First set archived paths
+      await request(app)
+        .patch('/api/preferences')
+        .send({ archivedSessionPaths: ['/archived.jsonl'] });
+
+      // Then set display names
+      const displayNames = { '/sessions/foo.jsonl': 'Renamed' };
+      const res = await request(app)
+        .patch('/api/preferences')
+        .send({ sessionDisplayNames: displayNames });
+
+      expect(res.status).toBe(200);
+      expect(res.body.archivedSessionPaths).toEqual(['/archived.jsonl']);
+      expect(res.body.sessionDisplayNames).toEqual(displayNames);
+    });
+
+    it('updates a single session display name without affecting others', async () => {
+      // Set initial display names
+      await request(app)
+        .patch('/api/preferences')
+        .send({
+          sessionDisplayNames: {
+            '/sessions/a.jsonl': 'Name A',
+            '/sessions/b.jsonl': 'Name B',
+          },
+        });
+
+      // Update just one
+      const res = await request(app)
+        .patch('/api/preferences')
+        .send({
+          sessionDisplayNames: {
+            '/sessions/a.jsonl': 'Name A Updated',
+            '/sessions/b.jsonl': 'Name B',
+          },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.sessionDisplayNames['/sessions/a.jsonl']).toBe('Name A Updated');
+      expect(res.body.sessionDisplayNames['/sessions/b.jsonl']).toBe('Name B');
+    });
+
+    it('can remove a display name by updating the map', async () => {
+      // Set initial display names
+      await request(app)
+        .patch('/api/preferences')
+        .send({
+          sessionDisplayNames: {
+            '/sessions/a.jsonl': 'Name A',
+            '/sessions/b.jsonl': 'Name B',
+          },
+        });
+
+      // Remove one by not including it
+      const res = await request(app)
+        .patch('/api/preferences')
+        .send({
+          sessionDisplayNames: {
+            '/sessions/b.jsonl': 'Name B',
+          },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.sessionDisplayNames['/sessions/a.jsonl']).toBeUndefined();
+      expect(res.body.sessionDisplayNames['/sessions/b.jsonl']).toBe('Name B');
+    });
+  });
 });

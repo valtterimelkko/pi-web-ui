@@ -11,6 +11,7 @@ export interface UploadedFile {
 
 export interface WebUIPreferences {
   archivedSessionPaths?: string[];
+  sessionDisplayNames?: Record<string, string>;
 }
 
 export class ApiError extends Error {

@@ -42,3 +42,4 @@ coverage/
 .cache/
 playwright-report/
 test-results/
+tests/screenshots/

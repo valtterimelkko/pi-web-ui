@@ -9,7 +9,7 @@ import { NewSessionModal } from '../Session';
 import { SessionItem } from './SessionItem';
 
 export function Sidebar() {
-  const { sessions, currentSessionId, archivedSessionPaths } = useSessionStore();
+  const { sessions, currentSessionId, archivedSessionPaths, sessionDisplayNames } = useSessionStore();
   const { sidebarOpen, toggleSidebar } = useChatStore();
   const { createNewSession, getSessions } = useWebSocket();
   const { theme, toggleTheme } = useUIStore();
@@ -18,12 +18,19 @@ export function Sidebar() {
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
 
+  // Helper to get display name for a session
+  const getDisplayName = (session: { path: string; name?: string; firstMessage?: string }) => {
+    return sessionDisplayNames[session.path] || session.name || session.firstMessage || 'New session';
+  };
+
   // Split sessions into active and archived
   const activeSessions = sessions.filter(s => !archivedSessionPaths.includes(s.path));
   const archivedSessions = sessions.filter(s => archivedSessionPaths.includes(s.path));
 
   const filteredSessions = activeSessions.filter((session) => {
+    const displayName = getDisplayName(session);
     const matchesText = !filter ||
+      displayName.toLowerCase().includes(filter.toLowerCase()) ||
       session.firstMessage?.toLowerCase().includes(filter.toLowerCase()) ||
       session.id.toLowerCase().includes(filter.toLowerCase());
 
@@ -33,7 +40,9 @@ export function Sidebar() {
   });
 
   const filteredArchivedSessions = archivedSessions.filter((session) => {
+    const displayName = getDisplayName(session);
     const matchesText = !filter ||
+      displayName.toLowerCase().includes(filter.toLowerCase()) ||
       session.firstMessage?.toLowerCase().includes(filter.toLowerCase()) ||
       session.id.toLowerCase().includes(filter.toLowerCase());
     return matchesText;
