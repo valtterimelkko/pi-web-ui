@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useSessionStore, type Message, type Session } from '../../src/store/sessionStore';
+import { useSessionStore, type Message, type Session } from '../../../src/store/sessionStore';
 
 describe('sessionStore', () => {
   beforeEach(() => {
@@ -12,6 +12,16 @@ describe('sessionStore', () => {
     state.setLoading(false);
     state.setError(null);
     state.setExtensionUIRequest(null);
+    // Clear session messages cache directly
+    useSessionStore.setState({ 
+      sessionMessages: {}, 
+      streamingSessions: {},
+      currentSessionId: null,
+      messages: [],
+      isStreaming: false,
+      isLoading: false,
+      error: null,
+    });
   });
 
   it('should have initial state', () => {
@@ -198,6 +208,142 @@ describe('sessionStore', () => {
         request,
       });
       expect(useSessionStore.getState().extensionUIRequest).toEqual(request);
+    });
+  });
+
+  describe('background session support', () => {
+    it('should have sessionMessages and streamingSessions in initial state', () => {
+      const state = useSessionStore.getState();
+      expect(state.sessionMessages).toEqual({});
+      expect(state.streamingSessions).toEqual({});
+    });
+
+    it('should cache messages per session when switching sessions', () => {
+      const state = useSessionStore.getState();
+      
+      // Set first session and add messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      state.addMessage({ id: '2', role: 'assistant', content: 'Response 1', timestamp: 2000 });
+      
+      // Switch to second session
+      state.setCurrentSession('session-2');
+      
+      // First session's messages should be cached
+      expect(state.getSessionMessages('session-1')).toHaveLength(2);
+      expect(state.getSessionMessages('session-1')[0].content).toBe('Message 1');
+      
+      // Current messages should be empty (new session)
+      expect(useSessionStore.getState().messages).toHaveLength(0);
+    });
+
+    it('should restore cached messages when switching back to a session', () => {
+      const state = useSessionStore.getState();
+      
+      // Set first session and add messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Switch to second session
+      state.setCurrentSession('session-2');
+      expect(useSessionStore.getState().messages).toHaveLength(0);
+      
+      // Switch back to first session
+      state.setCurrentSession('session-1');
+      
+      // Should restore cached messages
+      expect(useSessionStore.getState().messages).toHaveLength(1);
+      expect(useSessionStore.getState().messages[0].content).toBe('Message 1');
+    });
+
+    it('should track streaming state per session', () => {
+      const state = useSessionStore.getState();
+      
+      // Set session and start streaming
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      
+      expect(state.isSessionStreaming('session-1')).toBe(true);
+      expect(state.isSessionStreaming('session-2')).toBe(false);
+      
+      // Stop streaming
+      state.setStreaming(false);
+      expect(state.isSessionStreaming('session-1')).toBe(false);
+    });
+
+    it('should preserve streaming state for background sessions', () => {
+      const state = useSessionStore.getState();
+      
+      // Set session 1 and start streaming
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      
+      // Switch to session 2 (background session 1 is still streaming)
+      state.setCurrentSession('session-2');
+      
+      // Session 1 should still be marked as streaming
+      expect(state.streamingSessions['session-1']).toBe(true);
+    });
+
+    it('should clear session messages with clearSessionMessages', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message', timestamp: 1000 });
+      
+      expect(state.getSessionMessages('session-1')).toHaveLength(1);
+      
+      state.clearSessionMessages('session-1');
+      
+      expect(state.getSessionMessages('session-1')).toHaveLength(0);
+    });
+
+    it('should update sessionMessages cache when adding messages', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message', timestamp: 1000 });
+      
+      // Check cache is updated
+      expect(useSessionStore.getState().sessionMessages['session-1']).toHaveLength(1);
+    });
+
+    it('should update sessionMessages cache when updating messages', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'assistant', content: 'Initial', timestamp: 1000 });
+      state.updateMessage('1', { content: 'Updated' });
+      
+      // Check cache is updated
+      const cached = useSessionStore.getState().sessionMessages['session-1'];
+      expect(cached).toHaveLength(1);
+      expect(cached[0].content).toBe('Updated');
+    });
+
+    it('should handle session_switched with message caching', () => {
+      const state = useSessionStore.getState();
+      
+      // Create first session with messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Old message', timestamp: 1000 });
+      
+      // Simulate session_switched from server
+      state.handleServerMessage({
+        type: 'session_switched',
+        sessionId: 'session-2',
+        messages: [
+          { id: '2', role: 'user', content: 'New message', timestamp: 2000 },
+        ],
+      });
+      
+      // Should have switched to session-2 with its messages
+      expect(useSessionStore.getState().currentSessionId).toBe('session-2');
+      expect(useSessionStore.getState().messages).toHaveLength(1);
+      expect(useSessionStore.getState().messages[0].content).toBe('New message');
+      
+      // Session 1's messages should still be cached
+      expect(useSessionStore.getState().sessionMessages['session-1']).toHaveLength(1);
     });
   });
 });
