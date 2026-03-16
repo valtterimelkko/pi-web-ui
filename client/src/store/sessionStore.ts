@@ -187,7 +187,14 @@ export const useSessionStore = create<SessionState>()(
             set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
           }
           if (serverPrefs.sessionDisplayNames !== undefined) {
-            set({ sessionDisplayNames: serverPrefs.sessionDisplayNames });
+            // Merge server display names with local ones
+            // Server wins for conflicts, but local-only entries are preserved
+            const currentDisplayNames = get().sessionDisplayNames;
+            const mergedDisplayNames = {
+              ...currentDisplayNames,
+              ...serverPrefs.sessionDisplayNames,
+            };
+            set({ sessionDisplayNames: mergedDisplayNames });
           }
         } catch (e) {
           // Non-fatal: fall back to whatever is already in localStorage
