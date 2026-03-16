@@ -1,11 +1,13 @@
 import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcrypt';
 import { config } from '../config.js';
-import { generateTokens, verifyToken, type JwtPayload } from '../security/auth.js';
+import { generateTokens, verifyToken } from '../security/auth.js';
 import { generateCsrfToken, invalidateCsrfToken } from '../security/csrf.js';
 import { authLimiter } from '../security/rate-limit.js';
 import { validateBody, loginSchema } from '../security/input-validation.js';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
+
+// Express Request type extension is in src/types/express.d.ts
 
 const router = Router();
 
@@ -18,22 +20,13 @@ const COOKIE_OPTIONS = {
   path: '/',
 };
 
-// Extend Express Request type
-declare global {
-  namespace Express {
-    interface Request {
-      user?: JwtPayload;
-    }
-  }
-}
-
 // POST /api/auth/login - Login with password
 router.post('/login', authLimiter, validateBody(loginSchema), async (req: Request, res: Response) => {
   try {
     const { password } = req.body;
     
     // Single-user mode: compare against configured password
-    // Support both bcrypt hash (starts with $2) and plain text (for development)
+    // Support both bcrypt hash (starts with $2) and plain text (for development only)
     const storedPassword = config.authPassword;
     let validPassword: boolean;
     
@@ -41,7 +34,12 @@ router.post('/login', authLimiter, validateBody(loginSchema), async (req: Reques
       // bcrypt hash
       validPassword = await bcrypt.compare(password, storedPassword);
     } else {
-      // Plain text (development only)
+      // Plain text - ONLY allowed in development mode
+      if (config.nodeEnv === 'production') {
+        console.error('SECURITY ERROR: Plain text password detected in production. Use bcrypt hash.');
+        res.status(500).json({ error: 'Server configuration error' });
+        return;
+      }
       validPassword = password === storedPassword;
     }
     

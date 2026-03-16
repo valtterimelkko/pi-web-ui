@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { generateTokens, verifyToken, type JwtPayload } from './auth.js';
+import { describe, it, expect } from 'vitest';
+import { generateTokens, verifyToken } from './auth.js';
 import { generateCsrfToken, validateCsrfToken, invalidateCsrfToken } from './csrf.js';
 import { detectPromptInjection, sanitizePrompt } from './prompt-injection.js';
 import { loginSchema, promptSchema, browseSchema } from './input-validation.js';

@@ -1,9 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { 
   ChevronRight, 
-  ChevronDown, 
   Folder, 
-  FolderOpen, 
   FileText,
   RefreshCw,
   ArrowUp
@@ -26,7 +24,6 @@ interface FileTreeProps {
 export function FileTree({ initialPath = '.', onFileSelect, selectedPath }: FileTreeProps) {
   const [currentPath, setCurrentPath] = useState(initialPath);
   const [items, setItems] = useState<FileItem[]>([]);
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,18 +49,6 @@ interface BrowseResponse {
   useEffect(() => {
     loadDirectory(currentPath);
   }, [currentPath, loadDirectory]);
-
-  const toggleDir = (path: string) => {
-    setExpandedDirs((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
-  };
 
   const handleItemClick = (item: FileItem) => {
     if (item.type === 'directory') {
@@ -136,17 +121,10 @@ interface BrowseResponse {
                 `}
               >
                 {item.type === 'directory' ? (
-                  expandedDirs.has(item.path) ? (
-                    <>
-                      <ChevronDown className="w-4 h-4 text-slate-500" />
-                      <FolderOpen className="w-5 h-5 text-amber-400" />
-                    </>
-                  ) : (
-                    <>
-                      <ChevronRight className="w-4 h-4 text-slate-500" />
-                      <Folder className="w-5 h-5 text-amber-400" />
-                    </>
-                  )
+                  <>
+                    <ChevronRight className="w-4 h-4 text-slate-500" />
+                    <Folder className="w-5 h-5 text-amber-400" />
+                  </>
                 ) : (
                   <>
                     <span className="w-4" />

@@ -1,5 +1,5 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
-import { Send, Paperclip, X, Settings2, ArrowUpRight, Loader2 } from 'lucide-react';
+import { useRef, useState, useCallback } from 'react';
+import { Paperclip, X, Settings2, ArrowUpRight, Loader2 } from 'lucide-react';
 import { useChatStore, useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
@@ -169,7 +169,6 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
     addFiles(files);
     // Upload each file immediately
     files.forEach((file) => {
-      const uploadIndex = useChatStore.getState().uploadedFiles.length;
       addUploadedFile({ file, serverPath: '', uploading: true });
       
       uploadFile(file)

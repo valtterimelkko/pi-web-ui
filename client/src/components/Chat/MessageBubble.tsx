@@ -1,4 +1,4 @@
-import React, { useState, memo, useCallback, useMemo } from 'react';
+import React, { useState, memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check, Bot } from 'lucide-react';
@@ -64,8 +64,8 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
   // Process content to extract text and thinking
   const processContent = (): { text: string; thinking: string | null } => {
     if (Array.isArray(message.content)) {
-      let textParts: string[] = [];
-      let thinkingParts: string[] = [];
+      const textParts: string[] = [];
+      const thinkingParts: string[] = [];
 
       for (const part of message.content) {
         if (part.type === 'text' && part.text) {

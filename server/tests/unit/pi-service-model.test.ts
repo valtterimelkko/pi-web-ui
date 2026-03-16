@@ -32,7 +32,7 @@ vi.mock('@mariozechner/pi-coding-agent', () => {
       }),
     },
     ModelRegistry: vi.fn().mockImplementation(() => ({
-      getAvailable: vi.fn().mockResolvedValue([
+      getAvailable: vi.fn().mockReturnValue([
         { id: 'gpt-4', name: 'GPT-4', provider: 'openai' },
         { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'github-copilot' },
         { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'github-copilot' },
@@ -45,6 +45,12 @@ vi.mock('@mariozechner/pi-coding-agent', () => {
         ];
         return models.find(m => m.provider === provider && m.id === modelName) || null;
       }),
+      getError: vi.fn().mockReturnValue(null),
+      getAll: vi.fn().mockReturnValue([
+        { id: 'gpt-4', name: 'GPT-4', provider: 'openai' },
+        { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'github-copilot' },
+        { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'github-copilot' },
+      ]),
     })),
     DefaultResourceLoader: vi.fn().mockImplementation(() => ({
       reload: vi.fn().mockResolvedValue(undefined),

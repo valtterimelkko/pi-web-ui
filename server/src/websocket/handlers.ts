@@ -108,12 +108,13 @@ export function validateMessage(message: ClientMessage): string | null {
       if (!message.modelId) return 'Missing modelId';
       break;
 
-    case 'set_thinking_level':
+    case 'set_thinking_level': {
       const validLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
       if (!validLevels.includes(message.level)) {
         return `Invalid thinking level. Must be one of: ${validLevels.join(', ')}`;
       }
       break;
+    }
 
     case 'extension_ui_response':
       if (!message.response?.id) return 'Missing response.id';
