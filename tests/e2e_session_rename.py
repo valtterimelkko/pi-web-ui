@@ -135,8 +135,8 @@ def test_session_rename():
                     # Take screenshot of edit mode
                     page.screenshot(path=f"{SCREENSHOT_DIR}/05_edit_mode_{timestamp()}.png", full_page=True)
                     
-                    # Find the input field
-                    input_field = page.locator('input[type="text"]').first
+                    # Find the input field within the editing session item
+                    input_field = first_session.locator('input[type="text"]').first
                     
                     if input_field.count() > 0:
                         # Get the current session path for later verification

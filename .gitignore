@@ -43,3 +43,12 @@ coverage/
 playwright-report/
 test-results/
 tests/screenshots/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Test debug files
+tests/e2e_*_debug*.py
