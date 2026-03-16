@@ -17,7 +17,7 @@ vi.mock('react-virtuoso', () => ({
     }, [atBottomStateChange]);
     
     if (data.length === 0) {
-      return <div data-testid="empty-state">No messages</div>;
+      return <div data-testid="virtuoso-empty">No messages</div>;
     }
     return (
       <div data-testid="virtuoso-mock">
@@ -65,7 +65,8 @@ describe('VirtualizedMessageList', () => {
   it('shows empty state when no messages', () => {
     render(<VirtualizedMessageList messages={[]} isStreaming={false} />);
     
-    expect(screen.getByTestId('empty-state')).toBeInTheDocument();
+    // Component renders EmptyState component (not virtuoso)
+    expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
   });
 
   it('marks last message with isLast prop', () => {
@@ -157,7 +158,7 @@ describe('VirtualizedMessageList', () => {
       timestamp: i * 1000,
     }));
     
-    const { container: _container } = render(<VirtualizedMessageList messages={manyMessages} isStreaming={false} />);
+    render(<VirtualizedMessageList messages={manyMessages} isStreaming={false} />);
     
     // Should render without performance issues
     expect(screen.getByTestId('virtuoso-mock')).toBeInTheDocument();
@@ -182,6 +183,7 @@ describe('VirtualizedMessageList', () => {
   it('handles empty messages array', () => {
     render(<VirtualizedMessageList messages={[]} isStreaming={false} />);
     
-    expect(screen.getByTestId('empty-state')).toBeInTheDocument();
+    // Component shows empty state with Ready to help text
+    expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
   });
 });

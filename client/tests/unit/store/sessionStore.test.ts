@@ -272,17 +272,18 @@ describe('sessionStore', () => {
     });
 
     it('should preserve streaming state for background sessions', () => {
-      const state = useSessionStore.getState();
+      const store = useSessionStore;
       
       // Set session 1 and start streaming
-      state.setCurrentSession('session-1');
-      state.setStreaming(true);
+      store.getState().setCurrentSession('session-1');
+      store.getState().setStreaming(true);
       
       // Switch to session 2 (background session 1 is still streaming)
-      state.setCurrentSession('session-2');
+      store.getState().setCurrentSession('session-2');
       
       // Session 1 should still be marked as streaming
-      expect(state.streamingSessions['session-1']).toBe(true);
+      const currentState = store.getState();
+      expect(currentState.streamingSessions['session-1']).toBe(true);
     });
 
     it('should clear session messages with clearSessionMessages', () => {
