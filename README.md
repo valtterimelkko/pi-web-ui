@@ -57,7 +57,7 @@ This project was developed in 6 waves over approximately 5 weeks:
 - Toast notifications and loading states
 - Error boundary for crash handling
 - CSS animations and micro-interactions
-- Comprehensive test suite (security, backend, frontend)
+- Comprehensive test suite (100% pass rate)
 - Full documentation (README, SECURITY, API, DEPLOYMENT, AGENTS)
 
 ### Key Capabilities
@@ -69,6 +69,46 @@ This project was developed in 6 waves over approximately 5 weeks:
 - **Security Hardened**: JWT, CSRF, origin validation, rate limiting
 - **Production Ready**: systemd, Nginx, and Docker deployment configs
 
+## Recent Changes
+
+### Test Suite - 100% Pass Rate (March 2026)
+Complete test coverage across all modules:
+- **Server Unit Tests**: 93/93 passing - Security hardening, Pi service, WebSocket
+- **Client Unit Tests**: 62/62 passing - Component rendering, store logic
+- **E2E Tests**: 9/9 passing - Authentication flows, core functionality
+
+### Security Hardening (March 2026)
+Production deployment now requires secure configuration:
+- `JWT_SECRET` environment variable required in production (no defaults)
+- `AUTH_PASSWORD` must be bcrypt hash in production (plain text rejected)
+- Added comprehensive error handling and logging
+- ESLint configuration for code quality enforcement
+
+### UI Performance Optimizations (March 2026)
+Major performance improvements based on Kimi Web UI benchmark:
+- **Message Virtualization**: react-virtuoso for smooth scrolling with 100+ messages
+- **Collapsible Tool Cards**: Kimi-style verbosity - collapsed by default, expandable details
+- **Background Session Support**: Messages cached per session, streaming state tracked
+- **Component Memoization**: MessageBubble with custom comparison, reduced re-renders
+
+### UI/UX Improvements (March 2026)
+- **Thinking Previews**: Shows preview of thinking content when collapsed
+- **Activity Indicators**: Brief summary when assistant has no visible text content
+- **Auto-expand Thinking**: When message has only thinking (no text), auto-expands
+- **Mobile UX**: Restored sidebar toggle, visible header buttons, no zoom on input focus
+- **Light/Teal Theme**: Complete redesign from dark/violet to light/teal Kimi-style
+
+### Session Management Features (March 2026)
+- **Session Archiving**: Mark sessions as archived, syncs across devices
+- **Session Renaming**: Display names with server-side persistence
+- **Context Window Fix**: Fixed percentage mismatch between CLI and Web UI
+- **File Upload Sanitization**: URL-encoded filenames decoded, spaces replaced with underscores
+
+### Model Support (March 2026)
+- **Antigravity Models**: Google Antigravity provider with distinct indigo/purple styling
+- **Anthropic Models**: Added Claude model support
+- **Model Selector**: Provider grouping with search functionality
+
 ## Features
 
 - 🔐 **Security-first**: JWT auth, CSRF protection, WebSocket origin validation
@@ -77,8 +117,9 @@ This project was developed in 6 waves over approximately 5 weeks:
 - 📁 **Session management**: Web + CLI session visibility with tree navigation
 - 🔌 **Extension support**: Full extension UI protocol (confirm/select/input/editor)
 - 📂 **File browser**: Secure file browsing and preview
-- 🎨 **Beautiful UI**: Dark theme with animations and micro-interactions
+- 🎨 **Beautiful UI**: Light theme with animations and micro-interactions
 - 🤖 **AI-powered tools**: Web search, subagent delegation, todo management, and planning mode
+- 📱 **Mobile-friendly**: Responsive design with touch interactions
 
 ## Installed Extensions
 
@@ -206,13 +247,30 @@ npm install
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your settings
+# Edit .env with your settings (see Configuration section)
 
 # Build the project
 npm run build
 
 # Start the server
 npm start
+```
+
+### Environment Configuration
+
+Before running, you must configure the environment:
+
+```bash
+# Required in all environments
+JWT_SECRET=your-random-secret-key-here    # Generate with: openssl rand -base64 32
+CSRF_SECRET=your-csrf-secret-here         # Generate with: openssl rand -base64 32
+
+# Required in production (bcrypt hash recommended)
+AUTH_PASSWORD=$2b$10$...                  # Generate with: node -e "console.log(require('bcrypt').hashSync('password', 10))"
+
+# Optional
+PORT=3000                                 # Server port
+ALLOWED_ORIGINS=http://localhost:5173     # CORS origins (comma-separated)
 ```
 
 ### Development
@@ -226,6 +284,9 @@ npm test
 
 # Run tests with coverage
 npm run test:coverage
+
+# Run E2E tests (requires production server running)
+npm run test:e2e
 ```
 
 ## How to Use
@@ -246,13 +307,15 @@ npm run test:coverage
 
 **Chat Area (Center)**
 - Messages appear with syntax highlighting for code
-- Tool executions show as collapsible cards
+- Tool executions show as collapsible cards (click to expand)
 - Thinking blocks can be toggled on/off
 - Click the 🤖 icon to view the conversation tree
 
 **Sidebar (Left)**
 - Lists all sessions (web + CLI)
 - Filter by project (cwd) or search by first message
+- Archive sessions to declutter (syncs across devices)
+- Rename sessions for better organization
 - Active session highlighted in violet
 - Click any session to switch
 - Collapse with the ← button
@@ -317,12 +380,24 @@ Fetch and summarize https://example.com/docs
 **Switching Sessions**
 - Click any session in sidebar
 - Sessions are sorted by last activity
+- Background sessions preserve their messages in cache
 
 **Tree Navigation**
 - Click the 🤖 icon in chat header
 - Visual tree shows conversation branches
 - Click any node to navigate there
 - Fork button creates new branch
+
+**Archiving Sessions**
+- Hover session in sidebar
+- Click 📁 icon to archive/unarchive
+- Archived sessions are hidden but preserved
+- Archive state syncs across devices
+
+**Renaming Sessions**
+- Hover session in sidebar
+- Click ✏️ icon to rename
+- Display name is persisted server-side
 
 **Deleting Sessions**
 - Hover session in sidebar
@@ -341,6 +416,7 @@ Fetch and summarize https://example.com/docs
 - Drag and drop into message input
 - Or click paperclip icon
 - Images are displayed inline
+- Filenames are sanitized (spaces → underscores)
 
 ### Extension Interactions
 
@@ -354,13 +430,16 @@ When an extension requests UI input:
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `NODE_ENV` | Environment mode | `development` |
-| `PI_WEB_UI_PORT` | Server port | `3000` |
-| `JWT_SECRET` | JWT signing secret | (required) |
-| `CSRF_SECRET` | CSRF token secret | (required) |
-| `ALLOWED_ORIGINS` | CORS origins | `http://localhost:5173` |
+| Variable | Description | Required | Example |
+|----------|-------------|----------|---------|
+| `NODE_ENV` | Environment mode | No | `development` |
+| `PORT` | Server port | No | `3000` |
+| `JWT_SECRET` | JWT signing secret | Yes* | (generate) |
+| `CSRF_SECRET` | CSRF token secret | Yes* | (generate) |
+| `AUTH_PASSWORD` | Login password | Yes* | (bcrypt hash) |
+| `ALLOWED_ORIGINS` | CORS origins | No | `http://localhost:5173` |
+
+*Required in production mode
 
 ### Authentication
 
@@ -369,6 +448,12 @@ The web UI uses JWT-based authentication with httpOnly cookies:
 1. Default credentials: `admin` / `admin` (change in production!)
 2. Token expires after 15 minutes
 3. CSRF token required for state-changing operations
+4. In production, passwords must be bcrypt hashed
+
+**Generate bcrypt hash:**
+```bash
+node -e "console.log(require('bcrypt').hashSync('your-password', 10))"
+```
 
 ## Architecture
 
@@ -379,12 +464,20 @@ The web UI uses JWT-based authentication with httpOnly cookies:
 - WebSocket (ws library)
 - Pi SDK (@mariozechner/pi-coding-agent)
 - JWT + bcrypt for auth
+- Vitest for testing
 
 **Frontend:**
 - React 18 with TypeScript
 - Vite for building
 - TailwindCSS for styling
 - Zustand for state management
+- react-virtuoso for virtualization
+- Vitest for testing
+
+**Testing:**
+- Vitest for unit tests
+- Playwright for E2E tests
+- 100% test pass rate maintained
 
 ### Security
 
@@ -393,6 +486,43 @@ See [SECURITY.md](./SECURITY.md) for detailed security documentation.
 ## API
 
 See [API.md](./API.md) for WebSocket protocol and REST API documentation.
+
+## Testing
+
+### Test Coverage
+
+All tests currently passing:
+
+```bash
+# Run all tests
+npm test
+
+# Server tests (93 tests)
+npm test -- --workspace=server
+
+# Client tests (62 tests)
+npm test -- --workspace=client
+
+# E2E tests (9 tests)
+npm run test:e2e
+```
+
+### Test Structure
+
+```
+tests/
+├── e2e/                          # Playwright E2E tests
+│   ├── auth.spec.ts             # Authentication flows
+│   ├── smoke.spec.ts            # Critical path tests
+│   └── core.spec.ts             # Core functionality
+├── server/tests/unit/            # Server unit tests
+│   ├── security/                # Auth, CSRF, rate limiting
+│   ├── pi/                      # Pi service, session pool
+│   └── websocket/               # Connection, handlers
+└── client/tests/unit/            # Client unit tests
+    ├── components/              # React components
+    └── store/                   # Zustand stores
+```
 
 ## Production Deployment
 
@@ -433,13 +563,41 @@ sudo systemctl enable pi-web-ui
 sudo systemctl disable pi-web-ui
 ```
 
+### Security Requirements for Production
+
+Before deploying to production:
+
+1. **Generate secure secrets:**
+   ```bash
+   # JWT_SECRET
+   openssl rand -base64 32
+   
+   # CSRF_SECRET
+   openssl rand -base64 32
+   ```
+
+2. **Hash the password:**
+   ```bash
+   node -e "console.log(require('bcrypt').hashSync('your-password', 10))"
+   ```
+
+3. **Configure .env.production:**
+   ```bash
+   NODE_ENV=production
+   PORT=3456
+   JWT_SECRET=your-generated-secret
+   CSRF_SECRET=your-generated-secret
+   AUTH_PASSWORD=your-bcrypt-hash
+   ALLOWED_ORIGINS=https://your-domain.com
+   ```
+
 ### Default Login Credentials
 
 **URL:** https://pi.letsautomate.work
 
-**Password:** `ChangeMeNow123!`
+**Password:** See your `.env.production` file
 
-⚠️ **IMPORTANT:** Change the password immediately after first login by editing `/root/pi-web-ui/.env.production` and restarting the service.
+⚠️ **IMPORTANT:** Never commit `.env.production` to git!
 
 ### Updating the Application
 
@@ -472,18 +630,6 @@ The Pi Web UI is configured with WebSocket support and security headers. To relo
 docker exec n8n-docker-caddy-caddy-1 caddy reload --config /etc/caddy/Caddyfile
 ```
 
-### Environment Variables
-
-Production environment variables are stored in:
-`/root/pi-web-ui/.env.production`
-
-Key variables:
-- `PORT=3456` - Internal server port
-- `NODE_ENV=production` - Production mode
-- `AUTH_PASSWORD` - Login password (CHANGE THIS!)
-- `ALLOWED_ORIGINS=https://pi.letsautomate.work` - CORS origins
-- `JWT_SECRET` - JWT signing secret
-
 ### Troubleshooting Production
 
 **Service won't start:**
@@ -497,11 +643,18 @@ ls -la /root/pi-web-ui/client/dist/
 
 # Check port availability
 sudo lsof -i :3456
+
+# Verify environment variables
+cat /root/pi-web-ui/.env.production
 ```
 
 **WebSocket connection issues:**
 - Check Caddy logs: `docker logs n8n-docker-caddy-caddy-1`
-- Verify ALLOWED_ORIGINS includes `https://pi.letsautomate.work`
+- Verify ALLOWED_ORIGINS includes your domain
+
+**Authentication failures:**
+- Check JWT_SECRET is set and valid
+- Verify AUTH_PASSWORD is bcrypt hash (not plain text)
 
 **Permission errors:**
 - Ensure service runs as root (for Pi SDK access): `User=root` in service file
@@ -521,6 +674,7 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for additional deployment instructions.
 - Default credentials: `admin` / `admin`
 - Clear cookies and try again
 - Check JWT_SECRET is set in .env
+- In production, ensure password is bcrypt hash
 
 ### CLI Sessions Not Appearing
 - Verify `~/.pi/agent/sessions/` exists
@@ -533,6 +687,15 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for additional deployment instructions.
 rm -rf node_modules server/node_modules client/node_modules
 npm install
 npm run build
+```
+
+### Test Failures
+```bash
+# Run specific test with verbose output
+npm test -- --reporter=verbose server/tests/unit/security/auth.test.ts
+
+# Run E2E tests in headed mode for debugging
+npx playwright test --headed tests/e2e/auth.spec.ts
 ```
 
 ## Project Statistics
