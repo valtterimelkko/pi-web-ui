@@ -100,30 +100,9 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
           messages={messages}
           isStreaming={isStreaming}
           onAtBottomChange={handleAtBottomChange}
+          hasSession={!!currentSessionId}
+          onCreateSession={() => setShowNewSessionModal(true)}
         />
-        
-        {/* Empty state when no session */}
-        {!currentSessionId && messages.length === 0 && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center pointer-events-none">
-            <div className="flex size-16 items-center justify-center rounded-2xl bg-gray-100 mb-4">
-              <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
-              </svg>
-            </div>
-            <h2 className="text-lg font-medium text-gray-900 mb-2">
-              Create a session to begin
-            </h2>
-            <p className="text-gray-500 max-w-md text-sm mb-6">
-              Start a new coding session to interact with the AI assistant.
-            </p>
-            <button
-              onClick={() => setShowNewSessionModal(true)}
-              className="pointer-events-auto px-6 py-2.5 bg-gray-900 hover:bg-gray-800 rounded-full text-white text-sm font-medium transition-colors"
-            >
-              Create new session
-            </button>
-          </div>
-        )}
         
         {/* Scroll to bottom button */}
         {showScrollButton && (

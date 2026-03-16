@@ -12,6 +12,8 @@ interface VirtualizedMessageListProps {
   messages: Message[];
   isStreaming: boolean;
   onAtBottomChange?: (atBottom: boolean) => void;
+  hasSession?: boolean;
+  onCreateSession?: () => void;
 }
 
 type ListItem = {
@@ -46,7 +48,7 @@ const ListComponent = forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<
 );
 
 // Empty state component
-function EmptyState({ hasSession }: { hasSession: boolean }) {
+function EmptyState({ hasSession, onCreateSession }: { hasSession: boolean; onCreateSession?: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center h-full p-8 text-center">
       <div className="flex size-16 items-center justify-center rounded-2xl bg-gray-100 mb-4">
@@ -68,9 +70,17 @@ function EmptyState({ hasSession }: { hasSession: boolean }) {
           <h2 className="text-lg font-medium text-gray-900 mb-2">
             Create a session to begin
           </h2>
-          <p className="text-gray-500 max-w-md text-sm">
+          <p className="text-gray-500 max-w-md text-sm mb-6">
             Start a new coding session to interact with the AI assistant.
           </p>
+          {onCreateSession && (
+            <button
+              onClick={onCreateSession}
+              className="px-6 py-2.5 bg-gray-900 hover:bg-gray-800 rounded-full text-white text-sm font-medium transition-colors"
+            >
+              Create new session
+            </button>
+          )}
         </>
       )}
     </div>
@@ -102,7 +112,7 @@ export const VirtualizedMessageList = forwardRef<
   VirtualizedMessageListHandle,
   VirtualizedMessageListProps
 >(function VirtualizedMessageList(
-  { messages, isStreaming, onAtBottomChange },
+  { messages, isStreaming, onAtBottomChange, hasSession = true, onCreateSession },
   ref
 ) {
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
@@ -168,7 +178,7 @@ export const VirtualizedMessageList = forwardRef<
   }, [isStreaming, listItems.length]);
 
   if (messages.length === 0) {
-    return <EmptyState hasSession={true} />;
+    return <EmptyState hasSession={hasSession} onCreateSession={onCreateSession} />;
   }
 
   return (
