@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { GitBranch, X } from 'lucide-react';
-import type { Message } from '../../store';
 import { TreeNode } from './TreeNode';
 
 // Tree entry type based on Pi SDK session.tree structure

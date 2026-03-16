@@ -1,6 +1,6 @@
 import { X, Info, FileText, Coins, Activity, MessageSquare, Cpu, FolderOpen } from 'lucide-react';
 import { useEffect } from 'react';
-import { useSessionStore, type SessionStats } from '../../store';
+import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 
 interface SessionInfoModalProps {

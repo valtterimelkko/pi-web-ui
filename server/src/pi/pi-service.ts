@@ -9,7 +9,7 @@ import {
 } from '@mariozechner/pi-coding-agent';
 import { config } from '../config.js';
 import type { SessionInfo } from '@pi-web-ui/shared';
-import { createWebUIContext, createCommandContextActions, type WebUIContext, type CommandActionContext } from './extension-ui-adapter.js';
+import { createWebUIContext, createCommandContextActions, type WebUIContext } from './extension-ui-adapter.js';
 import type { SessionPool } from './session-pool.js';
 
 export interface CreateSessionOptions {

@@ -18,11 +18,13 @@
     "test:coverage": "npm run test:coverage --workspace=server && npm run test:coverage --workspace=client",
     "test:e2e": "./scripts/test-e2e.sh",
     "lint": "eslint . --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.57.0",
+    "@typescript-eslint/parser": "^8.57.0",
     "concurrently": "^8.2.2",
     "eslint": "^8.56.0",
     "playwright": "^1.58.2",

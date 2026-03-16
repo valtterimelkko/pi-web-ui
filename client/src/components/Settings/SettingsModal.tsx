@@ -2,7 +2,7 @@ import { X, Settings2, AlertCircle } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { useSessionStore, useUIStore } from '../../store';
+import { useSessionStore } from '../../store';
 import { ModelSelector, type Model } from './ModelSelector';
 import { ThinkingLevelSelector, type ThinkingLevel } from './ThinkingLevelSelector';
 

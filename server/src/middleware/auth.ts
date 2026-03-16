@@ -1,14 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
-import { verifyToken, type JwtPayload } from '../security/auth.js';
+import { verifyToken } from '../security/auth.js';
 
-// Extend Express Request type
-declare global {
-  namespace Express {
-    interface Request {
-      user?: JwtPayload;
-    }
-  }
-}
+// Express Request type extension is in src/types/express.d.ts
 
 export function authMiddleware(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;

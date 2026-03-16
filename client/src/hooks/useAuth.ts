@@ -15,7 +15,7 @@ const API_BASE = '/api';
 
 export const useAuth = create<AuthState>()(
   persist(
-    (set, get) => ({
+    (set, _get) => ({
       isAuthenticated: false,
       csrfToken: null,
       expiresIn: null,
@@ -42,7 +42,7 @@ export const useAuth = create<AuthState>()(
           });
           
           return { success: true };
-        } catch (error) {
+        } catch (_error) {
           return { success: false, error: 'Network error' };
         }
       },
@@ -79,7 +79,7 @@ export const useAuth = create<AuthState>()(
             csrfToken: data.csrfToken,
             expiresIn: data.expiresIn,
           });
-        } catch (error) {
+        } catch (_error) {
           set({ isAuthenticated: false, csrfToken: null });
         }
       },

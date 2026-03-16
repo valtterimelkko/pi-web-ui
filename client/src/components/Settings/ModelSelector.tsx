@@ -80,16 +80,6 @@ function getProviderStyle(provider: string) {
   return providerStyles['default'];
 }
 
-// Format model name for display
-function formatModelName(modelId: string): string {
-  const parts = modelId.split('/');
-  const name = parts.length > 1 ? parts.slice(1).join('/') : modelId;
-  return name
-    .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
 // Scoring constants for search relevance
 const SCORE_EXACT_MATCH = 3;
 const SCORE_STARTS_WITH = 2;

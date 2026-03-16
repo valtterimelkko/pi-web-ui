@@ -78,7 +78,7 @@ export class EventForwarder {
           assistantMessageEvent: event.assistantMessageEvent,
         };
 
-      case 'message_end':
+      case 'message_end': {
         // Include the current message ID and clear it
         const endMessageId = this.currentMessageId;
         this.currentMessageId = null;
@@ -87,6 +87,7 @@ export class EventForwarder {
           type: 'message_end',
           message: { id: endMessageId },
         };
+      }
 
       case 'tool_execution_start':
         return {

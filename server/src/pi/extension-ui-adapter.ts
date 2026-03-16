@@ -3,7 +3,7 @@ import type {
   ExtensionUIDialogOptions,
   ExtensionCommandContextActions,
 } from '@mariozechner/pi-coding-agent';
-import type { ExtensionUIRequest, ExtensionUIResponse } from './extension-ui-handler.js';
+import type { ExtensionUIRequest } from './extension-ui-handler.js';
 import { getExtensionUIHandler } from './extension-ui-handler.js';
 
 export interface WebUIContext {

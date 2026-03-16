@@ -1,4 +1,4 @@
-import { describe, it, expect, from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MessageBubble } from '../../../../src/components/Chat/MessageBubble';
 import type { Message } from '../../../../src/store';

@@ -44,21 +44,27 @@ function tryDecode(input: string): string {
         return decoded;
       }
     }
-  } catch {}
+  } catch {
+    // Invalid base64 - not base64 encoded, continue to next format
+  }
   
   try {
     // URL encoding
     if (/%[0-9A-Fa-f]{2}/.test(input)) {
       return decodeURIComponent(input);
     }
-  } catch {}
+  } catch {
+    // Invalid URL encoding - not URL encoded, continue to next format
+  }
   
   try {
     // Hex
     if (/^(0x)?[0-9A-Fa-f]+$/.test(input) && input.length > 10) {
       return Buffer.from(input.replace(/^0x/, ''), 'hex').toString('utf-8');
     }
-  } catch {}
+  } catch {
+    // Invalid hex - not hex encoded, return original input
+  }
   
   return input;
 }
@@ -110,6 +116,7 @@ export function detectPromptInjection(input: string): InjectionDetectionResult {
 export function sanitizePrompt(input: string): string {
   // Basic sanitization - remove null bytes, normalize whitespace
   return input
+    // eslint-disable-next-line no-control-regex
     .replace(/\x00/g, '')
     .replace(/[\u200B-\u200D\uFEFF]/g, '') // Zero-width characters
     .replace(/\s+/g, ' ')

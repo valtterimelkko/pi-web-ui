@@ -1,15 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import { VirtualizedMessageList } from '../../../../src/components/Chat/VirtualizedMessageList';
 import type { Message } from '../../../../src/store';
 import React from 'react';
 
 // Mock react-virtuoso
 vi.mock('react-virtuoso', () => ({
-  Virtuoso: ({ data, itemContent, components, atBottomStateChange }: {
+  Virtuoso: ({ data, itemContent, atBottomStateChange }: {
     data: Array<{ message: Message; index: number }>;
     itemContent: (index: number, item: { message: Message; index: number }) => React.ReactNode;
-    components?: { EmptyPlaceholder?: React.ComponentType };
     atBottomStateChange?: (atBottom: boolean) => void;
   }) => {
     // Call atBottomStateChange on mount
@@ -158,7 +157,7 @@ describe('VirtualizedMessageList', () => {
       timestamp: i * 1000,
     }));
     
-    const { container } = render(<VirtualizedMessageList messages={manyMessages} isStreaming={false} />);
+    const { container: _container } = render(<VirtualizedMessageList messages={manyMessages} isStreaming={false} />);
     
     // Should render without performance issues
     expect(screen.getByTestId('virtuoso-mock')).toBeInTheDocument();
