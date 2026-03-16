@@ -48,6 +48,12 @@ const providerStyles: Record<string, { icon: typeof Github; color: string; bgCol
     bgColor: 'bg-blue-50',
     label: 'Google',
   },
+  'google-antigravity': {
+    icon: Sparkles,
+    color: 'text-indigo-600',
+    bgColor: 'bg-indigo-50',
+    label: 'Antigravity',
+  },
   'xai': {
     icon: Cpu,
     color: 'text-red-600',
@@ -64,6 +70,7 @@ const providerStyles: Record<string, { icon: typeof Github; color: string; bgCol
 
 function getProviderStyle(provider: string) {
   const key = provider.toLowerCase();
+  if (key.includes('antigravity')) return providerStyles['google-antigravity'];
   if (key.includes('anthropic') || key.includes('claude')) return providerStyles['anthropic'];
   if (key.includes('github') || key.includes('copilot')) return providerStyles['github-copilot'];
   if (key.includes('kimi')) return providerStyles['kimi'];

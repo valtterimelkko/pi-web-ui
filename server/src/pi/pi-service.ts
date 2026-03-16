@@ -41,6 +41,21 @@ export class PiService {
       : undefined);
     
     this.modelRegistry = new ModelRegistry(this.authStorage);
+    
+    // Log any ModelRegistry errors (e.g., models.json issues)
+    const modelError = this.modelRegistry.getError();
+    if (modelError) {
+      console.error('[PiService] ModelRegistry error:', modelError);
+    }
+    
+    // Log loaded providers at startup
+    const allModels = this.modelRegistry.getAll();
+    const availableModels = this.modelRegistry.getAvailable();
+    const allProviders = [...new Set(allModels.map(m => m.provider))];
+    const availableProviders = [...new Set(availableModels.map(m => m.provider))];
+    console.log('[PiService] All providers loaded:', allProviders.join(', '));
+    console.log('[PiService] Available providers (with auth):', availableProviders.join(', '));
+    
     this.resourceLoader = new DefaultResourceLoader({
       cwd: process.cwd(),
       agentDir: config.piAgentDir || undefined,
@@ -196,7 +211,14 @@ export class PiService {
   }
 
   async getAvailableModels() {
-    return this.modelRegistry.getAvailable();
+    const models = this.modelRegistry.getAvailable();
+    
+    // Log available providers for debugging
+    const providers = [...new Set(models.map(m => m.provider))];
+    console.log('[PiService] Available model providers:', providers.join(', '));
+    console.log(`[PiService] Total models available: ${models.length}`);
+    
+    return models;
   }
 
   async setModel(sessionId: string, modelId: string): Promise<void> {
