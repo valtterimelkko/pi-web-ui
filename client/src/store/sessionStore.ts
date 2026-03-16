@@ -93,6 +93,11 @@ interface SessionState {
   archiveSession: (sessionPath: string) => void;
   unarchiveSession: (sessionPath: string) => void;
   isSessionArchived: (sessionPath: string) => boolean;
+  // Web UI display names (web UI only, not synced to CLI)
+  sessionDisplayNames: Record<string, string>;
+  setSessionDisplayName: (sessionPath: string, displayName: string) => void;
+  getSessionDisplayName: (sessionPath: string) => string | undefined;
+  removeSessionDisplayName: (sessionPath: string) => void;
   initPreferences: () => Promise<void>;
   
   // WebSocket event handlers
@@ -115,6 +120,7 @@ export const useSessionStore = create<SessionState>()(
       contextUsed: 0,
       contextWindow: 0,
       archivedSessionPaths: [],
+      sessionDisplayNames: {},
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),
@@ -145,12 +151,43 @@ export const useSessionStore = create<SessionState>()(
         return get().archivedSessionPaths.includes(sessionPath);
       },
 
+      setSessionDisplayName: (sessionPath, displayName) => {
+        set((state) => ({
+          sessionDisplayNames: {
+            ...state.sessionDisplayNames,
+            [sessionPath]: displayName,
+          },
+        }));
+        // Fire-and-forget sync to server so all devices stay in sync
+        patchPreferences({ sessionDisplayNames: get().sessionDisplayNames }).catch((e) => {
+          console.warn('Failed to sync display name to server:', e);
+        });
+      },
+
+      getSessionDisplayName: (sessionPath) => {
+        return get().sessionDisplayNames[sessionPath];
+      },
+
+      removeSessionDisplayName: (sessionPath) => {
+        set((state) => {
+          const newDisplayNames = { ...state.sessionDisplayNames };
+          delete newDisplayNames[sessionPath];
+          return { sessionDisplayNames: newDisplayNames };
+        });
+        patchPreferences({ sessionDisplayNames: get().sessionDisplayNames }).catch((e) => {
+          console.warn('Failed to sync display name removal to server:', e);
+        });
+      },
+
       initPreferences: async () => {
         try {
           const serverPrefs = await getPreferences();
           if (serverPrefs.archivedSessionPaths !== undefined) {
             // Server is the source of truth — overrides localStorage cache
             set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
+          }
+          if (serverPrefs.sessionDisplayNames !== undefined) {
+            set({ sessionDisplayNames: serverPrefs.sessionDisplayNames });
           }
         } catch (e) {
           // Non-fatal: fall back to whatever is already in localStorage
@@ -453,6 +490,7 @@ export const useSessionStore = create<SessionState>()(
       partialize: (state) => ({ 
         sessions: state.sessions,
         archivedSessionPaths: state.archivedSessionPaths,
+        sessionDisplayNames: state.sessionDisplayNames,
       }),
     }
   )
