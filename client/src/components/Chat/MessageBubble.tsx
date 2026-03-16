@@ -1,7 +1,7 @@
 import React, { useState, memo, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Copy, Check } from 'lucide-react';
+import { Copy, Check, Bot } from 'lucide-react';
 import type { Message } from '../../store';
 import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
@@ -12,6 +12,44 @@ import { copyToClipboard } from '../../lib/clipboard';
 interface MessageBubbleProps {
   message: Message;
   isLast?: boolean;
+}
+
+/**
+ * ActivityIndicator - Shows a brief summary for assistant messages with no visible text
+ * 
+ * This helps users understand what happened when the agent only thought/reasoned
+ * but didn't produce any visible output.
+ */
+function ActivityIndicator({ 
+  thinking, 
+  isStreaming 
+}: { 
+  thinking: string | null;
+  isStreaming: boolean;
+}) {
+  // Generate a brief preview of activity
+  const preview = useMemo(() => {
+    if (!thinking) return isStreaming ? 'Thinking...' : 'Processed';
+    
+    // Get first sentence or first 60 chars of thinking
+    const firstSentence = thinking.split(/[.!?]\s/)[0];
+    const truncated = firstSentence.length > 60 
+      ? firstSentence.slice(0, 60) + '…' 
+      : firstSentence;
+    return truncated;
+  }, [thinking, isStreaming]);
+
+  return (
+    <div className="flex items-center gap-2 text-sm text-gray-500 py-1">
+      <Bot className="w-4 h-4 text-gray-400 shrink-0" />
+      <span className="truncate">{preview}</span>
+      {isStreaming && (
+        <span className="inline-flex items-center gap-1">
+          <span className="animate-pulse">●</span>
+        </span>
+      )}
+    </div>
+  );
 }
 
 // Memoized MessageBubble for performance
@@ -68,7 +106,8 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
 
   const { text: displayText, thinking } = processContent();
   const hasThinking = !!thinking;
-  const isStreamingThis = isLast && isStreaming && isAssistant;
+  const hasVisibleContent = displayText && displayText.trim().length > 0;
+  const isStreamingThis = !!(isLast && isStreaming && isAssistant);
 
   const handleCopy = async () => {
     if (!displayText) return;
@@ -97,6 +136,10 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
     );
   }
 
+  // For assistant messages with no visible content but thinking, 
+  // auto-expand thinking block by default
+  const showThinkingExpanded = !hasVisibleContent && hasThinking;
+
   return (
     <div className="w-full">
       {/* Thinking block */}
@@ -104,82 +147,91 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
         <div className="mb-2">
           <ThinkingBlock
             content={thinking}
-            isOpen={showThinking}
+            isOpen={showThinking || showThinkingExpanded}
             onToggle={() => setShowThinking(!showThinking)}
           />
         </div>
       )}
 
-      {/* Message content */}
-      <div
-        className={`
-          relative group break-words overflow-hidden
-          ${isUser
-            ? 'bg-gray-100 rounded-lg p-4 text-gray-900'
-            : isTool
-              ? 'bg-gray-50 border border-gray-200 rounded-lg p-4'
-              : 'pl-4 pr-8 border-l-2 border-teal-400 text-gray-900'
-          }
-        `}
-      >
-        {/* Copy button - always visible on mobile, hover-only on desktop */}
-        {isAssistant && !isStreamingThis && displayText && (
-          <button
-            onClick={handleCopy}
-            className={`
-              absolute top-1 right-1 p-1.5 rounded-md transition-all duration-200
-              ${copied
-                ? 'bg-green-100 text-green-600'
-                : 'bg-gray-100 text-gray-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700'
-              }
-            `}
-            title={copied ? 'Copied!' : 'Copy message'}
-          >
-            {copied ? (
-              <Check className="w-3.5 h-3.5" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
-            )}
-          </button>
-        )}
+      {/* Activity indicator for messages with no visible content */}
+      {isAssistant && !hasVisibleContent && !hasThinking && (
+        <div className="pl-4 pr-8 border-l-2 border-gray-200">
+          <ActivityIndicator thinking={null} isStreaming={isStreamingThis} />
+        </div>
+      )}
 
-        {isStreamingThis ? (
-          <StreamingText text={displayText} />
-        ) : (
-          <div className="prose prose-sm max-w-none prose-gray">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                code({ inline, className, children, ...props }: { inline?: boolean; className?: string; children?: React.ReactNode }) {
-                  const match = /language-(\w+)/.exec(className || '');
-                  return !inline ? (
-                    <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-x-auto my-2">
-                      <code className={match ? `language-${match[1]}` : ''} {...props}>
+      {/* Message content */}
+      {hasVisibleContent && (
+        <div
+          className={`
+            relative group break-words overflow-hidden
+            ${isUser
+              ? 'bg-gray-100 rounded-lg p-4 text-gray-900'
+              : isTool
+                ? 'bg-gray-50 border border-gray-200 rounded-lg p-4'
+                : 'pl-4 pr-8 border-l-2 border-teal-400 text-gray-900'
+            }
+          `}
+        >
+          {/* Copy button - always visible on mobile, hover-only on desktop */}
+          {isAssistant && !isStreamingThis && (
+            <button
+              onClick={handleCopy}
+              className={`
+                absolute top-1 right-1 p-1.5 rounded-md transition-all duration-200
+                ${copied
+                  ? 'bg-green-100 text-green-600'
+                  : 'bg-gray-100 text-gray-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700'
+                }
+              `}
+              title={copied ? 'Copied!' : 'Copy message'}
+            >
+              {copied ? (
+                <Check className="w-3.5 h-3.5" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+            </button>
+          )}
+
+          {isStreamingThis ? (
+            <StreamingText text={displayText} />
+          ) : (
+            <div className="prose prose-sm max-w-none prose-gray">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  code({ inline, className, children, ...props }: { inline?: boolean; className?: string; children?: React.ReactNode }) {
+                    const match = /language-(\w+)/.exec(className || '');
+                    return !inline ? (
+                      <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-x-auto my-2">
+                        <code className={match ? `language-${match[1]}` : ''} {...props}>
+                          {children}
+                        </code>
+                      </pre>
+                    ) : (
+                      <code className="bg-gray-100 text-gray-800 px-1 py-0.5 rounded text-sm" {...props}>
                         {children}
                       </code>
-                    </pre>
-                  ) : (
-                    <code className="bg-gray-100 text-gray-800 px-1 py-0.5 rounded text-sm" {...props}>
+                    );
+                  },
+                  p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+                  ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                  a: ({ children, href }) => (
+                    <a href={href} className="text-teal-600 hover:text-teal-700 underline" target="_blank" rel="noopener noreferrer">
                       {children}
-                    </code>
-                  );
-                },
-                p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
-                ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
-                ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
-                li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-                a: ({ children, href }) => (
-                  <a href={href} className="text-teal-600 hover:text-teal-700 underline" target="_blank" rel="noopener noreferrer">
-                    {children}
-                  </a>
-                ),
-              }}
-            >
-              {displayText}
-            </ReactMarkdown>
-          </div>
-        )}
-      </div>
+                    </a>
+                  ),
+                }}
+              >
+                {displayText}
+              </ReactMarkdown>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Timestamp */}
       <span className="text-xs text-gray-400 mt-1 block">

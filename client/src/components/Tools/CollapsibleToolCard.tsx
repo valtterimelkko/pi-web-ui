@@ -430,7 +430,7 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
       {isExpanded && (
         <div className="px-3 py-2 space-y-3">
           {/* Arguments section */}
-          {args && (
+          {args !== null && args !== undefined && (
             <ToolInputSection args={args} />
           )}
           
