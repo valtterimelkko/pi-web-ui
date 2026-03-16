@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, memo, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check } from 'lucide-react';
@@ -6,7 +6,7 @@ import type { Message } from '../../store';
 import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
 import { ThinkingBlock } from './ThinkingBlock';
-import { ToolCallCard } from '../Tools/ToolCallCard';
+import { CollapsibleToolCard } from '../Tools/CollapsibleToolCard';
 import { copyToClipboard } from '../../lib/clipboard';
 
 interface MessageBubbleProps {
@@ -14,7 +14,8 @@ interface MessageBubbleProps {
   isLast?: boolean;
 }
 
-export function MessageBubble({ message, isLast }: MessageBubbleProps) {
+// Memoized MessageBubble for performance
+export const MessageBubble = memo(function MessageBubble({ message, isLast }: MessageBubbleProps) {
   const [showThinking, setShowThinking] = useState(false);
   const [copied, setCopied] = useState(false);
   const isStreaming = useSessionStore((state) => state.isStreaming);
@@ -85,19 +86,14 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
     });
   };
 
-  // Render tool call card for tool messages
+  // Render tool call card for tool messages (using new CollapsibleToolCard)
   if (isTool && message.toolCall) {
     return (
-      <div className="w-full">
-        <ToolCallCard
-          name={message.toolCall.name}
-          args={message.toolCall.args}
-          result={message.toolResult}
-        />
-        <span className="text-xs text-gray-400 mt-1 block">
-          {formatTime(message.timestamp)}
-        </span>
-      </div>
+      <CollapsibleToolCard
+        name={message.toolCall.name}
+        args={message.toolCall.args}
+        result={message.toolResult}
+      />
     );
   }
 
@@ -191,4 +187,14 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
       </span>
     </div>
   );
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison for better memoization
+  // Only re-render if message content or last status changes
+  return (
+    prevProps.message.id === nextProps.message.id &&
+    prevProps.message.content === nextProps.message.content &&
+    prevProps.isLast === nextProps.isLast &&
+    prevProps.message.toolResult?.output === nextProps.message.toolResult?.output &&
+    prevProps.message.toolResult?.isError === nextProps.message.toolResult?.isError
+  );
+});

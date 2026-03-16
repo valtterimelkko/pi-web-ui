@@ -77,6 +77,10 @@ interface SessionState {
   contextWindow: number;
   // Archive state (persisted)
   archivedSessionPaths: string[];
+  // Background session support - store messages per session
+  sessionMessages: Record<string, Message[]>;
+  // Track which sessions are streaming (for background processing)
+  streamingSessions: Record<string, boolean>;
 
   // Actions
   setSessions: (sessions: Session[]) => void;
@@ -99,6 +103,10 @@ interface SessionState {
   getSessionDisplayName: (sessionPath: string) => string | undefined;
   removeSessionDisplayName: (sessionPath: string) => void;
   initPreferences: () => Promise<void>;
+  // Background session helpers
+  getSessionMessages: (sessionId: string) => Message[];
+  isSessionStreaming: (sessionId: string) => boolean;
+  clearSessionMessages: (sessionId: string) => void;
   
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -121,10 +129,30 @@ export const useSessionStore = create<SessionState>()(
       contextWindow: 0,
       archivedSessionPaths: [],
       sessionDisplayNames: {},
+      // Background session support
+      sessionMessages: {},
+      streamingSessions: {},
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),
       setCurrentModel: (modelId) => set({ currentModel: modelId }),
+
+      // Background session helpers
+      getSessionMessages: (sessionId: string) => {
+        return get().sessionMessages[sessionId] || [];
+      },
+      
+      isSessionStreaming: (sessionId: string) => {
+        return get().streamingSessions[sessionId] || false;
+      },
+      
+      clearSessionMessages: (sessionId: string) => {
+        set((state) => {
+          const newSessionMessages = { ...state.sessionMessages };
+          delete newSessionMessages[sessionId];
+          return { sessionMessages: newSessionMessages };
+        });
+      },
 
       archiveSession: (sessionPath) => {
         set((state) => ({
@@ -205,27 +233,70 @@ export const useSessionStore = create<SessionState>()(
       setSessions: (sessions) => set({ sessions }),
 
       setCurrentSession: (sessionId) => {
+        const state = get();
+        
+        // First, save current session's messages to cache (if any)
+        if (state.currentSessionId && state.messages.length > 0) {
+          set((s) => ({
+            sessionMessages: {
+              ...s.sessionMessages,
+              [s.currentSessionId!]: s.messages,
+            },
+          }));
+        }
+        
+        // Then, switch to new session and load its cached messages (if any)
+        const cachedMessages = sessionId ? get().sessionMessages[sessionId] || [] : [];
         set({ 
           currentSessionId: sessionId,
-          messages: [], // Clear messages when switching
+          messages: cachedMessages,
         });
       },
 
       addMessage: (message) => {
-        set((state) => ({
-          messages: [...state.messages, message],
-        }));
+        set((state) => {
+          const newMessages = [...state.messages, message];
+          // Also update the session cache
+          const sessionId = state.currentSessionId;
+          const newSessionMessages = sessionId 
+            ? { ...state.sessionMessages, [sessionId]: newMessages }
+            : state.sessionMessages;
+          return { 
+            messages: newMessages,
+            sessionMessages: newSessionMessages,
+          };
+        });
       },
 
       updateMessage: (id, updates) => {
-        set((state) => ({
-          messages: state.messages.map((msg) =>
+        set((state) => {
+          const newMessages = state.messages.map((msg) =>
             msg.id === id ? { ...msg, ...updates } : msg
-          ),
-        }));
+          );
+          // Also update the session cache
+          const sessionId = state.currentSessionId;
+          const newSessionMessages = sessionId 
+            ? { ...state.sessionMessages, [sessionId]: newMessages }
+            : state.sessionMessages;
+          return { 
+            messages: newMessages,
+            sessionMessages: newSessionMessages,
+          };
+        });
       },
 
-      setStreaming: (isStreaming) => set({ isStreaming }),
+      setStreaming: (isStreaming) => {
+        set((state) => {
+          const sessionId = state.currentSessionId;
+          const newStreamingSessions = sessionId 
+            ? { ...state.streamingSessions, [sessionId]: isStreaming }
+            : state.streamingSessions;
+          return { 
+            isStreaming,
+            streamingSessions: newStreamingSessions,
+          };
+        });
+      },
       setLoading: (isLoading) => set({ isLoading }),
       setError: (error) => set({ error }),
 
@@ -247,6 +318,12 @@ export const useSessionStore = create<SessionState>()(
               contextUsed: 0,
               contextWindow: 0,
               sessionInfo: null,
+            });
+            // Clear any cached messages for this session
+            set((state) => {
+              const newSessionMessages = { ...state.sessionMessages };
+              delete newSessionMessages[msg.sessionId as string];
+              return { sessionMessages: newSessionMessages };
             });
             break;
 
@@ -274,13 +351,29 @@ export const useSessionStore = create<SessionState>()(
               timestamp: serverMsg.timestamp,
             }));
             
-            set({ 
-              currentSessionId: switchMsg.sessionId,
-              currentModel: switchMsg.model ?? null,
-              messages: clientMessages,
-              contextPercent: switchMsg.contextPercent ?? 0,
-              contextUsed: switchMsg.contextUsed ?? 0,
-              contextWindow: switchMsg.contextWindow ?? 0,
+            // Save current session's messages before switching (if any)
+            const currentId = get().currentSessionId;
+            const currentMessages = get().messages;
+            
+            set((state) => {
+              const newSessionMessages = { ...state.sessionMessages };
+              // Save current session's messages
+              if (currentId && currentMessages.length > 0) {
+                newSessionMessages[currentId] = currentMessages;
+              }
+              // Store the switched session's messages
+              if (switchMsg.sessionId) {
+                newSessionMessages[switchMsg.sessionId] = clientMessages;
+              }
+              return {
+                currentSessionId: switchMsg.sessionId,
+                currentModel: switchMsg.model ?? null,
+                messages: clientMessages,
+                contextPercent: switchMsg.contextPercent ?? 0,
+                contextUsed: switchMsg.contextUsed ?? 0,
+                contextWindow: switchMsg.contextWindow ?? 0,
+                sessionMessages: newSessionMessages,
+              };
             });
             break;
           }
