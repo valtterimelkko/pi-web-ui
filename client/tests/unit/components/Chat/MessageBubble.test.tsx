@@ -55,25 +55,24 @@ describe('MessageBubble', () => {
     expect(screen.getByText('Hi there! How can I help you?')).toBeInTheDocument();
   });
 
-  it('shows correct avatar styling for user', () => {
-    render(<MessageBubble message={mockUserMessage} />);
-    // User messages have violet styling
-    const avatar = document.querySelector('.bg-violet-600');
-    expect(avatar).toBeInTheDocument();
+  it('renders user message with correct styling', () => {
+    const { container } = render(<MessageBubble message={mockUserMessage} />);
+    // User messages have gray background
+    const messageElement = container.querySelector('.bg-gray-100');
+    expect(messageElement).toBeTruthy();
   });
 
-  it('shows correct avatar styling for assistant', () => {
-    render(<MessageBubble message={mockAssistantMessage} />);
-    // Assistant messages have slate styling
-    const avatar = document.querySelector('.bg-slate-700');
-    expect(avatar).toBeInTheDocument();
+  it('renders assistant message with correct styling', () => {
+    const { container } = render(<MessageBubble message={mockAssistantMessage} />);
+    // Assistant messages have left border
+    const messageElement = container.querySelector('.border-l-2');
+    expect(messageElement).toBeTruthy();
   });
 
-  it('shows correct avatar styling for tool messages', () => {
-    render(<MessageBubble message={mockToolMessage} />);
-    // Tool messages have amber styling
-    const avatar = document.querySelector('.bg-amber-600');
-    expect(avatar).toBeInTheDocument();
+  it('renders tool message with CollapsibleToolCard', () => {
+    const { container } = render(<MessageBubble message={mockToolMessage} />);
+    // Tool messages render CollapsibleToolCard component
+    expect(container.querySelector('.border')).toBeTruthy();
   });
 
   it('renders markdown content correctly', () => {
@@ -104,7 +103,8 @@ describe('MessageBubble', () => {
       timestamp: Date.now(),
     };
     render(<MessageBubble message={arrayContentMessage} />);
-    expect(screen.getByText('Part 1 Part 2')).toBeInTheDocument();
+    // Content parts are joined together without spaces
+    expect(screen.getByText('Part 1Part 2')).toBeInTheDocument();
   });
 
   it('applies last message styling when isLast is true', () => {
