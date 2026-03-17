@@ -1081,6 +1081,14 @@ export const useSessionStore = create<SessionState>()(
                 currentStep: currentStep ?? get().sessionData[sessionId]?.currentStep ?? 0,
               });
             }
+            
+            // Sync global isStreaming if this is the current session
+            // This ensures the UI (MessageInput) reflects the correct state
+            // when switching sessions or receiving status updates
+            if (get().currentSessionId === sessionId) {
+              const isStreaming = status === 'streaming' || status === 'busy';
+              set({ isStreaming });
+            }
             break;
           }
         }
