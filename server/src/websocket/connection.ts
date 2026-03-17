@@ -453,6 +453,13 @@ export class WebSocketConnectionManager {
     // Get the old session path before switching
     const oldSessionPath = this.multiSessionManager.getClientSessionPath(clientId);
 
+    // Unsubscribe from the old session if different from new session
+    // This prevents receiving events from the old session while viewing the new one
+    if (oldSessionPath && oldSessionPath !== sessionPath) {
+      this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
+      console.log(`[handleSwitchSession] Client ${clientId} unsubscribed from ${oldSessionPath}`);
+    }
+
     // Subscribe to the new session via MultiSessionManager (creates if doesn't exist)
     const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath);
 
