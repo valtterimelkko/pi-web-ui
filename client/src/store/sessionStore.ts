@@ -30,6 +30,15 @@ export interface Message {
   };
 }
 
+/**
+ * Metadata for session cache to enable intelligent cache invalidation
+ */
+interface SessionCacheMeta {
+  fileTimestamp: number;  // Server file modification time when last read
+  lastLocalUpdate: number; // When we last updated from WebSocket events
+  isStreaming: boolean;    // Was streaming when we last saw it
+}
+
 interface ExtensionUIRequest {
   id: string;
   type: 'confirm' | 'select' | 'input' | 'editor';
@@ -77,10 +86,13 @@ interface SessionState {
   contextWindow: number;
   // Archive state (persisted)
   archivedSessionPaths: string[];
-  // Background session support - store messages per session
+  // Session cache with metadata for intelligent invalidation
   sessionMessages: Record<string, Message[]>;
+  sessionCacheMeta: Record<string, SessionCacheMeta>;
   // Track which sessions are streaming (for background processing)
   streamingSessions: Record<string, boolean>;
+  // Loading state to prevent duplicate adds during initial session load
+  isLoadingSessions: boolean;
 
   // Actions
   setSessions: (sessions: Session[]) => void;
@@ -107,6 +119,8 @@ interface SessionState {
   getSessionMessages: (sessionId: string) => Message[];
   isSessionStreaming: (sessionId: string) => boolean;
   clearSessionMessages: (sessionId: string) => void;
+  // Cache metadata helpers
+  getSessionCacheMeta: (sessionId: string) => SessionCacheMeta | undefined;
   
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -129,9 +143,11 @@ export const useSessionStore = create<SessionState>()(
       contextWindow: 0,
       archivedSessionPaths: [],
       sessionDisplayNames: {},
-      // Background session support
+      // Session cache with metadata
       sessionMessages: {},
+      sessionCacheMeta: {},
       streamingSessions: {},
+      isLoadingSessions: false,
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),
@@ -149,9 +165,18 @@ export const useSessionStore = create<SessionState>()(
       clearSessionMessages: (sessionId: string) => {
         set((state) => {
           const newSessionMessages = { ...state.sessionMessages };
+          const newSessionCacheMeta = { ...state.sessionCacheMeta };
           delete newSessionMessages[sessionId];
-          return { sessionMessages: newSessionMessages };
+          delete newSessionCacheMeta[sessionId];
+          return { 
+            sessionMessages: newSessionMessages,
+            sessionCacheMeta: newSessionCacheMeta,
+          };
         });
+      },
+
+      getSessionCacheMeta: (sessionId: string) => {
+        return get().sessionCacheMeta[sessionId];
       },
 
       archiveSession: (sessionPath) => {
@@ -230,17 +255,36 @@ export const useSessionStore = create<SessionState>()(
         }
       },
 
-      setSessions: (sessions) => set({ sessions }),
+      setSessions: (sessions) => {
+        // Deduplicate sessions by path (path is the stable identifier)
+        const seenPaths = new Set<string>();
+        const dedupedSessions = sessions.filter((session) => {
+          if (seenPaths.has(session.path)) {
+            return false;
+          }
+          seenPaths.add(session.path);
+          return true;
+        });
+        set({ sessions: dedupedSessions, isLoadingSessions: false });
+      },
 
       setCurrentSession: (sessionId) => {
         const state = get();
         
-        // First, save current session's messages to cache (if any)
+        // First, save current session's messages to cache with metadata (if any)
         if (state.currentSessionId && state.messages.length > 0) {
           set((s) => ({
             sessionMessages: {
               ...s.sessionMessages,
               [s.currentSessionId!]: s.messages,
+            },
+            sessionCacheMeta: {
+              ...s.sessionCacheMeta,
+              [s.currentSessionId!]: {
+                fileTimestamp: s.sessionCacheMeta[s.currentSessionId!]?.fileTimestamp || 0,
+                lastLocalUpdate: Date.now(),
+                isStreaming: s.isStreaming,
+              },
             },
           }));
         }
@@ -306,9 +350,21 @@ export const useSessionStore = create<SessionState>()(
         const msg = message as { type: string; [key: string]: unknown };
 
         switch (msg.type) {
-          case 'sessions_list':
-            set({ sessions: (msg.sessions as Session[]) || [] });
+          case 'sessions_list': {
+            // Deduplicate sessions by path (path is the stable identifier)
+            const rawSessions = (msg.sessions as Session[]) || [];
+            const seenPaths = new Set<string>();
+            const dedupedSessions = rawSessions.filter((session) => {
+              if (seenPaths.has(session.path)) {
+                console.warn(`[sessionStore] Duplicate session path in sessions_list: ${session.path}`);
+                return false;
+              }
+              seenPaths.add(session.path);
+              return true;
+            });
+            set({ sessions: dedupedSessions, isLoadingSessions: false });
             break;
+          }
 
           case 'session_created':
             set({ 
@@ -340,6 +396,8 @@ export const useSessionStore = create<SessionState>()(
                 content: string | Array<{ type: string; text?: string; thinking?: string }>;
                 timestamp: number;
               }>;
+              fileTimestamp?: number;
+              isStreaming?: boolean;
             };
             
             // Transform server messages to client Message format
@@ -355,16 +413,35 @@ export const useSessionStore = create<SessionState>()(
             const currentId = get().currentSessionId;
             const currentMessages = get().messages;
             
+            // Check if we should use server messages or keep local cache
+            // Server file is the source of truth, but we need to handle streaming state
+            const serverFileTimestamp = switchMsg.fileTimestamp || 0;
+            const serverIsStreaming = switchMsg.isStreaming || false;
+            
             set((state) => {
               const newSessionMessages = { ...state.sessionMessages };
-              // Save current session's messages
+              const newSessionCacheMeta = { ...state.sessionCacheMeta };
+              
+              // Save current session's messages with metadata
               if (currentId && currentMessages.length > 0) {
                 newSessionMessages[currentId] = currentMessages;
+                newSessionCacheMeta[currentId] = {
+                  fileTimestamp: state.sessionCacheMeta[currentId]?.fileTimestamp || 0,
+                  lastLocalUpdate: Date.now(),
+                  isStreaming: state.isStreaming,
+                };
               }
-              // Store the switched session's messages
+              
+              // Store the switched session's messages with metadata from server
               if (switchMsg.sessionId) {
                 newSessionMessages[switchMsg.sessionId] = clientMessages;
+                newSessionCacheMeta[switchMsg.sessionId] = {
+                  fileTimestamp: serverFileTimestamp,
+                  lastLocalUpdate: Date.now(),
+                  isStreaming: serverIsStreaming,
+                };
               }
+              
               return {
                 currentSessionId: switchMsg.sessionId,
                 currentModel: switchMsg.model ?? null,
@@ -373,17 +450,57 @@ export const useSessionStore = create<SessionState>()(
                 contextUsed: switchMsg.contextUsed ?? 0,
                 contextWindow: switchMsg.contextWindow ?? 0,
                 sessionMessages: newSessionMessages,
+                sessionCacheMeta: newSessionCacheMeta,
+                // If server says streaming, trust it
+                isStreaming: serverIsStreaming,
               };
             });
             break;
           }
 
           case 'agent_start':
-            set({ isStreaming: true, isLoading: false });
+            set((state) => {
+              const sessionId = state.currentSessionId;
+              const newStreamingSessions = sessionId 
+                ? { ...state.streamingSessions, [sessionId]: true }
+                : state.streamingSessions;
+              const newSessionCacheMeta = { ...state.sessionCacheMeta };
+              if (sessionId) {
+                newSessionCacheMeta[sessionId] = {
+                  ...newSessionCacheMeta[sessionId],
+                  isStreaming: true,
+                  lastLocalUpdate: Date.now(),
+                };
+              }
+              return { 
+                isStreaming: true, 
+                isLoading: false,
+                streamingSessions: newStreamingSessions,
+                sessionCacheMeta: newSessionCacheMeta,
+              };
+            });
             break;
 
           case 'agent_end':
-            set({ isStreaming: false });
+            set((state) => {
+              const sessionId = state.currentSessionId;
+              const newStreamingSessions = sessionId 
+                ? { ...state.streamingSessions, [sessionId]: false }
+                : state.streamingSessions;
+              const newSessionCacheMeta = { ...state.sessionCacheMeta };
+              if (sessionId) {
+                newSessionCacheMeta[sessionId] = {
+                  ...newSessionCacheMeta[sessionId],
+                  isStreaming: false,
+                  lastLocalUpdate: Date.now(),
+                };
+              }
+              return { 
+                isStreaming: false,
+                streamingSessions: newStreamingSessions,
+                sessionCacheMeta: newSessionCacheMeta,
+              };
+            });
             break;
 
           case 'message_start': {
@@ -446,6 +563,29 @@ export const useSessionStore = create<SessionState>()(
             break;
           }
 
+          case 'message_end': {
+            // Message streaming complete - update cache metadata
+            const { message: msgData } = msg as { message?: { id: string } };
+            if (msgData?.id) {
+              set((state) => {
+                const sessionId = state.currentSessionId;
+                if (sessionId) {
+                  return {
+                    sessionCacheMeta: {
+                      ...state.sessionCacheMeta,
+                      [sessionId]: {
+                        ...state.sessionCacheMeta[sessionId],
+                        lastLocalUpdate: Date.now(),
+                      },
+                    },
+                  };
+                }
+                return state;
+              });
+            }
+            break;
+          }
+
           case 'tool_execution_start': {
             const { toolCallId, toolName, args } = msg as unknown as {
               toolCallId: string;
@@ -499,6 +639,12 @@ export const useSessionStore = create<SessionState>()(
             break;
 
           case 'session_update': {
+            // Skip session_update events during initial load to prevent duplicates
+            if (get().isLoadingSessions) {
+              console.log('[sessionStore] Ignoring session_update during initial load');
+              break;
+            }
+            
             const { type, sessionId, info } = msg as {
               type: 'add' | 'change' | 'unlink';
               sessionId: string;
@@ -506,14 +652,18 @@ export const useSessionStore = create<SessionState>()(
             };
             
             if (type === 'unlink') {
-              // Remove deleted session
+              // Remove deleted session (use path for matching)
               set((state) => ({
-                sessions: state.sessions.filter((s) => s.id !== sessionId),
+                sessions: state.sessions.filter((s) => s.path !== info?.path && s.id !== sessionId),
               }));
             } else if (info) {
-              // Add or update session
+              // Add or update session (dedupe by path)
               set((state) => {
-                const existingIndex = state.sessions.findIndex((s) => s.id === info.id);
+                // Check if session with this path already exists
+                const existingByPath = state.sessions.findIndex((s) => s.path === info.path);
+                const existingById = state.sessions.findIndex((s) => s.id === info.id);
+                const existingIndex = existingByPath >= 0 ? existingByPath : existingById;
+                
                 if (existingIndex >= 0) {
                   // Update existing
                   const newSessions = [...state.sessions];
@@ -591,6 +741,7 @@ export const useSessionStore = create<SessionState>()(
         sessions: state.sessions,
         archivedSessionPaths: state.archivedSessionPaths,
         sessionDisplayNames: state.sessionDisplayNames,
+        sessionCacheMeta: state.sessionCacheMeta,
       }),
     }
   )

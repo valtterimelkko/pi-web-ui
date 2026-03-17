@@ -17,6 +17,8 @@ export function useWebSocket() {
         // Fetch sessions when connected
         if (status === 'connected') {
           console.log('Fetching sessions...');
+          // Set loading state to prevent duplicate adds from session_update events
+          useSessionStore.getState().isLoadingSessions = true;
           client.send({ type: 'get_sessions' });
         }
       },
@@ -77,6 +79,8 @@ export function useWebSocket() {
   }, [sendMessage]);
 
   const getSessions = useCallback(() => {
+    // Set loading state to prevent duplicate adds from session_update events
+    useSessionStore.getState().isLoadingSessions = true;
     return sendMessage({ type: 'get_sessions' });
   }, [sendMessage]);
 
