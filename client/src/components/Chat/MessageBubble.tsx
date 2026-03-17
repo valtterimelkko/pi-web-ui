@@ -197,24 +197,51 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
           {isStreamingThis ? (
             <StreamingText text={displayText} />
           ) : (
-            <div className="prose prose-sm max-w-none prose-gray">
+            <div className="prose prose-sm max-w-none prose-gray prose-table:w-full">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
                   code({ inline, className, children, ...props }: { inline?: boolean; className?: string; children?: React.ReactNode }) {
                     const match = /language-(\w+)/.exec(className || '');
                     return !inline ? (
-                      <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-x-auto my-2">
-                        <code className={match ? `language-${match[1]}` : ''} {...props}>
+                      <pre className="bg-slate-100 border border-slate-200 rounded-lg p-3 overflow-x-auto my-2">
+                        <code className={`text-slate-800 ${match ? `language-${match[1]}` : ''}`} {...props}>
                           {children}
                         </code>
                       </pre>
                     ) : (
-                      <code className="bg-gray-100 text-gray-800 px-1 py-0.5 rounded text-sm" {...props}>
+                      <code className="bg-slate-200 text-slate-900 px-1.5 py-0.5 rounded text-sm font-mono font-semibold" {...props}>
                         {children}
                       </code>
                     );
                   },
+                  // Table components for proper rendering
+                  table: ({ children }) => (
+                    <div className="overflow-x-auto my-3">
+                      <table className="w-full border-collapse border border-gray-200 text-sm">
+                        {children}
+                      </table>
+                    </div>
+                  ),
+                  thead: ({ children }) => (
+                    <thead className="bg-gray-50">{children}</thead>
+                  ),
+                  tbody: ({ children }) => (
+                    <tbody className="divide-y divide-gray-200">{children}</tbody>
+                  ),
+                  tr: ({ children }) => (
+                    <tr className="border-b border-gray-200 even:bg-gray-50/50">{children}</tr>
+                  ),
+                  th: ({ children }) => (
+                    <th className="border border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
+                      {children}
+                    </th>
+                  ),
+                  td: ({ children }) => (
+                    <td className="border border-gray-200 px-3 py-2 text-sm text-gray-700">
+                      {children}
+                    </td>
+                  ),
                   p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
                   ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
                   ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,

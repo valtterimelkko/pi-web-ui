@@ -188,6 +188,13 @@ html {
   color: #e2e8f0 !important;
 }
 
+/* Slate color overrides for light mode code contrast */
+.dark .bg-slate-100 { background-color: #1e293b !important; }
+.dark .bg-slate-200 { background-color: #334155 !important; }
+.dark .text-slate-800 { color: #e2e8f0 !important; }
+.dark .text-slate-900 { color: #f1f5f9 !important; }
+.dark .border-slate-200 { border-color: #334155 !important; }
+
 /* Modals / overlays in dark mode */
 .dark .shadow-xl { box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4), 0 8px 10px -6px rgba(0,0,0,0.4) !important; }
 .dark .shadow-lg { box-shadow: 0 10px 15px -3px rgba(0,0,0,0.4), 0 4px 6px -4px rgba(0,0,0,0.4) !important; }
@@ -222,6 +229,19 @@ html {
 .dark .prose a { color: #2dd4bf !important; }
 .dark .prose strong { color: #f1f5f9 !important; }
 .dark .prose code { color: #e2e8f0 !important; background-color: #1e293b !important; }
+
+/* Table styles for dark mode */
+.dark .prose table { border-color: #334155 !important; }
+.dark .prose th, .dark .prose td { border-color: #334155 !important; }
+.dark .prose th { background-color: #1e293b !important; color: #e2e8f0 !important; }
+.dark .prose tr:nth-child(even) { background-color: #1e293b !important; }
+.dark .prose tbody { border-color: #334155 !important; }
+.dark .prose tr { border-color: #334155 !important; }
+
+/* Todo tool status display in dark mode */
+.dark .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.15) !important; }
+.dark .border-emerald-200 { border-color: rgba(16, 185, 129, 0.3) !important; }
+.dark .text-emerald-700 { color: #34d399 !important; }
 
 /* iOS safe area – prevents content being hidden behind home indicator */
 .pb-safe {
