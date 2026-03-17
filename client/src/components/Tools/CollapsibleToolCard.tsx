@@ -253,13 +253,44 @@ const ToolInputSection = memo(function ToolInputSection({ args }: { args: unknow
   );
 });
 
+// Parse todo tool output to extract status message
+function parseTodoOutput(output: string): { message: string; isToggle: boolean } | null {
+  try {
+    const parsed = JSON.parse(output);
+    // Check if this is a todo tool result
+    if (parsed && typeof parsed === 'object') {
+      // Handle toggle response: { success: true, message: "Todo #2 completed", id: 2 }
+      if (parsed.message && typeof parsed.message === 'string') {
+        return {
+          message: parsed.message,
+          isToggle: parsed.message.includes('completed') || parsed.message.includes('uncompleted'),
+        };
+      }
+      // Handle list response: { todos: [...] }
+      if (parsed.todos && Array.isArray(parsed.todos)) {
+        const completed = parsed.todos.filter((t: { completed?: boolean }) => t.completed).length;
+        const total = parsed.todos.length;
+        return {
+          message: `${completed}/${total} todos completed`,
+          isToggle: false,
+        };
+      }
+    }
+  } catch {
+    // Not JSON, return null to use default formatting
+  }
+  return null;
+}
+
 // Tool output section (result)
 const ToolOutput = memo(function ToolOutput({ 
   result, 
+  toolName,
   isExpanded,
   onToggle 
 }: { 
   result: ToolResult;
+  toolName: string;
   isExpanded: boolean;
   onToggle: () => void;
 }) {
@@ -268,6 +299,9 @@ const ToolOutput = memo(function ToolOutput({
   const formattedOutput = useMemo(() => formatResult(output), [output]);
   const truncatedOutput = useMemo(() => truncateOutput(output), [output]);
   const isLong = isLongOutput(output);
+  
+  // Parse todo output for special display
+  const todoInfo = toolName === 'todo' ? parseTodoOutput(output) : null;
 
   const handleCopy = useCallback(async () => {
     await navigator.clipboard.writeText(formattedOutput);
@@ -299,13 +333,28 @@ const ToolOutput = memo(function ToolOutput({
       </button>
       
       {isExpanded && (
-        <pre className={`ml-4 rounded-lg p-3 overflow-x-auto text-xs font-mono ${
+        <div className={`ml-4 rounded-lg overflow-hidden ${
           isError
-            ? 'bg-red-50 text-red-700 border border-red-200'
-            : 'bg-gray-50 text-gray-700 border border-gray-200'
+            ? 'bg-red-50 border border-red-200'
+            : 'bg-gray-50 border border-gray-200'
         }`}>
-          <code>{isLong && !isExpanded ? truncatedOutput : formattedOutput}</code>
-        </pre>
+          {/* Special display for todo tool results */}
+          {todoInfo && (
+            <div className={`px-3 py-2 text-sm border-b ${
+              todoInfo.isToggle ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-100 border-gray-200'
+            }`}>
+              <span className={todoInfo.isToggle ? 'text-emerald-700 font-medium' : 'text-gray-700'}>
+                {todoInfo.isToggle && '✓ '}
+                {todoInfo.message}
+              </span>
+            </div>
+          )}
+          <pre className={`p-3 overflow-x-auto text-xs font-mono ${
+            isError ? 'text-red-700' : 'text-gray-700'
+          }`}>
+            <code>{formattedOutput}</code>
+          </pre>
+        </div>
       )}
       
       {!isExpanded && isLong && (
@@ -440,7 +489,8 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
           {/* Result section */}
           {hasResult && (
             <ToolOutput 
-              result={result} 
+              result={result}
+              toolName={name}
               isExpanded={showResult}
               onToggle={handleToggleResult}
             />
