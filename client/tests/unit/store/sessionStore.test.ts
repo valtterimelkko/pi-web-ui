@@ -347,4 +347,152 @@ describe('sessionStore', () => {
       expect(useSessionStore.getState().sessionMessages['session-1']).toHaveLength(1);
     });
   });
+
+  describe('session_status syncing', () => {
+    it('should update sessionData status for any session', () => {
+      const state = useSessionStore.getState();
+      
+      state.handleServerMessage({
+        type: 'session_status',
+        sessionId: 'session-1',
+        sessionPath: '/path/to/session-1.jsonl',
+        status: 'streaming',
+      });
+      
+      // Get fresh state after handler runs
+      expect(useSessionStore.getState().sessionData['session-1']?.status).toBe('streaming');
+    });
+
+    it('should sync isStreaming to true when session_status is streaming for current session', () => {
+      const state = useSessionStore.getState();
+      
+      // Set current session
+      state.setCurrentSession('session-1');
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+      
+      // Receive streaming status for current session
+      state.handleServerMessage({
+        type: 'session_status',
+        sessionId: 'session-1',
+        sessionPath: '/path/to/session-1.jsonl',
+        status: 'streaming',
+      });
+      
+      // Global isStreaming should be synced
+      expect(useSessionStore.getState().isStreaming).toBe(true);
+    });
+
+    it('should sync isStreaming to true when session_status is busy for current session', () => {
+      const state = useSessionStore.getState();
+      
+      // Set current session
+      state.setCurrentSession('session-1');
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+      
+      // Receive busy status for current session
+      state.handleServerMessage({
+        type: 'session_status',
+        sessionId: 'session-1',
+        sessionPath: '/path/to/session-1.jsonl',
+        status: 'busy',
+      });
+      
+      // Global isStreaming should be synced
+      expect(useSessionStore.getState().isStreaming).toBe(true);
+    });
+
+    it('should sync isStreaming to false when session_status is idle for current session', () => {
+      const state = useSessionStore.getState();
+      
+      // Set current session and start streaming
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      expect(useSessionStore.getState().isStreaming).toBe(true);
+      
+      // Receive idle status for current session
+      state.handleServerMessage({
+        type: 'session_status',
+        sessionId: 'session-1',
+        sessionPath: '/path/to/session-1.jsonl',
+        status: 'idle',
+      });
+      
+      // Global isStreaming should be synced to false
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+    });
+
+    it('should NOT sync isStreaming when session_status is for a different session', () => {
+      const state = useSessionStore.getState();
+      
+      // Set current session
+      state.setCurrentSession('session-1');
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+      
+      // Receive streaming status for a DIFFERENT session
+      state.handleServerMessage({
+        type: 'session_status',
+        sessionId: 'session-2',
+        sessionPath: '/path/to/session-2.jsonl',
+        status: 'streaming',
+      });
+      
+      // Global isStreaming should NOT be affected
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+      
+      // But session-2's status should still be updated (get fresh state)
+      expect(useSessionStore.getState().sessionData['session-2']?.status).toBe('streaming');
+    });
+
+    it('should correctly sync when switching from streaming session to new idle session', () => {
+      const state = useSessionStore.getState();
+      
+      // Simulate being on session-1 which is streaming
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      state.setSessionStatus('session-1', 'streaming');
+      expect(useSessionStore.getState().isStreaming).toBe(true);
+      
+      // Switch to session-2 (new session)
+      state.handleServerMessage({
+        type: 'session_created',
+        sessionId: 'session-2',
+      });
+      expect(useSessionStore.getState().currentSessionId).toBe('session-2');
+      // isStreaming is still true at this point (the bug we're fixing)
+      
+      // Receive idle status for session-2 (the new current session)
+      state.handleServerMessage({
+        type: 'session_status',
+        sessionId: 'session-2',
+        sessionPath: '/path/to/session-2.jsonl',
+        status: 'idle',
+      });
+      
+      // Now isStreaming should be synced to false
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+      
+      // session-1 should still be streaming in background (get fresh state)
+      expect(useSessionStore.getState().sessionData['session-1']?.status).toBe('streaming');
+    });
+
+    it('should sync isStreaming to false when session_status is error for current session', () => {
+      const state = useSessionStore.getState();
+      
+      // Set current session and start streaming
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      expect(useSessionStore.getState().isStreaming).toBe(true);
+      
+      // Receive error status for current session
+      state.handleServerMessage({
+        type: 'session_status',
+        sessionId: 'session-1',
+        sessionPath: '/path/to/session-1.jsonl',
+        status: 'error',
+      });
+      
+      // Global isStreaming should be synced to false
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+    });
+  });
 });
