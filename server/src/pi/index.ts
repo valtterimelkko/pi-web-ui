@@ -4,6 +4,14 @@ export { EventForwarder, type WebSocketSender, type ForwardedEvent, type Session
 export { SessionWatcher, getSessionWatcher, startSessionWatcher, stopSessionWatcher } from './session-watcher.js';
 export type { SessionChangeEvent, SessionInfo } from './session-watcher.js';
 export {
+  MultiSessionManager,
+  type SessionStatus,
+  type SessionStatusInfo,
+  type ActiveSession,
+  type BroadcastFunction,
+  type WebUIContextProvider,
+} from './multi-session-manager.js';
+export {
   createWebUIContext,
   createCommandContextActions,
   type WebUIContext,
