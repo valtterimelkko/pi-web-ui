@@ -1,6 +1,6 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { Paperclip, X, Settings2, ArrowUpRight, Loader2 } from 'lucide-react';
-import { useChatStore, useSessionStore } from '../../store';
+import { useChatStore, useSessionStore, useDraftStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
 import { SlashPalette } from './SlashPalette';
@@ -32,7 +32,50 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   const isStreaming = useSessionStore((state) => state.isStreaming);
   const currentModel = useSessionStore((state) => state.currentModel);
   const contextPercent = useSessionStore((state) => state.contextPercent);
+  const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const { sendPrompt } = useWebSocket();
+
+  // Draft store for per-session draft persistence
+  const currentDraft = useDraftStore((state) => state.currentDraft);
+  const setDraft = useDraftStore((state) => state.setDraft);
+  const syncCurrentDraft = useDraftStore((state) => state.syncCurrentDraft);
+  const sendDraft = useDraftStore((state) => state.sendDraft);
+  const setSendCallback = useDraftStore((state) => state.setSendCallback);
+
+  // Sync draft when session changes
+  useEffect(() => {
+    syncCurrentDraft();
+  }, [currentSessionId, syncCurrentDraft]);
+
+  // Set up send callback for draft store
+  useEffect(() => {
+    setSendCallback(async (content: string) => {
+      // Check if any files are still uploading
+      const pendingUploads = useChatStore.getState().uploadedFiles.filter(f => f.uploading);
+      if (pendingUploads.length > 0) {
+        return false;
+      }
+
+      // Build message with file context
+      const successfulUploads = useChatStore.getState().uploadedFiles.filter(f => f.serverPath && !f.error);
+      let promptMessage = content;
+      
+      if (successfulUploads.length > 0) {
+        const filePaths = successfulUploads.map(f => f.serverPath).join('\n');
+        const fileNote = successfulUploads.length === 1
+          ? `I've uploaded a file. Please read it at: ${filePaths}`
+          : `I've uploaded ${successfulUploads.length} files. Please read them at:\n${filePaths}`;
+        
+        promptMessage = content
+          ? `${fileNote}\n\n${content}`
+          : fileNote;
+      }
+
+      const images: unknown[] = [];
+      sendPrompt(promptMessage, images);
+      return true;
+    });
+  }, [sendPrompt, setSendCallback]);
 
   const [isFocused, setIsFocused] = useState(false);
   const [showCompactModal, setShowCompactModal] = useState(false);
@@ -54,6 +97,13 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
+    
+    // Save to draft store for per-session persistence
+    if (currentSessionId) {
+      setDraft(currentSessionId, value);
+    }
+    
+    // Also update chat store for backward compatibility
     setInputValue(value);
     adjustTextareaHeight();
 
@@ -66,16 +116,17 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   };
 
   const handleSend = useCallback(() => {
-    const message = inputValue.trim();
+    const message = currentDraft.trim();
     if (!message && uploadedFiles.length === 0) return;
     if (disabled || isStreaming) return;
     if (!message && uploadedFiles.length === 0) return;
 
-    const finalMessage = message || '';
-
     // Handle slash commands
-    if (finalMessage === '/compact') {
+    if (message === '/compact') {
       setShowCompactModal(true);
+      if (currentSessionId) {
+        setDraft(currentSessionId, '');
+      }
       setInputValue('');
       clearFiles();
       if (textareaRef.current) {
@@ -91,24 +142,12 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
       return;
     }
 
-    // Build message with file context
-    const successfulUploads = uploadedFiles.filter(f => f.serverPath && !f.error);
-    let promptMessage = finalMessage;
-    
-    if (successfulUploads.length > 0) {
-      const filePaths = successfulUploads.map(f => f.serverPath).join('\n');
-      const fileNote = successfulUploads.length === 1
-        ? `I've uploaded a file. Please read it at: ${filePaths}`
-        : `I've uploaded ${successfulUploads.length} files. Please read them at:\n${filePaths}`;
-      
-      promptMessage = finalMessage
-        ? `${fileNote}\n\n${finalMessage}`
-        : fileNote;
+    // Use sendDraft from draftStore for per-session draft handling
+    if (currentSessionId) {
+      sendDraft(currentSessionId);
     }
-
-    const images: unknown[] = [];
-
-    sendPrompt(promptMessage, images);
+    
+    // Clear local state
     setInputValue('');
     clearFiles();
     setShowSlashPalette(false);
@@ -116,7 +155,7 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-  }, [inputValue, uploadedFiles, disabled, isStreaming, sendPrompt, setInputValue, clearFiles]);
+  }, [currentDraft, uploadedFiles, disabled, isStreaming, currentSessionId, sendDraft, setInputValue, clearFiles, setDraft]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter') {
@@ -131,7 +170,11 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   };
 
   const handleSlashSelect = (command: string) => {
-    setInputValue(command + ' ');
+    const newValue = command + ' ';
+    if (currentSessionId) {
+      setDraft(currentSessionId, newValue);
+    }
+    setInputValue(newValue);
     setShowSlashPalette(false);
     textareaRef.current?.focus();
   };
@@ -192,14 +235,14 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
 
   const hasUploads = uploadedFiles.some(f => f.serverPath && !f.uploading);
   const isAnyUploading = uploadedFiles.some(f => f.uploading);
-  const canSend = (inputValue.trim().length > 0 || hasUploads) && !disabled && !isStreaming && !isAnyUploading;
+  const canSend = (currentDraft.trim().length > 0 || hasUploads) && !disabled && !isStreaming && !isAnyUploading;
 
   return (
     <div className="relative">
       {/* Slash palette */}
       {showSlashPalette && (
         <SlashPalette
-          filter={inputValue}
+          filter={currentDraft}
           onSelect={handleSlashSelect}
           onClose={() => setShowSlashPalette(false)}
         />
@@ -277,7 +320,7 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
         {/* Textarea */}
         <textarea
           ref={textareaRef}
-          value={inputValue}
+          value={currentDraft}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
           onFocus={() => setIsFocused(true)}

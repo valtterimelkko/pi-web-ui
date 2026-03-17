@@ -1,6 +1,78 @@
 // WebSocket Protocol Types
 // Defines the message format for client-server communication
 
+// ============================================================================
+// Multi-Session Protocol Types
+// ============================================================================
+
+/**
+ * Session status types for multi-session support
+ */
+export type SessionStatus = 'idle' | 'busy' | 'streaming' | 'error';
+
+/**
+ * Server → Client: Broadcast when any session's state changes
+ */
+export interface SessionStatusBroadcast {
+  type: 'session_status';
+  sessionId: string;
+  sessionPath: string;
+  status: SessionStatus;
+  lastActivity: string;
+  messageCount: number;
+  currentStep?: number;
+}
+
+/**
+ * Server → Client: Wrap all events with sessionId for routing
+ */
+export interface SessionEvent {
+  type: 'session_event';
+  sessionId: string;
+  event: unknown; // AgentSessionEvent from Pi SDK
+}
+
+/**
+ * Client → Server: Subscribe to a session's events
+ */
+export interface SubscribeSession {
+  type: 'subscribe_session';
+  sessionPath: string;
+}
+
+/**
+ * Client → Server: Unsubscribe from a session's events
+ */
+export interface UnsubscribeSession {
+  type: 'unsubscribe_session';
+  sessionPath: string;
+}
+
+/**
+ * Server → Client: Confirmation of subscription
+ */
+export interface SessionSubscribed {
+  type: 'session_subscribed';
+  sessionId: string;
+  sessionPath: string;
+  status: SessionStatus;
+  messageCount?: number;
+  currentStep?: number;
+}
+
+/**
+ * Server → Client: Confirmation of unsubscription
+ */
+export interface SessionUnsubscribed {
+  type: 'session_unsubscribed';
+  sessionId: string;
+  sessionPath?: string;
+}
+
+// ============================================================================
+// Core Protocol Types
+// ============================================================================
+
 // Image content for multimodal messages
 export interface ImageContent {
   type: 'image';
@@ -26,7 +98,10 @@ export type ClientMessage =
   | { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' }
   | { type: 'compact'; customInstructions?: string }
   | { type: 'extension_ui_response'; response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean } }
-  | { type: 'set_session_name'; sessionId: string; name: string };
+  | { type: 'set_session_name'; sessionId: string; name: string }
+  // Multi-session subscription types
+  | SubscribeSession
+  | UnsubscribeSession;
 
 // Session information for listing
 export interface SessionInfo {
@@ -95,6 +170,11 @@ export type ServerMessage =
   | { type: 'model_changed'; modelId: string }
   | { type: 'thinking_level_changed'; level: string }
   | { type: 'compaction_result'; summary: string; tokensBefore: number }
+  // Multi-session protocol types
+  | SessionStatusBroadcast
+  | SessionEvent
+  | SessionSubscribed
+  | SessionUnsubscribed
   // Forwarded Pi SDK events
   | { type: 'agent_start' }
   | { type: 'agent_end'; messages: unknown[] }
@@ -130,6 +210,190 @@ export function isAuthMessage(message: ClientMessage): message is { type: 'auth'
 
 export function isPromptMessage(message: ClientMessage): message is { type: 'prompt'; sessionId: string; message: string; images?: ImageContent[] } {
   return message.type === 'prompt';
+}
+
+// ============================================================================
+// Multi-Session Type Guards
+// ============================================================================
+
+/**
+ * Check if a value is a valid SessionStatus
+ */
+export function isValidSessionStatus(value: unknown): value is SessionStatus {
+  return (
+    typeof value === 'string' &&
+    ['idle', 'busy', 'streaming', 'error'].includes(value)
+  );
+}
+
+/**
+ * Type guard for SessionStatusBroadcast
+ */
+export function isSessionStatusBroadcast(
+  data: unknown
+): data is SessionStatusBroadcast {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return (
+    msg.type === 'session_status' &&
+    typeof msg.sessionId === 'string' &&
+    typeof msg.sessionPath === 'string' &&
+    isValidSessionStatus(msg.status) &&
+    typeof msg.lastActivity === 'string' &&
+    typeof msg.messageCount === 'number' &&
+    (msg.currentStep === undefined || typeof msg.currentStep === 'number')
+  );
+}
+
+/**
+ * Type guard for SessionEvent
+ */
+export function isSessionEvent(data: unknown): data is SessionEvent {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return (
+    msg.type === 'session_event' &&
+    typeof msg.sessionId === 'string' &&
+    msg.event !== undefined
+  );
+}
+
+/**
+ * Type guard for SubscribeSession
+ */
+export function isSubscribeSession(data: unknown): data is SubscribeSession {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return msg.type === 'subscribe_session' && typeof msg.sessionPath === 'string';
+}
+
+/**
+ * Type guard for UnsubscribeSession
+ */
+export function isUnsubscribeSession(
+  data: unknown
+): data is UnsubscribeSession {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return (
+    msg.type === 'unsubscribe_session' && typeof msg.sessionPath === 'string'
+  );
+}
+
+/**
+ * Type guard for SessionSubscribed
+ */
+export function isSessionSubscribed(data: unknown): data is SessionSubscribed {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return (
+    msg.type === 'session_subscribed' &&
+    typeof msg.sessionId === 'string' &&
+    typeof msg.sessionPath === 'string' &&
+    isValidSessionStatus(msg.status)
+  );
+}
+
+/**
+ * Type guard for SessionUnsubscribed
+ */
+export function isSessionUnsubscribed(
+  data: unknown
+): data is SessionUnsubscribed {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return (
+    msg.type === 'session_unsubscribed' && typeof msg.sessionId === 'string'
+  );
+}
+
+// ============================================================================
+// Multi-Session Factory Functions
+// ============================================================================
+
+/**
+ * Create a valid SessionStatusBroadcast
+ */
+export function createSessionStatusBroadcast(
+  overrides: Partial<SessionStatusBroadcast> = {}
+): SessionStatusBroadcast {
+  return {
+    type: 'session_status',
+    sessionId: 'session-123',
+    sessionPath: '/path/to/session.jsonl',
+    status: 'idle',
+    lastActivity: new Date().toISOString(),
+    messageCount: 5,
+    ...overrides,
+  };
+}
+
+/**
+ * Create a valid SessionEvent
+ */
+export function createSessionEvent(
+  overrides: Partial<SessionEvent> = {}
+): SessionEvent {
+  return {
+    type: 'session_event',
+    sessionId: 'session-123',
+    event: { type: 'test_event', data: 'test' },
+    ...overrides,
+  };
+}
+
+/**
+ * Create a valid SubscribeSession
+ */
+export function createSubscribeSession(
+  overrides: Partial<SubscribeSession> = {}
+): SubscribeSession {
+  return {
+    type: 'subscribe_session',
+    sessionPath: '/path/to/session.jsonl',
+    ...overrides,
+  };
+}
+
+/**
+ * Create a valid UnsubscribeSession
+ */
+export function createUnsubscribeSession(
+  overrides: Partial<UnsubscribeSession> = {}
+): UnsubscribeSession {
+  return {
+    type: 'unsubscribe_session',
+    sessionPath: '/path/to/session.jsonl',
+    ...overrides,
+  };
+}
+
+/**
+ * Create a valid SessionSubscribed
+ */
+export function createSessionSubscribed(
+  overrides: Partial<SessionSubscribed> = {}
+): SessionSubscribed {
+  return {
+    type: 'session_subscribed',
+    sessionId: 'session-123',
+    sessionPath: '/path/to/session.jsonl',
+    status: 'idle',
+    ...overrides,
+  };
+}
+
+/**
+ * Create a valid SessionUnsubscribed
+ */
+export function createSessionUnsubscribed(
+  overrides: Partial<SessionUnsubscribed> = {}
+): SessionUnsubscribed {
+  return {
+    type: 'session_unsubscribed',
+    sessionId: 'session-123',
+    ...overrides,
+  };
 }
 
 // Error codes
