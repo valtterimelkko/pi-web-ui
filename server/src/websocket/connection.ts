@@ -32,6 +32,8 @@ export class WebSocketConnectionManager {
   private multiSessionManager: MultiSessionManager;
   private eventForwarder: EventForwarder;
   private cleanupTimer?: ReturnType<typeof setInterval>;
+  /** Track CWD per client for session info */
+  private clientCwd: Map<string, string> = new Map();
 
   constructor() {
     this.wss = new WebSocketServer({ noServer: true });
@@ -52,8 +54,8 @@ export class WebSocketConnectionManager {
     // Set up event forwarder to track streaming state
     this.eventForwarder.setSessionPool(this.sessionPool);
 
-    // Set up Web UI context provider for extension binding
-    this.sessionPool.setWebUIContextProvider(this.getWebUIContext.bind(this));
+    // Set up Web UI context provider for MultiSessionManager (extension binding)
+    this.multiSessionManager.setWebUIContextProvider(this.getWebUIContextForMultiSession.bind(this));
 
     // Set up session status change broadcasting
     this.setupSessionStatusBroadcasting();
@@ -341,59 +343,104 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    const clientSession = this.sessionPool.getClientSession(clientId);
-    if (!clientSession) {
+    // Get the session path the client is currently viewing
+    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
+    if (!agentSession) {
+      this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
       return;
     }
 
     // Extension commands are handled by the SDK automatically
 
-    await clientSession.session.prompt(message.message, {
+    await agentSession.prompt(message.message, {
       images: message.images,
     });
   }
 
   private async handleSteer(clientId: string, message: { type: 'steer'; message: string }): Promise<void> {
-    const clientSession = this.sessionPool.getClientSession(clientId);
-    if (!clientSession) {
+    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
 
-    await clientSession.session.steer(message.message);
+    const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
+    if (!agentSession) {
+      this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    await agentSession.steer(message.message);
   }
 
   private async handleFollowUp(clientId: string, message: { type: 'follow_up'; message: string }): Promise<void> {
-    const clientSession = this.sessionPool.getClientSession(clientId);
-    if (!clientSession) {
+    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
 
-    await clientSession.session.followUp(message.message);
+    const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
+    if (!agentSession) {
+      this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    await agentSession.followUp(message.message);
   }
 
   private async handleAbort(clientId: string): Promise<void> {
-    const clientSession = this.sessionPool.getClientSession(clientId);
-    if (!clientSession) return;
+    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    if (!sessionPath) return;
 
-    await clientSession.session.abort();
+    const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
+    if (!agentSession) return;
+
+    await agentSession.abort();
   }
 
   private async handleNewSession(clientId: string, message: { type: 'new_session'; cwd?: string }): Promise<void> {
     console.log(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}`);
-    
-    const clientSession = await this.sessionPool.createClientSession(clientId, {
+
+    // Create a new session via PiService to get the session path
+    const agentSession = await this.piService.createSession({
+      clientId: `multi-new-${clientId}`,
       cwd: message.cwd,
     });
 
-    console.log(`[handleNewSession] Session created: ${clientSession.sessionId}, sessionFile=${clientSession.session.sessionFile || 'N/A'}`);
+    const sessionPath = agentSession.sessionFile;
+    if (!sessionPath) {
+      // Clean up if session file wasn't created
+      agentSession.dispose();
+      this.sendMessage(clientId, { type: 'error', message: 'Failed to create session', code: 'SESSION_CREATION_FAILED' });
+      return;
+    }
+
+    // Dispose the session - we'll create it properly via MultiSessionManager
+    agentSession.dispose();
+
+    // Subscribe client to the session via MultiSessionManager
+    const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath);
+
+    // Track that this client is viewing this session
+    this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+
+    // Store the cwd for this client
+    const cwd = message.cwd || process.cwd();
+    this.clientCwd.set(clientId, cwd);
+
+    console.log(`[handleNewSession] Session created: ${status.sessionId}, sessionPath=${sessionPath}`);
 
     this.sendMessage(clientId, {
       type: 'session_created',
-      sessionId: clientSession.sessionId,
-      sessionPath: clientSession.session.sessionFile || '',
+      sessionId: status.sessionId,
+      sessionPath: sessionPath,
     });
   }
 
@@ -401,30 +448,47 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'switch_session'; sessionPath: string }
   ): Promise<void> {
-    const clientSession = await this.sessionPool.switchClientSession(clientId, message.sessionPath);
+    const sessionPath = message.sessionPath;
 
-    // Also subscribe via MultiSessionManager for multi-session support
+    // Get the old session path before switching
+    const oldSessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+
+    // Subscribe to the new session via MultiSessionManager (creates if doesn't exist)
+    const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath);
+
+    // Track that this client is now viewing this session
+    this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+
+    // Look up the cwd for this session from the sessions list
+    let cwd = this.clientCwd.get(clientId) || process.cwd();
     try {
-      await this.multiSessionManager.subscribeClient(clientId, message.sessionPath);
-    } catch (error) {
-      // Log but don't fail - backward compatibility with SessionPool
-      console.warn(`[handleSwitchSession] MultiSessionManager subscribe failed for ${clientId}:`, error);
+      const allSessions = await this.piService.listAllSessions();
+      const sessionInfo = allSessions.find(s => s.path === sessionPath);
+      if (sessionInfo?.cwd) {
+        cwd = sessionInfo.cwd;
+      }
+    } catch {
+      // Fallback to existing cwd
     }
+    this.clientCwd.set(clientId, cwd);
+
+    // Get the agent session for model/context info
+    const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
 
     // Get model and context usage from the session
-    const model = clientSession.session.model;
-    const contextUsage = clientSession.session.getContextUsage();
+    const model = agentSession?.model;
+    const contextUsage = agentSession?.getContextUsage();
 
     // Load session messages from file
-    const { messages, fileTimestamp } = await this.loadSessionMessages(message.sessionPath);
+    const { messages, fileTimestamp } = await this.loadSessionMessages(sessionPath);
 
-    // Check if session is currently streaming (has active agent operation)
-    const isStreaming = this.sessionPool.isSessionStreaming(clientId);
+    // Check if session is currently streaming using MultiSessionManager status
+    const isStreaming = status.status === 'streaming' || status.status === 'busy';
 
     this.sendMessage(clientId, {
       type: 'session_switched',
-      sessionId: clientSession.sessionId,
-      sessionPath: clientSession.session.sessionFile || '',
+      sessionId: status.sessionId,
+      sessionPath: sessionPath,
       model: model ? `${model.provider}/${model.id}` : undefined,
       contextWindow: contextUsage?.contextWindow ?? undefined,
       contextUsed: contextUsage?.tokens ?? undefined,
@@ -433,6 +497,11 @@ export class WebSocketConnectionManager {
       fileTimestamp,
       isStreaming,
     });
+
+    // Note: The old session (oldSessionPath) is NOT disposed here.
+    // It remains active in MultiSessionManager for background processing
+    // and can be switched back to by the client or other clients.
+    console.log(`[handleSwitchSession] Client ${clientId} switched from ${oldSessionPath || 'none'} to ${sessionPath}. Old session remains active.`);
   }
 
   /**
@@ -560,22 +629,31 @@ export class WebSocketConnectionManager {
   }
 
   private async handleGetSessionInfo(clientId: string): Promise<void> {
-    const clientSession = this.sessionPool.getClientSession(clientId);
-    if (!clientSession) {
+    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
 
-    const stats = clientSession.session.getSessionStats();
-    const contextUsage = clientSession.session.getContextUsage();
-    const model = clientSession.session.model;
+    const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
+    if (!agentSession) {
+      this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    const stats = agentSession.getSessionStats();
+    const contextUsage = agentSession.getContextUsage();
+    const model = agentSession.model;
+
+    // Get the cwd from our tracking (or use process.cwd as fallback)
+    const cwd = this.clientCwd.get(clientId) || process.cwd();
 
     this.sendMessage(clientId, {
       type: 'session_info',
       stats: {
-        sessionFile: clientSession.session.sessionFile,
-        sessionId: clientSession.sessionId,
-        cwd: clientSession.cwd,
+        sessionFile: agentSession.sessionFile,
+        sessionId: agentSession.sessionId,
+        cwd,
         userMessages: stats.userMessages ?? 0,
         assistantMessages: stats.assistantMessages ?? 0,
         toolCalls: stats.toolCalls ?? 0,
@@ -613,15 +691,22 @@ export class WebSocketConnectionManager {
   }
 
   private async handleSetModel(clientId: string, message: { type: 'set_model'; modelId: string }): Promise<void> {
-    const clientSession = this.sessionPool.getClientSession(clientId);
-    if (!clientSession) {
+    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    if (!sessionPath) {
       console.error(`[handleSetModel] No active session for client ${clientId}`);
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
 
-    console.log(`[handleSetModel] Client ${clientId}, session ${clientSession.sessionId}, requested model: ${message.modelId}`);
-    console.log(`[handleSetModel] Session file: ${clientSession.session.sessionFile || 'N/A'}`);
+    const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
+    if (!agentSession) {
+      console.error(`[handleSetModel] Session not found for client ${clientId}, path: ${sessionPath}`);
+      this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    console.log(`[handleSetModel] Client ${clientId}, session ${agentSession.sessionId}, requested model: ${message.modelId}`);
+    console.log(`[handleSetModel] Session file: ${agentSession.sessionFile || 'N/A'}`);
 
     // Parse model ID (format: provider/model-name)
     const [provider, ...modelParts] = message.modelId.split('/');
@@ -635,9 +720,9 @@ export class WebSocketConnectionManager {
 
     try {
       // Use pi service to set model
-      await this.piService.setModel(clientSession.sessionId, message.modelId);
+      await this.piService.setModel(agentSession.sessionId, message.modelId);
       
-      console.log(`[handleSetModel] Model change successful for session ${clientSession.sessionId}`);
+      console.log(`[handleSetModel] Model change successful for session ${agentSession.sessionId}`);
 
       this.sendMessage(clientId, {
         type: 'model_changed',
@@ -645,7 +730,7 @@ export class WebSocketConnectionManager {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`[handleSetModel] Failed to set model for session ${clientSession.sessionId}:`, errorMessage);
+      console.error(`[handleSetModel] Failed to set model for session ${agentSession.sessionId}:`, errorMessage);
       
       this.sendMessage(clientId, {
         type: 'error',
@@ -659,13 +744,19 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' }
   ): Promise<void> {
-    const clientSession = this.sessionPool.getClientSession(clientId);
-    if (!clientSession) {
+    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
 
-    clientSession.session.setThinkingLevel(message.level);
+    const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
+    if (!agentSession) {
+      this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    agentSession.setThinkingLevel(message.level);
 
     this.sendMessage(clientId, {
       type: 'thinking_level_changed',
@@ -677,13 +768,19 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'compact'; customInstructions?: string }
   ): Promise<void> {
-    const clientSession = this.sessionPool.getClientSession(clientId);
-    if (!clientSession) {
+    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
 
-    const result = await clientSession.session.compact(message.customInstructions);
+    const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
+    if (!agentSession) {
+      this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    const result = await agentSession.compact(message.customInstructions);
 
     this.sendMessage(clientId, {
       type: 'compaction_result',
@@ -799,8 +896,8 @@ export class WebSocketConnectionManager {
         this.multiSessionManager.unsubscribeClient(clientId, sessionPath);
       }
 
-      // Remove from SessionPool (backward compatibility)
-      this.sessionPool.removeClient(clientId);
+      // Clean up client tracking data
+      this.clientCwd.delete(clientId);
       this.clients.delete(clientId);
     }
   }
@@ -817,17 +914,43 @@ export class WebSocketConnectionManager {
   }
 
   /**
-   * Get Web UI context for a client (used by extension binding)
+   * Get Web UI context for a client (legacy, used by SessionPool for extension binding)
+   * @deprecated Use getWebUIContextForMultiSession instead for multi-session support
    */
   private getWebUIContext(clientId: string): { sendToClient: (message: unknown) => void; clientId: string } | undefined {
     const client = this.clients.get(clientId);
-    // DEBUG: console.log(`[getWebUIContext] clientId=${clientId}, found=${!!client}`);
     if (!client) return undefined;
 
     return {
       clientId,
       sendToClient: (message: unknown) => {
         this.sendToClient(clientId, message);
+      },
+    };
+  }
+
+  /**
+   * Get Web UI context for a session path (used by MultiSessionManager for extension binding).
+   * This provides the WebUIContext that extensions need to communicate with the Web UI.
+   */
+  private getWebUIContextForMultiSession(sessionPath: string): { sendEvent: (event: any) => void; sessionPath: string } | undefined {
+    // Find a client that is subscribed to this session
+    // We'll use the first subscriber as the context owner
+    const activeSession = this.multiSessionManager.getActiveSession(sessionPath);
+    if (!activeSession) return undefined;
+
+    // Get the first subscriber to determine which client to send events to
+    const firstSubscriber = activeSession.subscribers.values().next().value as string | undefined;
+    if (!firstSubscriber) return undefined;
+
+    const client = this.clients.get(firstSubscriber);
+    if (!client) return undefined;
+
+    return {
+      sessionPath,
+      sendEvent: (event: any) => {
+        // Broadcast to all subscribers of this session
+        this.multiSessionManager.broadcastToSubscribers(sessionPath, event);
       },
     };
   }
@@ -868,9 +991,8 @@ export class WebSocketConnectionManager {
     this.multiSessionManager.dispose();
 
     // Clean up all clients
-    for (const [clientId, client] of this.clients.entries()) {
+    for (const client of this.clients.values()) {
       client.ws.close();
-      this.sessionPool.removeClient(clientId);
     }
     this.clients.clear();
     this.wss.close();

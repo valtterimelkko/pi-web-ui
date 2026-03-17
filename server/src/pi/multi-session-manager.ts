@@ -1,4 +1,17 @@
 import type { PiService } from './pi-service.js';
+import type { AgentSession } from '@mariozechner/pi-coding-agent';
+
+/**
+ * WebUIContext for extension binding
+ */
+export interface WebUIContext {
+  /** Function to send events to the Web UI */
+  sendEvent: (event: any) => void;
+  /** Session path this context belongs to */
+  sessionPath: string;
+  /** Extension registry for accessing registered extensions */
+  extensionRegistry?: any;
+}
 
 /**
  * Session status types
@@ -11,12 +24,13 @@ export type SessionStatus = 'idle' | 'busy' | 'streaming' | 'error';
 export interface ActiveSession {
   sessionPath: string;
   sessionId: string;
-  agentSession: any; // AgentSession from pi-coding-agent
+  agentSession: AgentSession;
   status: SessionStatus;
   subscribers: Set<string>;
   lastActivity: Date;
   messageCount: number;
   currentStep: number;
+  webUIContext?: WebUIContext;
 }
 
 /**
@@ -46,6 +60,11 @@ export interface MultiSessionManagerOptions {
 export type BroadcastFunction = (clientId: string, message: any) => void;
 
 /**
+ * Type for the WebUI context provider function
+ */
+export type WebUIContextProvider = (sessionPath: string) => WebUIContext | undefined;
+
+/**
  * MultiSessionManager manages multiple sessions that can be shared across clients.
  * 
  * - Sessions are identified by their sessionPath (file path)
@@ -58,9 +77,11 @@ export class MultiSessionManager {
   private broadcast: BroadcastFunction;
   private sessions: Map<string, ActiveSession> = new Map(); // sessionPath -> ActiveSession
   private clientSubscriptions: Map<string, Set<string>> = new Map(); // clientId -> Set<sessionPath>
+  private clientViewingSession: Map<string, string> = new Map(); // clientId -> sessionPath
   private cleanupIntervalMs: number;
   private sessionTimeoutMs: number;
   private cleanupTimer?: ReturnType<typeof setInterval>;
+  private webUIContextProvider?: WebUIContextProvider;
 
   constructor(
     piService: PiService,
@@ -76,7 +97,11 @@ export class MultiSessionManager {
   /**
    * Subscribe a client to a session. Creates the session if it doesn't exist.
    */
-  async subscribeClient(clientId: string, sessionPath: string): Promise<SessionStatusInfo> {
+  async subscribeClient(
+    clientId: string,
+    sessionPath: string,
+    webUIContext?: WebUIContext
+  ): Promise<SessionStatusInfo> {
     // Validate inputs
     if (!sessionPath || sessionPath.trim() === '') {
       throw new Error('Invalid session path');
@@ -90,7 +115,7 @@ export class MultiSessionManager {
     if (!activeSession) {
       // Create new session
       console.log(`[MultiSessionManager] Creating new session for path: ${sessionPath}`);
-      
+
       const agentSession = await this.piService.createSession({
         clientId: `multi-${sessionPath}`,
         sessionPath,
@@ -110,9 +135,13 @@ export class MultiSessionManager {
         lastActivity: new Date(),
         messageCount: 0,
         currentStep: 0,
+        webUIContext,
       };
 
       this.sessions.set(sessionPath, activeSession);
+    } else if (webUIContext) {
+      // Update webUIContext if provided for existing session
+      activeSession.webUIContext = webUIContext;
     }
 
     // Add client to subscribers
@@ -305,6 +334,158 @@ export class MultiSessionManager {
   }
 
   /**
+   * Get the agent session for a path.
+   * Returns undefined if the session doesn't exist.
+   */
+  getSession(sessionPath: string): AgentSession | undefined {
+    const activeSession = this.sessions.get(sessionPath);
+    return activeSession?.agentSession;
+  }
+
+  /**
+   * Get the session path a client is currently viewing.
+   * Returns undefined if the client is not viewing any session.
+   */
+  getClientSessionPath(clientId: string): string | undefined {
+    return this.clientViewingSession.get(clientId);
+  }
+
+  /**
+   * Track which session a client is currently viewing.
+   * The client must already be subscribed to the session.
+   */
+  setClientViewingSession(clientId: string, sessionPath: string): void {
+    // Validate that the client is subscribed to this session
+    const clientSubs = this.clientSubscriptions.get(clientId);
+    if (!clientSubs || !clientSubs.has(sessionPath)) {
+      throw new Error(
+        `Client ${clientId} is not subscribed to session ${sessionPath}`
+      );
+    }
+
+    this.clientViewingSession.set(clientId, sessionPath);
+  }
+
+  /**
+   * Get the agent session for direct access.
+   * Alias for getSession() for clarity when accessing the underlying AgentSession.
+   */
+  getAgentSession(sessionPath: string): AgentSession | undefined {
+    return this.getSession(sessionPath);
+  }
+
+  /**
+   * Get the WebUIContext for a session.
+   * Returns undefined if the session doesn't exist or has no WebUIContext.
+   */
+  getWebUIContext(sessionPath: string): WebUIContext | undefined {
+    const activeSession = this.sessions.get(sessionPath);
+    return activeSession?.webUIContext;
+  }
+
+  /**
+   * Set the WebUIContext for a session.
+   * This allows updating the context for extension binding after session creation.
+   */
+  setWebUIContext(sessionPath: string, context: WebUIContext): void {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) {
+      throw new Error(`Session ${sessionPath} does not exist`);
+    }
+    activeSession.webUIContext = context;
+  }
+
+  /**
+   * Set a provider function that returns WebUIContext for a session path.
+   * This is used by the WebSocket connection manager to provide contexts dynamically.
+   */
+  setWebUIContextProvider(provider: WebUIContextProvider): void {
+    this.webUIContextProvider = provider;
+  }
+
+  /**
+   * Get WebUIContext for a session path using the registered provider.
+   * Returns undefined if no provider is set or the provider returns undefined.
+   */
+  getWebUIContextFromProvider(sessionPath: string): WebUIContext | undefined {
+    return this.webUIContextProvider?.(sessionPath);
+  }
+
+  /**
+   * Get the active session info for a path.
+   * Returns the internal ActiveSession object for advanced use cases.
+   */
+  getActiveSession(sessionPath: string): ActiveSession | undefined {
+    return this.sessions.get(sessionPath);
+  }
+
+  /**
+   * Send a prompt to a session.
+   * Requires the underlying AgentSession to have a prompt method.
+   */
+  async prompt(sessionPath: string, message: string): Promise<void> {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) {
+      throw new Error(`Session ${sessionPath} does not exist`);
+    }
+
+    // Update status to busy while processing
+    activeSession.status = 'busy';
+    activeSession.lastActivity = new Date();
+
+    try {
+      // The AgentSession should have a prompt method
+      await activeSession.agentSession.prompt(message);
+    } catch (error) {
+      activeSession.status = 'error';
+      throw error;
+    }
+  }
+
+  /**
+   * Steer/abort the current operation in a session.
+   * Requires the underlying AgentSession to have a steer method.
+   */
+  async steer(sessionPath: string, message: string): Promise<void> {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) {
+      throw new Error(`Session ${sessionPath} does not exist`);
+    }
+
+    activeSession.lastActivity = new Date();
+
+    try {
+      // The AgentSession should have a steer method
+      await activeSession.agentSession.steer(message);
+    } catch (error) {
+      console.error(`[MultiSessionManager] Error steering session ${sessionPath}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Abort the current operation in a session.
+   * Requires the underlying AgentSession to have an abort method.
+   */
+  async abort(sessionPath: string): Promise<void> {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) {
+      throw new Error(`Session ${sessionPath} does not exist`);
+    }
+
+    activeSession.lastActivity = new Date();
+
+    try {
+      // The AgentSession should have an abort method
+      await activeSession.agentSession.abort();
+      activeSession.status = 'idle';
+    } catch (error) {
+      console.error(`[MultiSessionManager] Error aborting session ${sessionPath}:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Clean up inactive sessions.
    * Returns the number of sessions cleaned up.
    */
@@ -379,5 +560,6 @@ export class MultiSessionManager {
     // Clear all maps
     this.sessions.clear();
     this.clientSubscriptions.clear();
+    this.clientViewingSession.clear();
   }
 }
