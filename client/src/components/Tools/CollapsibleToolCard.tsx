@@ -292,6 +292,41 @@ function parseReadOutput(output: string): { lines: number; chars: number; trunca
   return { lines, chars, truncated };
 }
 
+// Extract web search info for brief display
+function parseWebSearchOutput(output: string): { results: number; chars: number } | null {
+  // Web search returns JSON with search results
+  try {
+    const parsed = JSON.parse(output);
+    if (parsed && typeof parsed === 'object') {
+      // DuckDuckGo results format: { results: [...] }
+      const resultsCount = Array.isArray(parsed.results) ? parsed.results.length : 
+                           Array.isArray(parsed) ? parsed.length : 1;
+      return { results: resultsCount, chars: output.length };
+    }
+  } catch {
+    // Not JSON, count as text
+    if (output.length > 0) {
+      return { results: 1, chars: output.length };
+    }
+  }
+  return null;
+}
+
+// Extract web fetch info for brief display
+function parseWebFetchOutput(output: string): { chars: number; truncated: boolean } | null {
+  // Web fetch returns markdown/text content from a web page
+  const chars = output.length;
+  const truncated = output.includes('[Content truncated') || output.length > 50000;
+  if (chars > 0) {
+    return { chars, truncated };
+  }
+  return null;
+}
+
+// Tools that should hide their raw output and show only a brief summary
+// These are "intermediate" tools where the assistant processes the output
+const BRIEF_ONLY_TOOLS = ['read', 'web_search', 'web_fetch', 'fetch', 'search'];
+
 // Tool output section (result)
 const ToolOutput = memo(function ToolOutput({ 
   result, 
@@ -315,12 +350,38 @@ const ToolOutput = memo(function ToolOutput({
   
   // Parse read tool output for brief display (don't show file contents)
   const readInfo = toolName === 'read' ? parseReadOutput(output) : null;
+  
+  // Parse web search output for brief display
+  const webSearchInfo = toolName === 'web_search' || toolName === 'search' 
+    ? parseWebSearchOutput(output) : null;
+  
+  // Parse web fetch output for brief display
+  const webFetchInfo = toolName === 'web_fetch' || toolName === 'fetch' 
+    ? parseWebFetchOutput(output) : null;
+  
+  // Check if this tool should only show brief summary (hide raw output)
+  const isBriefOnly = BRIEF_ONLY_TOOLS.includes(toolName) && !isError;
+  const briefInfo = readInfo || webSearchInfo || webFetchInfo;
 
   const handleCopy = useCallback(async () => {
     await navigator.clipboard.writeText(formattedOutput);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [formattedOutput]);
+
+  // Generate brief summary based on tool type
+  const getBriefSummary = () => {
+    if (readInfo) {
+      return `✓ File loaded • ${readInfo.lines} lines • ${readInfo.chars.toLocaleString()} chars${readInfo.truncated ? ' (truncated)' : ''}`;
+    }
+    if (webSearchInfo) {
+      return `✓ Found ${webSearchInfo.results} result${webSearchInfo.results !== 1 ? 's' : ''} • ${webSearchInfo.chars.toLocaleString()} chars`;
+    }
+    if (webFetchInfo) {
+      return `✓ Page fetched • ${webFetchInfo.chars.toLocaleString()} chars${webFetchInfo.truncated ? ' (truncated)' : ''}`;
+    }
+    return null;
+  };
 
   return (
     <div className="space-y-1">
@@ -363,18 +424,17 @@ const ToolOutput = memo(function ToolOutput({
             </div>
           )}
           
-          {/* Special display for read tool - brief summary only, no file contents */}
-          {readInfo && !isError && (
+          {/* Special display for brief-only tools - summary only, no raw output */}
+          {isBriefOnly && briefInfo && (
             <div className="px-3 py-2 text-sm bg-emerald-50 border-b border-emerald-200">
               <span className="text-emerald-700 font-medium">
-                ✓ File loaded • {readInfo.lines} lines • {readInfo.chars.toLocaleString()} chars
-                {readInfo.truncated && ' (truncated)'}
+                {getBriefSummary()}
               </span>
             </div>
           )}
           
-          {/* Full output - hidden for read tool to reduce verbosity */}
-          {!(readInfo && !isError) && (
+          {/* Full output - hidden for brief-only tools to reduce verbosity */}
+          {!(isBriefOnly && briefInfo) && (
             <pre className={`p-3 overflow-x-auto text-xs font-mono ${
               isError ? 'text-red-700' : 'text-gray-700'
             }`}>
@@ -384,7 +444,7 @@ const ToolOutput = memo(function ToolOutput({
         </div>
       )}
       
-      {!isExpanded && isLong && !readInfo && (
+      {!isExpanded && isLong && !isBriefOnly && (
         <span className="ml-4 text-xs text-gray-400">
           {truncatedOutput}
           <button
@@ -396,10 +456,10 @@ const ToolOutput = memo(function ToolOutput({
         </span>
       )}
       
-      {/* Brief indicator for read tool when collapsed */}
-      {!isExpanded && readInfo && (
+      {/* Brief indicator for brief-only tools when collapsed */}
+      {!isExpanded && isBriefOnly && briefInfo && (
         <span className="ml-4 text-xs text-emerald-600">
-          ✓ File loaded • {readInfo.lines} lines
+          {getBriefSummary()}
         </span>
       )}
     </div>
@@ -447,6 +507,31 @@ const BriefStatus = memo(function BriefStatus({
         {truncated && ' (truncated)'}
       </span>
     );
+  }
+
+  // Special brief status for web search - show result count
+  if (toolName === 'web_search' || toolName === 'search') {
+    const searchInfo = parseWebSearchOutput(output);
+    if (searchInfo) {
+      return (
+        <span className="text-xs text-emerald-600">
+          ✓ Found {searchInfo.results} result{searchInfo.results !== 1 ? 's' : ''}
+        </span>
+      );
+    }
+  }
+
+  // Special brief status for web fetch - show chars fetched
+  if (toolName === 'web_fetch' || toolName === 'fetch') {
+    const fetchInfo = parseWebFetchOutput(output);
+    if (fetchInfo) {
+      return (
+        <span className="text-xs text-emerald-600">
+          ✓ Fetched • {fetchInfo.chars.toLocaleString()} chars
+          {fetchInfo.truncated && ' (truncated)'}
+        </span>
+      );
+    }
   }
 
   return (
