@@ -40,7 +40,7 @@ const ListComponent = forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<
     return (
       <div
         ref={ref}
-        className={`flex flex-col space-y-4 p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto ${className || ''}`}
+        className={`flex flex-col space-y-2 p-3 sm:p-4 lg:p-6 max-w-4xl mx-auto ${className || ''}`}
         {...props}
       />
     );
@@ -189,7 +189,7 @@ export const VirtualizedMessageList = forwardRef<
       scrollerRef={handleScrollerRef}
       followOutput={handleFollowOutput}
       // Estimated item height for virtualization
-      defaultItemHeight={120}
+      defaultItemHeight={80}
       // Render more items outside viewport for smoother scrolling
       increaseViewportBy={{ top: 400, bottom: 400 }}
       overscan={200}

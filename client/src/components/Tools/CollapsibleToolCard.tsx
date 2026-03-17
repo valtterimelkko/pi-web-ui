@@ -568,72 +568,75 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
   }, [showResult]);
 
   return (
-    <div className="w-full border border-gray-200 rounded-lg overflow-hidden bg-white text-sm group">
+    <div className="w-full border border-gray-200 rounded-md overflow-hidden bg-white text-xs group">
       {/* Header - always visible, clickable to expand */}
       <button
         onClick={handleToggleExpand}
-        className={`flex items-center gap-2 w-full px-3 py-2 text-left transition-colors ${
+        className={`flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left transition-colors ${
           isExpanded ? 'bg-gray-50 border-b border-gray-200' : 'hover:bg-gray-50'
         }`}
         type="button"
       >
         {/* Expand indicator */}
-        <ChevronRight className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
-        
+        <ChevronRight className={`w-3 h-3 text-gray-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
+
         {/* Tool icon */}
         <span className={`shrink-0 ${
           isError ? 'text-red-500' :
           isSuccess ? 'text-emerald-500' :
-          'text-gray-500'
+          'text-gray-400'
         }`}>
           {icon}
         </span>
-        
+
         {/* Tool name */}
-        <span className="font-medium text-gray-900">
+        <span className="font-medium text-gray-700 text-xs">
           {displayName}
         </span>
-        
-        {/* Primary parameter - HIDDEN when expanded (Kimi-style) */}
+
+        {/* Primary parameter - inline, subtle */}
         {primaryParam && !isExpanded && (
-          <span className="text-gray-500 truncate group-data-[state=open]:hidden">
-            ({primaryParam})
+          <span className="text-gray-400 truncate text-xs font-mono">
+            {primaryParam}
           </span>
         )}
-        
-        {/* Status icon */}
-        <span className="ml-auto shrink-0">
-          {statusIcon}
-        </span>
+
+        {/* Brief status inline when collapsed */}
+        {!isExpanded && (
+          <span className="ml-auto shrink-0 flex items-center gap-1.5">
+            <BriefStatus result={result} isPending={isPending} toolName={name} />
+            {statusIcon}
+          </span>
+        )}
+
+        {/* Status icon when expanded */}
+        {isExpanded && (
+          <span className="ml-auto shrink-0">
+            {statusIcon}
+          </span>
+        )}
       </button>
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="px-3 py-2 space-y-3">
+        <div className="px-2.5 py-1.5 space-y-2">
           {/* Arguments section */}
           {args !== null && args !== undefined && (
             <ToolInputSection args={args} />
           )}
-          
+
           {/* Brief status (always visible in expanded mode) */}
           <BriefStatus result={result} isPending={isPending} toolName={name} />
-          
+
           {/* Result section */}
           {hasResult && (
-            <ToolOutput 
+            <ToolOutput
               result={result}
               toolName={name}
               isExpanded={showResult}
               onToggle={handleToggleResult}
             />
           )}
-        </div>
-      )}
-
-      {/* Collapsed brief status */}
-      {!isExpanded && (
-        <div className="px-3 py-1.5 border-t border-gray-100">
-          <BriefStatus result={result} isPending={isPending} toolName={name} />
         </div>
       )}
     </div>
