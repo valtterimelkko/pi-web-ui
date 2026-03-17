@@ -78,6 +78,14 @@ export function useWebSocket() {
     return sendMessage({ type: 'switch_session', sessionPath });
   }, [sendMessage]);
 
+  const subscribeToSession = useCallback((sessionPath: string) => {
+    return sendMessage({ type: 'subscribe_session', sessionPath });
+  }, [sendMessage]);
+
+  const unsubscribeFromSession = useCallback((sessionPath: string) => {
+    return sendMessage({ type: 'unsubscribe_session', sessionPath });
+  }, [sendMessage]);
+
   const getSessions = useCallback(() => {
     // Set loading state to prevent duplicate adds from session_update events
     useSessionStore.getState().isLoadingSessions = true;
@@ -108,6 +116,8 @@ export function useWebSocket() {
     abortGeneration,
     createNewSession,
     switchSession,
+    subscribeToSession,
+    unsubscribeFromSession,
     getSessions,
     setModel,
     sendCompact,

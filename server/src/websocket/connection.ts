@@ -10,6 +10,7 @@ import { wsMessageLimiter } from '../security/rate-limit.js';
 import { detectPromptInjection } from '../security/prompt-injection.js';
 import { getPiService, type PiService } from '../pi/index.js';
 import { SessionPool } from '../pi/session-pool.js';
+import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
 import { config } from '../config.js';
@@ -28,7 +29,9 @@ export class WebSocketConnectionManager {
   private clients: Map<string, WebSocketClient> = new Map();
   private piService: PiService;
   private sessionPool: SessionPool;
+  private multiSessionManager: MultiSessionManager;
   private eventForwarder: EventForwarder;
+  private cleanupTimer?: ReturnType<typeof setInterval>;
 
   constructor() {
     this.wss = new WebSocketServer({ noServer: true });
@@ -36,13 +39,62 @@ export class WebSocketConnectionManager {
     this.sessionPool = new SessionPool(this.piService);
     this.eventForwarder = new EventForwarder(this.sendToClient.bind(this));
 
+    // Create MultiSessionManager with broadcast function
+    this.multiSessionManager = new MultiSessionManager(
+      this.piService,
+      this.sendToClient.bind(this),
+      {
+        cleanupIntervalMs: 5 * 60 * 1000, // 5 minutes
+        sessionTimeoutMs: 30 * 60 * 1000, // 30 minutes
+      }
+    );
+
     // Set up event forwarder to track streaming state
     this.eventForwarder.setSessionPool(this.sessionPool);
 
     // Set up Web UI context provider for extension binding
     this.sessionPool.setWebUIContextProvider(this.getWebUIContext.bind(this));
 
+    // Set up session status change broadcasting
+    this.setupSessionStatusBroadcasting();
+
+    // Start periodic cleanup of inactive sessions
+    this.startCleanupTimer();
+
     this.setupServer();
+  }
+
+  /**
+   * Set up broadcasting of session status changes to all clients
+   */
+  private setupSessionStatusBroadcasting(): void {
+    // Poll for session status changes every second
+    setInterval(() => {
+      const statuses = this.multiSessionManager.getAllSessionStatuses();
+      for (const status of statuses) {
+        this.broadcast({
+          type: 'session_status',
+          sessionId: status.sessionId,
+          sessionPath: status.sessionPath,
+          status: status.status,
+          lastActivity: status.lastActivity.toISOString(),
+          messageCount: status.messageCount,
+          currentStep: status.currentStep,
+        });
+      }
+    }, 1000);
+  }
+
+  /**
+   * Start periodic cleanup of inactive sessions
+   */
+  private startCleanupTimer(): void {
+    this.cleanupTimer = setInterval(() => {
+      const cleanedCount = this.multiSessionManager.cleanupInactiveSessions();
+      if (cleanedCount > 0) {
+        console.log(`[WebSocketConnectionManager] Cleaned up ${cleanedCount} inactive sessions`);
+      }
+    }, 5 * 60 * 1000); // Every 5 minutes
   }
 
   private setupServer(): void {
@@ -222,6 +274,14 @@ export class WebSocketConnectionManager {
         await this.handleSetSessionName(clientId, message);
         break;
 
+      case 'subscribe_session':
+        await this.handleSubscribeSession(clientId, message);
+        break;
+
+      case 'unsubscribe_session':
+        await this.handleUnsubscribeSession(clientId, message);
+        break;
+
       case 'auth': {
         const client = this.clients.get(clientId);
         if (!client?.userId) {
@@ -342,6 +402,14 @@ export class WebSocketConnectionManager {
     message: { type: 'switch_session'; sessionPath: string }
   ): Promise<void> {
     const clientSession = await this.sessionPool.switchClientSession(clientId, message.sessionPath);
+
+    // Also subscribe via MultiSessionManager for multi-session support
+    try {
+      await this.multiSessionManager.subscribeClient(clientId, message.sessionPath);
+    } catch (error) {
+      // Log but don't fail - backward compatibility with SessionPool
+      console.warn(`[handleSwitchSession] MultiSessionManager subscribe failed for ${clientId}:`, error);
+    }
 
     // Get model and context usage from the session
     const model = clientSession.session.model;
@@ -671,9 +739,67 @@ export class WebSocketConnectionManager {
     });
   }
 
+  /**
+   * Subscribe a client to a session's events via MultiSessionManager.
+   * This allows the client to receive real-time updates for the session.
+   */
+  private async handleSubscribeSession(
+    clientId: string,
+    message: { type: 'subscribe_session'; sessionPath: string }
+  ): Promise<void> {
+    try {
+      const status = await this.multiSessionManager.subscribeClient(clientId, message.sessionPath);
+
+      this.sendMessage(clientId, {
+        type: 'session_subscribed',
+        sessionId: status.sessionId,
+        sessionPath: status.sessionPath,
+        status: status.status,
+        messageCount: status.messageCount,
+        currentStep: status.currentStep,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[handleSubscribeSession] Failed to subscribe client ${clientId} to session:`, errorMessage);
+      
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: `Failed to subscribe to session: ${errorMessage}`,
+        code: 'SUBSCRIBE_FAILED',
+      });
+    }
+  }
+
+  /**
+   * Unsubscribe a client from a session's events via MultiSessionManager.
+   */
+  private handleUnsubscribeSession(
+    clientId: string,
+    message: { type: 'unsubscribe_session'; sessionPath: string }
+  ): void {
+    // Get session status before unsubscribing to get sessionId
+    const status = this.multiSessionManager.getSessionStatus(message.sessionPath);
+    const sessionId = status?.sessionId || '';
+
+    this.multiSessionManager.unsubscribeClient(clientId, message.sessionPath);
+
+    this.sendMessage(clientId, {
+      type: 'session_unsubscribed',
+      sessionId,
+      sessionPath: message.sessionPath,
+    });
+  }
+
   private handleDisconnect(clientId: string): void {
     const client = this.clients.get(clientId);
     if (client) {
+      // Unsubscribe client from all sessions via MultiSessionManager
+      const subscriptions = this.multiSessionManager.getClientSubscriptions(clientId);
+      for (const sessionPath of subscriptions) {
+        this.multiSessionManager.unsubscribeClient(clientId, sessionPath);
+      }
+
+      // Remove from SessionPool (backward compatibility)
       this.sessionPool.removeClient(clientId);
       this.clients.delete(clientId);
     }
@@ -732,6 +858,16 @@ export class WebSocketConnectionManager {
    * Close all connections and cleanup
    */
   async close(): Promise<void> {
+    // Clear cleanup timer
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = undefined;
+    }
+
+    // Dispose MultiSessionManager
+    this.multiSessionManager.dispose();
+
+    // Clean up all clients
     for (const [clientId, client] of this.clients.entries()) {
       client.ws.close();
       this.sessionPool.removeClient(clientId);

@@ -9,6 +9,16 @@ export interface ForwardedEvent {
   [key: string]: unknown;
 }
 
+/**
+ * Envelope for session-scoped event routing.
+ * Wraps agent events with sessionId so the client can route them to the correct session.
+ */
+export interface SessionEvent {
+  type: 'session_event';
+  sessionId: string;
+  event: ForwardedEvent;
+}
+
 export class EventForwarder {
   private wsSender: WebSocketSender;
   private sessionPool: SessionPool | null = null;
@@ -25,7 +35,12 @@ export class EventForwarder {
     this.sessionPool = pool;
   }
 
-  forwardEvent(clientId: string, event: AgentSessionEvent): void {
+  /**
+   * Forward an agent event to the WebSocket client.
+   * If sessionId is provided, the event is wrapped in a SessionEvent envelope
+   * for multi-session routing on the client side.
+   */
+  forwardEvent(clientId: string, event: AgentSessionEvent, sessionId?: string): void {
     // Track streaming state
     if (event.type === 'agent_start') {
       this.sessionPool?.setStreaming(clientId, true);
@@ -35,7 +50,13 @@ export class EventForwarder {
 
     // Map Pi SDK event to WebSocket message format
     const message = this.mapEventToMessage(event);
-    this.wsSender(clientId, message);
+
+    // Wrap in session envelope if sessionId is provided (multi-session routing)
+    const payload = sessionId
+      ? { type: 'session_event' as const, sessionId, event: message }
+      : message;
+
+    this.wsSender(clientId, payload);
   }
 
   private generateId(): string {
@@ -176,9 +197,13 @@ export class EventForwarder {
     }
   }
 
-  createHandler(clientId: string): (event: AgentSessionEvent) => void {
+  /**
+   * Create an event handler bound to a specific client.
+   * Optionally accepts a sessionId for multi-session routing.
+   */
+  createHandler(clientId: string, sessionId?: string): (event: AgentSessionEvent) => void {
     return (event: AgentSessionEvent) => {
-      this.forwardEvent(clientId, event);
+      this.forwardEvent(clientId, event, sessionId);
     };
   }
 }

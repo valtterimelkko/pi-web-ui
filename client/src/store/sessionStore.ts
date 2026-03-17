@@ -31,6 +31,18 @@ export interface Message {
 }
 
 /**
+ * Per-session data for multi-session support
+ */
+export interface SessionData {
+  messages: Message[];
+  status: 'idle' | 'busy' | 'streaming' | 'error';
+  lastEventTimestamp: number;
+  contextPercent: number;
+  currentStep: number;
+  model: string | null;
+}
+
+/**
  * Metadata for session cache to enable intelligent cache invalidation
  */
 interface SessionCacheMeta {
@@ -94,6 +106,9 @@ interface SessionState {
   // Loading state to prevent duplicate adds during initial session load
   isLoadingSessions: boolean;
 
+  // Multi-session data storage - per-session state for background sessions
+  sessionData: Record<string, SessionData>;
+
   // Actions
   setSessions: (sessions: Session[]) => void;
   setCurrentSession: (sessionId: string | null) => void;
@@ -122,6 +137,13 @@ interface SessionState {
   // Cache metadata helpers
   getSessionCacheMeta: (sessionId: string) => SessionCacheMeta | undefined;
   
+  // Multi-session data actions
+  updateSessionData: (sessionId: string, updates: Partial<SessionData>) => void;
+  addMessageToSession: (sessionId: string, message: Message) => void;
+  updateMessageInSession: (sessionId: string, messageId: string, updates: Partial<Message>) => void;
+  setSessionStatus: (sessionId: string, status: SessionData['status']) => void;
+  cleanupStaleSessionData: (maxSessions?: number) => void;
+  
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
 }
@@ -148,6 +170,8 @@ export const useSessionStore = create<SessionState>()(
       sessionCacheMeta: {},
       streamingSessions: {},
       isLoadingSessions: false,
+      // Multi-session data storage
+      sessionData: {},
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),
@@ -177,6 +201,150 @@ export const useSessionStore = create<SessionState>()(
 
       getSessionCacheMeta: (sessionId: string) => {
         return get().sessionCacheMeta[sessionId];
+      },
+
+      // Multi-session data actions
+      updateSessionData: (sessionId, updates) => {
+        set((state) => {
+          const existingData = state.sessionData[sessionId] || {
+            messages: [],
+            status: 'idle' as const,
+            lastEventTimestamp: 0,
+            contextPercent: 0,
+            currentStep: 0,
+            model: null,
+          };
+          return {
+            sessionData: {
+              ...state.sessionData,
+              [sessionId]: {
+                ...existingData,
+                ...updates,
+                lastEventTimestamp: Date.now(),
+              },
+            },
+          };
+        });
+      },
+
+      addMessageToSession: (sessionId, message) => {
+        set((state) => {
+          const existingData = state.sessionData[sessionId] || {
+            messages: [],
+            status: 'idle' as const,
+            lastEventTimestamp: 0,
+            contextPercent: 0,
+            currentStep: 0,
+            model: null,
+          };
+          const newMessages = [...existingData.messages, message];
+          return {
+            sessionData: {
+              ...state.sessionData,
+              [sessionId]: {
+                ...existingData,
+                messages: newMessages,
+                lastEventTimestamp: Date.now(),
+              },
+            },
+            // Also update legacy sessionMessages cache for backward compatibility
+            sessionMessages: {
+              ...state.sessionMessages,
+              [sessionId]: newMessages,
+            },
+          };
+        });
+      },
+
+      updateMessageInSession: (sessionId, messageId, updates) => {
+        set((state) => {
+          const existingData = state.sessionData[sessionId];
+          if (!existingData) return state;
+          
+          const newMessages = existingData.messages.map((msg) =>
+            msg.id === messageId ? { ...msg, ...updates } : msg
+          );
+          return {
+            sessionData: {
+              ...state.sessionData,
+              [sessionId]: {
+                ...existingData,
+                messages: newMessages,
+                lastEventTimestamp: Date.now(),
+              },
+            },
+            // Also update legacy sessionMessages cache for backward compatibility
+            sessionMessages: {
+              ...state.sessionMessages,
+              [sessionId]: newMessages,
+            },
+          };
+        });
+      },
+
+      setSessionStatus: (sessionId, status) => {
+        set((state) => {
+          const existingData = state.sessionData[sessionId] || {
+            messages: [],
+            status: 'idle' as const,
+            lastEventTimestamp: 0,
+            contextPercent: 0,
+            currentStep: 0,
+            model: null,
+          };
+          return {
+            sessionData: {
+              ...state.sessionData,
+              [sessionId]: {
+                ...existingData,
+                status,
+                lastEventTimestamp: Date.now(),
+              },
+            },
+            // Also update streamingSessions for backward compatibility
+            streamingSessions: {
+              ...state.streamingSessions,
+              [sessionId]: status === 'streaming',
+            },
+          };
+        });
+      },
+
+      cleanupStaleSessionData: (maxSessions = 50) => {
+        const state = get();
+        const sessionIds = Object.keys(state.sessionData);
+        
+        if (sessionIds.length <= maxSessions) return;
+        
+        // Sort by lastEventTimestamp (most recent first)
+        const sorted = sessionIds.sort((a, b) => 
+          (state.sessionData[b]?.lastEventTimestamp || 0) - 
+          (state.sessionData[a]?.lastEventTimestamp || 0)
+        );
+        
+        // Keep current session and most recent sessions
+        const currentSessionId = state.currentSessionId;
+        const toRemove = sorted.filter(id => id !== currentSessionId).slice(maxSessions - 1);
+        
+        if (toRemove.length > 0) {
+          set((s) => {
+            const newSessionData = { ...s.sessionData };
+            const newSessionMessages = { ...s.sessionMessages };
+            const newStreamingSessions = { ...s.streamingSessions };
+            
+            toRemove.forEach(id => {
+              delete newSessionData[id];
+              delete newSessionMessages[id];
+              delete newStreamingSessions[id];
+            });
+            
+            return {
+              sessionData: newSessionData,
+              sessionMessages: newSessionMessages,
+              streamingSessions: newStreamingSessions,
+            };
+          });
+        }
       },
 
       archiveSession: (sessionPath) => {
@@ -730,6 +898,189 @@ export const useSessionStore = create<SessionState>()(
                 s.id === nameMsg.sessionId ? { ...s, name: nameMsg.name } : s
               ),
             }));
+            break;
+          }
+
+          // Multi-session event routing
+          case 'session_event': {
+            const sessionEvent = msg as unknown as {
+              sessionId: string;
+              event: { type: string; [key: string]: unknown };
+            };
+            const { sessionId, event } = sessionEvent;
+            
+            // Route event to the correct session
+            switch (event.type) {
+              case 'agent_start':
+                get().setSessionStatus(sessionId, 'streaming');
+                // Also update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  set({ isStreaming: true, isLoading: false });
+                }
+                break;
+                
+              case 'agent_end':
+                get().setSessionStatus(sessionId, 'idle');
+                // Also update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  set({ isStreaming: false });
+                }
+                break;
+                
+              case 'message_start': {
+                const messageData = (event.message as { id: string; role: string; content: unknown }) || {};
+                const newMessage: Message = {
+                  id: messageData.id || `msg_${Date.now()}`,
+                  role: messageData.role as 'user' | 'assistant' | 'tool',
+                  content: messageData.content as Message['content'],
+                  timestamp: Date.now(),
+                };
+                get().addMessageToSession(sessionId, newMessage);
+                // Also update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  get().addMessage(newMessage);
+                }
+                break;
+              }
+              
+              case 'message_update': {
+                const { message: msgData, assistantMessageEvent } = event as {
+                  message?: { id: string; content?: Message['content'] };
+                  assistantMessageEvent?: { type: string; delta?: string };
+                };
+                
+                if (msgData?.id && assistantMessageEvent) {
+                  const sessionData = get().sessionData[sessionId];
+                  if (sessionData) {
+                    const existingMsg = sessionData.messages.find(m => m.id === msgData.id);
+                    if (existingMsg) {
+                      let contentArray: Array<{ type: string; text?: string; thinking?: string }>;
+                      if (Array.isArray(existingMsg.content)) {
+                        contentArray = [...existingMsg.content];
+                      } else if (typeof existingMsg.content === 'string') {
+                        contentArray = existingMsg.content ? [{ type: 'text', text: existingMsg.content }] : [];
+                      } else {
+                        contentArray = [];
+                      }
+
+                      const eventType = assistantMessageEvent.type;
+                      const delta = assistantMessageEvent.delta;
+
+                      if (eventType === 'text_delta') {
+                        const lastEntry = contentArray[contentArray.length - 1];
+                        if (lastEntry && lastEntry.type === 'text') {
+                          lastEntry.text = (lastEntry.text || '') + delta;
+                        } else {
+                          contentArray.push({ type: 'text', text: delta });
+                        }
+                        get().updateMessageInSession(sessionId, msgData.id, { content: contentArray });
+                        // Also update current session if it matches
+                        if (get().currentSessionId === sessionId) {
+                          get().updateMessage(msgData.id, { content: contentArray });
+                        }
+                      } else if (eventType === 'thinking_delta') {
+                        const lastEntry = contentArray[contentArray.length - 1];
+                        if (lastEntry && lastEntry.type === 'thinking') {
+                          lastEntry.thinking = (lastEntry.thinking || '') + delta;
+                        } else {
+                          contentArray.push({ type: 'thinking', thinking: delta });
+                        }
+                        get().updateMessageInSession(sessionId, msgData.id, { content: contentArray });
+                        // Also update current session if it matches
+                        if (get().currentSessionId === sessionId) {
+                          get().updateMessage(msgData.id, { content: contentArray });
+                        }
+                      }
+                    }
+                  }
+                }
+                break;
+              }
+              
+              case 'tool_execution_start': {
+                const { toolCallId, toolName, args } = event as unknown as {
+                  toolCallId: string;
+                  toolName: string;
+                  args: unknown;
+                };
+                const toolMessage: Message = {
+                  id: toolCallId,
+                  role: 'tool',
+                  content: '',
+                  timestamp: Date.now(),
+                  toolCall: { id: toolCallId, name: toolName, args },
+                };
+                get().addMessageToSession(sessionId, toolMessage);
+                // Also update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  get().addMessage(toolMessage);
+                }
+                break;
+              }
+              
+              case 'tool_execution_update': {
+                const { toolCallId, partialResult } = event as unknown as {
+                  toolCallId: string;
+                  partialResult?: { content: Array<{ type: string; text?: string }> };
+                };
+                const content = partialResult?.content?.[0]?.text || '';
+                get().updateMessageInSession(sessionId, toolCallId, { 
+                  content,
+                  toolResult: { output: content, isError: false },
+                });
+                // Also update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  get().updateMessage(toolCallId, { 
+                    content,
+                    toolResult: { output: content, isError: false },
+                  });
+                }
+                break;
+              }
+              
+              case 'tool_execution_end': {
+                const { toolCallId, result, isError } = event as unknown as {
+                  toolCallId: string;
+                  result?: { content: Array<{ type: string; text?: string }> };
+                  isError: boolean;
+                };
+                const content = result?.content?.[0]?.text || '';
+                get().updateMessageInSession(sessionId, toolCallId, {
+                  content,
+                  toolResult: { output: content, isError },
+                });
+                // Also update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  get().updateMessage(toolCallId, {
+                    content,
+                    toolResult: { output: content, isError },
+                  });
+                }
+                break;
+              }
+            }
+            break;
+          }
+
+          case 'session_status': {
+            const statusMsg = msg as unknown as {
+              sessionId: string;
+              sessionPath: string;
+              status: 'idle' | 'busy' | 'streaming' | 'error';
+              lastActivity?: string;
+              messageCount?: number;
+              currentStep?: number;
+            };
+            const { sessionId, status, currentStep, messageCount } = statusMsg;
+            
+            get().setSessionStatus(sessionId, status);
+            
+            // Update additional session data if provided
+            if (currentStep !== undefined || messageCount !== undefined) {
+              get().updateSessionData(sessionId, {
+                currentStep: currentStep ?? get().sessionData[sessionId]?.currentStep ?? 0,
+              });
+            }
             break;
           }
         }
