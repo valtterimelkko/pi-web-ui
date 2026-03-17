@@ -1,7 +1,7 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
-import { readFile } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
 import {
   authenticateWebSocket,
   type WsAuthResult,
@@ -35,6 +35,9 @@ export class WebSocketConnectionManager {
     this.piService = getPiService();
     this.sessionPool = new SessionPool(this.piService);
     this.eventForwarder = new EventForwarder(this.sendToClient.bind(this));
+
+    // Set up event forwarder to track streaming state
+    this.eventForwarder.setSessionPool(this.sessionPool);
 
     // Set up Web UI context provider for extension binding
     this.sessionPool.setWebUIContextProvider(this.getWebUIContext.bind(this));
@@ -345,7 +348,10 @@ export class WebSocketConnectionManager {
     const contextUsage = clientSession.session.getContextUsage();
 
     // Load session messages from file
-    const messages = await this.loadSessionMessages(message.sessionPath);
+    const { messages, fileTimestamp } = await this.loadSessionMessages(message.sessionPath);
+
+    // Check if session is currently streaming (has active agent operation)
+    const isStreaming = this.sessionPool.isSessionStreaming(clientId);
 
     this.sendMessage(clientId, {
       type: 'session_switched',
@@ -356,17 +362,24 @@ export class WebSocketConnectionManager {
       contextUsed: contextUsage?.tokens ?? undefined,
       contextPercent: contextUsage?.percent ?? undefined,
       messages,
+      fileTimestamp,
+      isStreaming,
     });
   }
 
   /**
    * Load messages from a session file (JSONL format)
+   * Returns messages and file modification timestamp for cache invalidation
    */
-  private async loadSessionMessages(sessionPath: string): Promise<SessionMessage[]> {
+  private async loadSessionMessages(sessionPath: string): Promise<{ messages: SessionMessage[]; fileTimestamp: number }> {
     try {
       if (!sessionPath) {
-        return [];
+        return { messages: [], fileTimestamp: 0 };
       }
+
+      // Get file stats for timestamp
+      const stats = await stat(sessionPath);
+      const fileTimestamp = stats.mtimeMs;
 
       // Read the session file
       const fileContent = await readFile(sessionPath, 'utf-8');
@@ -433,7 +446,7 @@ export class WebSocketConnectionManager {
         }
       }
 
-      return messages;
+      return { messages, fileTimestamp };
     } catch (error) {
       // Handle file reading errors gracefully
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -441,7 +454,7 @@ export class WebSocketConnectionManager {
       } else {
         console.warn(`Failed to load session messages from ${sessionPath}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
-      return [];
+      return { messages: [], fileTimestamp: 0 };
     }
   }
 

@@ -4,7 +4,7 @@ import { VirtualizedMessageList, type VirtualizedMessageListHandle } from './Vir
 import { MessageInput } from './MessageInput';
 import { TreeView, type TreeEntry } from '../Tree';
 import { NewSessionModal } from '../Session';
-import { Info, ChevronsUpDown, ArrowDown } from 'lucide-react';
+import { Info, ChevronsUpDown, ArrowDown, RefreshCw } from 'lucide-react';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
 
@@ -18,6 +18,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const isLoading = useSessionStore((state) => state.isLoading);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const sessions = useSessionStore((state) => state.sessions);
+  const getSessionCacheMeta = useSessionStore((state) => state.getSessionCacheMeta);
   const [showTreeView, setShowTreeView] = useState(false);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [showSessionInfo, setShowSessionInfo] = useState(false);
@@ -29,6 +30,10 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   // Get current session name
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const sessionTitle = currentSession?.name || currentSession?.firstMessage || 'New Session';
+  
+  // Check if session might have stale/incomplete content
+  const sessionMeta = currentSessionId ? getSessionCacheMeta(currentSessionId) : undefined;
+  const showSyncIndicator = sessionMeta?.isStreaming && !isStreaming;
 
   // Convert messages to tree entries
   const treeEntries: TreeEntry[] = messages.map((msg, index) => ({
@@ -70,6 +75,14 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         <h1 className="flex-1 min-w-0 text-sm font-medium text-gray-900 truncate pl-12 pr-2">
           {currentSessionId ? sessionTitle : ''}
         </h1>
+        
+        {/* Sync indicator - shows when content might be incomplete */}
+        {showSyncIndicator && (
+          <div className="flex items-center gap-1 px-2 py-1 bg-amber-50 border border-amber-200 rounded-md text-xs text-amber-700">
+            <RefreshCw className="w-3 h-3 animate-spin" />
+            <span>Syncing...</span>
+          </div>
+        )}
 
         {/* Right actions – only when session active */}
         {currentSessionId && (

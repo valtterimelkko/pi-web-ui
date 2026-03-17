@@ -15,6 +15,7 @@ export class SessionPool {
   private clientSessions: Map<string, ClientSession> = new Map();
   private piService: PiService;
   private getWebUIContext?: (clientId: string) => WebUIContext | undefined;
+  private streamingClients: Set<string> = new Set(); // Track which clients have active streaming
 
   constructor(piService: PiService) {
     this.piService = piService;
@@ -150,5 +151,23 @@ export class SessionPool {
   // Set up event forwarding for a client
   setEventForwarder(clientId: string, handler: (event: AgentSessionEvent) => void): void {
     this.piService.setEventHandler(clientId, handler);
+  }
+
+  /**
+   * Mark a client as streaming (agent is actively processing)
+   */
+  setStreaming(clientId: string, isStreaming: boolean): void {
+    if (isStreaming) {
+      this.streamingClients.add(clientId);
+    } else {
+      this.streamingClients.delete(clientId);
+    }
+  }
+
+  /**
+   * Check if a client's session is currently streaming
+   */
+  isSessionStreaming(clientId: string): boolean {
+    return this.streamingClients.has(clientId);
   }
 }

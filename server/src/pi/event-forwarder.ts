@@ -1,4 +1,5 @@
 import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import type { SessionPool } from './session-pool.js';
 
 export type WebSocketSender = (clientId: string, message: unknown) => void;
 
@@ -10,13 +11,28 @@ export interface ForwardedEvent {
 
 export class EventForwarder {
   private wsSender: WebSocketSender;
+  private sessionPool: SessionPool | null = null;
   private currentMessageId: string | null = null;
 
   constructor(wsSender: WebSocketSender) {
     this.wsSender = wsSender;
   }
 
+  /**
+   * Set the session pool reference for streaming state tracking
+   */
+  setSessionPool(pool: SessionPool): void {
+    this.sessionPool = pool;
+  }
+
   forwardEvent(clientId: string, event: AgentSessionEvent): void {
+    // Track streaming state
+    if (event.type === 'agent_start') {
+      this.sessionPool?.setStreaming(clientId, true);
+    } else if (event.type === 'agent_end') {
+      this.sessionPool?.setStreaming(clientId, false);
+    }
+
     // Map Pi SDK event to WebSocket message format
     const message = this.mapEventToMessage(event);
     this.wsSender(clientId, message);
