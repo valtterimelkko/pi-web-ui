@@ -374,10 +374,13 @@ describe('MultiSessionManager - Background Session Integration', () => {
       expect(client2Received).toBeDefined();
       expect(client3Received).toBeDefined();
 
-      // All should have the same message
-      expect(client1Received?.message.type).toBe('message_start');
-      expect(client2Received?.message.type).toBe('message_start');
-      expect(client3Received?.message.type).toBe('message_start');
+      // All should receive session_event wrapper with message_start inside
+      expect(client1Received?.message.type).toBe('session_event');
+      expect((client1Received?.message as any).event?.type).toBe('message_start');
+      expect(client2Received?.message.type).toBe('session_event');
+      expect((client2Received?.message as any).event?.type).toBe('message_start');
+      expect(client3Received?.message.type).toBe('session_event');
+      expect((client3Received?.message as any).event?.type).toBe('message_start');
     });
 
     it('should continue session for remaining clients when one unsubscribes', async () => {
@@ -776,11 +779,15 @@ describe('MultiSessionManager - Background Session Integration', () => {
       // Should have received 3 events (all broadcast to client-1)
       expect(mockBroadcast.broadcast).toHaveBeenCalledTimes(3);
       
-      // Verify event types
-      const eventTypes = mockBroadcast.messages.map(m => m.message.type);
+      // Verify event types (now wrapped in session_event)
+      const eventTypes = mockBroadcast.messages.map(m => (m.message as any).event?.type);
       expect(eventTypes).toContain('agent_start');
       expect(eventTypes).toContain('message_start');
       expect(eventTypes).toContain('agent_end');
+      
+      // Verify all events are wrapped in session_event
+      const allWrapped = mockBroadcast.messages.every(m => m.message.type === 'session_event');
+      expect(allWrapped).toBe(true);
     });
 
     it('should maintain correct subscriber count through multiple client lifecycle events', async () => {

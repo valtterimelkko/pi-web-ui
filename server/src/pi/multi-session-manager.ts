@@ -286,6 +286,7 @@ export class MultiSessionManager {
 
   /**
    * Handle an agent event for a session.
+   * Wraps the event in a session_event envelope with sessionId for proper routing.
    */
   handleAgentEvent(sessionPath: string, event: any): void {
     const activeSession = this.sessions.get(sessionPath);
@@ -321,8 +322,16 @@ export class MultiSessionManager {
         break;
     }
 
-    // Broadcast the event to all subscribers
-    this.broadcastToSubscribers(sessionPath, event);
+    // Wrap the event in a session_event envelope with sessionId for proper client routing
+    const sessionEvent = {
+      type: 'session_event',
+      sessionId: activeSession.sessionId,
+      sessionPath: activeSession.sessionPath,
+      event: event,
+    };
+
+    // Broadcast the wrapped event to all subscribers
+    this.broadcastToSubscribers(sessionPath, sessionEvent);
   }
 
   /**
