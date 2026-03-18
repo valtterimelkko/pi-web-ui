@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { Paperclip, X, Settings2, ArrowUpRight, Loader2 } from 'lucide-react';
+import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square } from 'lucide-react';
 import { useChatStore, useSessionStore, useDraftStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
@@ -33,7 +33,7 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   const currentModel = useSessionStore((state) => state.currentModel);
   const contextPercent = useSessionStore((state) => state.contextPercent);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
-  const { sendPrompt } = useWebSocket();
+  const { sendPrompt, abortGeneration } = useWebSocket();
 
   // Draft store for per-session draft persistence
   const currentDraft = useDraftStore((state) => state.currentDraft);
@@ -384,20 +384,31 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
             </div>
           </div>
 
-          {/* Send button */}
-          <button
-            onClick={handleSend}
-            disabled={!canSend}
-            className={`p-2 rounded-full transition-all ${
-              canSend
-                ? 'bg-gray-900 text-white hover:bg-gray-800'
-                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-            }`}
-            type="button"
-            title="Send message"
-          >
-            <ArrowUpRight className="w-4 h-4" />
-          </button>
+          {/* Send/Stop button */}
+          {isStreaming ? (
+            <button
+              onClick={abortGeneration}
+              className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition-all"
+              type="button"
+              title="Stop generation"
+            >
+              <Square className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!canSend}
+              className={`p-2 rounded-full transition-all ${
+                canSend
+                  ? 'bg-gray-900 text-white hover:bg-gray-800'
+                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              }`}
+              type="button"
+              title="Send message"
+            >
+              <ArrowUpRight className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Drag overlay */}
