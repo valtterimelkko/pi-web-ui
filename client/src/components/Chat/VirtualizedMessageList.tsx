@@ -88,15 +88,17 @@ function EmptyState({ hasSession, onCreateSession }: { hasSession: boolean; onCr
 }
 
 // Memoized message item component for performance
-const MessageItem = React.memo(function MessageItem({ 
-  message, 
-  isLast 
-}: { 
-  message: Message; 
+const MessageItem = React.memo(function MessageItem({
+  message,
+  isLast,
+  isCurrentRun,
+}: {
+  message: Message;
   isLast: boolean;
+  isCurrentRun: boolean;
 }) {
   return (
-    <MessageBubble message={message} isLast={isLast} />
+    <MessageBubble message={message} isLast={isLast} isCurrentRun={isCurrentRun} />
   );
 }, (prevProps, nextProps) => {
   // Custom comparison for better memoization
@@ -104,6 +106,7 @@ const MessageItem = React.memo(function MessageItem({
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
     prevProps.isLast === nextProps.isLast &&
+    prevProps.isCurrentRun === nextProps.isCurrentRun &&
     prevProps.message.toolResult?.output === nextProps.message.toolResult?.output
   );
 });
@@ -119,10 +122,18 @@ export const VirtualizedMessageList = forwardRef<
   const scrollerRef = useRef<HTMLElement | null>(null);
 
   // Create list items from messages
-  const listItems = useMemo<ListItem[]>(() => 
+  const listItems = useMemo<ListItem[]>(() =>
     messages.map((message, index) => ({ message, index })),
     [messages]
   );
+
+  // Find the index of the last user message to scope collapsing to the current agent run
+  const lastUserMessageIndex = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return i;
+    }
+    return -1;
+  }, [messages]);
 
   // Handle scroll position changes
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
@@ -208,10 +219,12 @@ export const VirtualizedMessageList = forwardRef<
       computeItemKey={(_index, item) => item.message.id}
       itemContent={(_index, item) => {
         const isLast = item.index === listItems.length - 1;
+        const isCurrentRun = item.index > lastUserMessageIndex;
         return (
           <MessageItem
             message={item.message}
             isLast={isLast}
+            isCurrentRun={isCurrentRun}
           />
         );
       }}

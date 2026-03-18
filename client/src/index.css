@@ -269,7 +269,7 @@ html {
 .prose-compact table { margin-top: 0.375rem; margin-bottom: 0.375rem; font-size: 0.75rem; }
 .prose-compact th, .prose-compact td { padding: 0.25rem 0.5rem; }
 
-/* Strong/bold - keep normal weight to avoid bulkiness */
+/* Strong/bold - use semibold (600) instead of bold (700) to avoid bulkiness */
 .prose-compact strong { font-weight: 600; }
 
 /* Collapse fade gradient for auto-collapsed intermediate messages */
