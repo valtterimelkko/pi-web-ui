@@ -133,7 +133,20 @@ describe('VirtualizedMessageList', () => {
     expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
   });
 
-  it('shows assistant messages but filters tool messages in mixed list', () => {
+  it('filters out toolResult messages from visible list', () => {
+    // Pi SDK sends message_start with role='toolResult' containing massive raw content
+    const toolResultMessage: Message = {
+      id: 'toolresult-1',
+      role: 'toolResult' as Message['role'],
+      content: [{ type: 'text', text: 'Web search results for: "AI trends"...' + 'x'.repeat(5000) }],
+      timestamp: 1500,
+    };
+    
+    render(<VirtualizedMessageList messages={[toolResultMessage]} isStreaming={false} />);
+    expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
+  });
+
+  it('shows assistant messages but filters tool and toolResult messages in mixed list', () => {
     const mixedMessages: Message[] = [
       { id: '1', role: 'user', content: 'Hello', timestamp: 1000 },
       { id: '2', role: 'assistant', content: 'Processing...', timestamp: 2000 },
@@ -144,6 +157,12 @@ describe('VirtualizedMessageList', () => {
         timestamp: 2500,
         toolCall: { id: 'call-1', name: 'web_search', args: { query: 'test' } },
         toolResult: { output: 'results', isError: false },
+      },
+      {
+        id: 'toolresult-1',
+        role: 'toolResult' as Message['role'],
+        content: [{ type: 'text', text: 'Web search results for: "test"...' + 'x'.repeat(5000) }],
+        timestamp: 2600,
       },
       { id: '3', role: 'assistant', content: 'Here are the results', timestamp: 3000 },
     ];
@@ -156,6 +175,8 @@ describe('VirtualizedMessageList', () => {
     expect(screen.getByTestId('message-bubble-3')).toBeInTheDocument();
     // Tool message should NOT be visible
     expect(screen.queryByTestId('message-bubble-tool-1')).not.toBeInTheDocument();
+    // toolResult message should NOT be visible
+    expect(screen.queryByTestId('message-bubble-toolresult-1')).not.toBeInTheDocument();
   });
 
   it('exposes scrollToIndex method via ref', () => {

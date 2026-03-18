@@ -3,6 +3,11 @@ import { persist } from 'zustand/middleware';
 import { useUIStore } from './uiStore';
 import { getPreferences, patchPreferences } from '../lib/api';
 
+// Track the current message ID per session for the multi-session event path.
+// Raw Pi SDK events forwarded by multi-session-manager don't include message IDs,
+// so we track the ID assigned at message_start to match subsequent message_update events.
+const currentMessageIdBySession = new Map<string, string>();
+
 export interface Session {
   id: string;
   path: string;
@@ -921,6 +926,7 @@ export const useSessionStore = create<SessionState>()(
                 
               case 'agent_end':
                 get().setSessionStatus(sessionId, 'idle');
+                currentMessageIdBySession.delete(sessionId);
                 // Also update current session if it matches
                 if (get().currentSessionId === sessionId) {
                   set({ isStreaming: false });
@@ -935,6 +941,10 @@ export const useSessionStore = create<SessionState>()(
                   content: messageData.content as Message['content'],
                   timestamp: Date.now(),
                 };
+                // Track the current message ID for this session so message_update
+                // events (which may arrive without IDs from raw SDK events) can
+                // be routed to the correct message.
+                currentMessageIdBySession.set(sessionId, newMessage.id);
                 get().addMessageToSession(sessionId, newMessage);
                 // Also update current session if it matches
                 if (get().currentSessionId === sessionId) {
@@ -949,10 +959,15 @@ export const useSessionStore = create<SessionState>()(
                   assistantMessageEvent?: { type: string; delta?: string };
                 };
                 
-                if (msgData?.id && assistantMessageEvent) {
+                // Use the tracked current message ID as fallback when raw SDK
+                // events arrive without IDs (multi-session-manager bypasses
+                // the EventForwarder's ID injection).
+                const messageId = msgData?.id || currentMessageIdBySession.get(sessionId);
+                
+                if (messageId && assistantMessageEvent) {
                   const sessionData = get().sessionData[sessionId];
                   if (sessionData) {
-                    const existingMsg = sessionData.messages.find(m => m.id === msgData.id);
+                    const existingMsg = sessionData.messages.find(m => m.id === messageId);
                     if (existingMsg) {
                       let contentArray: Array<{ type: string; text?: string; thinking?: string }>;
                       if (Array.isArray(existingMsg.content)) {
@@ -973,10 +988,10 @@ export const useSessionStore = create<SessionState>()(
                         } else {
                           contentArray.push({ type: 'text', text: delta });
                         }
-                        get().updateMessageInSession(sessionId, msgData.id, { content: contentArray });
+                        get().updateMessageInSession(sessionId, messageId, { content: contentArray });
                         // Also update current session if it matches
                         if (get().currentSessionId === sessionId) {
-                          get().updateMessage(msgData.id, { content: contentArray });
+                          get().updateMessage(messageId, { content: contentArray });
                         }
                       } else if (eventType === 'thinking_delta') {
                         const lastEntry = contentArray[contentArray.length - 1];
@@ -985,10 +1000,10 @@ export const useSessionStore = create<SessionState>()(
                         } else {
                           contentArray.push({ type: 'thinking', thinking: delta });
                         }
-                        get().updateMessageInSession(sessionId, msgData.id, { content: contentArray });
+                        get().updateMessageInSession(sessionId, messageId, { content: contentArray });
                         // Also update current session if it matches
                         if (get().currentSessionId === sessionId) {
-                          get().updateMessage(msgData.id, { content: contentArray });
+                          get().updateMessage(messageId, { content: contentArray });
                         }
                       }
                     }

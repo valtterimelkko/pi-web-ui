@@ -121,11 +121,13 @@ export const VirtualizedMessageList = forwardRef<
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
 
-  // Filter out tool messages for display — server history (session_switched)
-  // only sends user/assistant messages, so this matches that clean behavior
-  // during live streaming too, preventing verbose tool card clutter.
+  // Only show user + assistant messages — matches server's loadSessionMessages
+  // which filters to role === 'user' || 'assistant' and content type text/thinking.
+  // During streaming, the Pi SDK also sends role='toolResult' messages with
+  // massive raw content (web pages, search results); filtering those out keeps
+  // the streaming view clean and consistent with the history/reload view.
   const visibleMessages = useMemo(() =>
-    messages.filter(m => m.role !== 'tool'),
+    messages.filter(m => m.role === 'user' || m.role === 'assistant'),
     [messages]
   );
 
