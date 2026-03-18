@@ -109,7 +109,7 @@ describe('VirtualizedMessageList', () => {
     expect(screen.getByTestId('message-bubble-1')).toBeInTheDocument();
   });
 
-  it('handles tool messages', () => {
+  it('filters out tool messages from visible list', () => {
     const toolMessage: Message = {
       id: 'tool-1',
       role: 'tool',
@@ -126,9 +126,36 @@ describe('VirtualizedMessageList', () => {
       },
     };
     
+    // Tool messages should be filtered out (matches server history behavior)
     render(<VirtualizedMessageList messages={[toolMessage]} isStreaming={false} />);
     
-    expect(screen.getByTestId('message-bubble-tool-1')).toBeInTheDocument();
+    // Should show empty state since the only message is a tool message
+    expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
+  });
+
+  it('shows assistant messages but filters tool messages in mixed list', () => {
+    const mixedMessages: Message[] = [
+      { id: '1', role: 'user', content: 'Hello', timestamp: 1000 },
+      { id: '2', role: 'assistant', content: 'Processing...', timestamp: 2000 },
+      {
+        id: 'tool-1',
+        role: 'tool',
+        content: '',
+        timestamp: 2500,
+        toolCall: { id: 'call-1', name: 'web_search', args: { query: 'test' } },
+        toolResult: { output: 'results', isError: false },
+      },
+      { id: '3', role: 'assistant', content: 'Here are the results', timestamp: 3000 },
+    ];
+    
+    render(<VirtualizedMessageList messages={mixedMessages} isStreaming={false} />);
+    
+    // User and assistant messages visible
+    expect(screen.getByTestId('message-bubble-1')).toBeInTheDocument();
+    expect(screen.getByTestId('message-bubble-2')).toBeInTheDocument();
+    expect(screen.getByTestId('message-bubble-3')).toBeInTheDocument();
+    // Tool message should NOT be visible
+    expect(screen.queryByTestId('message-bubble-tool-1')).not.toBeInTheDocument();
   });
 
   it('exposes scrollToIndex method via ref', () => {

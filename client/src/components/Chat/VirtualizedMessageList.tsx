@@ -121,19 +121,27 @@ export const VirtualizedMessageList = forwardRef<
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
 
-  // Create list items from messages
-  const listItems = useMemo<ListItem[]>(() =>
-    messages.map((message, index) => ({ message, index })),
+  // Filter out tool messages for display — server history (session_switched)
+  // only sends user/assistant messages, so this matches that clean behavior
+  // during live streaming too, preventing verbose tool card clutter.
+  const visibleMessages = useMemo(() =>
+    messages.filter(m => m.role !== 'tool'),
     [messages]
+  );
+
+  // Create list items from visible messages
+  const listItems = useMemo<ListItem[]>(() =>
+    visibleMessages.map((message, index) => ({ message, index })),
+    [visibleMessages]
   );
 
   // Find the index of the last user message to scope collapsing to the current agent run
   const lastUserMessageIndex = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') return i;
+    for (let i = visibleMessages.length - 1; i >= 0; i--) {
+      if (visibleMessages[i].role === 'user') return i;
     }
     return -1;
-  }, [messages]);
+  }, [visibleMessages]);
 
   // Handle scroll position changes
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
@@ -188,7 +196,7 @@ export const VirtualizedMessageList = forwardRef<
     }
   }, [isStreaming, listItems.length]);
 
-  if (messages.length === 0) {
+  if (visibleMessages.length === 0) {
     return <EmptyState hasSession={hasSession} onCreateSession={onCreateSession} />;
   }
 
