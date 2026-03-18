@@ -12,6 +12,7 @@ import { copyToClipboard } from '../../lib/clipboard';
 interface MessageBubbleProps {
   message: Message;
   isLast?: boolean;
+  isCurrentRun?: boolean;
 }
 
 /**
@@ -53,7 +54,7 @@ function ActivityIndicator({
 }
 
 // Memoized MessageBubble for performance
-export const MessageBubble = memo(function MessageBubble({ message, isLast }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, isLast, isCurrentRun }: MessageBubbleProps) {
   const [showThinking, setShowThinking] = useState(false);
   const [copied, setCopied] = useState(false);
   const isStreaming = useSessionStore((state) => state.isStreaming);
@@ -115,7 +116,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
     if (!displayText) return false;
     return displayText.split('\n').length > 6 || displayText.length > 300;
   }, [displayText]);
-  const shouldCollapse = isStreaming && !isLast && isAssistant && hasVisibleContent && isLongContent && !manuallyExpanded;
+  const shouldCollapse = isStreaming && !isLast && isCurrentRun && isAssistant && hasVisibleContent && isLongContent && !manuallyExpanded;
 
   const handleCopy = async () => {
     if (!displayText) return;
@@ -146,7 +147,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
 
   // For assistant messages with no visible content but thinking,
   // auto-expand thinking block by default (but not for intermediate messages during streaming)
-  const showThinkingExpanded = !hasVisibleContent && hasThinking && !(isStreaming && !isLast);
+  const showThinkingExpanded = !hasVisibleContent && hasThinking && !(isStreaming && !isLast && isCurrentRun);
 
   return (
     <div className="w-full">
@@ -206,7 +207,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
             <StreamingText text={displayText} />
           ) : (
             <>
-            <div className={`prose prose-sm max-w-none prose-gray prose-table:w-full prose-compact${shouldCollapse ? ' max-h-[6rem] overflow-hidden' : ''}`}>
+            <div id={`msg-content-${message.id}`} className={`prose prose-sm max-w-none prose-gray prose-table:w-full prose-compact${shouldCollapse ? ' max-h-[6rem] overflow-hidden' : ''}`}>
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -282,16 +283,20 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
                   onClick={() => setManuallyExpanded(true)}
                   className="text-xs text-teal-600 hover:text-teal-700 mt-0.5"
                   type="button"
+                  aria-expanded={false}
+                  aria-controls={`msg-content-${message.id}`}
                 >
                   ▾ Show more
                 </button>
               </>
             )}
-            {!shouldCollapse && manuallyExpanded && isStreaming && !isLast && isLongContent && (
+            {!shouldCollapse && manuallyExpanded && isStreaming && !isLast && isCurrentRun && isLongContent && (
               <button
                 onClick={() => setManuallyExpanded(false)}
                 className="text-xs text-teal-600 hover:text-teal-700 mt-0.5"
                 type="button"
+                aria-expanded={true}
+                aria-controls={`msg-content-${message.id}`}
               >
                 ▴ Show less
               </button>
@@ -314,6 +319,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
     prevProps.isLast === nextProps.isLast &&
+    prevProps.isCurrentRun === nextProps.isCurrentRun &&
     prevProps.message.toolResult?.output === nextProps.message.toolResult?.output &&
     prevProps.message.toolResult?.isError === nextProps.message.toolResult?.isError
   );

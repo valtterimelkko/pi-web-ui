@@ -572,13 +572,13 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
       {/* Header - always visible, clickable to expand */}
       <button
         onClick={handleToggleExpand}
-        className={`flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left transition-colors ${
+        className={`flex items-center gap-1.5 w-full min-w-0 px-2.5 py-1.5 text-left transition-colors ${
           isExpanded ? 'bg-gray-50 border-b border-gray-200' : 'hover:bg-gray-50'
         }`}
         type="button"
       >
         {/* Expand indicator */}
-        <ChevronRight className={`w-3 h-3 text-gray-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
+        <ChevronRight className={`w-3 h-3 text-gray-400 transition-transform duration-200 shrink-0 ${isExpanded ? 'rotate-90' : ''}`} />
 
         {/* Tool icon */}
         <span className={`shrink-0 ${
@@ -590,13 +590,13 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
         </span>
 
         {/* Tool name */}
-        <span className="font-medium text-gray-700 text-xs">
+        <span className="font-medium text-gray-700 text-xs shrink-0">
           {displayName}
         </span>
 
         {/* Primary parameter - inline, subtle */}
         {primaryParam && !isExpanded && (
-          <span className="text-gray-400 truncate text-xs font-mono">
+          <span className="text-gray-400 truncate flex-1 min-w-0 text-xs font-mono">
             {primaryParam}
           </span>
         )}
