@@ -109,6 +109,14 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
   const hasVisibleContent = displayText && displayText.trim().length > 0;
   const isStreamingThis = !!(isLast && isStreaming && isAssistant);
 
+  // Auto-collapse long intermediate assistant messages during streaming
+  const [manuallyExpanded, setManuallyExpanded] = useState(false);
+  const isLongContent = useMemo(() => {
+    if (!displayText) return false;
+    return displayText.split('\n').length > 6 || displayText.length > 300;
+  }, [displayText]);
+  const shouldCollapse = isStreaming && !isLast && isAssistant && hasVisibleContent && isLongContent && !manuallyExpanded;
+
   const handleCopy = async () => {
     if (!displayText) return;
     const success = await copyToClipboard(displayText, 'Message copied to clipboard');
@@ -136,9 +144,9 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
     );
   }
 
-  // For assistant messages with no visible content but thinking, 
-  // auto-expand thinking block by default
-  const showThinkingExpanded = !hasVisibleContent && hasThinking;
+  // For assistant messages with no visible content but thinking,
+  // auto-expand thinking block by default (but not for intermediate messages during streaming)
+  const showThinkingExpanded = !hasVisibleContent && hasThinking && !(isStreaming && !isLast);
 
   return (
     <div className="w-full">
@@ -173,8 +181,8 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
             }
           `}
         >
-          {/* Copy button - always visible on mobile, hover-only on desktop */}
-          {isAssistant && !isStreamingThis && (
+          {/* Copy button - always visible on mobile, hover-only on desktop; hidden when collapsed */}
+          {isAssistant && !isStreamingThis && !shouldCollapse && (
             <button
               onClick={handleCopy}
               className={`
@@ -197,7 +205,8 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
           {isStreamingThis ? (
             <StreamingText text={displayText} />
           ) : (
-            <div className="prose prose-sm max-w-none prose-gray prose-table:w-full prose-compact">
+            <>
+            <div className={`prose prose-sm max-w-none prose-gray prose-table:w-full prose-compact${shouldCollapse ? ' max-h-[6rem] overflow-hidden' : ''}`}>
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -266,6 +275,28 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast }: Me
                 {displayText}
               </ReactMarkdown>
             </div>
+            {shouldCollapse && (
+              <>
+                <div className="h-6 -mt-6 collapse-fade-gradient pointer-events-none" />
+                <button
+                  onClick={() => setManuallyExpanded(true)}
+                  className="text-xs text-teal-600 hover:text-teal-700 mt-0.5"
+                  type="button"
+                >
+                  ▾ Show more
+                </button>
+              </>
+            )}
+            {!shouldCollapse && manuallyExpanded && isStreaming && !isLast && isLongContent && (
+              <button
+                onClick={() => setManuallyExpanded(false)}
+                className="text-xs text-teal-600 hover:text-teal-700 mt-0.5"
+                type="button"
+              >
+                ▴ Show less
+              </button>
+            )}
+            </>
           )}
         </div>
       )}
