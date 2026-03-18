@@ -272,6 +272,14 @@ html {
 /* Strong/bold - keep normal weight to avoid bulkiness */
 .prose-compact strong { font-weight: 600; }
 
+/* Collapse fade gradient for auto-collapsed intermediate messages */
+.collapse-fade-gradient {
+  background: linear-gradient(to top, white, transparent);
+}
+.dark .collapse-fade-gradient {
+  background: linear-gradient(to top, #0f172a, transparent) !important;
+}
+
 /* iOS safe area – prevents content being hidden behind home indicator */
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom, 0px);
