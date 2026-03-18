@@ -7,6 +7,7 @@ import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
 import { ThinkingBlock } from './ThinkingBlock';
 import { CollapsibleToolCard } from '../Tools/CollapsibleToolCard';
+import { SubagentToolCard } from '../Tools/SubagentToolCard';
 import { copyToClipboard } from '../../lib/clipboard';
 
 interface MessageBubbleProps {
@@ -134,8 +135,19 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     });
   };
 
-  // Render tool call card for tool messages (using new CollapsibleToolCard)
+  // Render tool call card for tool messages
   if (isTool && message.toolCall) {
+    // Use SubagentToolCard for subagent tools to show hierarchical view
+    if (message.toolCall.name === 'subagent') {
+      return (
+        <SubagentToolCard
+          name={message.toolCall.name}
+          args={message.toolCall.args}
+          result={message.toolResult}
+        />
+      );
+    }
+    // Use CollapsibleToolCard for all other tools
     return (
       <CollapsibleToolCard
         name={message.toolCall.name}

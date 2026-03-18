@@ -126,8 +126,13 @@ export const VirtualizedMessageList = forwardRef<
   // During streaming, the Pi SDK also sends role='toolResult' messages with
   // massive raw content (web pages, search results); filtering those out keeps
   // the streaming view clean and consistent with the history/reload view.
+  // EXCEPTION: subagent tool calls are shown with hierarchical display like CLI.
   const visibleMessages = useMemo(() =>
-    messages.filter(m => m.role === 'user' || m.role === 'assistant'),
+    messages.filter(m => 
+      m.role === 'user' || 
+      m.role === 'assistant' ||
+      (m.role === 'tool' && m.toolCall?.name === 'subagent')
+    ),
     [messages]
   );
 

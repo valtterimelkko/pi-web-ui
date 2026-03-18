@@ -133,6 +133,35 @@ describe('VirtualizedMessageList', () => {
     expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
   });
 
+  it('shows subagent tool messages (unlike other tool messages)', () => {
+    const subagentMessage: Message = {
+      id: 'subagent-1',
+      role: 'tool',
+      content: JSON.stringify({
+        mode: 'parallel',
+        tasks: [
+          { agent: 'coder', task: 'Refactor auth', result: 'Done' },
+        ],
+      }),
+      timestamp: 1000,
+      toolCall: {
+        id: 'call-1',
+        name: 'subagent',
+        args: { tasks: [{ agent: 'coder', task: 'Refactor auth' }] },
+      },
+      toolResult: {
+        output: JSON.stringify({ mode: 'parallel', tasks: [{ agent: 'coder', task: 'Refactor auth', result: 'Done' }] }),
+        isError: false,
+      },
+    };
+    
+    // Subagent tool messages should be visible (unlike other tool messages)
+    render(<VirtualizedMessageList messages={[subagentMessage]} isStreaming={false} />);
+    
+    // Should show the subagent message (not empty state)
+    expect(screen.getByTestId('message-bubble-subagent-1')).toBeInTheDocument();
+  });
+
   it('filters out toolResult messages from visible list', () => {
     // Pi SDK sends message_start with role='toolResult' containing massive raw content
     const toolResultMessage: Message = {
