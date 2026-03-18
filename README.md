@@ -229,6 +229,52 @@ Search and fetch web content directly from the chat.
 - Private IP blocking for security
 - Truncation for large content (50KB/2000 lines)
 
+## Development Environment
+
+### VNC Environment with Google Chrome
+
+This project includes a VNC (Virtual Network Computing) environment with **Google Chrome** browser pre-installed for browser automation and testing tasks.
+
+**Chrome Installation:**
+- **Binary location**: `/usr/bin/google-chrome`
+- **Stable link**: `/usr/bin/google-chrome-stable` → `/opt/google/chrome/google-chrome`
+- **Process**: Chrome runs with `--no-sandbox --disable-setuid-sandbox` flags for container compatibility
+
+**Interacting with Chrome:**
+
+Agents should use the **`chrome-cdp`** skill to interact with the live Chrome session:
+
+```bash
+# 1. List open tabs/pages
+/root/.pi/agent/skills/chrome-cdp/scripts/cdp.mjs list
+
+# 2. Take a screenshot of a page
+/root/.pi/agent/skills/chrome-cdp/scripts/cdp.mjs shot <target-id> /tmp/screenshot.png
+
+# 3. Navigate to a URL
+/root/.pi/agent/skills/chrome-cdp/scripts/cdp.mjs nav <target-id> https://example.com
+
+# 4. Click an element
+/root/.pi/agent/skills/chrome-cdp/scripts/cdp.mjs click <target-id> 'button#submit'
+
+# 5. Type text
+/root/.pi/agent/skills/chrome-cdp/scripts/cdp.mjs type <target-id> 'Hello World'
+
+# 6. Execute JavaScript
+/root/.pi/agent/skills/chrome-cdp/scripts/cdp.mjs eval <target-id> 'document.title'
+
+# 7. Get page HTML
+/root/.pi/agent/skills/chrome-cdp/scripts/cdp.mjs html <target-id>
+```
+
+**Key Points:**
+- Chrome must have **remote debugging enabled** (`chrome://inspect/#remote-debugging`)
+- First connection to a tab requires clicking "Allow" in Chrome's debugging prompt
+- Reuse the same approved tab for multiple operations to avoid repeated prompts
+- The skill automatically creates per-tab daemons for stable connections
+
+**Skill Documentation:** See `/root/.pi/agent/skills/chrome-cdp/SKILL.md` for complete details.
+
 ## Quick Start
 
 ### Prerequisites
@@ -236,6 +282,7 @@ Search and fetch web content directly from the chat.
 - Node.js 20+
 - npm or yarn
 - Git
+- Google Chrome (for browser automation tasks in VNC)
 
 ### Installation
 
