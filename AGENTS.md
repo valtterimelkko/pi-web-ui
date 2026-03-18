@@ -200,6 +200,30 @@ npm test
 3. Route it in `MessageBubble.tsx`
 4. Add tests for visibility
 
+## Extensions
+
+The Web UI shares the same extension directory as the CLI: `~/.pi/agent/extensions/`
+
+**Pre-installed Extensions:**
+- `agent-discovery` - Injects available subagents into system prompt
+- `enhanced-plan-mode` - `/plan` command with wave-based analysis
+- `subagent` - Subagent delegation tool
+- `todo` - Todo management (`/todos` command)
+- `web-tools` - Web search and fetch tools
+
+**Extension Loading:**
+Extensions are loaded by the Pi SDK's `DefaultResourceLoader` at startup. Check server logs for:
+```
+Loaded extensions:
+  - /root/.pi/agent/extensions/agent-discovery/index.ts
+  - /root/.pi/agent/extensions/enhanced-plan-mode/index.ts
+```
+
+**Extension Hooks Supported:**
+- `before_agent_start` - Modify system prompt before agent runs
+- `tool_call` - Validate/modify tool calls
+- `after_tool_call` - Process tool results
+
 ## Adding a New Component
 
 1. **Create directory**: `client/src/components/MyComponent/`

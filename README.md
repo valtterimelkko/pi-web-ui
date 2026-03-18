@@ -181,6 +181,7 @@ Delegate tasks to specialized agents with isolated context windows.
 - Isolated context windows for each subagent
 - JSON mode for structured output
 - Usage statistics tracking (tokens, cost)
+- **Agent Discovery**: Automatically discovers available agents from `~/.pi/agent/agents/` and injects them into the system prompt
 
 ### 3. Todo Management (`/todos`)
 
