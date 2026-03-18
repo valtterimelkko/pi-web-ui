@@ -181,6 +181,25 @@ npm test
 - Store: `client/src/store/sessionStore.ts`
 - Display: `client/src/components/Tools/`
 
+## UI Message Filtering & Tool Display
+
+**Important:** Not all messages from the Pi SDK are displayed in the chat UI. The `VirtualizedMessageList` component filters messages to maintain a clean interface:
+
+**Filtering Logic** (`client/src/components/Chat/VirtualizedMessageList.tsx`, lines 129-135):
+- ✅ **User messages** - Always shown
+- ✅ **Assistant messages** - Always shown  
+- ✅ **Subagent tools** - Shown with hierarchical display (CLI-style)
+- ❌ **Other tool messages** (read, edit, bash, web_search, etc.) - Hidden to reduce clutter
+- ❌ **toolResult messages** - Hidden (contains raw tool output)
+
+**Why?** The agent's text narrative summarizes tool results, so showing every tool call creates visual clutter. However, subagent tools are an exception - they show a hierarchical view of what subagents did internally.
+
+**To Add a New Visible Tool Type:**
+1. Modify the filter in `VirtualizedMessageList.tsx`
+2. Create a tool card component (see `SubagentToolCard.tsx` as example)
+3. Route it in `MessageBubble.tsx`
+4. Add tests for visibility
+
 ## Adding a New Component
 
 1. **Create directory**: `client/src/components/MyComponent/`

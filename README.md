@@ -92,6 +92,7 @@ Major performance improvements based on Kimi Web UI benchmark:
 - **Component Memoization**: MessageBubble with custom comparison, reduced re-renders
 
 ### UI/UX Improvements (March 2026)
+- **Subagent Hierarchical Display**: CLI-style view showing subagent execution with internal tool operations (read, edit, etc.) - visible while other tools remain hidden for cleanliness
 - **Thinking Previews**: Shows preview of thinking content when collapsed
 - **Activity Indicators**: Brief summary when assistant has no visible text content
 - **Auto-expand Thinking**: When message has only thinking (no text), auto-expands
