@@ -221,6 +221,49 @@ export class PiService {
     return models;
   }
 
+  /**
+   * Get loaded skills from the resource loader.
+   * Returns skill names and descriptions for slash command auto-complete.
+   */
+  getSkills() {
+    const { skills, diagnostics } = this.resourceLoader.getSkills();
+    
+    // Log any skill loading diagnostics
+    if (diagnostics.length > 0) {
+      diagnostics.forEach(d => {
+        console.log(`[PiService] Skill diagnostic: ${d.type} - ${d.message} (${d.path})`);
+      });
+    }
+    
+    return skills.map(skill => ({
+      name: skill.name,
+      description: skill.description,
+      path: skill.filePath,
+      disableModelInvocation: skill.disableModelInvocation,
+    }));
+  }
+
+  /**
+   * Get loaded extension commands from the resource loader.
+   * Returns command names and descriptions for slash command auto-complete.
+   */
+  getExtensionCommands() {
+    const extensionsResult = this.resourceLoader.getExtensions();
+    const commands: Array<{ name: string; description: string; extension: string }> = [];
+    
+    for (const ext of extensionsResult.extensions) {
+      for (const [cmdName, cmd] of ext.commands) {
+        commands.push({
+          name: cmdName,
+          description: cmd.description || '',
+          extension: ext.path,
+        });
+      }
+    }
+    
+    return commands;
+  }
+
   async setModel(sessionId: string, modelId: string): Promise<void> {
     console.log(`[PiService.setModel] Setting model for session ${sessionId} to ${modelId}`);
     

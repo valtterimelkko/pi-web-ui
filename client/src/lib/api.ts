@@ -95,6 +95,50 @@ export const api = {
 };
 
 /**
+ * Slash command definition from server.
+ */
+export interface SlashCommand {
+  name: string;
+  description: string;
+  type: 'skill' | 'extension' | 'builtin';
+}
+
+/**
+ * Fetch available slash commands from server (skills + extension commands).
+ * Falls back to basic commands if the request fails.
+ */
+export async function getSlashCommands(): Promise<SlashCommand[]> {
+  try {
+    const response = await fetch(`${API_URL}/api/extensions/commands`, {
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      // Try to parse as JSON error, otherwise throw with status
+      let errorMsg = `HTTP ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMsg = errorData.error || errorMsg;
+      } catch {
+        // Response wasn't JSON - likely HTML error page
+        errorMsg = `Server returned ${response.status} (not JSON)`;
+      }
+      throw new ApiError(response.status, errorMsg);
+    }
+
+    const result = await response.json();
+    return result.commands as SlashCommand[];
+  } catch (error) {
+    // Re-throw ApiErrors
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    // Wrap other errors
+    throw new ApiError(0, error instanceof Error ? error.message : 'Unknown error');
+  }
+}
+
+/**
  * Fetch web UI preferences from the server.
  */
 export async function getPreferences(): Promise<WebUIPreferences> {

@@ -1,68 +1,114 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { apiLimiter } from '../security/rate-limit.js';
-import fs from 'fs/promises';
-import path from 'path';
-import { config } from '../config.js';
+import { getPiService } from '../pi/index.js';
 
 const router = Router();
 
 router.use(cookieAuthMiddleware);
 router.use(apiLimiter);
 
-// GET /api/extensions - List loaded extensions
+// GET /api/extensions - List loaded extensions with their commands
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const extensionsDir = path.join(config.piAgentDir, 'extensions');
-    const extensions: Array<{
-      name: string;
-      path: string;
-      enabled: boolean;
-    }> = [];
+    const piService = getPiService();
+    const commands = piService.getExtensionCommands();
     
-    try {
-      const entries = await fs.readdir(extensionsDir, { withFileTypes: true });
-      
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const indexPath = path.join(extensionsDir, entry.name, 'index.ts');
-          const directPath = path.join(extensionsDir, `${entry.name}.ts`);
-          
-          try {
-            await fs.access(indexPath);
-            extensions.push({
-              name: entry.name,
-              path: indexPath,
-              enabled: true, // TODO: Track enabled/disabled state
-            });
-          } catch {
-            try {
-              await fs.access(directPath);
-              extensions.push({
-                name: entry.name,
-                path: directPath,
-                enabled: true,
-              });
-            } catch {
-              // Not a valid extension
-            }
-          }
-        } else if (entry.isFile() && entry.name.endsWith('.ts')) {
-          extensions.push({
-            name: entry.name.replace('.ts', ''),
-            path: path.join(extensionsDir, entry.name),
-            enabled: true,
-          });
-        }
+    // Group commands by extension
+    const extensionsMap = new Map<string, {
+      name: string;
+      commands: Array<{ name: string; description: string }>;
+    }>();
+    
+    for (const cmd of commands) {
+      const extName = cmd.extension.split('/').pop()?.replace('.ts', '') || cmd.extension;
+      if (!extensionsMap.has(extName)) {
+        extensionsMap.set(extName, {
+          name: extName,
+          commands: [],
+        });
       }
-    } catch {
-      // Extensions directory doesn't exist
+      extensionsMap.get(extName)!.commands.push({
+        name: cmd.name,
+        description: cmd.description,
+      });
     }
     
-    res.json({ extensions });
+    res.json({ 
+      extensions: Array.from(extensionsMap.values()),
+      commands,
+    });
   } catch (error) {
     console.error('Error listing extensions:', error);
     res.status(500).json({ error: 'Failed to list extensions' });
+  }
+});
+
+// GET /api/extensions/skills - List loaded skills from resource loader
+router.get('/skills', async (req: Request, res: Response) => {
+  try {
+    const piService = getPiService();
+    const skills = piService.getSkills();
+    
+    res.json({ skills });
+  } catch (error) {
+    console.error('Error listing skills:', error);
+    res.status(500).json({ error: 'Failed to list skills' });
+  }
+});
+
+// GET /api/extensions/commands - List all slash commands (skills + extension commands)
+router.get('/commands', async (req: Request, res: Response) => {
+  try {
+    const piService = getPiService();
+    const skills = piService.getSkills();
+    const extensionCommands = piService.getExtensionCommands();
+    
+    // Build combined list of slash commands
+    const commands: Array<{
+      name: string;
+      description: string;
+      type: 'skill' | 'extension' | 'builtin';
+    }> = [];
+    
+    // Add built-in commands
+    const builtinCommands = [
+      { name: 'compact', description: 'Summarize conversation to free context' },
+      { name: 'clear', description: 'Clear the current conversation' },
+      { name: 'export', description: 'Export session to file' },
+      { name: 'help', description: 'Show available commands' },
+    ];
+    
+    for (const cmd of builtinCommands) {
+      commands.push({
+        name: `/${cmd.name}`,
+        description: cmd.description,
+        type: 'builtin',
+      });
+    }
+    
+    // Add skills as /skill:name commands
+    for (const skill of skills) {
+      commands.push({
+        name: `/skill:${skill.name}`,
+        description: skill.description,
+        type: 'skill',
+      });
+    }
+    
+    // Add extension commands
+    for (const cmd of extensionCommands) {
+      commands.push({
+        name: `/${cmd.name}`,
+        description: cmd.description,
+        type: 'extension',
+      });
+    }
+    
+    res.json({ commands });
+  } catch (error) {
+    console.error('Error listing commands:', error);
+    res.status(500).json({ error: 'Failed to list commands' });
   }
 });
 
@@ -89,43 +135,6 @@ router.post('/:name/toggle', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error toggling extension:', error);
     res.status(500).json({ error: 'Failed to toggle extension' });
-  }
-});
-
-// GET /api/extensions/skills - List loaded skills
-router.get('/skills', async (req: Request, res: Response) => {
-  try {
-    const skillsDir = path.join(config.piAgentDir, 'skills');
-    const skills: Array<{
-      name: string;
-      path: string;
-    }> = [];
-    
-    try {
-      const entries = await fs.readdir(skillsDir, { withFileTypes: true });
-      
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const skillPath = path.join(skillsDir, entry.name, 'SKILL.md');
-          try {
-            await fs.access(skillPath);
-            skills.push({
-              name: entry.name,
-              path: skillPath,
-            });
-          } catch {
-            // Not a valid skill
-          }
-        }
-      }
-    } catch {
-      // Skills directory doesn't exist
-    }
-    
-    res.json({ skills });
-  } catch (error) {
-    console.error('Error listing skills:', error);
-    res.status(500).json({ error: 'Failed to list skills' });
   }
 });
 
