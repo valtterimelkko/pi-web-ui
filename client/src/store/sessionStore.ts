@@ -110,6 +110,9 @@ interface SessionState {
   streamingSessions: Record<string, boolean>;
   // Loading state to prevent duplicate adds during initial session load
   isLoadingSessions: boolean;
+  // Auto-compaction state
+  isCompacting: boolean;
+  compactionReason: string | null;
 
   // Multi-session data storage - per-session state for background sessions
   sessionData: Record<string, SessionData>;
@@ -175,6 +178,9 @@ export const useSessionStore = create<SessionState>()(
       sessionCacheMeta: {},
       streamingSessions: {},
       isLoadingSessions: false,
+      // Auto-compaction state
+      isCompacting: false,
+      compactionReason: null,
       // Multi-session data storage
       sessionData: {},
 
@@ -887,11 +893,57 @@ export const useSessionStore = create<SessionState>()(
 
           case 'compaction_result': {
             const { tokensBefore } = msg as unknown as { summary: string; tokensBefore: number };
-            // Show toast notification
+            // Show toast notification and reset compaction state
+            set({ isCompacting: false, compactionReason: null });
             useUIStore.getState().addToast({
               type: 'success',
               message: `Context compacted successfully! ${tokensBefore} tokens summarized.`,
             });
+            break;
+          }
+
+          case 'auto_compaction_start': {
+            const { reason } = msg as unknown as { reason: string };
+            set({ isCompacting: true, compactionReason: reason });
+            useUIStore.getState().addToast({
+              type: 'info',
+              message: `Auto-compacting context: ${reason}`,
+            });
+            break;
+          }
+
+          case 'auto_compaction_end': {
+            const { aborted, willRetry, errorMessage } = msg as unknown as {
+              result: unknown;
+              aborted: boolean;
+              willRetry: boolean;
+              errorMessage?: string;
+            };
+            set({ isCompacting: false, compactionReason: null });
+            
+            if (aborted) {
+              if (willRetry) {
+                useUIStore.getState().addToast({
+                  type: 'info',
+                  message: 'Auto-compaction aborted, will retry...',
+                });
+              } else {
+                useUIStore.getState().addToast({
+                  type: 'warning',
+                  message: 'Auto-compaction aborted.',
+                });
+              }
+            } else if (errorMessage) {
+              useUIStore.getState().addToast({
+                type: 'error',
+                message: `Auto-compaction failed: ${errorMessage}`,
+              });
+            } else {
+              useUIStore.getState().addToast({
+                type: 'success',
+                message: 'Auto-compaction completed successfully.',
+              });
+            }
             break;
           }
 
@@ -1070,6 +1122,57 @@ export const useSessionStore = create<SessionState>()(
                     content,
                     toolResult: { output: content, isError },
                   });
+                }
+                break;
+              }
+              
+              case 'auto_compaction_start': {
+                const { reason } = event as unknown as { reason: string };
+                // Update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  set({ isCompacting: true, compactionReason: reason });
+                  useUIStore.getState().addToast({
+                    type: 'info',
+                    message: `Auto-compacting context: ${reason}`,
+                  });
+                }
+                break;
+              }
+              
+              case 'auto_compaction_end': {
+                const { aborted, willRetry, errorMessage } = event as unknown as {
+                  result: unknown;
+                  aborted: boolean;
+                  willRetry: boolean;
+                  errorMessage?: string;
+                };
+                // Update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  set({ isCompacting: false, compactionReason: null });
+                  
+                  if (aborted) {
+                    if (willRetry) {
+                      useUIStore.getState().addToast({
+                        type: 'info',
+                        message: 'Auto-compaction aborted, will retry...',
+                      });
+                    } else {
+                      useUIStore.getState().addToast({
+                        type: 'warning',
+                        message: 'Auto-compaction aborted.',
+                      });
+                    }
+                  } else if (errorMessage) {
+                    useUIStore.getState().addToast({
+                      type: 'error',
+                      message: `Auto-compaction failed: ${errorMessage}`,
+                    });
+                  } else {
+                    useUIStore.getState().addToast({
+                      type: 'success',
+                      message: 'Auto-compaction completed successfully.',
+                    });
+                  }
                 }
                 break;
               }

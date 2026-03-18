@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square } from 'lucide-react';
+import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles } from 'lucide-react';
 import { useChatStore, useSessionStore, useDraftStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
@@ -30,6 +30,8 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   const updateUploadedFile = useChatStore((state) => state.updateUploadedFile);
 
   const isStreaming = useSessionStore((state) => state.isStreaming);
+  const isCompacting = useSessionStore((state) => state.isCompacting);
+  const compactionReason = useSessionStore((state) => state.compactionReason);
   const currentModel = useSessionStore((state) => state.currentModel);
   const contextPercent = useSessionStore((state) => state.contextPercent);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
@@ -251,10 +253,21 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
       {/* Status strip */}
       <div className="flex items-center justify-between px-3 py-1.5 text-xs">
         <div className="flex items-center gap-1.5">
-          <span className={`w-1.5 h-1.5 rounded-full ${isStreaming ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
-          <span className="text-gray-500">
-            {isStreaming ? 'Thinking...' : 'Awaiting input'}
-          </span>
+          {isCompacting ? (
+            <>
+              <Sparkles className="w-3.5 h-3.5 text-violet-500 animate-pulse" />
+              <span className="text-violet-600">
+                {compactionReason || 'Compacting context...'}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className={`w-1.5 h-1.5 rounded-full ${isStreaming ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
+              <span className="text-gray-500">
+                {isStreaming ? 'Thinking...' : 'Awaiting input'}
+              </span>
+            </>
+          )}
         </div>
         {contextPercent > 0 && (
           <span className="text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full text-[11px]">
