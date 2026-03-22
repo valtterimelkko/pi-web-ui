@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog, ArrowUp } from 'lucide-react';
+import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog, ArrowUp, History, ChevronDown, ChevronUp, Star } from 'lucide-react';
 import { api } from '../../lib/api';
+import { useUIStore } from '../../store/uiStore';
 
 interface NewSessionModalProps {
   isOpen: boolean;
@@ -19,7 +20,12 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   const [directories, setDirectories] = useState<DirectoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showRecentFolders, setShowRecentFolders] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+  const recentDropdownRef = useRef<HTMLDivElement>(null);
+
+  const { recentFolders, addRecentFolder, getRecentFolders } = useUIStore();
+  const topRecentFolders = getRecentFolders(8);
 
   const fetchDirectories = async (path: string) => {
     setIsLoading(true);
@@ -54,8 +60,20 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   useEffect(() => {
     if (isOpen) {
       fetchDirectories('/root');
+      setShowRecentFolders(true);
     }
   }, [isOpen]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (recentDropdownRef.current && !recentDropdownRef.current.contains(event.target as Node)) {
+        // Don't close - let user toggle manually
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleNavigate = (dir: DirectoryItem) => {
     fetchDirectories(dir.path);
@@ -75,11 +93,25 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   };
 
   const handleSelectAndCreate = () => {
+    addRecentFolder(currentPath);
     onCreateSession(currentPath);
     onClose();
   };
 
   const handleQuickSelect = (path: string) => {
+    addRecentFolder(path);
+    onCreateSession(path);
+    onClose();
+  };
+
+  const handleRecentFolderSelect = (path: string) => {
+    addRecentFolder(path);
+    fetchDirectories(path);
+  };
+
+  const handleCreateInRecentFolder = (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    addRecentFolder(path);
     onCreateSession(path);
     onClose();
   };
@@ -102,7 +134,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
 
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" data-testid="new-session-modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="bg-white rounded-xl border border-gray-200 shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-xl w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <div>
@@ -116,6 +148,70 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
             <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
+
+        {/* Recent Folders Section */}
+        {recentFolders.length > 0 && (
+          <div className="border-b border-gray-200" ref={recentDropdownRef}>
+            <button
+              onClick={() => setShowRecentFolders(!showRecentFolders)}
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <History className="w-4 h-4 text-teal-600" />
+                <span className="text-sm font-medium text-gray-700">Recent Projects</span>
+                <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                  {recentFolders.length}
+                </span>
+              </div>
+              {showRecentFolders ? (
+                <ChevronUp className="w-4 h-4 text-gray-400" />
+              ) : (
+                <ChevronDown className="w-4 h-4 text-gray-400" />
+              )}
+            </button>
+            
+            {showRecentFolders && (
+              <div className="px-4 pb-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {topRecentFolders.map((folder, index) => (
+                    <div
+                      key={folder.path}
+                      className="group flex items-center gap-2 p-2 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg cursor-pointer transition-all"
+                      onClick={() => handleRecentFolderSelect(folder.path)}
+                    >
+                      <div className="flex-shrink-0 w-8 h-8 bg-teal-100 rounded-lg flex items-center justify-center">
+                        {index === 0 ? (
+                          <Star className="w-4 h-4 text-teal-600 fill-teal-600" />
+                        ) : (
+                          <Folder className="w-4 h-4 text-teal-600" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-700 truncate" title={folder.label}>
+                          {folder.label}
+                        </p>
+                        <p className="text-xs text-gray-400 truncate" title={folder.path}>
+                          {folder.path}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="text-xs text-gray-400 bg-gray-200 px-1.5 py-0.5 rounded">
+                          {folder.count}
+                        </span>
+                        <button
+                          onClick={(e) => handleCreateInRecentFolder(folder.path, e)}
+                          className="px-2 py-1 bg-teal-600 hover:bg-teal-700 text-white text-xs rounded transition-colors"
+                        >
+                          Create
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Quick Select */}
         <div className="p-4 border-b border-gray-200">
@@ -157,7 +253,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         </div>
 
         {/* Directory Browser */}
-        <div className="flex-1 overflow-hidden flex flex-col">
+        <div className="flex-1 overflow-hidden flex flex-col min-h-[200px]">
           {/* Breadcrumb */}
           <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-2">
             <Folder className="w-4 h-4 text-teal-600" />
