@@ -181,18 +181,52 @@ npm test
 - Store: `client/src/store/sessionStore.ts`
 - Display: `client/src/components/Tools/`
 
+### Debugging Slash Commands
+
+**Pattern:** Slash commands (`/command`) and natural language requests for the same feature may behave differently.
+
+**Key Insight:** The Pi SDK processes slash commands by injecting content directly into the session as **user messages** (not tool calls). This means:
+1. Natural language: "Use the X skill to..." → triggers `read` tool → clean tool card display
+2. Slash command: `/skill:X do...` → injects skill content as user message → raw content displayed
+
+**When Filtering/Processing Content:**
+- Check **all message roles** (user, assistant, tool) - not just assistant messages
+- Check the **session file** (JSONL) to see how content is actually stored
+- Check **multiple data paths**: streaming events, session loading, and session list previews
+
+**Diagnostic Steps:**
+```bash
+# Check how content is stored in session file
+cat ~/.pi/agent/sessions/--path--/*.jsonl | head -10
+
+# Look for injected content patterns:
+# - <skill name="..."> tags (slash command injection)
+# - Raw markdown content
+# - User messages that aren't actual user input
+```
+
+**Code Locations:**
+- Session loading: `server/src/websocket/connection.ts` (`loadSessionMessages`)
+- Session watcher: `server/src/pi/session-watcher.ts` (firstMessage extraction)
+- Event filtering: `server/src/pi/multi-session-manager.ts`
+- Client display: `client/src/components/Chat/VirtualizedMessageList.tsx`
+
 ## UI Message Filtering & Tool Display
 
 **Important:** Not all messages from the Pi SDK are displayed in the chat UI. The `VirtualizedMessageList` component filters messages to maintain a clean interface:
 
-**Filtering Logic** (`client/src/components/Chat/VirtualizedMessageList.tsx`, lines 129-135):
-- ✅ **User messages** - Always shown
-- ✅ **Assistant messages** - Always shown  
+**Filtering Logic** (`client/src/components/Chat/VirtualizedMessageList.tsx`):
+- ✅ **User messages** - Shown (except slash command injected content)
+- ✅ **Assistant messages** - Shown (except raw skill content)  
 - ✅ **Subagent tools** - Shown with hierarchical display (CLI-style)
-- ❌ **Other tool messages** (read, edit, bash, web_search, etc.) - Hidden to reduce clutter
+- ✅ **Read tools** - Shown (for skill-loading visibility)
+- ❌ **Other tool messages** (edit, bash, web_search, etc.) - Hidden to reduce clutter
 - ❌ **toolResult messages** - Hidden (contains raw tool output)
+- ❌ **Skill injection content** - Hidden (from `/skill:name` slash commands)
 
 **Why?** The agent's text narrative summarizes tool results, so showing every tool call creates visual clutter. However, subagent tools are an exception - they show a hierarchical view of what subagents did internally.
+
+**Note on Slash Commands:** `/command` syntax may inject raw content as user messages. Filter these by checking for content patterns (e.g., `<skill name="...">`, `SKILL.md`) in the message content.
 
 **To Add a New Visible Tool Type:**
 1. Modify the filter in `VirtualizedMessageList.tsx`
