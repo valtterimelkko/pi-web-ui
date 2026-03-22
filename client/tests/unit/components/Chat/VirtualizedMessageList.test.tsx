@@ -109,28 +109,52 @@ describe('VirtualizedMessageList', () => {
     expect(screen.getByTestId('message-bubble-1')).toBeInTheDocument();
   });
 
-  it('filters out tool messages from visible list', () => {
-    const toolMessage: Message = {
+  it('filters out non-read tool messages from visible list', () => {
+    const bashToolMessage: Message = {
       id: 'tool-1',
       role: 'tool',
       content: '',
       timestamp: 1000,
       toolCall: {
         id: 'call-1',
-        name: 'read',
-        args: { path: '/test' },
+        name: 'bash',
+        args: { command: 'ls -la' },
       },
       toolResult: {
-        output: 'File content',
+        output: 'total 0',
         isError: false,
       },
     };
     
-    // Tool messages should be filtered out (matches server history behavior)
-    render(<VirtualizedMessageList messages={[toolMessage]} isStreaming={false} />);
+    // Non-read tool messages should be filtered out
+    render(<VirtualizedMessageList messages={[bashToolMessage]} isStreaming={false} />);
     
-    // Should show empty state since the only message is a tool message
+    // Should show empty state since the only message is a non-read tool message
     expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
+  });
+
+  it('shows read tool messages for skill-loading visibility', () => {
+    const readToolMessage: Message = {
+      id: 'read-1',
+      role: 'tool',
+      content: '',
+      timestamp: 1000,
+      toolCall: {
+        id: 'call-1',
+        name: 'read',
+        args: { path: '/root/.claude/skills/lecture-website/SKILL.md' },
+      },
+      toolResult: {
+        output: 'Skill file content here',
+        isError: false,
+      },
+    };
+    
+    // Read tool messages should be visible (for skill-loading visibility like Kimi)
+    render(<VirtualizedMessageList messages={[readToolMessage]} isStreaming={false} />);
+    
+    // Should show the read tool message (not empty state)
+    expect(screen.getByTestId('message-bubble-read-1')).toBeInTheDocument();
   });
 
   it('shows subagent tool messages (unlike other tool messages)', () => {

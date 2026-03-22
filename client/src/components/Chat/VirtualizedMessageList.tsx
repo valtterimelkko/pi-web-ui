@@ -127,11 +127,13 @@ export const VirtualizedMessageList = forwardRef<
   // massive raw content (web pages, search results); filtering those out keeps
   // the streaming view clean and consistent with the history/reload view.
   // EXCEPTION: subagent tool calls are shown with hierarchical display like CLI.
+  // EXCEPTION: read tool calls are shown for skill-loading visibility (clean Kimi-style)
   const visibleMessages = useMemo(() =>
     messages.filter(m => 
       m.role === 'user' || 
       m.role === 'assistant' ||
-      (m.role === 'tool' && m.toolCall?.name === 'subagent')
+      (m.role === 'tool' && m.toolCall?.name === 'subagent') ||
+      (m.role === 'tool' && m.toolCall?.name === 'read')
     ),
     [messages]
   );
