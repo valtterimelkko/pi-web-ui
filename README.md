@@ -229,6 +229,46 @@ Search and fetch web content directly from the chat.
 - Private IP blocking for security
 - Truncation for large content (50KB/2000 lines)
 
+### 5. Parallel Orchestrator (Experimental)
+
+Verdent-like parallel agent orchestration using git worktrees for isolated development.
+
+**Slash Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/worktrees` | List all git worktrees with status |
+| `/orchestrate <plan-file>` | Start orchestration from a modular plan |
+| `/merge <worktree-id>` | Merge a worktree's changes |
+| `/abort-worktree <id>` | Abort and cleanup a worktree |
+
+**Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `worktree` | Manage git worktrees (create/list/delete/status) |
+| `orchestrate` | Start orchestration from a plan file |
+| `merge_worktree` | Merge worktree branch with merge/squash/rebase |
+
+**Features:**
+- Git worktree isolation for parallel development
+- Plan parsing with dependency analysis
+- Parallel task identification
+- Multiple merge strategies
+- Worktree status tracking
+
+**Usage:**
+```bash
+# List worktrees
+/worktrees
+
+# Start orchestration from a plan
+/orchestrate path/to/plan.md
+
+# Merge completed work
+/merge wt-abc123
+```
+
 ## Development Environment
 
 ### VNC Environment with Google Chrome

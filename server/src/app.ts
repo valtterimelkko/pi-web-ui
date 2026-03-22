@@ -9,6 +9,7 @@ import modelsRoutes from './routes/models.js';
 import filesRoutes from './routes/files.js';
 import extensionsRoutes from './routes/extensions.js';
 import preferencesRoutes from './routes/preferences.js';
+import worktreesRoutes from './routes/worktrees.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -67,6 +68,9 @@ export function createApp(): express.Application {
 
   // Web UI preferences (archive state, etc.)
   app.use('/api/preferences', preferencesRoutes);
+
+  // Parallel orchestration worktrees
+  app.use('/api/worktrees', worktreesRoutes);
 
   // Serve static files from client/dist in production
   if (config.nodeEnv === 'production') {
