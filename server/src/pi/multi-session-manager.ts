@@ -285,12 +285,38 @@ export class MultiSessionManager {
   }
 
   /**
+   * Check if an event contains skill content that should be filtered.
+   */
+  private isSkillContentEvent(event: any): boolean {
+    if (event.type !== 'message_start' || !event.message) return false;
+    
+    const content = event.message.content;
+    if (!Array.isArray(content)) return false;
+    
+    const contentText = content.map((c: {text?: string}) => c.text || '').join('');
+    
+    // Check for skill content indicators
+    return contentText.includes('<skill name="') || 
+           contentText.includes('</skill>') ||
+           (contentText.includes('SKILL.md') && contentText.includes('## Process')) ||
+           contentText.startsWith('# Lecture Website Builder') ||
+           contentText.startsWith('# Skill:') ||
+           (contentText.includes('### Skill Purpose') && contentText.includes('### Workflow'));
+  }
+
+  /**
    * Handle an agent event for a session.
    * Wraps the event in a session_event envelope with sessionId for proper routing.
    */
   handleAgentEvent(sessionPath: string, event: any): void {
     const activeSession = this.sessions.get(sessionPath);
     if (!activeSession) {
+      return;
+    }
+
+    // Filter skill content messages
+    if (this.isSkillContentEvent(event)) {
+      console.log('[MultiSessionManager] Filtering skill content event for session:', sessionPath);
       return;
     }
 

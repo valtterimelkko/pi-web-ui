@@ -96,8 +96,17 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
     return then.toLocaleDateString();
   };
 
+  // Filter skill content from session preview (for old sessions created before server fix)
+  const isSkillContent = (text: string): boolean => {
+    return text.includes('<skill name="') ||
+           text.includes('</skill>') ||
+           text.includes('SKILL.md');
+  };
+
   // Get display name (web UI custom name > session name > first message)
-  const displayName = webUIDisplayName || session.name || session.firstMessage || 'New session';
+  // Filter out skill content for clean session previews
+  const rawName = webUIDisplayName || session.name || session.firstMessage || 'New session';
+  const displayName = isSkillContent(rawName) ? 'New session' : rawName;
 
   return (
     <div

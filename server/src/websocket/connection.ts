@@ -583,12 +583,13 @@ export class WebSocketConnectionManager {
           const contentText = Array.isArray(transformedContent) 
             ? transformedContent.map(c => c.text || '').join('')
             : '';
-          const isSkillContent = contentText.includes('<skill name="') || 
-                                 contentText.includes('</skill>') ||
-                                 contentText.includes('SKILL.md') ||
-                                 contentText.startsWith('# Lecture Website Builder');
+          const hasSkillTag = contentText.includes('<skill name="');
+          const hasCloseTag = contentText.includes('</skill>');
+          const hasSkillMd = contentText.includes('SKILL.md');
+          const hasLectureHeader = contentText.includes('# Lecture Website Builder');
           
-          if (isSkillContent) {
+          if (hasSkillTag || hasCloseTag || hasSkillMd || hasLectureHeader) {
+            console.log(`[loadSessionMessages] Filtering skill content: tag=${hasSkillTag}, close=${hasCloseTag}, md=${hasSkillMd}, header=${hasLectureHeader}`);
             continue; // Skip skill content messages
           }
 

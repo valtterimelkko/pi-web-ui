@@ -182,6 +182,13 @@ export class SessionWatcher extends EventEmitter {
     let createdAt: Date | null = null;
     let lastActivity: Date | null = null;
 
+    // Helper to check if content contains skill content
+    const isSkillContent = (text: string): boolean => {
+      return text.includes('<skill name="') ||
+             text.includes('</skill>') ||
+             text.includes('SKILL.md');
+    };
+
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
@@ -190,17 +197,26 @@ export class SessionWatcher extends EventEmitter {
         if (entry.type === 'message') {
           messageCount++;
           
-          // Extract first user message
+          // Extract first non-skill user message (skip /skill:name command content)
           if (!firstMessage && entry.message?.role === 'user') {
             const content = entry.message.content;
+            let extractedText = '';
+            
             if (typeof content === 'string') {
-              firstMessage = content.slice(0, 100);
+              extractedText = content.slice(0, 200);
             } else if (Array.isArray(content)) {
               const textPart = content.find((p: { type?: string }) => p.type === 'text');
               if (textPart?.text) {
-                firstMessage = textPart.text.slice(0, 100);
+                extractedText = textPart.text.slice(0, 200);
               }
             }
+            
+            // Only use this message if it's not skill content
+            // Skill content messages are injected by /skill:name commands
+            if (extractedText && !isSkillContent(extractedText)) {
+              firstMessage = extractedText.slice(0, 100);
+            }
+            // If it IS skill content, continue looking for the next user message
           }
         }
 

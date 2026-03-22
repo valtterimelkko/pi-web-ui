@@ -101,18 +101,19 @@ function isSkillContentMessage(message: Message): boolean {
   const trimmed = content.trim();
   
   // Skill content indicators (XML format from SDK):
-  // 1. Contains <skill name="..."> opening tag
-  // 2. Contains </skill> closing tag  
+  // 1. Contains <skill name="..."> opening tag (or HTML-escaped version)
+  // 2. Contains </skill> closing tag (or HTML-escaped version)
   // 3. Contains SKILL.md reference
-  const hasSkillOpenTag = trimmed.includes('<skill name="');
-  const hasSkillCloseTag = trimmed.includes('</skill>');
+  const hasSkillOpenTag = trimmed.includes('<skill name="') || trimmed.includes('&lt;skill name="');
+  const hasSkillCloseTag = trimmed.includes('</skill>') || trimmed.includes('&lt;/skill&gt;');
   const hasSkillMd = trimmed.includes('SKILL.md');
   
   // Skill content indicators (Markdown format after processing):
   // These indicate the skill file was injected and rendered as markdown
   const hasSkillHeader = trimmed.startsWith('# Lecture Website Builder') ||
                          trimmed.startsWith('## Process') ||
-                         trimmed.includes('\n# Lecture Website Builder\n');
+                         trimmed.includes('\n# Lecture Website Builder\n') ||
+                         trimmed.includes('\n## Process\n');
   const hasSkillSections = trimmed.includes('## Process') || 
                            trimmed.includes('Phase 1:') ||
                            trimmed.includes('Quick Start') ||
@@ -170,9 +171,10 @@ export const VirtualizedMessageList = forwardRef<
   // EXCEPTION: read tool calls are shown for skill-loading visibility (clean Kimi-style)
   // EXCEPTION: Filter out skill content messages (from /skill:name commands) to avoid
   // displaying massive skill file content in chat - show clean Read tool card instead
+  // NOTE: User messages with skill content are also filtered (from /skill:name slash commands)
   const visibleMessages = useMemo(() =>
     messages.filter(m => 
-      m.role === 'user' || 
+      (m.role === 'user' && !isSkillContentMessage(m)) || 
       (m.role === 'assistant' && !isSkillContentMessage(m)) ||
       (m.role === 'tool' && m.toolCall?.name === 'subagent') ||
       (m.role === 'tool' && m.toolCall?.name === 'read')

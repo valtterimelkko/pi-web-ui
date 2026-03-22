@@ -48,11 +48,22 @@ export class EventForwarder {
       this.sessionPool?.setStreaming(clientId, false);
     }
 
+    // Debug: Log all message_start events
+    if (event.type === 'message_start') {
+      const content = (event.message as {content?: Array<{type?: string; text?: string}>})?.content;
+      const contentText = content?.map(c => c.text || '').join('') || '';
+      console.log(`[EventForwarder] message_start event, content length: ${contentText.length}, preview: ${contentText.substring(0, 50)}...`);
+      if (contentText.includes('skill') || contentText.includes('SKILL')) {
+        console.log(`[EventForwarder] SKILL content detected in message_start, content preview: ${contentText.substring(0, 200)}`);
+      }
+    }
+
     // Map Pi SDK event to WebSocket message format
     const message = this.mapEventToMessage(event);
 
     // Skip filtered messages (e.g., skill content)
     if (message === null) {
+      console.log(`[EventForwarder] Message filtered (null), event type: ${event.type}`);
       return;
     }
 
@@ -85,10 +96,18 @@ export class EventForwarder {
     }
     
     // Check for skill content indicators
-    return contentText.includes('<skill name="') || 
-           contentText.includes('</skill>') ||
-           contentText.includes('SKILL.md') ||
-           contentText.startsWith('# Lecture Website Builder');
+    const hasSkillTag = contentText.includes('<skill name="');
+    const hasCloseTag = contentText.includes('</skill>');
+    const hasSkillMd = contentText.includes('SKILL.md');
+    const hasLectureHeader = contentText.includes('# Lecture Website Builder');
+    
+    if (hasSkillTag || hasCloseTag || hasSkillMd || hasLectureHeader) {
+      console.log(`[EventForwarder] Detected skill content: tag=${hasSkillTag}, close=${hasCloseTag}, md=${hasSkillMd}, header=${hasLectureHeader}`);
+      console.log(`[EventForwarder] Content preview: ${contentText.substring(0, 100)}...`);
+      return true;
+    }
+    
+    return false;
   }
 
   private mapEventToMessage(event: AgentSessionEvent): ForwardedEvent | null {
