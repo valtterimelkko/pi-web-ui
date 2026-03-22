@@ -232,6 +232,45 @@ describe('VirtualizedMessageList', () => {
     expect(screen.queryByTestId('message-bubble-toolresult-1')).not.toBeInTheDocument();
   });
 
+  it('filters out skill content messages from /skill:name commands', () => {
+    // When using /skill:name command, the Pi SDK injects skill content as assistant message
+    const skillContentMessage: Message = {
+      id: 'skill-1',
+      role: 'assistant',
+      content: '<skill name="lecture-website" location="/root/.pi/agent/skills/lecture-website/SKILL.md">\n# Lecture Website Builder\n\nTransform a simple idea...',
+      timestamp: 1000,
+    };
+    
+    // Skill content messages should be filtered out (messy raw content)
+    render(<VirtualizedMessageList messages={[skillContentMessage]} isStreaming={false} />);
+    
+    // Should show empty state since the skill content message is filtered
+    expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
+    // The skill content message should NOT be visible
+    expect(screen.queryByTestId('message-bubble-skill-1')).not.toBeInTheDocument();
+  });
+
+  it('shows regular assistant messages but filters skill content messages', () => {
+    const mixedMessages: Message[] = [
+      { id: '1', role: 'user', content: '/skill:lecture-website create a pinterest copy', timestamp: 1000 },
+      { 
+        id: '2', 
+        role: 'assistant', 
+        content: '<skill name="lecture-website" location="/root/.pi/agent/skills/lecture-website/SKILL.md">\n# Lecture Website Builder',
+        timestamp: 2000 
+      },
+      { id: '3', role: 'assistant', content: 'I\'ll create a Pinterest copy for you!', timestamp: 3000 },
+    ];
+    
+    render(<VirtualizedMessageList messages={mixedMessages} isStreaming={false} />);
+    
+    // User message and normal assistant message should be visible
+    expect(screen.getByTestId('message-bubble-1')).toBeInTheDocument();
+    expect(screen.getByTestId('message-bubble-3')).toBeInTheDocument();
+    // Skill content message should NOT be visible
+    expect(screen.queryByTestId('message-bubble-2')).not.toBeInTheDocument();
+  });
+
   it('exposes scrollToIndex method via ref', () => {
     const ref = React.createRef<{ scrollToIndex: (index: number, behavior?: 'auto' | 'smooth') => void; scrollToBottom: () => void }>();
     render(<VirtualizedMessageList {...defaultProps} ref={ref} />);

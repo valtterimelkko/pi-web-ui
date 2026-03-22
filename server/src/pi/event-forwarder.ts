@@ -51,6 +51,11 @@ export class EventForwarder {
     // Map Pi SDK event to WebSocket message format
     const message = this.mapEventToMessage(event);
 
+    // Skip filtered messages (e.g., skill content)
+    if (message === null) {
+      return;
+    }
+
     // Wrap in session envelope if sessionId is provided (multi-session routing)
     const payload = sessionId
       ? { type: 'session_event' as const, sessionId, event: message }
@@ -63,11 +68,40 @@ export class EventForwarder {
     return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
-  private mapEventToMessage(event: AgentSessionEvent): ForwardedEvent {
+  // Check if message content is raw skill content that should be filtered
+  private isSkillContentMessage(message: unknown): boolean {
+    if (typeof message !== 'object' || message === null) return false;
+    
+    const msg = message as { role?: string; content?: unknown };
+    if (msg.role !== 'assistant') return false;
+    
+    // Extract text content
+    let contentText = '';
+    if (Array.isArray(msg.content)) {
+      contentText = msg.content
+        .filter((c: { type?: string; text?: string }) => c.type === 'text')
+        .map((c: { text?: string }) => c.text || '')
+        .join('');
+    }
+    
+    // Check for skill content indicators
+    return contentText.includes('<skill name="') || 
+           contentText.includes('</skill>') ||
+           contentText.includes('SKILL.md') ||
+           contentText.startsWith('# Lecture Website Builder');
+  }
+
+  private mapEventToMessage(event: AgentSessionEvent): ForwardedEvent | null {
     // Base message structure
     const base = {
       timestamp: Date.now(),
     };
+
+    // Filter out skill content messages at the event level
+    if (event.type === 'message_start' && this.isSkillContentMessage(event.message)) {
+      console.log('[EventForwarder] Filtering skill content message');
+      return null; // Skip skill content messages
+    }
 
     switch (event.type) {
       case 'agent_start':

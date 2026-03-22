@@ -578,6 +578,20 @@ export class WebSocketConnectionManager {
             transformedContent = '';
           }
 
+          // Check if this is a skill content message (from /skill:name commands)
+          // These messages contain raw skill file content that should be filtered
+          const contentText = Array.isArray(transformedContent) 
+            ? transformedContent.map(c => c.text || '').join('')
+            : '';
+          const isSkillContent = contentText.includes('<skill name="') || 
+                                 contentText.includes('</skill>') ||
+                                 contentText.includes('SKILL.md') ||
+                                 contentText.startsWith('# Lecture Website Builder');
+          
+          if (isSkillContent) {
+            continue; // Skip skill content messages
+          }
+
           messages.push({
             id: (entry.id as string) || `msg_${timestamp || Date.now()}`,
             role: role as 'user' | 'assistant',

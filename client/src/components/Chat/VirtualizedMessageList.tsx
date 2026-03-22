@@ -87,6 +87,46 @@ function EmptyState({ hasSession, onCreateSession }: { hasSession: boolean; onCr
   );
 }
 
+// Detect if message content is raw skill file content (injected by /skill:name commands)
+// These messages contain <skill name="..."> tags or markdown skill content
+function isSkillContentMessage(message: Message): boolean {
+  if (message.role !== 'assistant') return false;
+  
+  const content = typeof message.content === 'string' 
+    ? message.content 
+    : Array.isArray(message.content) 
+      ? message.content.map(c => c.text || '').join('')
+      : '';
+  
+  const trimmed = content.trim();
+  
+  // Skill content indicators (XML format from SDK):
+  // 1. Contains <skill name="..."> opening tag
+  // 2. Contains </skill> closing tag  
+  // 3. Contains SKILL.md reference
+  const hasSkillOpenTag = trimmed.includes('<skill name="');
+  const hasSkillCloseTag = trimmed.includes('</skill>');
+  const hasSkillMd = trimmed.includes('SKILL.md');
+  
+  // Skill content indicators (Markdown format after processing):
+  // These indicate the skill file was injected and rendered as markdown
+  const hasSkillHeader = trimmed.startsWith('# Lecture Website Builder') ||
+                         trimmed.startsWith('## Process') ||
+                         trimmed.includes('\n# Lecture Website Builder\n');
+  const hasSkillSections = trimmed.includes('## Process') || 
+                           trimmed.includes('Phase 1:') ||
+                           trimmed.includes('Quick Start') ||
+                           trimmed.includes('Detailed Workflow');
+  const hasSkillPath = trimmed.includes('/.pi/agent/skills/') && trimmed.includes('SKILL.md');
+  
+  // Filter if it has skill tags, skill path reference, or looks like rendered skill content
+  return hasSkillOpenTag || 
+         hasSkillCloseTag || 
+         hasSkillMd ||
+         hasSkillHeader ||
+         (hasSkillPath && hasSkillSections);
+}
+
 // Memoized message item component for performance
 const MessageItem = React.memo(function MessageItem({
   message,
@@ -128,10 +168,12 @@ export const VirtualizedMessageList = forwardRef<
   // the streaming view clean and consistent with the history/reload view.
   // EXCEPTION: subagent tool calls are shown with hierarchical display like CLI.
   // EXCEPTION: read tool calls are shown for skill-loading visibility (clean Kimi-style)
+  // EXCEPTION: Filter out skill content messages (from /skill:name commands) to avoid
+  // displaying massive skill file content in chat - show clean Read tool card instead
   const visibleMessages = useMemo(() =>
     messages.filter(m => 
       m.role === 'user' || 
-      m.role === 'assistant' ||
+      (m.role === 'assistant' && !isSkillContentMessage(m)) ||
       (m.role === 'tool' && m.toolCall?.name === 'subagent') ||
       (m.role === 'tool' && m.toolCall?.name === 'read')
     ),
