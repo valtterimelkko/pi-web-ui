@@ -892,9 +892,32 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'compaction_result': {
-            const { tokensBefore } = msg as unknown as { summary: string; tokensBefore: number };
-            // Show toast notification and reset compaction state
-            set({ isCompacting: false, compactionReason: null });
+            const { tokensBefore, contextWindow, contextUsed, contextPercent } = msg as unknown as { 
+              summary: string; 
+              tokensBefore: number;
+              contextWindow?: number;
+              contextUsed?: number;
+              contextPercent?: number;
+            };
+            // Show toast notification, reset compaction state, and update context indicators
+            set({ 
+              isCompacting: false, 
+              compactionReason: null,
+              contextWindow: contextWindow ?? get().contextWindow,
+              contextUsed: contextUsed ?? get().contextUsed,
+              contextPercent: contextPercent ?? get().contextPercent,
+            });
+            // Also update sessionInfo if it exists to keep it in sync
+            if (get().sessionInfo) {
+              set({
+                sessionInfo: {
+                  ...get().sessionInfo!,
+                  contextWindow: contextWindow ?? get().sessionInfo!.contextWindow,
+                  contextUsed: contextUsed ?? get().sessionInfo!.contextUsed,
+                  contextPercent: contextPercent ?? get().sessionInfo!.contextPercent,
+                }
+              });
+            }
             useUIStore.getState().addToast({
               type: 'success',
               message: `Context compacted successfully! ${tokensBefore} tokens summarized.`,

@@ -804,10 +804,16 @@ export class WebSocketConnectionManager {
 
     const result = await agentSession.compact(message.customInstructions);
 
+    // Get updated context usage after compaction
+    const contextUsage = agentSession.getContextUsage();
+
     this.sendMessage(clientId, {
       type: 'compaction_result',
       summary: result.summary,
       tokensBefore: result.tokensBefore,
+      contextWindow: contextUsage?.contextWindow ?? undefined,
+      contextUsed: contextUsage?.tokens ?? undefined,
+      contextPercent: contextUsage?.percent ?? undefined,
     });
   }
 
