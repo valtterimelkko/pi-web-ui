@@ -111,6 +111,32 @@ npm test
 - Handlers: `server/src/websocket/handlers.ts`
 - Client: `client/src/lib/websocket.ts`
 
+### Debugging Deployment / Configuration
+
+**Health Endpoints:**
+```bash
+# Liveness (is server running?)
+curl http://localhost:3456/api/health/live
+
+# Readiness (is server ready for traffic?)
+curl http://localhost:3456/api/health/ready
+```
+
+**Config Validation:**
+```bash
+# Check for missing/invalid configuration
+curl http://localhost:3456/api/config/validate
+```
+
+The config validation endpoint checks:
+- JWT_SECRET, CSRF_SECRET, AUTH_PASSWORD presence and format
+- ALLOWED_ORIGINS for localhost in production
+- Rate limiting configuration
+
+**Code Locations:**
+- Health: `server/src/routes/health.ts`
+- Config: `server/src/routes/config.ts`
+
 ### Debugging Authentication
 
 **Symptoms:** 401 errors, redirect to login
@@ -377,7 +403,6 @@ npm test -- --watch
 
 - [ ] Keyboard shortcuts (Cmd+K for command palette)
 - [ ] Message search
-- [ ] Export to PDF/markdown
 - [ ] Theme customization
 - [ ] Collaborative sessions
 

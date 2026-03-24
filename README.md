@@ -102,8 +102,14 @@ Major performance improvements based on Kimi Web UI benchmark:
 ### Session Management Features (March 2026)
 - **Session Archiving**: Mark sessions as archived, syncs across devices
 - **Session Renaming**: Display names with server-side persistence
+- **Session Export**: Export sessions in Markdown, JSON, or HTML formats
 - **Context Window Fix**: Fixed percentage mismatch between CLI and Web UI
 - **File Upload Sanitization**: URL-encoded filenames decoded, spaces replaced with underscores
+
+### Infrastructure Features (March 2026)
+- **Health Endpoints**: `/api/health/live` and `/api/health/ready` for K8s/Docker orchestration
+- **Config Validation**: `/api/config/validate` endpoint for troubleshooting configuration
+- **Token Usage Tracking**: Per-session token/cost tracking with historical dashboard
 
 ### Model Support (March 2026)
 - **Antigravity Models**: Google Antigravity provider with distinct indigo/purple styling
@@ -493,6 +499,11 @@ Fetch and summarize https://example.com/docs
 - Click 🗑️ icon
 - Confirm deletion (cannot be undone)
 
+**Exporting Sessions**
+- Hover session in sidebar
+- Click ⬇️ (download) icon
+- Choose format: Markdown (.md), JSON (.json), or HTML (.html)
+
 ### File Operations
 
 **File Browser**
@@ -735,7 +746,24 @@ sudo lsof -i :3456
 
 # Verify environment variables
 cat /root/pi-web-ui/.env.production
+
+# Validate configuration via API
+curl http://localhost:3456/api/config/validate
 ```
+
+**Health check endpoints (for K8s/Docker):**
+```bash
+# Liveness probe - is server running?
+curl http://localhost:3456/api/health/live
+
+# Readiness probe - is server ready for traffic?
+curl http://localhost:3456/api/health/ready
+```
+
+The readiness probe checks:
+- Pi agent directory accessibility
+- Required environment variables in production
+- Memory usage (warns if > 90% heap)
 
 **WebSocket connection issues:**
 - Check Caddy logs: `docker logs n8n-docker-caddy-caddy-1`
