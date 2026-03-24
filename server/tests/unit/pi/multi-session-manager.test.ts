@@ -144,11 +144,8 @@ describe('MultiSessionManager', () => {
       expect(manager).toBeDefined();
     });
 
-    it('should accept optional cleanup interval configuration', () => {
-      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast, {
-        cleanupIntervalMs: 60000,
-        sessionTimeoutMs: 300000,
-      });
+    it('should accept options (for future extensibility)', () => {
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast, {});
       expect(manager).toBeDefined();
     });
   });
@@ -546,7 +543,7 @@ describe('MultiSessionManager', () => {
   });
 
   describe('cleanupInactiveSessions', () => {
-    it('should remove sessions with no subscribers and idle', async () => {
+    it('should NOT remove sessions that are idle (sessions persist indefinitely)', async () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
 
@@ -554,12 +551,12 @@ describe('MultiSessionManager', () => {
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
       
-      // Run cleanup with 0 max age (immediate cleanup)
-      manager.cleanupInactiveSessions(0);
+      // Run cleanup - should NOT remove idle sessions
+      manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
-      expect(status).toBeUndefined();
-      expect(mockSession.dispose).toHaveBeenCalled();
+      expect(status).toBeDefined();
+      expect(mockSession.dispose).not.toHaveBeenCalled();
     });
 
     it('should not remove sessions with subscribers', async () => {
@@ -569,7 +566,7 @@ describe('MultiSessionManager', () => {
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       
-      manager.cleanupInactiveSessions(0);
+      manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeDefined();
@@ -585,7 +582,7 @@ describe('MultiSessionManager', () => {
       manager.updateSessionStatus('/path/to/session.jsonl', 'busy');
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
       
-      manager.cleanupInactiveSessions(0);
+      manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeDefined();
@@ -601,53 +598,45 @@ describe('MultiSessionManager', () => {
       manager.updateSessionStatus('/path/to/session.jsonl', 'streaming');
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
       
-      manager.cleanupInactiveSessions(0);
+      manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeDefined();
       expect(mockSession.dispose).not.toHaveBeenCalled();
     });
 
-    it('should respect maxAge parameter', async () => {
+    it('should remove sessions that are in error state with no subscribers', async () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
 
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+      manager.updateSessionStatus('/path/to/session.jsonl', 'error');
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
       
-      // Cleanup with 1 hour maxAge - should NOT remove recent session
-      manager.cleanupInactiveSessions(60 * 60 * 1000);
-      
-      const status = manager.getSessionStatus('/path/to/session.jsonl');
-      expect(status).toBeDefined();
-      expect(mockSession.dispose).not.toHaveBeenCalled();
-    });
-
-    it('should remove old sessions that exceed maxAge', async () => {
-      vi.useFakeTimers();
-      
-      const mockSession = createMockAgentSession();
-      mockPiService.createSession.mockResolvedValueOnce(mockSession);
-
-      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
-      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
-      manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
-      
-      // Advance time by 31 minutes
-      vi.advanceTimersByTime(31 * 60 * 1000);
-      
-      // Cleanup with 30 minute maxAge - should remove the session
-      manager.cleanupInactiveSessions(30 * 60 * 1000);
+      manager.cleanupInactiveSessions();
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeUndefined();
       expect(mockSession.dispose).toHaveBeenCalled();
-      
-      vi.useRealTimers();
     });
 
-    it('should log cleanup actions', async () => {
+    it('should NOT remove error sessions that still have subscribers', async () => {
+      const mockSession = createMockAgentSession();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+      manager.updateSessionStatus('/path/to/session.jsonl', 'error');
+      
+      manager.cleanupInactiveSessions();
+      
+      const status = manager.getSessionStatus('/path/to/session.jsonl');
+      expect(status).toBeDefined();
+      expect(mockSession.dispose).not.toHaveBeenCalled();
+    });
+
+    it('should log cleanup actions for errored sessions', async () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
 
@@ -655,34 +644,117 @@ describe('MultiSessionManager', () => {
 
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+      manager.updateSessionStatus('/path/to/session.jsonl', 'error');
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
       
-      manager.cleanupInactiveSessions(0);
+      manager.cleanupInactiveSessions();
       
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining('[MultiSessionManager]'),
-        expect.stringContaining('Cleaning up inactive session')
+        expect.stringContaining('errored session')
       );
       
       consoleSpy.mockRestore();
     });
 
-    it('should return count of cleaned up sessions', async () => {
+    it('should return count of cleaned up sessions (only errored ones)', async () => {
       const mockSession1 = createMockAgentSession({ sessionPath: '/path/1.jsonl' });
       const mockSession2 = createMockAgentSession({ sessionPath: '/path/2.jsonl' });
+      const mockSession3 = createMockAgentSession({ sessionPath: '/path/3.jsonl' });
       mockPiService.createSession
         .mockResolvedValueOnce(mockSession1)
-        .mockResolvedValueOnce(mockSession2);
+        .mockResolvedValueOnce(mockSession2)
+        .mockResolvedValueOnce(mockSession3);
 
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/1.jsonl');
       await manager.subscribeClient('client-2', '/path/2.jsonl');
+      await manager.subscribeClient('client-3', '/path/3.jsonl');
+      
+      // Set session 1 and 2 to error, leave session 3 as idle
+      manager.updateSessionStatus('/path/1.jsonl', 'error');
+      manager.updateSessionStatus('/path/2.jsonl', 'error');
+      
       manager.unsubscribeClient('client-1', '/path/1.jsonl');
       manager.unsubscribeClient('client-2', '/path/2.jsonl');
+      manager.unsubscribeClient('client-3', '/path/3.jsonl');
       
-      const cleanedCount = manager.cleanupInactiveSessions(0);
+      const cleanedCount = manager.cleanupInactiveSessions();
       
+      // Only the 2 errored sessions should be cleaned up
       expect(cleanedCount).toBe(2);
+      
+      // Session 3 (idle) should still exist
+      expect(manager.getSessionStatus('/path/3.jsonl')).toBeDefined();
+    });
+  });
+
+  describe('stopSession', () => {
+    it('should stop and dispose a session', async () => {
+      const mockSession = createMockAgentSession();
+      mockSession.abort = vi.fn();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+      
+      const result = manager.stopSession('/path/to/session.jsonl');
+      
+      expect(result).toBe(true);
+      expect(mockSession.abort).toHaveBeenCalled();
+      expect(mockSession.dispose).toHaveBeenCalled();
+      expect(manager.getSessionStatus('/path/to/session.jsonl')).toBeUndefined();
+    });
+
+    it('should return false for non-existent session', () => {
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      
+      const result = manager.stopSession('/non/existent.jsonl');
+      
+      expect(result).toBe(false);
+    });
+
+    it('should clear client viewing references', async () => {
+      const mockSession = createMockAgentSession();
+      mockSession.abort = vi.fn();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+      manager.setClientViewingSession('client-1', '/path/to/session.jsonl');
+      
+      manager.stopSession('/path/to/session.jsonl');
+      
+      expect(manager.getClientSessionPath('client-1')).toBeUndefined();
+    });
+
+    it('should remove from client subscriptions', async () => {
+      const mockSession = createMockAgentSession();
+      mockSession.abort = vi.fn();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+      
+      manager.stopSession('/path/to/session.jsonl');
+      
+      expect(manager.getClientSubscriptions('client-1')).toEqual([]);
+    });
+
+    it('should abort ongoing operations before disposing', async () => {
+      const mockSession = createMockAgentSession();
+      mockSession.abort = vi.fn();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+      manager.updateSessionStatus('/path/to/session.jsonl', 'streaming');
+      
+      manager.stopSession('/path/to/session.jsonl');
+      
+      // Should have called abort before dispose
+      expect(mockSession.abort).toHaveBeenCalled();
+      expect(mockSession.dispose).toHaveBeenCalled();
     });
   });
 

@@ -31,7 +31,6 @@ export class WebSocketConnectionManager {
   private sessionPool: SessionPool;
   private multiSessionManager: MultiSessionManager;
   private eventForwarder: EventForwarder;
-  private cleanupTimer?: ReturnType<typeof setInterval>;
   /** Track CWD per client for session info */
   private clientCwd: Map<string, string> = new Map();
 
@@ -42,13 +41,10 @@ export class WebSocketConnectionManager {
     this.eventForwarder = new EventForwarder(this.sendToClient.bind(this));
 
     // Create MultiSessionManager with broadcast function
+    // Note: No automatic cleanup - sessions persist until explicitly stopped
     this.multiSessionManager = new MultiSessionManager(
       this.piService,
-      this.sendToClient.bind(this),
-      {
-        cleanupIntervalMs: 5 * 60 * 1000, // 5 minutes
-        sessionTimeoutMs: 30 * 60 * 1000, // 30 minutes
-      }
+      this.sendToClient.bind(this)
     );
 
     // Set up event forwarder to track streaming state
@@ -59,9 +55,6 @@ export class WebSocketConnectionManager {
 
     // Set up session status change broadcasting
     this.setupSessionStatusBroadcasting();
-
-    // Start periodic cleanup of inactive sessions
-    this.startCleanupTimer();
 
     this.setupServer();
   }
@@ -85,18 +78,6 @@ export class WebSocketConnectionManager {
         });
       }
     }, 1000);
-  }
-
-  /**
-   * Start periodic cleanup of inactive sessions
-   */
-  private startCleanupTimer(): void {
-    this.cleanupTimer = setInterval(() => {
-      const cleanedCount = this.multiSessionManager.cleanupInactiveSessions();
-      if (cleanedCount > 0) {
-        console.log(`[WebSocketConnectionManager] Cleaned up ${cleanedCount} inactive sessions`);
-      }
-    }, 5 * 60 * 1000); // Every 5 minutes
   }
 
   private setupServer(): void {
@@ -1009,13 +990,7 @@ export class WebSocketConnectionManager {
    * Close all connections and cleanup
    */
   async close(): Promise<void> {
-    // Clear cleanup timer
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer);
-      this.cleanupTimer = undefined;
-    }
-
-    // Dispose MultiSessionManager
+    // Dispose MultiSessionManager (which disposes all sessions)
     this.multiSessionManager.dispose();
 
     // Clean up all clients

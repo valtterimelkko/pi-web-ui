@@ -50,8 +50,9 @@ export interface SessionStatusInfo {
  * Options for MultiSessionManager
  */
 export interface MultiSessionManagerOptions {
-  cleanupIntervalMs?: number;
-  sessionTimeoutMs?: number;
+  // Note: cleanupIntervalMs and sessionTimeoutMs are deprecated.
+  // Sessions now persist indefinitely until explicitly stopped or the server shuts down.
+  // This ensures background processing continues even when clients disconnect.
 }
 
 /**
@@ -78,20 +79,19 @@ export class MultiSessionManager {
   private sessions: Map<string, ActiveSession> = new Map(); // sessionPath -> ActiveSession
   private clientSubscriptions: Map<string, Set<string>> = new Map(); // clientId -> Set<sessionPath>
   private clientViewingSession: Map<string, string> = new Map(); // clientId -> sessionPath
-  private cleanupIntervalMs: number;
-  private sessionTimeoutMs: number;
-  private cleanupTimer?: ReturnType<typeof setInterval>;
   private webUIContextProvider?: WebUIContextProvider;
 
   constructor(
     piService: PiService,
     broadcast: BroadcastFunction,
-    options: MultiSessionManagerOptions = {}
+    _options: MultiSessionManagerOptions = {}
   ) {
     this.piService = piService;
     this.broadcast = broadcast;
-    this.cleanupIntervalMs = options.cleanupIntervalMs ?? 60 * 1000; // Default: 1 minute
-    this.sessionTimeoutMs = options.sessionTimeoutMs ?? 30 * 60 * 1000; // Default: 30 minutes
+    // Note: No automatic cleanup timer. Sessions persist indefinitely until:
+    // 1. User explicitly stops them (abort button)
+    // 2. Server shuts down
+    // This ensures background processing continues even when clients disconnect.
   }
 
   /**
@@ -521,64 +521,119 @@ export class MultiSessionManager {
   }
 
   /**
-   * Clean up inactive sessions.
+   * Clean up sessions that are in error state with no subscribers.
+   * Note: Sessions in idle/busy/streaming states are NOT cleaned up automatically.
+   * They persist until explicitly stopped via stopSession() or server shutdown.
+   * This ensures background processing continues even when clients disconnect.
    * Returns the number of sessions cleaned up.
    */
-  cleanupInactiveSessions(maxAge: number = this.sessionTimeoutMs): number {
-    const now = Date.now();
+  cleanupInactiveSessions(): number {
     let cleanedCount = 0;
 
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
-      // Skip sessions with subscribers
+      // Only cleanup sessions in error state with no subscribers
       if (activeSession.subscribers.size > 0) {
         continue;
       }
 
-      // Skip sessions that are busy or streaming
-      if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
+      // Only cleanup sessions that have errored
+      if (activeSession.status !== 'error') {
         continue;
       }
 
-      // Check if session is old enough
-      const age = now - activeSession.lastActivity.getTime();
-      if (age >= maxAge) {
-        console.log(
-          '[MultiSessionManager]',
-          `Cleaning up inactive session: ${sessionPath}`
+      console.log(
+        '[MultiSessionManager]',
+        `Cleaning up errored session with no subscribers: ${sessionPath}`
+      );
+
+      // Dispose the agent session
+      try {
+        activeSession.agentSession.dispose();
+      } catch (error) {
+        console.error(
+          `[MultiSessionManager] Error disposing session ${sessionPath}:`,
+          error
         );
-
-        // Dispose the agent session
-        try {
-          activeSession.agentSession.dispose();
-        } catch (error) {
-          console.error(
-            `[MultiSessionManager] Error disposing session ${sessionPath}:`,
-            error
-          );
-        }
-
-        // Remove event handler
-        this.piService.removeEventHandler(`multi-${sessionPath}`);
-
-        // Remove from sessions map
-        this.sessions.delete(sessionPath);
-        cleanedCount++;
       }
+
+      // Remove event handler
+      this.piService.removeEventHandler(`multi-${sessionPath}`);
+
+      // Remove from sessions map
+      this.sessions.delete(sessionPath);
+      cleanedCount++;
     }
 
     return cleanedCount;
   }
 
   /**
-   * Dispose all sessions and clear internal state.
+   * Explicitly stop and dispose a session.
+   * This is called when a user clicks the stop button.
+   * Returns true if the session was stopped, false if it didn't exist.
    */
-  dispose(): void {
-    // Clear cleanup timer if running
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer);
-      this.cleanupTimer = undefined;
+  stopSession(sessionPath: string): boolean {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) {
+      return false;
     }
 
+    console.log(
+      '[MultiSessionManager]',
+      `Stopping session: ${sessionPath}`
+    );
+
+    // Abort any ongoing operation
+    try {
+      activeSession.agentSession.abort();
+    } catch (error) {
+      console.error(
+        `[MultiSessionManager] Error aborting session ${sessionPath}:`,
+        error
+      );
+    }
+
+    // Dispose the agent session
+    try {
+      activeSession.agentSession.dispose();
+    } catch (error) {
+      console.error(
+        `[MultiSessionManager] Error disposing session ${sessionPath}:`,
+        error
+      );
+    }
+
+    // Remove event handler
+    this.piService.removeEventHandler(`multi-${sessionPath}`);
+
+    // Remove from sessions map
+    this.sessions.delete(sessionPath);
+
+    // Clear client viewing references
+    for (const [clientId, viewingPath] of this.clientViewingSession.entries()) {
+      if (viewingPath === sessionPath) {
+        this.clientViewingSession.delete(clientId);
+      }
+    }
+
+    // Remove from client subscriptions
+    for (const [clientId, subscriptions] of this.clientSubscriptions.entries()) {
+      if (subscriptions.has(sessionPath)) {
+        subscriptions.delete(sessionPath);
+        if (subscriptions.size === 0) {
+          this.clientSubscriptions.delete(clientId);
+        }
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Dispose all sessions and clear internal state.
+   * Called when the server shuts down.
+   */
+  dispose(): void {
     // Dispose all sessions
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
       try {

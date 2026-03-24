@@ -502,8 +502,8 @@ describe('MultiSessionManager - Background Session Integration', () => {
       // Subscribe a client (session has subscribers)
       await manager.subscribeClient('client-1', '/path/to/active.jsonl');
       
-      // Run cleanup with 0 max age (immediate cleanup)
-      const cleanedCount = manager.cleanupInactiveSessions(0);
+      // Run cleanup
+      const cleanedCount = manager.cleanupInactiveSessions();
       
       // Should not clean up because there are subscribers
       expect(cleanedCount).toBe(0);
@@ -524,10 +524,10 @@ describe('MultiSessionManager - Background Session Integration', () => {
       manager.updateSessionStatus('/path/to/busy.jsonl', 'busy');
       manager.unsubscribeClient('client-1', '/path/to/busy.jsonl');
       
-      // Run cleanup with 0 max age
-      const cleanedCount = manager.cleanupInactiveSessions(0);
+      // Run cleanup
+      const cleanedCount = manager.cleanupInactiveSessions();
       
-      // Should not clean up because session is busy
+      // Should not clean up because sessions persist indefinitely
       expect(cleanedCount).toBe(0);
       expect(manager.hasSession('/path/to/busy.jsonl')).toBe(true);
       expect(mockSession.dispose).not.toHaveBeenCalled();
@@ -546,16 +546,16 @@ describe('MultiSessionManager - Background Session Integration', () => {
       manager.updateSessionStatus('/path/to/streaming.jsonl', 'streaming');
       manager.unsubscribeClient('client-1', '/path/to/streaming.jsonl');
       
-      // Run cleanup with 0 max age
-      const cleanedCount = manager.cleanupInactiveSessions(0);
+      // Run cleanup
+      const cleanedCount = manager.cleanupInactiveSessions();
       
-      // Should not clean up because session is streaming
+      // Should not clean up because sessions persist indefinitely
       expect(cleanedCount).toBe(0);
       expect(manager.hasSession('/path/to/streaming.jsonl')).toBe(true);
       expect(mockSession.dispose).not.toHaveBeenCalled();
     });
 
-    it('should clean up idle sessions with no subscribers', async () => {
+    it('should NOT clean up idle sessions (sessions persist indefinitely)', async () => {
       const mockSession = createMockAgentSession({
         sessionId: 'idle-session',
         sessionPath: '/path/to/idle.jsonl',
@@ -568,16 +568,16 @@ describe('MultiSessionManager - Background Session Integration', () => {
       // Leave session idle (default state)
       manager.unsubscribeClient('client-1', '/path/to/idle.jsonl');
       
-      // Run cleanup with 0 max age
-      const cleanedCount = manager.cleanupInactiveSessions(0);
+      // Run cleanup - should NOT clean up idle sessions
+      const cleanedCount = manager.cleanupInactiveSessions();
       
-      // Should clean up because session is idle with no subscribers
-      expect(cleanedCount).toBe(1);
-      expect(manager.hasSession('/path/to/idle.jsonl')).toBe(false);
-      expect(mockSession.dispose).toHaveBeenCalled();
+      // Should NOT clean up because sessions persist indefinitely
+      expect(cleanedCount).toBe(0);
+      expect(manager.hasSession('/path/to/idle.jsonl')).toBe(true);
+      expect(mockSession.dispose).not.toHaveBeenCalled();
     });
 
-    it('should only clean up sessions that meet ALL criteria', async () => {
+    it('should only clean up sessions that are errored with no subscribers', async () => {
       const mockSessionIdle = createMockAgentSession({
         sessionId: 'idle-session',
         sessionPath: '/path/to/idle.jsonl',
@@ -586,15 +586,15 @@ describe('MultiSessionManager - Background Session Integration', () => {
         sessionId: 'streaming-session',
         sessionPath: '/path/to/streaming.jsonl',
       });
-      const mockSessionWithSub = createMockAgentSession({
-        sessionId: 'subscribed-session',
-        sessionPath: '/path/to/subscribed.jsonl',
+      const mockSessionError = createMockAgentSession({
+        sessionId: 'error-session',
+        sessionPath: '/path/to/error.jsonl',
       });
 
       mockPiService.createSession
         .mockResolvedValueOnce(mockSessionIdle)
         .mockResolvedValueOnce(mockSessionStreaming)
-        .mockResolvedValueOnce(mockSessionWithSub);
+        .mockResolvedValueOnce(mockSessionError);
 
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast.broadcast);
       
@@ -607,25 +607,26 @@ describe('MultiSessionManager - Background Session Integration', () => {
       manager.updateSessionStatus('/path/to/streaming.jsonl', 'streaming');
       manager.unsubscribeClient('client-2', '/path/to/streaming.jsonl');
       
-      // Setup: Idle, but has subs
-      await manager.subscribeClient('client-3', '/path/to/subscribed.jsonl');
-      // Don't unsubscribe - keeps subscriber
+      // Setup: Error, no subs
+      await manager.subscribeClient('client-3', '/path/to/error.jsonl');
+      manager.updateSessionStatus('/path/to/error.jsonl', 'error');
+      manager.unsubscribeClient('client-3', '/path/to/error.jsonl');
 
-      // Run cleanup with 0 max age
-      const cleanedCount = manager.cleanupInactiveSessions(0);
+      // Run cleanup
+      const cleanedCount = manager.cleanupInactiveSessions();
       
-      // Only the idle, no-subscriber session should be cleaned
+      // Only the errored, no-subscriber session should be cleaned
       expect(cleanedCount).toBe(1);
-      expect(manager.hasSession('/path/to/idle.jsonl')).toBe(false);
-      expect(manager.hasSession('/path/to/streaming.jsonl')).toBe(true);
-      expect(manager.hasSession('/path/to/subscribed.jsonl')).toBe(true);
+      expect(manager.hasSession('/path/to/idle.jsonl')).toBe(true);  // Idle persists
+      expect(manager.hasSession('/path/to/streaming.jsonl')).toBe(true);  // Streaming persists
+      expect(manager.hasSession('/path/to/error.jsonl')).toBe(false);  // Error cleaned up
       
-      expect(mockSessionIdle.dispose).toHaveBeenCalled();
+      expect(mockSessionIdle.dispose).not.toHaveBeenCalled();
       expect(mockSessionStreaming.dispose).not.toHaveBeenCalled();
-      expect(mockSessionWithSub.dispose).not.toHaveBeenCalled();
+      expect(mockSessionError.dispose).toHaveBeenCalled();
     });
 
-    it('should respect maxAge parameter when cleaning up', async () => {
+    it('should persist sessions regardless of age (no maxAge parameter)', async () => {
       vi.useFakeTimers();
       
       const mockSession = createMockAgentSession({
@@ -639,21 +640,21 @@ describe('MultiSessionManager - Background Session Integration', () => {
       await manager.subscribeClient('client-1', '/path/to/old.jsonl');
       manager.unsubscribeClient('client-1', '/path/to/old.jsonl');
       
-      // Advance time by 5 minutes
-      vi.advanceTimersByTime(5 * 60 * 1000);
+      // Advance time by 30 minutes
+      vi.advanceTimersByTime(30 * 60 * 1000);
       
-      // Try cleanup with 10 minute max age - should NOT clean up
-      let cleanedCount = manager.cleanupInactiveSessions(10 * 60 * 1000);
+      // Cleanup should NOT remove the session (no maxAge parameter anymore)
+      const cleanedCount = manager.cleanupInactiveSessions();
       expect(cleanedCount).toBe(0);
       expect(manager.hasSession('/path/to/old.jsonl')).toBe(true);
       
-      // Advance time by another 10 minutes (15 total)
-      vi.advanceTimersByTime(10 * 60 * 1000);
+      // Advance time by another hour
+      vi.advanceTimersByTime(60 * 60 * 1000);
       
-      // Now cleanup with 10 minute max age - SHOULD clean up
-      cleanedCount = manager.cleanupInactiveSessions(10 * 60 * 1000);
-      expect(cleanedCount).toBe(1);
-      expect(manager.hasSession('/path/to/old.jsonl')).toBe(false);
+      // Still should NOT remove the session
+      const cleanedCount2 = manager.cleanupInactiveSessions();
+      expect(cleanedCount2).toBe(0);
+      expect(manager.hasSession('/path/to/old.jsonl')).toBe(true);
       
       vi.useRealTimers();
     });
@@ -681,8 +682,8 @@ describe('MultiSessionManager - Background Session Integration', () => {
       // Advance time by another 5 minutes (10 total, but lastActivity is at 5)
       vi.advanceTimersByTime(5 * 60 * 1000);
       
-      // Cleanup with 8 minute max age - should NOT clean up because lastActivity is recent
-      const cleanedCount = manager.cleanupInactiveSessions(8 * 60 * 1000);
+      // Cleanup should NOT clean up because sessions persist indefinitely
+      const cleanedCount = manager.cleanupInactiveSessions();
       expect(cleanedCount).toBe(0);
       expect(manager.hasSession('/path/to/active.jsonl')).toBe(true);
       
