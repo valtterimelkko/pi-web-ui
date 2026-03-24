@@ -87,45 +87,42 @@ function EmptyState({ hasSession, onCreateSession }: { hasSession: boolean; onCr
   );
 }
 
-// Detect if message content is raw skill file content (injected by /skill:name commands)
-// These messages contain <skill name="..."> tags or markdown skill content
-function isSkillContentMessage(message: Message): boolean {
-  if (message.role !== 'assistant') return false;
-  
+// Extract skill name from skill content (XML format)
+function extractSkillName(content: string): string | null {
+  // Look for <skill name="skill-name"> format
+  const match = content.match(/<skill name="([^"]+)"/);
+  return match ? match[1] : null;
+}
+
+// Check if message content is skill content and extract info for display
+function getSkillContentInfo(message: Message): { isSkillContent: boolean; skillName?: string } {
+  // Extract text content
+  const contentArray = Array.isArray(message.content) ? message.content : [];
   const content = typeof message.content === 'string' 
     ? message.content 
-    : Array.isArray(message.content) 
-      ? message.content.map(c => c.text || '').join('')
-      : '';
+    : contentArray.map(c => c.text || '').join('');
   
   const trimmed = content.trim();
   
   // Skill content indicators (XML format from SDK):
-  // 1. Contains <skill name="..."> opening tag (or HTML-escaped version)
-  // 2. Contains </skill> closing tag (or HTML-escaped version)
-  // 3. Contains SKILL.md reference
+  // Require BOTH opening AND closing tags to avoid false positives
   const hasSkillOpenTag = trimmed.includes('<skill name="') || trimmed.includes('&lt;skill name="');
   const hasSkillCloseTag = trimmed.includes('</skill>') || trimmed.includes('&lt;/skill&gt;');
-  const hasSkillMd = trimmed.includes('SKILL.md');
+  const hasFullSkillStructure = hasSkillOpenTag && hasSkillCloseTag;
   
   // Skill content indicators (Markdown format after processing):
-  // These indicate the skill file was injected and rendered as markdown
-  const hasSkillHeader = trimmed.startsWith('# Lecture Website Builder') ||
-                         trimmed.startsWith('## Process') ||
-                         trimmed.includes('\n# Lecture Website Builder\n') ||
-                         trimmed.includes('\n## Process\n');
-  const hasSkillSections = trimmed.includes('## Process') || 
-                           trimmed.includes('Phase 1:') ||
-                           trimmed.includes('Quick Start') ||
-                           trimmed.includes('Detailed Workflow');
-  const hasSkillPath = trimmed.includes('/.pi/agent/skills/') && trimmed.includes('SKILL.md');
+  const hasLectureHeader = trimmed.startsWith('# Lecture Website Builder');
+  const hasSkillHeader = trimmed.startsWith('# Skill:');
+  const hasSkillStructure = trimmed.includes('### Skill Purpose') && trimmed.includes('### Workflow');
   
-  // Filter if it has skill tags, skill path reference, or looks like rendered skill content
-  return hasSkillOpenTag || 
-         hasSkillCloseTag || 
-         hasSkillMd ||
-         hasSkillHeader ||
-         (hasSkillPath && hasSkillSections);
+  const isSkillContent = hasFullSkillStructure || hasLectureHeader || hasSkillHeader || hasSkillStructure;
+  
+  if (isSkillContent) {
+    const skillName = extractSkillName(trimmed);
+    return { isSkillContent: true, skillName: skillName || undefined };
+  }
+  
+  return { isSkillContent: false };
 }
 
 // Memoized message item component for performance
@@ -162,23 +159,33 @@ export const VirtualizedMessageList = forwardRef<
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
 
-  // Only show user + assistant messages — matches server's loadSessionMessages
-  // which filters to role === 'user' || 'assistant' and content type text/thinking.
-  // During streaming, the Pi SDK also sends role='toolResult' messages with
-  // massive raw content (web pages, search results); filtering those out keeps
-  // the streaming view clean and consistent with the history/reload view.
+  // Show user + assistant messages with skill content transformation
+  // Skill content (from /skill:name commands) is transformed to show a brief placeholder
+  // instead of the full verbose content. This preserves message context while keeping UI clean.
   // EXCEPTION: subagent tool calls are shown with hierarchical display like CLI.
   // EXCEPTION: read tool calls are shown for skill-loading visibility (clean Kimi-style)
-  // EXCEPTION: Filter out skill content messages (from /skill:name commands) to avoid
-  // displaying massive skill file content in chat - show clean Read tool card instead
-  // NOTE: User messages with skill content are also filtered (from /skill:name slash commands)
   const visibleMessages = useMemo(() =>
-    messages.filter(m => 
-      (m.role === 'user' && !isSkillContentMessage(m)) || 
-      (m.role === 'assistant' && !isSkillContentMessage(m)) ||
-      (m.role === 'tool' && m.toolCall?.name === 'subagent') ||
-      (m.role === 'tool' && m.toolCall?.name === 'read')
-    ),
+    messages
+      .filter(m => 
+        m.role === 'user' || 
+        m.role === 'assistant' ||
+        (m.role === 'tool' && m.toolCall?.name === 'subagent') ||
+        (m.role === 'tool' && m.toolCall?.name === 'read')
+      )
+      .map(m => {
+        // Transform skill content to brief placeholder
+        const skillInfo = getSkillContentInfo(m);
+        if (skillInfo.isSkillContent) {
+          const placeholder = skillInfo.skillName 
+            ? `📚 **Skill loaded: ${skillInfo.skillName}**`
+            : '📚 **Skill loaded**';
+          return {
+            ...m,
+            content: [{ type: 'text', text: placeholder }]
+          };
+        }
+        return m;
+      }),
     [messages]
   );
 

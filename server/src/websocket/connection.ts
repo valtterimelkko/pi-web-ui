@@ -560,18 +560,38 @@ export class WebSocketConnectionManager {
           }
 
           // Check if this is a skill content message (from /skill:name commands)
-          // These messages contain raw skill file content that should be filtered
+          // Transform skill content to brief placeholder instead of filtering entirely
           const contentText = Array.isArray(transformedContent) 
             ? transformedContent.map(c => c.text || '').join('')
             : '';
-          const hasSkillTag = contentText.includes('<skill name="');
-          const hasCloseTag = contentText.includes('</skill>');
-          const hasSkillMd = contentText.includes('SKILL.md');
+          
+          // Check for skill content injection markers
+          // We require BOTH opening tag AND closing tag to be specific
+          const hasSkillOpenTag = contentText.includes('<skill name="');
+          const hasSkillCloseTag = contentText.includes('</skill>');
+          const hasFullSkillStructure = hasSkillOpenTag && hasSkillCloseTag;
+          
+          // Also check for lecture website builder header (actual skill content)
           const hasLectureHeader = contentText.includes('# Lecture Website Builder');
           
-          if (hasSkillTag || hasCloseTag || hasSkillMd || hasLectureHeader) {
-            console.log(`[loadSessionMessages] Filtering skill content: tag=${hasSkillTag}, close=${hasCloseTag}, md=${hasSkillMd}, header=${hasLectureHeader}`);
-            continue; // Skip skill content messages
+          // Transform skill content to brief placeholder
+          if (hasFullSkillStructure || hasLectureHeader) {
+            // Extract skill name if available
+            const skillNameMatch = contentText.match(/<skill name="([^"]+)"/);
+            const skillName = skillNameMatch ? skillNameMatch[1] : null;
+            const placeholder = skillName 
+              ? `📚 **Skill loaded: ${skillName}**`
+              : '📚 **Skill loaded**';
+            
+            console.log(`[loadSessionMessages] Transforming skill content: ${skillName || 'unknown'}`);
+            
+            messages.push({
+              id: (entry.id as string) || `msg_${timestamp || Date.now()}`,
+              role: role as 'user' | 'assistant',
+              content: [{ type: 'text', text: placeholder }],
+              timestamp: timestamp || Date.now(),
+            });
+            continue;
           }
 
           messages.push({

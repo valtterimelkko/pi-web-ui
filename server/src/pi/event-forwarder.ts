@@ -79,12 +79,11 @@ export class EventForwarder {
     return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
-  // Check if message content is raw skill content that should be filtered
-  private isSkillContentMessage(message: unknown): boolean {
-    if (typeof message !== 'object' || message === null) return false;
+  // Check if message content is raw skill content and extract info
+  private getSkillContentInfo(message: unknown): { isSkillContent: boolean; skillName?: string } {
+    if (typeof message !== 'object' || message === null) return { isSkillContent: false };
     
     const msg = message as { role?: string; content?: unknown };
-    if (msg.role !== 'assistant') return false;
     
     // Extract text content
     let contentText = '';
@@ -95,19 +94,38 @@ export class EventForwarder {
         .join('');
     }
     
-    // Check for skill content indicators
-    const hasSkillTag = contentText.includes('<skill name="');
-    const hasCloseTag = contentText.includes('</skill>');
-    const hasSkillMd = contentText.includes('SKILL.md');
+    // Check for skill content injection markers - require BOTH opening AND closing tags
+    const hasSkillOpenTag = contentText.includes('<skill name="');
+    const hasSkillCloseTag = contentText.includes('</skill>');
+    const hasFullSkillStructure = hasSkillOpenTag && hasSkillCloseTag;
+    
+    // Also check for lecture website builder header (actual skill content)
     const hasLectureHeader = contentText.includes('# Lecture Website Builder');
     
-    if (hasSkillTag || hasCloseTag || hasSkillMd || hasLectureHeader) {
-      console.log(`[EventForwarder] Detected skill content: tag=${hasSkillTag}, close=${hasCloseTag}, md=${hasSkillMd}, header=${hasLectureHeader}`);
-      console.log(`[EventForwarder] Content preview: ${contentText.substring(0, 100)}...`);
-      return true;
+    if (hasFullSkillStructure || hasLectureHeader) {
+      // Extract skill name
+      const skillNameMatch = contentText.match(/<skill name="([^"]+)"/);
+      const skillName = skillNameMatch ? skillNameMatch[1] : undefined;
+      console.log(`[EventForwarder] Detected skill content: ${skillName || 'unknown'}`);
+      return { isSkillContent: true, skillName };
     }
     
-    return false;
+    return { isSkillContent: false };
+  }
+
+  // Transform skill content message to brief placeholder
+  private transformSkillContent(message: unknown, skillName?: string): unknown {
+    const placeholder = skillName 
+      ? `📚 **Skill loaded: ${skillName}**`
+      : '📚 **Skill loaded**';
+    
+    if (typeof message !== 'object' || message === null) return message;
+    
+    const msg = message as { content?: unknown; [key: string]: unknown };
+    return {
+      ...msg,
+      content: [{ type: 'text', text: placeholder }]
+    };
   }
 
   private mapEventToMessage(event: AgentSessionEvent): ForwardedEvent | null {
@@ -116,10 +134,18 @@ export class EventForwarder {
       timestamp: Date.now(),
     };
 
-    // Filter out skill content messages at the event level
-    if (event.type === 'message_start' && this.isSkillContentMessage(event.message)) {
-      console.log('[EventForwarder] Filtering skill content message');
-      return null; // Skip skill content messages
+    // Transform skill content messages at the event level
+    if (event.type === 'message_start') {
+      const skillInfo = this.getSkillContentInfo(event.message);
+      if (skillInfo.isSkillContent) {
+        console.log(`[EventForwarder] Transforming skill content message: ${skillInfo.skillName || 'unknown'}`);
+        const transformedMessage = this.transformSkillContent(event.message, skillInfo.skillName);
+        return {
+          ...base,
+          type: 'message_start',
+          message: transformedMessage,
+        };
+      }
     }
 
     switch (event.type) {

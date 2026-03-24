@@ -285,23 +285,51 @@ export class MultiSessionManager {
   }
 
   /**
-   * Check if an event contains skill content that should be filtered.
+   * Check if an event contains skill content and extract info for transformation.
    */
-  private isSkillContentEvent(event: any): boolean {
-    if (event.type !== 'message_start' || !event.message) return false;
+  private getSkillContentInfo(event: any): { isSkillContent: boolean; skillName?: string } {
+    if (event.type !== 'message_start' || !event.message) return { isSkillContent: false };
     
     const content = event.message.content;
-    if (!Array.isArray(content)) return false;
+    if (!Array.isArray(content)) return { isSkillContent: false };
     
     const contentText = content.map((c: {text?: string}) => c.text || '').join('');
     
-    // Check for skill content indicators
-    return contentText.includes('<skill name="') || 
-           contentText.includes('</skill>') ||
-           (contentText.includes('SKILL.md') && contentText.includes('## Process')) ||
-           contentText.startsWith('# Lecture Website Builder') ||
-           contentText.startsWith('# Skill:') ||
-           (contentText.includes('### Skill Purpose') && contentText.includes('### Workflow'));
+    // Check for skill content injection markers - require BOTH opening AND closing tags
+    const hasSkillOpenTag = contentText.includes('<skill name="');
+    const hasSkillCloseTag = contentText.includes('</skill>');
+    const hasFullSkillStructure = hasSkillOpenTag && hasSkillCloseTag;
+    
+    // Also check for specific skill content patterns
+    const hasLectureHeader = contentText.startsWith('# Lecture Website Builder');
+    const hasSkillHeader = contentText.startsWith('# Skill:');
+    const hasSkillStructure = contentText.includes('### Skill Purpose') && contentText.includes('### Workflow');
+    
+    if (hasFullSkillStructure || hasLectureHeader || hasSkillHeader || hasSkillStructure) {
+      // Extract skill name
+      const skillNameMatch = contentText.match(/<skill name="([^"]+)"/);
+      const skillName = skillNameMatch ? skillNameMatch[1] : undefined;
+      return { isSkillContent: true, skillName };
+    }
+    
+    return { isSkillContent: false };
+  }
+
+  /**
+   * Transform skill content event to brief placeholder
+   */
+  private transformSkillContentEvent(event: any, skillName?: string): any {
+    const placeholder = skillName 
+      ? `📚 **Skill loaded: ${skillName}**`
+      : '📚 **Skill loaded**';
+    
+    return {
+      ...event,
+      message: {
+        ...event.message,
+        content: [{ type: 'text', text: placeholder }]
+      }
+    };
   }
 
   /**
@@ -314,10 +342,11 @@ export class MultiSessionManager {
       return;
     }
 
-    // Filter skill content messages
-    if (this.isSkillContentEvent(event)) {
-      console.log('[MultiSessionManager] Filtering skill content event for session:', sessionPath);
-      return;
+    // Transform skill content messages
+    const skillInfo = this.getSkillContentInfo(event);
+    if (skillInfo.isSkillContent) {
+      console.log(`[MultiSessionManager] Transforming skill content event for session: ${sessionPath}, skill: ${skillInfo.skillName || 'unknown'}`);
+      event = this.transformSkillContentEvent(event, skillInfo.skillName);
     }
 
     // Update last activity

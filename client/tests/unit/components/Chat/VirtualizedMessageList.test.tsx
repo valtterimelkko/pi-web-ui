@@ -232,31 +232,29 @@ describe('VirtualizedMessageList', () => {
     expect(screen.queryByTestId('message-bubble-toolresult-1')).not.toBeInTheDocument();
   });
 
-  it('filters out skill content messages from /skill:name commands', () => {
+  it('transforms skill content messages to brief placeholder', () => {
     // When using /skill:name command, the Pi SDK injects skill content as assistant message
+    // Now we transform it to a brief placeholder instead of filtering entirely
     const skillContentMessage: Message = {
       id: 'skill-1',
       role: 'assistant',
-      content: '<skill name="lecture-website" location="/root/.pi/agent/skills/lecture-website/SKILL.md">\n# Lecture Website Builder\n\nTransform a simple idea...',
+      content: '<skill name="lecture-website" location="/root/.pi/agent/skills/lecture-website/SKILL.md">\n# Lecture Website Builder\n\nTransform a simple idea...</skill>',
       timestamp: 1000,
     };
     
-    // Skill content messages should be filtered out (messy raw content)
     render(<VirtualizedMessageList messages={[skillContentMessage]} isStreaming={false} />);
     
-    // Should show empty state since the skill content message is filtered
-    expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
-    // The skill content message should NOT be visible
-    expect(screen.queryByTestId('message-bubble-skill-1')).not.toBeInTheDocument();
+    // Skill content message should be transformed to placeholder, NOT filtered out
+    expect(screen.getByTestId('message-bubble-skill-1')).toBeInTheDocument();
   });
 
-  it('shows regular assistant messages but filters skill content messages', () => {
+  it('transforms skill content and shows placeholder alongside regular messages', () => {
     const mixedMessages: Message[] = [
       { id: '1', role: 'user', content: '/skill:lecture-website create a pinterest copy', timestamp: 1000 },
       { 
         id: '2', 
         role: 'assistant', 
-        content: '<skill name="lecture-website" location="/root/.pi/agent/skills/lecture-website/SKILL.md">\n# Lecture Website Builder',
+        content: '<skill name="lecture-website" location="/root/.pi/agent/skills/lecture-website/SKILL.md">\n# Lecture Website Builder</skill>',
         timestamp: 2000 
       },
       { id: '3', role: 'assistant', content: 'I\'ll create a Pinterest copy for you!', timestamp: 3000 },
@@ -264,11 +262,25 @@ describe('VirtualizedMessageList', () => {
     
     render(<VirtualizedMessageList messages={mixedMessages} isStreaming={false} />);
     
-    // User message and normal assistant message should be visible
+    // All messages should be visible (skill content transformed to placeholder)
     expect(screen.getByTestId('message-bubble-1')).toBeInTheDocument();
+    expect(screen.getByTestId('message-bubble-2')).toBeInTheDocument();
     expect(screen.getByTestId('message-bubble-3')).toBeInTheDocument();
-    // Skill content message should NOT be visible
-    expect(screen.queryByTestId('message-bubble-2')).not.toBeInTheDocument();
+  });
+
+  it('does not transform messages that just mention SKILL.md in file paths', () => {
+    // Messages that mention SKILL.md but don't have full skill structure should pass through unchanged
+    const regularMessage: Message = {
+      id: 'msg-1',
+      role: 'assistant',
+      content: 'I edited the file: /root/.skills/skill-name/SKILL.md',
+      timestamp: 1000,
+    };
+    
+    render(<VirtualizedMessageList messages={[regularMessage]} isStreaming={false} />);
+    
+    // Message should be visible and NOT transformed
+    expect(screen.getByTestId('message-bubble-msg-1')).toBeInTheDocument();
   });
 
   it('exposes scrollToIndex method via ref', () => {
