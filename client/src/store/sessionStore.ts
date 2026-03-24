@@ -888,6 +888,23 @@ export const useSessionStore = create<SessionState>()(
           case 'session_info': {
             const { stats } = msg as unknown as { stats: SessionStats };
             set({ sessionInfo: stats });
+            
+            // Record usage for dashboard (fire-and-forget)
+            if (stats && stats.tokens.total > 0) {
+              import('../lib/api').then(({ recordUsage }) => {
+                recordUsage({
+                  sessionId: stats.sessionId,
+                  sessionPath: stats.sessionFile || '',
+                  cwd: stats.cwd || '',
+                  model: stats.model || '',
+                  tokens: stats.tokens,
+                  cost: stats.cost,
+                  messageCount: stats.totalMessages,
+                });
+              }).catch(() => {
+                // Silently ignore recording errors
+              });
+            }
             break;
           }
 

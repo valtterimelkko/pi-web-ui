@@ -73,10 +73,11 @@ router.delete('/:id', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/sessions/:id/export - Export session to HTML
+// GET /api/sessions/:id/export - Export session to various formats
 router.get('/:id/export', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+    const format = (req.query.format as string) || 'html'; // html, markdown, json
     const piService = getPiService();
     
     // Find session
@@ -95,12 +96,32 @@ router.get('/:id/export', async (req: Request, res: Response) => {
     // Parse entries
     const entries = lines.map(line => JSON.parse(line));
     
-    // Generate simple HTML export
-    const html = generateSessionHtml(session, entries);
-    
-    res.setHeader('Content-Type', 'text/html');
-    res.setHeader('Content-Disposition', `attachment; filename="session-${id}.html"`);
-    res.send(html);
+    // Export based on format
+    switch (format.toLowerCase()) {
+      case 'markdown':
+      case 'md': {
+        const markdown = generateSessionMarkdown(session, entries);
+        res.setHeader('Content-Type', 'text/markdown');
+        res.setHeader('Content-Disposition', `attachment; filename="session-${id}.md"`);
+        res.send(markdown);
+        break;
+      }
+      case 'json': {
+        const jsonData = generateSessionJson(session, entries);
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `attachment; filename="session-${id}.json"`);
+        res.send(JSON.stringify(jsonData, null, 2));
+        break;
+      }
+      case 'html':
+      default: {
+        const html = generateSessionHtml(session, entries);
+        res.setHeader('Content-Type', 'text/html');
+        res.setHeader('Content-Disposition', `attachment; filename="session-${id}.html"`);
+        res.send(html);
+        break;
+      }
+    }
   } catch (error) {
     console.error('Error exporting session:', error);
     res.status(500).json({ error: 'Failed to export session' });
@@ -160,6 +181,79 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function generateSessionMarkdown(session: SessionInfo, entries: SessionEntry[]): string {
+  const messages = entries
+    .filter((e) => e.type === 'message')
+    .map((e) => {
+      const role = e.message?.role || 'unknown';
+      const content = typeof e.message?.content === 'string' 
+        ? e.message.content 
+        : extractTextContent(e.message?.content);
+      return `## ${role.charAt(0).toUpperCase() + role.slice(1)}\n\n${content}\n`;
+    })
+    .join('\n---\n\n');
+
+  const frontMatter = `---
+title: "Session ${session.id}"
+cwd: "${session.cwd}"
+exported: "${new Date().toISOString()}"
+message_count: ${entries.filter(e => e.type === 'message').length}
+---
+
+`;
+
+  return `# Session ${session.id}
+
+**Working Directory:** \`${session.cwd}\`
+**Exported:** ${new Date().toLocaleString()}
+
+---
+
+${messages}`;
+}
+
+function generateSessionJson(session: SessionInfo, entries: SessionEntry[]): object {
+  const messages = entries
+    .filter((e) => e.type === 'message')
+    .map((e, index) => ({
+      index,
+      role: e.message?.role || 'unknown',
+      content: typeof e.message?.content === 'string' 
+        ? e.message.content 
+        : e.message?.content,
+    }));
+
+  return {
+    session: {
+      id: session.id,
+      cwd: session.cwd,
+      path: session.path,
+      exported: new Date().toISOString(),
+    },
+    messages,
+    metadata: {
+      totalMessages: messages.length,
+      userMessages: messages.filter(m => m.role === 'user').length,
+      assistantMessages: messages.filter(m => m.role === 'assistant').length,
+    },
+  };
+}
+
+function extractTextContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block: { type?: string; text?: string; thinking?: string }) => {
+        if (block.type === 'text' && block.text) return block.text;
+        if (block.type === 'thinking' && block.thinking) return `[Thinking]\n${block.thinking}`;
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+  }
+  return JSON.stringify(content);
 }
 
 export default router;

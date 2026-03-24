@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PanelLeft, PanelRight, Plus, RefreshCw, Sun, Moon, ChevronRight } from 'lucide-react';
+import { PanelLeft, PanelRight, Plus, RefreshCw, Sun, Moon, ChevronRight, Coins } from 'lucide-react';
 import { useSessionStore, useUIStore } from '../../store';
 import { useChatStore } from '../../store/chatStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -7,6 +7,7 @@ import { SessionList } from './SessionList';
 import { SessionFilters } from './SessionFilters';
 import { NewSessionModal } from '../Session';
 import { SessionItem } from './SessionItem';
+import { TokenUsageDashboard } from '../Usage';
 
 export function Sidebar() {
   const { sessions, currentSessionId, archivedSessionPaths, sessionDisplayNames } = useSessionStore();
@@ -17,6 +18,7 @@ export function Sidebar() {
   const [cwdFilter, setCwdFilter] = useState<string | null>(null);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
+  const [showUsageDashboard, setShowUsageDashboard] = useState(false);
 
   // Helper to get display name for a session
   const getDisplayName = (session: { path: string; name?: string; firstMessage?: string }) => {
@@ -179,17 +181,26 @@ export function Sidebar() {
 
         {/* Bottom section */}
         <div className="border-t border-gray-200 px-3 py-3 flex items-center justify-between">
-          <button
-            onClick={toggleTheme}
-            className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
-            title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-          >
-            {theme === 'light' ? (
-              <Moon className="w-4 h-4 text-gray-400" />
-            ) : (
-              <Sun className="w-4 h-4 text-gray-400" />
-            )}
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowUsageDashboard(true)}
+              className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+              title="Token usage dashboard"
+            >
+              <Coins className="w-4 h-4 text-gray-400" />
+            </button>
+            <button
+              onClick={toggleTheme}
+              className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+              title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            >
+              {theme === 'light' ? (
+                <Moon className="w-4 h-4 text-gray-400" />
+              ) : (
+                <Sun className="w-4 h-4 text-gray-400" />
+              )}
+            </button>
+          </div>
           <button
             onClick={toggleSidebar}
             className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
@@ -205,6 +216,12 @@ export function Sidebar() {
         isOpen={showNewSessionModal}
         onClose={() => setShowNewSessionModal(false)}
         onCreateSession={handleCreateSession}
+      />
+
+      {/* Token Usage Dashboard */}
+      <TokenUsageDashboard
+        isOpen={showUsageDashboard}
+        onClose={() => setShowUsageDashboard(false)}
       />
     </>
   );

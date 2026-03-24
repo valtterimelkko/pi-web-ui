@@ -164,3 +164,35 @@ export async function patchPreferences(updates: Partial<WebUIPreferences>): Prom
 
   return response.json() as Promise<WebUIPreferences>;
 }
+
+/**
+ * Record token usage for a session.
+ * Called automatically when session info is received.
+ */
+export async function recordUsage(data: {
+  sessionId: string;
+  sessionPath: string;
+  cwd: string;
+  model: string;
+  tokens: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+  cost: number;
+  messageCount: number;
+}): Promise<void> {
+  try {
+    await fetch(`${API_URL}/api/usage/record`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    // Fire-and-forget - don't wait for response or throw on error
+  } catch {
+    // Silently ignore usage recording errors
+  }
+}

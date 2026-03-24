@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Trash2, Edit2, Check, X, Archive, ArchiveRestore } from 'lucide-react';
+import { Trash2, Edit2, Check, X, Archive, ArchiveRestore, Download, FileText, FileJson, Code } from 'lucide-react';
 import type { Session } from '../../store/sessionStore';
 import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -20,6 +20,7 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
   const sessionData = useSessionStore(state => state.sessionData[session.id]);
   const [showActions, setShowActions] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   // Use web UI display name if set, otherwise fall back to session name or first message
   const webUIDisplayName = getSessionDisplayName(session.path);
   const [editName, setEditName] = useState(webUIDisplayName || session.name || '');
@@ -77,6 +78,29 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
     } else if (e.key === 'Escape') {
       setIsEditing(false);
       setEditName(webUIDisplayName || session.name || '');
+      setShowExportMenu(false);
+    }
+  };
+
+  const handleExport = async (format: 'markdown' | 'json' | 'html') => {
+    try {
+      const response = await fetch(`/api/sessions/${session.id}/export?format=${format}`, {
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('Export failed');
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `session-${session.id.slice(0, 8)}.${format === 'markdown' ? 'md' : format}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setShowExportMenu(false);
+    } catch (error) {
+      console.error('Export failed:', error);
     }
   };
 
@@ -170,6 +194,46 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
                     <Edit2 className="w-3 h-3 text-gray-400" />
                   </button>
                 )}
+                <div className="relative">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowExportMenu(!showExportMenu);
+                    }}
+                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                    title="Export session"
+                  >
+                    <Download className="w-3 h-3 text-gray-400" />
+                  </button>
+                  {showExportMenu && (
+                    <div 
+                      className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 min-w-[120px]"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        onClick={() => handleExport('markdown')}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        Markdown
+                      </button>
+                      <button
+                        onClick={() => handleExport('json')}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        <FileJson className="w-3.5 h-3.5" />
+                        JSON
+                      </button>
+                      <button
+                        onClick={() => handleExport('html')}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        <Code className="w-3.5 h-3.5" />
+                        HTML
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();

@@ -10,6 +10,9 @@ import filesRoutes from './routes/files.js';
 import extensionsRoutes from './routes/extensions.js';
 import preferencesRoutes from './routes/preferences.js';
 import worktreesRoutes from './routes/worktrees.js';
+import healthRoutes from './routes/health.js';
+import configRoutes from './routes/config.js';
+import usageRoutes from './routes/usage.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -46,10 +49,14 @@ export function createApp(): express.Application {
     message: { error: 'Too many requests, please try again later.' },
   }));
 
-  // Health check endpoint
+  // Health check endpoints (no auth required)
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
+  app.use('/api/health', healthRoutes);
+
+  // Config validation (requires auth)
+  app.use('/api/config', configRoutes);
 
   // Auth routes
   app.use('/api/auth', authRoutes);
@@ -71,6 +78,9 @@ export function createApp(): express.Application {
 
   // Parallel orchestration worktrees
   app.use('/api/worktrees', worktreesRoutes);
+
+  // Token usage tracking
+  app.use('/api/usage', usageRoutes);
 
   // Serve static files from client/dist in production
   if (config.nodeEnv === 'production') {
