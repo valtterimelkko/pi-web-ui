@@ -1,4 +1,4 @@
-import React, { useState, useMemo, memo } from 'react';
+import React, { useState, useMemo, useEffect, memo } from 'react';
 import {
   Bot,
   CheckCircle,
@@ -15,6 +15,7 @@ import {
   Brain,
   ListTodo,
   ChevronDown,
+  Clock,
 } from 'lucide-react';
 
 /**
@@ -34,6 +35,7 @@ interface SubagentToolCardProps {
     output: string;
     isError: boolean;
   } | null;
+  startTime?: number; // Unix timestamp when tool started
 }
 
 interface ToolCall {
@@ -327,18 +329,42 @@ const TaskSection = memo(function TaskSection({
   );
 });
 
+// Format elapsed seconds to human readable
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}m ${secs}s`;
+}
+
 export const SubagentToolCard = memo(function SubagentToolCard({ 
   name, 
   args, 
-  result 
+  result,
+  startTime
 }: SubagentToolCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedTasks, setExpandedTasks] = useState<Set<number>>(new Set());
   const [showRawOutput, setShowRawOutput] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const hasResult = result !== undefined && result !== null;
   const isError = hasResult && result.isError;
   const isPending = !hasResult;
+
+  // Track elapsed time for pending operations
+  useEffect(() => {
+    if (!isPending || !startTime) return;
+    
+    const updateElapsed = () => {
+      setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+    };
+    
+    updateElapsed();
+    const interval = setInterval(updateElapsed, 1000);
+    
+    return () => clearInterval(interval);
+  }, [isPending, startTime]);
 
   // Parse subagent result
   const subagentData = useMemo(() => {
@@ -431,7 +457,14 @@ export const SubagentToolCard = memo(function SubagentToolCard({
         {/* Status */}
         <div className="ml-auto flex items-center gap-2">
           {isPending ? (
-            <span className="text-xs text-amber-500 animate-pulse">Running...</span>
+            <span className="text-xs text-amber-500 flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              Running
+              {elapsedSeconds > 0 && (
+                <span className="font-mono">({formatElapsed(elapsedSeconds)})</span>
+              )}
+              ...
+            </span>
           ) : isError ? (
             <XCircle className="w-4 h-4 text-red-500" />
           ) : (

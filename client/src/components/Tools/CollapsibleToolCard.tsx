@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, memo } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, memo } from 'react';
 import {
   Terminal,
   CheckCircle,
@@ -17,6 +17,7 @@ import {
   Mail,
   Copy,
   Check,
+  Clock,
 } from 'lucide-react';
 
 /**
@@ -38,6 +39,7 @@ interface CollapsibleToolCardProps {
   name: string;
   args: unknown;
   result?: ToolResult | null;
+  startTime?: number; // Unix timestamp when tool started
 }
 
 // Map tool names to icons (following Kimi's approach)
@@ -466,20 +468,35 @@ const ToolOutput = memo(function ToolOutput({
   );
 });
 
+// Format elapsed seconds to human readable
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}m ${secs}s`;
+}
+
 // Brief status display (always visible)
 const BriefStatus = memo(function BriefStatus({ 
   result,
   isPending,
-  toolName
+  toolName,
+  elapsedSeconds
 }: { 
   result?: ToolResult | null;
   isPending: boolean;
   toolName: string;
+  elapsedSeconds?: number;
 }) {
   if (isPending) {
     return (
-      <span className="text-xs text-amber-500 animate-pulse">
-        Running…
+      <span className="text-xs text-amber-500 flex items-center gap-1">
+        <Clock className="w-3 h-3" />
+        Running
+        {elapsedSeconds !== undefined && elapsedSeconds > 0 && (
+          <span className="font-mono">({formatElapsed(elapsedSeconds)})</span>
+        )}
+        …
       </span>
     );
   }
@@ -544,15 +561,31 @@ const BriefStatus = memo(function BriefStatus({
 export const CollapsibleToolCard = memo(function CollapsibleToolCard({ 
   name, 
   args, 
-  result 
+  result,
+  startTime
 }: CollapsibleToolCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showResult, setShowResult] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const hasResult = result !== undefined && result !== null;
   const isError = hasResult && result.isError;
   const isSuccess = hasResult && !result.isError;
   const isPending = !hasResult;
+
+  // Track elapsed time for pending operations
+  useEffect(() => {
+    if (!isPending || !startTime) return;
+    
+    const updateElapsed = () => {
+      setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+    };
+    
+    updateElapsed();
+    const interval = setInterval(updateElapsed, 1000);
+    
+    return () => clearInterval(interval);
+  }, [isPending, startTime]);
 
   const displayName = TOOL_DISPLAY_NAMES[name] || name;
   const icon = TOOL_ICONS[name] || <Terminal className="w-3.5 h-3.5" />;
@@ -604,7 +637,7 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
         {/* Brief status inline when collapsed */}
         {!isExpanded && (
           <span className="ml-auto shrink-0 flex items-center gap-1.5">
-            <BriefStatus result={result} isPending={isPending} toolName={name} />
+            <BriefStatus result={result} isPending={isPending} toolName={name} elapsedSeconds={elapsedSeconds} />
             {statusIcon}
           </span>
         )}
@@ -626,7 +659,7 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
           )}
 
           {/* Brief status (always visible in expanded mode) */}
-          <BriefStatus result={result} isPending={isPending} toolName={name} />
+          <BriefStatus result={result} isPending={isPending} toolName={name} elapsedSeconds={elapsedSeconds} />
 
           {/* Result section */}
           {hasResult && (

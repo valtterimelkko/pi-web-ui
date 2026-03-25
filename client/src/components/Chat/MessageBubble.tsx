@@ -144,6 +144,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
           name={message.toolCall.name}
           args={message.toolCall.args}
           result={message.toolResult}
+          startTime={message.timestamp}
         />
       );
     }
@@ -153,6 +154,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
         name={message.toolCall.name}
         args={message.toolCall.args}
         result={message.toolResult}
+        startTime={message.timestamp}
       />
     );
   }
