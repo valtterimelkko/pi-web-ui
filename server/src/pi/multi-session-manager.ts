@@ -50,9 +50,14 @@ export interface SessionStatusInfo {
  * Options for MultiSessionManager
  */
 export interface MultiSessionManagerOptions {
-  // Note: cleanupIntervalMs and sessionTimeoutMs are deprecated.
-  // Sessions now persist indefinitely until explicitly stopped or the server shuts down.
-  // This ensures background processing continues even when clients disconnect.
+  /** How often to check for idle sessions to cleanup (default: 60000ms = 1 minute) */
+  cleanupIntervalMs?: number;
+  /** How long a session can be idle with no subscribers before cleanup (default: 1800000ms = 30 minutes) */
+  idleSessionTimeoutMs?: number;
+  /** Maximum number of sessions to keep in memory (default: 20) */
+  maxSessions?: number;
+  /** Enable memory monitoring and logging (default: true) */
+  enableMemoryMonitoring?: boolean;
 }
 
 /**
@@ -71,7 +76,8 @@ export type WebUIContextProvider = (sessionPath: string) => WebUIContext | undef
  * - Sessions are identified by their sessionPath (file path)
  * - Multiple clients can subscribe to the same session
  * - Events are broadcast to all subscribers
- * - Inactive sessions (no subscribers, idle) are cleaned up periodically
+ * - Idle sessions (no subscribers, not streaming/busy) are cleaned up after timeout
+ * - Memory is monitored to prevent OOM conditions
  */
 export class MultiSessionManager {
   private piService: PiService;
@@ -80,18 +86,229 @@ export class MultiSessionManager {
   private clientSubscriptions: Map<string, Set<string>> = new Map(); // clientId -> Set<sessionPath>
   private clientViewingSession: Map<string, string> = new Map(); // clientId -> sessionPath
   private webUIContextProvider?: WebUIContextProvider;
+  
+  // Configuration
+  private cleanupIntervalMs: number;
+  private idleSessionTimeoutMs: number;
+  private maxSessions: number;
+  private enableMemoryMonitoring: boolean;
+  
+  // Cleanup timer
+  private cleanupTimer?: ReturnType<typeof setInterval>;
+  private memoryCheckTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     piService: PiService,
     broadcast: BroadcastFunction,
-    _options: MultiSessionManagerOptions = {}
+    options: MultiSessionManagerOptions = {}
   ) {
     this.piService = piService;
     this.broadcast = broadcast;
-    // Note: No automatic cleanup timer. Sessions persist indefinitely until:
-    // 1. User explicitly stops them (abort button)
-    // 2. Server shuts down
-    // This ensures background processing continues even when clients disconnect.
+    
+    // Configure with defaults
+    this.cleanupIntervalMs = options.cleanupIntervalMs ?? 60000; // 1 minute
+    this.idleSessionTimeoutMs = options.idleSessionTimeoutMs ?? 1800000; // 30 minutes
+    this.maxSessions = options.maxSessions ?? 20;
+    this.enableMemoryMonitoring = options.enableMemoryMonitoring ?? true;
+    
+    // Start cleanup timer
+    this.startCleanupTimer();
+    
+    // Start memory monitoring
+    if (this.enableMemoryMonitoring) {
+      this.startMemoryMonitoring();
+    }
+    
+    console.log(`[MultiSessionManager] Initialized with cleanupInterval=${this.cleanupIntervalMs}ms, idleTimeout=${this.idleSessionTimeoutMs}ms, maxSessions=${this.maxSessions}`);
+  }
+  
+  /**
+   * Start the periodic cleanup timer
+   */
+  private startCleanupTimer(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+    }
+    
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupIdleSessions();
+    }, this.cleanupIntervalMs);
+    
+    // Unref the timer so it doesn't keep the process alive
+    if (this.cleanupTimer.unref) {
+      this.cleanupTimer.unref();
+    }
+  }
+  
+  /**
+   * Start memory monitoring
+   */
+  private startMemoryMonitoring(): void {
+    if (this.memoryCheckTimer) {
+      clearInterval(this.memoryCheckTimer);
+    }
+    
+    // Check memory every 30 seconds
+    this.memoryCheckTimer = setInterval(() => {
+      this.logMemoryUsage();
+    }, 30000);
+    
+    // Unref the timer so it doesn't keep the process alive
+    if (this.memoryCheckTimer.unref) {
+      this.memoryCheckTimer.unref();
+    }
+  }
+  
+  /**
+   * Log memory usage for monitoring
+   */
+  private logMemoryUsage(): void {
+    const memUsage = process.memoryUsage();
+    const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+    const heapTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
+    const rssMB = Math.round(memUsage.rss / 1024 / 1024);
+    const externalMB = Math.round(memUsage.external / 1024 / 1024);
+    
+    const sessionCount = this.sessions.size;
+    
+    // Only log if memory is high or session count is significant
+    if (heapUsedMB > 500 || sessionCount > 5) {
+      console.log(`[MultiSessionManager] Memory: heap=${heapUsedMB}MB/${heapTotalMB}MB, rss=${rssMB}MB, external=${externalMB}MB, sessions=${sessionCount}`);
+    }
+    
+    // If memory is very high, trigger aggressive cleanup
+    // Threshold is 2.5GB to provide buffer before systemd MemoryHigh (3GB) kicks in
+    if (heapUsedMB > 2500) {
+      console.warn(`[MultiSessionManager] High memory usage detected (${heapUsedMB}MB), triggering aggressive cleanup`);
+      this.aggressiveCleanup();
+    }
+  }
+  
+  /**
+   * Aggressive cleanup when memory is high
+   */
+  private aggressiveCleanup(): void {
+    let cleanedCount = 0;
+    
+    // Clean up all idle sessions regardless of timeout
+    for (const [sessionPath, activeSession] of this.sessions.entries()) {
+      // Only clean up sessions that are not currently active
+      if (activeSession.status === 'idle' && activeSession.subscribers.size === 0) {
+        console.log(`[MultiSessionManager] Aggressive cleanup: disposing session ${sessionPath}`);
+        this.disposeSession(sessionPath);
+        cleanedCount++;
+      }
+    }
+    
+    // If still too many sessions, remove oldest idle ones
+    if (this.sessions.size > this.maxSessions) {
+      const sessionsToRemove = this.sessions.size - this.maxSessions;
+      const idleSessions = Array.from(this.sessions.entries())
+        .filter(([_, s]) => s.status === 'idle')
+        .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
+      
+      for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
+        const [sessionPath] = idleSessions[i];
+        console.log(`[MultiSessionManager] Aggressive cleanup: disposing oldest session ${sessionPath}`);
+        this.disposeSession(sessionPath);
+        cleanedCount++;
+      }
+    }
+    
+    // Force garbage collection if available
+    if (global.gc) {
+      global.gc();
+      console.log(`[MultiSessionManager] Triggered garbage collection after aggressive cleanup (${cleanedCount} sessions removed)`);
+    }
+  }
+  
+  /**
+   * Clean up sessions that have been idle for too long with no subscribers
+   */
+  cleanupIdleSessions(): number {
+    const now = Date.now();
+    let cleanedCount = 0;
+    
+    for (const [sessionPath, activeSession] of this.sessions.entries()) {
+      // Skip sessions with subscribers
+      if (activeSession.subscribers.size > 0) {
+        continue;
+      }
+      
+      // Skip sessions that are busy or streaming
+      if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
+        continue;
+      }
+      
+      // Check if session has been idle longer than timeout
+      const idleTime = now - activeSession.lastActivity.getTime();
+      if (idleTime > this.idleSessionTimeoutMs) {
+        console.log(
+          `[MultiSessionManager] Cleaning up idle session: ${sessionPath} (idle for ${Math.round(idleTime / 60000)} minutes)`
+        );
+        this.disposeSession(sessionPath);
+        cleanedCount++;
+      }
+    }
+    
+    // Also enforce max session limit
+    if (this.sessions.size > this.maxSessions) {
+      const sessionsToRemove = this.sessions.size - this.maxSessions;
+      const idleSessions = Array.from(this.sessions.entries())
+        .filter(([_, s]) => s.status === 'idle' && s.subscribers.size === 0)
+        .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
+      
+      for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
+        const [sessionPath] = idleSessions[i];
+        console.log(`[MultiSessionManager] Cleaning up session to enforce max limit: ${sessionPath}`);
+        this.disposeSession(sessionPath);
+        cleanedCount++;
+      }
+    }
+    
+    if (cleanedCount > 0) {
+      console.log(`[MultiSessionManager] Cleaned up ${cleanedCount} idle sessions, ${this.sessions.size} remaining`);
+    }
+    
+    return cleanedCount;
+  }
+  
+  /**
+   * Dispose a single session
+   */
+  private disposeSession(sessionPath: string): void {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) return;
+    
+    // Dispose the agent session
+    try {
+      activeSession.agentSession.dispose();
+    } catch (error) {
+      console.error(`[MultiSessionManager] Error disposing session ${sessionPath}:`, error);
+    }
+    
+    // Remove event handler
+    this.piService.removeEventHandler(`multi-${sessionPath}`);
+    
+    // Remove from sessions map
+    this.sessions.delete(sessionPath);
+    
+    // Clear client viewing references
+    for (const [clientId, viewingPath] of this.clientViewingSession.entries()) {
+      if (viewingPath === sessionPath) {
+        this.clientViewingSession.delete(clientId);
+      }
+    }
+    
+    // Remove from client subscriptions
+    for (const [clientId, subscriptions] of this.clientSubscriptions.entries()) {
+      if (subscriptions.has(sessionPath)) {
+        subscriptions.delete(sessionPath);
+        if (subscriptions.size === 0) {
+          this.clientSubscriptions.delete(clientId);
+        }
+      }
+    }
   }
 
   /**
@@ -548,52 +765,33 @@ export class MultiSessionManager {
       throw error;
     }
   }
+  
+  /**
+   * Stop the cleanup timer
+   */
+  stopCleanupTimer(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = undefined;
+    }
+    if (this.memoryCheckTimer) {
+      clearInterval(this.memoryCheckTimer);
+      this.memoryCheckTimer = undefined;
+    }
+    console.log('[MultiSessionManager] Cleanup timer stopped');
+  }
 
   /**
-   * Clean up sessions that are in error state with no subscribers.
-   * Note: Sessions in idle/busy/streaming states are NOT cleaned up automatically.
-   * They persist until explicitly stopped via stopSession() or server shutdown.
-   * This ensures background processing continues even when clients disconnect.
-   * Returns the number of sessions cleaned up.
+   * Get current memory usage stats
    */
-  cleanupInactiveSessions(): number {
-    let cleanedCount = 0;
-
-    for (const [sessionPath, activeSession] of this.sessions.entries()) {
-      // Only cleanup sessions in error state with no subscribers
-      if (activeSession.subscribers.size > 0) {
-        continue;
-      }
-
-      // Only cleanup sessions that have errored
-      if (activeSession.status !== 'error') {
-        continue;
-      }
-
-      console.log(
-        '[MultiSessionManager]',
-        `Cleaning up errored session with no subscribers: ${sessionPath}`
-      );
-
-      // Dispose the agent session
-      try {
-        activeSession.agentSession.dispose();
-      } catch (error) {
-        console.error(
-          `[MultiSessionManager] Error disposing session ${sessionPath}:`,
-          error
-        );
-      }
-
-      // Remove event handler
-      this.piService.removeEventHandler(`multi-${sessionPath}`);
-
-      // Remove from sessions map
-      this.sessions.delete(sessionPath);
-      cleanedCount++;
-    }
-
-    return cleanedCount;
+  getMemoryStats(): { heapUsedMB: number; heapTotalMB: number; rssMB: number; sessionCount: number } {
+    const memoryUsage = process.memoryUsage();
+    return {
+      heapUsedMB: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+      heapTotalMB: Math.round(memoryUsage.heapTotal / 1024 / 1024),
+      rssMB: Math.round(memoryUsage.rss / 1024 / 1024),
+      sessionCount: this.sessions.size,
+    };
   }
 
   /**
@@ -663,6 +861,9 @@ export class MultiSessionManager {
    * Called when the server shuts down.
    */
   dispose(): void {
+    // Stop cleanup timer
+    this.stopCleanupTimer();
+    
     // Dispose all sessions
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
       try {

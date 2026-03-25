@@ -41,11 +41,22 @@ export class WebSocketConnectionManager {
     this.eventForwarder = new EventForwarder(this.sendToClient.bind(this));
 
     // Create MultiSessionManager with broadcast function
-    // Note: No automatic cleanup - sessions persist until explicitly stopped
+    // Configure cleanup to prevent memory exhaustion from abandoned sessions
     this.multiSessionManager = new MultiSessionManager(
       this.piService,
-      this.sendToClient.bind(this)
+      this.sendToClient.bind(this),
+      {
+        // Clean up idle sessions after 30 minutes of inactivity with no subscribers
+        idleSessionTimeoutMs: 30 * 60 * 1000,
+        // Check for cleanup every 2 minutes
+        cleanupIntervalMs: 2 * 60 * 1000,
+        // Maximum sessions to keep in memory
+        maxSessions: 15,
+        // Enable memory monitoring
+        enableMemoryMonitoring: true,
+      }
     );
+    // Note: Cleanup timer is started automatically in MultiSessionManager constructor
 
     // Set up event forwarder to track streaming state
     this.eventForwarder.setSessionPool(this.sessionPool);
