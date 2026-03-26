@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import fs from 'fs/promises';
 import os from 'os';
+import { getWorkerPool } from './sessions.js';
 
 const router = Router();
 
@@ -22,9 +23,10 @@ router.get('/live', (_req: Request, res: Response) => {
  * Checks if critical dependencies are available:
  * - Pi agent directory exists
  * - Environment configuration is valid
+ * - Worker pool has capacity
  */
 router.get('/ready', async (_req: Request, res: Response) => {
-  const checks: Record<string, { status: 'ok' | 'error'; message?: string }> = {};
+  const checks: Record<string, { status: 'ok' | 'error' | 'warning'; message?: string }> = {};
   let allHealthy = true;
 
   // Check 1: Pi agent directory exists and is accessible
@@ -73,7 +75,50 @@ router.get('/ready', async (_req: Request, res: Response) => {
     allHealthy = false;
   }
 
-  const response = {
+  // Check 4: Worker pool status
+  let workerStats = null;
+  try {
+    const pool = getWorkerPool();
+    workerStats = pool.getStats();
+    
+    const hasCapacity = workerStats.total < workerStats.maxWorkers;
+    const atMaxCapacity = workerStats.total >= workerStats.maxWorkers;
+    
+    if (atMaxCapacity) {
+      checks.workerPool = {
+        status: 'error',
+        message: `Worker pool at max capacity (${workerStats.total}/${workerStats.maxWorkers} workers)`,
+      };
+      allHealthy = false;
+    } else if (workerStats.total >= workerStats.maxWorkers * 0.8) {
+      // Warning if at 80% capacity
+      checks.workerPool = {
+        status: 'warning',
+        message: `Worker pool near capacity (${workerStats.total}/${workerStats.maxWorkers} workers, ${workerStats.active} active)`,
+      };
+    } else {
+      checks.workerPool = {
+        status: 'ok',
+        message: `Worker pool healthy (${workerStats.total}/${workerStats.maxWorkers} workers, ${workerStats.active} active, ${workerStats.idle} idle)`,
+      };
+    }
+  } catch (error) {
+    checks.workerPool = {
+      status: 'error',
+      message: `Worker pool unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    };
+    allHealthy = false;
+  }
+
+  const response: {
+    status: string;
+    timestamp: string;
+    uptime: number;
+    version: string;
+    nodeEnv: string;
+    checks: typeof checks;
+    workerStats?: typeof workerStats;
+  } = {
     status: allHealthy ? 'ok' : 'degraded',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
@@ -81,6 +126,11 @@ router.get('/ready', async (_req: Request, res: Response) => {
     nodeEnv: config.nodeEnv,
     checks,
   };
+
+  // Include worker stats in response when available
+  if (workerStats) {
+    response.workerStats = workerStats;
+  }
 
   res.status(allHealthy ? 200 : 503).json(response);
 });

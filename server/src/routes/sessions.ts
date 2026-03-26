@@ -14,7 +14,7 @@ let workerPool: WorkerPool | null = null;
 /**
  * Get or create the WorkerPool singleton instance.
  */
-function getWorkerPool(): WorkerPool {
+export function getWorkerPool(): WorkerPool {
   if (!workerPool) {
     workerPool = new WorkerPool({
       maxWorkers: 15,

@@ -125,6 +125,8 @@ export interface SessionStats {
   contextPercent?: number;
 }
 
+export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'terminated' | 'error';
+
 interface SessionState {
   sessions: Session[];
   currentSessionId: string | null;
@@ -156,6 +158,11 @@ interface SessionState {
 
   // Multi-session data storage - per-session state for background sessions
   sessionData: Record<string, SessionData>;
+
+  // Worker status tracking - for worker-based session architecture
+  workerStatus: Record<string, WorkerStatus>;
+  // Active worker sessions - list of sessionIds with active workers
+  activeWorkers: string[];
 
   // Actions
   setSessions: (sessions: Session[]) => void;
@@ -196,6 +203,11 @@ interface SessionState {
   setSessionStatus: (sessionId: string, status: SessionData['status']) => void;
   cleanupStaleSessionData: (maxSessions?: number) => void;
   
+  // Worker status tracking actions
+  updateWorkerStatus: (sessionId: string, status: WorkerStatus) => void;
+  getWorkerStatus: (sessionId: string) => WorkerStatus | undefined;
+  removeWorkerStatus: (sessionId: string) => void;
+  
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
 }
@@ -229,6 +241,41 @@ export const useSessionStore = create<SessionState>()(
       compactionReason: null,
       // Multi-session data storage
       sessionData: {},
+      // Worker status tracking
+      workerStatus: {},
+      activeWorkers: [],
+
+      // Worker status tracking implementation
+      updateWorkerStatus: (sessionId: string, status: WorkerStatus) => {
+        set((state) => {
+          const newWorkerStatus = { ...state.workerStatus, [sessionId]: status };
+          const newActiveWorkers = Object.entries(newWorkerStatus)
+            .filter(([_, s]) => s !== 'terminated' && s !== 'error')
+            .map(([id]) => id);
+          return {
+            workerStatus: newWorkerStatus,
+            activeWorkers: newActiveWorkers,
+          };
+        });
+      },
+
+      getWorkerStatus: (sessionId: string) => {
+        return get().workerStatus[sessionId];
+      },
+
+      removeWorkerStatus: (sessionId: string) => {
+        set((state) => {
+          const newWorkerStatus = { ...state.workerStatus };
+          delete newWorkerStatus[sessionId];
+          const newActiveWorkers = Object.entries(newWorkerStatus)
+            .filter(([_, s]) => s !== 'terminated' && s !== 'error')
+            .map(([id]) => id);
+          return {
+            workerStatus: newWorkerStatus,
+            activeWorkers: newActiveWorkers,
+          };
+        });
+      },
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),
@@ -1500,6 +1547,47 @@ export const useSessionStore = create<SessionState>()(
               const isStreaming = status === 'streaming' || status === 'busy';
               set({ isStreaming });
             }
+            break;
+          }
+
+          case 'worker_status': {
+            const workerMsg = msg as unknown as {
+              sessionId: string;
+              status: WorkerStatus;
+              error?: string;
+              previousStatus?: WorkerStatus;
+              timestamp?: number;
+            };
+            const { sessionId: workerSessionId, status: workerStatus, error: workerError } = workerMsg;
+            
+            // Update worker status in store
+            get().updateWorkerStatus(workerSessionId, workerStatus);
+            
+            // Log worker status changes for debugging
+            console.log(`[WorkerStatus] Session ${workerSessionId}: ${workerMsg.previousStatus || 'unknown'} -> ${workerStatus}`);
+            
+            // Handle error state
+            if (workerStatus === 'error' && workerError) {
+              console.error(`[sessionStore] Worker error for session ${workerSessionId}:`, workerError);
+              // Show error toast if this is the current session
+              if (get().currentSessionId === workerSessionId) {
+                useUIStore.getState().addToast({
+                  type: 'error',
+                  message: `Worker error: ${workerError}`,
+                });
+                set({ 
+                  isStreaming: false,
+                  isLoading: false,
+                  error: workerError,
+                });
+              }
+            }
+            
+            // Handle terminated state - clean up
+            if (workerStatus === 'terminated') {
+              get().removeWorkerStatus(workerSessionId);
+            }
+            
             break;
           }
         }
