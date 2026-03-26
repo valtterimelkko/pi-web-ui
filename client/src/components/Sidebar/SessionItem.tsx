@@ -4,6 +4,7 @@ import type { Session } from '../../store/sessionStore';
 import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
+import { WorkerStatusIndicator } from './WorkerStatusIndicator';
 
 interface SessionItemProps {
   session: Session;
@@ -18,6 +19,7 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
   const getSessionDisplayName = useSessionStore(state => state.getSessionDisplayName);
   const setSessionDisplayName = useSessionStore(state => state.setSessionDisplayName);
   const sessionData = useSessionStore(state => state.sessionData[session.id]);
+  const workerStatus = useSessionStore(state => state.workerStatus[session.id]);
   const [showActions, setShowActions] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -260,6 +262,8 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
                   <Trash2 className="w-3 h-3 text-gray-400" />
                 </button>
               </>
+            ) : workerStatus ? (
+              <WorkerStatusIndicator sessionId={session.id} />
             ) : isActiveSession ? (
               <SessionStatusIndicator sessionId={session.id} />
             ) : (

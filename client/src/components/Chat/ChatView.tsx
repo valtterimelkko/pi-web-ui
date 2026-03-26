@@ -20,6 +20,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const sessions = useSessionStore((state) => state.sessions);
   const getSessionCacheMeta = useSessionStore((state) => state.getSessionCacheMeta);
+  const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
   const [showTreeView, setShowTreeView] = useState(false);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [showSessionInfo, setShowSessionInfo] = useState(false);
@@ -31,6 +32,9 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   // Get current session name
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const sessionTitle = currentSession?.name || currentSession?.firstMessage || 'New Session';
+  
+  // Get worker status for current session
+  const workerStatus = currentSessionId ? getWorkerStatus(currentSessionId) : undefined;
   
   // Check if session might have stale/incomplete content
   const sessionMeta = currentSessionId ? getSessionCacheMeta(currentSessionId) : undefined;
@@ -116,6 +120,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
           onAtBottomChange={handleAtBottomChange}
           hasSession={!!currentSessionId}
           onCreateSession={() => setShowNewSessionModal(true)}
+          workerStatus={workerStatus}
         />
         
         {/* Scroll to bottom button */}

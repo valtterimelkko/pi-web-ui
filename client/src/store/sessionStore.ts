@@ -125,7 +125,7 @@ export interface SessionStats {
   contextPercent?: number;
 }
 
-export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'terminated' | 'error';
+export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'error' | 'disconnected' | 'terminated';
 
 interface SessionState {
   sessions: Session[];

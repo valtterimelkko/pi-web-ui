@@ -1,6 +1,8 @@
 import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import { Loader2, AlertCircle } from 'lucide-react';
 import type { LiveMessage } from '../../hooks/useSessionStream.js';
+import type { WorkerStatus } from '../../store';
 import { MessageBubble } from './MessageBubble';
 
 export interface VirtualizedMessageListHandle {
@@ -14,6 +16,7 @@ interface VirtualizedMessageListProps {
   onAtBottomChange?: (atBottom: boolean) => void;
   hasSession?: boolean;
   onCreateSession?: () => void;
+  workerStatus?: WorkerStatus;
 }
 
 type ListItem = {
@@ -46,6 +49,64 @@ const ListComponent = forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<
     );
   }
 );
+
+// Worker status indicator component
+function WorkerStatusIndicator({ status }: { status: WorkerStatus }) {
+  const statusConfig: Record<WorkerStatus, { icon: typeof Loader2; text: string; className: string; animate: string }> = {
+    spawning: {
+      icon: Loader2,
+      text: 'Connecting...',
+      className: 'text-blue-600 bg-blue-50 border-blue-200',
+      animate: 'animate-spin',
+    },
+    ready: {
+      icon: Loader2,
+      text: 'Ready',
+      className: 'text-green-600 bg-green-50 border-green-200',
+      animate: '',
+    },
+    streaming: {
+      icon: Loader2,
+      text: 'Streaming...',
+      className: 'text-teal-600 bg-teal-50 border-teal-200',
+      animate: 'animate-spin',
+    },
+    idle: {
+      icon: Loader2,
+      text: 'Idle',
+      className: 'text-gray-600 bg-gray-50 border-gray-200',
+      animate: '',
+    },
+    terminated: {
+      icon: AlertCircle,
+      text: 'Disconnected',
+      className: 'text-gray-600 bg-gray-50 border-gray-200',
+      animate: '',
+    },
+    disconnected: {
+      icon: AlertCircle,
+      text: 'Disconnected',
+      className: 'text-gray-600 bg-gray-50 border-gray-200',
+      animate: '',
+    },
+    error: {
+      icon: AlertCircle,
+      text: 'Error',
+      className: 'text-red-600 bg-red-50 border-red-200',
+      animate: '',
+    },
+  };
+
+  const config = statusConfig[status];
+  const Icon = config.icon;
+
+  return (
+    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${config.className} text-sm`}>
+      <Icon className={`w-4 h-4 ${config.animate}`} />
+      <span className="font-medium">{config.text}</span>
+    </div>
+  );
+}
 
 // Empty state component
 function EmptyState({ hasSession, onCreateSession }: { hasSession: boolean; onCreateSession?: () => void }) {
@@ -152,7 +213,7 @@ export const VirtualizedMessageList = forwardRef<
   VirtualizedMessageListHandle,
   VirtualizedMessageListProps
 >(function VirtualizedMessageList(
-  { messages, isStreaming, onAtBottomChange, hasSession = true, onCreateSession },
+  { messages, isStreaming, onAtBottomChange, hasSession = true, onCreateSession, workerStatus },
   ref
 ) {
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
@@ -278,42 +339,55 @@ export const VirtualizedMessageList = forwardRef<
     return <EmptyState hasSession={hasSession} onCreateSession={onCreateSession} />;
   }
 
+  // Show worker status when actively processing (spawning, streaming, or error)
+  const showWorkerStatus = workerStatus && workerStatus !== 'idle' && workerStatus !== 'terminated' && workerStatus !== 'ready';
+
   return (
-    <Virtuoso
-      ref={virtuosoRef}
-      data={listItems}
-      className="h-full"
-      scrollerRef={handleScrollerRef}
-      followOutput={handleFollowOutput}
-      // Estimated item height for virtualization
-      defaultItemHeight={80}
-      // Render more items outside viewport for smoother scrolling
-      increaseViewportBy={{ top: 400, bottom: 400 }}
-      overscan={200}
-      minOverscanItemCount={3}
-      atBottomStateChange={handleAtBottomChange}
-      // Start at the bottom (most recent messages)
-      initialTopMostItemIndex={{
-        index: Math.max(0, listItems.length - 1),
-        align: 'end',
-      }}
-      components={{
-        Scroller: ScrollerComponent,
-        List: ListComponent,
-      }}
-      // Use message ID as key for stable rendering
-      computeItemKey={(_index, item) => item.message.id}
-      itemContent={(_index, item) => {
-        const isLast = item.index === listItems.length - 1;
-        const isCurrentRun = item.index > lastUserMessageIndex;
-        return (
-          <MessageItem
-            message={item.message}
-            isLast={isLast}
-            isCurrentRun={isCurrentRun}
-          />
-        );
-      }}
-    />
+    <div className="flex flex-col h-full">
+      <div className="flex-1 overflow-hidden">
+        <Virtuoso
+          ref={virtuosoRef}
+          data={listItems}
+          className="h-full"
+          scrollerRef={handleScrollerRef}
+          followOutput={handleFollowOutput}
+          // Estimated item height for virtualization
+          defaultItemHeight={80}
+          // Render more items outside viewport for smoother scrolling
+          increaseViewportBy={{ top: 400, bottom: 400 }}
+          overscan={200}
+          minOverscanItemCount={3}
+          atBottomStateChange={handleAtBottomChange}
+          // Start at the bottom (most recent messages)
+          initialTopMostItemIndex={{
+            index: Math.max(0, listItems.length - 1),
+            align: 'end',
+          }}
+          components={{
+            Scroller: ScrollerComponent,
+            List: ListComponent,
+          }}
+          // Use message ID as key for stable rendering
+          computeItemKey={(_index, item) => item.message.id}
+          itemContent={(_index, item) => {
+            const isLast = item.index === listItems.length - 1;
+            const isCurrentRun = item.index > lastUserMessageIndex;
+            return (
+              <MessageItem
+                message={item.message}
+                isLast={isLast}
+                isCurrentRun={isCurrentRun}
+              />
+            );
+          }}
+        />
+      </div>
+      {/* Worker status indicator - shown at bottom when active */}
+      {showWorkerStatus && (
+        <div className="flex-shrink-0 px-4 py-2 bg-white border-t border-gray-100">
+          <WorkerStatusIndicator status={workerStatus} />
+        </div>
+      )}
+    </div>
   );
 });
