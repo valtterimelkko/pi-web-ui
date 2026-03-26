@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useUIStore } from './uiStore';
 import { getPreferences, patchPreferences } from '../lib/api';
+import type { ContentPart } from '../hooks/useSessionStream.js';
 
 // Maximum sessions to keep in memory (LRU cache limit)
 const MAX_CACHED_SESSIONS = 5;
@@ -56,7 +57,7 @@ export interface Session {
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'tool';
-  content: string | Array<{ type: string; text?: string; thinking?: string }>;
+  content: string | ContentPart[];
   timestamp: number;
   toolCall?: {
     id: string;
@@ -67,6 +68,7 @@ export interface Message {
     output: string;
     isError: boolean;
   };
+  isComplete?: boolean; // Optional for backward compatibility with LiveMessage
 }
 
 /**
@@ -797,7 +799,7 @@ export const useSessionStore = create<SessionState>()(
               messages?: Array<{
                 id: string;
                 role: 'user' | 'assistant';
-                content: string | Array<{ type: string; text?: string; thinking?: string }>;
+                content: string | ContentPart[];
                 timestamp: number;
               }>;
               fileTimestamp?: number;
@@ -953,11 +955,11 @@ export const useSessionStore = create<SessionState>()(
               const existingMsg = get().messages.find(m => m.id === msgData.id);
               if (existingMsg) {
                 // Get existing content array or create new one
-                let contentArray: Array<{ type: string; text?: string; thinking?: string }>;
+                let contentArray: ContentPart[];
                 if (Array.isArray(existingMsg.content)) {
                   contentArray = [...existingMsg.content];
                 } else if (typeof existingMsg.content === 'string') {
-                  contentArray = existingMsg.content ? [{ type: 'text', text: existingMsg.content }] : [];
+                  contentArray = existingMsg.content ? [{ type: 'text' as const, text: existingMsg.content }] : [];
                 } else {
                   contentArray = [];
                 }
@@ -971,7 +973,7 @@ export const useSessionStore = create<SessionState>()(
                   if (lastEntry && lastEntry.type === 'text') {
                     lastEntry.text = (lastEntry.text || '') + delta;
                   } else {
-                    contentArray.push({ type: 'text', text: delta });
+                    contentArray.push({ type: 'text' as const, text: delta });
                   }
                   get().updateMessage(msgData.id, { content: contentArray });
                 }
@@ -981,7 +983,7 @@ export const useSessionStore = create<SessionState>()(
                   if (lastEntry && lastEntry.type === 'thinking') {
                     lastEntry.thinking = (lastEntry.thinking || '') + delta;
                   } else {
-                    contentArray.push({ type: 'thinking', thinking: delta });
+                    contentArray.push({ type: 'thinking' as const, thinking: delta });
                   }
                   get().updateMessage(msgData.id, { content: contentArray });
                 }
@@ -1312,11 +1314,11 @@ export const useSessionStore = create<SessionState>()(
                   if (sessionData) {
                     const existingMsg = sessionData.messages.find(m => m.id === messageId);
                     if (existingMsg) {
-                      let contentArray: Array<{ type: string; text?: string; thinking?: string }>;
+                      let contentArray: ContentPart[];
                       if (Array.isArray(existingMsg.content)) {
                         contentArray = [...existingMsg.content];
                       } else if (typeof existingMsg.content === 'string') {
-                        contentArray = existingMsg.content ? [{ type: 'text', text: existingMsg.content }] : [];
+                        contentArray = existingMsg.content ? [{ type: 'text' as const, text: existingMsg.content }] : [];
                       } else {
                         contentArray = [];
                       }
@@ -1329,7 +1331,7 @@ export const useSessionStore = create<SessionState>()(
                         if (lastEntry && lastEntry.type === 'text') {
                           lastEntry.text = (lastEntry.text || '') + delta;
                         } else {
-                          contentArray.push({ type: 'text', text: delta });
+                          contentArray.push({ type: 'text' as const, text: delta });
                         }
                         get().updateMessageInSession(sessionId, messageId, { content: contentArray });
                         // Also update current session if it matches
@@ -1341,7 +1343,7 @@ export const useSessionStore = create<SessionState>()(
                         if (lastEntry && lastEntry.type === 'thinking') {
                           lastEntry.thinking = (lastEntry.thinking || '') + delta;
                         } else {
-                          contentArray.push({ type: 'thinking', thinking: delta });
+                          contentArray.push({ type: 'thinking' as const, thinking: delta });
                         }
                         get().updateMessageInSession(sessionId, messageId, { content: contentArray });
                         // Also update current session if it matches

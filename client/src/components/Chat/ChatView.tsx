@@ -7,6 +7,7 @@ import { NewSessionModal } from '../Session';
 import { Info, ChevronsUpDown, ArrowDown, RefreshCw } from 'lucide-react';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
+import { messagesToLiveMessages } from '../../lib/messageAdapter';
 
 interface ChatViewProps {
   onOpenSettings?: () => void;
@@ -110,7 +111,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         {/* Message List - Virtualized for performance */}
         <VirtualizedMessageList
           ref={listRef}
-          messages={messages}
+          messages={messagesToLiveMessages(messages)}
           isStreaming={isStreaming}
           onAtBottomChange={handleAtBottomChange}
           hasSession={!!currentSessionId}

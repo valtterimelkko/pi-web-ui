@@ -1,6 +1,7 @@
 import { Sparkles } from 'lucide-react';
 import type { Message } from '../../store';
 import { MessageBubble } from './MessageBubble';
+import { messageToLiveMessage } from '../../lib/messageAdapter';
 
 interface MessageListProps {
   messages: Message[];
@@ -50,7 +51,7 @@ export function MessageList({ messages, hasSession, onCreateSession }: MessageLi
       {messages.map((message, index) => (
         <MessageBubble
           key={message.id}
-          message={message}
+          message={messageToLiveMessage(message)}
           isLast={index === messages.length - 1}
         />
       ))}

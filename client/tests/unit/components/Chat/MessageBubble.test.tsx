@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MessageBubble } from '../../../../src/components/Chat/MessageBubble';
-import type { Message } from '../../../../src/store';
+import type { LiveMessage } from '../../../../src/hooks/useSessionStream';
 
 // Mock the useSessionStore hook
 vi.mock('../../../src/store', () => ({
@@ -15,25 +15,28 @@ vi.mock('../../../src/store', () => ({
 }));
 
 describe('MessageBubble', () => {
-  const mockUserMessage: Message = {
+  const mockUserMessage: LiveMessage = {
     id: '1',
     role: 'user',
-    content: 'Hello!',
+    content: [{ type: 'text', text: 'Hello!' }],
     timestamp: Date.now(),
+    isComplete: true,
   };
 
-  const mockAssistantMessage: Message = {
+  const mockAssistantMessage: LiveMessage = {
     id: '2',
     role: 'assistant',
-    content: 'Hi there! How can I help you?',
+    content: [{ type: 'text', text: 'Hi there! How can I help you?' }],
     timestamp: Date.now(),
+    isComplete: true,
   };
 
-  const mockToolMessage: Message = {
+  const mockToolMessage: LiveMessage = {
     id: '3',
     role: 'tool',
-    content: 'Tool execution result',
+    content: [],
     timestamp: Date.now(),
+    isComplete: true,
     toolCall: {
       id: 'tool-1',
       name: 'read_file',
@@ -76,11 +79,12 @@ describe('MessageBubble', () => {
   });
 
   it('renders markdown content correctly', () => {
-    const markdownMessage: Message = {
+    const markdownMessage: LiveMessage = {
       id: '4',
       role: 'assistant',
-      content: 'Here is **bold** and *italic* text.',
+      content: [{ type: 'text', text: 'Here is **bold** and *italic* text.' }],
       timestamp: Date.now(),
+      isComplete: true,
     };
     render(<MessageBubble message={markdownMessage} />);
     expect(screen.getByText(/bold/)).toBeInTheDocument();
@@ -96,11 +100,12 @@ describe('MessageBubble', () => {
   });
 
   it('renders content as array of parts', () => {
-    const arrayContentMessage: Message = {
+    const arrayContentMessage: LiveMessage = {
       id: '5',
       role: 'assistant',
       content: [{ type: 'text', text: 'Part 1' }, { type: 'text', text: 'Part 2' }],
       timestamp: Date.now(),
+      isComplete: true,
     };
     render(<MessageBubble message={arrayContentMessage} />);
     // Content parts are joined together without spaces
@@ -114,11 +119,15 @@ describe('MessageBubble', () => {
   });
 
   it('handles thinking blocks in content', () => {
-    const thinkingMessage: Message = {
+    const thinkingMessage: LiveMessage = {
       id: '6',
       role: 'assistant',
-      content: '<thinking>Let me think about this...</thinking>Here is the answer.',
+      content: [
+        { type: 'thinking', thinking: 'Let me think about this...' },
+        { type: 'text', text: 'Here is the answer.' },
+      ],
       timestamp: Date.now(),
+      isComplete: true,
     };
     render(<MessageBubble message={thinkingMessage} />);
     expect(screen.getByText('Here is the answer.')).toBeInTheDocument();
