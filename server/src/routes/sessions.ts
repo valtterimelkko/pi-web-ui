@@ -2,9 +2,28 @@ import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { getPiService } from '../pi/index.js';
 import { apiLimiter } from '../security/rate-limit.js';
+import { WorkerPool } from '../workers/worker-pool.js';
+import type { WorkerPoolStats, WorkerInfo } from '@pi-web-ui/shared';
 import fs from 'fs/promises';
 
 const router = Router();
+
+// WorkerPool singleton instance
+let workerPool: WorkerPool | null = null;
+
+/**
+ * Get or create the WorkerPool singleton instance.
+ */
+function getWorkerPool(): WorkerPool {
+  if (!workerPool) {
+    workerPool = new WorkerPool({
+      maxWorkers: 15,
+      idleTimeoutMs: 30 * 60 * 1000, // 30 minutes
+      maxOldSpaceSize: 512,
+    });
+  }
+  return workerPool;
+}
 
 // All session routes require authentication
 router.use(cookieAuthMiddleware);
@@ -255,5 +274,76 @@ function extractTextContent(content: unknown): string {
   }
   return JSON.stringify(content);
 }
+
+// ============================================================================
+// Worker Pool Routes
+// ============================================================================
+
+// GET /api/sessions/workers - Get worker pool statistics
+router.get('/workers', async (_req: Request, res: Response) => {
+  try {
+    const pool = getWorkerPool();
+    const stats: WorkerPoolStats = pool.getStats();
+    
+    res.json({
+      success: true,
+      stats,
+    });
+  } catch (error) {
+    console.error('Error getting worker pool stats:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get worker pool statistics' 
+    });
+  }
+});
+
+// GET /api/sessions/workers/:sessionPath - Get worker info for a specific session
+router.get('/workers/:sessionPath', async (req: Request, res: Response) => {
+  try {
+    const { sessionPath } = req.params;
+    
+    if (!sessionPath) {
+      res.status(400).json({
+        success: false,
+        error: 'Session path is required',
+      });
+      return;
+    }
+    
+    // Decode the session path (it may be URL-encoded)
+    const decodedPath = decodeURIComponent(sessionPath);
+    
+    const pool = getWorkerPool();
+    const worker = pool.get(decodedPath);
+    
+    if (!worker) {
+      res.status(404).json({
+        success: false,
+        error: 'Worker not found for session',
+      });
+      return;
+    }
+    
+    const workerInfo: WorkerInfo = {
+      sessionPath: decodedPath,
+      status: worker.status,
+      pid: worker.pid,
+      lastActivity: worker.lastActivity,
+      spawnedAt: Date.now(), // Approximation since worker doesn't expose spawnedAt
+    };
+    
+    res.json({
+      success: true,
+      worker: workerInfo,
+    });
+  } catch (error) {
+    console.error('Error getting worker info:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get worker information' 
+    });
+  }
+});
 
 export default router;
