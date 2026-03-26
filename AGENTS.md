@@ -71,14 +71,6 @@ Pi Web UI is a web interface for the Pi Coding Agent:
 - **JSON-RPC 2.0 Protocol** - Structured request/response with correlation IDs
 - **Per-Session WebSockets** - Isolated connections per session
 - **Ref-Based Streaming** - No re-renders during content accumulation
-- **Identity Guards** - Prevents stale callbacks after session switches
-- **LRU Cache** - Max 5 sessions in memory, automatic eviction
-
-**Key Architecture Features:**
-- **JSON-RPC 2.0 Protocol** - Structured request/response with correlation IDs
-- **Per-Session WebSockets** - Isolated connections per session
-- **Ref-Based Streaming** - No re-renders during content accumulation
-- **Identity Guards** - Prevents stale callbacks after session switches
 - **LRU Cache** - Max 5 sessions in memory, automatic eviction
 
 ## Development Workflow
@@ -195,6 +187,28 @@ npm test
 | Worker crash on start | Corrupted session file | Delete session file (data loss) |
 | Stuck "Initializing..." | Worker not responding | Check logs, restart server |
 | High worker count | No idle cleanup | Workers auto-terminate after 30min idle |
+
+**Adjusting Worker Memory Limits:**
+
+If workers are crashing due to OOM, increase the per-worker memory limit:
+
+```bash
+# Edit systemd service override
+sudo systemctl edit pi-web-ui
+
+# Add/modify these values:
+[Service]
+Environment="PI_WORKER_MEMORY=768"  # Increase from 512MB to 768MB per worker
+Environment="PI_MAX_WORKERS=10"     # Reduce max workers if needed
+MemoryMax=8G                         # Increase total memory limit
+
+# Apply changes
+sudo systemctl daemon-reload
+sudo systemctl restart pi-web-ui
+
+# Verify
+curl -s http://localhost:3456/api/health/ready | jq '.workerStats'
+```
 
 **Code Locations:**
 - Worker Manager: `server/src/workers/session-worker-manager.ts`

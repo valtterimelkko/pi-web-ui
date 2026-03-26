@@ -71,6 +71,13 @@ This project was developed in 6 waves over approximately 5 weeks:
 
 ## Recent Changes
 
+### Process-per-Session Architecture (March 2026)
+Refactored to isolate each session in its own worker process:
+- **Memory Isolation** - 512MB heap per worker, one session can't crash others
+- **Crash Resilience** - Worker OOMs only affect that session; auto-restart preserves state
+- **Worker Pool** - Lazy spawning, idle cleanup (30min), max 15 concurrent workers
+- **RPC Protocol Bridge** - JSON-RPC over stdin/stdout to worker processes
+
 ### Architecture Overhaul (March 2026)
 Complete architectural refactor for mobile performance:
 - **JSON-RPC 2.0 Protocol** - Structured WebSocket communication with request/response correlation
@@ -583,7 +590,7 @@ Pi Web UI uses a JSON-RPC 2.0 based WebSocket protocol for real-time communicati
 
 ### Process-per-Session Architecture
 
-The Pi Web UI employs a multi-process architecture where each AI session runs in its own isolated Node.js worker process:
+Each AI session runs in an isolated Node.js worker process:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -593,33 +600,34 @@ The Pi Web UI employs a multi-process architecture where each AI session runs in
 │  │ (Express)    │  │   Manager    │  │  Manager              │     │
 │  │ WebSocket   │  │ (lifecycle)   │  │  (spawn/kill)         │     │
 │  └──────┬───────┘  └──────────────┘  └───────────────────────┘     │
-│         │                                                             │
-│         │  spawns per-session worker processes                        │
-│         ▼                                                             │
+│         │                          │                                 │
+│         │  spawns per-session worker processes                      │
+│         ▼                                                            │
 ├─────────────────────────────────────────────────────────────────────┤
 │                    WORKER PROCESS (one per session)                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────────┐ │
 │  │ Pi SDK RPC   │  │   Event      │  │   stdin/stdout            │ │
 │  │ Mode         │  │  Forwarder   │  │   (JSON-RPC protocol)      │ │
 │  └──────────────┘  └──────────────┘  └───────────────────────────┘ │
-│  ┌───────────────────────────────────────────────────────────────┐ │
-│  │ Extensions │ Tools │ Session File │ Context Management       │ │
-│  └───────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Benefits:**
-- **Memory Isolation**: Each worker process gets its own V8 heap (512MB limit), preventing memory leaks in one session from affecting others
-- **Crash Resilience**: If a worker crashes (OOM or uncaught exception), only that session is affected; others continue running
-- **Scalability**: OS-level memory management instead of single-process GC unpredictability
-- **Persistent Sessions**: Sessions continue processing in the background via file-based persistence
+**Benefits:** Memory isolation (512MB per worker), crash resilience, persistent sessions.
 
-**Worker Lifecycle:**
-1. **Spawn**: Workers are spawned on first WebSocket connection to a session
-2. **Command**: Pi SDK runs in RPC mode (`pi --mode rpc --session <path>`)
-3. **Communication**: JSON-RPC over stdin/stdout between main process and worker
-4. **Idle Timeout**: Workers auto-terminate after 30 minutes of inactivity
-5. **Restart**: Crashed workers automatically restart while preserving session state
+**Adjusting Worker Memory:**
+```bash
+# Edit systemd service
+sudo systemctl edit pi-web-ui
+
+# Add/modify:
+[Service]
+Environment="PI_WORKER_MEMORY=768"  # Increase to 768MB per worker
+MemoryMax=8G                         # Increase total limit
+
+# Apply
+sudo systemctl daemon-reload
+sudo systemctl restart pi-web-ui
+```
 
 ### WebSocket Endpoints
 - `/ws/sessions/:sessionId` - JSON-RPC 2.0 protocol
