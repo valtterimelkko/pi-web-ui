@@ -572,19 +572,61 @@ node -e "console.log(require('bcrypt').hashSync('your-password', 10))"
 
 ## Architecture
 
-Pi Web UI uses a JSON-RPC 2.0 based WebSocket protocol for real-time communication.
+Pi Web UI uses a JSON-RPC 2.0 based WebSocket protocol for real-time communication with a **process-per-session** architecture for memory isolation and crash resilience.
 
 ### Key Features
+- **Process-per-Session Architecture** - Each session runs in an isolated worker process
 - **Per-session WebSocket connections** - Each session has its own WebSocket endpoint
 - **Ref-based streaming** - Minimal re-renders during content streaming
 - **Identity guards** - Prevents stale callbacks after session switches
 - **LRU cache** - Automatic memory management for session data
 
+### Process-per-Session Architecture
+
+The Pi Web UI employs a multi-process architecture where each AI session runs in its own isolated Node.js worker process:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     MAIN SERVER PROCESS                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐     │
+│  │ HTTP Server  │  │   Session    │  │  Worker Process       │     │
+│  │ (Express)    │  │   Manager    │  │  Manager              │     │
+│  │ WebSocket   │  │ (lifecycle)   │  │  (spawn/kill)         │     │
+│  └──────┬───────┘  └──────────────┘  └───────────────────────┘     │
+│         │                                                             │
+│         │  spawns per-session worker processes                        │
+│         ▼                                                             │
+├─────────────────────────────────────────────────────────────────────┤
+│                    WORKER PROCESS (one per session)                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────────┐ │
+│  │ Pi SDK RPC   │  │   Event      │  │   stdin/stdout            │ │
+│  │ Mode         │  │  Forwarder   │  │   (JSON-RPC protocol)      │ │
+│  └──────────────┘  └──────────────┘  └───────────────────────────┘ │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │ Extensions │ Tools │ Session File │ Context Management       │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Benefits:**
+- **Memory Isolation**: Each worker process gets its own V8 heap (512MB limit), preventing memory leaks in one session from affecting others
+- **Crash Resilience**: If a worker crashes (OOM or uncaught exception), only that session is affected; others continue running
+- **Scalability**: OS-level memory management instead of single-process GC unpredictability
+- **Persistent Sessions**: Sessions continue processing in the background via file-based persistence
+
+**Worker Lifecycle:**
+1. **Spawn**: Workers are spawned on first WebSocket connection to a session
+2. **Command**: Pi SDK runs in RPC mode (`pi --mode rpc --session <path>`)
+3. **Communication**: JSON-RPC over stdin/stdout between main process and worker
+4. **Idle Timeout**: Workers auto-terminate after 30 minutes of inactivity
+5. **Restart**: Crashed workers automatically restart while preserving session state
+
 ### WebSocket Endpoints
 - `/ws/sessions/:sessionId` - JSON-RPC 2.0 protocol
 - `/ws` - Legacy protocol (deprecated)
 
-See [docs/PROTOCOL.md](docs/PROTOCOL.md) for full protocol documentation.
+See [docs/PROTOCOL.md](docs/PROTOCOL.md) for full protocol specification.
+See [docs/PROCESS-ISOLATION-DESIGN.md](docs/PROCESS-ISOLATION-DESIGN.md) for detailed design documentation.
 
 ### Technology Stack
 

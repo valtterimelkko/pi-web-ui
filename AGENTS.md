@@ -42,20 +42,37 @@ Pi Web UI is a web interface for the Pi Coding Agent:
                         │ WebSocket (JSON-RPC 2.0)
                         │ /ws/sessions/:sessionId
 ┌───────────────────────┴─────────────────────────────────────────┐
-│  SERVER (Express + Node.js)                                     │
+│  MAIN SERVER PROCESS (Express + Node.js)                        │
 │  ├─ Session WebSocket (server/src/websocket/session-websocket.ts)│
 │  ├─ JSON-RPC Protocol (server/src/protocol/)                   │
 │  │   └─ Methods: initialize, prompt, cancel, steer, replay     │
-│  ├─ Event Forwarder (server/src/pi/event-forwarder.ts)         │
-│  ├─ Multi-Session Manager (server/src/pi/multi-session-manager.ts)│
+│  ├─ Worker Process Manager (server/src/workers/)               │
+│  │   ├─ session-worker-manager.ts  (spawn/kill lifecycle)      │
+│  │   ├─ worker-pool.ts            (pool management)            │
+│  │   ├─ rpc-protocol-bridge.ts    (protocol translation)       │
+│  │   └─ session-rpc-client.ts     (RPC client wrapper)         │
 │  └─ REST API Routes (server/src/routes/)                       │
 └───────────────────────┬─────────────────────────────────────────┘
-                        │ File I/O
+                        │ stdin/stdout JSON-RPC
+                        │ spawns worker processes
 ┌───────────────────────┴─────────────────────────────────────────┐
-│  FILE SYSTEM                                                    │
-│  └─ ~/.pi/agent/sessions/  (JSONL files)                       │
+│  WORKER PROCESS (one per session)                               │
+│  ├─ Pi SDK RPC Mode (pi --mode rpc)                            │
+│  ├─ Event Forwarder (server/src/pi/event-forwarder.ts)         │
+│  ├─ Extensions & Tools                                         │
+│  └─ Session File I/O (~/.pi/agent/sessions/)                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Key Architecture Features:**
+- **Process-per-Session** - Each session runs in an isolated Node.js worker process
+- **Memory Isolation** - 512MB heap limit per worker, prevents cross-session OOM crashes
+- **Crash Resilience** - Worker crashes only affect that session; auto-restart preserves state
+- **JSON-RPC 2.0 Protocol** - Structured request/response with correlation IDs
+- **Per-Session WebSockets** - Isolated connections per session
+- **Ref-Based Streaming** - No re-renders during content accumulation
+- **Identity Guards** - Prevents stale callbacks after session switches
+- **LRU Cache** - Max 5 sessions in memory, automatic eviction
 
 **Key Architecture Features:**
 - **JSON-RPC 2.0 Protocol** - Structured request/response with correlation IDs
@@ -124,6 +141,66 @@ npm test
 - Client Hook: `client/src/hooks/useSessionStream.ts`
 - Client WebSocket: `client/src/lib/session-websocket.ts`
 - Legacy Client: `client/src/lib/websocket.ts` (deprecated)
+- **Worker Process Manager: `server/src/workers/session-worker-manager.ts`**
+- **Worker Pool: `server/src/workers/worker-pool.ts`**
+- **RPC Protocol Bridge: `server/src/workers/rpc-protocol-bridge.ts`**
+- **Session RPC Client: `server/src/workers/session-rpc-client.ts`**
+- **Session Worker Process: `server/src/workers/session-worker.ts`**
+
+### Debugging Worker Processes
+
+**Symptoms:** Session stuck "Initializing...", worker crash, OOM errors
+
+**Diagnostic Steps:**
+
+1. **Check worker process status:**
+   ```bash
+   # List all Pi Web UI worker processes
+   ps aux | grep "pi --mode rpc" | grep -v grep
+   
+   # Check worker count
+   ps aux | grep "pi --mode rpc" | grep -v grep | wc -l
+   ```
+
+2. **Check worker logs:**
+   ```bash
+   # Server logs show worker spawn/terminate
+   grep "worker" server/logs
+   
+   # Look for spawn errors
+   grep "spawnWorker\|terminateWorker" server/logs
+   ```
+
+3. **Verify worker pool stats:**
+   ```bash
+   # Via API (if implemented)
+   curl http://localhost:3000/api/workers/stats
+   
+   # Expected response:
+   # { "active": 3, "idle": 2, "total": 5, "maxWorkers": 15 }
+   ```
+
+4. **Check memory per worker:**
+   ```bash
+   # Memory usage by worker
+   ps aux | grep "pi --mode rpc" | awk '{print $2, $6/1024 "MB", $11}'
+   ```
+
+**Common Worker Issues:**
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| "Worker spawn failed" | Pi CLI not in PATH | Ensure `pi` command is available |
+| Worker OOM (512MB limit) | Large context window | Use `/compact` or start new session |
+| Worker crash on start | Corrupted session file | Delete session file (data loss) |
+| Stuck "Initializing..." | Worker not responding | Check logs, restart server |
+| High worker count | No idle cleanup | Workers auto-terminate after 30min idle |
+
+**Code Locations:**
+- Worker Manager: `server/src/workers/session-worker-manager.ts`
+- Worker Pool: `server/src/workers/worker-pool.ts`
+- RPC Bridge: `server/src/workers/rpc-protocol-bridge.ts`
+- RPC Client: `server/src/workers/session-rpc-client.ts`
 
 ### Debugging Deployment / Configuration
 
@@ -511,6 +588,7 @@ const { messages, streamingMessage, isStreaming } = useSessionStream(sessionId);
 - [DEPLOYMENT.md](./DEPLOYMENT.md) - Production deployment
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Comprehensive architecture
 - [docs/PROTOCOL.md](docs/PROTOCOL.md) - WebSocket protocol specification
+- [docs/PROCESS-ISOLATION-DESIGN.md](docs/PROCESS-ISOLATION-DESIGN.md) - Process-per-session design document
 
 ## Getting Help
 
