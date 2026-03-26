@@ -557,6 +557,20 @@ node -e "console.log(require('bcrypt').hashSync('your-password', 10))"
 
 ## Architecture
 
+Pi Web UI uses a JSON-RPC 2.0 based WebSocket protocol for real-time communication.
+
+### Key Features
+- **Per-session WebSocket connections** - Each session has its own WebSocket endpoint
+- **Ref-based streaming** - Minimal re-renders during content streaming
+- **Identity guards** - Prevents stale callbacks after session switches
+- **LRU cache** - Automatic memory management for session data
+
+### WebSocket Endpoints
+- `/ws/sessions/:sessionId` - JSON-RPC 2.0 protocol
+- `/ws` - Legacy protocol (deprecated)
+
+See [docs/PROTOCOL.md](docs/PROTOCOL.md) for full protocol documentation.
+
 ### Technology Stack
 
 **Backend:**
@@ -582,6 +596,12 @@ node -e "console.log(require('bcrypt').hashSync('your-password', 10))"
 ### Security
 
 See [SECURITY.md](./SECURITY.md) for detailed security documentation.
+
+### Architecture Documentation
+
+For comprehensive architecture details, see:
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Full system architecture
+- [docs/PROTOCOL.md](docs/PROTOCOL.md) - WebSocket protocol specification
 
 ## API
 

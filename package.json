@@ -17,6 +17,8 @@
     "test": "npm run test --workspace=server && npm run test --workspace=client",
     "test:coverage": "npm run test:coverage --workspace=server && npm run test:coverage --workspace=client",
     "test:e2e": "playwright test",
+    "benchmark": "vitest bench --config tests/benchmarks/vitest.bench.config.ts",
+    "benchmark:quick": "tsx tests/benchmarks/index.ts",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared"
   },

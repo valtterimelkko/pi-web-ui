@@ -423,12 +423,80 @@ npm test -- --watch
 - Prefer semantic colors
 - Extract repeated patterns to components
 
+## Architecture Notes
+
+### useSessionStream Hook
+The `useSessionStream` hook implements ref-based streaming for mobile performance:
+- Uses refs for content accumulation (no re-renders)
+- Identity guards prevent stale callbacks
+- Atomic teardown with useLayoutEffect
+
+**Location:** `client/src/hooks/useSessionStream.ts`
+
+**Usage:**
+```typescript
+const { messages, streamingMessage, isStreaming } = useSessionStream(sessionId);
+```
+
+**Key Concepts:**
+- **Ref-based accumulation**: Content is accumulated in refs to prevent re-renders during streaming
+- **Identity guards**: Callbacks check if they belong to the current session before updating state
+- **Atomic teardown**: useLayoutEffect ensures cleanup runs before next effect
+
+### Message Types
+- **LiveMessage** - New type from useSessionStream (lightweight, optimized for streaming)
+- **Message** - Legacy type from sessionStore (full-featured)
+- Use `messageAdapter.ts` for conversion between types
+
+**Type Locations:**
+```typescript
+// LiveMessage - streaming-optimized
+// client/src/hooks/useSessionStream.ts
+
+// Message - full-featured
+// client/src/store/sessionStore.ts
+
+// Adapter for conversion
+// client/src/lib/messageAdapter.ts
+```
+
+### Session Subscription Flow
+
+1. Client subscribes to session via `subscribe_session` method
+2. Server creates AgentSession if needed
+3. Events are wrapped in `session_event` envelope with sessionId
+4. Client routes events based on sessionId
+5. Unsubscribe when switching sessions
+
+**Code Locations:**
+- Server: `server/src/pi/multi-session-manager.ts`
+- Client: `client/src/hooks/useSessionStream.ts`
+
+### Performance Optimizations
+
+**LRU Cache:**
+- Session messages cached with LRU eviction
+- Max 50 sessions cached
+- Prevents memory leaks with many sessions
+
+**Virtualization:**
+- react-virtuoso for message list
+- Only visible messages rendered
+- Smooth scrolling with 100+ messages
+
+**Memoization:**
+- MessageBubble with custom comparison
+- Prevents re-renders for unchanged messages
+- Tool cards memoized separately
+
 ## Resources
 
 - [README.md](./README.md) - User documentation
 - [API.md](./API.md) - WebSocket/REST protocol
 - [SECURITY.md](./SECURITY.md) - Security architecture
 - [DEPLOYMENT.md](./DEPLOYMENT.md) - Production deployment
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Comprehensive architecture
+- [docs/PROTOCOL.md](docs/PROTOCOL.md) - WebSocket protocol specification
 
 ## Getting Help
 
