@@ -33,18 +33,22 @@ Pi Web UI is a web interface for the Pi Coding Agent:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  CLIENT (React + Vite)                                          │
-│  ├─ WebSocket Client (client/src/lib/websocket.ts)             │
+│  ├─ useSessionStream Hook (client/src/hooks/useSessionStream.ts)│
+│  │   └─ Ref-based streaming, identity guards, atomic teardown  │
+│  ├─ JSON-RPC Client (client/src/lib/jsonrpc-client.ts)         │
 │  ├─ Zustand Stores (client/src/store/)                         │
-│  ├─ React Components (client/src/components/)                  │
-│  └─ API Client (client/src/lib/api.ts)                         │
+│  └─ React Components (client/src/components/)                  │
 └───────────────────────┬─────────────────────────────────────────┘
-                        │ WebSocket / HTTP
+                        │ WebSocket (JSON-RPC 2.0)
+                        │ /ws/sessions/:sessionId
 ┌───────────────────────┴─────────────────────────────────────────┐
 │  SERVER (Express + Node.js)                                     │
-│  ├─ WebSocket Handler (server/src/websocket/)                  │
-│  ├─ Pi Service Layer (server/src/pi/)                          │
-│  ├─ REST API Routes (server/src/routes/)                       │
-│  └─ Security Layer (server/src/security/)                      │
+│  ├─ Session WebSocket (server/src/websocket/session-websocket.ts)│
+│  ├─ JSON-RPC Protocol (server/src/protocol/)                   │
+│  │   └─ Methods: initialize, prompt, cancel, steer, replay     │
+│  ├─ Event Forwarder (server/src/pi/event-forwarder.ts)         │
+│  ├─ Multi-Session Manager (server/src/pi/multi-session-manager.ts)│
+│  └─ REST API Routes (server/src/routes/)                       │
 └───────────────────────┬─────────────────────────────────────────┘
                         │ File I/O
 ┌───────────────────────┴─────────────────────────────────────────┐
@@ -52,6 +56,13 @@ Pi Web UI is a web interface for the Pi Coding Agent:
 │  └─ ~/.pi/agent/sessions/  (JSONL files)                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Key Architecture Features:**
+- **JSON-RPC 2.0 Protocol** - Structured request/response with correlation IDs
+- **Per-Session WebSockets** - Isolated connections per session
+- **Ref-Based Streaming** - No re-renders during content accumulation
+- **Identity Guards** - Prevents stale callbacks after session switches
+- **LRU Cache** - Max 5 sessions in memory, automatic eviction
 
 ## Development Workflow
 
@@ -107,9 +118,12 @@ npm test
    - JWT cookie needs `httpOnly` and `sameSite`
 
 **Code Locations:**
+- JSON-RPC Handler: `server/src/protocol/jsonrpc-handler.ts`
+- Session WebSocket: `server/src/websocket/session-websocket.ts`
 - Connection: `server/src/websocket/connection.ts`
-- Handlers: `server/src/websocket/handlers.ts`
-- Client: `client/src/lib/websocket.ts`
+- Client Hook: `client/src/hooks/useSessionStream.ts`
+- Client WebSocket: `client/src/lib/session-websocket.ts`
+- Legacy Client: `client/src/lib/websocket.ts` (deprecated)
 
 ### Debugging Deployment / Configuration
 

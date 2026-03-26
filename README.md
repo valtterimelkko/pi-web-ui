@@ -71,11 +71,26 @@ This project was developed in 6 waves over approximately 5 weeks:
 
 ## Recent Changes
 
-### Test Suite - 100% Pass Rate (March 2026)
-Complete test coverage across all modules:
-- **Server Unit Tests**: 93/93 passing - Security hardening, Pi service, WebSocket
-- **Client Unit Tests**: 62/62 passing - Component rendering, store logic
-- **E2E Tests**: 9/9 passing - Authentication flows, core functionality
+### Architecture Overhaul (March 2026)
+Complete architectural refactor for mobile performance:
+- **JSON-RPC 2.0 Protocol** - Structured WebSocket communication with request/response correlation
+- **Per-Session WebSockets** - `/ws/sessions/:sessionId` endpoints for isolated connections
+- **Ref-Based Streaming** - Content accumulated in refs, no re-renders during streaming
+- **Identity Guards** - Prevents stale callbacks after rapid session switches
+- **Atomic Teardown** - useLayoutEffect ensures cleanup before next render
+- **LRU Cache** - Max 5 sessions kept in memory to prevent memory bloat
+- **GZip Compression** - Responses > 1KB compressed for bandwidth efficiency
+
+**Performance Targets:**
+- Mobile session switch: 60-120s → <1s
+- Mobile typing latency: 2-5s → <100ms
+- Memory per session: ~15MB → ~5MB
+
+### Test Suite - 571 Tests Passing (March 2026)
+- **Shared Package**: 98 tests - JSON-RPC protocol types
+- **Server**: 280+ tests - Protocol, WebSocket, Pi service
+- **Client**: 190+ tests - Hooks, components, stores
+- **E2E**: 9 tests - Authentication, core functionality
 
 ### Security Hardening (March 2026)
 Production deployment now requires secure configuration:
