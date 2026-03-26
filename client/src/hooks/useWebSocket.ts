@@ -1,3 +1,15 @@
+/**
+ * @deprecated Use useSessionStream instead.
+ * This hook will be removed in a future version.
+ *
+ * Migration guide:
+ * - Replace `useWebSocket()` with `useSessionStream(sessionId)`
+ * - The new hook provides: messages, status, sendPrompt, cancelCurrentTurn
+ * - Session management is handled automatically by the hook
+ *
+ * For components that only need to send specific messages (like extension responses),
+ * consider using the WebSocket client directly or refactoring to use the new protocol.
+ */
 import { useEffect, useRef, useCallback } from 'react';
 import { useSessionStore } from '../store';
 import { WebSocketClient, createWebSocketClient, type WebSocketStatus } from '../lib/websocket';

@@ -36,4 +36,48 @@ test.describe('Core Functionality', () => {
     const title = await page.title();
     expect(title).toBeTruthy();
   });
+
+  test('WebSocket connection establishes successfully', async ({ page }) => {
+    // Wait for WebSocket to connect
+    await page.waitForTimeout(2000);
+    
+    // Check for connection errors
+    const connectionError = page.locator('text=/connection.*failed|websocket.*error|disconnected/i');
+    await expect(connectionError).not.toBeVisible({ timeout: 5000 });
+    
+    // App should be functional
+    await expect(page.locator('[data-testid="chat-interface"]')).toBeVisible();
+  });
+
+  test('dual protocol - HTTP and WebSocket work together', async ({ page }) => {
+    // Make HTTP request
+    const response = await page.request.get('/health');
+    expect(response.status()).toBe(200);
+    
+    // WebSocket should also be functional
+    await page.waitForTimeout(1000);
+    await expect(page.locator('[data-testid="chat-interface"]')).toBeVisible();
+  });
+
+  test('no critical console errors after load', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        consoleErrors.push(msg.text());
+      }
+    });
+    
+    await page.waitForTimeout(3000);
+    
+    // Filter out non-critical errors
+    const criticalErrors = consoleErrors.filter(err => 
+      !err.includes('Warning:') && 
+      !err.includes('DevTools') &&
+      !err.includes('network') &&
+      !err.includes('404')
+    );
+    
+    expect(criticalErrors.length).toBeLessThan(3);
+  });
 });

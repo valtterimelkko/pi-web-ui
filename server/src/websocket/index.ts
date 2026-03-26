@@ -11,3 +11,11 @@ export {
   createErrorResponse,
   type MessageHandler 
 } from './handlers.js';
+export {
+  handleSessionWebSocket,
+  replayHistory,
+  createSessionWebSocketHandler,
+  broadcastSessionEvent,
+  type SessionWsClient,
+  type SessionWsOptions,
+} from './session-websocket.js';

@@ -2,7 +2,7 @@ import React, { useState, memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check, Bot } from 'lucide-react';
-import type { Message } from '../../store';
+import type { LiveMessage } from '../../hooks/useSessionStream.js';
 import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -11,7 +11,7 @@ import { SubagentToolCard } from '../Tools/SubagentToolCard';
 import { copyToClipboard } from '../../lib/clipboard';
 
 interface MessageBubbleProps {
-  message: Message;
+  message: LiveMessage;
   isLast?: boolean;
   isCurrentRun?: boolean;
 }
@@ -64,46 +64,24 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
   const isAssistant = message.role === 'assistant';
 
   // Process content to extract text and thinking
+  // LiveMessage has content: ContentPart[] (always array)
   const processContent = (): { text: string; thinking: string | null } => {
-    if (Array.isArray(message.content)) {
-      const textParts: string[] = [];
-      const thinkingParts: string[] = [];
+    const content = message.content;
+    const textParts: string[] = [];
+    const thinkingParts: string[] = [];
 
-      for (const part of message.content) {
-        if (part.type === 'text' && part.text) {
-          textParts.push(part.text);
-        } else if (part.type === 'thinking' && part.thinking) {
-          thinkingParts.push(part.thinking);
-        }
+    for (const part of content) {
+      if (part.type === 'text' && part.text) {
+        textParts.push(part.text);
+      } else if (part.type === 'thinking' && part.thinking) {
+        thinkingParts.push(part.thinking);
       }
-
-      const fullText = textParts.join('');
-      const thinkingMatch = fullText.match(/<thinking>([\s\S]*?)<\/thinking>/);
-      if (thinkingMatch) {
-        return {
-          text: fullText.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trim(),
-          thinking: thinkingMatch[1].trim(),
-        };
-      }
-
-      return {
-        text: fullText,
-        thinking: thinkingParts.length > 0 ? thinkingParts.join('\n\n') : null,
-      };
     }
 
-    if (typeof message.content === 'string') {
-      const thinkingMatch = message.content.match(/<thinking>([\s\S]*?)<\/thinking>/);
-      if (thinkingMatch) {
-        return {
-          text: message.content.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trim(),
-          thinking: thinkingMatch[1].trim(),
-        };
-      }
-      return { text: message.content, thinking: null };
-    }
-
-    return { text: '', thinking: null };
+    return {
+      text: textParts.join(''),
+      thinking: thinkingParts.length > 0 ? thinkingParts.join('\n\n') : null,
+    };
   };
 
   const { text: displayText, thinking } = processContent();
@@ -329,9 +307,10 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
 }, (prevProps, nextProps) => {
   // Custom comparison for better memoization
   // Only re-render if message content or last status changes
+  // LiveMessage.content is ContentPart[], compare as JSON for simplicity
   return (
     prevProps.message.id === nextProps.message.id &&
-    prevProps.message.content === nextProps.message.content &&
+    JSON.stringify(prevProps.message.content) === JSON.stringify(nextProps.message.content) &&
     prevProps.isLast === nextProps.isLast &&
     prevProps.isCurrentRun === nextProps.isCurrentRun &&
     prevProps.message.toolResult?.output === nextProps.message.toolResult?.output &&

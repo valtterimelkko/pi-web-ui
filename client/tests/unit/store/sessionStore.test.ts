@@ -21,6 +21,8 @@ describe('sessionStore', () => {
       isStreaming: false,
       isLoading: false,
       error: null,
+      sessionCache: new Map(),
+      sessionCacheMeta: {},
     });
   });
 
@@ -493,6 +495,216 @@ describe('sessionStore', () => {
       
       // Global isStreaming should be synced to false
       expect(useSessionStore.getState().isStreaming).toBe(false);
+    });
+  });
+
+  describe('LRU cache', () => {
+    beforeEach(() => {
+      // Clear sessionCache before each test
+      useSessionStore.setState({ 
+        sessionCache: new Map(),
+        sessionMessages: {},
+        sessionCacheMeta: {},
+      });
+    });
+
+    it('should have sessionCache in initial state', () => {
+      const state = useSessionStore.getState();
+      expect(state.sessionCache).toBeInstanceOf(Map);
+      expect(state.sessionCache.size).toBe(0);
+    });
+
+    it('should cache messages when switching sessions', () => {
+      const state = useSessionStore.getState();
+      
+      // Set first session and add messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Switch to second session
+      state.setCurrentSession('session-2');
+      
+      // First session should be in cache
+      const cache = useSessionStore.getState().sessionCache;
+      expect(cache.has('session-1')).toBe(true);
+      expect(cache.get('session-1')?.messages).toHaveLength(1);
+    });
+
+    it('should restore cached messages when switching back', () => {
+      const state = useSessionStore.getState();
+      
+      // Set first session and add messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Switch to second session
+      state.setCurrentSession('session-2');
+      expect(useSessionStore.getState().messages).toHaveLength(0);
+      
+      // Switch back to first session
+      state.setCurrentSession('session-1');
+      
+      // Should restore cached messages
+      expect(useSessionStore.getState().messages).toHaveLength(1);
+    });
+
+    it('should evict oldest session when cache exceeds limit', () => {
+      const state = useSessionStore.getState();
+      
+      // Add 6 sessions (exceeds MAX_CACHED_SESSIONS = 5)
+      for (let i = 1; i <= 6; i++) {
+        state.setCurrentSession(`session-${i}`);
+        state.addMessage({ id: `msg-${i}`, role: 'user', content: `Message ${i}`, timestamp: i * 1000 });
+      }
+      
+      // Check that eviction happened (should have at most 5)
+      const cache = useSessionStore.getState().sessionCache;
+      expect(cache.size).toBeLessThanOrEqual(5);
+    });
+
+    it('should never evict the current session', () => {
+      const state = useSessionStore.getState();
+      
+      // Create first session
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Create more sessions to trigger eviction
+      for (let i = 2; i <= 7; i++) {
+        state.setCurrentSession(`session-${i}`);
+        state.addMessage({ id: `${i}`, role: 'user', content: `Message ${i}`, timestamp: i * 1000 });
+      }
+      
+      // Current session (session-7) should still be in cache
+      const cache = useSessionStore.getState().sessionCache;
+      expect(cache.has('session-7')).toBe(true);
+    });
+
+    it('should track lastAccess on session switch', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message', timestamp: 1000 });
+      
+      const beforeSwitch = Date.now();
+      state.setCurrentSession('session-2');
+      
+      const cache = useSessionStore.getState().sessionCache;
+      const cached = cache.get('session-1');
+      expect(cached?.lastAccess).toBeGreaterThanOrEqual(beforeSwitch);
+    });
+
+    it('should provide cache statistics via getCacheStats', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message', timestamp: 1000 });
+      
+      const stats = state.getCacheStats();
+      expect(stats.size).toBe(1);
+      expect(stats.maxSize).toBe(5);
+      expect(stats.sessions).toContain('session-1');
+    });
+
+    it('should update cache metadata with messageCount and sizeBytes', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Test message content', timestamp: 1000 });
+      
+      const meta = useSessionStore.getState().sessionCacheMeta['session-1'];
+      expect(meta?.messageCount).toBe(1);
+      expect(meta?.sizeBytes).toBeGreaterThan(0);
+    });
+  });
+
+  describe('switchSession', () => {
+    beforeEach(() => {
+      useSessionStore.setState({ 
+        sessionCache: new Map(),
+        sessionMessages: {},
+        sessionCacheMeta: {},
+        streamingSessions: {},
+      });
+    });
+
+    it('should switch sessions atomically', () => {
+      const state = useSessionStore.getState();
+      
+      // Set up first session with messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Use switchSession for atomic switch
+      state.switchSession('session-2');
+      
+      expect(useSessionStore.getState().currentSessionId).toBe('session-2');
+      expect(useSessionStore.getState().messages).toHaveLength(0);
+    });
+
+    it('should mark old session as accessed before switching', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message', timestamp: 1000 });
+      
+      const beforeSwitch = Date.now();
+      state.switchSession('session-2');
+      
+      const cache = useSessionStore.getState().sessionCache;
+      const cached = cache.get('session-1');
+      expect(cached?.lastAccess).toBeGreaterThanOrEqual(beforeSwitch);
+    });
+
+    it('should restore cached messages when switching to previously visited session', () => {
+      const state = useSessionStore.getState();
+      
+      // Set up first session with messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Switch away
+      state.switchSession('session-2');
+      expect(useSessionStore.getState().messages).toHaveLength(0);
+      
+      // Switch back
+      state.switchSession('session-1');
+      expect(useSessionStore.getState().messages).toHaveLength(1);
+      expect(useSessionStore.getState().messages[0].content).toBe('Message 1');
+    });
+
+    it('should reset streaming state based on streamingSessions', () => {
+      const state = useSessionStore.getState();
+      
+      // Set up session-1 as streaming
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      
+      // Set up session-2 as not streaming
+      state.setCurrentSession('session-2');
+      state.setStreaming(false);
+      
+      // Switch to session-1 (which is streaming)
+      state.switchSession('session-1');
+      expect(useSessionStore.getState().isStreaming).toBe(true);
+      
+      // Switch to session-2 (which is not streaming)
+      state.switchSession('session-2');
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+    });
+
+    it('should trigger eviction after switch', () => {
+      const state = useSessionStore.getState();
+      
+      // Create 6 sessions to exceed limit
+      for (let i = 1; i <= 6; i++) {
+        state.switchSession(`session-${i}`);
+        state.addMessage({ id: `${i}`, role: 'user', content: `Message ${i}`, timestamp: i * 1000 });
+      }
+      
+      // Cache should be limited
+      const cache = useSessionStore.getState().sessionCache;
+      expect(cache.size).toBeLessThanOrEqual(5);
     });
   });
 });

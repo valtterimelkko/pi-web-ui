@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
+import { compressionMiddleware } from './middleware/compression.js';
 import authRoutes from './routes/auth.js';
 import sessionsRoutes from './routes/sessions.js';
 import modelsRoutes from './routes/models.js';
@@ -48,6 +49,9 @@ export function createApp(): express.Application {
     max: config.rateLimitMax,
     message: { error: 'Too many requests, please try again later.' },
   }));
+
+  // Response compression
+  app.use(compressionMiddleware);
 
   // Health check endpoints (no auth required)
   app.get('/health', (_req, res) => {

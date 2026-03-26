@@ -13,8 +13,37 @@ import { SessionPool } from '../pi/session-pool.js';
 import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
+import { handleSessionWebSocket } from './session-websocket.js';
 import { config } from '../config.js';
 import { validateCsrfToken } from '../security/csrf.js';
+
+// ============================================================================
+// Protocol Detection
+// ============================================================================
+
+/**
+ * Protocol type for WebSocket messages
+ */
+type ProtocolType = 'jsonrpc' | 'legacy';
+
+/**
+ * Detect the protocol of an incoming WebSocket message.
+ *
+ * JSON-RPC 2.0 messages have a `jsonrpc: '2.0'` field.
+ * Legacy messages use the original Pi Web UI protocol.
+ *
+ * @param data - Raw message data as string
+ * @returns 'jsonrpc' or 'legacy'
+ */
+function detectProtocol(data: string): ProtocolType {
+  try {
+    const parsed = JSON.parse(data);
+    if (parsed.jsonrpc === '2.0') return 'jsonrpc';
+    return 'legacy';
+  } catch {
+    return 'legacy';
+  }
+}
 
 export interface WebSocketClient {
   id: string;
@@ -115,7 +144,7 @@ export class WebSocketConnectionManager {
       });
 
       ws.on('message', (data: Buffer) => {
-        void this.handleMessage(clientId, data);
+        void this.handleMessageWithProtocol(clientId, data, ws, req);
       });
 
       ws.on('close', () => {
@@ -140,7 +169,35 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    // Authenticate
+    // Check if this is a JSON-RPC session WebSocket request
+    // URL format: /ws/sessions/:sessionId or /ws/session/:sessionId
+    const url = req.url || '';
+    if (url.includes('/ws/sessions/') || url.includes('/ws/session/')) {
+      // Extract session ID from URL
+      const match = url.match(/\/ws\/sessions?\/([^\/\?]+)/);
+      if (match) {
+        const sessionId = match[1];
+        console.log(`JSON-RPC WebSocket upgrade for session: ${sessionId}`);
+
+        // Authenticate first
+        const authResult = authenticateWebSocket(req);
+        if (!authResult.success) {
+          console.log('JSON-RPC WebSocket auth failed, destroying socket');
+          socket.destroy();
+          return;
+        }
+
+        // Upgrade and hand off to session-websocket handler
+        this.wss.handleUpgrade(req, socket, head, (ws) => {
+          handleSessionWebSocket(ws, req, sessionId, this.multiSessionManager, {
+            verboseLogging: process.env.NODE_ENV === 'development',
+          });
+        });
+        return;
+      }
+    }
+
+    // Authenticate for legacy protocol
     const authResult = authenticateWebSocket(req);
     console.log(`WebSocket auth result: ${authResult.success}, userId: ${authResult.user?.userId}`);
 
@@ -153,6 +210,48 @@ export class WebSocketConnectionManager {
     this.wss.handleUpgrade(req, socket, head, (ws) => {
       this.wss.emit('connection', ws, req, authResult);
     });
+  }
+
+  /**
+   * Handle incoming WebSocket message with protocol detection.
+   *
+   * Routes JSON-RPC messages to the session-websocket handler
+   * and legacy messages to the existing message handler.
+   */
+  private async handleMessageWithProtocol(
+    clientId: string,
+    data: Buffer,
+    ws: WebSocket,
+    req: IncomingMessage
+  ): Promise<void> {
+    const dataStr = data.toString();
+    const protocol = detectProtocol(dataStr);
+
+    if (protocol === 'jsonrpc') {
+      // JSON-RPC message - should not reach here for session WebSocket
+      // as those are handled by session-websocket.ts directly
+      console.log(`Received JSON-RPC message on legacy connection from ${clientId}`);
+
+      // Send error response indicating wrong endpoint
+      try {
+        const parsed = JSON.parse(dataStr);
+        const response = {
+          jsonrpc: '2.0',
+          id: parsed.id ?? null,
+          error: {
+            code: -32600,
+            message: 'Invalid Request: JSON-RPC messages should use /ws/sessions/:sessionId endpoint',
+          },
+        };
+        ws.send(JSON.stringify(response));
+      } catch {
+        // Invalid JSON-RPC, ignore
+      }
+      return;
+    }
+
+    // Legacy protocol - use existing handler
+    await this.handleMessage(clientId, data);
   }
 
   private async handleMessage(clientId: string, data: Buffer): Promise<void> {
@@ -1015,6 +1114,20 @@ export class WebSocketConnectionManager {
     return {
       connectedClients: this.clients.size,
     };
+  }
+
+  /**
+   * Get the WebSocket server instance
+   */
+  getWss(): WebSocketServer {
+    return this.wss;
+  }
+
+  /**
+   * Get the MultiSessionManager instance
+   */
+  getMultiSessionManager(): MultiSessionManager {
+    return this.multiSessionManager;
   }
 
   /**

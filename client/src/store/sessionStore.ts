@@ -2,11 +2,46 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useUIStore } from './uiStore';
 import { getPreferences, patchPreferences } from '../lib/api';
+import type { ContentPart } from '../hooks/useSessionStream.js';
+
+// Maximum sessions to keep in memory (LRU cache limit)
+const MAX_CACHED_SESSIONS = 5;
 
 // Track the current message ID per session for the multi-session event path.
 // Raw Pi SDK events forwarded by multi-session-manager don't include message IDs,
 // so we track the ID assigned at message_start to match subsequent message_update events.
 const currentMessageIdBySession = new Map<string, string>();
+
+/**
+ * LRU cache entry for session messages
+ */
+interface SessionCache {
+  messages: Message[];
+  lastAccess: number;
+}
+
+/**
+ * Estimate message size in bytes for cache tracking
+ */
+function estimateMessageSize(msg: Message): number {
+  let size = 100; // Base overhead
+  if (typeof msg.content === 'string') {
+    size += msg.content.length * 2; // UTF-16 chars
+  } else if (Array.isArray(msg.content)) {
+    msg.content.forEach(block => {
+      size += (block.text?.length || 0) * 2;
+      size += (block.thinking?.length || 0) * 2;
+    });
+  }
+  return size;
+}
+
+/**
+ * Estimate total size of messages array in bytes
+ */
+function estimateMessagesSize(messages: Message[]): number {
+  return messages.reduce((total, msg) => total + estimateMessageSize(msg), 0);
+}
 
 export interface Session {
   id: string;
@@ -22,7 +57,7 @@ export interface Session {
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'tool';
-  content: string | Array<{ type: string; text?: string; thinking?: string }>;
+  content: string | ContentPart[];
   timestamp: number;
   toolCall?: {
     id: string;
@@ -33,6 +68,7 @@ export interface Message {
     output: string;
     isError: boolean;
   };
+  isComplete?: boolean; // Optional for backward compatibility with LiveMessage
 }
 
 /**
@@ -54,6 +90,8 @@ interface SessionCacheMeta {
   fileTimestamp: number;  // Server file modification time when last read
   lastLocalUpdate: number; // When we last updated from WebSocket events
   isStreaming: boolean;    // Was streaming when we last saw it
+  messageCount: number;    // Number of messages in cache
+  sizeBytes: number;       // Approximate memory usage
 }
 
 interface ExtensionUIRequest {
@@ -103,6 +141,8 @@ interface SessionState {
   contextWindow: number;
   // Archive state (persisted)
   archivedSessionPaths: string[];
+  // LRU cache for session messages
+  sessionCache: Map<string, SessionCache>;
   // Session cache with metadata for intelligent invalidation
   sessionMessages: Record<string, Message[]>;
   sessionCacheMeta: Record<string, SessionCacheMeta>;
@@ -120,6 +160,7 @@ interface SessionState {
   // Actions
   setSessions: (sessions: Session[]) => void;
   setCurrentSession: (sessionId: string | null) => void;
+  switchSession: (newSessionId: string) => void;
   setCurrentModel: (modelId: string) => void;
   addMessage: (message: Message) => void;
   updateMessage: (id: string, updates: Partial<Message>) => void;
@@ -144,6 +185,9 @@ interface SessionState {
   clearSessionMessages: (sessionId: string) => void;
   // Cache metadata helpers
   getSessionCacheMeta: (sessionId: string) => SessionCacheMeta | undefined;
+  // LRU cache helpers
+  evictIfNeeded: () => void;
+  getCacheStats: () => { size: number; maxSize: number; sessions: string[] };
   
   // Multi-session data actions
   updateSessionData: (sessionId: string, updates: Partial<SessionData>) => void;
@@ -173,6 +217,8 @@ export const useSessionStore = create<SessionState>()(
       contextWindow: 0,
       archivedSessionPaths: [],
       sessionDisplayNames: {},
+      // LRU cache for session messages
+      sessionCache: new Map<string, SessionCache>(),
       // Session cache with metadata
       sessionMessages: {},
       sessionCacheMeta: {},
@@ -188,6 +234,99 @@ export const useSessionStore = create<SessionState>()(
       setSessionInfo: (info) => set({ sessionInfo: info }),
       setCurrentModel: (modelId) => set({ currentModel: modelId }),
 
+      // LRU cache eviction: remove least recently used sessions when over limit
+      evictIfNeeded: () => {
+        const state = get();
+        const cache = state.sessionCache;
+        
+        if (cache.size <= MAX_CACHED_SESSIONS) return;
+        
+        // Sort by lastAccess (oldest first)
+        const entries = [...cache.entries()]
+          .sort((a, b) => a[1].lastAccess - b[1].lastAccess);
+        
+        // Remove oldest (but never current session)
+        const currentSessionId = state.currentSessionId;
+        const toEvict: string[] = [];
+        
+        for (const [id] of entries) {
+          if (id !== currentSessionId && cache.size - toEvict.length > MAX_CACHED_SESSIONS) {
+            toEvict.push(id);
+          }
+        }
+        
+        if (toEvict.length > 0) {
+          set((s) => {
+            const newCache = new Map(s.sessionCache);
+            const newSessionMessages = { ...s.sessionMessages };
+            const newSessionCacheMeta = { ...s.sessionCacheMeta };
+            
+            toEvict.forEach(id => {
+              newCache.delete(id);
+              delete newSessionMessages[id];
+              delete newSessionCacheMeta[id];
+            });
+            
+            return {
+              sessionCache: newCache,
+              sessionMessages: newSessionMessages,
+              sessionCacheMeta: newSessionCacheMeta,
+            };
+          });
+        }
+      },
+
+      // Get cache statistics
+      getCacheStats: () => {
+        const cache = get().sessionCache;
+        return {
+          size: cache.size,
+          maxSize: MAX_CACHED_SESSIONS,
+          sessions: [...cache.keys()],
+        };
+      },
+
+      // Atomic session switch - clears old data before loading new
+      switchSession: (newSessionId: string) => {
+        set((state) => {
+          const newCache = new Map(state.sessionCache);
+          
+          // Mark old session cache as accessed before switching
+          if (state.currentSessionId) {
+            const oldCache = newCache.get(state.currentSessionId);
+            if (oldCache) {
+              oldCache.lastAccess = Date.now();
+            }
+          }
+          
+          // Get cached messages for new session (or empty)
+          const newSessionCache = newCache.get(newSessionId);
+          const cachedMessages = newSessionCache?.messages || [];
+          
+          // Update lastAccess for new session
+          if (newSessionCache) {
+            newSessionCache.lastAccess = Date.now();
+          } else {
+            // Create new cache entry
+            newCache.set(newSessionId, {
+              messages: cachedMessages,
+              lastAccess: Date.now(),
+            });
+          }
+          
+          return {
+            currentSessionId: newSessionId,
+            messages: cachedMessages,
+            sessionCache: newCache,
+            // Reset streaming state for the new session
+            isStreaming: state.streamingSessions[newSessionId] || false,
+          };
+        });
+        
+        // Trigger eviction after switch
+        get().evictIfNeeded();
+      },
+
       // Background session helpers
       getSessionMessages: (sessionId: string) => {
         return get().sessionMessages[sessionId] || [];
@@ -201,11 +340,14 @@ export const useSessionStore = create<SessionState>()(
         set((state) => {
           const newSessionMessages = { ...state.sessionMessages };
           const newSessionCacheMeta = { ...state.sessionCacheMeta };
+          const newCache = new Map(state.sessionCache);
           delete newSessionMessages[sessionId];
           delete newSessionCacheMeta[sessionId];
+          newCache.delete(sessionId);
           return { 
             sessionMessages: newSessionMessages,
             sessionCacheMeta: newSessionCacheMeta,
+            sessionCache: newCache,
           };
         });
       },
@@ -249,6 +391,11 @@ export const useSessionStore = create<SessionState>()(
             model: null,
           };
           const newMessages = [...existingData.messages, message];
+          const newCache = new Map(state.sessionCache);
+          newCache.set(sessionId, {
+            messages: newMessages,
+            lastAccess: Date.now(),
+          });
           return {
             sessionData: {
               ...state.sessionData,
@@ -263,6 +410,7 @@ export const useSessionStore = create<SessionState>()(
               ...state.sessionMessages,
               [sessionId]: newMessages,
             },
+            sessionCache: newCache,
           };
         });
       },
@@ -275,6 +423,11 @@ export const useSessionStore = create<SessionState>()(
           const newMessages = existingData.messages.map((msg) =>
             msg.id === messageId ? { ...msg, ...updates } : msg
           );
+          const newCache = new Map(state.sessionCache);
+          newCache.set(sessionId, {
+            messages: newMessages,
+            lastAccess: Date.now(),
+          });
           return {
             sessionData: {
               ...state.sessionData,
@@ -289,6 +442,7 @@ export const useSessionStore = create<SessionState>()(
               ...state.sessionMessages,
               [sessionId]: newMessages,
             },
+            sessionCache: newCache,
           };
         });
       },
@@ -452,41 +606,86 @@ export const useSessionStore = create<SessionState>()(
         
         // First, save current session's messages to cache with metadata (if any)
         if (state.currentSessionId && state.messages.length > 0) {
-          set((s) => ({
-            sessionMessages: {
-              ...s.sessionMessages,
-              [s.currentSessionId!]: s.messages,
-            },
-            sessionCacheMeta: {
-              ...s.sessionCacheMeta,
-              [s.currentSessionId!]: {
-                fileTimestamp: s.sessionCacheMeta[s.currentSessionId!]?.fileTimestamp || 0,
-                lastLocalUpdate: Date.now(),
-                isStreaming: s.isStreaming,
+          const oldMessages = state.messages;
+          set((s) => {
+            const newCache = new Map(s.sessionCache);
+            newCache.set(s.currentSessionId!, {
+              messages: oldMessages,
+              lastAccess: Date.now(),
+            });
+            return {
+              sessionCache: newCache,
+              sessionMessages: {
+                ...s.sessionMessages,
+                [s.currentSessionId!]: oldMessages,
               },
-            },
-          }));
+              sessionCacheMeta: {
+                ...s.sessionCacheMeta,
+                [s.currentSessionId!]: {
+                  fileTimestamp: s.sessionCacheMeta[s.currentSessionId!]?.fileTimestamp || 0,
+                  lastLocalUpdate: Date.now(),
+                  isStreaming: s.isStreaming,
+                  messageCount: oldMessages.length,
+                  sizeBytes: estimateMessagesSize(oldMessages),
+                },
+              },
+            };
+          });
         }
         
         // Then, switch to new session and load its cached messages (if any)
         const cachedMessages = sessionId ? get().sessionMessages[sessionId] || [] : [];
-        set({ 
-          currentSessionId: sessionId,
-          messages: cachedMessages,
+        set((s) => {
+          const newCache = new Map(s.sessionCache);
+          if (sessionId) {
+            const existingCache = newCache.get(sessionId);
+            newCache.set(sessionId, {
+              messages: existingCache?.messages || cachedMessages,
+              lastAccess: Date.now(),
+            });
+          }
+          return {
+            currentSessionId: sessionId,
+            messages: cachedMessages,
+            sessionCache: newCache,
+          };
         });
+        
+        // Trigger eviction after session switch
+        get().evictIfNeeded();
       },
 
       addMessage: (message) => {
         set((state) => {
           const newMessages = [...state.messages, message];
-          // Also update the session cache
+          // Also update the session caches
           const sessionId = state.currentSessionId;
           const newSessionMessages = sessionId 
             ? { ...state.sessionMessages, [sessionId]: newMessages }
             : state.sessionMessages;
+          const newCache = new Map(state.sessionCache);
+          if (sessionId) {
+            newCache.set(sessionId, {
+              messages: newMessages,
+              lastAccess: Date.now(),
+            });
+          }
+          const newSessionCacheMeta = sessionId 
+            ? {
+                ...state.sessionCacheMeta,
+                [sessionId]: {
+                  ...state.sessionCacheMeta[sessionId],
+                  messageCount: newMessages.length,
+                  sizeBytes: estimateMessagesSize(newMessages),
+                  lastLocalUpdate: Date.now(),
+                },
+              }
+            : state.sessionCacheMeta;
           return { 
             messages: newMessages,
             sessionMessages: newSessionMessages,
+            sessionCache: newCache,
+            sessionCacheMeta: newSessionCacheMeta,
           };
         });
       },
@@ -496,14 +695,34 @@ export const useSessionStore = create<SessionState>()(
           const newMessages = state.messages.map((msg) =>
             msg.id === id ? { ...msg, ...updates } : msg
           );
-          // Also update the session cache
+          // Also update the session caches
           const sessionId = state.currentSessionId;
           const newSessionMessages = sessionId 
             ? { ...state.sessionMessages, [sessionId]: newMessages }
             : state.sessionMessages;
+          const newCache = new Map(state.sessionCache);
+          if (sessionId) {
+            newCache.set(sessionId, {
+              messages: newMessages,
+              lastAccess: Date.now(),
+            });
+          }
+          const newSessionCacheMeta = sessionId 
+            ? {
+                ...state.sessionCacheMeta,
+                [sessionId]: {
+                  ...state.sessionCacheMeta[sessionId],
+                  messageCount: newMessages.length,
+                  sizeBytes: estimateMessagesSize(newMessages),
+                  lastLocalUpdate: Date.now(),
+                },
+              }
+            : state.sessionCacheMeta;
           return { 
             messages: newMessages,
             sessionMessages: newSessionMessages,
+            sessionCache: newCache,
+            sessionCacheMeta: newSessionCacheMeta,
           };
         });
       },
@@ -557,8 +776,16 @@ export const useSessionStore = create<SessionState>()(
             // Clear any cached messages for this session
             set((state) => {
               const newSessionMessages = { ...state.sessionMessages };
+              const newSessionCacheMeta = { ...state.sessionCacheMeta };
+              const newCache = new Map(state.sessionCache);
               delete newSessionMessages[msg.sessionId as string];
-              return { sessionMessages: newSessionMessages };
+              delete newSessionCacheMeta[msg.sessionId as string];
+              newCache.delete(msg.sessionId as string);
+              return { 
+                sessionMessages: newSessionMessages,
+                sessionCacheMeta: newSessionCacheMeta,
+                sessionCache: newCache,
+              };
             });
             break;
 
@@ -572,7 +799,7 @@ export const useSessionStore = create<SessionState>()(
               messages?: Array<{
                 id: string;
                 role: 'user' | 'assistant';
-                content: string | Array<{ type: string; text?: string; thinking?: string }>;
+                content: string | ContentPart[];
                 timestamp: number;
               }>;
               fileTimestamp?: number;
@@ -600,6 +827,7 @@ export const useSessionStore = create<SessionState>()(
             set((state) => {
               const newSessionMessages = { ...state.sessionMessages };
               const newSessionCacheMeta = { ...state.sessionCacheMeta };
+              const newCache = new Map(state.sessionCache);
               
               // Save current session's messages with metadata
               if (currentId && currentMessages.length > 0) {
@@ -608,7 +836,13 @@ export const useSessionStore = create<SessionState>()(
                   fileTimestamp: state.sessionCacheMeta[currentId]?.fileTimestamp || 0,
                   lastLocalUpdate: Date.now(),
                   isStreaming: state.isStreaming,
+                  messageCount: currentMessages.length,
+                  sizeBytes: estimateMessagesSize(currentMessages),
                 };
+                newCache.set(currentId, {
+                  messages: currentMessages,
+                  lastAccess: Date.now(),
+                });
               }
               
               // Store the switched session's messages with metadata from server
@@ -618,7 +852,13 @@ export const useSessionStore = create<SessionState>()(
                   fileTimestamp: serverFileTimestamp,
                   lastLocalUpdate: Date.now(),
                   isStreaming: serverIsStreaming,
+                  messageCount: clientMessages.length,
+                  sizeBytes: estimateMessagesSize(clientMessages),
                 };
+                newCache.set(switchMsg.sessionId, {
+                  messages: clientMessages,
+                  lastAccess: Date.now(),
+                });
               }
               
               return {
@@ -630,10 +870,14 @@ export const useSessionStore = create<SessionState>()(
                 contextWindow: switchMsg.contextWindow ?? 0,
                 sessionMessages: newSessionMessages,
                 sessionCacheMeta: newSessionCacheMeta,
+                sessionCache: newCache,
                 // If server says streaming, trust it
                 isStreaming: serverIsStreaming,
               };
             });
+            
+            // Trigger eviction after session switch
+            get().evictIfNeeded();
             break;
           }
 
@@ -645,10 +889,13 @@ export const useSessionStore = create<SessionState>()(
                 : state.streamingSessions;
               const newSessionCacheMeta = { ...state.sessionCacheMeta };
               if (sessionId) {
+                const currentMeta = newSessionCacheMeta[sessionId] || {};
                 newSessionCacheMeta[sessionId] = {
-                  ...newSessionCacheMeta[sessionId],
+                  ...currentMeta,
                   isStreaming: true,
                   lastLocalUpdate: Date.now(),
+                  messageCount: currentMeta.messageCount || state.messages.length,
+                  sizeBytes: currentMeta.sizeBytes || estimateMessagesSize(state.messages),
                 };
               }
               return { 
@@ -668,10 +915,13 @@ export const useSessionStore = create<SessionState>()(
                 : state.streamingSessions;
               const newSessionCacheMeta = { ...state.sessionCacheMeta };
               if (sessionId) {
+                const currentMeta = newSessionCacheMeta[sessionId] || {};
                 newSessionCacheMeta[sessionId] = {
-                  ...newSessionCacheMeta[sessionId],
+                  ...currentMeta,
                   isStreaming: false,
                   lastLocalUpdate: Date.now(),
+                  messageCount: state.messages.length,
+                  sizeBytes: estimateMessagesSize(state.messages),
                 };
               }
               return { 
@@ -705,11 +955,11 @@ export const useSessionStore = create<SessionState>()(
               const existingMsg = get().messages.find(m => m.id === msgData.id);
               if (existingMsg) {
                 // Get existing content array or create new one
-                let contentArray: Array<{ type: string; text?: string; thinking?: string }>;
+                let contentArray: ContentPart[];
                 if (Array.isArray(existingMsg.content)) {
                   contentArray = [...existingMsg.content];
                 } else if (typeof existingMsg.content === 'string') {
-                  contentArray = existingMsg.content ? [{ type: 'text', text: existingMsg.content }] : [];
+                  contentArray = existingMsg.content ? [{ type: 'text' as const, text: existingMsg.content }] : [];
                 } else {
                   contentArray = [];
                 }
@@ -723,7 +973,7 @@ export const useSessionStore = create<SessionState>()(
                   if (lastEntry && lastEntry.type === 'text') {
                     lastEntry.text = (lastEntry.text || '') + delta;
                   } else {
-                    contentArray.push({ type: 'text', text: delta });
+                    contentArray.push({ type: 'text' as const, text: delta });
                   }
                   get().updateMessage(msgData.id, { content: contentArray });
                 }
@@ -733,7 +983,7 @@ export const useSessionStore = create<SessionState>()(
                   if (lastEntry && lastEntry.type === 'thinking') {
                     lastEntry.thinking = (lastEntry.thinking || '') + delta;
                   } else {
-                    contentArray.push({ type: 'thinking', thinking: delta });
+                    contentArray.push({ type: 'thinking' as const, thinking: delta });
                   }
                   get().updateMessage(msgData.id, { content: contentArray });
                 }
@@ -749,12 +999,15 @@ export const useSessionStore = create<SessionState>()(
               set((state) => {
                 const sessionId = state.currentSessionId;
                 if (sessionId) {
+                  const currentMeta = state.sessionCacheMeta[sessionId] || {};
                   return {
                     sessionCacheMeta: {
                       ...state.sessionCacheMeta,
                       [sessionId]: {
-                        ...state.sessionCacheMeta[sessionId],
+                        ...currentMeta,
                         lastLocalUpdate: Date.now(),
+                        messageCount: state.messages.length,
+                        sizeBytes: estimateMessagesSize(state.messages),
                       },
                     },
                   };
@@ -1061,11 +1314,11 @@ export const useSessionStore = create<SessionState>()(
                   if (sessionData) {
                     const existingMsg = sessionData.messages.find(m => m.id === messageId);
                     if (existingMsg) {
-                      let contentArray: Array<{ type: string; text?: string; thinking?: string }>;
+                      let contentArray: ContentPart[];
                       if (Array.isArray(existingMsg.content)) {
                         contentArray = [...existingMsg.content];
                       } else if (typeof existingMsg.content === 'string') {
-                        contentArray = existingMsg.content ? [{ type: 'text', text: existingMsg.content }] : [];
+                        contentArray = existingMsg.content ? [{ type: 'text' as const, text: existingMsg.content }] : [];
                       } else {
                         contentArray = [];
                       }
@@ -1078,7 +1331,7 @@ export const useSessionStore = create<SessionState>()(
                         if (lastEntry && lastEntry.type === 'text') {
                           lastEntry.text = (lastEntry.text || '') + delta;
                         } else {
-                          contentArray.push({ type: 'text', text: delta });
+                          contentArray.push({ type: 'text' as const, text: delta });
                         }
                         get().updateMessageInSession(sessionId, messageId, { content: contentArray });
                         // Also update current session if it matches
@@ -1090,7 +1343,7 @@ export const useSessionStore = create<SessionState>()(
                         if (lastEntry && lastEntry.type === 'thinking') {
                           lastEntry.thinking = (lastEntry.thinking || '') + delta;
                         } else {
-                          contentArray.push({ type: 'thinking', thinking: delta });
+                          contentArray.push({ type: 'thinking' as const, thinking: delta });
                         }
                         get().updateMessageInSession(sessionId, messageId, { content: contentArray });
                         // Also update current session if it matches

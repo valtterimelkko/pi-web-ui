@@ -1,6 +1,6 @@
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
-import type { Message } from '../../store';
+import type { LiveMessage } from '../../hooks/useSessionStream.js';
 import { MessageBubble } from './MessageBubble';
 
 export interface VirtualizedMessageListHandle {
@@ -9,7 +9,7 @@ export interface VirtualizedMessageListHandle {
 }
 
 interface VirtualizedMessageListProps {
-  messages: Message[];
+  messages: LiveMessage[];
   isStreaming: boolean;
   onAtBottomChange?: (atBottom: boolean) => void;
   hasSession?: boolean;
@@ -17,7 +17,7 @@ interface VirtualizedMessageListProps {
 }
 
 type ListItem = {
-  message: Message;
+  message: LiveMessage;
   index: number;
 };
 
@@ -95,12 +95,11 @@ function extractSkillName(content: string): string | null {
 }
 
 // Check if message content is skill content and extract info for display
-function getSkillContentInfo(message: Message): { isSkillContent: boolean; skillName?: string } {
-  // Extract text content
-  const contentArray = Array.isArray(message.content) ? message.content : [];
-  const content = typeof message.content === 'string' 
-    ? message.content 
-    : contentArray.map(c => c.text || '').join('');
+function getSkillContentInfo(message: LiveMessage): { isSkillContent: boolean; skillName?: string } {
+  // Extract text content from ContentPart[]
+  const content = message.content
+    .map(c => c.text || c.thinking || '')
+    .join('');
   
   const trimmed = content.trim();
   
@@ -126,12 +125,12 @@ function getSkillContentInfo(message: Message): { isSkillContent: boolean; skill
 }
 
 // Memoized message item component for performance
-const MessageItem = React.memo(function MessageItem({
+const MessageItem = memo(function MessageItem({
   message,
   isLast,
   isCurrentRun,
 }: {
-  message: Message;
+  message: LiveMessage;
   isLast: boolean;
   isCurrentRun: boolean;
 }) {
@@ -159,6 +158,21 @@ export const VirtualizedMessageList = forwardRef<
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
 
+  // Identity guard for scroll events
+  const scrollIdentityRef = useRef<string>('');
+  const sessionId = useMemo(() => messages[0]?.id || 'default', [messages]);
+
+  useEffect(() => {
+    const identity = crypto.randomUUID();
+    scrollIdentityRef.current = identity;
+
+    return () => {
+      scrollIdentityRef.current = ''; // Invalidate scroll handlers
+    };
+  }, [sessionId]);
+
+  const identity = scrollIdentityRef.current;
+
   // Show user + assistant messages with skill content transformation
   // Skill content (from /skill:name commands) is transformed to show a brief placeholder
   // instead of the full verbose content. This preserves message context while keeping UI clean.
@@ -166,8 +180,8 @@ export const VirtualizedMessageList = forwardRef<
   // EXCEPTION: read tool calls are shown for skill-loading visibility (clean Kimi-style)
   const visibleMessages = useMemo(() =>
     messages
-      .filter(m => 
-        m.role === 'user' || 
+      .filter(m =>
+        m.role === 'user' ||
         m.role === 'assistant' ||
         (m.role === 'tool' && m.toolCall?.name === 'subagent') ||
         (m.role === 'tool' && m.toolCall?.name === 'read')
@@ -176,12 +190,12 @@ export const VirtualizedMessageList = forwardRef<
         // Transform skill content to brief placeholder
         const skillInfo = getSkillContentInfo(m);
         if (skillInfo.isSkillContent) {
-          const placeholder = skillInfo.skillName 
+          const placeholder = skillInfo.skillName
             ? `📚 **Skill loaded: ${skillInfo.skillName}**`
             : '📚 **Skill loaded**';
           return {
             ...m,
-            content: [{ type: 'text', text: placeholder }]
+            content: [{ type: 'text' as const, text: placeholder }]
           };
         }
         return m;
@@ -203,18 +217,21 @@ export const VirtualizedMessageList = forwardRef<
     return -1;
   }, [visibleMessages]);
 
-  // Handle scroll position changes
+  // Handle scroll position changes with identity guard
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
+    if (scrollIdentityRef.current !== identity) return;
     onAtBottomChange?.(atBottom);
-  }, [onAtBottomChange]);
+  }, [onAtBottomChange, identity]);
 
-  // Store scroller reference
+  // Store scroller reference with identity guard
   const handleScrollerRef = useCallback((ref: HTMLElement | Window | null) => {
+    if (scrollIdentityRef.current !== identity) return;
     scrollerRef.current = ref instanceof HTMLElement ? ref : null;
-  }, []);
+  }, [identity]);
 
   // Follow output behavior - auto-scroll when at bottom
   const handleFollowOutput = useCallback((isAtBottom: boolean) => {
+    if (scrollIdentityRef.current !== identity) return false;
     if (isAtBottom) return 'auto' as const;
     const scroller = scrollerRef.current;
     if (scroller) {
@@ -223,7 +240,7 @@ export const VirtualizedMessageList = forwardRef<
       if (gap <= 500) return 'auto' as const;
     }
     return false;
-  }, []);
+  }, [identity]);
 
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
@@ -247,6 +264,7 @@ export const VirtualizedMessageList = forwardRef<
 
   // Auto-scroll to bottom when new messages arrive during streaming
   useEffect(() => {
+    if (scrollIdentityRef.current !== identity) return;
     if (isStreaming && listItems.length > 0) {
       virtuosoRef.current?.scrollToIndex({
         index: listItems.length - 1,
@@ -254,7 +272,7 @@ export const VirtualizedMessageList = forwardRef<
         behavior: 'smooth',
       });
     }
-  }, [isStreaming, listItems.length]);
+  }, [isStreaming, listItems.length, identity]);
 
   if (visibleMessages.length === 0) {
     return <EmptyState hasSession={hasSession} onCreateSession={onCreateSession} />;

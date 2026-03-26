@@ -1,9 +1,19 @@
 import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 import type { SessionPool } from './session-pool.js';
+import type { JSONRPCNotification } from '@pi-web-ui/shared';
 
 export type WebSocketSender = (clientId: string, message: unknown) => void;
 
 export interface ForwardedEvent {
+  type: string;
+  timestamp: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Pi SDK event type for internal use
+ */
+export interface PiEvent {
   type: string;
   timestamp: number;
   [key: string]: unknown;
@@ -23,6 +33,13 @@ export class EventForwarder {
   private wsSender: WebSocketSender;
   private sessionPool: SessionPool | null = null;
   private currentMessageId: string | null = null;
+
+  // Request ID tracking for correlation
+  private requestCorrelation: Map<string, string> = new Map();
+
+  // Event buffering for replay
+  private replayBuffer: PiEvent[] = [];
+  private isReplaying: boolean = false;
 
   constructor(wsSender: WebSocketSender) {
     this.wsSender = wsSender;
@@ -67,10 +84,40 @@ export class EventForwarder {
       return;
     }
 
+    // Buffer event if in replay mode
+    this.bufferEvent(message);
+
     // Wrap in session envelope if sessionId is provided (multi-session routing)
     const payload = sessionId
       ? { type: 'session_event' as const, sessionId, event: message }
       : message;
+
+    this.wsSender(clientId, payload);
+  }
+
+  /**
+   * Forward an event wrapped as a JSON-RPC notification.
+   * Used for JSON-RPC protocol mode.
+   */
+  forwardEventAsJSONRPC(clientId: string, event: AgentSessionEvent, sessionId?: string): void {
+    // Map Pi SDK event to internal format
+    const message = this.mapEventToMessage(event);
+
+    // Skip filtered messages
+    if (message === null) {
+      return;
+    }
+
+    // Buffer event if in replay mode
+    this.bufferEvent(message);
+
+    // Wrap as JSON-RPC notification
+    const notification = this.wrapAsNotification(message);
+
+    // Wrap in session envelope if sessionId is provided
+    const payload = sessionId
+      ? { type: 'session_event' as const, sessionId, event: notification }
+      : notification;
 
     this.wsSender(clientId, payload);
   }
@@ -284,5 +331,126 @@ export class EventForwarder {
     return (event: AgentSessionEvent) => {
       this.forwardEvent(clientId, event, sessionId);
     };
+  }
+
+  // ============================================================================
+  // JSON-RPC Envelope Wrapping
+  // ============================================================================
+
+  /**
+   * Wrap a Pi event as a JSON-RPC notification
+   */
+  private wrapAsNotification(event: PiEvent): JSONRPCNotification {
+    return {
+      jsonrpc: '2.0',
+      method: this.mapEventToMethod(event.type),
+      params: event
+    };
+  }
+
+  /**
+   * Map Pi SDK event types to JSON-RPC method names
+   */
+  private mapEventToMethod(eventType: string): string {
+    const mapping: Record<string, string> = {
+      'content_part': 'contentPart',
+      'tool_call': 'toolCall',
+      'tool_result': 'toolResult',
+      'status_update': 'status',
+      'turn_begin': 'turnBegin',
+      'turn_end': 'turnEnd',
+      'message_start': 'messageStart',
+      'message_update': 'messageUpdate',
+      'message_end': 'messageEnd',
+      'tool_execution_start': 'toolExecutionStart',
+      'tool_execution_update': 'toolExecutionUpdate',
+      'tool_execution_end': 'toolExecutionEnd',
+      'agent_start': 'agentStart',
+      'agent_end': 'agentEnd',
+      'turn_start': 'turnStart',
+      'auto_compaction_start': 'autoCompactionStart',
+      'auto_compaction_end': 'autoCompactionEnd',
+      'auto_retry_start': 'autoRetryStart',
+      'auto_retry_end': 'autoRetryEnd',
+    };
+    return mapping[eventType] || eventType;
+  }
+
+  // ============================================================================
+  // Request ID Tracking
+  // ============================================================================
+
+  /**
+   * Set correlation between an event ID and a request ID
+   */
+  setRequestCorrelation(eventId: string, requestId: string): void {
+    this.requestCorrelation.set(eventId, requestId);
+  }
+
+  /**
+   * Get the request ID associated with an event ID
+   */
+  getRequestId(eventId: string): string | undefined {
+    return this.requestCorrelation.get(eventId);
+  }
+
+  /**
+   * Clear request correlation for an event ID
+   */
+  clearRequestCorrelation(eventId: string): void {
+    this.requestCorrelation.delete(eventId);
+  }
+
+  // ============================================================================
+  // Event Buffering for Replay
+  // ============================================================================
+
+  /**
+   * Start buffering events for replay
+   */
+  startReplayBuffering(): void {
+    this.isReplaying = true;
+    this.replayBuffer = [];
+  }
+
+  /**
+   * Flush the replay buffer and return all buffered events
+   */
+  flushReplayBuffer(): PiEvent[] {
+    const events = [...this.replayBuffer];
+    this.replayBuffer = [];
+    this.isReplaying = false;
+    return events;
+  }
+
+  /**
+   * Get current replay buffer without clearing
+   */
+  getReplayBuffer(): PiEvent[] {
+    return [...this.replayBuffer];
+  }
+
+  /**
+   * Check if currently buffering for replay
+   */
+  isInReplayMode(): boolean {
+    return this.isReplaying;
+  }
+
+  /**
+   * Stop replay buffering without returning events
+   */
+  stopReplayBuffering(): void {
+    this.isReplaying = false;
+    this.replayBuffer = [];
+  }
+
+  /**
+   * Add an event to the replay buffer if in replay mode
+   */
+  private bufferEvent(event: PiEvent): void {
+    if (this.isReplaying) {
+      this.replayBuffer.push(event);
+    }
   }
 }

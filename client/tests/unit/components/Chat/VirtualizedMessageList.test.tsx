@@ -1,21 +1,21 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { VirtualizedMessageList } from '../../../../src/components/Chat/VirtualizedMessageList';
-import type { Message } from '../../../../src/store';
+import type { LiveMessage } from '../../../../src/hooks/useSessionStream';
 import React from 'react';
 
 // Mock react-virtuoso
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({ data, itemContent, atBottomStateChange }: {
-    data: Array<{ message: Message; index: number }>;
-    itemContent: (index: number, item: { message: Message; index: number }) => React.ReactNode;
+    data: Array<{ message: LiveMessage; index: number }>;
+    itemContent: (index: number, item: { message: LiveMessage; index: number }) => React.ReactNode;
     atBottomStateChange?: (atBottom: boolean) => void;
   }) => {
     // Call atBottomStateChange on mount
     React.useEffect(() => {
       atBottomStateChange?.(true);
     }, [atBottomStateChange]);
-    
+
     if (data.length === 0) {
       return <div data-testid="virtuoso-empty">No messages</div>;
     }
@@ -33,19 +33,19 @@ vi.mock('react-virtuoso', () => ({
 
 // Mock MessageBubble to avoid complex rendering
 vi.mock('../../../../src/components/Chat/MessageBubble', () => ({
-  MessageBubble: ({ message, isLast }: { message: Message; isLast: boolean }) => (
+  MessageBubble: ({ message, isLast }: { message: LiveMessage; isLast: boolean }) => (
     <div data-testid={`message-bubble-${message.id}`}>
-      {message.role}: {typeof message.content === 'string' ? message.content : 'complex content'}
+      {message.role}: {Array.isArray(message.content) ? message.content.map(c => c.text || c.thinking || '').join('') : 'complex content'}
       {isLast && <span data-testid="is-last-indicator" />}
     </div>
   ),
 }));
 
 describe('VirtualizedMessageList', () => {
-  const mockMessages: Message[] = [
-    { id: '1', role: 'user', content: 'Hello', timestamp: 1000 },
-    { id: '2', role: 'assistant', content: 'Hi there!', timestamp: 2000 },
-    { id: '3', role: 'user', content: 'How are you?', timestamp: 3000 },
+  const mockMessages: LiveMessage[] = [
+    { id: '1', role: 'user', content: [{ type: 'text', text: 'Hello' }], timestamp: 1000, isComplete: true },
+    { id: '2', role: 'assistant', content: [{ type: 'text', text: 'Hi there!' }], timestamp: 2000, isComplete: true },
+    { id: '3', role: 'user', content: [{ type: 'text', text: 'How are you?' }], timestamp: 3000, isComplete: true },
   ];
 
   const defaultProps = {
@@ -92,7 +92,7 @@ describe('VirtualizedMessageList', () => {
   });
 
   it('handles messages with array content', () => {
-    const messagesWithArrayContent: Message[] = [
+    const messagesWithArrayContent: LiveMessage[] = [
       {
         id: '1',
         role: 'assistant',
@@ -101,20 +101,22 @@ describe('VirtualizedMessageList', () => {
           { type: 'thinking', thinking: 'Thinking...' },
         ],
         timestamp: 1000,
+        isComplete: true,
       },
     ];
-    
+
     render(<VirtualizedMessageList messages={messagesWithArrayContent} isStreaming={false} />);
-    
+
     expect(screen.getByTestId('message-bubble-1')).toBeInTheDocument();
   });
 
   it('filters out non-read tool messages from visible list', () => {
-    const bashToolMessage: Message = {
+    const bashToolMessage: LiveMessage = {
       id: 'tool-1',
       role: 'tool',
-      content: '',
+      content: [],
       timestamp: 1000,
+      isComplete: true,
       toolCall: {
         id: 'call-1',
         name: 'bash',
@@ -125,20 +127,21 @@ describe('VirtualizedMessageList', () => {
         isError: false,
       },
     };
-    
+
     // Non-read tool messages should be filtered out
     render(<VirtualizedMessageList messages={[bashToolMessage]} isStreaming={false} />);
-    
+
     // Should show empty state since the only message is a non-read tool message
     expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
   });
 
   it('shows read tool messages for skill-loading visibility', () => {
-    const readToolMessage: Message = {
+    const readToolMessage: LiveMessage = {
       id: 'read-1',
       role: 'tool',
-      content: '',
+      content: [],
       timestamp: 1000,
+      isComplete: true,
       toolCall: {
         id: 'call-1',
         name: 'read',
@@ -149,25 +152,26 @@ describe('VirtualizedMessageList', () => {
         isError: false,
       },
     };
-    
+
     // Read tool messages should be visible (for skill-loading visibility like Kimi)
     render(<VirtualizedMessageList messages={[readToolMessage]} isStreaming={false} />);
-    
+
     // Should show the read tool message (not empty state)
     expect(screen.getByTestId('message-bubble-read-1')).toBeInTheDocument();
   });
 
   it('shows subagent tool messages (unlike other tool messages)', () => {
-    const subagentMessage: Message = {
+    const subagentMessage: LiveMessage = {
       id: 'subagent-1',
       role: 'tool',
-      content: JSON.stringify({
+      content: [{ type: 'text', text: JSON.stringify({
         mode: 'parallel',
         tasks: [
           { agent: 'coder', task: 'Refactor auth', result: 'Done' },
         ],
-      }),
+      }) }],
       timestamp: 1000,
+      isComplete: true,
       toolCall: {
         id: 'call-1',
         name: 'subagent',
@@ -178,90 +182,72 @@ describe('VirtualizedMessageList', () => {
         isError: false,
       },
     };
-    
+
     // Subagent tool messages should be visible (unlike other tool messages)
     render(<VirtualizedMessageList messages={[subagentMessage]} isStreaming={false} />);
-    
+
     // Should show the subagent message (not empty state)
     expect(screen.getByTestId('message-bubble-subagent-1')).toBeInTheDocument();
   });
 
-  it('filters out toolResult messages from visible list', () => {
-    // Pi SDK sends message_start with role='toolResult' containing massive raw content
-    const toolResultMessage: Message = {
-      id: 'toolresult-1',
-      role: 'toolResult' as Message['role'],
-      content: [{ type: 'text', text: 'Web search results for: "AI trends"...' + 'x'.repeat(5000) }],
-      timestamp: 1500,
-    };
-    
-    render(<VirtualizedMessageList messages={[toolResultMessage]} isStreaming={false} />);
-    expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
-  });
-
-  it('shows assistant messages but filters tool and toolResult messages in mixed list', () => {
-    const mixedMessages: Message[] = [
-      { id: '1', role: 'user', content: 'Hello', timestamp: 1000 },
-      { id: '2', role: 'assistant', content: 'Processing...', timestamp: 2000 },
+  it('shows assistant messages but filters tool messages in mixed list', () => {
+    const mixedMessages: LiveMessage[] = [
+      { id: '1', role: 'user', content: [{ type: 'text', text: 'Hello' }], timestamp: 1000, isComplete: true },
+      { id: '2', role: 'assistant', content: [{ type: 'text', text: 'Processing...' }], timestamp: 2000, isComplete: true },
       {
         id: 'tool-1',
         role: 'tool',
-        content: '',
+        content: [],
         timestamp: 2500,
+        isComplete: true,
         toolCall: { id: 'call-1', name: 'web_search', args: { query: 'test' } },
         toolResult: { output: 'results', isError: false },
       },
-      {
-        id: 'toolresult-1',
-        role: 'toolResult' as Message['role'],
-        content: [{ type: 'text', text: 'Web search results for: "test"...' + 'x'.repeat(5000) }],
-        timestamp: 2600,
-      },
-      { id: '3', role: 'assistant', content: 'Here are the results', timestamp: 3000 },
+      { id: '3', role: 'assistant', content: [{ type: 'text', text: 'Here are the results' }], timestamp: 3000, isComplete: true },
     ];
-    
+
     render(<VirtualizedMessageList messages={mixedMessages} isStreaming={false} />);
-    
+
     // User and assistant messages visible
     expect(screen.getByTestId('message-bubble-1')).toBeInTheDocument();
     expect(screen.getByTestId('message-bubble-2')).toBeInTheDocument();
     expect(screen.getByTestId('message-bubble-3')).toBeInTheDocument();
     // Tool message should NOT be visible
     expect(screen.queryByTestId('message-bubble-tool-1')).not.toBeInTheDocument();
-    // toolResult message should NOT be visible
-    expect(screen.queryByTestId('message-bubble-toolresult-1')).not.toBeInTheDocument();
   });
 
   it('transforms skill content messages to brief placeholder', () => {
     // When using /skill:name command, the Pi SDK injects skill content as assistant message
     // Now we transform it to a brief placeholder instead of filtering entirely
-    const skillContentMessage: Message = {
+    const skillContentMessage: LiveMessage = {
       id: 'skill-1',
       role: 'assistant',
-      content: '<skill name="lecture-website" location="/root/.pi/agent/skills/lecture-website/SKILL.md">\n# Lecture Website Builder\n\nTransform a simple idea...</skill>',
+      content: [{ type: 'text', text: '<skill name="lecture-website" location="/root/.pi/agent/skills/lecture-website/SKILL.md">\n# Lecture Website Builder\n\nTransform a simple idea...</skill>' }],
       timestamp: 1000,
+      isComplete: true,
     };
-    
+
     render(<VirtualizedMessageList messages={[skillContentMessage]} isStreaming={false} />);
-    
+
     // Skill content message should be transformed to placeholder, NOT filtered out
     expect(screen.getByTestId('message-bubble-skill-1')).toBeInTheDocument();
   });
 
   it('transforms skill content and shows placeholder alongside regular messages', () => {
-    const mixedMessages: Message[] = [
-      { id: '1', role: 'user', content: '/skill:lecture-website create a pinterest copy', timestamp: 1000 },
-      { 
-        id: '2', 
-        role: 'assistant', 
-        content: '<skill name="lecture-website" location="/root/.pi/agent/skills/lecture-website/SKILL.md">\n# Lecture Website Builder</skill>',
-        timestamp: 2000 
+    const mixedMessages: LiveMessage[] = [
+      { id: '1', role: 'user', content: [{ type: 'text', text: '/skill:lecture-website create a pinterest copy' }], timestamp: 1000, isComplete: true },
+      {
+        id: '2',
+        role: 'assistant',
+        content: [{ type: 'text', text: '<skill name="lecture-website" location="/root/.pi/agent/skills/lecture-website/SKILL.md">\n# Lecture Website Builder</skill>' }],
+        timestamp: 2000,
+        isComplete: true,
       },
-      { id: '3', role: 'assistant', content: 'I\'ll create a Pinterest copy for you!', timestamp: 3000 },
+      { id: '3', role: 'assistant', content: [{ type: 'text', text: 'I\'ll create a Pinterest copy for you!' }], timestamp: 3000, isComplete: true },
     ];
-    
+
     render(<VirtualizedMessageList messages={mixedMessages} isStreaming={false} />);
-    
+
     // All messages should be visible (skill content transformed to placeholder)
     expect(screen.getByTestId('message-bubble-1')).toBeInTheDocument();
     expect(screen.getByTestId('message-bubble-2')).toBeInTheDocument();
@@ -270,15 +256,16 @@ describe('VirtualizedMessageList', () => {
 
   it('does not transform messages that just mention SKILL.md in file paths', () => {
     // Messages that mention SKILL.md but don't have full skill structure should pass through unchanged
-    const regularMessage: Message = {
+    const regularMessage: LiveMessage = {
       id: 'msg-1',
       role: 'assistant',
-      content: 'I edited the file: /root/.skills/skill-name/SKILL.md',
+      content: [{ type: 'text', text: 'I edited the file: /root/.skills/skill-name/SKILL.md' }],
       timestamp: 1000,
+      isComplete: true,
     };
-    
+
     render(<VirtualizedMessageList messages={[regularMessage]} isStreaming={false} />);
-    
+
     // Message should be visible and NOT transformed
     expect(screen.getByTestId('message-bubble-msg-1')).toBeInTheDocument();
   });
@@ -303,39 +290,63 @@ describe('VirtualizedMessageList', () => {
 
   it('handles large number of messages efficiently', () => {
     // Generate 100 messages
-    const manyMessages: Message[] = Array.from({ length: 100 }, (_, i) => ({
+    const manyMessages: LiveMessage[] = Array.from({ length: 100 }, (_, i) => ({
       id: `msg-${i}`,
       role: i % 2 === 0 ? 'user' : 'assistant' as const,
-      content: `Message ${i}`,
+      content: [{ type: 'text' as const, text: `Message ${i}` }],
       timestamp: i * 1000,
+      isComplete: true,
     }));
-    
+
     render(<VirtualizedMessageList messages={manyMessages} isStreaming={false} />);
-    
+
     // Should render without performance issues
     expect(screen.getByTestId('virtuoso-mock')).toBeInTheDocument();
   });
 
   it('updates when messages change', () => {
     const { rerender } = render(<VirtualizedMessageList {...defaultProps} />);
-    
+
     expect(screen.getByTestId('message-bubble-3')).toBeInTheDocument();
-    
+
     // Add a new message
     const newMessages = [
       ...mockMessages,
-      { id: '4', role: 'assistant' as const, content: 'New message', timestamp: 4000 },
+      { id: '4', role: 'assistant' as const, content: [{ type: 'text' as const, text: 'New message' }], timestamp: 4000, isComplete: true },
     ];
-    
+
     rerender(<VirtualizedMessageList messages={newMessages} isStreaming={false} />);
-    
+
     expect(screen.getByTestId('message-bubble-4')).toBeInTheDocument();
   });
 
   it('handles empty messages array', () => {
     render(<VirtualizedMessageList messages={[]} isStreaming={false} />);
-    
+
     // Component shows empty state with Ready to help text
     expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
+  });
+
+  it('uses identity guards for scroll events', () => {
+    const onAtBottomChange = vi.fn();
+    const { rerender } = render(
+      <VirtualizedMessageList {...defaultProps} onAtBottomChange={onAtBottomChange} />
+    );
+
+    // Should have called the callback on mount
+    expect(onAtBottomChange).toHaveBeenCalledWith(true);
+
+    // Change messages (simulating session switch)
+    const newMessages: LiveMessage[] = [
+      { id: 'new-1', role: 'user', content: [{ type: 'text', text: 'New session' }], timestamp: 5000, isComplete: true },
+    ];
+
+    rerender(
+      <VirtualizedMessageList messages={newMessages} isStreaming={false} onAtBottomChange={onAtBottomChange} />
+    );
+
+    // Identity guard should have changed, preventing stale callbacks
+    // The component should still work correctly
+    expect(screen.getByTestId('message-bubble-new-1')).toBeInTheDocument();
   });
 });

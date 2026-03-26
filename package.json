@@ -17,11 +17,14 @@
     "test": "npm run test --workspace=server && npm run test --workspace=client",
     "test:coverage": "npm run test:coverage --workspace=server && npm run test:coverage --workspace=client",
     "test:e2e": "playwright test",
+    "benchmark": "vitest bench --config tests/benchmarks/vitest.bench.config.ts",
+    "benchmark:quick": "tsx tests/benchmarks/index.ts",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "@types/compression": "^1.8.1",
     "@types/node": "^20.10.0",
     "@typescript-eslint/eslint-plugin": "^8.57.0",
     "@typescript-eslint/parser": "^8.57.0",
@@ -35,6 +38,7 @@
   },
   "dependencies": {
     "@types/multer": "^2.1.0",
+    "compression": "^1.8.1",
     "multer": "^2.1.1"
   }
 }

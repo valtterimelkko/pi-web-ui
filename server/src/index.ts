@@ -25,11 +25,37 @@ async function initialize(): Promise<void> {
 
     // Handle WebSocket upgrade requests
     server.on('upgrade', (request, socket, head) => {
-      if (request.url === '/ws') {
+      const url = new URL(request.url || '', `http://${request.headers.host}`);
+
+      // Main WebSocket endpoint
+      if (url.pathname === '/ws') {
         wsManager!.handleUpgrade(request, socket, head);
-      } else {
-        socket.destroy();
+        return;
       }
+
+      // Per-session WebSocket endpoint: /ws/sessions/:sessionId
+      const sessionMatch = url.pathname.match(/^\/ws\/sessions\/([^\/\?]+)$/);
+      if (sessionMatch) {
+        const sessionId = sessionMatch[1];
+
+        // Import handleSessionWebSocket dynamically to avoid circular dependencies
+        import('./websocket/session-websocket.js').then(({ handleSessionWebSocket }) => {
+          // Get the MultiSessionManager from WebSocketConnectionManager
+          const multiSessionManager = wsManager!.getMultiSessionManager();
+
+          // Handle the upgrade
+          wsManager!.getWss().handleUpgrade(request, socket, head, (ws) => {
+            handleSessionWebSocket(ws, request, sessionId, multiSessionManager);
+          });
+        }).catch((error) => {
+          console.error('Failed to handle session WebSocket upgrade:', error);
+          socket.destroy();
+        });
+        return;
+      }
+
+      // Unknown WebSocket path
+      socket.destroy();
     });
 
     // Initialize CLI session watcher
