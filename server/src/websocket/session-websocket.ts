@@ -1,11 +1,10 @@
 /**
- * Per-session WebSocket Endpoint
- *
- * Handles WebSocket connections for a specific session, providing:
- * - History replay on connect
- * - Live event streaming
- * - Graceful disconnect
- * - Reconnection with resume support
+ * Session WebSocket Handler
+ * Handles WebSocket connections for the process-per-session architecture.
+ * 
+ * This module exports both:
+ * - The new SessionWebSocketHandler class (worker-based architecture)
+ * - Legacy functions (handleSessionWebSocket, replayHistory, etc.) for backward compatibility
  */
 
 import WebSocket from 'ws';
@@ -13,11 +12,314 @@ import type { IncomingMessage } from 'http';
 import { readFile, stat } from 'fs/promises';
 import { createInterface } from 'readline';
 import { createReadStream } from 'fs';
+import { WorkerPool } from '../workers/worker-pool.js';
+import { SessionRPCClient } from '../workers/session-rpc-client.js';
+import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { MultiSessionManager, SessionStatusInfo } from '../pi/multi-session-manager.js';
 import type { ServerMessage } from './protocol.js';
+import type { ImageContent } from '@mariozechner/pi-ai';
+
+// ============================================================================
+// New Worker-Based Architecture
+// ============================================================================
+
+export type WSSender = (clientId: string, message: unknown) => void;
+
+export interface SessionWebSocketOptions {
+  ws: WebSocket;
+  clientId: string;
+  workerPool: WorkerPool;
+  send: WSSender;
+}
+
+export interface SessionWebSocketMessage {
+  type: string;
+  sessionId?: string;
+  sessionPath?: string;
+  message?: string;
+  images?: Array<{ type: string; data: string; mimeType?: string }>;
+  level?: string;
+  provider?: string;
+  modelId?: string;
+  customInstructions?: string;
+}
 
 /**
- * Session WebSocket client state
+ * Handles WebSocket communication for session workers.
+ */
+export class SessionWebSocketHandler {
+  private ws: WebSocket;
+  private clientId: string;
+  private workerPool: WorkerPool;
+  private send: WSSender;
+  private activeSessions: Map<string, () => void> = new Map();
+  private sessionClients: Map<string, SessionRPCClient> = new Map();
+
+  constructor(options: SessionWebSocketOptions) {
+    this.ws = options.ws;
+    this.clientId = options.clientId;
+    this.workerPool = options.workerPool;
+    this.send = options.send;
+  }
+
+  /**
+   * Handle incoming WebSocket message.
+   */
+  async handleMessage(data: unknown): Promise<void> {
+    const message = data as SessionWebSocketMessage;
+
+    switch (message.type) {
+      case 'subscribe':
+        await this.handleSubscribe(message);
+        break;
+      case 'unsubscribe':
+        this.handleUnsubscribe(message);
+        break;
+      case 'prompt':
+        await this.handlePrompt(message);
+        break;
+      case 'steer':
+        await this.handleSteer(message);
+        break;
+      case 'abort':
+        await this.handleAbort(message);
+        break;
+      case 'compact':
+        await this.handleCompact(message);
+        break;
+      case 'set_model':
+        await this.handleSetModel(message);
+        break;
+      case 'set_thinking_level':
+        await this.handleSetThinkingLevel(message);
+        break;
+    }
+  }
+
+  /**
+   * Handle session subscription.
+   */
+  private async handleSubscribe(message: SessionWebSocketMessage): Promise<void> {
+    const sessionPath = message.sessionPath || message.sessionId;
+    if (!sessionPath) return;
+
+    try {
+      // Get or create worker
+      const worker = await this.workerPool.getOrCreate(sessionPath);
+      const client = new SessionRPCClient(worker);
+      
+      // Store client for this session
+      this.sessionClients.set(sessionPath, client);
+
+      // Subscribe to events
+      const unsubscribe = client.subscribe((event: NormalizedEvent) => {
+        this.send(this.clientId, {
+          type: 'session_event',
+          sessionId: sessionPath,
+          event,
+        });
+      });
+
+      this.activeSessions.set(sessionPath, unsubscribe);
+
+      // Send confirmation
+      this.send(this.clientId, {
+        type: 'subscribed',
+        sessionId: sessionPath,
+        status: worker.status,
+      });
+    } catch (error) {
+      this.send(this.clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Failed to subscribe',
+        sessionId: sessionPath,
+      });
+    }
+  }
+
+  /**
+   * Handle session unsubscription.
+   */
+  private handleUnsubscribe(message: SessionWebSocketMessage): void {
+    const sessionPath = message.sessionPath || message.sessionId;
+    if (!sessionPath) return;
+
+    const unsubscribe = this.activeSessions.get(sessionPath);
+    if (unsubscribe) {
+      unsubscribe();
+      this.activeSessions.delete(sessionPath);
+    }
+
+    this.sessionClients.delete(sessionPath);
+
+    this.send(this.clientId, {
+      type: 'unsubscribed',
+      sessionId: sessionPath,
+    });
+  }
+
+  /**
+   * Handle prompt message.
+   */
+  private async handlePrompt(message: SessionWebSocketMessage): Promise<void> {
+    const sessionPath = message.sessionPath || message.sessionId;
+    const client = sessionPath ? this.sessionClients.get(sessionPath) : undefined;
+    
+    if (!client) {
+      this.send(this.clientId, {
+        type: 'error',
+        message: 'Not subscribed to session',
+        sessionId: sessionPath,
+      });
+      return;
+    }
+
+    try {
+      const images: ImageContent[] | undefined = message.images?.map(img => ({
+        type: 'image',
+        data: img.data,
+        mimeType: img.mimeType || 'image/png',
+      }));
+      await client.prompt(message.message || '', images);
+    } catch (error) {
+      this.send(this.clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Prompt failed',
+        sessionId: sessionPath,
+      });
+    }
+  }
+
+  /**
+   * Handle steering message.
+   */
+  private async handleSteer(message: SessionWebSocketMessage): Promise<void> {
+    const sessionPath = message.sessionPath || message.sessionId;
+    const client = sessionPath ? this.sessionClients.get(sessionPath) : undefined;
+    
+    if (!client) return;
+
+    try {
+      const images: ImageContent[] | undefined = message.images?.map(img => ({
+        type: 'image',
+        data: img.data,
+        mimeType: img.mimeType || 'image/png',
+      }));
+      await client.steer(message.message || '', images);
+    } catch (error) {
+      this.send(this.clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Steer failed',
+        sessionId: sessionPath,
+      });
+    }
+  }
+
+  /**
+   * Handle abort message.
+   */
+  private async handleAbort(message: SessionWebSocketMessage): Promise<void> {
+    const sessionPath = message.sessionPath || message.sessionId;
+    const client = sessionPath ? this.sessionClients.get(sessionPath) : undefined;
+    
+    if (!client) return;
+
+    try {
+      await client.abort();
+    } catch (error) {
+      this.send(this.clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Abort failed',
+        sessionId: sessionPath,
+      });
+    }
+  }
+
+  /**
+   * Handle compact message.
+   */
+  private async handleCompact(message: SessionWebSocketMessage): Promise<void> {
+    const sessionPath = message.sessionPath || message.sessionId;
+    const client = sessionPath ? this.sessionClients.get(sessionPath) : undefined;
+    
+    if (!client) return;
+
+    try {
+      await client.compact(message.customInstructions);
+    } catch (error) {
+      this.send(this.clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Compact failed',
+        sessionId: sessionPath,
+      });
+    }
+  }
+
+  /**
+   * Handle set_model message.
+   */
+  private async handleSetModel(message: SessionWebSocketMessage): Promise<void> {
+    const sessionPath = message.sessionPath || message.sessionId;
+    const client = sessionPath ? this.sessionClients.get(sessionPath) : undefined;
+    
+    if (!client || !message.provider || !message.modelId) return;
+
+    try {
+      await client.setModel(message.provider, message.modelId);
+    } catch (error) {
+      this.send(this.clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Set model failed',
+        sessionId: sessionPath,
+      });
+    }
+  }
+
+  /**
+   * Handle set_thinking_level message.
+   */
+  private async handleSetThinkingLevel(message: SessionWebSocketMessage): Promise<void> {
+    const sessionPath = message.sessionPath || message.sessionId;
+    const client = sessionPath ? this.sessionClients.get(sessionPath) : undefined;
+    
+    if (!client || !message.level) return;
+
+    try {
+      await client.setThinkingLevel(message.level);
+    } catch (error) {
+      this.send(this.clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Set thinking level failed',
+        sessionId: sessionPath,
+      });
+    }
+  }
+
+  /**
+   * Clean up all subscriptions.
+   */
+  close(): void {
+    for (const [sessionPath, unsubscribe] of this.activeSessions) {
+      unsubscribe();
+    }
+    this.activeSessions.clear();
+    this.sessionClients.clear();
+  }
+
+  /**
+   * Get active session count.
+   */
+  get activeSessionCount(): number {
+    return this.activeSessions.size;
+  }
+}
+
+// ============================================================================
+// Legacy Exports for Backward Compatibility
+// ============================================================================
+
+/**
+ * @deprecated Use SessionWebSocketHandler instead. This interface is kept for backward compatibility.
  */
 export interface SessionWsClient {
   ws: WebSocket;
@@ -26,14 +328,12 @@ export interface SessionWsClient {
   lastEventIndex: number;
   connectedAt: Date;
   isReplayComplete: boolean;
-  /** Buffer for backpressure handling */
   messageBuffer: BufferedMessage[];
-  /** Whether client is slow (buffer is filling up) */
   isSlowClient: boolean;
 }
 
 /**
- * Buffered message for backpressure handling
+ * @deprecated Use SessionWebSocketHandler instead. This interface is kept for backward compatibility.
  */
 interface BufferedMessage {
   message: ServerMessage;
@@ -41,29 +341,20 @@ interface BufferedMessage {
 }
 
 /**
- * Configuration options for session WebSocket handler
+ * @deprecated Use SessionWebSocketHandler instead. This interface is kept for backward compatibility.
  */
 export interface SessionWsOptions {
-  /** Maximum buffer size before marking client as slow (default: 100) */
   maxBufferSize?: number;
-  /** Maximum time to keep buffered messages (default: 30000ms) */
   maxBufferAge?: number;
-  /** Whether to enable verbose logging (default: false) */
   verboseLogging?: boolean;
 }
 
-/**
- * JSON-RPC notification format
- */
 interface JsonRpcNotification {
   jsonrpc: '2.0';
   method: string;
   params: unknown;
 }
 
-/**
- * JSON-RPC request format (for incoming messages)
- */
 interface JsonRpcRequest {
   jsonrpc: '2.0';
   id?: string | number;
@@ -71,9 +362,6 @@ interface JsonRpcRequest {
   params?: unknown;
 }
 
-/**
- * JSON-RPC response format
- */
 interface JsonRpcResponse {
   jsonrpc: '2.0';
   id: string | number;
@@ -86,16 +374,7 @@ interface JsonRpcResponse {
 }
 
 /**
- * Handle a session-specific WebSocket connection.
- *
- * This is the main entry point for per-session WebSocket connections.
- * It sets up the connection lifecycle handlers and initiates history replay.
- *
- * @param ws - The WebSocket connection
- * @param req - The HTTP upgrade request
- * @param sessionId - The session ID to connect to
- * @param multiSessionManager - The multi-session manager instance
- * @param options - Configuration options
+ * @deprecated Use SessionWebSocketHandler instead. This function is kept for backward compatibility.
  */
 export function handleSessionWebSocket(
   ws: WebSocket,
@@ -116,16 +395,13 @@ export function handleSessionWebSocket(
     }
   };
 
-  // Generate a unique client ID based on connection time
   const clientId = `session-ws-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
   log(`New connection from ${req.socket.remoteAddress}`);
 
-  // We'll track state in a client object
   const client: SessionWsClient = {
     ws,
     sessionId,
-    sessionPath: '', // Will be set after subscription
+    sessionPath: '',
     lastEventIndex: 0,
     connectedAt: new Date(),
     isReplayComplete: false,
@@ -133,16 +409,11 @@ export function handleSessionWebSocket(
     isSlowClient: false,
   };
 
-  // Extract resume parameters from query string
   const url = new URL(req.url || '', `http://${req.headers.host}`);
   const resumeFromIndex = parseInt(url.searchParams.get('lastEventIndex') || '0', 10);
   client.lastEventIndex = resumeFromIndex;
-
   log(`Resume from index: ${resumeFromIndex}`);
 
-  /**
-   * Send a JSON-RPC notification to the client
-   */
   const sendNotification = (method: string, params: unknown): void => {
     const notification: JsonRpcNotification = {
       jsonrpc: '2.0',
@@ -152,9 +423,6 @@ export function handleSessionWebSocket(
     sendToClient(notification);
   };
 
-  /**
-   * Send a JSON-RPC response to the client
-   */
   const sendResponse = (id: string | number, result?: unknown, error?: JsonRpcResponse['error']): void => {
     const response: JsonRpcResponse = {
       jsonrpc: '2.0',
@@ -164,25 +432,18 @@ export function handleSessionWebSocket(
     sendToClient(response);
   };
 
-  /**
-   * Send raw message to client with backpressure handling
-   */
   const sendToClient = (message: unknown): void => {
     const serialized = JSON.stringify(message);
 
-    // Check if buffer is getting full (backpressure)
     if (client.messageBuffer.length >= maxBufferSize) {
       client.isSlowClient = true;
       log(`Client marked as slow, buffer size: ${client.messageBuffer.length}`);
-
-      // Clean up old buffered messages
       const now = Date.now();
       client.messageBuffer = client.messageBuffer.filter(
         m => now - m.timestamp < maxBufferAge
       );
     }
 
-    // If client is slow, buffer the message
     if (client.isSlowClient && client.messageBuffer.length > 0) {
       client.messageBuffer.push({
         message: message as ServerMessage,
@@ -191,23 +452,18 @@ export function handleSessionWebSocket(
       return;
     }
 
-    // Try to send directly
     if (ws.readyState === WebSocket.OPEN) {
       try {
         ws.send(serialized);
-
-        // Process any buffered messages
         processBuffer();
       } catch (error) {
         log(`Error sending message: ${error}`);
-        // Buffer for retry
         client.messageBuffer.push({
           message: message as ServerMessage,
           timestamp: Date.now(),
         });
       }
     } else {
-      // Buffer for later
       client.messageBuffer.push({
         message: message as ServerMessage,
         timestamp: Date.now(),
@@ -215,55 +471,40 @@ export function handleSessionWebSocket(
     }
   };
 
-  /**
-   * Process buffered messages (backpressure relief)
-   */
   const processBuffer = (): void => {
     if (client.messageBuffer.length === 0) {
       client.isSlowClient = false;
       return;
     }
 
-    // Send up to 10 buffered messages at a time
     const toSend = client.messageBuffer.splice(0, 10);
-
     for (const buffered of toSend) {
       if (ws.readyState === WebSocket.OPEN) {
         try {
           ws.send(JSON.stringify(buffered.message));
         } catch (error) {
           log(`Error sending buffered message: ${error}`);
-          // Re-queue at the front
           client.messageBuffer.unshift(buffered);
           return;
         }
       }
     }
 
-    // If buffer is cleared, mark client as not slow
     if (client.messageBuffer.length === 0) {
       client.isSlowClient = false;
       log(`Client buffer cleared, back to normal`);
     }
   };
 
-  /**
-   * Handle incoming message from client
-   */
   const handleMessage = (data: Buffer): void => {
     let request: JsonRpcRequest;
-
     try {
       request = JSON.parse(data.toString()) as JsonRpcRequest;
     } catch {
-      sendResponse(0, undefined, {
-        code: -32700,
-        message: 'Parse error: Invalid JSON',
-      });
+      sendResponse(0, undefined, { code: -32700, message: 'Parse error: Invalid JSON' });
       return;
     }
 
-    // Validate JSON-RPC format
     if (request.jsonrpc !== '2.0' || typeof request.method !== 'string') {
       sendResponse(request.id ?? 0, undefined, {
         code: -32600,
@@ -273,36 +514,26 @@ export function handleSessionWebSocket(
     }
 
     log(`Received method: ${request.method}`);
-
-    // Route to method handler
     routeMethod(request);
   };
 
-  /**
-   * Route incoming method to appropriate handler
-   */
   const routeMethod = (request: JsonRpcRequest): void => {
     switch (request.method) {
       case 'ping':
         handlePing(request);
         break;
-
       case 'resume':
         handleResume(request);
         break;
-
       case 'get_status':
         handleGetStatus(request);
         break;
-
       case 'prompt':
         handlePrompt(request);
         break;
-
       case 'abort':
         handleAbort(request);
         break;
-
       default:
         sendResponse(request.id ?? 0, undefined, {
           code: -32601,
@@ -311,16 +542,10 @@ export function handleSessionWebSocket(
     }
   };
 
-  /**
-   * Handle ping request
-   */
   const handlePing = (request: JsonRpcRequest): void => {
     sendResponse(request.id ?? 0, { pong: true, timestamp: Date.now() });
   };
 
-  /**
-   * Handle resume request (replay from specific index)
-   */
   const handleResume = async (request: JsonRpcRequest): Promise<void> => {
     const params = request.params as { lastEventIndex?: number } | undefined;
     const newIndex = params?.lastEventIndex ?? 0;
@@ -347,9 +572,6 @@ export function handleSessionWebSocket(
     }
   };
 
-  /**
-   * Handle get_status request
-   */
   const handleGetStatus = (request: JsonRpcRequest): void => {
     const status = multiSessionManager.getSessionStatus(client.sessionPath);
     sendResponse(request.id ?? 0, {
@@ -362,12 +584,8 @@ export function handleSessionWebSocket(
     });
   };
 
-  /**
-   * Handle prompt request
-   */
   const handlePrompt = async (request: JsonRpcRequest): Promise<void> => {
     const params = request.params as { message?: string } | undefined;
-
     if (!params?.message || typeof params.message !== 'string') {
       sendResponse(request.id ?? 0, undefined, {
         code: -32602,
@@ -387,9 +605,6 @@ export function handleSessionWebSocket(
     }
   };
 
-  /**
-   * Handle abort request
-   */
   const handleAbort = async (request: JsonRpcRequest): Promise<void> => {
     try {
       await multiSessionManager.abort(client.sessionPath);
@@ -402,47 +617,29 @@ export function handleSessionWebSocket(
     }
   };
 
-  /**
-   * Handle WebSocket close
-   */
   const handleClose = (code: number, reason: Buffer): void => {
     log(`Connection closed: code=${code}, reason=${reason.toString()}`);
-
-    // Unsubscribe from session
     if (client.sessionPath) {
       multiSessionManager.unsubscribeClient(clientId, client.sessionPath);
       log(`Unsubscribed from session: ${client.sessionPath}`);
     }
-
-    // Clear buffer
     client.messageBuffer = [];
   };
 
-  /**
-   * Handle WebSocket error
-   */
   const handleError = (error: Error): void => {
     console.error(`[SessionWs:${sessionId}] WebSocket error:`, error);
-
-    // Cleanup on error
     if (client.sessionPath) {
       multiSessionManager.unsubscribeClient(clientId, client.sessionPath);
     }
   };
 
-  /**
-   * Initialize the connection
-   */
   const initialize = async (): Promise<void> => {
     try {
-      // Subscribe to the session
       const status = await multiSessionManager.subscribeClient(clientId, sessionId);
       client.sessionPath = status.sessionPath;
       client.sessionId = status.sessionId;
-
       log(`Subscribed to session: ${status.sessionPath}`);
 
-      // Send initialize response
       sendResponse('init', {
         success: true,
         sessionId: status.sessionId,
@@ -452,21 +649,13 @@ export function handleSessionWebSocket(
         currentStep: status.currentStep,
       });
 
-      // Start history replay
       await replayHistory(client.sessionPath, ws, client.lastEventIndex);
-
-      // Mark replay as complete
       client.isReplayComplete = true;
 
-      // Notify client that replay is complete
       sendNotification('replay_complete', {
         lastEventIndex: client.lastEventIndex,
         timestamp: Date.now(),
       });
-
-      // Set up live event forwarding
-      setupEventForwarding();
-
     } catch (error) {
       console.error(`[SessionWs:${sessionId}] Initialization failed:`, error);
       sendResponse('init', undefined, {
@@ -477,50 +666,17 @@ export function handleSessionWebSocket(
     }
   };
 
-  /**
-   * Set up event forwarding from MultiSessionManager
-   */
-  const setupEventForwarding = (): void => {
-    // Get the active session to check for events
-    const activeSession = multiSessionManager.getActiveSession(client.sessionPath);
-    if (!activeSession) {
-      log(`No active session found for event forwarding`);
-      return;
-    }
+  ws.on('message', (data: Buffer) => handleMessage(data));
+  ws.on('close', (code: number, reason: Buffer) => handleClose(code, reason));
+  ws.on('error', (error: Error) => handleError(error));
 
-    // Events are already being broadcast by MultiSessionManager
-    // We just need to track the event index
-    log(`Event forwarding set up for session: ${client.sessionPath}`);
-  };
-
-  // Set up WebSocket event handlers
-  ws.on('message', (data: Buffer) => {
-    handleMessage(data);
-  });
-
-  ws.on('close', (code: number, reason: Buffer) => {
-    handleClose(code, reason);
-  });
-
-  ws.on('error', (error: Error) => {
-    handleError(error);
-  });
-
-  // Start initialization
   initialize().catch((error) => {
     console.error(`[SessionWs:${sessionId}] Unhandled initialization error:`, error);
   });
 }
 
 /**
- * Replay session history from a JSONL file.
- *
- * Reads the session file line by line, parses events, and sends them
- * as JSON-RPC notifications to the client.
- *
- * @param sessionPath - Path to the session JSONL file
- * @param ws - WebSocket connection to send events to
- * @param fromIndex - Index to start replaying from (default: 0)
+ * @deprecated Use SessionWebSocketHandler instead. This function is kept for backward compatibility.
  */
 export async function replayHistory(
   sessionPath: string,
@@ -531,35 +687,25 @@ export async function replayHistory(
     throw new Error('Session path is required');
   }
 
-  // Check if file exists
   let stats;
   try {
     stats = await stat(sessionPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      // File doesn't exist - this is OK for new sessions
       return;
     }
     throw error;
   }
 
-  // Read and parse the file
   const fileStream = createReadStream(sessionPath, { encoding: 'utf-8' });
-  const rl = createInterface({
-    input: fileStream,
-    crlfDelay: Infinity,
-  });
+  const rl = createInterface({ input: fileStream, crlfDelay: Infinity });
 
   let currentIndex = 0;
   let sentCount = 0;
 
   try {
     for await (const line of rl) {
-      if (!line.trim()) {
-        continue;
-      }
-
-      // Skip events before fromIndex
+      if (!line.trim()) continue;
       if (currentIndex < fromIndex) {
         currentIndex++;
         continue;
@@ -567,24 +713,17 @@ export async function replayHistory(
 
       try {
         const entry = JSON.parse(line);
-
-        // Send as notification
         if (ws.readyState === WebSocket.OPEN) {
           const notification: JsonRpcNotification = {
             jsonrpc: '2.0',
             method: 'session_event',
-            params: {
-              index: currentIndex,
-              event: entry,
-            },
+            params: { index: currentIndex, event: entry },
           };
           ws.send(JSON.stringify(notification));
           sentCount++;
         }
-
         currentIndex++;
       } catch (parseError) {
-        // Skip invalid lines but continue
         console.warn(
           `[replayHistory] Failed to parse line ${currentIndex}:`,
           parseError instanceof Error ? parseError.message : 'Unknown error'
@@ -601,21 +740,13 @@ export async function replayHistory(
 }
 
 /**
- * Create a session WebSocket handler factory.
- *
- * This creates a handler function that can be used with HTTP server upgrade events.
- *
- * @param multiSessionManager - The multi-session manager instance
- * @param options - Configuration options
- * @returns Handler function for WebSocket upgrades
+ * @deprecated Use SessionWebSocketHandler instead. This function is kept for backward compatibility.
  */
 export function createSessionWebSocketHandler(
   multiSessionManager: MultiSessionManager,
   options: SessionWsOptions = {}
 ): (ws: WebSocket, req: IncomingMessage) => void {
   return (ws: WebSocket, req: IncomingMessage) => {
-    // Extract session ID from URL path
-    // Expected format: /ws/session/:sessionId
     const url = req.url || '';
     const match = url.match(/\/ws\/session\/([^\/\?]+)/);
 
@@ -625,8 +756,6 @@ export function createSessionWebSocketHandler(
     }
 
     const sessionId = match[1];
-
-    // Validate session ID (should be a valid path or ID)
     if (!sessionId || sessionId.length === 0) {
       ws.close(1008, 'Session ID is required');
       return;
@@ -637,15 +766,7 @@ export function createSessionWebSocketHandler(
 }
 
 /**
- * Broadcast an event to all subscribers of a session.
- *
- * This is a helper function that wraps the MultiSessionManager broadcast
- * with JSON-RPC notification formatting.
- *
- * @param multiSessionManager - The multi-session manager instance
- * @param sessionPath - Path to the session
- * @param event - The event to broadcast
- * @param eventIndex - The index of this event
+ * @deprecated Use SessionWebSocketHandler instead. This function is kept for backward compatibility.
  */
 export function broadcastSessionEvent(
   multiSessionManager: MultiSessionManager,
@@ -656,12 +777,8 @@ export function broadcastSessionEvent(
   const notification: JsonRpcNotification = {
     jsonrpc: '2.0',
     method: 'session_event',
-    params: {
-      index: eventIndex,
-      event,
-    },
+    params: { index: eventIndex, event },
   };
-
   multiSessionManager.broadcastToSubscribers(sessionPath, notification);
 }
 
