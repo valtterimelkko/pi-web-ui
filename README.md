@@ -883,6 +883,47 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for additional deployment instructions.
 - Check server logs for file watcher errors
 - Ensure Pi CLI has created sessions
 
+### Monitoring Worker Crashes
+
+Each session runs in an isolated worker process. If workers are crashing (especially due to OOM), you can monitor this via the API:
+
+**Check worker health (no auth required):**
+```bash
+curl http://localhost:3456/api/health/workers
+```
+
+**View crash statistics (requires auth):**
+```bash
+curl -b cookies.txt http://localhost:3456/api/sessions/workers/crashes/stats
+```
+
+**View recent crashes (requires auth):**
+```bash
+curl -b cookies.txt http://localhost:3456/api/sessions/workers/crashes/recent?limit=10
+```
+
+**Crash types detected:**
+| Type | Description | Action |
+|------|-------------|--------|
+| `oom_killed` | Out of memory (SIGKILL) | Increase `PI_WORKER_MEMORY` env var |
+| `crashed` | Non-zero exit code | Check server logs for errors |
+| `spawn_failed` | Worker failed to start | Verify `pi` CLI is in PATH |
+| `signal_terminated` | Terminated by signal | Usually graceful shutdown |
+
+**Adjusting worker memory:**
+```bash
+# Edit systemd service
+sudo systemctl edit pi-web-ui
+
+# Add/modify:
+[Service]
+Environment="PI_WORKER_MEMORY=768"  # Increase from 512MB to 768MB
+
+# Apply
+sudo systemctl daemon-reload
+sudo systemctl restart pi-web-ui
+```
+
 ### Build Errors
 ```bash
 # Clean and rebuild
