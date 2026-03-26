@@ -4,11 +4,37 @@
 
 ### Connection
 
-Connect to `ws://localhost:3000/ws` (or `wss://` in production).
+**Main WebSocket:** Connect to `ws://localhost:3000/ws` (or `wss://` in production).
+
+**Per-Session WebSocket:** Connect to `ws://localhost:3000/ws/sessions/:sessionId` for session-specific connections.
 
 **Authentication:**
 1. JWT must be in httpOnly cookie
 2. First message must include CSRF token
+
+### Per-Session WebSocket
+
+The per-session WebSocket endpoint (`/ws/sessions/:sessionId`) provides:
+
+- **History replay** on connect (resumable from last event index)
+- **Live event streaming** for the specific session
+- **Graceful disconnect** with cleanup
+- **Reconnection support** via `lastEventIndex` query parameter
+
+**Query Parameters:**
+- `lastEventIndex` - Resume from a specific event index (default: 0)
+
+**Example:**
+```
+ws://localhost:3000/ws/sessions/session-123?lastEventIndex=42
+```
+
+**JSON-RPC Methods:**
+- `ping` - Health check
+- `resume` - Replay from specific index
+- `get_status` - Get session status
+- `prompt` - Send a prompt to the session
+- `abort` - Abort current operation
 
 ### Client → Server Messages
 

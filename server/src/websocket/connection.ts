@@ -1018,6 +1018,20 @@ export class WebSocketConnectionManager {
   }
 
   /**
+   * Get the WebSocket server instance
+   */
+  getWss(): WebSocketServer {
+    return this.wss;
+  }
+
+  /**
+   * Get the MultiSessionManager instance
+   */
+  getMultiSessionManager(): MultiSessionManager {
+    return this.multiSessionManager;
+  }
+
+  /**
    * Close all connections and cleanup
    */
   async close(): Promise<void> {
