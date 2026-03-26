@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import fs from 'fs/promises';
 import os from 'os';
 import { getWorkerPool } from './sessions.js';
+import { getCrashLogger } from '../workers/crash-logger.js';
 
 const router = Router();
 
@@ -146,6 +147,53 @@ router.get('/', (_req: Request, res: Response) => {
     version: process.env.npm_package_version || 'unknown',
     nodeEnv: config.nodeEnv,
   });
+});
+
+/**
+ * GET /api/health/workers - Worker health and crash statistics
+ */
+router.get('/workers', (_req: Request, res: Response) => {
+  try {
+    const pool = getWorkerPool();
+    const workerStats = pool.getStats();
+    const crashStats = pool.getCrashStats();
+    
+    // Determine health status based on recent crashes
+    let status = 'healthy';
+    const warnings: string[] = [];
+    
+    if (crashStats.crashesLastHour > 5) {
+      status = 'critical';
+      warnings.push(`High crash rate: ${crashStats.crashesLastHour} crashes in the last hour`);
+    } else if (crashStats.crashesLastHour > 0) {
+      status = 'warning';
+      warnings.push(`${crashStats.crashesLastHour} crash(es) in the last hour`);
+    }
+    
+    if (crashStats.oomStats.last24h > 3) {
+      status = status === 'critical' ? 'critical' : 'warning';
+      warnings.push(`${crashStats.oomStats.last24h} OOM kill(s) in the last 24 hours - consider increasing PI_WORKER_MEMORY`);
+    }
+    
+    if (workerStats.total >= workerStats.maxWorkers * 0.9) {
+      warnings.push(`Worker pool near capacity: ${workerStats.total}/${workerStats.maxWorkers}`);
+    }
+    
+    res.json({
+      status,
+      timestamp: new Date().toISOString(),
+      warnings: warnings.length > 0 ? warnings : undefined,
+      workerStats,
+      crashStats,
+    });
+  } catch (error) {
+    console.error('Error getting worker health:', error);
+    res.status(500).json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      error: 'Failed to get worker health statistics',
+    });
+  }
 });
 
 export default router;

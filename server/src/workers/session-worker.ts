@@ -7,6 +7,7 @@ import { spawn, ChildProcess } from 'node:child_process';
 import type { SessionWorkerState, WorkerOptions, RPCEvent, EventHandler } from './types.js';
 import { RPCProtocolBridge } from './rpc-protocol-bridge.js';
 import type { WorkerStatus } from '@pi-web-ui/shared';
+import { getCrashLogger } from './crash-logger.js';
 
 export class SessionWorker {
   private state: SessionWorkerState;
@@ -75,10 +76,31 @@ export class SessionWorker {
       this.handleExit(code, signal);
     });
 
+    // Handle process spawn errors
+    this.state.process.on('spawn', () => {
+      this.state.status = 'ready';
+      console.log(`[SessionWorker:${this.state.pid}] Process spawned successfully`);
+    });
+
     this.state.process.on('error', (err) => {
       this.state.status = 'error';
       this.state.error = err.message;
       console.error(`[SessionWorker:${this.state.pid}] Process error:`, err);
+
+      // Record spawn failure if process hasn't fully started
+      if (!this.state.pid) {
+        const crashLogger = getCrashLogger();
+        crashLogger.recordCrash({
+          sessionPath: this.state.sessionPath,
+          pid: undefined,
+          exitCode: null,
+          signal: null,
+          memoryLimitMB: this.state.options.maxOldSpaceSize ?? 512,
+          spawnedAt: this.state.spawnedAt,
+          errorMessage: err.message,
+          previousStatus: 'spawning',
+        });
+      }
     });
 
     // Wait for ready state (streaming_started or similar)
@@ -202,10 +224,29 @@ export class SessionWorker {
 
   /**
    * Handle process exit.
+   * Records crash information for monitoring.
    */
   private handleExit(code: number | null, signal: string | null): void {
+    const previousStatus = this.state.status;
     this.state.status = 'terminated';
+
+    // Log basic exit info
     console.log(`[SessionWorker:${this.state.pid}] Exited with code=${code}, signal=${signal}`);
+
+    // Record crash for monitoring (skip if graceful shutdown via terminate())
+    if (signal !== 'SIGTERM' || code !== 0) {
+      const crashLogger = getCrashLogger();
+      crashLogger.recordCrash({
+        sessionPath: this.state.sessionPath,
+        pid: this.state.pid,
+        exitCode: code,
+        signal,
+        memoryLimitMB: this.state.options.maxOldSpaceSize ?? 512,
+        spawnedAt: this.state.spawnedAt,
+        errorMessage: this.state.error,
+        previousStatus,
+      });
+    }
   }
 
   /**

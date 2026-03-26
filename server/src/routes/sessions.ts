@@ -346,4 +346,83 @@ router.get('/workers/:sessionPath', async (req: Request, res: Response) => {
   }
 });
 
+// ============================================================================
+// Worker Crash Monitoring Routes
+// ============================================================================
+
+// GET /api/sessions/workers/crashes/stats - Get crash statistics
+router.get('/workers/crashes/stats', async (_req: Request, res: Response) => {
+  try {
+    const pool = getWorkerPool();
+    const stats = pool.getCrashStats();
+    
+    res.json({
+      success: true,
+      stats,
+    });
+  } catch (error) {
+    console.error('Error getting crash stats:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get crash statistics' 
+    });
+  }
+});
+
+// GET /api/sessions/workers/crashes/recent - Get recent crash records
+router.get('/workers/crashes/recent', async (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 10;
+    const pool = getWorkerPool();
+    const crashes = pool.getRecentCrashes(Math.min(limit, 100));
+    
+    res.json({
+      success: true,
+      crashes,
+    });
+  } catch (error) {
+    console.error('Error getting recent crashes:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get recent crashes' 
+    });
+  }
+});
+
+// GET /api/sessions/workers/crashes/by-session/:sessionPath - Get crashes for specific session
+router.get('/workers/crashes/by-session/:sessionPath', async (req: Request, res: Response) => {
+  try {
+    const { sessionPath } = req.params;
+    
+    if (!sessionPath) {
+      res.status(400).json({
+        success: false,
+        error: 'Session path is required',
+      });
+      return;
+    }
+    
+    const decodedPath = decodeURIComponent(sessionPath);
+    const pool = getWorkerPool();
+    const crashCount = pool.getSessionCrashCount(decodedPath);
+    
+    // Import getCrashLogger directly to get records for this session
+    const { getCrashLogger } = await import('../workers/crash-logger.js');
+    const crashes = getCrashLogger().getRecords({ sessionPath: decodedPath });
+    
+    res.json({
+      success: true,
+      sessionPath: decodedPath,
+      crashCount,
+      crashes,
+    });
+  } catch (error) {
+    console.error('Error getting session crashes:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get session crash information' 
+    });
+  }
+});
+
 export default router;

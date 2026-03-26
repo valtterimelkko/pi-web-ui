@@ -6,6 +6,7 @@
 import { SessionWorker } from './session-worker.js';
 import type { WorkerOptions, WorkerManagerConfig, EventHandler, RPCEvent } from './types.js';
 import { WorkerStatus, WorkerPoolStats, WorkerInfo } from '@pi-web-ui/shared';
+import { getCrashLogger, CrashStats } from './crash-logger.js';
 
 export class WorkerPool {
   private workers: Map<string, SessionWorker> = new Map();
@@ -95,6 +96,27 @@ export class WorkerPool {
       await worker.terminate();
       this.workers.delete(sessionPath);
     }
+  }
+
+  /**
+   * Get crash statistics from the crash logger.
+   */
+  getCrashStats(): CrashStats {
+    return getCrashLogger().getStats();
+  }
+
+  /**
+   * Get recent crash records.
+   */
+  getRecentCrashes(limit = 10) {
+    return getCrashLogger().getRecords({ limit });
+  }
+
+  /**
+   * Get crash count for a specific session.
+   */
+  getSessionCrashCount(sessionPath: string): number {
+    return getCrashLogger().getSessionCrashCount(sessionPath);
   }
 
   /**
