@@ -395,6 +395,18 @@ export class MultiSessionManager {
 
     let activeSession = this.sessions.get(sessionPath);
 
+    // If not found by path, try to find by session ID (UUID)
+    // This handles the case where per-session WebSocket connects with just the UUID
+    if (!activeSession && !sessionPath.includes('/')) {
+      for (const [path, session] of this.sessions.entries()) {
+        if (session.sessionId === sessionPath) {
+          activeSession = session;
+          sessionPath = path; // Use the full path
+          break;
+        }
+      }
+    }
+
     if (!activeSession) {
       // Create new session
       console.log(`[MultiSessionManager] Creating new session for path: ${sessionPath}${cwd ? ` with cwd: ${cwd}` : ''}`);
