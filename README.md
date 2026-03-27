@@ -434,6 +434,41 @@ npm run test:coverage
 npm run test:e2e
 ```
 
+### Updating the Pi SDK
+
+The Web UI depends on `@mariozechner/pi-coding-agent` (the Pi SDK). This is a **separate dependency** from the Pi CLI tool installed globally — updating the CLI (`npm update -g @mariozechner/pi-coding-agent`) does **not** update the Web UI's copy.
+
+To update the SDK in the Web UI:
+
+```bash
+cd pi-web-ui
+
+# Check current versions
+grep "pi-coding-agent" server/package.json  # server workspace dependency
+grep "pi-coding-agent" package.json         # root workspace dependency
+
+# Update both workspaces to latest
+npm install @mariozechner/pi-coding-agent@latest -w server
+npm install @mariozechner/pi-coding-agent@latest -w .
+
+# Rebuild and check for type errors
+npm run build
+
+# If there are TypeScript errors, the SDK may have changed event types
+# or API signatures. Check the changelog and fix accordingly.
+
+# Run tests to verify
+npm test
+
+# Restart the service
+sudo systemctl restart pi-web-ui
+```
+
+**Common issues after SDK updates:**
+- **TypeScript errors** — Event type names may change (e.g., `auto_compaction_start` → `compaction_start`). Check `server/src/pi/event-forwarder.ts`.
+- **API changes** — The `SessionManager` or `AgentSession` API may change. Check `server/src/pi/pi-service.ts`.
+- **The Web UI calls `(sessionManager as any)._rewriteFile()`** to force immediate session file creation. If the SDK adds a public `flush()` method in the future, switch to that instead.
+
 ## How to Use
 
 ### Getting Started

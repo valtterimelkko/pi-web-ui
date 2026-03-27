@@ -281,21 +281,21 @@ export class EventForwarder {
           isError: event.isError,
         };
 
-      case 'auto_compaction_start':
+      case 'compaction_start':
         return {
           ...base,
-          type: 'auto_compaction_start',
-          reason: event.reason,
+          type: 'compaction_start',
+          reason: (event as any).reason,
         };
 
-      case 'auto_compaction_end':
+      case 'compaction_end':
         return {
           ...base,
-          type: 'auto_compaction_end',
-          result: event.result,
-          aborted: event.aborted,
-          willRetry: event.willRetry,
-          errorMessage: event.errorMessage,
+          type: 'compaction_end',
+          result: (event as any).result,
+          aborted: (event as any).aborted,
+          willRetry: (event as any).willRetry,
+          errorMessage: (event as any).errorMessage,
         };
 
       case 'auto_retry_start':

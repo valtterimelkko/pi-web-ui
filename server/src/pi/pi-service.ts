@@ -109,18 +109,22 @@ export class PiService {
         sessionManager = SessionManager.open(options.sessionPath, config.sessionDir);
       } else {
         // File doesn't exist yet - create with cwd, then set the session file path
-        // Note: setSessionFile() on non-existent file calls newSession() which flushes
-        // to an auto-generated path. We need to override the path and flush again.
+        // Note: setSessionFile() on non-existent file calls newSession() which writes
+        // to an auto-generated path. We need to override the path and force write again.
         console.log(`[PiService.createSession] Session file doesn't exist yet, creating with cwd: ${cwd}`);
         sessionManager = SessionManager.create(cwd, config.sessionDir);
         sessionManager.setSessionFile(options.sessionPath);
-        // Ensure the file is written to the correct path immediately
-        sessionManager.flush();
+        // Force immediate write to disk using internal _rewriteFile()
+        // (public flush() not yet available in published SDK)
+        (sessionManager as any)._rewriteFile();
       }
     } else if (options.continueRecent) {
       sessionManager = await SessionManager.continueRecent(cwd, config.sessionDir);
     } else {
       sessionManager = SessionManager.create(cwd, config.sessionDir);
+      // Force immediate write to disk so session file exists before anything else needs it
+      // (SDK defers writing until first assistant message by default)
+      (sessionManager as any)._rewriteFile();
     }
 
     const { session } = await createAgentSession({
