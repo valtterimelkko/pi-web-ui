@@ -109,9 +109,13 @@ export class PiService {
         sessionManager = SessionManager.open(options.sessionPath, config.sessionDir);
       } else {
         // File doesn't exist yet - create with cwd, then set the session file path
+        // Note: setSessionFile() on non-existent file calls newSession() which flushes
+        // to an auto-generated path. We need to override the path and flush again.
         console.log(`[PiService.createSession] Session file doesn't exist yet, creating with cwd: ${cwd}`);
         sessionManager = SessionManager.create(cwd, config.sessionDir);
         sessionManager.setSessionFile(options.sessionPath);
+        // Ensure the file is written to the correct path immediately
+        sessionManager.flush();
       }
     } else if (options.continueRecent) {
       sessionManager = await SessionManager.continueRecent(cwd, config.sessionDir);
