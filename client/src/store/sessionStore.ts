@@ -1120,7 +1120,6 @@ export const useSessionStore = create<SessionState>()(
           case 'session_update': {
             // Skip session_update events during initial load to prevent duplicates
             if (get().isLoadingSessions) {
-              console.log('[sessionStore] Ignoring session_update during initial load');
               break;
             }
             

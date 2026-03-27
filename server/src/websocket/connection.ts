@@ -510,31 +510,18 @@ export class WebSocketConnectionManager {
   private async handleNewSession(clientId: string, message: { type: 'new_session'; cwd?: string }): Promise<void> {
     console.log(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}`);
 
-    // Create a new session via PiService to get the session path
-    const agentSession = await this.piService.createSession({
-      clientId: `multi-new-${clientId}`,
-      cwd: message.cwd,
-    });
+    const cwd = message.cwd || process.cwd();
 
-    const sessionPath = agentSession.sessionFile;
-    if (!sessionPath) {
-      // Clean up if session file wasn't created
-      agentSession.dispose();
-      this.sendMessage(clientId, { type: 'error', message: 'Failed to create session', code: 'SESSION_CREATION_FAILED' });
-      return;
-    }
+    // Create the session directly via MultiSessionManager (it handles creation and registration)
+    // We pass no sessionPath so it creates a new one with the correct cwd
+    const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd);
 
-    // Dispose the session - we'll create it properly via MultiSessionManager
-    agentSession.dispose();
-
-    // Subscribe client to the session via MultiSessionManager (pass cwd to ensure correct session header)
-    const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath, message.cwd);
+    const sessionPath = status.sessionPath;
 
     // Track that this client is viewing this session
     this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
 
     // Store the cwd for this client
-    const cwd = message.cwd || process.cwd();
     this.clientCwd.set(clientId, cwd);
 
     console.log(`[handleNewSession] Session created: ${status.sessionId}, sessionPath=${sessionPath}`);

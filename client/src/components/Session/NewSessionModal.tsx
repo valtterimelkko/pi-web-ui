@@ -94,19 +94,20 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
     }
   };
 
-  const handleSelectAndCreate = async () => {
+  const handleSelectAndCreate = () => {
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(currentPath);
     onCreateSession(currentPath);
-    // Don't set isCreating to false here - the modal will close
+    onClose(); // Close modal immediately - creation happens in background
   };
 
-  const handleQuickSelect = async (path: string) => {
+  const handleQuickSelect = (path: string) => {
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(path);
     onCreateSession(path);
+    onClose(); // Close modal immediately - creation happens in background
   };
 
   const handleRecentFolderSelect = (path: string) => {
@@ -121,6 +122,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
     setIsCreating(true);
     addRecentFolder(path);
     onCreateSession(path);
+    onClose(); // Close modal immediately - creation happens in background
   };
 
   // Close on Escape

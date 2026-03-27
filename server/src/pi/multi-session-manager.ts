@@ -314,6 +314,71 @@ export class MultiSessionManager {
   /**
    * Subscribe a client to a session. Creates the session if it doesn't exist.
    */
+  /**
+   * Create a new session and subscribe a client to it.
+   * This is the preferred way to create new sessions - it avoids the double-creation
+   * problem where creating a session just to get the path, then disposing and recreating
+   * can cause multiple session files to be created.
+   */
+  async createAndSubscribe(
+    clientId: string,
+    cwd: string,
+    webUIContext?: WebUIContext
+  ): Promise<SessionStatusInfo> {
+    // Validate inputs
+    if (!clientId || clientId.trim() === '') {
+      throw new Error('Invalid client ID');
+    }
+
+    console.log(`[MultiSessionManager] Creating new session for client ${clientId} with cwd: ${cwd}`);
+
+    // Create the session with the correct cwd
+    const agentSession = await this.piService.createSession({
+      clientId: `multi-${clientId}`,
+      cwd,
+    });
+
+    const sessionPath = agentSession.sessionFile;
+    if (!sessionPath) {
+      agentSession.dispose();
+      throw new Error('Failed to create session file');
+    }
+
+    // Set up event handler for this session
+    this.piService.setEventHandler(`multi-${clientId}`, (event) => {
+      this.handleAgentEvent(sessionPath, event);
+    });
+
+    // Create the active session entry
+    const activeSession: ActiveSession = {
+      sessionPath,
+      sessionId: agentSession.sessionId,
+      agentSession,
+      status: 'idle',
+      subscribers: new Set(),
+      lastActivity: new Date(),
+      messageCount: 0,
+      currentStep: 0,
+      webUIContext,
+    };
+
+    this.sessions.set(sessionPath, activeSession);
+
+    // Add client to subscribers
+    activeSession.subscribers.add(clientId);
+    activeSession.lastActivity = new Date();
+
+    // Track client subscription
+    if (!this.clientSubscriptions.has(clientId)) {
+      this.clientSubscriptions.set(clientId, new Set());
+    }
+    this.clientSubscriptions.get(clientId)!.add(sessionPath);
+
+    console.log(`[MultiSessionManager] Session created: ${agentSession.sessionId}, path=${sessionPath}`);
+
+    return this.getSessionStatus(sessionPath)!;
+  }
+
   async subscribeClient(
     clientId: string,
     sessionPath: string,
@@ -333,7 +398,6 @@ export class MultiSessionManager {
     if (!activeSession) {
       // Create new session
       console.log(`[MultiSessionManager] Creating new session for path: ${sessionPath}${cwd ? ` with cwd: ${cwd}` : ''}`);
-
       const agentSession = await this.piService.createSession({
         clientId: `multi-${sessionPath}`,
         sessionPath,
