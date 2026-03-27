@@ -15,7 +15,7 @@ import { EventForwarder } from '../pi/event-forwarder.js';
 import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
 import { handleSessionWebSocket } from './session-websocket.js';
 import { config } from '../config.js';
-import { validateCsrfToken } from '../security/csrf.js';
+import { validateCsrfToken, hasCsrfToken } from '../security/csrf.js';
 
 // ============================================================================
 // Protocol Detection
@@ -382,6 +382,17 @@ export class WebSocketConnectionManager {
             type: 'error',
             message: 'Not authenticated',
             code: 'UNAUTHORIZED'
+          });
+          break;
+        }
+
+        // Check if CSRF token exists for this user
+        // If not, the server may have restarted and client needs to refresh
+        if (!hasCsrfToken(client.userId)) {
+          this.sendMessage(clientId, {
+            type: 'error',
+            message: 'CSRF token not found. Please refresh the page.',
+            code: 'CSRF_TOKEN_REFRESH_REQUIRED'
           });
           break;
         }

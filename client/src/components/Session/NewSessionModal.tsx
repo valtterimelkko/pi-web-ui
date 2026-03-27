@@ -19,6 +19,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<DirectoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRecentFolders, setShowRecentFolders] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -61,6 +62,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
     if (isOpen) {
       fetchDirectories('/root');
       setShowRecentFolders(true);
+      setIsCreating(false);
     }
   }, [isOpen]);
 
@@ -92,28 +94,33 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
     }
   };
 
-  const handleSelectAndCreate = () => {
+  const handleSelectAndCreate = async () => {
+    if (isCreating) return;
+    setIsCreating(true);
     addRecentFolder(currentPath);
     onCreateSession(currentPath);
-    onClose();
+    // Don't set isCreating to false here - the modal will close
   };
 
-  const handleQuickSelect = (path: string) => {
+  const handleQuickSelect = async (path: string) => {
+    if (isCreating) return;
+    setIsCreating(true);
     addRecentFolder(path);
     onCreateSession(path);
-    onClose();
   };
 
   const handleRecentFolderSelect = (path: string) => {
+    if (isCreating) return;
     addRecentFolder(path);
     fetchDirectories(path);
   };
 
-  const handleCreateInRecentFolder = (path: string, e: React.MouseEvent) => {
+  const handleCreateInRecentFolder = (e: React.MouseEvent, path: string) => {
+    if (isCreating) return;
     e.stopPropagation();
+    setIsCreating(true);
     addRecentFolder(path);
     onCreateSession(path);
-    onClose();
   };
 
   // Close on Escape
@@ -199,10 +206,11 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
                           {folder.count}
                         </span>
                         <button
-                          onClick={(e) => handleCreateInRecentFolder(folder.path, e)}
-                          className="px-2 py-1 bg-teal-600 hover:bg-teal-700 text-white text-xs rounded transition-colors"
+                          onClick={(e) => handleCreateInRecentFolder(e, folder.path)}
+                          disabled={isCreating}
+                          className="px-2 py-1 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-400 disabled:cursor-not-allowed text-white text-xs rounded transition-colors"
                         >
-                          Create
+                          {isCreating ? '...' : 'Create'}
                         </button>
                       </div>
                     </div>
@@ -223,7 +231,8 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
                 <button
                   key={workspace.path}
                   onClick={() => handleQuickSelect(workspace.path)}
-                  className="flex items-center gap-2 px-3 py-2 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-700 transition-colors"
+                  disabled={isCreating}
+                  className="flex items-center gap-2 px-3 py-2 bg-gray-50 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed border border-gray-200 rounded-lg text-sm text-gray-700 transition-colors"
                 >
                   <Icon className="w-4 h-4 text-teal-600" />
                   <span>{workspace.label}</span>
@@ -316,15 +325,18 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
           <div className="flex gap-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-gray-500 hover:text-gray-700 transition-colors"
+              disabled={isCreating}
+              className="px-4 py-2 text-gray-500 hover:text-gray-700 disabled:opacity-50 transition-colors"
             >
               Cancel
             </button>
             <button
               onClick={handleSelectAndCreate}
-              className="px-4 py-2 bg-gray-900 hover:bg-gray-800 rounded-lg text-white transition-colors"
+              disabled={isCreating}
+              className="px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed rounded-lg text-white transition-colors flex items-center gap-2"
             >
-              Create Session
+              {isCreating && <Loader2 className="w-4 h-4 animate-spin" />}
+              {isCreating ? 'Creating...' : 'Create Session'}
             </button>
           </div>
         </div>

@@ -43,10 +43,24 @@ export function validateCsrfToken(sessionId: string, providedToken: string): boo
     return false;
   }
   
-  return crypto.timingSafeEqual(
-    Buffer.from(data.token, 'hex'),
-    Buffer.from(providedToken, 'hex')
-  );
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(data.token, 'hex'),
+      Buffer.from(providedToken, 'hex')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if a CSRF token exists for a session.
+ * Used to determine if client needs to refresh their token.
+ */
+export function hasCsrfToken(sessionId: string): boolean {
+  const data = tokenStore.get(sessionId);
+  if (!data) return false;
+  return Date.now() <= data.expiresAt;
 }
 
 export function invalidateCsrfToken(sessionId: string): void {
