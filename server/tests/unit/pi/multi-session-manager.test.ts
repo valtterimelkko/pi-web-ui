@@ -266,6 +266,42 @@ describe('MultiSessionManager', () => {
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status?.lastActivity.getTime()).toBeGreaterThanOrEqual(beforeSubscribe.getTime());
     });
+
+    it('should pass cwd parameter to createSession when provided', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'cwd-session',
+        sessionPath: '/path/to/cwd-session.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      // cwd is the 3rd parameter, webUIContext is the 4th
+      await manager.subscribeClient('client-1', '/path/to/cwd-session.jsonl', '/custom/cwd');
+
+      expect(mockPiService.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionPath: '/path/to/cwd-session.jsonl',
+          cwd: '/custom/cwd',
+        })
+      );
+    });
+
+    it('should work without cwd parameter (backward compatible)', async () => {
+      const mockSession = createMockAgentSession();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+      expect(mockPiService.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionPath: '/path/to/session.jsonl',
+        })
+      );
+      // When cwd is not provided, it should be undefined
+      const callArgs = mockPiService.createSession.mock.calls[0][0];
+      expect(callArgs.cwd).toBeUndefined();
+    });
   });
 
   describe('unsubscribeClient', () => {

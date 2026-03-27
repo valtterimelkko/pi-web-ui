@@ -317,6 +317,7 @@ export class MultiSessionManager {
   async subscribeClient(
     clientId: string,
     sessionPath: string,
+    cwd?: string,
     webUIContext?: WebUIContext
   ): Promise<SessionStatusInfo> {
     // Validate inputs
@@ -331,11 +332,12 @@ export class MultiSessionManager {
 
     if (!activeSession) {
       // Create new session
-      console.log(`[MultiSessionManager] Creating new session for path: ${sessionPath}`);
+      console.log(`[MultiSessionManager] Creating new session for path: ${sessionPath}${cwd ? ` with cwd: ${cwd}` : ''}`);
 
       const agentSession = await this.piService.createSession({
         clientId: `multi-${sessionPath}`,
         sessionPath,
+        cwd,
       });
 
       // Set up event handler for this session

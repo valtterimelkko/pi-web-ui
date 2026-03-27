@@ -516,8 +516,8 @@ export class WebSocketConnectionManager {
     // Dispose the session - we'll create it properly via MultiSessionManager
     agentSession.dispose();
 
-    // Subscribe client to the session via MultiSessionManager
-    const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath);
+    // Subscribe client to the session via MultiSessionManager (pass cwd to ensure correct session header)
+    const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath, message.cwd);
 
     // Track that this client is viewing this session
     this.multiSessionManager.setClientViewingSession(clientId, sessionPath);

@@ -94,7 +94,25 @@ export class PiService {
     if (options.inMemory) {
       sessionManager = SessionManager.inMemory();
     } else if (options.sessionPath) {
-      sessionManager = SessionManager.open(options.sessionPath, config.sessionDir);
+      // Check if the session file already exists
+      const fs = await import('fs/promises');
+      let fileExists = false;
+      try {
+        await fs.access(options.sessionPath);
+        fileExists = true;
+      } catch {
+        fileExists = false;
+      }
+      
+      if (fileExists) {
+        // File exists - open it normally
+        sessionManager = SessionManager.open(options.sessionPath, config.sessionDir);
+      } else {
+        // File doesn't exist yet - create with cwd, then set the session file path
+        console.log(`[PiService.createSession] Session file doesn't exist yet, creating with cwd: ${cwd}`);
+        sessionManager = SessionManager.create(cwd, config.sessionDir);
+        sessionManager.setSessionFile(options.sessionPath);
+      }
     } else if (options.continueRecent) {
       sessionManager = await SessionManager.continueRecent(cwd, config.sessionDir);
     } else {

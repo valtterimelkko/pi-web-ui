@@ -14,7 +14,7 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
     },
   }),
   SessionManager: {
-    create: vi.fn().mockReturnValue({}),
+    create: vi.fn().mockReturnValue({ setSessionFile: vi.fn() }),
     open: vi.fn().mockReturnValue({}),
     inMemory: vi.fn().mockReturnValue({}),
     continueRecent: vi.fn().mockResolvedValue({}),
