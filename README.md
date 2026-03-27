@@ -136,7 +136,35 @@ Major performance improvements based on Kimi Web UI benchmark:
 ### Model Support (March 2026)
 - **Antigravity Models**: Google Antigravity provider with distinct indigo/purple styling
 - **Anthropic Models**: Added Claude model support
+- **GLM Models**: Added GLM-5.1 and other GLM model support
 - **Model Selector**: Provider grouping with search functionality
+
+#### Adding New Models
+
+To add new models (e.g., when new GLM or other provider models are released), edit the Pi CLI models configuration file:
+
+```bash
+# Edit the models configuration
+nano ~/.pi/agent/models.json
+```
+
+Add your new model to the `models` array:
+
+```json
+{
+  "models": [
+    {
+      "id": "provider/model-name",
+      "name": "Display Name",
+      "provider": "provider-name",
+      "contextWindow": 128000,
+      "maxTokens": 8192
+    }
+  ]
+}
+```
+
+Save the file and the model will appear in both the Pi CLI and the Web UI model selectors immediately. No restart required.
 
 ## Features
 
