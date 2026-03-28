@@ -22,7 +22,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRecentFolders, setShowRecentFolders] = useState(true);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [pathInput, setPathInput] = useState('/root');
   const recentDropdownRef = useRef<HTMLDivElement>(null);
 
   const { recentFolders, addRecentFolder, getRecentFolders } = useUIStore();
@@ -48,10 +48,12 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
 
       setDirectories(dirs);
       setCurrentPath(response.path || path);
+      setPathInput(response.path || path);
       setParentPath(response.parent);
     } catch (err) {
       console.error('Failed to fetch directories:', err);
-      setError('Access denied or path not found. Try a different path.');
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Access denied or path not found. (${errorMsg})`);
       setDirectories([]);
     } finally {
       setIsLoading(false);
@@ -89,8 +91,8 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
 
   const handlePathSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (inputRef.current?.value) {
-      fetchDirectories(inputRef.current.value);
+    if (pathInput.trim()) {
+      fetchDirectories(pathInput.trim());
     }
   };
 
@@ -248,9 +250,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         <div className="p-4 border-b border-gray-200">
           <form onSubmit={handlePathSubmit} className="flex gap-2">
             <input
-              ref={inputRef}
               type="text"
-              defaultValue={currentPath}
+              value={pathInput}
+              onChange={(e) => setPathInput(e.target.value)}
               placeholder="Enter path..."
               className="flex-1 px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 placeholder-gray-400 border border-gray-200 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-base"
             />
@@ -304,15 +306,18 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
             ) : (
               <div className="space-y-0.5">
                 {directories.map((dir) => (
-                  <button
+                  <div
                     key={dir.path}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleNavigate(dir)}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 rounded-lg transition-colors text-left"
+                    onKeyDown={(e) => e.key === 'Enter' && handleNavigate(dir)}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 active:bg-gray-200 rounded-lg transition-colors cursor-pointer select-none"
                   >
-                    <FolderOpen className="w-5 h-5 text-teal-600" />
-                    <span className="text-sm text-gray-700 truncate">{dir.name}</span>
-                    <ChevronRight className="w-4 h-4 text-gray-300 ml-auto" />
-                  </button>
+                    <FolderOpen className="w-5 h-5 text-teal-600 flex-shrink-0" />
+                    <span className="text-sm text-gray-700 truncate flex-1">{dir.name}</span>
+                    <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                  </div>
                 ))}
               </div>
             )}

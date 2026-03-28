@@ -23,11 +23,27 @@ router.use(apiLimiter);
 
 // Allowed directories for file browsing
 function getAllowedDirectories(): string[] {
-  // Default to cwd and home directory
-  return [
-    process.cwd(),
-    process.env.HOME || '/root',
-  ];
+  // Always include common directories for flexibility
+  const dirs = new Set<string>();
+  
+  // Add current working directory
+  dirs.add(process.cwd());
+  
+  // Add home directory
+  if (process.env.HOME) {
+    dirs.add(process.env.HOME);
+  }
+  
+  // Always allow /root for this deployment
+  dirs.add('/root');
+  
+  // Add parent of cwd if cwd is a subdirectory of /root
+  const cwd = process.cwd();
+  if (cwd.startsWith('/root/')) {
+    dirs.add('/root');
+  }
+  
+  return Array.from(dirs);
 }
 
 // Validate path is within allowed directories
@@ -39,14 +55,21 @@ async function validatePath(requestedPath: string): Promise<string | null> {
     const real = await fs.realpath(resolved);
     
     for (const allowed of allowedDirs) {
-      const allowedReal = await fs.realpath(allowed);
-      if (real.startsWith(allowedReal)) {
-        return real;
+      try {
+        const allowedReal = await fs.realpath(allowed);
+        if (real.startsWith(allowedReal)) {
+          return real;
+        }
+      } catch {
+        // Skip allowed dirs that don't exist
+        continue;
       }
     }
     
+    console.warn(`Path validation failed: ${real} not in allowed directories: ${allowedDirs.join(', ')}`);
     return null;
-  } catch {
+  } catch (err) {
+    console.warn(`Path validation error for ${requestedPath}:`, err);
     return null;
   }
 }
@@ -58,6 +81,7 @@ router.get('/browse', async (req: Request, res: Response) => {
     
     const validatedPath = await validatePath(requestedPath);
     if (!validatedPath) {
+      console.warn(`Browse access denied for path: ${requestedPath}, allowed dirs: ${getAllowedDirectories().join(', ')}`);
       res.status(403).json({ error: 'Access denied to this path' });
       return;
     }
