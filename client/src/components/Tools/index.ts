@@ -1,6 +1,7 @@
 export { ToolCallCard } from './ToolCallCard';
 export { CollapsibleToolCard } from './CollapsibleToolCard';
 export { SubagentToolCard } from './SubagentToolCard';
+export { TodoToolCard } from './TodoToolCard';
 export { ToolProgressIndicator } from './ToolProgressIndicator';
 export { ToolOutput } from './ToolOutput';
 export { BashOutput } from './BashOutput';

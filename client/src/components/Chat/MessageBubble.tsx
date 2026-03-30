@@ -8,6 +8,7 @@ import { StreamingText } from './StreamingText';
 import { ThinkingBlock } from './ThinkingBlock';
 import { CollapsibleToolCard } from '../Tools/CollapsibleToolCard';
 import { SubagentToolCard } from '../Tools/SubagentToolCard';
+import { TodoToolCard } from '../Tools/TodoToolCard';
 import { copyToClipboard } from '../../lib/clipboard';
 
 interface MessageBubbleProps {
@@ -119,6 +120,17 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     if (message.toolCall.name === 'subagent') {
       return (
         <SubagentToolCard
+          name={message.toolCall.name}
+          args={message.toolCall.args}
+          result={message.toolResult}
+          startTime={message.timestamp}
+        />
+      );
+    }
+    // Use TodoToolCard for todo tools to show visual todo list
+    if (message.toolCall.name === 'todo') {
+      return (
+        <TodoToolCard
           name={message.toolCall.name}
           args={message.toolCall.args}
           result={message.toolResult}

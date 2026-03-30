@@ -239,13 +239,15 @@ export const VirtualizedMessageList = forwardRef<
   // instead of the full verbose content. This preserves message context while keeping UI clean.
   // EXCEPTION: subagent tool calls are shown with hierarchical display like CLI.
   // EXCEPTION: read tool calls are shown for skill-loading visibility (clean Kimi-style)
+  // EXCEPTION: todo tool calls are shown with visual todo list display
   const visibleMessages = useMemo(() =>
     messages
       .filter(m =>
         m.role === 'user' ||
         m.role === 'assistant' ||
         (m.role === 'tool' && m.toolCall?.name === 'subagent') ||
-        (m.role === 'tool' && m.toolCall?.name === 'read')
+        (m.role === 'tool' && m.toolCall?.name === 'read') ||
+        (m.role === 'tool' && m.toolCall?.name === 'todo')
       )
       .map(m => {
         // Transform skill content to brief placeholder
