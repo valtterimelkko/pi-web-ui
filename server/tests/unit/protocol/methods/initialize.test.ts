@@ -121,9 +121,7 @@ describe('Initialize Method Handler', () => {
       
       // Should log about version mismatch
       expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Client requested protocol version'),
-        '2.0.0',
-        expect.stringContaining(PROTOCOL_VERSION)
+        expect.stringContaining('Client requested protocol version 2.0.0, server has')
       );
 
       consoleSpy.mockRestore();

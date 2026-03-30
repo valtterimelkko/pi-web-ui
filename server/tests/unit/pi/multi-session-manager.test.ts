@@ -686,8 +686,7 @@ describe('MultiSessionManager', () => {
       manager.cleanupInactiveSessions();
       
       expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[MultiSessionManager]'),
-        expect.stringContaining('errored session')
+        expect.stringContaining('[MultiSessionManager] Cleaning up errored session:')
       );
       
       consoleSpy.mockRestore();

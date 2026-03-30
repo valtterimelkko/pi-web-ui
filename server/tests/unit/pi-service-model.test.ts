@@ -19,10 +19,10 @@ vi.mock('@mariozechner/pi-coding-agent', () => {
       session: mockSession,
     }),
     SessionManager: {
-      create: vi.fn().mockReturnValue({}),
-      open: vi.fn().mockReturnValue({}),
-      inMemory: vi.fn().mockReturnValue({}),
-      continueRecent: vi.fn().mockResolvedValue({}),
+      create: vi.fn().mockReturnValue({ _rewriteFile: vi.fn() }),
+      open: vi.fn().mockReturnValue({ _rewriteFile: vi.fn() }),
+      inMemory: vi.fn().mockReturnValue({ _rewriteFile: vi.fn() }),
+      continueRecent: vi.fn().mockResolvedValue({ _rewriteFile: vi.fn() }),
       list: vi.fn().mockResolvedValue([]),
       listAll: vi.fn().mockResolvedValue([]),
     },
@@ -31,27 +31,29 @@ vi.mock('@mariozechner/pi-coding-agent', () => {
         getAll: vi.fn().mockReturnValue([]),
       }),
     },
-    ModelRegistry: vi.fn().mockImplementation(() => ({
-      getAvailable: vi.fn().mockReturnValue([
-        { id: 'gpt-4', name: 'GPT-4', provider: 'openai' },
-        { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'github-copilot' },
-        { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'github-copilot' },
-      ]),
-      find: vi.fn((provider: string, modelName: string) => {
-        const models = [
+    ModelRegistry: {
+      create: vi.fn().mockReturnValue({
+        getAvailable: vi.fn().mockReturnValue([
           { id: 'gpt-4', name: 'GPT-4', provider: 'openai' },
           { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'github-copilot' },
           { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'github-copilot' },
-        ];
-        return models.find(m => m.provider === provider && m.id === modelName) || null;
+        ]),
+        find: vi.fn((provider: string, modelName: string) => {
+          const models = [
+            { id: 'gpt-4', name: 'GPT-4', provider: 'openai' },
+            { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'github-copilot' },
+            { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'github-copilot' },
+          ];
+          return models.find(m => m.provider === provider && m.id === modelName) || null;
+        }),
+        getError: vi.fn().mockReturnValue(null),
+        getAll: vi.fn().mockReturnValue([
+          { id: 'gpt-4', name: 'GPT-4', provider: 'openai' },
+          { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'github-copilot' },
+          { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'github-copilot' },
+        ]),
       }),
-      getError: vi.fn().mockReturnValue(null),
-      getAll: vi.fn().mockReturnValue([
-        { id: 'gpt-4', name: 'GPT-4', provider: 'openai' },
-        { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'github-copilot' },
-        { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'github-copilot' },
-      ]),
-    })),
+    },
     DefaultResourceLoader: vi.fn().mockImplementation(() => ({
       reload: vi.fn().mockResolvedValue(undefined),
       getExtensions: vi.fn().mockReturnValue({ extensions: [], errors: [] }),
@@ -168,7 +170,8 @@ describe('PiService.setModel', () => {
     it('should handle model IDs with multiple slashes in name', async () => {
       // Update the mock registry to include a multi-slash model
       const { ModelRegistry } = await import('@mariozechner/pi-coding-agent');
-      const mockRegistryInstance = vi.mocked(ModelRegistry).mock.results[0]?.value;
+      const mockCreate = vi.mocked(ModelRegistry.create);
+      const mockRegistryInstance = mockCreate.mock.results[0]?.value;
       if (mockRegistryInstance) {
         mockRegistryInstance.find.mockImplementation((provider: string, modelName: string) => {
           if (provider === 'custom' && modelName === 'provider/model-name-v2') {

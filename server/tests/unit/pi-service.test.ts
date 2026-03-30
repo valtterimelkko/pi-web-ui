@@ -14,10 +14,19 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
     },
   }),
   SessionManager: {
-    create: vi.fn().mockReturnValue({ setSessionFile: vi.fn() }),
-    open: vi.fn().mockReturnValue({}),
-    inMemory: vi.fn().mockReturnValue({}),
-    continueRecent: vi.fn().mockResolvedValue({}),
+    create: vi.fn().mockReturnValue({ 
+      setSessionFile: vi.fn(),
+      _rewriteFile: vi.fn(),
+    }),
+    open: vi.fn().mockReturnValue({
+      _rewriteFile: vi.fn(),
+    }),
+    inMemory: vi.fn().mockReturnValue({
+      _rewriteFile: vi.fn(),
+    }),
+    continueRecent: vi.fn().mockResolvedValue({
+      _rewriteFile: vi.fn(),
+    }),
     list: vi.fn().mockResolvedValue([
       {
         id: 'session-1',
@@ -50,16 +59,18 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
       getAll: vi.fn().mockReturnValue([]),
     }),
   },
-  ModelRegistry: vi.fn().mockImplementation(() => ({
-    getAvailable: vi.fn().mockReturnValue([
-      { id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' },
-    ]),
-    getAll: vi.fn().mockReturnValue([
-      { id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' },
-    ]),
-    find: vi.fn().mockReturnValue({ id: 'openai/gpt-4', name: 'GPT-4' }),
-    getError: vi.fn().mockReturnValue(null),
-  })),
+  ModelRegistry: {
+    create: vi.fn().mockReturnValue({
+      getAvailable: vi.fn().mockReturnValue([
+        { id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' },
+      ]),
+      getAll: vi.fn().mockReturnValue([
+        { id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' },
+      ]),
+      find: vi.fn().mockReturnValue({ id: 'openai/gpt-4', name: 'GPT-4' }),
+      getError: vi.fn().mockReturnValue(null),
+    }),
+  },
   DefaultResourceLoader: vi.fn().mockImplementation(() => ({
     reload: vi.fn().mockResolvedValue(undefined),
     getExtensions: vi.fn().mockReturnValue({ extensions: [], errors: [] }),

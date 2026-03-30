@@ -40,7 +40,7 @@ export class PiService {
       ? `${config.piAgentDir}/auth.json`
       : undefined);
     
-    this.modelRegistry = new ModelRegistry(this.authStorage);
+    this.modelRegistry = ModelRegistry.create(this.authStorage);
     
     // Log any ModelRegistry errors (e.g., models.json issues)
     const modelError = this.modelRegistry.getError();

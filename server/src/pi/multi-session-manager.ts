@@ -223,10 +223,11 @@ export class MultiSessionManager {
   }
   
   /**
-   * Clean up sessions that have been idle for too long with no subscribers
+   * Clean up sessions that are in error state with no subscribers.
+   * Note: Idle sessions now persist indefinitely (no timeout-based cleanup).
+   * Only errored sessions are cleaned up immediately when they have no subscribers.
    */
   cleanupIdleSessions(): number {
-    const now = Date.now();
     let cleanedCount = 0;
     
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
@@ -235,42 +236,26 @@ export class MultiSessionManager {
         continue;
       }
       
-      // Skip sessions that are busy or streaming
-      if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
-        continue;
-      }
-      
-      // Check if session has been idle longer than timeout
-      const idleTime = now - activeSession.lastActivity.getTime();
-      if (idleTime > this.idleSessionTimeoutMs) {
-        console.log(
-          `[MultiSessionManager] Cleaning up idle session: ${sessionPath} (idle for ${Math.round(idleTime / 60000)} minutes)`
-        );
-        this.disposeSession(sessionPath);
-        cleanedCount++;
-      }
-    }
-    
-    // Also enforce max session limit
-    if (this.sessions.size > this.maxSessions) {
-      const sessionsToRemove = this.sessions.size - this.maxSessions;
-      const idleSessions = Array.from(this.sessions.entries())
-        .filter(([_, s]) => s.status === 'idle' && s.subscribers.size === 0)
-        .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
-      
-      for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
-        const [sessionPath] = idleSessions[i];
-        console.log(`[MultiSessionManager] Cleaning up session to enforce max limit: ${sessionPath}`);
+      // Clean up errored sessions immediately
+      if (activeSession.status === 'error') {
+        console.log(`[MultiSessionManager] Cleaning up errored session: ${sessionPath}`);
         this.disposeSession(sessionPath);
         cleanedCount++;
       }
     }
     
     if (cleanedCount > 0) {
-      console.log(`[MultiSessionManager] Cleaned up ${cleanedCount} idle sessions, ${this.sessions.size} remaining`);
+      console.log(`[MultiSessionManager] Cleaned up ${cleanedCount} errored sessions, ${this.sessions.size} remaining`);
     }
     
     return cleanedCount;
+  }
+  
+  /**
+   * Alias for cleanupIdleSessions - for backward compatibility with tests
+   */
+  cleanupInactiveSessions(): number {
+    return this.cleanupIdleSessions();
   }
   
   /**

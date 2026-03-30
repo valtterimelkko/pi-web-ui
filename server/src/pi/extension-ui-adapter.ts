@@ -308,6 +308,11 @@ export function createWebUIContext(webUI: WebUIContext): ExtensionUIContext {
     setToolsExpanded(_expanded: boolean): void {
       // Web UI manages expansion state independently
     },
+
+    // Set the label for hidden thinking blocks - not applicable to Web UI
+    setHiddenThinkingLabel(_label: string | undefined): void {
+      // Web UI manages thinking labels independently
+    },
   };
 }
 
