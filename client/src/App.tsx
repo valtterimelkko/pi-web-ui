@@ -9,7 +9,6 @@ import { SettingsModal } from './components/Settings';
 import { ToastContainer } from './components/common';
 import { useSessionStore } from './store/sessionStore';
 import { useUIStore } from './store/uiStore';
-import { useSessionStream } from './hooks/useSessionStream.js';
 
 function App() {
   const isAuthenticated = useAuth((state) => state.isAuthenticated);
@@ -57,24 +56,6 @@ function AuthenticatedApp() {
   const extensionUIRequest = useSessionStore((state) => state.extensionUIRequest);
   const setExtensionUIRequest = useSessionStore((state) => state.setExtensionUIRequest);
   const initPreferences = useSessionStore((state) => state.initPreferences);
-  const currentSessionId = useSessionStore((state) => state.currentSessionId);
-
-  // Use the new session stream hook for the current session
-  const {
-    messages,
-    status,
-    sendPrompt,
-    cancelCurrentTurn,
-  } = useSessionStream(currentSessionId, {
-    debug: import.meta.env.DEV,
-  });
-
-  // Handle session switching - atomic switch with automatic cleanup
-  const handleSessionSwitch = useCallback((newSessionId: string) => {
-    // useSessionStream's useLayoutEffect handles cleanup automatically
-    // when currentSessionId changes
-    useSessionStore.getState().setCurrentSession(newSessionId);
-  }, []);
 
   // Enable keyboard shortcut for copying last message (Ctrl+Shift+C)
   useCopyShortcut();
@@ -106,11 +87,6 @@ function AuthenticatedApp() {
       <div className="flex-1 flex flex-col overflow-hidden">
         <ChatView
           onOpenSettings={() => setSettingsOpen(true)}
-          // New protocol props (for future use when ChatView is refactored)
-          // messages={messages}
-          // isStreaming={status === 'streaming'}
-          // onSendMessage={sendPrompt}
-          // onCancel={cancelCurrentTurn}
         />
       </div>
       <ExtensionDialog

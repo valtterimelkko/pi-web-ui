@@ -18,10 +18,24 @@ export function useWebSocket() {
   const clientRef = useRef<WebSocketClient | null>(null);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
 
+  // Track the current session path for reconnection resubscription
+  const currentSessionPathRef = useRef<string | null>(null);
+
+  // Subscribe to session store changes to keep sessionPathRef in sync
+  const sessions = useSessionStore((state) => state.sessions);
+  useEffect(() => {
+    if (currentSessionId) {
+      const session = sessions.find(s => s.id === currentSessionId);
+      if (session?.path) {
+        currentSessionPathRef.current = session.path;
+      }
+    }
+  }, [currentSessionId, sessions]);
+
   useEffect(() => {
     // Get the handler from the store directly to avoid re-subscription
     const handleServerMessage = useSessionStore.getState().handleServerMessage;
-    
+
     const client = createWebSocketClient({
       onMessage: handleServerMessage,
       onStatusChange: (status: WebSocketStatus) => {
@@ -32,6 +46,14 @@ export function useWebSocket() {
           // Set loading state to prevent duplicate adds from session_update events
           useSessionStore.getState().isLoadingSessions = true;
           client.send({ type: 'get_sessions' });
+
+          // Re-subscribe to the current session after reconnection
+          // This fixes the bug where prompts silently fail after WS reconnect
+          const sessionPath = currentSessionPathRef.current;
+          if (sessionPath) {
+            console.log('[WebSocket] Re-subscribing to session after reconnection:', sessionPath);
+            client.send({ type: 'switch_session', sessionPath });
+          }
         }
       },
       onError: (error) => {
@@ -40,7 +62,7 @@ export function useWebSocket() {
     });
 
     clientRef.current = client;
-    
+
     // Only connect if not already connected/connecting
     const status = client.getStatus();
     if (status !== 'connected' && status !== 'connecting') {

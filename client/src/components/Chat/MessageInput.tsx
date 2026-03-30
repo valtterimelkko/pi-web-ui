@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles } from 'lucide-react';
 import { useChatStore, useSessionStore, useDraftStore } from '../../store';
+import { useUIStore } from '../../store/uiStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
 import { SlashPalette } from './SlashPalette';
@@ -74,7 +75,29 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
       }
 
       const images: unknown[] = [];
-      sendPrompt(promptMessage, images);
+      const sent = sendPrompt(promptMessage, images);
+      if (!sent) {
+        // Surface send failure - don't clear draft, show error toast
+        useUIStore.getState().addToast({
+          type: 'error',
+          message: 'Failed to send message. Check your connection and try again.',
+        });
+        return false;
+      }
+
+      // Optimistic user message insertion - immediately show the user's message
+      // The server will eventually send message_start but this ensures instant feedback
+      const store = useSessionStore.getState();
+      if (store.currentSessionId) {
+        store.addMessage({
+          id: `optimistic_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+          role: 'user',
+          content: promptMessage,
+          timestamp: Date.now(),
+          isComplete: true,
+        });
+      }
+
       return true;
     });
   }, [sendPrompt, setSendCallback]);
@@ -117,7 +140,7 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
     }
   };
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const message = currentDraft.trim();
     if (!message && uploadedFiles.length === 0) return;
     if (disabled || isStreaming) return;
@@ -145,17 +168,17 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
     }
 
     // Use sendDraft from draftStore for per-session draft handling
-    if (currentSessionId) {
-      sendDraft(currentSessionId);
-    }
+    const success = currentSessionId ? await sendDraft(currentSessionId) : false;
     
-    // Clear local state
-    setInputValue('');
-    clearFiles();
-    setShowSlashPalette(false);
+    // Only clear local state if send was successful
+    if (success) {
+      setInputValue('');
+      clearFiles();
+      setShowSlashPalette(false);
 
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
     }
   }, [currentDraft, uploadedFiles, disabled, isStreaming, currentSessionId, sendDraft, setInputValue, clearFiles, setDraft]);
 
