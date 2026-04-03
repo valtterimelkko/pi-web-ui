@@ -5,6 +5,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { createWriteStream, mkdirSync } from 'fs';
 import { randomUUID } from 'crypto';
+import { z } from 'zod';
 
 // Upload directory
 const UPLOAD_DIR = '/tmp/pi-uploads';
@@ -102,11 +103,27 @@ router.get('/browse', async (req: Request, res: Response) => {
           // Ignore stat errors
         }
         
+        let modifiedAt: string | null = null;
+        let isSymlink = false;
+        try {
+          const lstat = await fs.lstat(itemPath);
+          isSymlink = lstat.isSymbolicLink();
+          modifiedAt = lstat.mtime.toISOString();
+          if (entry.isFile() && size === 0) {
+            // lstat gives accurate size for files too
+            size = lstat.size;
+          }
+        } catch {
+          // Ignore lstat errors
+        }
+
         return {
           name: entry.name,
           type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other',
           path: itemPath,
           size,
+          modifiedAt,
+          isSymlink,
         };
       })
     );
@@ -251,4 +268,94 @@ router.post('/upload', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/files/write - create or overwrite a file
+router.post('/write', async (req: Request, res: Response) => {
+  try {
+    const { path: filePath, content } = z.object({
+      path: z.string().min(1),
+      content: z.string(),
+    }).parse(req.body);
+
+    const safePath = await validatePath(filePath);
+    if (!safePath) {
+      res.status(400).json({ error: 'Access denied to this path' });
+      return;
+    }
+    await fs.writeFile(safePath, content, 'utf-8');
+    res.json({ success: true });
+  } catch (err: unknown) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+// PUT /api/files/rename - rename a file or directory
+router.put('/rename', async (req: Request, res: Response) => {
+  try {
+    const { oldPath, newPath } = z.object({
+      oldPath: z.string().min(1),
+      newPath: z.string().min(1),
+    }).parse(req.body);
+
+    const safeOldPath = await validatePath(oldPath);
+    if (!safeOldPath) {
+      res.status(400).json({ error: 'Access denied to source path' });
+      return;
+    }
+    // For newPath, validate the parent directory (the new path may not exist yet)
+    const newPathParent = path.dirname(newPath);
+    const safeNewParent = await validatePath(newPathParent);
+    if (!safeNewParent) {
+      res.status(400).json({ error: 'Access denied to destination path' });
+      return;
+    }
+    const safeNewPath = path.join(safeNewParent, path.basename(newPath));
+    await fs.rename(safeOldPath, safeNewPath);
+    res.json({ success: true });
+  } catch (err: unknown) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+// DELETE /api/files/delete - delete a file
+router.delete('/delete', async (req: Request, res: Response) => {
+  try {
+    const { path: filePath } = z.object({
+      path: z.string().min(1),
+    }).parse(req.body);
+
+    const safePath = await validatePath(filePath);
+    if (!safePath) {
+      res.status(400).json({ error: 'Access denied to this path' });
+      return;
+    }
+    await fs.unlink(safePath);
+    res.json({ success: true });
+  } catch (err: unknown) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+// POST /api/files/mkdir - create a directory
+router.post('/mkdir', async (req: Request, res: Response) => {
+  try {
+    const { path: dirPath } = z.object({
+      path: z.string().min(1),
+    }).parse(req.body);
+
+    // For mkdir, validate the parent (the new dir may not exist yet)
+    const parentDir = path.dirname(dirPath);
+    const safeParent = await validatePath(parentDir);
+    if (!safeParent) {
+      res.status(400).json({ error: 'Access denied to this path' });
+      return;
+    }
+    const safePath = path.join(safeParent, path.basename(dirPath));
+    await fs.mkdir(safePath, { recursive: true });
+    res.json({ success: true });
+  } catch (err: unknown) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+export { router as filesRouter };
 export default router;
