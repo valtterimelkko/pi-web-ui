@@ -1,0 +1,613 @@
+# Agent Instructions for Pi Web UI
+
+> **For users**: See [README.md](./README.md) for installation and usage instructions. This document is for developers/agents working on the codebase.
+
+## Your Role
+
+Improve the Pi Web UI with test-driven development. Each change needs verification via:
+1. `webapp-testing` skill (local dev servers)
+2. `playwright-cli` skill (external sites)
+3. Test suite (`npm test`)
+
+## Quick Reference
+
+| Task | Section |
+|------|---------|
+| Debug WebSocket | [Debugging WebSocket](#debugging-websocket) |
+| Fix auth issues | [Debugging Auth](#debugging-authentication) |
+| Add component | [Adding Components](#adding-a-new-component) |
+| Add API endpoint | [Adding API Endpoints](#adding-a-new-api-endpoint) |
+| Run tests | [Testing Strategy](#testing-strategy) |
+
+## Project Overview
+
+Pi Web UI is a web interface for the Pi Coding Agent:
+- **React frontend** + Express backend
+- **WebSocket** real-time communication
+- **JWT authentication** with security hardening
+- **Pi SDK integration** for AI capabilities
+- **File-based sessions** shared with CLI
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  CLIENT (React + Vite)                                          │
+│  ├─ useSessionStream Hook (client/src/hooks/useSessionStream.ts)│
+│  │   └─ Ref-based streaming, identity guards, atomic teardown  │
+│  ├─ JSON-RPC Client (client/src/lib/jsonrpc-client.ts)         │
+│  ├─ Zustand Stores (client/src/store/)                         │
+│  └─ React Components (client/src/components/)                  │
+└───────────────────────┬─────────────────────────────────────────┘
+                        │ WebSocket (JSON-RPC 2.0)
+                        │ /ws/sessions/:sessionId
+┌───────────────────────┴─────────────────────────────────────────┐
+│  MAIN SERVER PROCESS (Express + Node.js)                        │
+│  ├─ Session WebSocket (server/src/websocket/session-websocket.ts)│
+│  ├─ JSON-RPC Protocol (server/src/protocol/)                   │
+│  │   └─ Methods: initialize, prompt, cancel, steer, replay     │
+│  ├─ Worker Process Manager (server/src/workers/)               │
+│  │   ├─ session-worker-manager.ts  (spawn/kill lifecycle)      │
+│  │   ├─ worker-pool.ts            (pool management)            │
+│  │   ├─ rpc-protocol-bridge.ts    (protocol translation)       │
+│  │   └─ session-rpc-client.ts     (RPC client wrapper)         │
+│  └─ REST API Routes (server/src/routes/)                       │
+└───────────────────────┬─────────────────────────────────────────┘
+                        │ stdin/stdout JSON-RPC
+                        │ spawns worker processes
+┌───────────────────────┴─────────────────────────────────────────┐
+│  WORKER PROCESS (one per session)                               │
+│  ├─ Pi SDK RPC Mode (pi --mode rpc)                            │
+│  ├─ Event Forwarder (server/src/pi/event-forwarder.ts)         │
+│  ├─ Extensions & Tools                                         │
+│  └─ Session File I/O (~/.pi/agent/sessions/)                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Architecture Features:**
+- **Process-per-Session** - Each session runs in an isolated Node.js worker process
+- **Memory Isolation** - 512MB heap limit per worker, prevents cross-session OOM crashes
+- **Crash Resilience** - Worker crashes only affect that session; auto-restart preserves state
+- **JSON-RPC 2.0 Protocol** - Structured request/response with correlation IDs
+- **Per-Session WebSockets** - Isolated connections per session
+- **Ref-Based Streaming** - No re-renders during content accumulation
+- **LRU Cache** - Max 5 sessions in memory, automatic eviction
+
+## Development Workflow
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Configure environment
+cp .env.example .env
+# Edit .env with JWT_SECRET, CSRF_SECRET
+
+# 3. Start development
+npm run dev
+
+# 4. Run tests
+npm test
+```
+
+### Making Changes
+
+1. **Write tests first** (TDD)
+2. **Make minimal changes**
+3. **Run tests** to verify
+4. **Check TypeScript** (`npm run build`)
+5. **Test manually** if UI changes
+
+## Debugging Guides
+
+### Debugging WebSocket
+
+**Symptoms:** Connection drops, "Thinking..." stuck
+
+**Diagnostic Steps:**
+1. Check browser DevTools → Network → WS
+   - Look for connection attempts
+   - Close codes: 1006 = abnormal, 1008 = policy violation
+
+2. Check server logs:
+   ```
+   "Origin not allowed" → Check ALLOWED_ORIGINS
+   "Invalid CSRF token" → Token not sent or expired
+   "JWT verification failed" → Cookie issue
+   ```
+
+3. Verify auth:
+   ```bash
+   curl -c cookies.txt -b cookies.txt http://localhost:3000/api/auth/me
+   ```
+
+4. Common fixes:
+   - `ALLOWED_ORIGINS` must include exact URL (including port)
+   - First WebSocket message: `{ type: 'auth', csrfToken: '...' }`
+   - JWT cookie needs `httpOnly` and `sameSite`
+
+**Code Locations:**
+- JSON-RPC Handler: `server/src/protocol/jsonrpc-handler.ts`
+- Session WebSocket: `server/src/websocket/session-websocket.ts`
+- Connection: `server/src/websocket/connection.ts`
+- Client Hook: `client/src/hooks/useSessionStream.ts`
+- Client WebSocket: `client/src/lib/session-websocket.ts`
+- Legacy Client: `client/src/lib/websocket.ts` (deprecated)
+- **Worker Process Manager: `server/src/workers/session-worker-manager.ts`**
+- **Worker Pool: `server/src/workers/worker-pool.ts`**
+- **RPC Protocol Bridge: `server/src/workers/rpc-protocol-bridge.ts`**
+- **Session RPC Client: `server/src/workers/session-rpc-client.ts`**
+- **Session Worker Process: `server/src/workers/session-worker.ts`**
+
+### Debugging Worker Processes
+
+**Symptoms:** Session stuck "Initializing...", worker crash, OOM errors
+
+**Diagnostic Steps:**
+
+1. **Check worker process status:**
+   ```bash
+   # List all Pi Web UI worker processes
+   ps aux | grep "pi --mode rpc" | grep -v grep
+   
+   # Check worker count
+   ps aux | grep "pi --mode rpc" | grep -v grep | wc -l
+   ```
+
+2. **Check worker logs:**
+   ```bash
+   # Server logs show worker spawn/terminate
+   grep "worker" server/logs
+   
+   # Look for spawn errors
+   grep "spawnWorker\|terminateWorker" server/logs
+   ```
+
+3. **Verify worker pool stats:**
+   ```bash
+   # Via API (if implemented)
+   curl http://localhost:3000/api/workers/stats
+   
+   # Expected response:
+   # { "active": 3, "idle": 2, "total": 5, "maxWorkers": 15 }
+   ```
+
+4. **Check memory per worker:**
+   ```bash
+   # Memory usage by worker
+   ps aux | grep "pi --mode rpc" | awk '{print $2, $6/1024 "MB", $11}'
+   ```
+
+**Common Worker Issues:**
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| "Worker spawn failed" | Pi CLI not in PATH | Ensure `pi` command is available |
+| Worker OOM (512MB limit) | Large context window | Use `/compact` or start new session |
+| Worker crash on start | Corrupted session file | Delete session file (data loss) |
+| Stuck "Initializing..." | Worker not responding | Check logs, restart server |
+| High worker count | No idle cleanup | Workers auto-terminate after 30min idle |
+
+**Adjusting Worker Memory Limits:**
+
+If workers are crashing due to OOM, increase the per-worker memory limit:
+
+```bash
+# Edit systemd service override
+sudo systemctl edit pi-web-ui
+
+# Add/modify these values:
+[Service]
+Environment="PI_WORKER_MEMORY=768"  # Increase from 512MB to 768MB per worker
+Environment="PI_MAX_WORKERS=10"     # Reduce max workers if needed
+MemoryMax=8G                         # Increase total memory limit
+
+# Apply changes
+sudo systemctl daemon-reload
+sudo systemctl restart pi-web-ui
+
+# Verify
+curl -s http://localhost:3456/api/health/ready | jq '.workerStats'
+```
+
+**Code Locations:**
+- Worker Manager: `server/src/workers/session-worker-manager.ts`
+- Worker Pool: `server/src/workers/worker-pool.ts`
+- RPC Bridge: `server/src/workers/rpc-protocol-bridge.ts`
+- RPC Client: `server/src/workers/session-rpc-client.ts`
+
+### Debugging Deployment / Configuration
+
+**Health Endpoints:**
+```bash
+# Liveness (is server running?)
+curl http://localhost:3456/api/health/live
+
+# Readiness (is server ready for traffic?)
+curl http://localhost:3456/api/health/ready
+```
+
+**Config Validation:**
+```bash
+# Check for missing/invalid configuration
+curl http://localhost:3456/api/config/validate
+```
+
+The config validation endpoint checks:
+- JWT_SECRET, CSRF_SECRET, AUTH_PASSWORD presence and format
+- ALLOWED_ORIGINS for localhost in production
+- Rate limiting configuration
+
+**Code Locations:**
+- Health: `server/src/routes/health.ts`
+- Config: `server/src/routes/config.ts`
+
+### Debugging Authentication
+
+**Symptoms:** 401 errors, redirect to login
+
+**Diagnostic Steps:**
+1. Check JWT token:
+   ```javascript
+   document.cookie  // Should contain 'jwt=...'
+   ```
+
+2. Decode JWT:
+   ```bash
+   echo "TOKEN" | cut -d. -f2 | base64 -d
+   ```
+
+3. Check CSRF flow:
+   - Login → `X-CSRF-Token` header
+   - Stored in Zustand authStore
+   - Sent with WebSocket auth message
+
+**Code Locations:**
+- JWT: `server/src/security/auth.ts`
+- CSRF: `server/src/security/csrf.ts`
+- Login: `server/src/routes/auth.ts`
+- Store: `client/src/store/authStore.ts`
+
+### Debugging Session Sync
+
+**Symptoms:** CLI sessions don't appear, stale list
+
+**Diagnostic Steps:**
+1. Verify file watcher:
+   ```bash
+   grep "SessionWatcher" server/logs
+   ```
+
+2. Check session directory:
+   ```bash
+   ls -la ~/.pi/agent/sessions/--path--/
+   ```
+
+3. Test manual trigger:
+   ```bash
+   pi "test message"
+   ```
+
+**Code Locations:**
+- Watcher: `server/src/pi/session-watcher.ts`
+- Handler: `client/src/store/sessionStore.ts`
+
+### Debugging Tool Execution Display
+
+**Symptoms:** Tools don't show output, stuck "Executing..."
+
+**Diagnostic Steps:**
+1. Check WebSocket events:
+   - `tool_execution_start`
+   - `tool_execution_update` (streaming)
+   - `tool_execution_end`
+
+2. Check tool result format:
+   ```typescript
+   { content: [{ type: 'text', text: '...' }], isError: false }
+   ```
+
+**Code Locations:**
+- Handler: `server/src/pi/event-forwarder.ts`
+- Store: `client/src/store/sessionStore.ts`
+- Display: `client/src/components/Tools/`
+
+### Debugging Slash Commands
+
+**Pattern:** Slash commands (`/command`) and natural language requests for the same feature may behave differently.
+
+**Key Insight:** The Pi SDK processes slash commands by injecting content directly into the session as **user messages** (not tool calls). This means:
+1. Natural language: "Use the X skill to..." → triggers `read` tool → clean tool card display
+2. Slash command: `/skill:X do...` → injects skill content as user message → raw content displayed
+
+**When Filtering/Processing Content:**
+- Check **all message roles** (user, assistant, tool) - not just assistant messages
+- Check the **session file** (JSONL) to see how content is actually stored
+- Check **multiple data paths**: streaming events, session loading, and session list previews
+
+**Diagnostic Steps:**
+```bash
+# Check how content is stored in session file
+cat ~/.pi/agent/sessions/--path--/*.jsonl | head -10
+
+# Look for injected content patterns:
+# - <skill name="..."> tags (slash command injection)
+# - Raw markdown content
+# - User messages that aren't actual user input
+```
+
+**Code Locations:**
+- Session loading: `server/src/websocket/connection.ts` (`loadSessionMessages`)
+- Session watcher: `server/src/pi/session-watcher.ts` (firstMessage extraction)
+- Event filtering: `server/src/pi/multi-session-manager.ts`
+- Client display: `client/src/components/Chat/VirtualizedMessageList.tsx`
+
+## UI Message Filtering & Tool Display
+
+**Important:** Not all messages from the Pi SDK are displayed in the chat UI. The `VirtualizedMessageList` component filters messages to maintain a clean interface:
+
+**Filtering Logic** (`client/src/components/Chat/VirtualizedMessageList.tsx`):
+- ✅ **User messages** - Shown (except slash command injected content)
+- ✅ **Assistant messages** - Shown (except raw skill content)  
+- ✅ **Subagent tools** - Shown with hierarchical display (CLI-style)
+- ✅ **Read tools** - Shown (for skill-loading visibility)
+- ❌ **Other tool messages** (edit, bash, web_search, etc.) - Hidden to reduce clutter
+- ❌ **toolResult messages** - Hidden (contains raw tool output)
+- ❌ **Skill injection content** - Hidden (from `/skill:name` slash commands)
+
+**Why?** The agent's text narrative summarizes tool results, so showing every tool call creates visual clutter. However, subagent tools are an exception - they show a hierarchical view of what subagents did internally.
+
+**Note on Slash Commands:** `/command` syntax may inject raw content as user messages. Filter these by checking for content patterns (e.g., `<skill name="...">`, `SKILL.md`) in the message content.
+
+**To Add a New Visible Tool Type:**
+1. Modify the filter in `VirtualizedMessageList.tsx`
+2. Create a tool card component (see `SubagentToolCard.tsx` as example)
+3. Route it in `MessageBubble.tsx`
+4. Add tests for visibility
+
+## Extensions
+
+The Web UI shares the same extension directory as the CLI: `~/.pi/agent/extensions/`
+
+**Pre-installed Extensions:**
+- `agent-discovery` - Injects available subagents into system prompt
+- `enhanced-plan-mode` - `/plan` command with wave-based analysis
+- `subagent` - Subagent delegation tool
+- `todo` - Todo management (`/todos` command)
+- `web-tools` - Web search and fetch tools
+
+**Extension Loading:**
+Extensions are loaded by the Pi SDK's `DefaultResourceLoader` at startup. Check server logs for:
+```
+Loaded extensions:
+  - /root/.pi/agent/extensions/agent-discovery/index.ts
+  - /root/.pi/agent/extensions/enhanced-plan-mode/index.ts
+```
+
+**Extension Hooks Supported:**
+- `before_agent_start` - Modify system prompt before agent runs
+- `tool_call` - Validate/modify tool calls
+- `after_tool_call` - Process tool results
+
+## Adding a New Component
+
+1. **Create directory**: `client/src/components/MyComponent/`
+2. **Create files**:
+   ```typescript
+   // MyComponent.tsx
+   export function MyComponent() { ... }
+   
+   // index.ts
+   export { MyComponent } from './MyComponent';
+   ```
+3. **Style with Tailwind**:
+   - Backgrounds: `bg-slate-900`, `bg-slate-800`
+   - Primary accent: `text-violet-400`, `bg-violet-600`
+   - Text: `text-slate-200` (primary), `text-slate-400` (secondary)
+4. **Export from barrel**: `client/src/components/index.ts`
+5. **Add tests**: `client/tests/unit/components/MyComponent.test.tsx`
+
+## Adding a New API Endpoint
+
+1. **Create route**: `server/src/routes/my-feature.ts`
+2. **Add security**:
+   ```typescript
+   router.use(cookieAuthMiddleware);
+   router.use(apiLimiter);
+   ```
+3. **Validate input**:
+   ```typescript
+   const data = z.object({ ... }).parse(req.body);
+   ```
+4. **Mount in app.ts**:
+   ```typescript
+   app.use('/api/my-feature', myFeatureRouter);
+   ```
+5. **Add tests**: `server/tests/unit/routes/my-feature.test.ts`
+
+## Testing Strategy
+
+### Commands
+
+```bash
+# Run all tests
+npm test
+
+# Run with coverage
+npm run test:coverage
+
+# Run specific test
+npm test -- server/tests/unit/security/auth.test.ts
+
+# E2E tests
+npm run test:e2e
+
+# Watch mode
+npm test -- --watch
+```
+
+### Coverage Targets
+
+| Module | Target | Current |
+|--------|--------|---------|
+| Security | 90% | ~90% |
+| Pi Service | 85% | ~85% |
+| WebSocket | 85% | ~85% |
+| API Routes | 80% | ~80% |
+| Frontend | 70% | ~70% |
+
+### Current Status
+- **Server**: 93/93 passing ✅
+- **Client**: 62/62 passing ✅
+- **E2E**: 9/9 passing ✅
+
+## Security Considerations
+
+**CRITICAL:** Always follow these rules:
+
+1. **Path Validation** - Validate paths before file access:
+   ```typescript
+   const validPath = validatePath(requestedPath, allowedDirs);
+   if (!validPath) return res.status(403).json({ error: 'Access denied' });
+   ```
+
+2. **Authentication** - Check auth on protected routes:
+   ```typescript
+   router.use(cookieAuthMiddleware);
+   ```
+
+3. **Input Validation** - Never trust client input:
+   ```typescript
+   const data = mySchema.parse(req.body);
+   ```
+
+4. **Prompt Injection** - Check for injection:
+   ```typescript
+   if (detectPromptInjection(input)) {
+     return res.status(400).json({ error: 'Suspicious input' });
+   }
+   ```
+
+## Known Issues & TODOs
+
+### Current Issues
+
+1. **Session tree navigation doesn't sync with CLI forks**
+   - CLI forks create new files, but tree state isn't shared
+   - Workaround: Refresh browser to see new branches
+
+2. **Extension UI timeout hardcoded to 30s**
+   - Located in `server/src/pi/extension-ui-handler.ts`
+   - Should be configurable per-extension
+
+3. **No mobile responsive design**
+   - Sidebar takes full width on mobile
+   - Needs responsive breakpoints
+
+### Enhancement Ideas
+
+- [ ] Keyboard shortcuts (Cmd+K for command palette)
+- [ ] Message search
+- [ ] Theme customization
+- [ ] Collaborative sessions
+
+## Code Style
+
+### TypeScript
+- Use strict mode
+- Prefer `interface` over `type`
+- Use `unknown` instead of `any`
+
+### React
+- Functional components with hooks
+- Keep components small (< 200 lines)
+- Custom hooks for reusable logic
+
+### Tailwind
+- Use arbitrary values sparingly
+- Prefer semantic colors
+- Extract repeated patterns to components
+
+## Architecture Notes
+
+### useSessionStream Hook
+The `useSessionStream` hook implements ref-based streaming for mobile performance:
+- Uses refs for content accumulation (no re-renders)
+- Identity guards prevent stale callbacks
+- Atomic teardown with useLayoutEffect
+
+**Location:** `client/src/hooks/useSessionStream.ts`
+
+**Usage:**
+```typescript
+const { messages, streamingMessage, isStreaming } = useSessionStream(sessionId);
+```
+
+**Key Concepts:**
+- **Ref-based accumulation**: Content is accumulated in refs to prevent re-renders during streaming
+- **Identity guards**: Callbacks check if they belong to the current session before updating state
+- **Atomic teardown**: useLayoutEffect ensures cleanup runs before next effect
+
+### Message Types
+- **LiveMessage** - New type from useSessionStream (lightweight, optimized for streaming)
+- **Message** - Legacy type from sessionStore (full-featured)
+- Use `messageAdapter.ts` for conversion between types
+
+**Type Locations:**
+```typescript
+// LiveMessage - streaming-optimized
+// client/src/hooks/useSessionStream.ts
+
+// Message - full-featured
+// client/src/store/sessionStore.ts
+
+// Adapter for conversion
+// client/src/lib/messageAdapter.ts
+```
+
+### Session Subscription Flow
+
+1. Client subscribes to session via `subscribe_session` method
+2. Server creates AgentSession if needed
+3. Events are wrapped in `session_event` envelope with sessionId
+4. Client routes events based on sessionId
+5. Unsubscribe when switching sessions
+
+**Code Locations:**
+- Server: `server/src/pi/multi-session-manager.ts`
+- Client: `client/src/hooks/useSessionStream.ts`
+
+### Performance Optimizations
+
+**LRU Cache:**
+- Session messages cached with LRU eviction
+- Max 50 sessions cached
+- Prevents memory leaks with many sessions
+
+**Virtualization:**
+- react-virtuoso for message list
+- Only visible messages rendered
+- Smooth scrolling with 100+ messages
+
+**Memoization:**
+- MessageBubble with custom comparison
+- Prevents re-renders for unchanged messages
+- Tool cards memoized separately
+
+## Resources
+
+- [README.md](./README.md) - User documentation
+- [API.md](./API.md) - WebSocket/REST protocol
+- [SECURITY.md](./SECURITY.md) - Security architecture
+- [DEPLOYMENT.md](./DEPLOYMENT.md) - Production deployment
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Comprehensive architecture
+- [docs/PROTOCOL.md](docs/PROTOCOL.md) - WebSocket protocol specification
+- [docs/PROCESS-ISOLATION-DESIGN.md](docs/PROCESS-ISOLATION-DESIGN.md) - Process-per-session design document
+
+## Getting Help
+
+1. Check this document
+2. Review code locations above
+3. Check test files for examples
+4. Review commit history
+5. When in doubt, add more tests!
