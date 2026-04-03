@@ -4,6 +4,7 @@ import { useChatStore, useSessionStore, useDraftStore } from '../../store';
 import { useUIStore } from '../../store/uiStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
+import { ContextRing } from '../Usage/ContextRing';
 import { SlashPalette } from './SlashPalette';
 import { uploadFile } from '../../lib/api';
 
@@ -293,9 +294,15 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
           )}
         </div>
         {contextPercent > 0 && (
-          <span className="text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full text-[11px]">
-            {contextPercent}% context
-          </span>
+          <div className="flex items-center gap-1.5">
+            <ContextRing
+              percent={contextPercent}
+              size={20}
+              showLabel
+              label={`Context usage: ${contextPercent}%`}
+            />
+            <span className="text-xs text-gray-400">{contextPercent}%</span>
+          </div>
         )}
       </div>
 
