@@ -4,7 +4,7 @@ import { VirtualizedMessageList, type VirtualizedMessageListHandle } from './Vir
 import { MessageInput } from './MessageInput';
 import { TreeView, type TreeEntry } from '../Tree';
 import { NewSessionModal } from '../Session';
-import { Info, ChevronsUpDown, ArrowDown, RefreshCw } from 'lucide-react';
+import { ArrowDown } from 'lucide-react';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
 import { messagesToLiveMessages } from '../../lib/messageAdapter';
@@ -18,8 +18,6 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const isStreaming = useSessionStore((state) => state.isStreaming);
   const isLoading = useSessionStore((state) => state.isLoading);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
-  const sessions = useSessionStore((state) => state.sessions);
-  const getSessionCacheMeta = useSessionStore((state) => state.getSessionCacheMeta);
   const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
   const [showTreeView, setShowTreeView] = useState(false);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
@@ -29,17 +27,9 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const listRef = useRef<VirtualizedMessageListHandle>(null);
   const { createNewSession } = useWebSocket();
 
-  // Get current session name
-  const currentSession = sessions.find(s => s.id === currentSessionId);
-  const sessionTitle = currentSession?.name || currentSession?.firstMessage || 'New Session';
-  
   // Get worker status for current session
   const workerStatus = currentSessionId ? getWorkerStatus(currentSessionId) : undefined;
   
-  // Check if session might have stale/incomplete content
-  const sessionMeta = currentSessionId ? getSessionCacheMeta(currentSessionId) : undefined;
-  const showSyncIndicator = sessionMeta?.isStreaming && !isStreaming;
-
   // Convert messages to tree entries
   const treeEntries: TreeEntry[] = messages.map((msg, index) => ({
     id: msg.id,
@@ -74,42 +64,6 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
 
   return (
     <div className="flex flex-col h-full bg-white" data-testid="chat-interface">
-      {/* Header - always shown */}
-      <header className="flex items-center gap-2 px-2 py-2 border-b border-gray-200 bg-white min-w-0">
-        {/* Session title — left-padded to clear the fixed sidebar toggle button */}
-        <h1 className="flex-1 min-w-0 text-sm font-medium text-gray-900 truncate pl-12 pr-2">
-          {currentSessionId ? sessionTitle : ''}
-        </h1>
-        
-        {/* Sync indicator - shows when content might be incomplete */}
-        {showSyncIndicator && (
-          <div className="flex items-center gap-1 px-2 py-1 bg-amber-50 border border-amber-200 rounded-md text-xs text-amber-700">
-            <RefreshCw className="w-3 h-3 animate-spin" />
-            <span>Syncing...</span>
-          </div>
-        )}
-
-        {/* Right actions – only when session active */}
-        {currentSessionId && (
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <button
-              onClick={() => setShowSessionInfo(true)}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              title="Session info"
-            >
-              <Info className="w-5 h-5 text-gray-600" />
-            </button>
-            <button
-              onClick={() => setShowTreeView(true)}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              title="View conversation tree"
-            >
-              <ChevronsUpDown className="w-5 h-5 text-gray-600" />
-            </button>
-          </div>
-        )}
-      </header>
-
       {/* Main content area */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
         {/* Message List - Virtualized for performance */}

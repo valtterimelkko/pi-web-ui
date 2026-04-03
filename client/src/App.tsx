@@ -4,6 +4,11 @@ import { useCopyShortcut } from './hooks/useCopyShortcut';
 import { LoginForm } from './components/Auth/LoginForm';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/Chat';
+import { IntegratedHeader, BottomNav, TabPanel } from './components/Navigation';
+import { ShellTab } from './components/Shell';
+import { GitTab } from './components/Git';
+import { FilesTab } from './components/Files';
+import { TasksPlaceholder } from './components/Tasks';
 import { ExtensionDialog } from './components/Extensions';
 import { SettingsModal } from './components/Settings';
 import { ToastContainer } from './components/common';
@@ -82,13 +87,31 @@ function AuthenticatedApp() {
   }, [setExtensionUIRequest]);
 
   return (
-    <div className="h-screen flex bg-white dark:bg-gray-950">
-      <Sidebar />
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <ChatView
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
+    <div className="h-screen flex flex-col bg-white dark:bg-gray-950 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <IntegratedHeader onOpenSettings={() => setSettingsOpen(true)} />
+          <div className="flex-1 overflow-hidden relative flex">
+            <TabPanel tab="chat">
+              <ChatView onOpenSettings={() => setSettingsOpen(true)} />
+            </TabPanel>
+            <TabPanel tab="shell">
+              <ShellTab />
+            </TabPanel>
+            <TabPanel tab="files">
+              <FilesTab />
+            </TabPanel>
+            <TabPanel tab="git">
+              <GitTab />
+            </TabPanel>
+            <TabPanel tab="tasks">
+              <TasksPlaceholder />
+            </TabPanel>
+          </div>
+        </div>
       </div>
+      <BottomNav />
       <ExtensionDialog
         request={extensionUIRequest}
         onResponse={handleExtensionResponse}
