@@ -15,6 +15,7 @@ import healthRoutes from './routes/health.js';
 import configRoutes from './routes/config.js';
 import usageRoutes from './routes/usage.js';
 import { gitRouter } from './routes/git.js';
+import { terminalRouter } from './routes/terminal.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -89,6 +90,9 @@ export function createApp(): express.Application {
 
   // Git operations
   app.use('/api/git', gitRouter);
+
+  // Terminal management routes
+  app.use('/api/terminal', terminalRouter);
 
   // Serve static files from client/dist in production
   if (config.nodeEnv === 'production') {

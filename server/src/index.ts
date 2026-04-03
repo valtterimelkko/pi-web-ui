@@ -5,6 +5,7 @@ import { createServer } from 'http';
 import { createApp } from './app.js';
 import { config } from './config.js';
 import { WebSocketConnectionManager } from './websocket/index.js';
+import { handleTerminalWebSocket } from './terminal/terminal-websocket.js';
 import { initializePiService, startSessionWatcher, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
 
 const app = createApp();
@@ -50,6 +51,14 @@ async function initialize(): Promise<void> {
         }).catch((error) => {
           console.error('Failed to handle session WebSocket upgrade:', error);
           socket.destroy();
+        });
+        return;
+      }
+
+      // Terminal WebSocket endpoint: /ws/terminal
+      if (url.pathname === '/ws/terminal') {
+        wsManager!.getWss().handleUpgrade(request, socket, head, (ws) => {
+          handleTerminalWebSocket(ws, request);
         });
         return;
       }
