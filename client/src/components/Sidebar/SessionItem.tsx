@@ -153,7 +153,7 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
       className={`
         group relative py-2 px-3 rounded-md cursor-pointer transition-all duration-150 outline-none
         ${isActive
-          ? 'bg-teal-50 border-l-2 border-teal-500'
+          ? 'bg-blue-50 border-l-2 border-blue-500'
           : 'hover:bg-gray-100 border-l-2 border-transparent'
         }
       `}
@@ -166,7 +166,7 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
             onChange={(e) => setEditName(e.target.value)}
             onKeyDown={handleKeyDown}
             onClick={(e) => e.stopPropagation()}
-            className="flex-1 px-2 py-1 text-sm bg-white border border-gray-300 rounded text-gray-900 focus:outline-none focus:border-teal-500 text-base"
+            className="flex-1 px-2 py-1 text-sm bg-white border border-gray-300 rounded text-gray-900 focus:outline-none focus:border-blue-500 text-base"
             placeholder="Session name"
             autoFocus
           />
@@ -257,7 +257,7 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
                   title={isArchived ? 'Restore from archive' : 'Archive session'}
                 >
                   {isArchived ? (
-                    <ArchiveRestore className="w-3 h-3 text-teal-500" />
+                    <ArchiveRestore className="w-3 h-3 text-blue-500" />
                   ) : (
                     <Archive className="w-3 h-3 text-gray-400" />
                   )}
@@ -271,7 +271,7 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
                 </button>
               </>
             ) : isLoading ? (
-              <Loader2 className="w-4 h-4 text-teal-500 animate-spin" />
+              <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
             ) : workerStatus ? (
               <WorkerStatusIndicator sessionId={session.id} />
             ) : isActiveSession ? (

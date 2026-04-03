@@ -119,7 +119,7 @@ function HighlightedText({ text, query }: { text: string; query: string }) {
     <>
       {parts.map((part, i) => (
         part.isMatch ? (
-          <mark key={i} className="bg-teal-100 text-teal-800 rounded px-0.5">
+          <mark key={i} className="bg-blue-100 text-blue-800 rounded px-0.5">
             {part.text}
           </mark>
         ) : (
@@ -234,7 +234,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search models..."
-                className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 autoFocus
                 data-testid="model-selector-search"
               />
@@ -253,7 +253,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                     onClick={() => handleSelect(model.id, model.provider)}
                     className={`
                       w-full px-3 py-2.5 flex items-center gap-3 hover:bg-gray-50 transition-colors
-                      ${currentModel === `${model.provider}/${model.id}` ? 'bg-teal-50' : ''}
+                      ${currentModel === `${model.provider}/${model.id}` ? 'bg-blue-50' : ''}
                     `}
                     data-testid="model-option"
                   >
@@ -272,7 +272,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                       </p>
                     </div>
                     {currentModel === `${model.provider}/${model.id}` && (
-                      <Check className="w-4 h-4 text-teal-600" />
+                      <Check className="w-4 h-4 text-blue-600" />
                     )}
                   </button>
                 );
@@ -294,7 +294,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                         onClick={() => handleSelect(model.id, provider)}
                         className={`
                           w-full px-3 py-2.5 flex items-center gap-3 hover:bg-gray-50 transition-colors
-                          ${currentModel === `${provider}/${model.id}` ? 'bg-teal-50' : ''}
+                          ${currentModel === `${provider}/${model.id}` ? 'bg-blue-50' : ''}
                         `}
                       >
                         <div className="flex-1 text-left">
@@ -305,7 +305,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                           </p>
                         </div>
                         {currentModel === `${provider}/${model.id}` && (
-                          <Check className="w-4 h-4 text-teal-600" />
+                          <Check className="w-4 h-4 text-blue-600" />
                         )}
                       </button>
                     ))}

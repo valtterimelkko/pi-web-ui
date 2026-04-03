@@ -17,7 +17,7 @@ const statusColors: Record<string, string> = {
   running: 'text-amber-400 animate-pulse',
   completed: 'text-emerald-400',
   error: 'text-red-400',
-  merged: 'text-violet-400',
+  merged: 'text-blue-400',
 };
 
 const statusIcons: Record<string, string> = {

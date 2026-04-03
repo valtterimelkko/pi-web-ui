@@ -151,12 +151,12 @@ html {
 .dark .border-gray-300 { border-color: #475569 !important; }
 
 /* Teal adjustments for dark */
-.dark .bg-teal-50 { background-color: rgba(13, 148, 136, 0.15) !important; }
-.dark .bg-teal-100 { background-color: rgba(13, 148, 136, 0.25) !important; }
-.dark .text-teal-600 { color: #2dd4bf !important; }
-.dark .text-teal-700 { color: #14b8a6 !important; }
-.dark .border-teal-400 { border-color: #14b8a6 !important; }
-.dark .border-teal-500 { border-color: #0d9488 !important; }
+.dark .bg-blue-50 { background-color: rgba(37, 99, 235, 0.15) !important; }
+.dark .bg-blue-100 { background-color: rgba(37, 99, 235, 0.25) !important; }
+.dark .text-blue-600 { color: #60a5fa !important; }
+.dark .text-blue-700 { color: #3b82f6 !important; }
+.dark .border-blue-400 { border-color: #3b82f6 !important; }
+.dark .border-blue-500 { border-color: #2563eb !important; }
 
 /* Special component overrides */
 .dark .bg-gray-900 {
@@ -226,7 +226,7 @@ html {
 /* Prose / markdown content */
 .dark .prose { color: #e2e8f0 !important; }
 .dark .prose h1, .dark .prose h2, .dark .prose h3, .dark .prose h4 { color: #f1f5f9 !important; }
-.dark .prose a { color: #2dd4bf !important; }
+.dark .prose a { color: #60a5fa !important; }
 .dark .prose strong { color: #f1f5f9 !important; }
 .dark .prose code { color: #e2e8f0 !important; background-color: #1e293b !important; }
 

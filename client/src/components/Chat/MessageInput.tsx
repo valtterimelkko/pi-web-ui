@@ -278,8 +278,8 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
         <div className="flex items-center gap-1.5">
           {isCompacting ? (
             <>
-              <Sparkles className="w-3.5 h-3.5 text-violet-500 animate-pulse" />
-              <span className="text-violet-600">
+              <Sparkles className="w-3.5 h-3.5 text-blue-500 animate-pulse" />
+              <span className="text-blue-600">
                 {compactionReason || 'Compacting context...'}
               </span>
             </>
@@ -303,9 +303,9 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
       <div
         className={`relative rounded-xl border transition-all duration-200 ${
           isDragging
-            ? 'border-teal-500 bg-teal-50'
+            ? 'border-blue-500 bg-blue-50'
             : isFocused
-            ? 'border-teal-500 bg-white'
+            ? 'border-blue-500 bg-white'
             : 'border-gray-200 bg-white'
         } ${disabled ? 'opacity-50' : ''}`}
         onDragOver={handleDragOver}
@@ -331,14 +331,14 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
                   }`}
                 >
                   {isUploading ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-500" />
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
                   ) : (
                     <Paperclip className={`w-3.5 h-3.5 ${hasError ? 'text-red-400' : isSuccess ? 'text-green-500' : 'text-gray-400'}`} />
                   )}
                   <span className="max-w-[150px] truncate" title={isSuccess ? uploadInfo.serverPath : file.name}>
                     {file.name}
                   </span>
-                  {isUploading && <span className="text-xs text-teal-500">uploading...</span>}
+                  {isUploading && <span className="text-xs text-blue-500">uploading...</span>}
                   {hasError && <span className="text-xs text-red-400" title={uploadInfo.error}>failed</span>}
                   <button
                     onClick={() => removeFile(index)}
@@ -407,7 +407,7 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
               <button
                 onClick={toggleThinking}
                 className={`w-8 h-4.5 rounded-full transition-colors relative ${
-                  showThinking ? 'bg-teal-500' : 'bg-gray-300'
+                  showThinking ? 'bg-blue-500' : 'bg-gray-300'
                 }`}
                 type="button"
               >
@@ -449,8 +449,8 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
 
         {/* Drag overlay */}
         {isDragging && (
-          <div className="absolute inset-0 bg-teal-50 border-2 border-dashed border-teal-500 rounded-xl flex items-center justify-center">
-            <div className="text-teal-600 font-medium text-sm">Drop files here</div>
+          <div className="absolute inset-0 bg-blue-50 border-2 border-dashed border-blue-500 rounded-xl flex items-center justify-center">
+            <div className="text-blue-600 font-medium text-sm">Drop files here</div>
           </div>
         )}
       </div>

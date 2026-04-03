@@ -44,7 +44,7 @@ export function TreeNode({
         className={`
           group flex items-center gap-2 py-2 px-3 rounded-lg cursor-pointer transition-colors
           ${isCurrent
-            ? 'bg-teal-50 border border-teal-200'
+            ? 'bg-blue-50 border border-blue-200'
             : 'hover:bg-gray-50 border border-transparent'
           }
         `}
@@ -72,12 +72,12 @@ export function TreeNode({
         {/* Icon */}
         <div className={`
           w-6 h-6 rounded flex items-center justify-center
-          ${entry.role === 'user' ? 'bg-gray-200' : 'bg-teal-100'}
+          ${entry.role === 'user' ? 'bg-gray-200' : 'bg-blue-100'}
         `}>
           {entry.role === 'user' ? (
             <User className="w-3.5 h-3.5 text-gray-600" />
           ) : (
-            <MessageSquare className="w-3.5 h-3.5 text-teal-600" />
+            <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
           )}
         </div>
 
@@ -94,7 +94,7 @@ export function TreeNode({
               })}
             </span>
             {hasBranches && (
-              <span className="text-xs text-teal-600 flex items-center gap-1">
+              <span className="text-xs text-blue-600 flex items-center gap-1">
                 <GitFork className="w-3 h-3" />
                 {entry.branches!.length} branch{entry.branches!.length !== 1 ? 'es' : ''}
               </span>
@@ -110,17 +110,17 @@ export function TreeNode({
                 e.stopPropagation();
                 onFork(entry.id);
               }}
-              className="p-1.5 hover:bg-teal-100 rounded transition-colors"
+              className="p-1.5 hover:bg-blue-100 rounded transition-colors"
               title="Fork from here"
             >
-              <GitFork className="w-4 h-4 text-teal-600" />
+              <GitFork className="w-4 h-4 text-blue-600" />
             </button>
           )}
         </div>
 
         {/* Current indicator */}
         {isCurrent && (
-          <div className="w-2 h-2 bg-teal-500 rounded-full" />
+          <div className="w-2 h-2 bg-blue-500 rounded-full" />
         )}
       </div>
 

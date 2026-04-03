@@ -35,7 +35,7 @@ const statusColors: Record<string, string> = {
   added: 'text-emerald-400',
   modified: 'text-amber-400',
   deleted: 'text-red-400',
-  renamed: 'text-violet-400',
+  renamed: 'text-blue-400',
 };
 
 const statusIcons: Record<string, string> = {
@@ -99,7 +99,7 @@ export function MergePreview({
             <div className="text-xs text-slate-500">Deletions</div>
           </div>
           <div>
-            <div className="text-xl font-bold text-violet-400">{commitCount}</div>
+            <div className="text-xl font-bold text-blue-400">{commitCount}</div>
             <div className="text-xs text-slate-500">Commits</div>
           </div>
         </div>
@@ -174,7 +174,7 @@ export function MergePreview({
                 className={`
                   flex-1 px-3 py-2 text-sm rounded-md border transition-colors
                   ${selectedStrategy === strategy
-                    ? 'border-violet-500 bg-violet-900/30 text-violet-300'
+                    ? 'border-blue-500 bg-blue-900/30 text-blue-300'
                     : 'border-slate-700 text-slate-400 hover:border-slate-600'
                   }
                 `}
@@ -199,7 +199,7 @@ export function MergePreview({
               px-4 py-2 text-sm rounded-md transition-colors flex items-center gap-2
               ${hasConflicts
                 ? 'bg-amber-600 hover:bg-amber-500 text-white'
-                : 'bg-violet-600 hover:bg-violet-500 text-white'
+                : 'bg-blue-600 hover:bg-blue-500 text-white'
               }
             `}
           >

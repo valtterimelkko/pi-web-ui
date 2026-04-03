@@ -55,9 +55,9 @@ function TreeNode({ item, depth, onFileClick }: TreeNodeProps) {
               <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
             )}
             {isExpanded ? (
-              <FolderOpen className="w-4 h-4 text-teal-500" />
+              <FolderOpen className="w-4 h-4 text-blue-500" />
             ) : (
-              <Folder className="w-4 h-4 text-teal-500" />
+              <Folder className="w-4 h-4 text-blue-500" />
             )}
           </>
         ) : (

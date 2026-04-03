@@ -26,7 +26,7 @@ export function SessionFilters({
           onChange={(e) => onFilterChange(e.target.value)}
           placeholder="Search sessions..."
           aria-label="Search sessions"
-          className="w-full pl-8 pr-7 py-1.5 bg-white border border-gray-200 rounded-md text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-base"
+          className="w-full pl-8 pr-7 py-1.5 bg-white border border-gray-200 rounded-md text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base"
         />
         {filter && (
           <button
@@ -46,7 +46,7 @@ export function SessionFilters({
             value={cwdFilter || ''}
             onChange={(e) => onCwdFilterChange(e.target.value || null)}
             aria-label="Filter by project"
-            className="flex-1 bg-white border border-gray-200 rounded-md text-xs text-gray-600 py-1.5 px-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+            className="flex-1 bg-white border border-gray-200 rounded-md text-xs text-gray-600 py-1.5 px-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">All projects</option>
             {uniqueCwds.map((cwd) => (

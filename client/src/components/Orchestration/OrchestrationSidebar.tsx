@@ -18,7 +18,7 @@ const statusColors: Record<TaskInfo['status'], string> = {
   running: 'text-amber-400 border-amber-500',
   completed: 'text-emerald-400 border-emerald-500',
   error: 'text-red-400 border-red-500',
-  merged: 'text-violet-400 border-violet-500',
+  merged: 'text-blue-400 border-blue-500',
 };
 
 const statusBgColors: Record<TaskInfo['status'], string> = {
@@ -26,7 +26,7 @@ const statusBgColors: Record<TaskInfo['status'], string> = {
   running: 'bg-amber-900/20',
   completed: 'bg-emerald-900/20',
   error: 'bg-red-900/20',
-  merged: 'bg-violet-900/20',
+  merged: 'bg-blue-900/20',
 };
 
 const statusIcons: Record<TaskInfo['status'], string> = {
@@ -137,7 +137,7 @@ export function OrchestrationSidebar({ onStartAll, onPauseAll, onMergeReady }: O
         {!hasRunning && !allCompleted && (
           <button
             onClick={onStartAll}
-            className="w-full px-3 py-2 bg-violet-600 hover:bg-violet-500 text-white text-sm rounded-md transition-colors flex items-center justify-center gap-2"
+            className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-md transition-colors flex items-center justify-center gap-2"
           >
             <span>▶</span>
             Start All

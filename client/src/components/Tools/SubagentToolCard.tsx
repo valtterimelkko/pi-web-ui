@@ -440,8 +440,8 @@ export const SubagentToolCard = memo(function SubagentToolCard({
         <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
 
         {/* Subagent icon */}
-        <div className={`p-1 rounded ${isError ? 'bg-red-50' : isPending ? 'bg-amber-50' : 'bg-violet-50'}`}>
-          <Bot className={`w-4 h-4 ${isError ? 'text-red-500' : isPending ? 'text-amber-500' : 'text-violet-500'}`} />
+        <div className={`p-1 rounded ${isError ? 'bg-red-50' : isPending ? 'bg-amber-50' : 'bg-blue-50'}`}>
+          <Bot className={`w-4 h-4 ${isError ? 'text-red-500' : isPending ? 'text-amber-500' : 'text-blue-500'}`} />
         </div>
 
         {/* Subagent name and role */}
@@ -503,9 +503,9 @@ export const SubagentToolCard = memo(function SubagentToolCard({
 
           {/* Summary from subagent */}
           {subagentData?.summary && (
-            <div className="mt-2 p-2 bg-violet-50 rounded border border-violet-100">
-              <div className="text-xs font-medium text-violet-700 mb-1">Summary</div>
-              <div className="text-xs text-violet-600 whitespace-pre-wrap">
+            <div className="mt-2 p-2 bg-blue-50 rounded border border-blue-100">
+              <div className="text-xs font-medium text-blue-700 mb-1">Summary</div>
+              <div className="text-xs text-blue-600 whitespace-pre-wrap">
                 {subagentData.summary}
               </div>
             </div>

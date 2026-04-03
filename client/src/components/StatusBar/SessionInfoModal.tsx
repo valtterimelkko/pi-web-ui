@@ -66,7 +66,7 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <div className="flex items-center gap-3">
-            <Info className="w-5 h-5 text-teal-600" />
+            <Info className="w-5 h-5 text-blue-600" />
             <h2 className="text-lg font-semibold text-gray-900">Session Info</h2>
           </div>
           <button
@@ -103,7 +103,7 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                         setIsLoading(false);
                       }
                     }}
-                    className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2 mx-auto"
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2 mx-auto"
                   >
                     <RefreshCw className="w-4 h-4" />
                     Retry
@@ -166,14 +166,14 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                         <div
                           className={`h-full rounded-full transition-all ${
                             sessionInfo.contextPercent > 90 ? 'bg-red-500' :
-                            sessionInfo.contextPercent > 70 ? 'bg-amber-500' : 'bg-teal-500'
+                            sessionInfo.contextPercent > 70 ? 'bg-amber-500' : 'bg-blue-500'
                           }`}
                           style={{ width: `${Math.min(sessionInfo.contextPercent, 100)}%` }}
                         />
                       </div>
                       <span className={`text-xs font-medium ${
                         sessionInfo.contextPercent > 90 ? 'text-red-500' :
-                        sessionInfo.contextPercent > 70 ? 'text-amber-500' : 'text-teal-600'
+                        sessionInfo.contextPercent > 70 ? 'text-amber-500' : 'text-blue-600'
                       }`}>
                         {sessionInfo.contextPercent}%
                       </span>

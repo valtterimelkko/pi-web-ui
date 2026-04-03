@@ -101,7 +101,7 @@ export function TokenUsageDashboard({ isOpen, onClose }: TokenUsageDashboardProp
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <div className="flex items-center gap-3">
-            <Coins className="w-5 h-5 text-teal-600" />
+            <Coins className="w-5 h-5 text-blue-600" />
             <h2 className="text-lg font-semibold text-gray-900">Token Usage Dashboard</h2>
           </div>
           <div className="flex items-center gap-2">
@@ -136,7 +136,7 @@ export function TokenUsageDashboard({ isOpen, onClose }: TokenUsageDashboardProp
               <p>{error}</p>
               <button
                 onClick={fetchStats}
-                className="mt-2 text-sm text-teal-600 hover:underline"
+                className="mt-2 text-sm text-blue-600 hover:underline"
               >
                 Try again
               </button>
@@ -146,7 +146,7 @@ export function TokenUsageDashboard({ isOpen, onClose }: TokenUsageDashboardProp
           {stats && (
             <div className="space-y-6">
               {/* Totals */}
-              <div className="bg-gradient-to-br from-teal-50 to-cyan-50 rounded-lg p-4">
+              <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-lg p-4">
                 <h3 className="text-sm font-medium text-gray-500 mb-3 flex items-center gap-2">
                   <TrendingUp className="w-4 h-4" />
                   Overall Statistics
@@ -157,7 +157,7 @@ export function TokenUsageDashboard({ isOpen, onClose }: TokenUsageDashboardProp
                     <p className="text-xs text-gray-500">Total Tokens</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-teal-600">{formatCost(stats.totals.cost)}</p>
+                    <p className="text-2xl font-bold text-blue-600">{formatCost(stats.totals.cost)}</p>
                     <p className="text-xs text-gray-500">Total Cost</p>
                   </div>
                   <div className="text-center">
@@ -202,7 +202,7 @@ export function TokenUsageDashboard({ isOpen, onClose }: TokenUsageDashboardProp
                           <div key={day} className="text-center">
                             <div className="h-16 flex items-end justify-center mb-1">
                               <div
-                                className="w-6 bg-teal-400 rounded-t transition-all"
+                                className="w-6 bg-blue-400 rounded-t transition-all"
                                 style={{ height: `${Math.max(height, 5)}%` }}
                                 title={`${formatNumber(data.tokens)} tokens, ${formatCost(data.cost)}`}
                               />
@@ -234,7 +234,7 @@ export function TokenUsageDashboard({ isOpen, onClose }: TokenUsageDashboardProp
                           <span className="text-sm text-gray-500 ml-2">
                             {formatNumber(data.tokens)} tokens
                           </span>
-                          <span className="text-sm text-teal-600 ml-2">
+                          <span className="text-sm text-blue-600 ml-2">
                             {formatCost(data.cost)}
                           </span>
                         </div>
@@ -262,7 +262,7 @@ export function TokenUsageDashboard({ isOpen, onClose }: TokenUsageDashboardProp
                           <span className="text-sm text-gray-500 ml-2">
                             {data.sessions} sessions
                           </span>
-                          <span className="text-sm text-teal-600 ml-2">
+                          <span className="text-sm text-blue-600 ml-2">
                             {formatCost(data.cost)}
                           </span>
                         </div>
@@ -293,7 +293,7 @@ export function TokenUsageDashboard({ isOpen, onClose }: TokenUsageDashboardProp
                         <span className="text-gray-400 ml-2">
                           {new Date(record.timestamp).toLocaleDateString()}
                         </span>
-                        <span className="text-teal-600 ml-2 font-medium">
+                        <span className="text-blue-600 ml-2 font-medium">
                           {formatCost(record.cost)}
                         </span>
                       </div>

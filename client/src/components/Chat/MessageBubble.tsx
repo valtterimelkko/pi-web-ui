@@ -184,7 +184,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
               ? 'bg-gray-100 rounded-lg p-3 text-gray-900 text-sm'
               : isTool
                 ? 'bg-gray-50 border border-gray-200 rounded-lg p-3'
-                : 'pl-3 pr-8 border-l-2 border-teal-400 text-gray-900'
+                : 'pl-3 pr-8 border-l-2 border-blue-400 text-gray-900'
             }
           `}
         >
@@ -273,7 +273,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
                   ),
                   hr: () => <hr className="my-2 border-gray-200" />,
                   a: ({ children, href }) => (
-                    <a href={href} className="text-teal-600 hover:text-teal-700 underline" target="_blank" rel="noopener noreferrer">
+                    <a href={href} className="text-blue-600 hover:text-blue-700 underline" target="_blank" rel="noopener noreferrer">
                       {children}
                     </a>
                   ),
@@ -287,7 +287,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
                 <div className="h-6 -mt-6 collapse-fade-gradient pointer-events-none" />
                 <button
                   onClick={() => setManuallyExpanded(true)}
-                  className="text-xs text-teal-600 hover:text-teal-700 mt-0.5"
+                  className="text-xs text-blue-600 hover:text-blue-700 mt-0.5"
                   type="button"
                   aria-expanded={false}
                   aria-controls={`msg-content-${message.id}`}
@@ -299,7 +299,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
             {!shouldCollapse && manuallyExpanded && isStreaming && !isLast && isCurrentRun && isLongContent && (
               <button
                 onClick={() => setManuallyExpanded(false)}
-                className="text-xs text-teal-600 hover:text-teal-700 mt-0.5"
+                className="text-xs text-blue-600 hover:text-blue-700 mt-0.5"
                 type="button"
                 aria-expanded={true}
                 aria-controls={`msg-content-${message.id}`}

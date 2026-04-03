@@ -44,7 +44,7 @@ interface ReadResponse {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-800">
           <div className="flex items-center gap-3">
-            <FileText className="w-5 h-5 text-violet-400" />
+            <FileText className="w-5 h-5 text-blue-400" />
             <h3 className="text-lg font-semibold text-slate-200">{fileName}</h3>
           </div>
           <button
@@ -59,7 +59,7 @@ interface ReadResponse {
         <div className="flex-1 overflow-auto p-4">
           {loading ? (
             <div className="flex items-center justify-center h-full">
-              <div className="animate-spin w-6 h-6 border-2 border-violet-600 border-t-transparent rounded-full" />
+              <div className="animate-spin w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full" />
             </div>
           ) : error ? (
             <div className="flex flex-col items-center justify-center h-full text-center">

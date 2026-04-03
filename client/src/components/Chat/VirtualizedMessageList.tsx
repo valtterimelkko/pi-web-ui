@@ -68,7 +68,7 @@ function WorkerStatusIndicator({ status }: { status: WorkerStatus }) {
     streaming: {
       icon: Loader2,
       text: 'Streaming...',
-      className: 'text-teal-600 bg-teal-50 border-teal-200',
+      className: 'text-blue-600 bg-blue-50 border-blue-200',
       animate: 'animate-spin',
     },
     idle: {

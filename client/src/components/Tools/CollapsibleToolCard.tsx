@@ -452,7 +452,7 @@ const ToolOutput = memo(function ToolOutput({
           {truncatedOutput}
           <button
             onClick={onToggle}
-            className="ml-2 text-teal-600 hover:text-teal-700 underline"
+            className="ml-2 text-blue-600 hover:text-blue-700 underline"
           >
             Show more
           </button>

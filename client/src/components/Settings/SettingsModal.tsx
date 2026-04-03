@@ -114,7 +114,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <div className="flex items-center gap-3">
-            <Settings2 className="w-5 h-5 text-teal-600" />
+            <Settings2 className="w-5 h-5 text-blue-600" />
             <h2 className="text-lg font-semibold text-gray-900">Settings</h2>
           </div>
           <button
@@ -182,7 +182,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                       }, 0);
                     }
                   }}
-                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2 mx-auto"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2 mx-auto"
                 >
                   <RefreshCw className="w-4 h-4" />
                   Retry
@@ -213,7 +213,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 onClick={() => setShowThinking(!showThinking)}
                 className={`
                   w-12 h-6 rounded-full transition-colors relative
-                  ${showThinking ? 'bg-teal-500' : 'bg-gray-300'}
+                  ${showThinking ? 'bg-blue-500' : 'bg-gray-300'}
                 `}
               >
                 <span

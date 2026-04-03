@@ -18,7 +18,7 @@ const statusColors: Record<WorktreeInfo['status'], string> = {
   running: 'text-amber-400 bg-amber-900/30',
   completed: 'text-emerald-400 bg-emerald-900/30',
   error: 'text-red-400 bg-red-900/30',
-  merged: 'text-violet-400 bg-violet-900/30',
+  merged: 'text-blue-400 bg-blue-900/30',
 };
 
 const statusIcons: Record<WorktreeInfo['status'], string> = {
@@ -74,7 +74,7 @@ function WorktreeCard({ worktree, isSelected, onSelect, onMerge, onDelete }: Wor
       className={`
         p-3 rounded-lg border cursor-pointer transition-colors
         ${isSelected
-          ? 'border-violet-500 bg-violet-900/20'
+          ? 'border-blue-500 bg-blue-900/20'
           : 'border-slate-700 bg-slate-800 hover:border-slate-600'
         }
       `}
@@ -105,7 +105,7 @@ function WorktreeCard({ worktree, isSelected, onSelect, onMerge, onDelete }: Wor
             {worktree.status === 'completed' && (
               <button
                 onClick={(e) => { e.stopPropagation(); onMerge(); }}
-                className="p-1 text-xs text-violet-400 hover:text-violet-300 hover:bg-violet-900/30 rounded"
+                className="p-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-blue-900/30 rounded"
                 title="Merge this worktree"
               >
                 ⊳

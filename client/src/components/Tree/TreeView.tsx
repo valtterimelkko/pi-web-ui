@@ -62,7 +62,7 @@ export function TreeView({
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-200">
         <div className="flex items-center gap-2">
-          <GitBranch className="w-5 h-5 text-teal-600" />
+          <GitBranch className="w-5 h-5 text-blue-600" />
           <h3 className="text-lg font-semibold text-gray-900">
             Conversation Tree
           </h3>

@@ -75,7 +75,7 @@ export function CompactModal({ isOpen, onClose }: CompactModalProps) {
             onChange={(e) => setCustomInstructions(e.target.value)}
             placeholder="e.g., Focus on preserving technical details about the API implementation..."
             rows={3}
-            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 text-sm resize-none focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20"
+            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 text-sm resize-none focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
           />
           <p className="mt-1 text-xs text-gray-400">
             Leave empty to use default summarization behavior.

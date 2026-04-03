@@ -168,7 +168,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
               className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
             >
               <div className="flex items-center gap-2">
-                <History className="w-4 h-4 text-teal-600" />
+                <History className="w-4 h-4 text-blue-600" />
                 <span className="text-sm font-medium text-gray-700">Recent Projects</span>
                 <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
                   {recentFolders.length}
@@ -190,11 +190,11 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
                       className="group flex items-center gap-2 p-2 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg cursor-pointer transition-all"
                       onClick={() => handleRecentFolderSelect(folder.path)}
                     >
-                      <div className="flex-shrink-0 w-8 h-8 bg-teal-100 rounded-lg flex items-center justify-center">
+                      <div className="flex-shrink-0 w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
                         {index === 0 ? (
-                          <Star className="w-4 h-4 text-teal-600 fill-teal-600" />
+                          <Star className="w-4 h-4 text-blue-600 fill-blue-600" />
                         ) : (
-                          <Folder className="w-4 h-4 text-teal-600" />
+                          <Folder className="w-4 h-4 text-blue-600" />
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -212,7 +212,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
                         <button
                           onClick={(e) => handleCreateInRecentFolder(e, folder.path)}
                           disabled={isCreating}
-                          className="px-2 py-1 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-400 disabled:cursor-not-allowed text-white text-xs rounded transition-colors"
+                          className="px-2 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed text-white text-xs rounded transition-colors"
                         >
                           {isCreating ? '...' : 'Create'}
                         </button>
@@ -238,7 +238,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
                   disabled={isCreating}
                   className="flex items-center gap-2 px-3 py-2 bg-gray-50 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed border border-gray-200 rounded-lg text-sm text-gray-700 transition-colors"
                 >
-                  <Icon className="w-4 h-4 text-teal-600" />
+                  <Icon className="w-4 h-4 text-blue-600" />
                   <span>{workspace.label}</span>
                 </button>
               );
@@ -254,7 +254,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
               value={pathInput}
               onChange={(e) => setPathInput(e.target.value)}
               placeholder="Enter path..."
-              className="flex-1 px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 placeholder-gray-400 border border-gray-200 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-base"
+              className="flex-1 px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 placeholder-gray-400 border border-gray-200 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-base"
             />
             <button
               type="submit"
@@ -269,7 +269,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         <div className="flex-1 overflow-hidden flex flex-col min-h-[200px]">
           {/* Breadcrumb */}
           <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-2">
-            <Folder className="w-4 h-4 text-teal-600" />
+            <Folder className="w-4 h-4 text-blue-600" />
             {parentPath && (
               <button
                 onClick={handleNavigateUp}
@@ -287,14 +287,14 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
           <div className="flex-1 overflow-y-auto p-2">
             {isLoading ? (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="w-6 h-6 text-teal-600 animate-spin" />
+                <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
               </div>
             ) : error ? (
               <div className="text-center py-8">
                 <p className="text-red-500 text-sm mb-4">{error}</p>
                 <button
                   onClick={() => fetchDirectories('/root')}
-                  className="text-teal-600 text-sm hover:underline"
+                  className="text-blue-600 text-sm hover:underline"
                 >
                   Reset to /root
                 </button>
@@ -314,7 +314,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
                     onKeyDown={(e) => e.key === 'Enter' && handleNavigate(dir)}
                     className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 active:bg-gray-200 rounded-lg transition-colors cursor-pointer select-none"
                   >
-                    <FolderOpen className="w-5 h-5 text-teal-600 flex-shrink-0" />
+                    <FolderOpen className="w-5 h-5 text-blue-600 flex-shrink-0" />
                     <span className="text-sm text-gray-700 truncate flex-1">{dir.name}</span>
                     <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
                   </div>

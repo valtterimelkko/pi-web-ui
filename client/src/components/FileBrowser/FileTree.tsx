@@ -117,7 +117,7 @@ interface BrowseResponse {
                 onClick={() => handleItemClick(item)}
                 className={`
                   w-full flex items-center gap-3 px-3 py-2 text-left transition-colors
-                  ${selectedPath === item.path ? 'bg-violet-600/20' : 'hover:bg-slate-800'}
+                  ${selectedPath === item.path ? 'bg-blue-600/20' : 'hover:bg-slate-800'}
                 `}
               >
                 {item.type === 'directory' ? (

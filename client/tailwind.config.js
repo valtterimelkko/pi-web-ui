@@ -10,11 +10,11 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Pi brand colors - teal/ocean blue accent
+        // Pi brand colors - blue accent
         pi: {
-          primary: '#0D9488',    // teal-600
-          hover: '#0F766E',      // teal-700
-          light: '#F0FDFA',      // teal-50
+          primary: '#2563EB',    // blue-600
+          hover: '#1D4ED8',      // blue-700
+          light: '#EFF6FF',      // blue-50
           dark: '#111827',       // gray-900
           surface: '#FFFFFF',
           sidebar: '#F9FAFB',    // gray-50

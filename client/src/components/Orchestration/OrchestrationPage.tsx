@@ -51,7 +51,7 @@ export function OrchestrationPage({ onSendMessage }: OrchestrationPageProps) {
           </p>
           <div className="space-y-3">
             <button
-              className="w-full px-4 py-3 bg-violet-600 hover:bg-violet-500 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+              className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
               onClick={() => {
                 // TODO: File picker for plan
                 console.log('Select plan file');
@@ -129,7 +129,7 @@ export function OrchestrationPage({ onSendMessage }: OrchestrationPageProps) {
                 <input
                   type="text"
                   placeholder="Type to intervene in this session..."
-                  className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-violet-500"
+                  className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && e.currentTarget.value) {
                       onSendMessage?.(selectedSessionId, e.currentTarget.value);

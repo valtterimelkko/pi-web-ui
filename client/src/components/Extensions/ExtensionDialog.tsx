@@ -59,7 +59,7 @@ export function ExtensionDialog({ request, onResponse }: ExtensionDialogProps) {
       <div className="bg-white rounded-xl border border-gray-200 w-full max-w-md mx-4 shadow-xl">
         {/* Header */}
         <div className="flex items-center gap-3 p-4 border-b border-gray-200">
-          <AlertCircle className="w-6 h-6 text-teal-600" />
+          <AlertCircle className="w-6 h-6 text-blue-600" />
           <h3 className="text-lg font-semibold text-gray-900">
             Extension Request
           </h3>
@@ -170,7 +170,7 @@ function SelectContent({
           className={`
             w-full p-3 rounded-lg text-left transition-colors
             ${value === option.value
-              ? 'bg-teal-50 border border-teal-500'
+              ? 'bg-blue-50 border border-blue-500'
               : 'bg-gray-50 hover:bg-gray-100 border border-gray-200'
             }
           `}
@@ -201,7 +201,7 @@ function InputContent({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={params.placeholder as string}
-        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
     </div>
   );
@@ -225,7 +225,7 @@ function EditorContent({
         value={value || (params.defaultValue as string) || ''}
         onChange={(e) => onChange(e.target.value)}
         rows={10}
-        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none"
+        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
       />
     </div>
   );

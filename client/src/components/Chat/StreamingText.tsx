@@ -66,7 +66,7 @@ export function StreamingText({ text }: StreamingTextProps) {
           ),
           hr: () => <hr className="my-2 border-gray-200" />,
           a: ({ children, href }) => (
-            <a href={href} className="text-teal-600 hover:text-teal-700 underline" target="_blank" rel="noopener noreferrer">
+            <a href={href} className="text-blue-600 hover:text-blue-700 underline" target="_blank" rel="noopener noreferrer">
               {children}
             </a>
           ),
@@ -74,7 +74,7 @@ export function StreamingText({ text }: StreamingTextProps) {
       >
         {text}
       </ReactMarkdown>
-      <span className="inline-block w-2 h-4 ml-0.5 bg-teal-500 animate-pulse align-middle" />
+      <span className="inline-block w-2 h-4 ml-0.5 bg-blue-500 animate-pulse align-middle" />
     </div>
   );
 }

@@ -71,7 +71,7 @@ export function ConflictResolution({ conflict, onResolve, onSkip }: ConflictReso
           <span className="text-xs text-slate-400">Conflict Preview</span>
           <button
             onClick={() => setShowPreview(!showPreview)}
-            className="text-xs text-violet-400 hover:text-violet-300"
+            className="text-xs text-blue-400 hover:text-blue-300"
           >
             {showPreview ? 'Hide' : 'Show'} Details
           </button>
@@ -118,7 +118,7 @@ export function ConflictResolution({ conflict, onResolve, onSkip }: ConflictReso
               className={`
                 p-3 rounded-lg border text-left transition-colors
                 ${selectedResolution === resolution.id
-                  ? 'border-violet-500 bg-violet-900/30'
+                  ? 'border-blue-500 bg-blue-900/30'
                   : 'border-slate-700 hover:border-slate-600'
                 }
               `}
@@ -141,7 +141,7 @@ export function ConflictResolution({ conflict, onResolve, onSkip }: ConflictReso
             <textarea
               value={customContent}
               onChange={(e) => setCustomContent(e.target.value)}
-              className="w-full h-32 px-3 py-2 bg-slate-800 border border-slate-700 rounded-md text-sm text-slate-200 font-mono resize-none focus:outline-none focus:border-violet-500"
+              className="w-full h-32 px-3 py-2 bg-slate-800 border border-slate-700 rounded-md text-sm text-slate-200 font-mono resize-none focus:outline-none focus:border-blue-500"
               placeholder="Enter the resolved content..."
             />
           </div>
@@ -165,7 +165,7 @@ export function ConflictResolution({ conflict, onResolve, onSkip }: ConflictReso
             px-4 py-2 text-sm rounded-md transition-colors flex items-center gap-2
             ${selectedResolution === 'manual' && !customContent
               ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
-              : 'bg-violet-600 hover:bg-violet-500 text-white'
+              : 'bg-blue-600 hover:bg-blue-500 text-white'
             }
           `}
         >
@@ -232,7 +232,7 @@ export function ConflictList({ conflicts, onResolveAll, onCancel }: ConflictList
         </div>
         <div className="h-1 bg-slate-700 rounded-full overflow-hidden">
           <div
-            className="h-full bg-violet-500 transition-all"
+            className="h-full bg-blue-500 transition-all"
             style={{ width: `${(progress / total) * 100}%` }}
           />
         </div>

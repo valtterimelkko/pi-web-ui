@@ -43,7 +43,7 @@ export function PlanPreview({
           <span>🎯</span>
           Orchestration Setup
         </h2>
-        <h3 className="text-sm text-violet-400 mt-1">{title}</h3>
+        <h3 className="text-sm text-blue-400 mt-1">{title}</h3>
         {description && (
           <p className="text-xs text-slate-400 mt-2">{description}</p>
         )}
@@ -56,7 +56,7 @@ export function PlanPreview({
           <div className="text-xs text-slate-500">Tasks</div>
         </div>
         <div>
-          <div className="text-2xl font-bold text-violet-400">{parallelGroups.length}</div>
+          <div className="text-2xl font-bold text-blue-400">{parallelGroups.length}</div>
           <div className="text-xs text-slate-500">Groups</div>
         </div>
         <div>
@@ -74,7 +74,7 @@ export function PlanPreview({
                 Parallel Group {groupIndex + 1}
               </span>
               {group.length > 1 && (
-                <span className="text-xs px-1.5 py-0.5 bg-violet-900/30 text-violet-400 rounded">
+                <span className="text-xs px-1.5 py-0.5 bg-blue-900/30 text-blue-400 rounded">
                   {group.length} parallel
                 </span>
               )}
@@ -141,7 +141,7 @@ export function PlanPreview({
         {onStart && (
           <button
             onClick={onStart}
-            className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-sm rounded-md transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-md transition-colors flex items-center gap-2"
           >
             <span>▶</span>
             Start Orchestration
@@ -164,7 +164,7 @@ function TaskCard({ task, isSelected, onClick }: TaskCardProps) {
       className={`
         flex-shrink-0 w-48 p-3 rounded-lg border cursor-pointer transition-colors
         ${isSelected
-          ? 'border-violet-500 bg-violet-900/20'
+          ? 'border-blue-500 bg-blue-900/20'
           : 'border-slate-700 bg-slate-800 hover:border-slate-600'
         }
       `}
@@ -185,7 +185,7 @@ function TaskCard({ task, isSelected, onClick }: TaskCardProps) {
           </span>
         )}
         {task.agent && (
-          <span className="text-violet-400">{task.agent}</span>
+          <span className="text-blue-400">{task.agent}</span>
         )}
       </div>
 

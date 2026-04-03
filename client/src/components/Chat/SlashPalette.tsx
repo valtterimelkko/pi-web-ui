@@ -99,7 +99,7 @@ export function SlashPalette({ filter, onSelect, onClose }: SlashPaletteProps) {
     return (
       <div className="absolute bottom-full left-0 right-0 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
         <div className="py-3 px-4 text-sm text-gray-500 flex items-center gap-2">
-          <div className="w-3 h-3 border-2 border-gray-300 border-t-teal-500 rounded-full animate-spin" />
+          <div className="w-3 h-3 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
           Loading commands...
         </div>
       </div>

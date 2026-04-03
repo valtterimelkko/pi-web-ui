@@ -15,7 +15,7 @@ export function Loading({ size = 'md', text }: LoadingProps) {
       <div
         className={`
           ${sizes[size]}
-          border-2 border-teal-500 border-t-transparent
+          border-2 border-blue-500 border-t-transparent
           rounded-full animate-spin
         `}
       />

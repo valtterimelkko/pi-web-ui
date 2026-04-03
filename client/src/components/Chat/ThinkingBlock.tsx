@@ -50,7 +50,7 @@ export function ThinkingBlock({ content, isOpen = false, onToggle }: ThinkingBlo
         type="button"
       >
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          <Sparkles className="w-3 h-3 text-violet-400 shrink-0" />
+          <Sparkles className="w-3 h-3 text-blue-400 shrink-0" />
           <span className="text-xs text-gray-500 shrink-0">Thinking</span>
           {/* Show preview when collapsed */}
           {!isExpanded && preview && (

@@ -30,7 +30,7 @@ export function ThinkingLevelSelector({ value, onChange }: ThinkingLevelSelector
             className={`
               p-3 rounded-lg text-left transition-colors
               ${value === level.value
-                ? 'bg-teal-50 border border-teal-500'
+                ? 'bg-blue-50 border border-blue-500'
                 : 'bg-gray-50 border border-gray-200 hover:bg-gray-100'
               }
             `}
