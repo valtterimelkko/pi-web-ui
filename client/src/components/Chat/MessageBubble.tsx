@@ -15,6 +15,7 @@ interface MessageBubbleProps {
   message: LiveMessage;
   isLast?: boolean;
   isCurrentRun?: boolean;
+  forceExpanded?: boolean; // passed from "Expand all" group toggle
 }
 
 /**
@@ -56,7 +57,7 @@ function ActivityIndicator({
 }
 
 // Memoized MessageBubble for performance
-export const MessageBubble = memo(function MessageBubble({ message, isLast, isCurrentRun }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, isLast, isCurrentRun, forceExpanded }: MessageBubbleProps) {
   const [showThinking, setShowThinking] = useState(false);
   const [copied, setCopied] = useState(false);
   const isStreaming = useSessionStore((state) => state.isStreaming);
@@ -145,6 +146,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
         args={message.toolCall.args}
         result={message.toolResult}
         startTime={message.timestamp}
+        forceExpanded={forceExpanded}
       />
     );
   }
@@ -326,6 +328,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     prevProps.isLast === nextProps.isLast &&
     prevProps.isCurrentRun === nextProps.isCurrentRun &&
     prevProps.message.toolResult?.output === nextProps.message.toolResult?.output &&
-    prevProps.message.toolResult?.isError === nextProps.message.toolResult?.isError
+    prevProps.message.toolResult?.isError === nextProps.message.toolResult?.isError &&
+    prevProps.forceExpanded === nextProps.forceExpanded
   );
 });

@@ -1,4 +1,4 @@
-import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Loader2, AlertCircle } from 'lucide-react';
 import type { LiveMessage } from '../../hooks/useSessionStream.js';
@@ -185,18 +185,42 @@ function getSkillContentInfo(message: LiveMessage): { isSkillContent: boolean; s
   return { isSkillContent: false };
 }
 
+// Toggle shown above a group of 3+ consecutive tool cards
+function ToolGroupToggle({
+  size,
+  isExpanded,
+  onToggle,
+}: {
+  size: number;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 mb-1 transition-colors"
+      type="button"
+    >
+      {isExpanded ? '▲ Collapse all' : '▼ Expand all'}
+      <span className="text-gray-400">({size} tools)</span>
+    </button>
+  );
+}
+
 // Memoized message item component for performance
 const MessageItem = memo(function MessageItem({
   message,
   isLast,
   isCurrentRun,
+  forceExpanded,
 }: {
   message: LiveMessage;
   isLast: boolean;
   isCurrentRun: boolean;
+  forceExpanded?: boolean;
 }) {
   return (
-    <MessageBubble message={message} isLast={isLast} isCurrentRun={isCurrentRun} />
+    <MessageBubble message={message} isLast={isLast} isCurrentRun={isCurrentRun} forceExpanded={forceExpanded} />
   );
 }, (prevProps, nextProps) => {
   // Custom comparison for better memoization
@@ -205,9 +229,10 @@ const MessageItem = memo(function MessageItem({
     prevProps.message.content === nextProps.message.content &&
     prevProps.isLast === nextProps.isLast &&
     prevProps.isCurrentRun === nextProps.isCurrentRun &&
-    prevProps.message.toolResult?.output === nextProps.message.toolResult?.output
+    prevProps.message.toolResult?.output === nextProps.message.toolResult?.output &&
+    prevProps.forceExpanded === nextProps.forceExpanded
   );
-});
+})
 
 export const VirtualizedMessageList = forwardRef<
   VirtualizedMessageListHandle,
@@ -218,6 +243,9 @@ export const VirtualizedMessageList = forwardRef<
 ) {
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
+
+  // Expand-all state keyed by the ID of the first message in each tool group
+  const [toolGroupExpanded, setToolGroupExpanded] = useState<Record<string, boolean>>({});
 
   // Identity guard for scroll events
   const scrollIdentityRef = useRef<string>('');
@@ -271,6 +299,29 @@ export const VirtualizedMessageList = forwardRef<
     visibleMessages.map((message, index) => ({ message, index })),
     [visibleMessages]
   );
+
+  // Compute group metadata for consecutive runs of 3+ tool messages
+  const toolGroupMeta = useMemo(() => {
+    const meta: Record<string, { groupId: string; groupSize: number; isFirst: boolean }> = {};
+    let i = 0;
+    while (i < visibleMessages.length) {
+      if (visibleMessages[i].role === 'tool') {
+        let j = i;
+        while (j < visibleMessages.length && visibleMessages[j].role === 'tool') j++;
+        const groupSize = j - i;
+        if (groupSize >= 3) {
+          const groupId = visibleMessages[i].id;
+          for (let k = i; k < j; k++) {
+            meta[visibleMessages[k].id] = { groupId, groupSize, isFirst: k === i };
+          }
+        }
+        i = j;
+      } else {
+        i++;
+      }
+    }
+    return meta;
+  }, [visibleMessages]);
 
   // Find the index of the last user message to scope collapsing to the current agent run
   const lastUserMessageIndex = useMemo(() => {
@@ -374,12 +425,31 @@ export const VirtualizedMessageList = forwardRef<
           itemContent={(_index, item) => {
             const isLast = item.index === listItems.length - 1;
             const isCurrentRun = item.index > lastUserMessageIndex;
+            const groupMeta = toolGroupMeta[item.message.id];
+            const isGroupExpanded = groupMeta
+              ? (toolGroupExpanded[groupMeta.groupId] ?? false)
+              : false;
             return (
-              <MessageItem
-                message={item.message}
-                isLast={isLast}
-                isCurrentRun={isCurrentRun}
-              />
+              <>
+                {groupMeta?.isFirst && (
+                  <ToolGroupToggle
+                    size={groupMeta.groupSize}
+                    isExpanded={isGroupExpanded}
+                    onToggle={() =>
+                      setToolGroupExpanded(prev => ({
+                        ...prev,
+                        [groupMeta.groupId]: !prev[groupMeta.groupId],
+                      }))
+                    }
+                  />
+                )}
+                <MessageItem
+                  message={item.message}
+                  isLast={isLast}
+                  isCurrentRun={isCurrentRun}
+                  forceExpanded={groupMeta ? isGroupExpanded : undefined}
+                />
+              </>
             );
           }}
         />

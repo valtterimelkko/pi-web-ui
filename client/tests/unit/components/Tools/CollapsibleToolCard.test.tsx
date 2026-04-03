@@ -12,17 +12,17 @@ describe('CollapsibleToolCard', () => {
     });
   });
 
-  it('renders collapsed by default with tool name and status', () => {
+  it('renders collapsed by default with "Using {name}" prefix', () => {
     render(
       <CollapsibleToolCard
         name="read"
         args={{ path: '/test/file.txt' }}
       />
     );
-    
-    // Should show tool display name
-    expect(screen.getByText('Read')).toBeInTheDocument();
-    
+
+    // Should show "Using Read" in the header
+    expect(screen.getByText('Using Read')).toBeInTheDocument();
+
     // Should show pending status
     expect(screen.getByText('Running…')).toBeInTheDocument();
   });
@@ -35,7 +35,7 @@ describe('CollapsibleToolCard', () => {
         result={{ output: 'File content', isError: false }}
       />
     );
-    
+
     // Should show brief status with line count
     expect(screen.getByText(/lines?/i)).toBeInTheDocument();
   });
@@ -48,7 +48,7 @@ describe('CollapsibleToolCard', () => {
         result={{ output: 'Command not found', isError: true }}
       />
     );
-    
+
     // Should show error brief status
     expect(screen.getByText(/Error/)).toBeInTheDocument();
   });
@@ -61,14 +61,110 @@ describe('CollapsibleToolCard', () => {
         result={{ output: 'File content', isError: false }}
       />
     );
-    
-    // Click the header button
-    const headerButton = screen.getByRole('button', { name: /Read/i });
+
+    // Click the header button (contains "Using Read")
+    const headerButton = screen.getByRole('button', { name: /Using Read/i });
     fireEvent.click(headerButton);
-    
-    // Should now show expanded content - look for Arguments text in section
-    const argumentsLabels = screen.getAllByText('Arguments');
-    expect(argumentsLabels.length).toBeGreaterThan(0);
+
+    // Should now show the "Input parameters" section toggle
+    expect(screen.getByText('Input parameters')).toBeInTheDocument();
+  });
+
+  it('Input parameters section starts collapsed by default', () => {
+    render(
+      <CollapsibleToolCard
+        name="bash"
+        args={{ command: 'ls -la', extra: 'value' }}
+        result={{ output: 'total 8', isError: false }}
+      />
+    );
+
+    // Expand the card first
+    const headerButton = screen.getByRole('button', { name: /Using Shell/i });
+    fireEvent.click(headerButton);
+
+    // "Input parameters" section header should be visible
+    expect(screen.getByText('Input parameters')).toBeInTheDocument();
+
+    // But args content should NOT be visible (section collapsed by default)
+    // The actual "Arguments" label inside ToolInputSection should not be visible
+    expect(screen.queryByText('Arguments')).not.toBeInTheDocument();
+  });
+
+  it('Tool Result section starts collapsed by default', () => {
+    render(
+      <CollapsibleToolCard
+        name="bash"
+        args={{ command: 'ls' }}
+        result={{ output: 'total 8\nfile.txt', isError: false }}
+      />
+    );
+
+    // Expand the card
+    const headerButton = screen.getByRole('button', { name: /Using Shell/i });
+    fireEvent.click(headerButton);
+
+    // Result section toggle should be visible
+    expect(screen.getByText('Result')).toBeInTheDocument();
+
+    // But actual result content should NOT be visible (collapsed)
+    expect(screen.queryByText('total 8')).not.toBeInTheDocument();
+  });
+
+  it('auto-expands Tool Result section on error', () => {
+    render(
+      <CollapsibleToolCard
+        name="bash"
+        args={{ command: 'bad-cmd' }}
+        result={{ output: 'bash: bad-cmd: command not found', isError: true }}
+      />
+    );
+
+    // Expand the card
+    const headerButton = screen.getByRole('button', { name: /Using Shell/i });
+    fireEvent.click(headerButton);
+
+    // Result section should be auto-expanded (error text visible)
+    expect(screen.getByText('bash: bad-cmd: command not found')).toBeInTheDocument();
+  });
+
+  it('expands card when forceExpanded prop is true', () => {
+    render(
+      <CollapsibleToolCard
+        name="read"
+        args={{ path: '/test' }}
+        result={{ output: 'content', isError: false }}
+        forceExpanded={true}
+      />
+    );
+
+    // Card should be expanded – "Input parameters" section toggle visible
+    expect(screen.getByText('Input parameters')).toBeInTheDocument();
+  });
+
+  it('collapses card when forceExpanded changes to false', () => {
+    const { rerender } = render(
+      <CollapsibleToolCard
+        name="read"
+        args={{ path: '/test' }}
+        result={{ output: 'content', isError: false }}
+        forceExpanded={true}
+      />
+    );
+
+    expect(screen.getByText('Input parameters')).toBeInTheDocument();
+
+    rerender(
+      <CollapsibleToolCard
+        name="read"
+        args={{ path: '/test' }}
+        result={{ output: 'content', isError: false }}
+        forceExpanded={false}
+      />
+    );
+
+    // Card should now be collapsed
+    expect(screen.queryByText('Input parameters')).not.toBeInTheDocument();
   });
 
   it('truncates long parameters in collapsed view', () => {
@@ -79,9 +175,8 @@ describe('CollapsibleToolCard', () => {
         args={{ path: longPath }}
       />
     );
-    
+
     // Should show truncated path with ellipsis in collapsed state
-    // Look for the truncated path text specifically
     const truncatedElements = screen.getAllByText(/\/very\/long\/path.*…/);
     expect(truncatedElements.length).toBeGreaterThan(0);
   });
@@ -95,19 +190,19 @@ describe('CollapsibleToolCard', () => {
         result={{ output, isError: false }}
       />
     );
-    
+
     // Should show line count
     expect(screen.getByText(/3 lines/)).toBeInTheDocument();
   });
 
-  it('maps tool names to display names correctly', () => {
+  it('maps tool names to display names with "Using" prefix', () => {
     const toolNames = [
-      { name: 'bash', displayName: 'Shell' },
-      { name: 'read', displayName: 'Read' },
-      { name: 'write', displayName: 'Write' },
-      { name: 'edit', displayName: 'Edit' },
-      { name: 'grep', displayName: 'Search' },
-      { name: 'glob', displayName: 'Find Files' },
+      { name: 'bash', displayName: 'Using Shell' },
+      { name: 'read', displayName: 'Using Read' },
+      { name: 'write', displayName: 'Using Write' },
+      { name: 'edit', displayName: 'Using Edit' },
+      { name: 'grep', displayName: 'Using Search' },
+      { name: 'glob', displayName: 'Using Find Files' },
     ];
 
     toolNames.forEach(({ name, displayName }) => {
@@ -119,15 +214,15 @@ describe('CollapsibleToolCard', () => {
     });
   });
 
-  it('falls back to original name for unknown tools', () => {
+  it('falls back to original name with "Using" prefix for unknown tools', () => {
     render(
       <CollapsibleToolCard
         name="custom_tool"
         args={{}}
       />
     );
-    
-    expect(screen.getByText('custom_tool')).toBeInTheDocument();
+
+    expect(screen.getByText('Using custom_tool')).toBeInTheDocument();
   });
 
   it('handles array arguments correctly', () => {
@@ -137,9 +232,9 @@ describe('CollapsibleToolCard', () => {
         args={{ patterns: ['*.ts', '*.tsx'] }}
       />
     );
-    
+
     // Should render without error
-    expect(screen.getByText('Find Files')).toBeInTheDocument();
+    expect(screen.getByText('Using Find Files')).toBeInTheDocument();
   });
 
   it('handles empty args gracefully', () => {
@@ -149,9 +244,8 @@ describe('CollapsibleToolCard', () => {
         args={{}}
       />
     );
-    
-    // Should render without error
-    expect(screen.getByText('Read')).toBeInTheDocument();
+
+    expect(screen.getByText('Using Read')).toBeInTheDocument();
   });
 
   it('handles null args gracefully', () => {
@@ -161,9 +255,8 @@ describe('CollapsibleToolCard', () => {
         args={null}
       />
     );
-    
-    // Should render without error
-    expect(screen.getByText('Read')).toBeInTheDocument();
+
+    expect(screen.getByText('Using Read')).toBeInTheDocument();
   });
 
   it('handles JSON result output', () => {
@@ -175,7 +268,7 @@ describe('CollapsibleToolCard', () => {
         result={{ output: jsonOutput, isError: false }}
       />
     );
-    
+
     // Should show brief status with line count
     expect(screen.getByText(/lines/)).toBeInTheDocument();
   });
@@ -188,19 +281,40 @@ describe('CollapsibleToolCard', () => {
         result={{ output: 'content', isError: false }}
       />
     );
-    
+
     // Expand
-    const headerButton = screen.getByRole('button', { name: /Read/i });
+    const headerButton = screen.getByRole('button', { name: /Using Read/i });
     fireEvent.click(headerButton);
-    
-    // Should show Arguments section
-    const argumentsLabels = screen.getAllByText('Arguments');
-    expect(argumentsLabels.length).toBeGreaterThan(0);
-    
+
+    // Should show Input parameters section
+    expect(screen.getByText('Input parameters')).toBeInTheDocument();
+
     // Collapse
     fireEvent.click(headerButton);
-    
-    // The card should still be visible but without expanded content
-    expect(screen.getByText('Read')).toBeInTheDocument();
+
+    // The card should be collapsed again
+    expect(screen.queryByText('Input parameters')).not.toBeInTheDocument();
+    expect(screen.getByText('Using Read')).toBeInTheDocument();
+  });
+
+  it('Input parameters section expands when clicked', () => {
+    render(
+      <CollapsibleToolCard
+        name="bash"
+        args={{ command: 'ls -la', extra: 'value' }}
+        result={{ output: 'total 8', isError: false }}
+      />
+    );
+
+    // Expand the card first
+    const headerButton = screen.getByRole('button', { name: /Using Shell/i });
+    fireEvent.click(headerButton);
+
+    // Click the Input parameters toggle
+    const inputsToggle = screen.getByRole('button', { name: /Input parameters/i });
+    fireEvent.click(inputsToggle);
+
+    // Args section (Arguments label) should now be visible
+    expect(screen.getByText('Arguments')).toBeInTheDocument();
   });
 });

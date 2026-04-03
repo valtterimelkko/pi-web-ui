@@ -40,6 +40,7 @@ interface CollapsibleToolCardProps {
   args: unknown;
   result?: ToolResult | null;
   startTime?: number; // Unix timestamp when tool started
+  forceExpanded?: boolean; // externally controlled (e.g. "Expand all" toggle)
 }
 
 // Map tool names to icons (following Kimi's approach)
@@ -220,7 +221,7 @@ const ToolInputSection = memo(function ToolInputSection({ args }: { args: unknow
   if (!args || typeof args !== 'object') return null;
 
   const entries = Object.entries(args as Record<string, unknown>);
-  if (entries.length === 1) return null;
+  if (entries.length === 0) return null;
 
   const handleCopy = useCallback(async () => {
     await navigator.clipboard.writeText(formatArgs(args));
@@ -562,16 +563,32 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
   name, 
   args, 
   result,
-  startTime
+  startTime,
+  forceExpanded,
 }: CollapsibleToolCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showResult, setShowResult] = useState(false);
+  const [showInputs, setShowInputs] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const hasResult = result !== undefined && result !== null;
   const isError = hasResult && result.isError;
   const isSuccess = hasResult && !result.isError;
   const isPending = !hasResult;
+
+  // Sync with external forceExpanded prop (e.g. "Expand all" group toggle)
+  useEffect(() => {
+    if (forceExpanded !== undefined) {
+      setIsExpanded(forceExpanded);
+    }
+  }, [forceExpanded]);
+
+  // Auto-expand the result section when a tool returns an error
+  useEffect(() => {
+    if (isError) {
+      setShowResult(true);
+    }
+  }, [isError]);
 
   // Track elapsed time for pending operations
   useEffect(() => {
@@ -610,21 +627,18 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
         }`}
         type="button"
       >
-        {/* Expand indicator */}
-        <ChevronRight className={`w-3 h-3 text-gray-400 transition-transform duration-200 shrink-0 ${isExpanded ? 'rotate-90' : ''}`} />
-
-        {/* Tool icon */}
+        {/* Tool icon – spinner (blue) when pending, green on success, red on error */}
         <span className={`shrink-0 ${
-          isError ? 'text-red-500' :
-          isSuccess ? 'text-emerald-500' :
-          'text-gray-400'
+          isPending ? 'text-blue-500' :
+          isError   ? 'text-red-500' :
+          'text-emerald-500'
         }`}>
-          {icon}
+          {isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : icon}
         </span>
 
-        {/* Tool name */}
+        {/* "Using {displayName}" */}
         <span className="font-medium text-gray-700 text-xs shrink-0">
-          {displayName}
+          Using {displayName}
         </span>
 
         {/* Primary parameter - inline, subtle */}
@@ -638,30 +652,39 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
         {!isExpanded && (
           <span className="ml-auto shrink-0 flex items-center gap-1.5">
             <BriefStatus result={result} isPending={isPending} toolName={name} elapsedSeconds={elapsedSeconds} />
-            {statusIcon}
           </span>
         )}
 
-        {/* Status icon when expanded */}
-        {isExpanded && (
-          <span className="ml-auto shrink-0">
-            {statusIcon}
-          </span>
-        )}
+        {/* Chevron toggle – moved to RIGHT side */}
+        <ChevronRight className={`w-3 h-3 text-gray-400 transition-transform duration-200 shrink-0 ${isExpanded ? 'rotate-90' : ''}`} />
       </button>
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="px-2.5 py-1.5 space-y-2">
-          {/* Arguments section */}
-          {args !== null && args !== undefined && (
-            <ToolInputSection args={args} />
-          )}
-
-          {/* Brief status (always visible in expanded mode) */}
+        <div className="px-2.5 py-1.5 space-y-1.5">
+          {/* Brief status at top of expanded card */}
           <BriefStatus result={result} isPending={isPending} toolName={name} elapsedSeconds={elapsedSeconds} />
 
-          {/* Result section */}
+          {/* Section 1: Input parameters – collapsed by default */}
+          {args !== null && args !== undefined && (
+            <div>
+              <button
+                onClick={() => setShowInputs(prev => !prev)}
+                className="flex items-center gap-1 text-xs text-gray-500 font-mono hover:text-gray-700 py-0.5 w-full text-left"
+                type="button"
+              >
+                <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${showInputs ? 'rotate-90' : ''}`} />
+                Input parameters
+              </button>
+              {showInputs && (
+                <div className="mt-1 pl-3 border-l border-gray-100">
+                  <ToolInputSection args={args} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Section 2: Tool Result – collapsed by default, auto-expanded on error */}
           {hasResult && (
             <ToolOutput
               result={result}
