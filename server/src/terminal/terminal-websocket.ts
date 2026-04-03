@@ -9,9 +9,9 @@ function getClientId(_req: IncomingMessage): string {
 }
 
 export function handleTerminalWebSocket(ws: WebSocket, req: IncomingMessage): void {
-  // Authenticate via cookie
+  // Authenticate via cookie - supports both 'jwt' and 'accessToken' cookie names
   const cookies = req.headers.cookie || '';
-  const jwtMatch = cookies.match(/(?:^|;\s*)jwt=([^;]+)/);
+  const jwtMatch = cookies.match(/(?:^|;)\s*(?:jwt|accessToken)=([^;]+)/);
   const token = jwtMatch?.[1];
 
   if (!token) {
@@ -29,7 +29,14 @@ export function handleTerminalWebSocket(ws: WebSocket, req: IncomingMessage): vo
   const clientId = getClientId(req);
   let termCreated = false;
 
-  ws.on('message', (message: Buffer | string) => {
+  // Check availability asynchronously and send ready signal
+  terminalManager.isAvailable().then((available) => {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ type: 'ready', available }));
+    }
+  });
+
+  ws.on('message', async (message: Buffer | string) => {
     // Check for JSON control messages
     const data = message.toString();
 
@@ -40,7 +47,7 @@ export function handleTerminalWebSocket(ws: WebSocket, req: IncomingMessage): vo
           const cwd = msg.cwd || process.env.HOME || '/';
           const cols = msg.cols || 80;
           const rows = msg.rows || 24;
-          const result = terminalManager.create(clientId, cwd, cols, rows);
+          const result = await terminalManager.create(clientId, cwd, cols, rows);
           if (!result.success) {
             ws.send(JSON.stringify({ type: 'error', error: result.error }));
             return;
@@ -89,7 +96,4 @@ export function handleTerminalWebSocket(ws: WebSocket, req: IncomingMessage): vo
   ws.on('error', () => {
     terminalManager.destroy(clientId);
   });
-
-  // Send ready signal
-  ws.send(JSON.stringify({ type: 'ready', available: terminalManager.isAvailable() }));
 }

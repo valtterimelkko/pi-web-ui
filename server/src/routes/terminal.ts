@@ -6,9 +6,9 @@ const router = Router();
 router.use(cookieAuthMiddleware);
 
 // GET /api/terminal/status
-router.get('/status', (_req, res) => {
+router.get('/status', async (_req, res) => {
   res.json({
-    available: terminalManager.isAvailable(),
+    available: await terminalManager.isAvailable(),
     terminals: terminalManager.list(),
   });
 });

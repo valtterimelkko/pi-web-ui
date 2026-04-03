@@ -6,12 +6,22 @@ type NodePty = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type IPty = any;
 
-let pty: NodePty | null = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  pty = require('node-pty');
-} catch {
-  console.warn('[TerminalManager] node-pty not available, terminal feature disabled');
+// Lazy-loaded node-pty module (ESM compatible)
+let ptyModule: NodePty | null | undefined = undefined;
+
+async function getPty(): Promise<NodePty | null> {
+  if (ptyModule === undefined) {
+    try {
+      // Dynamic import for ESM compatibility
+      const mod = await import('node-pty');
+      ptyModule = mod.default || mod;
+      console.log('[TerminalManager] node-pty loaded successfully');
+    } catch (err) {
+      console.warn('[TerminalManager] node-pty not available, terminal feature disabled:', (err as Error).message);
+      ptyModule = null;
+    }
+  }
+  return ptyModule;
 }
 
 interface TerminalSession {
@@ -32,11 +42,13 @@ export class TerminalManager {
   private terminals = new Map<string, TerminalSession>();
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  isAvailable(): boolean {
+  async isAvailable(): Promise<boolean> {
+    const pty = await getPty();
     return pty !== null;
   }
 
-  create(clientId: string, cwd: string = process.env.HOME || '/', cols: number = 80, rows: number = 24): { success: boolean; error?: string; info?: { clientId: string; cwd: string; pid: number; cols: number; rows: number; createdAt: number; lastActivity: number } } {
+  async create(clientId: string, cwd: string = process.env.HOME || '/', cols: number = 80, rows: number = 24): Promise<{ success: boolean; error?: string; info?: { clientId: string; cwd: string; pid: number; cols: number; rows: number; createdAt: number; lastActivity: number } }> {
+    const pty = await getPty();
     if (!pty) return { success: false, error: 'node-pty not available' };
     if (this.terminals.size >= MAX_TERMINALS) {
       return { success: false, error: 'Maximum terminals reached' };
