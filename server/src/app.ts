@@ -14,6 +14,7 @@ import worktreesRoutes from './routes/worktrees.js';
 import healthRoutes from './routes/health.js';
 import configRoutes from './routes/config.js';
 import usageRoutes from './routes/usage.js';
+import { gitRouter } from './routes/git.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -85,6 +86,9 @@ export function createApp(): express.Application {
 
   // Token usage tracking
   app.use('/api/usage', usageRoutes);
+
+  // Git operations
+  app.use('/api/git', gitRouter);
 
   // Serve static files from client/dist in production
   if (config.nodeEnv === 'production') {
