@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Trash2, Edit2, Check, X, Archive, ArchiveRestore, Download, FileText, FileJson, Code } from 'lucide-react';
+import { Trash2, Edit2, Check, X, Archive, ArchiveRestore, Download, FileText, FileJson, Code, Loader2 } from 'lucide-react';
 import type { Session } from '../../store/sessionStore';
 import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -18,8 +18,11 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
   const unarchiveSession = useSessionStore(state => state.unarchiveSession);
   const getSessionDisplayName = useSessionStore(state => state.getSessionDisplayName);
   const setSessionDisplayName = useSessionStore(state => state.setSessionDisplayName);
+  const setSwitchingSession = useSessionStore(state => state.setSwitchingSession);
   const sessionData = useSessionStore(state => state.sessionData[session.id]);
   const workerStatus = useSessionStore(state => state.workerStatus[session.id]);
+  const isSwitchingSession = useSessionStore(state => state.isSwitchingSession);
+  const switchingToSessionId = useSessionStore(state => state.switchingToSessionId);
   const [showActions, setShowActions] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -30,9 +33,14 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
   // Check if session has active status (streaming or busy)
   const sessionStatus = sessionData?.status;
   const isActiveSession = sessionStatus === 'streaming' || sessionStatus === 'busy';
+  
+  // Check if this session is currently being switched to
+  const isLoading = isSwitchingSession && switchingToSessionId === session.id;
 
   const handleClick = () => {
-    if (!isActive && !isEditing) {
+    if (!isActive && !isEditing && !isLoading) {
+      // Set switching state for UI feedback
+      setSwitchingSession(true, session.id);
       switchSession(session.path);
     }
   };
@@ -262,6 +270,8 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
                   <Trash2 className="w-3 h-3 text-gray-400" />
                 </button>
               </>
+            ) : isLoading ? (
+              <Loader2 className="w-4 h-4 text-teal-500 animate-spin" />
             ) : workerStatus ? (
               <WorkerStatusIndicator sessionId={session.id} />
             ) : isActiveSession ? (

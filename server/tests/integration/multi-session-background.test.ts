@@ -626,7 +626,7 @@ describe('MultiSessionManager - Background Session Integration', () => {
       expect(mockSessionError.dispose).toHaveBeenCalled();
     });
 
-    it('should persist sessions regardless of age (no maxAge parameter)', async () => {
+    it('should unload idle sessions after timeout (15 minutes)', async () => {
       vi.useFakeTimers();
       
       const mockSession = createMockAgentSession({
@@ -635,26 +635,30 @@ describe('MultiSessionManager - Background Session Integration', () => {
       });
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
 
-      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast.broadcast);
+      // Create manager with disabled auto-cleanup to avoid timer interference
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast.broadcast, {
+        cleanupIntervalMs: 24 * 60 * 60 * 1000, // 24 hours (effectively disabled)
+        idleSessionTimeoutMs: 15 * 60 * 1000, // 15 minutes
+        enableMemoryMonitoring: false,
+      });
       
       await manager.subscribeClient('client-1', '/path/to/old.jsonl');
       manager.unsubscribeClient('client-1', '/path/to/old.jsonl');
       
-      // Advance time by 30 minutes
-      vi.advanceTimersByTime(30 * 60 * 1000);
+      // Advance time by 10 minutes - session should still be there
+      vi.advanceTimersByTime(10 * 60 * 1000);
       
-      // Cleanup should NOT remove the session (no maxAge parameter anymore)
-      const cleanedCount = manager.cleanupInactiveSessions();
-      expect(cleanedCount).toBe(0);
+      const cleanedCount1 = manager.cleanupInactiveSessions();
+      expect(cleanedCount1).toBe(0);
       expect(manager.hasSession('/path/to/old.jsonl')).toBe(true);
       
-      // Advance time by another hour
-      vi.advanceTimersByTime(60 * 60 * 1000);
+      // Advance time by another 10 minutes (total 20 minutes, exceeding 15 min timeout)
+      vi.advanceTimersByTime(10 * 60 * 1000);
       
-      // Still should NOT remove the session
+      // Now the session should be unloaded
       const cleanedCount2 = manager.cleanupInactiveSessions();
-      expect(cleanedCount2).toBe(0);
-      expect(manager.hasSession('/path/to/old.jsonl')).toBe(true);
+      expect(cleanedCount2).toBe(1);
+      expect(manager.hasSession('/path/to/old.jsonl')).toBe(false);
       
       vi.useRealTimers();
     });

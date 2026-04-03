@@ -52,9 +52,9 @@ export interface SessionStatusInfo {
 export interface MultiSessionManagerOptions {
   /** How often to check for idle sessions to cleanup (default: 60000ms = 1 minute) */
   cleanupIntervalMs?: number;
-  /** How long a session can be idle with no subscribers before cleanup (default: 1800000ms = 30 minutes) */
+  /** How long a session can be idle with no subscribers before cleanup (default: 900000ms = 15 minutes) */
   idleSessionTimeoutMs?: number;
-  /** Maximum number of sessions to keep in memory (default: 20) */
+  /** Maximum number of sessions to keep in memory (default: 10) */
   maxSessions?: number;
   /** Enable memory monitoring and logging (default: true) */
   enableMemoryMonitoring?: boolean;
@@ -107,8 +107,8 @@ export class MultiSessionManager {
     
     // Configure with defaults
     this.cleanupIntervalMs = options.cleanupIntervalMs ?? 60000; // 1 minute
-    this.idleSessionTimeoutMs = options.idleSessionTimeoutMs ?? 1800000; // 30 minutes
-    this.maxSessions = options.maxSessions ?? 20;
+    this.idleSessionTimeoutMs = options.idleSessionTimeoutMs ?? 900000; // 15 minutes
+    this.maxSessions = options.maxSessions ?? 10;
     this.enableMemoryMonitoring = options.enableMemoryMonitoring ?? true;
     
     // Start cleanup timer
@@ -223,29 +223,62 @@ export class MultiSessionManager {
   }
   
   /**
-   * Clean up sessions that are in error state with no subscribers.
-   * Note: Idle sessions now persist indefinitely (no timeout-based cleanup).
-   * Only errored sessions are cleaned up immediately when they have no subscribers.
+   * Clean up sessions that are idle with no subscribers.
+   * Sessions are unloaded from memory after idleTimeoutMs of inactivity.
+   * Also enforces maxSessions limit by unloading oldest idle sessions.
    */
   cleanupIdleSessions(): number {
+    const now = Date.now();
     let cleanedCount = 0;
     
+    // First pass: Clean up idle sessions that have exceeded timeout
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
-      // Skip sessions with subscribers
+      // Skip sessions with subscribers (someone is actively viewing)
       if (activeSession.subscribers.size > 0) {
+        continue;
+      }
+      
+      // Skip busy/streaming sessions
+      if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
         continue;
       }
       
       // Clean up errored sessions immediately
       if (activeSession.status === 'error') {
         console.log(`[MultiSessionManager] Cleaning up errored session: ${sessionPath}`);
-        this.disposeSession(sessionPath);
+        this.unloadSession(sessionPath);
+        cleanedCount++;
+        continue;
+      }
+      
+      // Clean up idle sessions after timeout
+      const idleTime = now - activeSession.lastActivity.getTime();
+      if (idleTime > this.idleSessionTimeoutMs) {
+        console.log(`[MultiSessionManager] Unloading idle session after ${Math.round(idleTime / 60000)}min: ${sessionPath}`);
+        this.unloadSession(sessionPath);
+        cleanedCount++;
+      }
+    }
+    
+    // Second pass: Enforce maxSessions limit by unloading oldest idle sessions
+    if (this.sessions.size > this.maxSessions) {
+      const sessionsToRemove = this.sessions.size - this.maxSessions;
+      
+      // Get idle sessions sorted by last activity (oldest first)
+      const idleSessions = Array.from(this.sessions.entries())
+        .filter(([_, s]) => s.status === 'idle' && s.subscribers.size === 0)
+        .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
+      
+      for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
+        const [sessionPath] = idleSessions[i];
+        console.log(`[MultiSessionManager] Unloading oldest idle session to enforce limit: ${sessionPath}`);
+        this.unloadSession(sessionPath);
         cleanedCount++;
       }
     }
     
     if (cleanedCount > 0) {
-      console.log(`[MultiSessionManager] Cleaned up ${cleanedCount} errored sessions, ${this.sessions.size} remaining`);
+      console.log(`[MultiSessionManager] Cleaned up ${cleanedCount} sessions, ${this.sessions.size} remaining`);
     }
     
     return cleanedCount;
@@ -294,6 +327,53 @@ export class MultiSessionManager {
         }
       }
     }
+  }
+
+  /**
+   * Unload a session from memory without deleting the session file.
+   * This is used for lazy session management - the session can be rehydrated later.
+   */
+  private unloadSession(sessionPath: string): void {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) return;
+    
+    // Dispose the agent session (this flushes to disk automatically)
+    try {
+      activeSession.agentSession.dispose();
+    } catch (error) {
+      console.error(`[MultiSessionManager] Error unloading session ${sessionPath}:`, error);
+    }
+    
+    // Remove event handler
+    this.piService.removeEventHandler(`multi-${sessionPath}`);
+    
+    // Remove from sessions map
+    this.sessions.delete(sessionPath);
+    
+    // Note: We intentionally do NOT clear client viewing references or subscriptions
+    // because the client might still be "viewing" the session in the UI,
+    // just not subscribed to events. When they click back, we'll rehydrate.
+  }
+
+  /**
+   * Evict the oldest idle session to make room for a new one.
+   * Returns true if a session was evicted, false if no idle sessions available.
+   */
+  private evictOldestIdleSession(): boolean {
+    // Get idle sessions sorted by last activity (oldest first)
+    const idleSessions = Array.from(this.sessions.entries())
+      .filter(([_, s]) => s.status === 'idle' && s.subscribers.size === 0)
+      .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
+    
+    if (idleSessions.length === 0) {
+      console.warn(`[MultiSessionManager] Cannot evict: no idle sessions available (${this.sessions.size} loaded)`);
+      return false;
+    }
+    
+    const [sessionPath] = idleSessions[0];
+    console.log(`[MultiSessionManager] Evicting oldest idle session: ${sessionPath}`);
+    this.unloadSession(sessionPath);
+    return true;
   }
 
   /**
@@ -393,8 +473,16 @@ export class MultiSessionManager {
     }
 
     if (!activeSession) {
-      // Create new session
-      console.log(`[MultiSessionManager] Creating new session for path: ${sessionPath}${cwd ? ` with cwd: ${cwd}` : ''}`);
+      // Session not in memory - need to rehydrate from disk
+      console.log(`[MultiSessionManager] Rehydrating session from disk: ${sessionPath}`);
+      
+      // Check if we're at capacity and need to make room
+      if (this.sessions.size >= this.maxSessions) {
+        console.log(`[MultiSessionManager] At capacity (${this.sessions.size}/${this.maxSessions}), unloading oldest idle session`);
+        this.evictOldestIdleSession();
+      }
+      
+      // Create/recreate the session
       const agentSession = await this.piService.createSession({
         clientId: `multi-${sessionPath}`,
         sessionPath,
@@ -419,6 +507,7 @@ export class MultiSessionManager {
       };
 
       this.sessions.set(sessionPath, activeSession);
+      console.log(`[MultiSessionManager] Session rehydrated: ${agentSession.sessionId}`);
     } else if (webUIContext) {
       // Update webUIContext if provided for existing session
       activeSession.webUIContext = webUIContext;

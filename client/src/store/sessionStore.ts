@@ -134,6 +134,9 @@ interface SessionState {
   messages: Message[];
   isStreaming: boolean;
   isLoading: boolean;
+  // Loading state for session switching (rehydration)
+  isSwitchingSession: boolean;
+  switchingToSessionId: string | null;
   error: string | null;
   extensionUIRequest: ExtensionUIRequest | null;
   sessionInfo: SessionStats | null;
@@ -173,6 +176,7 @@ interface SessionState {
   updateMessage: (id: string, updates: Partial<Message>) => void;
   setStreaming: (isStreaming: boolean) => void;
   setLoading: (isLoading: boolean) => void;
+  setSwitchingSession: (isSwitching: boolean, sessionId?: string | null) => void;
   setError: (error: string | null) => void;
   clearMessages: () => void;
   setExtensionUIRequest: (request: ExtensionUIRequest | null) => void;
@@ -221,6 +225,8 @@ export const useSessionStore = create<SessionState>()(
       messages: [],
       isStreaming: false,
       isLoading: false,
+      isSwitchingSession: false,
+      switchingToSessionId: null,
       error: null,
       extensionUIRequest: null,
       sessionInfo: null,
@@ -787,6 +793,10 @@ export const useSessionStore = create<SessionState>()(
         });
       },
       setLoading: (isLoading) => set({ isLoading }),
+      setSwitchingSession: (isSwitching, sessionId = null) => set({ 
+        isSwitchingSession: isSwitching, 
+        switchingToSessionId: isSwitching ? sessionId : null 
+      }),
       setError: (error) => set({ error }),
 
       clearMessages: () => set({ messages: [] }),
@@ -920,6 +930,9 @@ export const useSessionStore = create<SessionState>()(
                 sessionCache: newCache,
                 // If server says streaming, trust it
                 isStreaming: serverIsStreaming,
+                // Clear switching state when session is loaded
+                isSwitchingSession: false,
+                switchingToSessionId: null,
               };
             });
             
