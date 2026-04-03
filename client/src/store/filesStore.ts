@@ -51,9 +51,19 @@ export const useFilesStore = create<FilesState>((set, get) => ({
     try {
       set({ isLoading: true, error: null, selectedFile: null, previewContent: null });
       const result = await apiFetch(`/api/files/browse?path=${encodeURIComponent(path)}`);
-      const items: FileEntry[] = Array.isArray(result)
+      // Server returns { path, parent, items } where each item has `type: 'directory'|'file'`
+      const rawItems: Array<Record<string, unknown>> = Array.isArray(result)
         ? result
-        : (result.files || result.entries || []);
+        : (result.items || result.files || result.entries || []);
+      const items: FileEntry[] = rawItems.map((item) => ({
+        name: item.name as string,
+        path: item.path as string,
+        isDirectory: item.isDirectory === true || item.type === 'directory',
+        isSymlink: (item.isSymlink as boolean) ?? false,
+        size: (item.size as number) ?? 0,
+        modifiedAt: (item.modifiedAt as string) ?? '',
+        extension: item.extension as string | undefined,
+      }));
       set({ currentPath: path, items, isLoading: false });
     } catch (e) {
       set({ error: (e as Error).message, isLoading: false });
