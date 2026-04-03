@@ -1,5 +1,5 @@
-import { X, Info, FileText, Coins, Activity, MessageSquare, Cpu, FolderOpen } from 'lucide-react';
-import { useEffect } from 'react';
+import { X, Info, FileText, Coins, Activity, MessageSquare, Cpu, FolderOpen, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 
@@ -11,12 +11,38 @@ interface SessionInfoModalProps {
 export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
   const sessionInfo = useSessionStore((state) => state.sessionInfo);
   const { getSessionInfo } = useWebSocket();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
-      getSessionInfo();
+      setIsLoading(true);
+      setError(null);
+      
+      // Request session info with timeout
+      const timeoutId = setTimeout(() => {
+        setIsLoading(false);
+        setError('Request timed out. Please try again.');
+      }, 5000);
+      
+      try {
+        getSessionInfo();
+      } catch (err) {
+        setError('Failed to load session info');
+      }
+      
+      // Clear loading state when sessionInfo arrives
+      return () => clearTimeout(timeoutId);
     }
   }, [isOpen, getSessionInfo]);
+
+  // Update loading state when sessionInfo changes
+  useEffect(() => {
+    if (sessionInfo) {
+      setIsLoading(false);
+      setError(null);
+    }
+  }, [sessionInfo]);
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -53,10 +79,42 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
 
         {/* Content */}
         <div className="p-4 space-y-4">
-          {!sessionInfo ? (
+          {isLoading || !sessionInfo ? (
             <div className="text-center py-8 text-gray-400">
-              <Activity className="w-8 h-8 mx-auto mb-2 animate-pulse" />
-              Loading session info...
+              {error ? (
+                <>
+                  <Activity className="w-8 h-8 mx-auto mb-2 text-red-500" />
+                  <p className="text-red-500 text-sm mb-3">{error}</p>
+                  <button
+                    onClick={() => {
+                      setIsLoading(true);
+                      setError(null);
+                      try {
+                        getSessionInfo();
+                        // Set timeout again
+                        setTimeout(() => {
+                          if (!sessionInfo) {
+                            setIsLoading(false);
+                            setError('Request timed out. Please try again.');
+                          }
+                        }, 5000);
+                      } catch (err) {
+                        setError('Failed to load session info');
+                        setIsLoading(false);
+                      }
+                    }}
+                    className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2 mx-auto"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Retry
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Activity className="w-8 h-8 mx-auto mb-2 animate-pulse" />
+                  Loading session info...
+                </>
+              )}
             </div>
           ) : (
             <>

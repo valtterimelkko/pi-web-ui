@@ -1,4 +1,4 @@
-import { X, Settings2, AlertCircle } from 'lucide-react';
+import { X, Settings2, AlertCircle, RefreshCw } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -27,22 +27,43 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   useEffect(() => {
     if (!isOpen) return;
 
+    // Reset loading state when modal opens
+    setIsLoading(true);
+    setError(null);
+
     const fetchModels = async () => {
       try {
-        const response = await api.get('/api/models') as { models: Model[] };
+        // Add a timeout to prevent infinite loading (10 seconds)
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Request timeout')), 10000);
+        });
+        
+        const response = await Promise.race([
+          api.get('/api/models') as Promise<{ models: Model[] }>,
+          timeoutPromise
+        ]);
+        
         const modelList = response.models || [];
         setModels(modelList);
         const initialModel = storeCurrentModel || (modelList[0]?.id ?? '');
         setCurrentModel(initialModel);
       } catch (error) {
         console.error('Failed to fetch models:', error);
+        setError(error instanceof Error ? error.message : 'Failed to load models');
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchModels();
-  }, [isOpen, storeCurrentModel]);
+  }, [isOpen]); // Only depend on isOpen to prevent race conditions
+
+  // Update current model when storeCurrentModel changes (separate from fetch)
+  useEffect(() => {
+    if (storeCurrentModel && !currentModel) {
+      setCurrentModel(storeCurrentModel);
+    }
+  }, [storeCurrentModel, currentModel]);
 
   useEffect(() => {
     if (isOpen) {
@@ -121,7 +142,52 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           <section>
             <h3 className="text-sm font-medium text-gray-500 mb-3">Model</h3>
             {isLoading ? (
-              <div className="text-gray-400 text-sm">Loading models...</div>
+              <div className="flex items-center gap-2 text-gray-400 text-sm">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Loading models...
+              </div>
+            ) : error && models.length === 0 ? (
+              <div className="text-center py-4">
+                <p className="text-red-500 text-sm mb-3">{error}</p>
+                <button
+                  onClick={() => {
+                    setIsLoading(true);
+                    setError(null);
+                    // Re-trigger the effect by toggling isOpen temporarily
+                    const wasOpen = isOpen;
+                    if (wasOpen) {
+                      // Force refetch by resetting state
+                      setTimeout(() => {
+                        const fetchModels = async () => {
+                          try {
+                            const timeoutPromise = new Promise<never>((_, reject) => {
+                              setTimeout(() => reject(new Error('Request timeout')), 10000);
+                            });
+                            const response = await Promise.race([
+                              api.get('/api/models') as Promise<{ models: Model[] }>,
+                              timeoutPromise
+                            ]);
+                            const modelList = response.models || [];
+                            setModels(modelList);
+                            const initialModel = storeCurrentModel || (modelList[0]?.id ?? '');
+                            setCurrentModel(initialModel);
+                          } catch (err) {
+                            console.error('Failed to fetch models:', err);
+                            setError(err instanceof Error ? err.message : 'Failed to load models');
+                          } finally {
+                            setIsLoading(false);
+                          }
+                        };
+                        fetchModels();
+                      }, 0);
+                    }
+                  }}
+                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2 mx-auto"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Retry
+                </button>
+              </div>
             ) : (
               <ModelSelector
                 models={models}
