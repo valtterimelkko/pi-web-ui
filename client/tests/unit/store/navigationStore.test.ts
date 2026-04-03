@@ -34,4 +34,25 @@ describe('navigationStore', () => {
     setIsMobile(true);
     expect(useNavigationStore.getState().isMobile).toBe(true);
   });
+
+  it('should have bottomNavCollapsed as false by default', () => {
+    const { bottomNavCollapsed } = useNavigationStore.getState();
+    expect(bottomNavCollapsed).toBe(false);
+  });
+
+  it('should toggle bottomNavCollapsed', () => {
+    const { toggleBottomNav } = useNavigationStore.getState();
+    toggleBottomNav();
+    expect(useNavigationStore.getState().bottomNavCollapsed).toBe(true);
+    toggleBottomNav();
+    expect(useNavigationStore.getState().bottomNavCollapsed).toBe(false);
+  });
+
+  it('should set bottomNavCollapsed directly', () => {
+    const { setBottomNavCollapsed } = useNavigationStore.getState();
+    setBottomNavCollapsed(true);
+    expect(useNavigationStore.getState().bottomNavCollapsed).toBe(true);
+    setBottomNavCollapsed(false);
+    expect(useNavigationStore.getState().bottomNavCollapsed).toBe(false);
+  });
 });

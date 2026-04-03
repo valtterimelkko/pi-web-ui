@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useSessionStore } from '../../store';
+import { useNavigationStore } from '../../store/navigationStore';
 import { VirtualizedMessageList, type VirtualizedMessageListHandle } from './VirtualizedMessageList';
 import { MessageInput } from './MessageInput';
 import { TreeView, type TreeEntry } from '../Tree';
@@ -19,6 +20,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const isLoading = useSessionStore((state) => state.isLoading);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
+  const bottomNavCollapsed = useNavigationStore((state) => state.bottomNavCollapsed);
   const [showTreeView, setShowTreeView] = useState(false);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [showSessionInfo, setShowSessionInfo] = useState(false);
@@ -89,7 +91,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         )}
 
         {/* Message Input */}
-        <div className="bg-white pb-safe flex-shrink-0">
+        <div className={`bg-white pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[70px]' : ''}`}>
           <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
             <MessageInput disabled={!currentSessionId || isLoading} onOpenSettings={onOpenSettings} />
           </div>
