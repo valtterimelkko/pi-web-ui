@@ -2,3 +2,4 @@ export { useSessionStore, type Session, type Message, type SessionStats, type Wo
 export { useChatStore } from './chatStore';
 export { useUIStore } from './uiStore';
 export { useDraftStore, type DraftStore } from './draftStore';
+export { useNavigationStore } from './navigationStore';

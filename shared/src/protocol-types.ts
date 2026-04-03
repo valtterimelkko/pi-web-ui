@@ -53,6 +53,69 @@ export interface SessionEventEnvelope {
   event: NormalizedEvent;
 }
 
+// Git types
+export interface GitFileStatus {
+  path: string;
+  staged: boolean;
+  status: string; // 'M' | 'A' | 'D' | 'R' | '?' | '!'
+  stagedStatus?: string;
+}
+
+export interface GitStatus {
+  isRepo: boolean;
+  branch: string;
+  ahead: number;
+  behind: number;
+  staged: GitFileStatus[];
+  unstaged: GitFileStatus[];
+  untracked: GitFileStatus[];
+}
+
+export interface GitBranch {
+  name: string;
+  isCurrent: boolean;
+  isRemote: boolean;
+  lastCommit?: string;
+}
+
+export interface GitLogEntry {
+  hash: string;
+  shortHash: string;
+  message: string;
+  author: string;
+  date: string;
+  refs: string;
+}
+
+export interface GitDiff {
+  file: string;
+  content: string;
+  additions: number;
+  deletions: number;
+}
+
+// Terminal types
+export interface TerminalSessionInfo {
+  clientId: string;
+  cwd: string;
+  pid: number;
+  cols: number;
+  rows: number;
+  createdAt: number;
+  lastActivity: number;
+}
+
+// Enhanced file entry
+export interface FileEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  isSymlink: boolean;
+  size: number;
+  modifiedAt: string;
+  extension?: string;
+}
+
 // Pool statistics
 export interface WorkerPoolStats {
   active: number;
