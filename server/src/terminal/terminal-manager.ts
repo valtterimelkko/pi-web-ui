@@ -1,8 +1,14 @@
 import { EventEmitter } from 'events';
 
-// Try to import node-pty, use mock if not available
-let pty: typeof import('node-pty') | null = null;
+// node-pty is optional – gracefully degrade when not installed
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type NodePty = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type IPty = any;
+
+let pty: NodePty | null = null;
 try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   pty = require('node-pty');
 } catch {
   console.warn('[TerminalManager] node-pty not available, terminal feature disabled');
@@ -15,7 +21,7 @@ interface TerminalSession {
   rows: number;
   createdAt: number;
   lastActivity: number;
-  process: import('node-pty').IPty;
+  process: IPty;
   emitter: EventEmitter;
 }
 
@@ -64,13 +70,13 @@ export class TerminalManager {
 
     this.terminals.set(clientId, session);
 
-    process_.onData((data) => {
+    process_.onData((data: string) => {
       session.lastActivity = Date.now();
       this.resetIdleTimer(clientId);
       emitter.emit('data', data);
     });
 
-    process_.onExit(({ exitCode, signal }) => {
+    process_.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => {
       emitter.emit('exit', { exitCode, signal });
       this.terminals.delete(clientId);
       this.clearIdleTimer(clientId);
