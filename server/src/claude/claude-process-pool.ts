@@ -10,14 +10,12 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { ClaudeEventNormalizer } from './claude-event-normalizer.js';
 
 export interface ClaudeProcessOptions {
-  /** Our internal session UUID */
   sessionId: string;
-  /** Claude Code's --session-id for conversation continuity */
   claudeSessionId: string;
   cwd: string;
-  /** Model shorthand accepted by the claude CLI, e.g. 'sonnet', 'opus', 'haiku' */
   model: string;
   prompt: string;
+  isFollowUp?: boolean;
 }
 
 export type ClaudeEventHandler = (event: NormalizedEvent) => void;

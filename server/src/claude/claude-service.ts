@@ -195,8 +195,18 @@ export class ClaudeService {
         prompt,
         isFollowUp,
       },
-      // onEvent: persist interesting events and forward to caller
+      // onEvent: persist interesting events, capture confirmed session_id, and forward to caller
       async (event: NormalizedEvent) => {
+        // On first turn, capture the session_id Claude actually used so --resume targets it correctly
+        if (event.type === 'session_init' && !this.sessionsWithHistory.has(sessionId)) {
+          const confirmedSid = (event.data as Record<string, unknown>)?.sessionId as string | undefined;
+          if (confirmedSid && confirmedSid !== entry.claudeSessionId) {
+            console.log(`[ClaudeService] Updating claudeSessionId for ${sessionId}: ${entry.claudeSessionId} → ${confirmedSid}`);
+            await this.registry.upsert({ id: sessionId, sdkType: 'claude', cwd: entry.cwd, claudeSessionId: confirmedSid });
+            // Mutate entry so onComplete and future sends use the confirmed id
+            entry.claudeSessionId = confirmedSid;
+          }
+        }
         try {
           await this.persistEvent(sessionId, event);
         } catch (persistErr) {
