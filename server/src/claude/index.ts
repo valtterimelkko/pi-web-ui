@@ -5,3 +5,4 @@ export type { ClaudeProcessOptions, ClaudeEventHandler, ActiveProcess } from './
 export { ClaudeEventNormalizer } from './claude-event-normalizer.js';
 export { ClaudeSessionStore } from './claude-session-store.js';
 export type { ClaudeMessageEntry } from './claude-session-store.js';
+export { claudeEntryToEvent, historyToReplayEvents } from './claude-history-replay.js';

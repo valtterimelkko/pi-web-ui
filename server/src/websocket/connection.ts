@@ -835,17 +835,56 @@ export class WebSocketConnectionManager {
   private async replayClaudeHistory(clientId: string, sessionId: string): Promise<void> {
     const registry = getSessionRegistry();
     const entry = await registry.get(sessionId);
+    if (!entry) {
+      this.sendMessage(clientId, { type: 'error', message: 'Claude session not found', code: 'SESSION_NOT_FOUND' } as unknown as ServerMessage);
+      return;
+    }
 
+    // Send session_switched first
     this.sendMessage(clientId, {
       type: 'session_switched',
       sessionId,
       sessionPath: sessionId,
       sdkType: 'claude',
-      model: entry?.model ?? 'sonnet',
+      model: entry.model ?? 'sonnet',
       messages: [],
       fileTimestamp: 0,
       isStreaming: this.claudeService.isRunning(sessionId),
     } as unknown as ServerMessage);
+
+    // Load and replay history
+    try {
+      const { ClaudeSessionStore } = await import('../claude/claude-session-store.js');
+      const { historyToReplayEvents } = await import('../claude/claude-history-replay.js');
+      const { config: cfg } = await import('../config.js');
+
+      const store = new ClaudeSessionStore(cfg.claudeSessionDir);
+      const history = await store.loadHistory(sessionId);
+
+      if (history.length === 0) {
+        // Empty session, nothing to replay
+        return;
+      }
+
+      // Send history_start signal
+      this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
+
+      // Send each event as a session_event
+      const events = historyToReplayEvents(history);
+      for (const evt of events) {
+        this.sendMessage(clientId, {
+          type: 'session_event',
+          sessionId,
+          event: evt,
+        } as unknown as ServerMessage);
+      }
+
+      // Send history_end signal
+      this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
+    } catch (error) {
+      console.error(`[replayClaudeHistory] Error replaying history for ${sessionId}:`, error);
+      // Non-fatal: client will have empty history
+    }
   }
 
   /**
@@ -1271,8 +1310,31 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'subscribe_session'; sessionPath: string }
   ): Promise<void> {
+    const sessionPath = message.sessionPath;
+
+    // Check if this is a Claude session
+    let isClaudeSession = this.claudeSessionIds.has(sessionPath);
+    if (!isClaudeSession) {
+      try {
+        const registry = getSessionRegistry();
+        const entry = await registry.get(sessionPath).catch(() => undefined);
+        if (entry?.sdkType === 'claude') {
+          isClaudeSession = true;
+          this.claudeSessionIds.add(sessionPath);
+        }
+      } catch {
+        // Ignore registry lookup errors
+      }
+    }
+
+    if (isClaudeSession) {
+      this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+      await this.replayClaudeHistory(clientId, sessionPath);
+      return;
+    }
+
     try {
-      const status = await this.multiSessionManager.subscribeClient(clientId, message.sessionPath);
+      const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath);
 
       this.sendMessage(clientId, {
         type: 'session_subscribed',

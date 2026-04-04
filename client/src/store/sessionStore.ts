@@ -1625,6 +1625,20 @@ export const useSessionStore = create<SessionState>()(
             break;
           }
 
+          case 'history_start': {
+            const histStartMsg = msg as unknown as { sessionId: string };
+            // Clear existing messages for this session to prepare for replay
+            get().clearSessionMessages(histStartMsg.sessionId);
+            break;
+          }
+
+          case 'history_end': {
+            const histEndMsg = msg as unknown as { sessionId: string };
+            // Replay complete — set session to idle
+            get().setSessionStatus(histEndMsg.sessionId, 'idle');
+            break;
+          }
+
           case 'session_status': {
             const statusMsg = msg as unknown as {
               sessionId: string;
