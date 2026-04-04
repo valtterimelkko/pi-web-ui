@@ -74,7 +74,10 @@ export class ClaudeProcessPool {
       {
         cwd: options.cwd,
         env: claudeEnv,
-        stdio: ['pipe', 'pipe', 'pipe'],
+        // Explicitly ignore stdin so Claude CLI does not keep waiting for input.
+        // Leaving stdin open can keep the process alive and make the next turn fail
+        // with "Session ID ... is already in use".
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
 
