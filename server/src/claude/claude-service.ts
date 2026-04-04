@@ -45,7 +45,7 @@ export class ClaudeService {
    */
   async validateAuth(): Promise<ClaudeAuthStatus> {
     try {
-      const result = execSync('claude auth status --output-format json', {
+      const result = execSync('claude auth status --json', {
         encoding: 'utf-8',
         timeout: 5000,
       });

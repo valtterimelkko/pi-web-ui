@@ -48,7 +48,7 @@ function isClaudeAvailable(): boolean {
   try {
     execSync('which claude', { timeout: 2000, stdio: 'pipe' });
     // The server runs exactly this command; if it throws, claudeAvailable = false
-    const result = execSync('claude auth status --output-format json', {
+    const result = execSync('claude auth status --json', {
       encoding: 'utf-8',
       timeout: 5000,
       stdio: 'pipe',
