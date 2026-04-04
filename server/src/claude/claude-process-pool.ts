@@ -70,7 +70,11 @@ export class ClaudeProcessPool {
         '--verbose',
         '--permission-mode', 'acceptEdits',
         '--model', options.model,
-        '--session-id', options.claudeSessionId,
+        // First turn: --session-id creates the session.
+        // Follow-up turns: --resume avoids the session lock conflict.
+        ...(options.isFollowUp
+          ? ['--resume', options.claudeSessionId]
+          : ['--session-id', options.claudeSessionId]),
       ],
       {
         cwd: options.cwd,

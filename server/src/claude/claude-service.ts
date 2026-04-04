@@ -34,6 +34,8 @@ export class ClaudeService {
   private processPool: ClaudeProcessPool;
   private sessionStore: ClaudeSessionStore;
   private registry: SessionRegistryManager;
+  /** Track sessions that have completed at least one turn */
+  private sessionsWithHistory: Set<string> = new Set();
 
   constructor(cfg: {
     claudeSessionDir: string;
@@ -179,6 +181,10 @@ export class ClaudeService {
       onEvent(agentStartEvent);
     } catch { /* non-fatal */ }
 
+    // Check if this session has had a previous turn (for --resume vs --session-id)
+    const isFollowUp = this.sessionsWithHistory.has(sessionId)
+      || (entry.messageCount != null && entry.messageCount > 0);
+
     // Spawn the process
     await this.processPool.spawn(
       {
@@ -187,6 +193,7 @@ export class ClaudeService {
         cwd: entry.cwd,
         model: entry.model ?? 'sonnet',
         prompt,
+        isFollowUp,
       },
       // onEvent: persist interesting events and forward to caller
       async (event: NormalizedEvent) => {
@@ -201,6 +208,10 @@ export class ClaudeService {
       },
       // onComplete
       async (error?: Error) => {
+        // Mark session as having history so future turns use --resume
+        if (!error) {
+          this.sessionsWithHistory.add(sessionId);
+        }
         try {
           await this.registry.updateStatus(sessionId, error ? 'error' : 'idle');
           // Update lastActivity
