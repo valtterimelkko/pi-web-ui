@@ -190,6 +190,14 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
           <p className="text-sm text-gray-900 truncate flex-1">
             {displayName}
           </p>
+          {session.sdkType === 'claude' && (
+            <span 
+              className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20 cursor-help"
+              title="Claude Direct - uses Claude Code CLI with subscription quota"
+            >
+              CC
+            </span>
+          )}
 
           <div className="flex items-center gap-1 flex-shrink-0">
             {/* Actions: hover on desktop; always visible for active session */}

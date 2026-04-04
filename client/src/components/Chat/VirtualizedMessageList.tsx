@@ -185,7 +185,17 @@ function getSkillContentInfo(message: LiveMessage): { isSkillContent: boolean; s
   return { isSkillContent: false };
 }
 
-// Toggle shown above a group of 3+ consecutive tool cards
+/**
+ * Tool names that should be visible as cards in the message list.
+ * Includes both Pi SDK names (lowercase) and Claude SDK equivalents (PascalCase).
+ */
+const VISIBLE_TOOL_NAMES = new Set([
+  // Pi SDK names
+  'subagent', 'read', 'todo',
+  // Claude SDK equivalents (PascalCase)
+  'Agent', 'Task', 'Read', 'TodoWrite', 'TodoRead',
+]);
+
 function ToolGroupToggle({
   size,
   isExpanded,
@@ -265,17 +275,15 @@ export const VirtualizedMessageList = forwardRef<
   // Show user + assistant messages with skill content transformation
   // Skill content (from /skill:name commands) is transformed to show a brief placeholder
   // instead of the full verbose content. This preserves message context while keeping UI clean.
-  // EXCEPTION: subagent tool calls are shown with hierarchical display like CLI.
-  // EXCEPTION: read tool calls are shown for skill-loading visibility (clean Kimi-style)
-  // EXCEPTION: todo tool calls are shown with visual todo list display
+  // EXCEPTION: subagent / Agent / Task tool calls are shown with hierarchical display like CLI.
+  // EXCEPTION: read / Read tool calls are shown for skill-loading visibility.
+  // EXCEPTION: todo / TodoWrite / TodoRead tool calls are shown with visual todo list display.
   const visibleMessages = useMemo(() =>
     messages
       .filter(m =>
         m.role === 'user' ||
         m.role === 'assistant' ||
-        (m.role === 'tool' && m.toolCall?.name === 'subagent') ||
-        (m.role === 'tool' && m.toolCall?.name === 'read') ||
-        (m.role === 'tool' && m.toolCall?.name === 'todo')
+        (m.role === 'tool' && !!m.toolCall?.name && VISIBLE_TOOL_NAMES.has(m.toolCall.name))
       )
       .map(m => {
         // Transform skill content to brief placeholder

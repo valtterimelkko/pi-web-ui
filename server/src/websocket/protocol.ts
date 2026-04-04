@@ -87,7 +87,7 @@ export type ClientMessage =
   | { type: 'steer'; message: string }
   | { type: 'follow_up'; message: string }
   | { type: 'abort' }
-  | { type: 'new_session'; cwd?: string }
+  | { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' }
   | { type: 'switch_session'; sessionPath: string }
   | { type: 'get_sessions'; cwd?: string }
   | { type: 'get_session_tree'; sessionId: string }
@@ -195,7 +195,8 @@ export type ServerMessage =
   // CLI Session Watcher events
   | { type: 'session_update'; changeType: 'add' | 'change' | 'unlink'; path: string; sessionId?: string; cwd?: string; info?: SessionInfo }
   | { type: 'session_name_updated'; sessionId: string; name: string }
-  | { type: 'session_name_changed'; sessionId: string; name: string };
+  | { type: 'session_name_changed'; sessionId: string; name: string }
+  | { type: 'claude_available'; available: boolean; error: string | null };
 
 // Message type guards
 export function isClientMessage(data: unknown): data is ClientMessage {

@@ -137,8 +137,77 @@ The session registry is a JSON file (`~/.pi-web-ui/session-registry.json`) that 
 
 This is our own format for replay — NOT Claude Code's internal session format.
 
+**CRITICAL: Authentication — Subscription Auth, NOT API Key**
+
+The entire point of Claude Direct is to use the Claude subscription's normal quota (not extra use, not pay-per-use API). This requires specific auth handling:
+
+1. **Claude Code must be installed and authenticated via `claude auth login`** (subscription login, NOT API key). The Web UI server checks this on startup by running `claude auth status --output-format json` and parsing the result.
+
+2. **The subprocess MUST NOT have `ANTHROPIC_API_KEY` set.** If this env var is present, Claude Code will use the API key (pay-per-use) instead of the subscription. The spawn call **explicitly strips this variable**:
+
+```typescript
+// Build env WITHOUT ANTHROPIC_API_KEY to force subscription auth
+const claudeEnv = { ...process.env };
+delete claudeEnv.ANTHROPIC_API_KEY;  // CRITICAL: forces subscription login auth
+delete claudeEnv.ANTHROPIC_AUTH_TOKEN;  // Also remove if present
+```
+
+3. **Auth is inherited from `~/.claude/`** — Claude Code stores its subscription credentials there after `claude auth login`. The subprocess reads them automatically. No tokens/keys are passed from the Web UI.
+
+4. **Runtime verification:** Every Claude response includes a `rate_limit_event` in the stream-json output. The `ClaudeEventNormalizer` MUST check this and warn if `isUsingOverage: true` unexpectedly:
+
+```typescript
+// In claude-event-normalizer.ts
+if (event.type === 'rate_limit_event') {
+  const info = event.rate_limit_info;
+  // Log and surface to UI
+  if (info.isUsingOverage) {
+    console.warn('[ClaudeService] Session using OVERAGE — check auth config');
+  }
+  return {
+    type: 'rate_limit',
+    data: {
+      status: info.status,
+      rateLimitType: info.rateLimitType,  // 'five_hour' or 'weekly'
+      isUsingOverage: info.isUsingOverage,
+      resetsAt: info.resetsAt,
+      overageResetsAt: info.overageResetsAt,
+    }
+  };
+}
+```
+
+5. **Startup validation in `claude-service.ts`:**
+
+```typescript
+async validateAuth(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const result = execSync('claude auth status --output-format json', {
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+    const status = JSON.parse(result);
+    if (!status.loggedIn) {
+      return { ok: false, error: 'Claude Code not logged in. Run: claude auth login' };
+    }
+    if (status.apiProvider !== 'firstParty') {
+      return { ok: false, error: `Claude Code using ${status.apiProvider} provider, not subscription. Run: claude auth login` };
+    }
+    // status.subscriptionType should be 'pro', 'team', or 'enterprise'
+    console.log(`[ClaudeService] Auth OK: ${status.email}, plan: ${status.subscriptionType}`);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: 'Claude Code not installed or auth check failed' };
+  }
+}
+```
+
 **Subprocess invocation:**
 ```typescript
+const claudeEnv = { ...process.env };
+delete claudeEnv.ANTHROPIC_API_KEY;       // Force subscription auth
+delete claudeEnv.ANTHROPIC_AUTH_TOKEN;    // Force subscription auth
+
 const proc = spawn('claude', [
   '-p', prompt,
   '--output-format', 'stream-json',
@@ -147,7 +216,7 @@ const proc = spawn('claude', [
   '--model', modelAlias,     // e.g. 'sonnet' or 'opus'
   '--session-id', sessionId, // resume context
   '--cwd', cwd,
-], { env: { ...process.env } });  // inherits Claude Code auth from ~/.claude/
+], { env: claudeEnv });  // Subscription auth from ~/.claude/ — NO API key
 ```
 
 **Abort handling:** Send SIGTERM to the subprocess, same as Pi's abort pattern.
@@ -546,10 +615,12 @@ docs(dual-sdk): Module 11 - README and AGENTS.md updates
 - **Behaviour:** If not found, hide "Claude Direct" option in NewSessionModal, log warning
 - **Test:** Unit test for detection + UI test for hidden option
 
-### Edge Case 2: Claude Code Not Authenticated
-- **Detection:** Run `claude auth status --output-format json` on startup
-- **Behaviour:** If not logged in, show "Claude Direct" as disabled with tooltip "Claude Code not authenticated — run `claude auth login`"
-- **Test:** Unit test with mock auth status
+### Edge Case 2: Claude Code Not Authenticated or Wrong Auth
+- **Detection:** `ClaudeService.validateAuth()` on startup checks `claude auth status --output-format json`
+- **Check 1 — Not logged in:** `loggedIn: false` → disable "Claude Direct" option, tooltip: "Run `claude auth login`"
+- **Check 2 — Wrong provider:** `apiProvider !== 'firstParty'` → disable, tooltip: "Claude Code using API key, not subscription. Run `claude auth login`"
+- **Check 3 — `ANTHROPIC_API_KEY` in env:** If this env var exists on the server process, log a warning: "ANTHROPIC_API_KEY detected — Claude Direct sessions strip this to force subscription auth"
+- **Test:** Unit tests for all three conditions with mocked `execSync`
 
 ### Edge Case 3: Claude Process Crash Mid-Response
 - **Detection:** Subprocess exit code ≠ 0
@@ -590,7 +661,13 @@ docs(dual-sdk): Module 11 - README and AGENTS.md updates
 - **Claude models:** Hardcoded list: `opus`, `sonnet`, `haiku` (+ version variants from `claude --help`)
 - **Test:** Unit test for model filtering
 
-### Edge Case 10: Slash Commands Conflict
+### Edge Case 10: ANTHROPIC_API_KEY Leaking Into Claude Subprocess
+- **Risk:** If `ANTHROPIC_API_KEY` is set in the server's env (e.g., for other services), it could leak into the Claude subprocess and cause pay-per-use billing instead of subscription.
+- **Mitigation:** `ClaudeProcessPool.spawn()` explicitly deletes `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the subprocess env (see Module 1 auth section).
+- **Verification:** The `rate_limit_event` in every response confirms `rateLimitType: 'five_hour'` (subscription) vs absence of rate limit info (API key). If no `rate_limit_event` is received, the normalizer logs a warning.
+- **Test:** Unit test that verifies env stripping in spawn; unit test that warns on missing rate_limit_event.
+
+### Edge Case 11: Slash Commands Conflict
 - **Existing Pi commands:** `/compact`, `/plan`, `/approve`, `/a`, `/modify`, `/m`, `/todos`, `/worktrees`, `/orchestrate`, `/merge`, `/abort-worktree`, `/webtools-clear-cache`
 - **Claude Code built-in commands:** `/compact`, `/context`, `/cost`, `/init`, `/review`, `/security-review`, `/extra-usage`, `/insights`, plus 115+ skill commands
 - **Conflict:** `/compact` exists in both

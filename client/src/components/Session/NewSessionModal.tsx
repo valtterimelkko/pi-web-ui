@@ -2,11 +2,12 @@ import { useState, useEffect, useRef } from 'react';
 import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog, ArrowUp, History, ChevronDown, ChevronUp, Star } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useUIStore } from '../../store/uiStore';
+import { useSessionStore } from '../../store';
 
 interface NewSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreateSession: (cwd?: string) => void;
+  onCreateSession: (cwd?: string, sdkType?: 'pi' | 'claude') => void;
 }
 
 interface DirectoryItem {
@@ -23,9 +24,11 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   const [error, setError] = useState<string | null>(null);
   const [showRecentFolders, setShowRecentFolders] = useState(true);
   const [pathInput, setPathInput] = useState('/root');
+  const [sdkType, setSdkType] = useState<'pi' | 'claude'>('pi');
   const recentDropdownRef = useRef<HTMLDivElement>(null);
 
   const { recentFolders, addRecentFolder, getRecentFolders } = useUIStore();
+  const { claudeAvailable, claudeAuthError } = useSessionStore();
   const topRecentFolders = getRecentFolders(8);
 
   const fetchDirectories = async (path: string) => {
@@ -100,7 +103,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(currentPath);
-    onCreateSession(currentPath);
+    onCreateSession(currentPath, sdkType);
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -108,7 +111,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(path);
-    onCreateSession(path);
+    onCreateSession(path, sdkType);
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -123,7 +126,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
     e.stopPropagation();
     setIsCreating(true);
     addRecentFolder(path);
-    onCreateSession(path);
+    onCreateSession(path, sdkType);
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -158,6 +161,44 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
           >
             <X className="w-5 h-5 text-gray-400" />
           </button>
+        </div>
+
+        {/* SDK Type Selector */}
+        <div className="px-4 pt-3 pb-2 border-b border-gray-200">
+          <p className="text-xs font-medium text-slate-400 mb-2">Session Type</p>
+          <div className="grid grid-cols-2 gap-2">
+            {/* Pi SDK option */}
+            <button
+              onClick={() => setSdkType('pi')}
+              className={`flex flex-col items-start p-3 rounded-lg border text-left transition-colors ${
+                sdkType === 'pi'
+                  ? 'border-violet-500 bg-violet-500/10 text-slate-100'
+                  : 'border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-600'
+              }`}
+            >
+              <span className="text-sm font-medium">Pi SDK</span>
+              <span className="text-xs text-slate-400 mt-0.5">All providers • Extensions</span>
+            </button>
+
+            {/* Claude Direct option */}
+            <button
+              onClick={() => claudeAvailable && setSdkType('claude')}
+              disabled={!claudeAvailable}
+              title={claudeAuthError || undefined}
+              className={`flex flex-col items-start p-3 rounded-lg border text-left transition-colors ${
+                !claudeAvailable
+                  ? 'border-slate-700 bg-slate-800/30 text-slate-500 cursor-not-allowed'
+                  : sdkType === 'claude'
+                  ? 'border-violet-500 bg-violet-500/10 text-slate-100'
+                  : 'border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-600'
+              }`}
+            >
+              <span className="text-sm font-medium">Claude Direct</span>
+              <span className="text-xs text-slate-400 mt-0.5">
+                {claudeAvailable ? 'Subscription quota • CC tools' : (claudeAuthError || 'Not available')}
+              </span>
+            </button>
+          </div>
         </div>
 
         {/* Recent Folders Section */}

@@ -1,4 +1,4 @@
-import { X, Info, FileText, Coins, Activity, MessageSquare, Cpu, FolderOpen, RefreshCw } from 'lucide-react';
+import { X, Info, FileText, Coins, Activity, MessageSquare, Cpu, FolderOpen, RefreshCw, Box } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -10,6 +10,11 @@ interface SessionInfoModalProps {
 
 export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
   const sessionInfo = useSessionStore((state) => state.sessionInfo);
+  const currentSessionId = useSessionStore((state) => state.currentSessionId);
+  const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
+  const sessionData = useSessionStore((state) => state.sessionData);
+  const isClaudeSession = currentSessionSdkType === 'claude';
+  const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo : null;
   const { getSessionInfo } = useWebSocket();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -140,6 +145,33 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                 </p>
               </div>
 
+              {/* Session Type */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-gray-500 text-sm">
+                  <Box className="w-4 h-4" />
+                  <span>Session Type</span>
+                </div>
+                <div className="pl-6">
+                  {isClaudeSession ? (
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200">
+                        CC
+                      </span>
+                      <span className="text-sm text-gray-900">Claude Direct</span>
+                      <span className="text-xs text-gray-400">(Claude Code CLI)</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-violet-100 text-violet-700 border border-violet-200">
+                        π
+                      </span>
+                      <span className="text-sm text-gray-900">Pi SDK</span>
+                      <span className="text-xs text-gray-400">(Full extensions & providers)</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* Model */}
               {sessionInfo.model && (
                 <div className="space-y-2">
@@ -257,6 +289,31 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                   </div>
                 </div>
               </div>
+
+              {/* Claude quota info */}
+              {isClaudeSession && quotaInfo && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                    <Activity className="w-4 h-4" />
+                    <span>Claude Quota</span>
+                  </div>
+                  <div className="pl-6 flex items-center gap-2">
+                    <span className={`text-sm font-medium ${
+                      quotaInfo.isUsingOverage ? 'text-amber-500' : 'text-green-600'
+                    }`}>
+                      {quotaInfo.isUsingOverage ? '⚠ Extra use' : '✓ Subscription'}
+                    </span>
+                    {quotaInfo.rateLimitType && (
+                      <span className="text-xs text-gray-400">{quotaInfo.rateLimitType}</span>
+                    )}
+                  </div>
+                  {quotaInfo.resetsAt && (
+                    <p className="text-xs text-gray-400 pl-6">
+                      Resets: {new Date(quotaInfo.resetsAt * 1000).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Session ID */}
               <div className="pt-2 border-t border-gray-200">

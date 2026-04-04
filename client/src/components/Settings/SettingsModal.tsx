@@ -1,10 +1,26 @@
-import { X, Settings2, AlertCircle, RefreshCw } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { X, Settings2, AlertCircle, RefreshCw, Info } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
 import { api } from '../../lib/api';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { useSessionStore } from '../../store';
 import { ModelSelector, type Model } from './ModelSelector';
 import { ThinkingLevelSelector, type ThinkingLevel } from './ThinkingLevelSelector';
+
+// Claude models for Claude Direct sessions
+const CLAUDE_MODELS: Model[] = [
+  { id: 'opus', name: 'Claude Opus', provider: 'anthropic', contextWindow: 200000, maxTokens: 64000, description: 'Most powerful Claude model for complex tasks' },
+  { id: 'sonnet', name: 'Claude Sonnet', provider: 'anthropic', contextWindow: 200000, maxTokens: 64000, description: 'Balanced performance and speed' },
+  { id: 'haiku', name: 'Claude Haiku', provider: 'anthropic', contextWindow: 200000, maxTokens: 64000, description: 'Fastest Claude model for simple tasks' },
+];
+
+function normalizeClaudeModelId(modelId: string | null): 'opus' | 'sonnet' | 'haiku' | null {
+  if (!modelId) return null;
+  const lower = modelId.toLowerCase();
+  if (lower.includes('opus')) return 'opus';
+  if (lower.includes('haiku')) return 'haiku';
+  if (lower.includes('sonnet') || lower.includes('default')) return 'sonnet';
+  return null;
+}
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -22,8 +38,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { setModel } = useWebSocket();
   const storeCurrentModel = useSessionStore((state) => state.currentModel);
   const errorMessage = useSessionStore((state) => state.error);
+  const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
+  
+  // Check if current session is a Claude Direct session
+  const isClaudeSession = useMemo(() => currentSessionSdkType === 'claude', [currentSessionSdkType]);
 
-  // Fetch models on mount
+  // Fetch models on mount (or use Claude models for Claude sessions)
   useEffect(() => {
     if (!isOpen) return;
 
@@ -33,6 +53,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
     const fetchModels = async () => {
       try {
+        // For Claude sessions, use hardcoded Claude models
+        if (isClaudeSession) {
+          setModels(CLAUDE_MODELS);
+          // Default to sonnet if no model selected, or normalize any prior Claude model id
+          const normalizedCurrent = normalizeClaudeModelId(storeCurrentModel);
+          const validModel = CLAUDE_MODELS.find(m => m.id === normalizedCurrent);
+          setCurrentModel(validModel?.id || 'sonnet');
+          setIsLoading(false);
+          return;
+        }
+        
         // Add a timeout to prevent infinite loading (10 seconds)
         const timeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => reject(new Error('Request timeout')), 10000);
@@ -56,7 +87,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     };
 
     fetchModels();
-  }, [isOpen]); // Only depend on isOpen to prevent race conditions
+  }, [isOpen, isClaudeSession]); // Depend on isOpen and isClaudeSession
 
   // Update current model when storeCurrentModel changes (separate from fetch)
   useEffect(() => {
@@ -140,7 +171,20 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
           {/* Model Selection */}
           <section>
-            <h3 className="text-sm font-medium text-gray-500 mb-3">Model</h3>
+            <h3 className="text-sm font-medium text-gray-500 mb-3">
+              Model
+              {isClaudeSession && (
+                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 border border-amber-200">
+                  Claude Direct
+                </span>
+              )}
+            </h3>
+            {isClaudeSession && (
+              <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
+                <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>Claude Direct sessions only support Claude models (Opus, Sonnet, Haiku).</span>
+              </div>
+            )}
             {isLoading ? (
               <div className="flex items-center gap-2 text-gray-400 text-sm">
                 <RefreshCw className="w-4 h-4 animate-spin" />
@@ -193,6 +237,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 models={models}
                 currentModel={currentModel}
                 onSelect={setCurrentModel}
+                qualifyWithProvider={!isClaudeSession}
               />
             )}
           </section>

@@ -60,8 +60,8 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
     }
   }, [isStreaming, isAtBottom, messages.length]);
 
-  const handleCreateSession = (cwd?: string) => {
-    createNewSession(cwd);
+  const handleCreateSession = (cwd?: string, sdkType?: 'pi' | 'claude') => {
+    createNewSession(cwd, sdkType);
   };
 
   return (

@@ -37,6 +37,12 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   const currentModel = useSessionStore((state) => state.currentModel);
   const contextPercent = useSessionStore((state) => state.contextPercent);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
+  const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
+  const sessionData = useSessionStore((state) => state.sessionData);
+
+  // Derive if current session is Claude Direct
+  const isClaudeSession = currentSessionSdkType === 'claude';
+  const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo : null;
   const { sendPrompt, abortGeneration } = useWebSocket();
 
   // Draft store for per-session draft persistence
@@ -293,17 +299,30 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
             </>
           )}
         </div>
-        {contextPercent > 0 && (
-          <div className="flex items-center gap-1.5">
-            <ContextRing
-              percent={contextPercent}
-              size={20}
-              showLabel
-              label={`Context usage: ${contextPercent}%`}
-            />
-            <span className="text-xs text-gray-400">{contextPercent}%</span>
-          </div>
-        )}
+        <div className="flex items-center gap-1.5">
+          {isClaudeSession && (
+            <span 
+              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20 cursor-help"
+              title="Claude Direct - Claude Code CLI"
+            >
+              CC
+            </span>
+          )}
+          {isClaudeSession && quotaInfo?.isUsingOverage && (
+            <span className="text-xs text-amber-400" title="Using extra quota (overage)">⚠ Extra</span>
+          )}
+          {contextPercent > 0 && !isClaudeSession && (
+            <div className="flex items-center gap-1.5">
+              <ContextRing
+                percent={contextPercent}
+                size={20}
+                showLabel
+                label={`Context usage: ${contextPercent}%`}
+              />
+              <span className="text-xs text-gray-400">{contextPercent}%</span>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Main composer */}

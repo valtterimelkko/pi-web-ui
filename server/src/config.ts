@@ -16,6 +16,9 @@ export interface ServerConfig {
   rateLimitMax: number;
   piAgentDir: string;
   sessionDir: string | undefined;
+  claudeSessionDir: string;
+  sessionRegistryPath: string;
+  maxClaudeProcesses: number;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -46,4 +49,7 @@ export const config: ServerConfig = {
   rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
   piAgentDir: process.env.PI_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent'),
   sessionDir: process.env.SESSION_DIR || undefined,
+  claudeSessionDir: process.env.CLAUDE_SESSION_DIR || path.join(os.homedir(), '.pi-web-ui', 'claude-sessions'),
+  sessionRegistryPath: process.env.SESSION_REGISTRY_PATH || path.join(os.homedir(), '.pi-web-ui', 'session-registry.json'),
+  maxClaudeProcesses: parseInt(process.env.MAX_CLAUDE_PROCESSES || '10', 10),
 };

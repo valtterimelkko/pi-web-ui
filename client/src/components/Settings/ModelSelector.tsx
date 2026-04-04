@@ -14,6 +14,7 @@ interface ModelSelectorProps {
   models: Model[];
   currentModel: string;
   onSelect: (modelId: string) => void;
+  qualifyWithProvider?: boolean;
 }
 
 // Provider icons and colors for visual distinction
@@ -130,7 +131,7 @@ function HighlightedText({ text, query }: { text: string; query: string }) {
   );
 }
 
-export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorProps) {
+export function ModelSelector({ models, currentModel, onSelect, qualifyWithProvider = true }: ModelSelectorProps) {
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
 
@@ -184,16 +185,16 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
   }, [filteredModels]);
 
   const selectedModel = currentModel
-    ? models.find((m) => `${m.provider}/${m.id}` === currentModel)
+    ? models.find((m) => qualifyWithProvider ? `${m.provider}/${m.id}` === currentModel : m.id === currentModel)
     : undefined;
   const selectedProviderStyle = selectedModel ? getProviderStyle(selectedModel.provider) : providerStyles['default'];
   const SelectedIcon = selectedProviderStyle.icon;
 
   const handleSelect = (modelId: string, provider: string) => {
-    const qualifiedModelId = `${provider}/${modelId}`;
+    const nextModelId = qualifyWithProvider ? `${provider}/${modelId}` : modelId;
 
-    if (qualifiedModelId !== currentModel) {
-      onSelect(qualifiedModelId);
+    if (nextModelId !== currentModel) {
+      onSelect(nextModelId);
     }
     setIsOpen(false);
     setSearch('');
@@ -253,7 +254,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                     onClick={() => handleSelect(model.id, model.provider)}
                     className={`
                       w-full px-3 py-2.5 flex items-center gap-3 hover:bg-gray-50 transition-colors
-                      ${currentModel === `${model.provider}/${model.id}` ? 'bg-blue-50' : ''}
+                      ${(qualifyWithProvider ? currentModel === `${model.provider}/${model.id}` : currentModel === model.id) ? 'bg-blue-50' : ''}
                     `}
                     data-testid="model-option"
                   >
@@ -271,7 +272,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                         {model.description && ` · ${model.description}`}
                       </p>
                     </div>
-                    {currentModel === `${model.provider}/${model.id}` && (
+                    {(qualifyWithProvider ? currentModel === `${model.provider}/${model.id}` : currentModel === model.id) && (
                       <Check className="w-4 h-4 text-blue-600" />
                     )}
                   </button>
@@ -294,7 +295,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                         onClick={() => handleSelect(model.id, provider)}
                         className={`
                           w-full px-3 py-2.5 flex items-center gap-3 hover:bg-gray-50 transition-colors
-                          ${currentModel === `${provider}/${model.id}` ? 'bg-blue-50' : ''}
+                          ${(qualifyWithProvider ? currentModel === `${provider}/${model.id}` : currentModel === model.id) ? 'bg-blue-50' : ''}
                         `}
                       >
                         <div className="flex-1 text-left">
@@ -304,7 +305,7 @@ export function ModelSelector({ models, currentModel, onSelect }: ModelSelectorP
                             {model.description && ` · ${model.description}`}
                           </p>
                         </div>
-                        {currentModel === `${provider}/${model.id}` && (
+                        {(qualifyWithProvider ? currentModel === `${provider}/${model.id}` : currentModel === model.id) && (
                           <Check className="w-4 h-4 text-blue-600" />
                         )}
                       </button>

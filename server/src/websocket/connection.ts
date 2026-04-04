@@ -16,6 +16,45 @@ import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from 
 import { handleSessionWebSocket } from './session-websocket.js';
 import { config } from '../config.js';
 import { validateCsrfToken, hasCsrfToken } from '../security/csrf.js';
+import { getClaudeService, type ClaudeService } from '../claude/index.js';
+import { getSessionRegistry } from '../session-registry.js';
+import type { NormalizedEvent } from '@pi-web-ui/shared';
+
+// ============================================================================
+// NormalizedEvent → Pi-compatible format converter
+// ============================================================================
+
+/**
+ * Convert a NormalizedEvent (from ClaudeEventNormalizer) to the Pi-compatible
+ * event format expected by the frontend sessionStore.
+ */
+function normEventToPiFormat(event: NormalizedEvent): Record<string, unknown> {
+  const data = event.data as Record<string, unknown>;
+  switch (event.type) {
+    case 'message_start':
+      return { type: 'message_start', message: { id: data.id, role: data.role } };
+    case 'message_update':
+      return { type: 'message_update', message: { id: data.id }, assistantMessageEvent: data.assistantMessageEvent };
+    case 'message_end':
+      return { type: 'message_end', message: { id: data.id } };
+    case 'tool_execution_start':
+      return { type: 'tool_execution_start', toolCallId: data.toolCallId, toolName: data.toolName, args: data.args };
+    case 'tool_execution_end':
+      return { type: 'tool_execution_end', toolCallId: data.toolCallId, result: data.result, isError: data.isError };
+    case 'tool_execution_update':
+      return { type: 'tool_execution_update', toolCallId: data.toolCallId, partialResult: data.partialResult };
+    case 'agent_start':
+      return { type: 'agent_start' };
+    case 'agent_end':
+      return { type: 'agent_end', result: (data as Record<string, unknown>).result, usage: (data as Record<string, unknown>).usage };
+    case 'session_init':
+      return { type: 'session_init', ...data };
+    case 'rate_limit':
+      return { type: 'rate_limit', ...data };
+    default:
+      return { type: event.type, ...data };
+  }
+}
 
 // ============================================================================
 // Protocol Detection
@@ -62,12 +101,32 @@ export class WebSocketConnectionManager {
   private eventForwarder: EventForwarder;
   /** Track CWD per client for session info */
   private clientCwd: Map<string, string> = new Map();
+  /** Track currently viewed session for both Pi and Claude sessions */
+  private clientViewingSession: Map<string, string> = new Map();
+  /** Claude service for Claude Direct sessions */
+  private claudeService: ClaudeService;
+  /** Session IDs (UUIDs) that are Claude sessions */
+  private claudeSessionIds: Set<string> = new Set();
 
   constructor() {
     this.wss = new WebSocketServer({ noServer: true });
     this.piService = getPiService();
     this.sessionPool = new SessionPool(this.piService);
     this.eventForwarder = new EventForwarder(this.sendToClient.bind(this));
+    this.claudeService = getClaudeService();
+
+    // Log Claude availability on startup
+    this.claudeService.isAvailable().then(async (available) => {
+      if (available) {
+        const authStatus = await this.claudeService.validateAuth();
+        if (authStatus.ok) {
+          console.log(`[WebUI] Claude Direct available: ${authStatus.email}`);
+        }
+      }
+    }).catch(() => { /* non-fatal */ });
+
+    // Restore Claude session IDs from registry on startup
+    void this.restoreClaudeSessionIds();
 
     // Create MultiSessionManager with broadcast function
     // Configure aggressive cleanup for lazy session management
@@ -86,6 +145,7 @@ export class WebSocketConnectionManager {
       }
     );
     // Note: Cleanup timer is started automatically in MultiSessionManager constructor
+    // Note: Claude session IDs are restored asynchronously from the registry
 
     // Set up event forwarder to track streaming state
     this.eventForwarder.setSessionPool(this.sessionPool);
@@ -97,6 +157,24 @@ export class WebSocketConnectionManager {
     this.setupSessionStatusBroadcasting();
 
     this.setupServer();
+  }
+
+  /**
+   * Restore claudeSessionIds Set from the session registry after server restart.
+   */
+  private async restoreClaudeSessionIds(): Promise<void> {
+    try {
+      const registry = getSessionRegistry();
+      const claudeSessions = await registry.listBySdkType('claude');
+      for (const entry of claudeSessions) {
+        this.claudeSessionIds.add(entry.id);
+      }
+      if (claudeSessions.length > 0) {
+        console.log(`[WebUI] Restored ${claudeSessions.length} Claude session ID(s) from registry`);
+      }
+    } catch (err) {
+      console.warn('[WebUI] Failed to restore Claude session IDs from registry:', err instanceof Error ? err.message : String(err));
+    }
   }
 
   /**
@@ -418,6 +496,30 @@ export class WebSocketConnectionManager {
           type: 'connection_status',
           status: 'authenticated'
         });
+
+        // Send Claude availability status
+        void this.claudeService.isAvailable().then(async (available) => {
+          if (available) {
+            const auth = await this.claudeService.validateAuth();
+            this.sendMessage(clientId, {
+              type: 'claude_available',
+              available: auth.ok,
+              error: auth.ok ? null : (auth.error ?? null),
+            } as unknown as ServerMessage);
+          } else {
+            this.sendMessage(clientId, {
+              type: 'claude_available',
+              available: false,
+              error: 'Claude Code not installed',
+            } as unknown as ServerMessage);
+          }
+        }).catch(() => {
+          this.sendMessage(clientId, {
+            type: 'claude_available',
+            available: false,
+            error: 'Claude availability check failed',
+          } as unknown as ServerMessage);
+        });
         break;
       }
 
@@ -428,6 +530,10 @@ export class WebSocketConnectionManager {
           code: 'INVALID_MESSAGE',
         });
     }
+  }
+
+  private getCurrentSessionPath(clientId: string): string | undefined {
+    return this.clientViewingSession.get(clientId) || this.multiSessionManager.getClientSessionPath(clientId);
   }
 
   private async handlePrompt(
@@ -446,9 +552,15 @@ export class WebSocketConnectionManager {
     }
 
     // Get the session path the client is currently viewing
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    // Check if this is a Claude session — dispatch to Claude handler
+    if (this.claudeSessionIds.has(sessionPath)) {
+      await this.handleClaudePrompt(clientId, sessionPath, message.message, message.images);
       return;
     }
 
@@ -465,8 +577,73 @@ export class WebSocketConnectionManager {
     });
   }
 
+  /**
+   * Handle a prompt for a Claude Direct session.
+   */
+  private async handleClaudePrompt(
+    clientId: string,
+    sessionId: string,
+    prompt: string,
+    _images?: ImageContent[]
+  ): Promise<void> {
+    // If the session already has a running process, wait for it to finish
+    if (this.claudeService.isRunning(sessionId)) {
+      console.log(`[handleClaudePrompt] Session ${sessionId} busy, waiting for current turn to finish...`);
+      const maxWait = 30000; // 30 seconds max wait
+      const pollInterval = 500;
+      const start = Date.now();
+      while (this.claudeService.isRunning(sessionId) && Date.now() - start < maxWait) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+      }
+      if (this.claudeService.isRunning(sessionId)) {
+        this.sendMessage(clientId, { type: 'error', message: 'Session still busy after waiting', code: 'SESSION_BUSY' });
+        return;
+      }
+    }
+
+    try {
+      await this.claudeService.sendPrompt(
+        sessionId,
+        prompt,
+        (normalizedEvent) => {
+          // Convert NormalizedEvent to Pi-compatible format and send as session_event
+          const piEvent = normEventToPiFormat(normalizedEvent);
+          // Broadcast to all subscribers of this session
+          const activeSession = this.multiSessionManager.getActiveSession(sessionId);
+          if (activeSession) {
+            for (const subscriberId of activeSession.subscribers) {
+              this.sendMessage(subscriberId, {
+                type: 'session_event',
+                sessionId,
+                event: piEvent,
+              });
+            }
+          } else {
+            // Fall back: send only to the requesting client
+            this.sendMessage(clientId, {
+              type: 'session_event',
+              sessionId,
+              event: piEvent,
+            });
+          }
+        },
+        (error) => {
+          if (error) {
+            this.sendMessage(clientId, { type: 'error', message: error.message, code: 'CLAUDE_ERROR' });
+          }
+        }
+      );
+    } catch (error) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Claude prompt failed',
+        code: 'CLAUDE_ERROR',
+      });
+    }
+  }
+
   private async handleSteer(clientId: string, message: { type: 'steer'; message: string }): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
@@ -482,7 +659,7 @@ export class WebSocketConnectionManager {
   }
 
   private async handleFollowUp(clientId: string, message: { type: 'follow_up'; message: string }): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
@@ -498,8 +675,14 @@ export class WebSocketConnectionManager {
   }
 
   private async handleAbort(clientId: string): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) return;
+
+    // Claude session abort
+    if (this.claudeSessionIds.has(sessionPath)) {
+      this.claudeService.abort(sessionPath);
+      return;
+    }
 
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
     if (!agentSession) return;
@@ -507,24 +690,56 @@ export class WebSocketConnectionManager {
     await agentSession.abort();
   }
 
-  private async handleNewSession(clientId: string, message: { type: 'new_session'; cwd?: string }): Promise<void> {
-    console.log(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}`);
+  private async handleNewSession(
+    clientId: string,
+    message: { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' }
+  ): Promise<void> {
+    console.log(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}, sdkType=${message.sdkType || 'pi'}`);
 
     const cwd = message.cwd || process.cwd();
+    const sdkType = message.sdkType || 'pi';
 
-    // Create the session directly via MultiSessionManager (it handles creation and registration)
-    // We pass no sessionPath so it creates a new one with the correct cwd
+    if (sdkType === 'claude') {
+      try {
+        const { sessionId } = await this.claudeService.createSession(cwd);
+
+        // Track this as a Claude session
+        this.claudeSessionIds.add(sessionId);
+
+        // Register the client as viewing this session
+        this.clientViewingSession.set(clientId, sessionId);
+        this.clientCwd.set(clientId, cwd);
+
+        console.log(`[handleNewSession] Claude session created: ${sessionId}`);
+
+        this.sendMessage(clientId, {
+          type: 'session_created',
+          sessionId,
+          sessionPath: sessionId,  // For Claude sessions, sessionId IS the path
+          sdkType: 'claude',
+        } as unknown as ServerMessage);
+      } catch (error) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to create Claude session',
+          code: 'SESSION_CREATE_FAILED',
+        });
+      }
+      return;
+    }
+
+    // Pi session creation
     const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd);
 
     const sessionPath = status.sessionPath;
 
     // Track that this client is viewing this session
-    this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+    this.clientViewingSession.set(clientId, sessionPath);
 
     // Store the cwd for this client
     this.clientCwd.set(clientId, cwd);
 
-    console.log(`[handleNewSession] Session created: ${status.sessionId}, sessionPath=${sessionPath}`);
+    console.log(`[handleNewSession] Pi session created: ${status.sessionId}, sessionPath=${sessionPath}`);
 
     this.sendMessage(clientId, {
       type: 'session_created',
@@ -540,7 +755,36 @@ export class WebSocketConnectionManager {
     const sessionPath = message.sessionPath;
 
     // Get the old session path before switching
-    const oldSessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const oldSessionPath = this.getCurrentSessionPath(clientId);
+
+    // Check if this is a Claude session — either already tracked or in registry
+    let isClaudeSession = this.claudeSessionIds.has(sessionPath);
+    if (!isClaudeSession) {
+      // Check registry in case server restarted
+      try {
+        const registry = getSessionRegistry();
+        const entry = await registry.get(sessionPath);
+        if (entry?.sdkType === 'claude') {
+          isClaudeSession = true;
+          this.claudeSessionIds.add(sessionPath);
+        }
+      } catch {
+        // Ignore registry lookup errors
+      }
+    }
+
+    if (isClaudeSession) {
+      // Unsubscribe from old session if different
+      if (oldSessionPath && oldSessionPath !== sessionPath) {
+        this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
+      }
+      this.clientViewingSession.set(clientId, sessionPath);
+      await this.replayClaudeHistory(clientId, sessionPath);
+      console.log(`[handleSwitchSession] Client ${clientId} switched to Claude session ${sessionPath}`);
+      return;
+    }
+
+    // Pi session switching
 
     // Unsubscribe from the old session if different from new session
     // This prevents receiving events from the old session while viewing the new one
@@ -553,7 +797,7 @@ export class WebSocketConnectionManager {
     const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath);
 
     // Track that this client is now viewing this session
-    this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+    this.clientViewingSession.set(clientId, sessionPath);
 
     // Look up the cwd for this session from the sessions list
     let cwd = this.clientCwd.get(clientId) || process.cwd();
@@ -598,6 +842,64 @@ export class WebSocketConnectionManager {
     // It remains active in MultiSessionManager for background processing
     // and can be switched back to by the client or other clients.
     console.log(`[handleSwitchSession] Client ${clientId} switched from ${oldSessionPath || 'none'} to ${sessionPath}. Old session remains active.`);
+  }
+
+  /**
+   * Replay Claude session history to a client on switch.
+   */
+  private async replayClaudeHistory(clientId: string, sessionId: string): Promise<void> {
+    const registry = getSessionRegistry();
+    const entry = await registry.get(sessionId);
+    if (!entry) {
+      this.sendMessage(clientId, { type: 'error', message: 'Claude session not found', code: 'SESSION_NOT_FOUND' } as unknown as ServerMessage);
+      return;
+    }
+
+    // Send session_switched first
+    this.sendMessage(clientId, {
+      type: 'session_switched',
+      sessionId,
+      sessionPath: sessionId,
+      sdkType: 'claude',
+      model: entry.model ?? 'sonnet',
+      messages: [],
+      fileTimestamp: 0,
+      isStreaming: this.claudeService.isRunning(sessionId),
+    } as unknown as ServerMessage);
+
+    // Load and replay history
+    try {
+      const { ClaudeSessionStore } = await import('../claude/claude-session-store.js');
+      const { historyToReplayEvents } = await import('../claude/claude-history-replay.js');
+      const { config: cfg } = await import('../config.js');
+
+      const store = new ClaudeSessionStore(cfg.claudeSessionDir);
+      const history = await store.loadHistory(sessionId);
+
+      if (history.length === 0) {
+        // Empty session, nothing to replay
+        return;
+      }
+
+      // Send history_start signal
+      this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
+
+      // Send each event as a session_event
+      const events = historyToReplayEvents(history);
+      for (const evt of events) {
+        this.sendMessage(clientId, {
+          type: 'session_event',
+          sessionId,
+          event: evt,
+        } as unknown as ServerMessage);
+      }
+
+      // Send history_end signal
+      this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
+    } catch (error) {
+      console.error(`[replayClaudeHistory] Error replaying history for ${sessionId}:`, error);
+      // Non-fatal: client will have empty history
+    }
   }
 
   /**
@@ -728,22 +1030,49 @@ export class WebSocketConnectionManager {
 
   private async handleGetSessions(
     clientId: string,
-    message: { type: 'get_sessions'; cwd?: string }
+    _message: { type: 'get_sessions'; cwd?: string }
   ): Promise<void> {
-    const sessions = await this.piService.listAllSessions();
+    const piSessions = await this.piService.listAllSessions();
+
+    const formattedPiSessions: Array<{
+      id: string; path: string; sdkType: 'pi' | 'claude';
+      firstMessage: string; messageCount: number; cwd: string;
+      name?: string; createdAt: string; lastActivity: string;
+    }> = piSessions.map(s => ({
+      id: s.id,
+      path: s.path,
+      sdkType: 'pi' as const,
+      firstMessage: s.firstMessage,
+      messageCount: s.messageCount,
+      cwd: s.cwd,
+      name: s.name,
+      createdAt: s.createdAt?.toISOString?.() ?? String(s.createdAt),
+      lastActivity: s.lastActivity?.toISOString?.() ?? String(s.lastActivity),
+    }));
+
+    // Also load Claude sessions from the registry
+    let allSessions = formattedPiSessions;
+    try {
+      const claudeEntries = await this.claudeService.listSessions();
+      const formattedClaudeSessions = claudeEntries.map(entry => ({
+        id: entry.id,
+        path: entry.id,  // For Claude sessions, path == id
+        sdkType: 'claude' as const,
+        firstMessage: entry.firstMessage || '',
+        messageCount: entry.messageCount || 0,
+        cwd: entry.cwd || '',
+        name: undefined,
+        createdAt: entry.createdAt || new Date().toISOString(),
+        lastActivity: entry.lastActivity || new Date().toISOString(),
+      }));
+      allSessions = [...formattedPiSessions, ...formattedClaudeSessions];
+    } catch (e) {
+      console.warn('[handleGetSessions] Failed to load Claude sessions:', e instanceof Error ? e.message : String(e));
+    }
 
     this.sendMessage(clientId, {
       type: 'sessions_list',
-      sessions: sessions.map(s => ({
-        id: s.id,
-        path: s.path,
-        firstMessage: s.firstMessage,
-        messageCount: s.messageCount,
-        cwd: s.cwd,
-        name: s.name,
-        createdAt: s.createdAt?.toISOString?.() ?? String(s.createdAt),
-        lastActivity: s.lastActivity?.toISOString?.() ?? String(s.lastActivity),
-      })),
+      sessions: allSessions,
     });
   }
 
@@ -760,7 +1089,7 @@ export class WebSocketConnectionManager {
   }
 
   private async handleGetSessionInfo(clientId: string): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
@@ -822,10 +1151,25 @@ export class WebSocketConnectionManager {
   }
 
   private async handleSetModel(clientId: string, message: { type: 'set_model'; modelId: string }): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       console.error(`[handleSetModel] No active session for client ${clientId}`);
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    // Handle Claude session model change
+    if (this.claudeSessionIds.has(sessionPath)) {
+      try {
+        const normalizedModel = await this.claudeService.setModel(sessionPath, message.modelId);
+        this.sendMessage(clientId, { type: 'model_changed', modelId: normalizedModel });
+      } catch (error) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to change model',
+          code: 'MODEL_CHANGE_FAILED',
+        });
+      }
       return;
     }
 
@@ -875,7 +1219,7 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' }
   ): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
@@ -981,8 +1325,31 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'subscribe_session'; sessionPath: string }
   ): Promise<void> {
+    const sessionPath = message.sessionPath;
+
+    // Check if this is a Claude session
+    let isClaudeSession = this.claudeSessionIds.has(sessionPath);
+    if (!isClaudeSession) {
+      try {
+        const registry = getSessionRegistry();
+        const entry = await registry.get(sessionPath).catch(() => undefined);
+        if (entry?.sdkType === 'claude') {
+          isClaudeSession = true;
+          this.claudeSessionIds.add(sessionPath);
+        }
+      } catch {
+        // Ignore registry lookup errors
+      }
+    }
+
+    if (isClaudeSession) {
+      this.clientViewingSession.set(clientId, sessionPath);
+      await this.replayClaudeHistory(clientId, sessionPath);
+      return;
+    }
+
     try {
-      const status = await this.multiSessionManager.subscribeClient(clientId, message.sessionPath);
+      const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath);
 
       this.sendMessage(clientId, {
         type: 'session_subscribed',
@@ -1035,6 +1402,7 @@ export class WebSocketConnectionManager {
 
       // Clean up client tracking data
       this.clientCwd.delete(clientId);
+      this.clientViewingSession.delete(clientId);
       this.clients.delete(clientId);
     }
   }

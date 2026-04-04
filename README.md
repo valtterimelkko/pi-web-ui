@@ -166,6 +166,48 @@ Add your new model to the `models` array:
 
 Save the file and the model will appear in both the Pi CLI and the Web UI model selectors immediately. No restart required.
 
+## Dual-SDK Architecture (April 2026)
+
+Pi Web UI supports two AI runtime paths that can be selected when creating a new session:
+
+### Pi SDK Sessions
+- Uses Pi Coding Agent's SDK for AI interaction  
+- All Pi extensions active (Enhanced Plan Mode, Subagent, Todo, Web Tools, Agent Discovery, etc.)
+- Supports all providers: Anthropic, GitHub Copilot, Google, Kimi, OpenRouter, and more
+- Full model switching between providers mid-session
+- Session files stored in: `~/.pi/agent/sessions/`
+
+### Claude Direct Sessions  
+- Uses Claude Code CLI (`claude -p`) as a subprocess for AI interaction
+- Uses Claude Code's built-in tools (Read, Edit, Write, Bash, Glob, Grep, WebSearch, WebFetch, Plan mode, Skills, Tasks, etc.)
+- **Uses Claude subscription's normal quota** (not extra use, not pay-per-use API)
+- Claude models only: Opus, Sonnet, Haiku (model alias switching supported)
+- Permissionless operation: `--permission-mode acceptEdits`
+- Session files stored in: `~/.pi-web-ui/claude-sessions/`
+
+**Prerequisite for Claude Direct:** Claude Code must be installed and authenticated with a subscription:
+```bash
+# Install Claude Code
+npm install -g @anthropic-ai/claude-code
+
+# Authenticate with subscription
+claude auth login
+```
+
+### Session Registry
+Both Pi and Claude session types are indexed in a unified registry at `~/.pi-web-ui/session-registry.json`. This enables the sidebar to show sessions from both SDKs in a single list.
+
+### Choosing Between SDKs
+
+| Criteria | Pi SDK | Claude Direct |
+|---|---|---|
+| Need Pi extensions (Plan Mode, Subagent, etc.) | ✅ | ❌ |
+| Need non-Claude models (GPT, Gemini, Kimi, etc.) | ✅ | ❌ |
+| Want Claude subscription's **normal quota** | Via Copilot | ✅ |
+| Need GitHub Copilot integration | ✅ | ❌ |
+| Want Claude Code's native tools & skills | ❌ | ✅ |
+| Need mid-session provider switching | ✅ | ❌ |
+
 ## Features
 
 - 🔐 **Security-first**: JWT auth, CSRF protection, WebSocket origin validation
