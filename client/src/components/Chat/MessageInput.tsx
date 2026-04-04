@@ -301,7 +301,10 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
         </div>
         <div className="flex items-center gap-1.5">
           {isClaudeSession && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20">
+            <span 
+              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20 cursor-help"
+              title="Claude Direct - Claude Code CLI"
+            >
               CC
             </span>
           )}

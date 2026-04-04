@@ -1,4 +1,4 @@
-import { X, Info, FileText, Coins, Activity, MessageSquare, Cpu, FolderOpen, RefreshCw } from 'lucide-react';
+import { X, Info, FileText, Coins, Activity, MessageSquare, Cpu, FolderOpen, RefreshCw, Box } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -143,6 +143,33 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                 <p className="text-xs text-gray-700 bg-gray-50 p-2 rounded break-all font-mono">
                   {sessionInfo.sessionFile || 'N/A'}
                 </p>
+              </div>
+
+              {/* Session Type */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-gray-500 text-sm">
+                  <Box className="w-4 h-4" />
+                  <span>Session Type</span>
+                </div>
+                <div className="pl-6">
+                  {isClaudeSession ? (
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200">
+                        CC
+                      </span>
+                      <span className="text-sm text-gray-900">Claude Direct</span>
+                      <span className="text-xs text-gray-400">(Claude Code CLI)</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-violet-100 text-violet-700 border border-violet-200">
+                        π
+                      </span>
+                      <span className="text-sm text-gray-900">Pi SDK</span>
+                      <span className="text-xs text-gray-400">(Full extensions & providers)</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Model */}
