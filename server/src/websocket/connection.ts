@@ -1095,32 +1095,6 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    // Check if this is a Claude Direct session
-    if (this.claudeSessionIds.has(sessionPath)) {
-      const stats = await this.claudeService.getSessionStats(sessionPath);
-      if (!stats) {
-        this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
-        return;
-      }
-
-      // Get the cwd from our tracking (or use the session's cwd as fallback)
-      const cwd = this.clientCwd.get(clientId) || stats.cwd || process.cwd();
-
-      this.sendMessage(clientId, {
-        type: 'session_info',
-        stats: {
-          ...stats,
-          cwd,
-          // Claude sessions don't have context usage info
-          contextWindow: undefined,
-          contextUsed: undefined,
-          contextPercent: undefined,
-        },
-      });
-      return;
-    }
-
-    // Pi SDK session
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
     if (!agentSession) {
       this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
