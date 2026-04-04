@@ -129,6 +129,16 @@ export class ClaudeProcessPool {
           ),
         );
       } else {
+        try {
+          onEvent({
+            type: 'agent_end',
+            sessionId: options.sessionId,
+            timestamp: Date.now(),
+            data: {},
+          });
+        } catch {
+          // non-fatal
+        }
         onComplete();
       }
     });

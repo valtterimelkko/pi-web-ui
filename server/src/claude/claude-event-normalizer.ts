@@ -233,9 +233,13 @@ export class ClaudeEventNormalizer {
     sessionId: string,
     timestamp: number,
   ): NormalizedEvent[] {
+    // IMPORTANT: do not emit agent_end here.
+    // Claude can emit a final result before the subprocess has fully exited,
+    // and sending agent_end too early allows the UI to send another prompt
+    // while Claude still holds the session lock.
     return [
       {
-        type: 'agent_end',
+        type: 'claude_result',
         sessionId,
         timestamp,
         data: {
