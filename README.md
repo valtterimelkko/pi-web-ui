@@ -94,10 +94,9 @@ Complete architectural refactor for mobile performance:
 - Memory per session: ~15MB → ~5MB
 
 ### Test Suite - 571 Tests Passing (March 2026)
-- **Shared Package**: 98 tests - JSON-RPC protocol types
-- **Server**: 280+ tests - Protocol, WebSocket, Pi service
-- **Client**: 190+ tests - Hooks, components, stores
-- **E2E**: 9 tests - Authentication, core functionality
+- **Server**: 735+ tests — Pi service, WebSocket, Claude Direct, security
+- **Client**: 62+ tests — Hooks, components, stores
+- **E2E**: 14+ tests — Authentication, core functionality, Claude Direct flow
 
 ### Security Hardening (March 2026)
 Production deployment now requires secure configuration:
@@ -787,13 +786,13 @@ All tests currently passing:
 # Run all tests
 npm test
 
-# Server tests (93 tests)
+# Server tests
 npm test -- --workspace=server
 
-# Client tests (62 tests)
+# Client tests
 npm test -- --workspace=client
 
-# E2E tests (9 tests)
+# E2E tests (requires server running)
 npm run test:e2e
 ```
 
