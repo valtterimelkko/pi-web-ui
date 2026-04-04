@@ -101,6 +101,8 @@ export class WebSocketConnectionManager {
   private eventForwarder: EventForwarder;
   /** Track CWD per client for session info */
   private clientCwd: Map<string, string> = new Map();
+  /** Track currently viewed session for both Pi and Claude sessions */
+  private clientViewingSession: Map<string, string> = new Map();
   /** Claude service for Claude Direct sessions */
   private claudeService: ClaudeService;
   /** Session IDs (UUIDs) that are Claude sessions */
@@ -530,6 +532,10 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private getCurrentSessionPath(clientId: string): string | undefined {
+    return this.clientViewingSession.get(clientId) || this.multiSessionManager.getClientSessionPath(clientId);
+  }
+
   private async handlePrompt(
     clientId: string,
     message: { type: 'prompt'; sessionId: string; message: string; images?: ImageContent[] }
@@ -546,7 +552,7 @@ export class WebSocketConnectionManager {
     }
 
     // Get the session path the client is currently viewing
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
@@ -627,7 +633,7 @@ export class WebSocketConnectionManager {
   }
 
   private async handleSteer(clientId: string, message: { type: 'steer'; message: string }): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
@@ -643,7 +649,7 @@ export class WebSocketConnectionManager {
   }
 
   private async handleFollowUp(clientId: string, message: { type: 'follow_up'; message: string }): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
@@ -659,7 +665,7 @@ export class WebSocketConnectionManager {
   }
 
   private async handleAbort(clientId: string): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) return;
 
     // Claude session abort
@@ -691,8 +697,7 @@ export class WebSocketConnectionManager {
         this.claudeSessionIds.add(sessionId);
 
         // Register the client as viewing this session
-        // We use setClientViewingSession directly — Claude sessions are identified by UUID
-        this.multiSessionManager.setClientViewingSession(clientId, sessionId);
+        this.clientViewingSession.set(clientId, sessionId);
         this.clientCwd.set(clientId, cwd);
 
         console.log(`[handleNewSession] Claude session created: ${sessionId}`);
@@ -719,7 +724,7 @@ export class WebSocketConnectionManager {
     const sessionPath = status.sessionPath;
 
     // Track that this client is viewing this session
-    this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+    this.clientViewingSession.set(clientId, sessionPath);
 
     // Store the cwd for this client
     this.clientCwd.set(clientId, cwd);
@@ -740,7 +745,7 @@ export class WebSocketConnectionManager {
     const sessionPath = message.sessionPath;
 
     // Get the old session path before switching
-    const oldSessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const oldSessionPath = this.getCurrentSessionPath(clientId);
 
     // Check if this is a Claude session — either already tracked or in registry
     let isClaudeSession = this.claudeSessionIds.has(sessionPath);
@@ -763,7 +768,7 @@ export class WebSocketConnectionManager {
       if (oldSessionPath && oldSessionPath !== sessionPath) {
         this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
       }
-      this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+      this.clientViewingSession.set(clientId, sessionPath);
       await this.replayClaudeHistory(clientId, sessionPath);
       console.log(`[handleSwitchSession] Client ${clientId} switched to Claude session ${sessionPath}`);
       return;
@@ -782,7 +787,7 @@ export class WebSocketConnectionManager {
     const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath);
 
     // Track that this client is now viewing this session
-    this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+    this.clientViewingSession.set(clientId, sessionPath);
 
     // Look up the cwd for this session from the sessions list
     let cwd = this.clientCwd.get(clientId) || process.cwd();
@@ -1074,7 +1079,7 @@ export class WebSocketConnectionManager {
   }
 
   private async handleGetSessionInfo(clientId: string): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
@@ -1136,7 +1141,7 @@ export class WebSocketConnectionManager {
   }
 
   private async handleSetModel(clientId: string, message: { type: 'set_model'; modelId: string }): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       console.error(`[handleSetModel] No active session for client ${clientId}`);
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
@@ -1204,7 +1209,7 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' }
   ): Promise<void> {
-    const sessionPath = this.multiSessionManager.getClientSessionPath(clientId);
+    const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
@@ -1328,7 +1333,7 @@ export class WebSocketConnectionManager {
     }
 
     if (isClaudeSession) {
-      this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
+      this.clientViewingSession.set(clientId, sessionPath);
       await this.replayClaudeHistory(clientId, sessionPath);
       return;
     }
@@ -1387,6 +1392,7 @@ export class WebSocketConnectionManager {
 
       // Clean up client tracking data
       this.clientCwd.delete(clientId);
+      this.clientViewingSession.delete(clientId);
       this.clients.delete(clientId);
     }
   }

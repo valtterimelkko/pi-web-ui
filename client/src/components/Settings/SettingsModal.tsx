@@ -29,13 +29,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { setModel } = useWebSocket();
   const storeCurrentModel = useSessionStore((state) => state.currentModel);
   const errorMessage = useSessionStore((state) => state.error);
-  const currentSessionId = useSessionStore((state) => state.currentSessionId);
-  const sessions = useSessionStore((state) => state.sessions);
+  const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   
   // Check if current session is a Claude Direct session
-  const isClaudeSession = useMemo(() => {
-    return sessions.find(s => s.id === currentSessionId)?.sdkType === 'claude';
-  }, [sessions, currentSessionId]);
+  const isClaudeSession = useMemo(() => currentSessionSdkType === 'claude', [currentSessionSdkType]);
 
   // Fetch models on mount (or use Claude models for Claude sessions)
   useEffect(() => {

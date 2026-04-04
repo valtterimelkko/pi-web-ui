@@ -37,11 +37,11 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   const currentModel = useSessionStore((state) => state.currentModel);
   const contextPercent = useSessionStore((state) => state.contextPercent);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
-  const sessions = useSessionStore((state) => state.sessions);
+  const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   const sessionData = useSessionStore((state) => state.sessionData);
 
   // Derive if current session is Claude Direct
-  const isClaudeSession = sessions.find(s => s.id === currentSessionId)?.sdkType === 'claude';
+  const isClaudeSession = currentSessionSdkType === 'claude';
   const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo : null;
   const { sendPrompt, abortGeneration } = useWebSocket();
 

@@ -11,9 +11,9 @@ interface SessionInfoModalProps {
 export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
   const sessionInfo = useSessionStore((state) => state.sessionInfo);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
-  const sessions = useSessionStore((state) => state.sessions);
+  const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   const sessionData = useSessionStore((state) => state.sessionData);
-  const isClaudeSession = sessions.find(s => s.id === currentSessionId)?.sdkType === 'claude';
+  const isClaudeSession = currentSessionSdkType === 'claude';
   const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo : null;
   const { getSessionInfo } = useWebSocket();
   const [isLoading, setIsLoading] = useState(false);

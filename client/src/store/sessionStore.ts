@@ -138,6 +138,7 @@ export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'error'
 interface SessionState {
   sessions: Session[];
   currentSessionId: string | null;
+  currentSessionSdkType: 'pi' | 'claude' | null;
   currentModel: string | null;
   messages: Message[];
   isStreaming: boolean;
@@ -236,6 +237,7 @@ export const useSessionStore = create<SessionState>()(
     (set, get) => ({
       sessions: [],
       currentSessionId: null,
+      currentSessionSdkType: null,
       currentModel: null,
       messages: [],
       isStreaming: false,
@@ -389,6 +391,7 @@ export const useSessionStore = create<SessionState>()(
           
           return {
             currentSessionId: newSessionId,
+            currentSessionSdkType: state.sessions.find((s) => s.id === newSessionId)?.sdkType ?? null,
             messages: cachedMessages,
             sessionCache: newCache,
             // Reset streaming state for the new session
@@ -719,6 +722,7 @@ export const useSessionStore = create<SessionState>()(
           }
           return {
             currentSessionId: sessionId,
+            currentSessionSdkType: s.sessions.find((session) => session.id === sessionId)?.sdkType ?? null,
             messages: cachedMessages,
             sessionCache: newCache,
           };
@@ -851,11 +855,15 @@ export const useSessionStore = create<SessionState>()(
             const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' };
             set({ 
               currentSessionId: createdMsg.sessionId,
+              currentSessionSdkType: createdMsg.sdkType ?? null,
               messages: [], // Clear messages for new session
               contextPercent: 0,
               contextUsed: 0,
               contextWindow: 0,
               sessionInfo: null,
+              isLoading: false,
+              isSwitchingSession: false,
+              switchingToSessionId: null,
             });
             // Clear any cached messages for this session
             set((state) => {
@@ -865,12 +873,25 @@ export const useSessionStore = create<SessionState>()(
               delete newSessionMessages[createdMsg.sessionId];
               delete newSessionCacheMeta[createdMsg.sessionId];
               newCache.delete(createdMsg.sessionId);
-              // Add/update sdkType on the newly-created session entry
-              const updatedSessions = state.sessions.map((s) =>
-                s.id === createdMsg.sessionId && createdMsg.sdkType
-                  ? { ...s, sdkType: createdMsg.sdkType }
-                  : s
-              );
+              // Add or update the newly-created session entry immediately so UI can reflect sdkType
+              const existingSession = state.sessions.find((s) => s.id === createdMsg.sessionId);
+              const updatedSessions = existingSession
+                ? state.sessions.map((s) =>
+                    s.id === createdMsg.sessionId
+                      ? { ...s, path: createdMsg.sessionPath, sdkType: createdMsg.sdkType ?? s.sdkType }
+                      : s
+                  )
+                : [
+                    {
+                      id: createdMsg.sessionId,
+                      path: createdMsg.sessionPath,
+                      firstMessage: 'New session',
+                      messageCount: 0,
+                      cwd: '',
+                      sdkType: createdMsg.sdkType ?? undefined,
+                    },
+                    ...state.sessions,
+                  ];
               return { 
                 sessions: updatedSessions,
                 sessionMessages: newSessionMessages,
@@ -965,6 +986,7 @@ export const useSessionStore = create<SessionState>()(
 
               return {
                 currentSessionId: switchMsg.sessionId,
+                currentSessionSdkType: switchMsg.sdkType ?? state.sessions.find((s) => s.id === switchMsg.sessionId)?.sdkType ?? null,
                 currentModel: switchMsg.model ?? null,
                 messages: clientMessages,
                 contextPercent: switchMsg.contextPercent ?? 0,
@@ -1043,7 +1065,7 @@ export const useSessionStore = create<SessionState>()(
             const newMessage: Message = {
               id: messageData.id || `msg_${Date.now()}`,
               role: messageData.role as 'user' | 'assistant' | 'tool',
-              content: messageData.content as Message['content'],
+              content: (messageData.content as Message['content']) ?? [],
               timestamp: Date.now(),
             };
             get().addMessage(newMessage);
@@ -1388,7 +1410,7 @@ export const useSessionStore = create<SessionState>()(
                 const newMessage: Message = {
                   id: messageData.id || `msg_${Date.now()}`,
                   role: messageData.role as 'user' | 'assistant' | 'tool',
-                  content: messageData.content as Message['content'],
+                  content: (messageData.content as Message['content']) ?? [],
                   timestamp: Date.now(),
                 };
                 // Track the current message ID for this session so message_update
