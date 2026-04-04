@@ -277,6 +277,71 @@ export class ClaudeService {
     return this.registry.listBySdkType('claude');
   }
 
+  /**
+   * Get session stats for the session info modal.
+   * Loads history and calculates message counts.
+   */
+  async getSessionStats(sessionId: string): Promise<{
+    sessionFile: string;
+    sessionId: string;
+    cwd: string;
+    userMessages: number;
+    assistantMessages: number;
+    toolCalls: number;
+    toolResults: number;
+    totalMessages: number;
+    tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+    cost: number;
+    model?: string;
+  } | null> {
+    const entry = await this.registry.get(sessionId);
+    if (!entry) {
+      return null;
+    }
+
+    const history = await this.sessionStore.loadHistory(sessionId);
+    const sessionFile = this.sessionStore.getFilePath(sessionId);
+
+    // Count messages by type
+    let userMessages = 0;
+    let assistantMessages = 0;
+    let toolCalls = 0;
+    let totalMessages = 0;
+
+    for (const h of history) {
+      switch (h.type) {
+        case 'user':
+          userMessages++;
+          totalMessages++;
+          break;
+        case 'assistant':
+          assistantMessages++;
+          totalMessages++;
+          break;
+        case 'tool':
+          toolCalls++;
+          totalMessages++;
+          break;
+      }
+    }
+
+    // Note: Claude Code CLI doesn't expose token usage directly
+    // We return zeros for tokens/cost as they're not available
+    return {
+      sessionFile,
+      sessionId,
+      cwd: entry.cwd,
+      userMessages,
+      assistantMessages,
+      toolCalls,
+      toolResults: toolCalls, // Each tool call has a result
+      totalMessages,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      cost: 0,
+      model: entry.model,
+    };
+  }
+
   // ── Private helpers ───────────────────────────────────────────────────────
 
   /**
