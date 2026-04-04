@@ -528,7 +528,7 @@ sudo systemctl restart pi-web-ui
 
 **Chat Area (Center)**
 - Messages appear with syntax highlighting for code
-- Tool executions show as collapsible cards (click to expand)
+- Tool executions show as collapsible cards (click to expand) — only a curated subset are shown; the Pi SDK is verbose and most tool calls (bash, edit, web_search, etc.) are hidden to keep the chat readable. Subagent tool cards and read calls are always shown.
 - Thinking blocks can be toggled on/off
 - Click the 🤖 icon to view the conversation tree
 

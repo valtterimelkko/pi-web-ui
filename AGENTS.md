@@ -116,6 +116,23 @@ The UI uses a **light theme**:
 
 When adding components, match the existing light theme. Do NOT use the dark slate palette (`bg-slate-900` etc.) — that was replaced.
 
+## UI Message Filtering (Pi SDK verbosity)
+
+The Pi SDK emits many event types that would clutter the chat. `VirtualizedMessageList.tsx` filters them:
+
+| Shown | Hidden |
+|-------|--------|
+| User messages (except raw skill injections) | Tool calls: bash, edit, write, web_search, web_fetch, grep, find, etc. |
+| Assistant text responses | `toolResult` messages (raw output) |
+| Subagent tool cards (hierarchical) | Skill injection content (`<skill name="...">`) |
+| Read tool calls (skill-loading visibility) | |
+
+**Key constant:** `VISIBLE_TOOL_NAMES` set in `VirtualizedMessageList.tsx` — add a tool name here to make its card visible.
+
+Tool cards that ARE shown use `CollapsibleToolCard` — collapsed by default, expandable. Long outputs are truncated (50KB / 2000 lines).
+
+Claude Direct tool names are PascalCase (`Read`, `Bash`, `Edit`) — `normalizeToolName()` in `messageAdapter.ts` maps them to the Pi equivalents for rendering.
+
 ## Adding a Component
 1. `client/src/components/MyComponent/MyComponent.tsx` + `index.ts`
 2. Export from `client/src/components/index.ts`
