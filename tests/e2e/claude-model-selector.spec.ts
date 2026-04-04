@@ -138,41 +138,39 @@ test.describe('Claude Direct Model Selector', () => {
     
     console.log('[TEST] Model selector content verified');
     
-    // 8. Select a different Claude model (e.g., opus)
-    const opusOption = page.locator('text=Opus').first();
-    if (await opusOption.isVisible().catch(() => false)) {
-      await opusOption.click();
-      await page.waitForTimeout(300);
-    }
+    // 8. Select Sonnet explicitly (matches the default Claude subscription path)
+    const sonnetOption = page.locator('text=Claude Sonnet').first();
+    await expect(sonnetOption).toBeVisible({ timeout: 5000 });
+    await sonnetOption.click();
+    await page.waitForTimeout(300);
     
     // 9. Save the changes
     const saveBtn = page.locator('button').filter({ hasText: /save/i }).first();
     if (await saveBtn.isVisible().catch(() => false)) {
       await saveBtn.click();
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(800);
     }
-    
-    // 10. Send a test message
+
     const input = page.locator('textarea[placeholder*="message" i], textarea').first();
     await expect(input).toBeVisible({ timeout: 5000 });
-    await input.fill('Hello, this is a test message from Claude Direct session');
-    await page.waitForTimeout(300);
+
+    const sendPrompt = async (prompt: string, expectedFragment: string, timeoutMs = 15000) => {
+      await input.fill(prompt);
+      await page.waitForTimeout(200);
+      const sendBtn = page.locator('button[title="Send message"]').first();
+      if (await sendBtn.isEnabled().catch(() => false)) {
+        await sendBtn.click();
+      } else {
+        await input.press('Control+Enter');
+      }
+      await expect(page.locator(`text=${expectedFragment}`)).toBeVisible({ timeout: timeoutMs });
+    };
+
+    // 10. Multi-turn verification
+    await sendPrompt('what model are you? Reply in one short sentence.', 'Sonnet');
+    await sendPrompt('tell me more about yourself in one short sentence.', 'Anthropic');
+    await sendPrompt('reply with exactly: followup works', 'followup works');
     
-    // Send with Ctrl+Enter or click send button
-    const sendBtn = page.locator('button[type="submit"]').first();
-    if (await sendBtn.isEnabled().catch(() => false)) {
-      await sendBtn.click();
-    } else {
-      await input.press('Control+Enter');
-    }
-    
-    // 11. Verify message appears and agent responds
-    await page.waitForTimeout(3000);
-    
-    // Check that our message appears in the chat
-    const ourMessage = page.locator('text=Hello, this is a test message from Claude Direct session');
-    await expect(ourMessage).toBeVisible({ timeout: 10000 });
-    
-    console.log('[TEST] Claude Direct model selector and messaging test completed successfully!');
+    console.log('[TEST] Claude Direct model selector and multi-turn messaging test completed successfully!');
   });
 });
