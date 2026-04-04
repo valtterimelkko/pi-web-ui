@@ -586,9 +586,19 @@ export class WebSocketConnectionManager {
     prompt: string,
     _images?: ImageContent[]
   ): Promise<void> {
+    // If the session already has a running process, wait for it to finish
     if (this.claudeService.isRunning(sessionId)) {
-      this.sendMessage(clientId, { type: 'error', message: 'Session already running', code: 'SESSION_BUSY' });
-      return;
+      console.log(`[handleClaudePrompt] Session ${sessionId} busy, waiting for current turn to finish...`);
+      const maxWait = 30000; // 30 seconds max wait
+      const pollInterval = 500;
+      const start = Date.now();
+      while (this.claudeService.isRunning(sessionId) && Date.now() - start < maxWait) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+      }
+      if (this.claudeService.isRunning(sessionId)) {
+        this.sendMessage(clientId, { type: 'error', message: 'Session still busy after waiting', code: 'SESSION_BUSY' });
+        return;
+      }
     }
 
     try {

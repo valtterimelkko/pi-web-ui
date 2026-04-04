@@ -45,6 +45,7 @@ export class ClaudeProcessPool {
     options: ClaudeProcessOptions,
     onEvent: ClaudeEventHandler,
     onComplete: (error?: Error) => void,
+    retryCount: number = 0,
   ): Promise<void> {
     if (this.activeProcesses.size >= this.maxProcesses) {
       throw new Error(
@@ -107,9 +108,14 @@ export class ClaudeProcessPool {
       }
     });
 
-    // ── Forward stderr to server logs ───────────────────────────────────────
+    // ── Collect stderr for error diagnosis and logging ────────────────────
+    let stderrOutput = '';
     proc.stderr?.on('data', (chunk: Buffer) => {
-      console.error(`[ClaudeProcessPool:${options.sessionId}] stderr:`, chunk.toString());
+      const text = chunk.toString();
+      stderrOutput += text;
+      if (!text.includes('no stdin data received')) {
+        console.error(`[ClaudeProcessPool:${options.sessionId}] stderr:`, text.trim());
+      }
     });
 
     // ── Handle process exit ─────────────────────────────────────────────────
@@ -121,6 +127,18 @@ export class ClaudeProcessPool {
     proc.on('exit', (code, signal) => {
       this.activeProcesses.delete(options.sessionId);
       rl.close();
+
+      // If the process failed because the session is still locked, retry with backoff
+      if (code !== 0 && stderrOutput.includes('is already in use') && retryCount < 5) {
+        const delay = 1500 + retryCount * 1000; // 1.5s, 2.5s, 3.5s, 4.5s, 5.5s
+        console.log(`[ClaudeProcessPool] Session lock detected for ${options.sessionId}, retry ${retryCount + 1}/5 in ${delay}ms...`);
+        setTimeout(() => {
+          this.spawn(options, onEvent, onComplete, retryCount + 1).catch((retryErr) => {
+            onComplete(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
+          });
+        }, delay);
+        return;
+      }
 
       if (code !== 0 && signal !== 'SIGTERM') {
         onComplete(
