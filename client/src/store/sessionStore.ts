@@ -83,6 +83,12 @@ export interface SessionData {
   contextPercent: number;
   currentStep: number;
   model: string | null;
+  quotaInfo?: {  // Claude rate-limit / quota info
+    status: string;
+    rateLimitType: string;
+    isUsingOverage: boolean;
+    resetsAt?: number;
+  } | null;
 }
 
 /**
@@ -821,23 +827,30 @@ export const useSessionStore = create<SessionState>()(
         switch (msg.type) {
           case 'sessions_list': {
             // Deduplicate sessions by path (path is the stable identifier)
-            const rawSessions = (msg.sessions as Session[]) || [];
+            const rawSessions = (msg.sessions as Array<Session & { sdkType?: 'pi' | 'claude' }>) || [];
             const seenPaths = new Set<string>();
-            const dedupedSessions = rawSessions.filter((session) => {
-              if (seenPaths.has(session.path)) {
-                console.warn(`[sessionStore] Duplicate session path in sessions_list: ${session.path}`);
-                return false;
-              }
-              seenPaths.add(session.path);
-              return true;
-            });
+            const dedupedSessions = rawSessions
+              .filter((session) => {
+                if (seenPaths.has(session.path)) {
+                  console.warn(`[sessionStore] Duplicate session path in sessions_list: ${session.path}`);
+                  return false;
+                }
+                seenPaths.add(session.path);
+                return true;
+              })
+              .map((session) => ({
+                ...session,
+                // Preserve sdkType if the server sends it
+                sdkType: session.sdkType ?? undefined,
+              }));
             set({ sessions: dedupedSessions, isLoadingSessions: false });
             break;
           }
 
-          case 'session_created':
+          case 'session_created': {
+            const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' };
             set({ 
-              currentSessionId: msg.sessionId as string,
+              currentSessionId: createdMsg.sessionId,
               messages: [], // Clear messages for new session
               contextPercent: 0,
               contextUsed: 0,
@@ -849,20 +862,29 @@ export const useSessionStore = create<SessionState>()(
               const newSessionMessages = { ...state.sessionMessages };
               const newSessionCacheMeta = { ...state.sessionCacheMeta };
               const newCache = new Map(state.sessionCache);
-              delete newSessionMessages[msg.sessionId as string];
-              delete newSessionCacheMeta[msg.sessionId as string];
-              newCache.delete(msg.sessionId as string);
+              delete newSessionMessages[createdMsg.sessionId];
+              delete newSessionCacheMeta[createdMsg.sessionId];
+              newCache.delete(createdMsg.sessionId);
+              // Add/update sdkType on the newly-created session entry
+              const updatedSessions = state.sessions.map((s) =>
+                s.id === createdMsg.sessionId && createdMsg.sdkType
+                  ? { ...s, sdkType: createdMsg.sdkType }
+                  : s
+              );
               return { 
+                sessions: updatedSessions,
                 sessionMessages: newSessionMessages,
                 sessionCacheMeta: newSessionCacheMeta,
                 sessionCache: newCache,
               };
             });
             break;
+          }
 
           case 'session_switched': {
             const switchMsg = msg as unknown as {
               sessionId: string;
+              sdkType?: 'pi' | 'claude';
               model?: string;
               contextWindow?: number;
               contextUsed?: number;
@@ -932,6 +954,15 @@ export const useSessionStore = create<SessionState>()(
                 });
               }
               
+              // Update sdkType on the switched-to session if server provides it
+              const updatedSessions = switchMsg.sdkType
+                ? state.sessions.map((s) =>
+                    s.id === switchMsg.sessionId
+                      ? { ...s, sdkType: switchMsg.sdkType }
+                      : s
+                  )
+                : state.sessions;
+
               return {
                 currentSessionId: switchMsg.sessionId,
                 currentModel: switchMsg.model ?? null,
@@ -939,6 +970,7 @@ export const useSessionStore = create<SessionState>()(
                 contextPercent: switchMsg.contextPercent ?? 0,
                 contextUsed: switchMsg.contextUsed ?? 0,
                 contextWindow: switchMsg.contextWindow ?? 0,
+                sessions: updatedSessions,
                 sessionMessages: newSessionMessages,
                 sessionCacheMeta: newSessionCacheMeta,
                 sessionCache: newCache,
@@ -1539,6 +1571,53 @@ export const useSessionStore = create<SessionState>()(
                       message: 'Auto-compaction completed successfully.',
                     });
                   }
+                }
+                break;
+              }
+
+              case 'session_init': {
+                // Claude session initialized — update model info if available
+                const initData = event as unknown as { model?: string; tools?: string[] };
+                if (initData.model) {
+                  // Update the session's model field in the sessions list
+                  set((state) => ({
+                    sessions: state.sessions.map((s) =>
+                      s.id === sessionId ? { ...s, model: initData.model } : s
+                    ),
+                  }));
+                  // Also update sessionData
+                  get().updateSessionData(sessionId, { model: initData.model });
+                  // Update currentModel if this is the active session
+                  if (get().currentSessionId === sessionId) {
+                    set({ currentModel: initData.model });
+                  }
+                }
+                break;
+              }
+
+              case 'rate_limit': {
+                // Claude quota / rate-limit info
+                const rateLimitData = event as unknown as {
+                  status: string;
+                  rateLimitType: string;
+                  isUsingOverage: boolean;
+                  resetsAt?: number;
+                };
+                // Persist quota info in session data
+                get().updateSessionData(sessionId, {
+                  quotaInfo: {
+                    status: rateLimitData.status,
+                    rateLimitType: rateLimitData.rateLimitType,
+                    isUsingOverage: rateLimitData.isUsingOverage,
+                    resetsAt: rateLimitData.resetsAt,
+                  },
+                });
+                // Show a warning toast if using paid overage on the active session
+                if (rateLimitData.isUsingOverage && get().currentSessionId === sessionId) {
+                  useUIStore.getState().addToast({
+                    type: 'warning',
+                    message: 'Claude session is using extra quota (overage)',
+                  });
                 }
                 break;
               }

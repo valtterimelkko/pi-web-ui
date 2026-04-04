@@ -10,6 +10,7 @@ import { CollapsibleToolCard } from '../Tools/CollapsibleToolCard';
 import { SubagentToolCard } from '../Tools/SubagentToolCard';
 import { TodoToolCard } from '../Tools/TodoToolCard';
 import { copyToClipboard } from '../../lib/clipboard';
+import { normalizeToolName } from '../../lib/messageAdapter';
 
 interface MessageBubbleProps {
   message: LiveMessage;
@@ -117,8 +118,12 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
 
   // Render tool call card for tool messages
   if (isTool && message.toolCall) {
+    // Normalize Claude PascalCase tool names to Pi equivalents for routing.
+    // The original name is still passed to the card so headers show the real name.
+    const normalizedName = normalizeToolName(message.toolCall.name);
+
     // Use SubagentToolCard for subagent tools to show hierarchical view
-    if (message.toolCall.name === 'subagent') {
+    if (normalizedName === 'subagent') {
       return (
         <SubagentToolCard
           name={message.toolCall.name}
@@ -129,7 +134,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
       );
     }
     // Use TodoToolCard for todo tools to show visual todo list
-    if (message.toolCall.name === 'todo') {
+    if (normalizedName === 'todo') {
       return (
         <TodoToolCard
           name={message.toolCall.name}
