@@ -160,7 +160,7 @@ describe('ClaudeEventNormalizer', () => {
 
   // ─── result event ─────────────────────────────────────────────────────────
 
-  it('result event → produces agent_end NormalizedEvent', () => {
+  it('result event → produces claude_result NormalizedEvent (agent_end emitted by process pool on exit)', () => {
     const line = JSON.stringify({
       type: 'result',
       result: 'All done!',
@@ -172,7 +172,7 @@ describe('ClaudeEventNormalizer', () => {
 
     const events = normalizer.normalize(line, SESSION_ID);
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('agent_end');
+    expect(events[0].type).toBe('claude_result');
     const data = events[0].data as Record<string, unknown>;
     expect(data.result).toBe('All done!');
     expect(data.isError).toBe(false);
@@ -234,16 +234,17 @@ describe('ClaudeEventNormalizer', () => {
     expect(types).toContain('message_start');
     expect(types).toContain('message_update');
     expect(types).toContain('message_end');
-    // result → agent_end
-    expect(types).toContain('agent_end');
+    // result → claude_result (agent_end comes from process pool on exit)
+    expect(types).toContain('claude_result');
+    expect(types).not.toContain('agent_end');
 
     // session_init should come first
     expect(types[0]).toBe('session_init');
-    // agent_end should be last
-    expect(types[types.length - 1]).toBe('agent_end');
+    // claude_result should be last from the normalizer
+    expect(types[types.length - 1]).toBe('claude_result');
   });
 
-  it('full fixture (text-only) produces session_init then text events then agent_end', () => {
+  it('full fixture (text-only) produces session_init then text events then claude_result', () => {
     const lines = fixtureTextOnly.split('\n').filter((l) => l.trim());
     const allEvents = lines.flatMap((line) => normalizer.normalize(line, SESSION_ID));
 
@@ -252,7 +253,8 @@ describe('ClaudeEventNormalizer', () => {
     expect(types).toContain('message_start');
     expect(types).toContain('message_update');
     expect(types).toContain('message_end');
-    expect(types[types.length - 1]).toBe('agent_end');
+    // agent_end is now emitted by the process pool on subprocess exit, not by normalizer
+    expect(types[types.length - 1]).toBe('claude_result');
     // No tool events in text-only fixture
     expect(types).not.toContain('tool_execution_start');
     expect(types).not.toContain('tool_execution_end');
