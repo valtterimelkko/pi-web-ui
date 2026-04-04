@@ -23,6 +23,13 @@ export interface ClaudeAuthStatus {
 
 // ─── ClaudeService ────────────────────────────────────────────────────────────
 
+function normalizeClaudeModelAlias(model: string): 'opus' | 'sonnet' | 'haiku' {
+  const lower = model.toLowerCase();
+  if (lower.includes('opus')) return 'opus';
+  if (lower.includes('haiku')) return 'haiku';
+  return 'sonnet';
+}
+
 export class ClaudeService {
   private processPool: ClaudeProcessPool;
   private sessionStore: ClaudeSessionStore;
@@ -224,17 +231,19 @@ export class ClaudeService {
   }
 
   /** Update the model for a session (persisted in registry). */
-  async setModel(sessionId: string, model: string): Promise<void> {
+  async setModel(sessionId: string, model: string): Promise<'opus' | 'sonnet' | 'haiku'> {
     const entry = await this.registry.get(sessionId);
     if (!entry) {
       throw new Error(`Claude session not found: ${sessionId}`);
     }
+    const normalizedModel = normalizeClaudeModelAlias(model);
     await this.registry.upsert({
       id: sessionId,
       sdkType: 'claude',
       cwd: entry.cwd,
-      model,
+      model: normalizedModel,
     });
+    return normalizedModel;
   }
 
   // ── Queries ───────────────────────────────────────────────────────────────

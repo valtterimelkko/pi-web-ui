@@ -13,6 +13,15 @@ const CLAUDE_MODELS: Model[] = [
   { id: 'haiku', name: 'Claude Haiku', provider: 'anthropic', contextWindow: 200000, maxTokens: 64000, description: 'Fastest Claude model for simple tasks' },
 ];
 
+function normalizeClaudeModelId(modelId: string | null): 'opus' | 'sonnet' | 'haiku' | null {
+  if (!modelId) return null;
+  const lower = modelId.toLowerCase();
+  if (lower.includes('opus')) return 'opus';
+  if (lower.includes('haiku')) return 'haiku';
+  if (lower.includes('sonnet') || lower.includes('default')) return 'sonnet';
+  return null;
+}
+
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -47,8 +56,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         // For Claude sessions, use hardcoded Claude models
         if (isClaudeSession) {
           setModels(CLAUDE_MODELS);
-          // Default to sonnet if no model selected, or validate current selection
-          const validModel = CLAUDE_MODELS.find(m => m.id === storeCurrentModel);
+          // Default to sonnet if no model selected, or normalize any prior Claude model id
+          const normalizedCurrent = normalizeClaudeModelId(storeCurrentModel);
+          const validModel = CLAUDE_MODELS.find(m => m.id === normalizedCurrent);
           setCurrentModel(validModel?.id || 'sonnet');
           setIsLoading(false);
           return;
@@ -227,6 +237,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 models={models}
                 currentModel={currentModel}
                 onSelect={setCurrentModel}
+                qualifyWithProvider={!isClaudeSession}
               />
             )}
           </section>
