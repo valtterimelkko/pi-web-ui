@@ -73,6 +73,51 @@ Pi Web UI is a web interface for the Pi Coding Agent:
 - **Ref-Based Streaming** - No re-renders during content accumulation
 - **LRU Cache** - Max 5 sessions in memory, automatic eviction
 
+## Dual-SDK Session Architecture
+
+The system supports two session types, chosen at session creation:
+
+### Pi SDK Sessions (existing)
+- Managed by `MultiSessionManager` and `WorkerPool`
+- Persistent worker processes per session
+- Extensions, all providers, model switching
+
+### Claude Direct Sessions (new)
+- Managed by `ClaudeService` and `ClaudeProcessPool`
+- Ephemeral `claude -p` subprocesses (one per prompt, exit after response)
+- Session continuity via `--session-id` flag to Claude Code CLI
+- **Auth: Claude subscription (NOT API key)** — `ANTHROPIC_API_KEY` explicitly stripped from subprocess env
+- Session history persisted as JSONL in `~/.pi-web-ui/claude-sessions/`
+
+### Session Registry
+`server/src/session-registry.ts` — Unified index at `~/.pi-web-ui/session-registry.json` for both session types.
+
+### Claude Direct Key Files
+| File | Purpose |
+|---|---|
+| `server/src/claude/claude-service.ts` | Main service: process lifecycle, auth validation |
+| `server/src/claude/claude-process-pool.ts` | Pool of active `claude -p` subprocesses |
+| `server/src/claude/claude-event-normalizer.ts` | Converts `stream-json` output to NormalizedEvent |
+| `server/src/claude/claude-session-store.ts` | JSONL session history persistence |
+| `server/src/claude/claude-history-replay.ts` | History replay on session reconnect |
+| `server/src/session-registry.ts` | Unified session registry |
+
+### Debugging Claude Direct Sessions
+
+**Symptoms:** "Claude Direct" option disabled in modal, Claude session stuck
+
+**Diagnostic Steps:**
+1. Check if Claude Code is installed: `which claude`
+2. Check auth status: `claude auth status --output-format json`
+   - Must show `loggedIn: true`
+3. Check server logs for `[ClaudeService]` prefix
+4. Verify `ANTHROPIC_API_KEY` is NOT set in server env (it's stripped for subprocesses, but worth checking)
+
+**Claude auth health endpoint:**
+```bash
+curl http://localhost:3456/api/health/ready | jq '.claudeAuth'
+```
+
 ## Development Workflow
 
 ```bash
@@ -457,9 +502,9 @@ npm test -- --watch
 | Frontend | 70% | ~70% |
 
 ### Current Status
-- **Server**: 93/93 passing ✅
-- **Client**: 62/62 passing ✅
-- **E2E**: 9/9 passing ✅
+- **Server**: 735+ tests passing (includes new dual-SDK tests) ✅
+- **Client**: 62+ tests passing ✅
+- **E2E**: 14+ passing, correctly skips Claude-specific tests when not authenticated ✅
 
 ## Security Considerations
 
@@ -503,6 +548,8 @@ npm test -- --watch
 3. **No mobile responsive design**
    - Sidebar takes full width on mobile
    - Needs responsive breakpoints
+
+4. **Claude Direct requires separate auth** — Claude Code must be authenticated separately via `claude auth login`. The Web UI checks this on startup but cannot auto-authenticate.
 
 ### Enhancement Ideas
 
