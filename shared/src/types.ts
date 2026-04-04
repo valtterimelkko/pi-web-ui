@@ -1,3 +1,6 @@
+// SDK Type
+export type SdkType = 'pi' | 'claude';
+
 // WebSocket Message Types
 
 export interface WebSocketMessage<T = unknown> {
@@ -24,11 +27,26 @@ export interface SessionInfo {
   path: string;
   cwd: string;
   name?: string;
+  sdkType: SdkType;               // SDK type ('pi' | 'claude')
   parentSessionPath?: string;
   createdAt: Date;
   lastActivity: Date;
   messageCount: number;
   firstMessage: string;
+  model?: string;                   // current model name for display
+  claudeSessionId?: string;         // Claude Code session ID (for claude type)
+}
+
+export interface ClaudeSessionInfo {
+  id: string;           // Our internal ID (UUID)
+  claudeSessionId: string;  // Claude Code's session ID (--session-id flag)
+  cwd: string;
+  model: string;        // 'opus' | 'sonnet' | 'haiku'
+  createdAt: Date;
+  lastActivity: Date;
+  messageCount: number;
+  firstMessage: string;
+  status: 'idle' | 'running' | 'error';
 }
 
 // Session metadata for storing custom names
