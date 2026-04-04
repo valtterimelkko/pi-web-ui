@@ -50,6 +50,8 @@ export interface Session {
   messageCount: number;
   cwd: string;
   name?: string;
+  sdkType?: 'pi' | 'claude';  // optional for backward compatibility
+  model?: string;              // current model
   createdAt?: string;
   lastActivity?: string;
 }
@@ -167,6 +169,10 @@ interface SessionState {
   // Active worker sessions - list of sessionIds with active workers
   activeWorkers: string[];
 
+  // Claude Direct availability
+  claudeAvailable: boolean;
+  claudeAuthError: string | null;
+
   // Actions
   setSessions: (sessions: Session[]) => void;
   setCurrentSession: (sessionId: string | null) => void;
@@ -211,6 +217,9 @@ interface SessionState {
   updateWorkerStatus: (sessionId: string, status: WorkerStatus) => void;
   getWorkerStatus: (sessionId: string) => WorkerStatus | undefined;
   removeWorkerStatus: (sessionId: string) => void;
+
+  // Claude Direct availability
+  setClaudeAvailable: (available: boolean, error?: string | null) => void;
   
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -250,6 +259,9 @@ export const useSessionStore = create<SessionState>()(
       // Worker status tracking
       workerStatus: {},
       activeWorkers: [],
+      // Claude Direct availability
+      claudeAvailable: false,
+      claudeAuthError: null,
 
       // Worker status tracking implementation
       updateWorkerStatus: (sessionId: string, status: WorkerStatus) => {
@@ -282,6 +294,8 @@ export const useSessionStore = create<SessionState>()(
           };
         });
       },
+
+      setClaudeAvailable: (available, error = null) => set({ claudeAvailable: available, claudeAuthError: error }),
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),
@@ -1559,6 +1573,12 @@ export const useSessionStore = create<SessionState>()(
               const isStreaming = status === 'streaming' || status === 'busy';
               set({ isStreaming });
             }
+            break;
+          }
+
+          case 'claude_available': {
+            const claudeMsg = msg as unknown as { available: boolean; error?: string | null };
+            get().setClaudeAvailable(claudeMsg.available, claudeMsg.error || null);
             break;
           }
 
