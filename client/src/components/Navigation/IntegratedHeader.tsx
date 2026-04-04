@@ -1,6 +1,7 @@
-import { MessageSquare, Terminal, FolderOpen, GitBranch, ListTodo, type LucideIcon } from 'lucide-react';
+import { MessageSquare, Terminal, FolderOpen, GitBranch, ListTodo, Info, ChevronsUpDown, type LucideIcon } from 'lucide-react';
 import { useNavigationStore } from '../../store/navigationStore';
 import { useSessionStore } from '../../store/sessionStore';
+import { useUIStore } from '../../store/uiStore';
 
 type Tab = 'chat' | 'shell' | 'files' | 'git' | 'tasks';
 
@@ -17,6 +18,8 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const sessions = useSessionStore((state) => state.sessions);
   const session = sessions.find((s) => s.id === currentSessionId);
+  const openSessionInfo = useUIStore((state) => state.openSessionInfo);
+  const openTreeView = useUIStore((state) => state.openTreeView);
 
   // Suppress unused warning - onOpenSettings may be used in future
   void onOpenSettings;
@@ -27,27 +30,55 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
       <div className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate max-w-xs">
         {session?.name || session?.firstMessage?.slice(0, 40) || 'New Session'}
       </div>
-      {/* Right: tab pills */}
-      <div className="flex items-center gap-1">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors relative ${
-              activeTab === tab.id
-                ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
-            }`}
-          >
-            <tab.icon size={14} />
-            {tab.label}
-            {tab.id === 'tasks' && (
-              <span className="text-[9px] font-bold bg-blue-100 dark:bg-blue-900 text-blue-500 dark:text-blue-400 px-1 rounded">
-                Soon
-              </span>
-            )}
-          </button>
-        ))}
+      {/* Right: tab pills + session actions */}
+      <div className="flex items-center gap-2">
+        {/* Tab pills */}
+        <div className="flex items-center gap-1">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors relative ${
+                activeTab === tab.id
+                  ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
+              }`}
+            >
+              <tab.icon size={14} />
+              {tab.label}
+              {tab.id === 'tasks' && (
+                <span className="text-[9px] font-bold bg-blue-100 dark:bg-blue-900 text-blue-500 dark:text-blue-400 px-1 rounded">
+                  Soon
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Divider */}
+        {currentSessionId && (
+          <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1" />
+        )}
+
+        {/* Session action buttons - only when session active */}
+        {currentSessionId && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={openSessionInfo}
+              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+              title="Session info"
+            >
+              <Info className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+            </button>
+            <button
+              onClick={openTreeView}
+              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+              title="View conversation tree"
+            >
+              <ChevronsUpDown className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

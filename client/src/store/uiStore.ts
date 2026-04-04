@@ -15,6 +15,8 @@ interface UIState {
   // Modals
   settingsOpen: boolean;
   modelSelectorOpen: boolean;
+  sessionInfoOpen: boolean;
+  treeViewOpen: boolean;
 
   // Notifications
   toasts: Array<{
@@ -33,6 +35,10 @@ interface UIState {
   closeSettings: () => void;
   openModelSelector: () => void;
   closeModelSelector: () => void;
+  openSessionInfo: () => void;
+  closeSessionInfo: () => void;
+  openTreeView: () => void;
+  closeTreeView: () => void;
   addToast: (toast: Omit<UIState['toasts'][0], 'id'>) => void;
   removeToast: (id: string) => void;
   addRecentFolder: (path: string) => void;
@@ -52,6 +58,8 @@ export const useUIStore = create<UIState>()(
       theme: 'light',
       settingsOpen: false,
       modelSelectorOpen: false,
+      sessionInfoOpen: false,
+      treeViewOpen: false,
       toasts: [],
       recentFolders: [],
 
@@ -63,6 +71,12 @@ export const useUIStore = create<UIState>()(
 
       openModelSelector: () => set({ modelSelectorOpen: true }),
       closeModelSelector: () => set({ modelSelectorOpen: false }),
+
+      openSessionInfo: () => set({ sessionInfoOpen: true }),
+      closeSessionInfo: () => set({ sessionInfoOpen: false }),
+
+      openTreeView: () => set({ treeViewOpen: true }),
+      closeTreeView: () => set({ treeViewOpen: false }),
 
       addToast: (toast) => set((state) => ({
         toasts: [...state.toasts, { ...toast, id: `toast_${Date.now()}` }],

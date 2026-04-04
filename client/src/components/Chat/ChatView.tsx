@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useSessionStore } from '../../store';
 import { useNavigationStore } from '../../store/navigationStore';
+import { useUIStore } from '../../store/uiStore';
 import { VirtualizedMessageList, type VirtualizedMessageListHandle } from './VirtualizedMessageList';
 import { MessageInput } from './MessageInput';
 import { TreeView, type TreeEntry } from '../Tree';
@@ -21,9 +22,11 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
   const bottomNavCollapsed = useNavigationStore((state) => state.bottomNavCollapsed);
-  const [showTreeView, setShowTreeView] = useState(false);
+  const sessionInfoOpen = useUIStore((state) => state.sessionInfoOpen);
+  const treeViewOpen = useUIStore((state) => state.treeViewOpen);
+  const closeSessionInfo = useUIStore((state) => state.closeSessionInfo);
+  const closeTreeView = useUIStore((state) => state.closeTreeView);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
-  const [showSessionInfo, setShowSessionInfo] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const listRef = useRef<VirtualizedMessageListHandle>(null);
@@ -31,7 +34,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
 
   // Get worker status for current session
   const workerStatus = currentSessionId ? getWorkerStatus(currentSessionId) : undefined;
-  
+
   // Convert messages to tree entries
   const treeEntries: TreeEntry[] = messages.map((msg, index) => ({
     id: msg.id,
@@ -78,7 +81,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
           onCreateSession={() => setShowNewSessionModal(true)}
           workerStatus={workerStatus}
         />
-        
+
         {/* Scroll to bottom button */}
         {showScrollButton && (
           <button
@@ -99,12 +102,12 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
       </main>
 
       {/* Tree View Modal */}
-      {showTreeView && (
+      {treeViewOpen && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="w-full max-w-2xl mx-4">
             <TreeView
               entries={treeEntries}
-              onClose={() => setShowTreeView(false)}
+              onClose={closeTreeView}
               onNavigate={(id) => {
                 console.log('Navigate to:', id);
               }}
@@ -125,8 +128,8 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
 
       {/* Session Info Modal */}
       <SessionInfoModal
-        isOpen={showSessionInfo}
-        onClose={() => setShowSessionInfo(false)}
+        isOpen={sessionInfoOpen}
+        onClose={closeSessionInfo}
       />
     </div>
   );
