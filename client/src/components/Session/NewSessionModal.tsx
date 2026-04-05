@@ -147,8 +147,8 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" data-testid="new-session-modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="bg-white rounded-xl border border-gray-200 shadow-xl w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-2 sm:p-4" data-testid="new-session-modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl border border-gray-200 shadow-xl w-full max-w-2xl max-h-[95vh] sm:max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <div>
@@ -165,19 +165,19 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
 
         {/* SDK Type Selector */}
         <div className="px-4 pt-3 pb-2 border-b border-gray-200">
-          <p className="text-xs font-medium text-slate-400 mb-2">Session Type</p>
+          <p className="text-xs font-medium text-gray-500 mb-2">Session Type</p>
           <div className="grid grid-cols-2 gap-2">
             {/* Pi SDK option */}
             <button
               onClick={() => setSdkType('pi')}
               className={`flex flex-col items-start p-3 rounded-lg border text-left transition-colors ${
                 sdkType === 'pi'
-                  ? 'border-violet-500 bg-violet-500/10 text-slate-100'
-                  : 'border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-600'
+                  ? 'border-blue-500 bg-blue-50 text-gray-900'
+                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
               }`}
             >
               <span className="text-sm font-medium">Pi SDK</span>
-              <span className="text-xs text-slate-400 mt-0.5">All providers • Extensions</span>
+              <span className="text-xs text-gray-500 mt-0.5">All providers • Extensions</span>
             </button>
 
             {/* Claude Direct option */}
@@ -187,14 +187,14 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
               title={claudeAuthError || undefined}
               className={`flex flex-col items-start p-3 rounded-lg border text-left transition-colors ${
                 !claudeAvailable
-                  ? 'border-slate-700 bg-slate-800/30 text-slate-500 cursor-not-allowed'
+                  ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
                   : sdkType === 'claude'
-                  ? 'border-violet-500 bg-violet-500/10 text-slate-100'
-                  : 'border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-600'
+                  ? 'border-amber-500 bg-amber-50 text-gray-900'
+                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
               }`}
             >
               <span className="text-sm font-medium">Claude Direct</span>
-              <span className="text-xs text-slate-400 mt-0.5">
+              <span className="text-xs text-gray-500 mt-0.5">
                 {claudeAvailable ? 'Subscription quota • CC tools' : (claudeAuthError || 'Not available')}
               </span>
             </button>
@@ -307,7 +307,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         </div>
 
         {/* Directory Browser */}
-        <div className="flex-1 overflow-hidden flex flex-col min-h-[200px]">
+        <div className="flex-1 overflow-hidden flex flex-col min-h-[120px] sm:min-h-[200px]">
           {/* Breadcrumb */}
           <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-2">
             <Folder className="w-4 h-4 text-blue-600" />
@@ -366,11 +366,11 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-3 p-4 border-t border-gray-200">
-          <p className="text-xs text-gray-400">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border-t border-gray-200">
+          <p className="text-xs text-gray-400 truncate">
             Selected: <span className="text-gray-600 font-mono">{currentPath}</span>
           </p>
-          <div className="flex gap-3">
+          <div className="flex gap-3 justify-end">
             <button
               onClick={onClose}
               disabled={isCreating}
