@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useSessionStore } from '../../store';
 import { useNavigationStore } from '../../store/navigationStore';
 import { useUIStore } from '../../store/uiStore';
@@ -34,6 +34,10 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
 
   // Get worker status for current session
   const workerStatus = currentSessionId ? getWorkerStatus(currentSessionId) : undefined;
+
+  // Memoize message conversion to avoid creating new arrays on every render
+  // Only recomputes when the messages array reference changes
+  const liveMessages = useMemo(() => messagesToLiveMessages(messages), [messages]);
 
   // Convert messages to tree entries
   const treeEntries: TreeEntry[] = messages.map((msg, index) => ({
@@ -74,7 +78,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         {/* Message List - Virtualized for performance */}
         <VirtualizedMessageList
           ref={listRef}
-          messages={messagesToLiveMessages(messages)}
+          messages={liveMessages}
           isStreaming={isStreaming}
           onAtBottomChange={handleAtBottomChange}
           hasSession={!!currentSessionId}

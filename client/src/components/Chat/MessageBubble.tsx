@@ -2,7 +2,7 @@ import React, { useState, memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check, Bot } from 'lucide-react';
-import type { LiveMessage } from '../../hooks/useSessionStream.js';
+import type { LiveMessage, ContentPart } from '../../hooks/useSessionStream.js';
 import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -55,6 +55,18 @@ function ActivityIndicator({
       )}
     </div>
   );
+}
+
+function contentPartsEqual(a: ContentPart[], b: ContentPart[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    if (a[i].type !== b[i].type) return false;
+    if (a[i].type === 'text' && a[i].text !== (b[i] as ContentPart).text) return false;
+    if (a[i].type === 'thinking' && a[i].thinking !== (b[i] as ContentPart).thinking) return false;
+  }
+  return true;
 }
 
 // Memoized MessageBubble for performance
@@ -324,12 +336,9 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     </div>
   );
 }, (prevProps, nextProps) => {
-  // Custom comparison for better memoization
-  // Only re-render if message content or last status changes
-  // LiveMessage.content is ContentPart[], compare as JSON for simplicity
   return (
     prevProps.message.id === nextProps.message.id &&
-    JSON.stringify(prevProps.message.content) === JSON.stringify(nextProps.message.content) &&
+    contentPartsEqual(prevProps.message.content, nextProps.message.content) &&
     prevProps.isLast === nextProps.isLast &&
     prevProps.isCurrentRun === nextProps.isCurrentRun &&
     prevProps.message.toolResult?.output === nextProps.message.toolResult?.output &&

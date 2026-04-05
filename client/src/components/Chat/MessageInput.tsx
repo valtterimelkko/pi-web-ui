@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback, useEffect, memo } from 'react';
 import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles } from 'lucide-react';
 import { useChatStore, useSessionStore, useDraftStore } from '../../store';
 import { useUIStore } from '../../store/uiStore';
@@ -13,7 +13,7 @@ interface MessageInputProps {
   onOpenSettings?: () => void;
 }
 
-export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
+export const MessageInput = memo(function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -38,11 +38,13 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   const contextPercent = useSessionStore((state) => state.contextPercent);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
-  const sessionData = useSessionStore((state) => state.sessionData);
+  const quotaInfo = useSessionStore((state) => {
+    const sid = state.currentSessionId;
+    return sid ? state.sessionData[sid]?.quotaInfo ?? null : null;
+  });
 
   // Derive if current session is Claude Direct
   const isClaudeSession = currentSessionSdkType === 'claude';
-  const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo : null;
   const { sendPrompt, abortGeneration } = useWebSocket();
 
   // Draft store for per-session draft persistence
@@ -485,4 +487,4 @@ export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
       <CompactModal isOpen={showCompactModal} onClose={() => setShowCompactModal(false)} />
     </div>
   );
-}
+});
