@@ -7,10 +7,7 @@ import type { ContentPart } from '../hooks/useSessionStream.js';
 // Maximum sessions to keep in memory (LRU cache limit)
 const MAX_CACHED_SESSIONS = 5;
 
-// Track the current message ID per session for the multi-session event path.
-// Raw Pi SDK events forwarded by multi-session-manager don't include message IDs,
-// so we track the ID assigned at message_start to match subsequent message_update events.
-const currentMessageIdBySession = new Map<string, string>();
+// Message ID tracking moved to useSessionStream hook
 
 /**
  * LRU cache entry for session messages
@@ -1060,6 +1057,10 @@ export const useSessionStore = create<SessionState>()(
             });
             break;
 
+          // Top-level message events (single-session mode / legacy path)
+          // In multi-session mode these arrive inside session_event and are
+          // handled by useSessionStream. These top-level handlers remain for
+          // backward compatibility.
           case 'message_start': {
             const messageData = (msg.message as { id: string; role: string; content: unknown }) || {};
             const newMessage: Message = {
@@ -1073,16 +1074,14 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'message_update': {
-            // Update streaming content
             const { message: msgData, assistantMessageEvent } = msg as {
               message?: { id: string; content?: Message['content'] };
               assistantMessageEvent?: { type: string; delta?: string };
             };
-            
-            if (msgData?.id && assistantMessageEvent) {
-              const existingMsg = get().messages.find(m => m.id === msgData.id);
+            const messageId = msgData?.id;
+            if (messageId && assistantMessageEvent) {
+              const existingMsg = get().messages.find(m => m.id === messageId);
               if (existingMsg) {
-                // Get existing content array or create new one
                 let contentArray: ContentPart[];
                 if (Array.isArray(existingMsg.content)) {
                   contentArray = [...existingMsg.content];
@@ -1091,11 +1090,8 @@ export const useSessionStore = create<SessionState>()(
                 } else {
                   contentArray = [];
                 }
-
                 const eventType = assistantMessageEvent.type;
                 const delta = assistantMessageEvent.delta;
-
-                // Handle text content (text_delta)
                 if (eventType === 'text_delta') {
                   const lastEntry = contentArray[contentArray.length - 1];
                   if (lastEntry && lastEntry.type === 'text') {
@@ -1103,17 +1099,15 @@ export const useSessionStore = create<SessionState>()(
                   } else {
                     contentArray.push({ type: 'text' as const, text: delta });
                   }
-                  get().updateMessage(msgData.id, { content: contentArray });
-                }
-                // Handle thinking content (thinking_delta)
-                else if (eventType === 'thinking_delta') {
+                  get().updateMessage(messageId, { content: contentArray });
+                } else if (eventType === 'thinking_delta') {
                   const lastEntry = contentArray[contentArray.length - 1];
                   if (lastEntry && lastEntry.type === 'thinking') {
                     lastEntry.thinking = (lastEntry.thinking || '') + delta;
                   } else {
                     contentArray.push({ type: 'thinking' as const, thinking: delta });
                   }
-                  get().updateMessage(msgData.id, { content: contentArray });
+                  get().updateMessage(messageId, { content: contentArray });
                 }
               }
             }
@@ -1121,27 +1115,9 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'message_end': {
-            // Message streaming complete - update cache metadata
-            const { message: msgData } = msg as { message?: { id: string } };
-            if (msgData?.id) {
-              set((state) => {
-                const sessionId = state.currentSessionId;
-                if (sessionId) {
-                  const currentMeta = state.sessionCacheMeta[sessionId] || {};
-                  return {
-                    sessionCacheMeta: {
-                      ...state.sessionCacheMeta,
-                      [sessionId]: {
-                        ...currentMeta,
-                        lastLocalUpdate: Date.now(),
-                        messageCount: state.messages.length,
-                        sizeBytes: estimateMessagesSize(state.messages),
-                      },
-                    },
-                  };
-                }
-                return state;
-              });
+            const { message: endMsgData } = msg as { message?: { id: string } };
+            if (endMsgData?.id) {
+              get().updateMessage(endMsgData.id, { isComplete: true });
             }
             break;
           }
@@ -1169,7 +1145,7 @@ export const useSessionStore = create<SessionState>()(
               partialResult?: { content: Array<{ type: string; text?: string }> };
             };
             const content = partialResult?.content?.[0]?.text || '';
-            get().updateMessage(toolCallId, { 
+            get().updateMessage(toolCallId, {
               content,
               toolResult: { output: content, isError: false },
             });
@@ -1398,153 +1374,17 @@ export const useSessionStore = create<SessionState>()(
                 
               case 'agent_end':
                 get().setSessionStatus(sessionId, 'idle');
-                currentMessageIdBySession.delete(sessionId);
                 // Also update current session if it matches
                 if (get().currentSessionId === sessionId) {
                   set({ isStreaming: false });
                 }
                 break;
                 
-              case 'message_start': {
-                const messageData = (event.message as { id: string; role: string; content: unknown }) || {};
-                const newMessage: Message = {
-                  id: messageData.id || `msg_${Date.now()}`,
-                  role: messageData.role as 'user' | 'assistant' | 'tool',
-                  content: (messageData.content as Message['content']) ?? [],
-                  timestamp: Date.now(),
-                };
-                // Track the current message ID for this session so message_update
-                // events (which may arrive without IDs from raw SDK events) can
-                // be routed to the correct message.
-                currentMessageIdBySession.set(sessionId, newMessage.id);
-                get().addMessageToSession(sessionId, newMessage);
-                // Also update current session if it matches
-                if (get().currentSessionId === sessionId) {
-                  get().addMessage(newMessage);
-                }
-                break;
-              }
-              
-              case 'message_update': {
-                const { message: msgData, assistantMessageEvent } = event as {
-                  message?: { id: string; content?: Message['content'] };
-                  assistantMessageEvent?: { type: string; delta?: string };
-                };
-                
-                // Use the tracked current message ID as fallback when raw SDK
-                // events arrive without IDs (multi-session-manager bypasses
-                // the EventForwarder's ID injection).
-                const messageId = msgData?.id || currentMessageIdBySession.get(sessionId);
-                
-                if (messageId && assistantMessageEvent) {
-                  const sessionData = get().sessionData[sessionId];
-                  if (sessionData) {
-                    const existingMsg = sessionData.messages.find(m => m.id === messageId);
-                    if (existingMsg) {
-                      let contentArray: ContentPart[];
-                      if (Array.isArray(existingMsg.content)) {
-                        contentArray = [...existingMsg.content];
-                      } else if (typeof existingMsg.content === 'string') {
-                        contentArray = existingMsg.content ? [{ type: 'text' as const, text: existingMsg.content }] : [];
-                      } else {
-                        contentArray = [];
-                      }
-
-                      const eventType = assistantMessageEvent.type;
-                      const delta = assistantMessageEvent.delta;
-
-                      if (eventType === 'text_delta') {
-                        const lastEntry = contentArray[contentArray.length - 1];
-                        if (lastEntry && lastEntry.type === 'text') {
-                          lastEntry.text = (lastEntry.text || '') + delta;
-                        } else {
-                          contentArray.push({ type: 'text' as const, text: delta });
-                        }
-                        get().updateMessageInSession(sessionId, messageId, { content: contentArray });
-                        // Also update current session if it matches
-                        if (get().currentSessionId === sessionId) {
-                          get().updateMessage(messageId, { content: contentArray });
-                        }
-                      } else if (eventType === 'thinking_delta') {
-                        const lastEntry = contentArray[contentArray.length - 1];
-                        if (lastEntry && lastEntry.type === 'thinking') {
-                          lastEntry.thinking = (lastEntry.thinking || '') + delta;
-                        } else {
-                          contentArray.push({ type: 'thinking' as const, thinking: delta });
-                        }
-                        get().updateMessageInSession(sessionId, messageId, { content: contentArray });
-                        // Also update current session if it matches
-                        if (get().currentSessionId === sessionId) {
-                          get().updateMessage(messageId, { content: contentArray });
-                        }
-                      }
-                    }
-                  }
-                }
-                break;
-              }
-              
-              case 'tool_execution_start': {
-                const { toolCallId, toolName, args } = event as unknown as {
-                  toolCallId: string;
-                  toolName: string;
-                  args: unknown;
-                };
-                const toolMessage: Message = {
-                  id: toolCallId,
-                  role: 'tool',
-                  content: '',
-                  timestamp: Date.now(),
-                  toolCall: { id: toolCallId, name: toolName, args },
-                };
-                get().addMessageToSession(sessionId, toolMessage);
-                // Also update current session if it matches
-                if (get().currentSessionId === sessionId) {
-                  get().addMessage(toolMessage);
-                }
-                break;
-              }
-              
-              case 'tool_execution_update': {
-                const { toolCallId, partialResult } = event as unknown as {
-                  toolCallId: string;
-                  partialResult?: { content: Array<{ type: string; text?: string }> };
-                };
-                const content = partialResult?.content?.[0]?.text || '';
-                get().updateMessageInSession(sessionId, toolCallId, { 
-                  content,
-                  toolResult: { output: content, isError: false },
-                });
-                // Also update current session if it matches
-                if (get().currentSessionId === sessionId) {
-                  get().updateMessage(toolCallId, { 
-                    content,
-                    toolResult: { output: content, isError: false },
-                  });
-                }
-                break;
-              }
-              
-              case 'tool_execution_end': {
-                const { toolCallId, result, isError } = event as unknown as {
-                  toolCallId: string;
-                  result?: { content: Array<{ type: string; text?: string }> };
-                  isError: boolean;
-                };
-                const content = result?.content?.[0]?.text || '';
-                get().updateMessageInSession(sessionId, toolCallId, {
-                  content,
-                  toolResult: { output: content, isError },
-                });
-                // Also update current session if it matches
-                if (get().currentSessionId === sessionId) {
-                  get().updateMessage(toolCallId, {
-                    content,
-                    toolResult: { output: content, isError },
-                  });
-                }
-                break;
-              }
+              // Message/tool events now handled by useSessionStream hook
+              // The following cases were moved to useSessionStream for ref-based
+              // streaming without re-renders on every delta:
+              //   message_start, message_update, message_end,
+              //   tool_execution_start, tool_execution_update, tool_execution_end
               
               case 'auto_compaction_start': {
                 const { reason } = event as unknown as { reason: string };

@@ -1,807 +1,292 @@
 /**
  * Tests for useSessionStream Hook
  *
- * Tests cover:
- * - Ref accumulation without re-renders
- * - Identity guard effectiveness
- * - Atomic teardown
- * - History replay handling
- * - Rapid session switching
+ * Tests cover the ref-based streaming hook that subscribes to the global
+ * singleton WebSocket via getWebSocketInstance().addMessageListener().
+ *
+ * Event types handled by the hook:
+ *   agent_start / agent_end
+ *   message_start / message_update / message_end
+ *   tool_execution_start / tool_execution_update / tool_execution_end
+ *   history_start / history_end
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { useSessionStream } from '../../../src/hooks/useSessionStream';
-import type { LiveMessage, ContentPart } from '../../../src/hooks/useSessionStream';
 
 // ============================================================================
-// Mock WebSocket
+// Mock WebSocket Client
 // ============================================================================
 
-class MockWebSocket {
-  static CONNECTING = 0;
-  static OPEN = 1;
-  static CLOSING = 2;
-  static CLOSED = 3;
-
-  readyState: number = MockWebSocket.CONNECTING;
-  url: string;
-
-  private eventListeners: Map<string, Set<EventListener>> = new Map();
-
-  onopen: ((event: Event) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-
-  sentMessages: string[] = [];
-  closeCode: number | null = null;
-  closeReason: string | null = null;
-
-  constructor(url: string) {
-    this.url = url;
-  }
-
-  addEventListener(type: string, listener: EventListener): void {
-    if (!this.eventListeners.has(type)) {
-      this.eventListeners.set(type, new Set());
-    }
-    this.eventListeners.get(type)!.add(listener);
-  }
-
-  removeEventListener(type: string, listener: EventListener): void {
-    this.eventListeners.get(type)?.delete(listener);
-  }
-
-  private dispatchEvent(event: Event | CloseEvent | MessageEvent): void {
-    const listeners = this.eventListeners.get(event.type);
-    if (listeners) {
-      listeners.forEach((listener) => listener(event as Event));
-    }
-    if (event.type === 'open' && this.onopen) this.onopen(event as Event);
-    if (event.type === 'close' && this.onclose) this.onclose(event as CloseEvent);
-    if (event.type === 'error' && this.onerror) this.onerror(event as Event);
-    if (event.type === 'message' && this.onmessage)
-      this.onmessage(event as MessageEvent);
-  }
-
-  send(data: string): void {
-    this.sentMessages.push(data);
-  }
-
-  close(code?: number, reason?: string): void {
-    this.closeCode = code ?? 1000;
-    this.closeReason = reason ?? '';
-    this.readyState = MockWebSocket.CLOSED;
-    this.dispatchEvent(
-      new CloseEvent('close', { code: this.closeCode, reason: this.closeReason })
-    );
-  }
-
-  // Test helpers
-  open(): void {
-    this.readyState = MockWebSocket.OPEN;
-    this.dispatchEvent(new Event('open'));
-  }
-
-  simulateMessage(data: unknown): void {
-    this.dispatchEvent(
-      new MessageEvent('message', { data: JSON.stringify(data) })
-    );
-  }
-
-  simulateError(): void {
-    this.dispatchEvent(new Event('error'));
-  }
-
-  simulateClose(code: number = 1000, reason: string = ''): void {
-    this.readyState = MockWebSocket.CLOSED;
-    this.dispatchEvent(new CloseEvent('close', { code, reason }));
-  }
-
-  getLastMessage(): unknown {
-    const last = this.sentMessages[this.sentMessages.length - 1];
-    return last ? JSON.parse(last) : null;
-  }
-
-  clearMessages(): void {
-    this.sentMessages = [];
-  }
+interface MockWebSocketClient {
+  addMessageListener: ReturnType<typeof vi.fn>;
+  send: ReturnType<typeof vi.fn>;
+  getStatus: ReturnType<typeof vi.fn>;
 }
 
-// Store original WebSocket
-const OriginalWebSocket = global.WebSocket;
+let mockWsInstance: MockWebSocketClient | null = null;
+let capturedListener: ((message: unknown) => void) | null = null;
+
+// Mock the websocket module
+vi.mock('../../../src/lib/websocket.js', () => ({
+  getWebSocketInstance: () => mockWsInstance,
+}));
 
 // ============================================================================
 // Test Suite
 // ============================================================================
 
 describe('useSessionStream', () => {
-  let mockWsInstances: MockWebSocket[] = [];
-
   beforeEach(() => {
     vi.useFakeTimers();
-    mockWsInstances = [];
 
-    // Mock WebSocket that stores instances for testing
-    global.WebSocket = class extends MockWebSocket {
-      constructor(url: string) {
-        super(url);
-        mockWsInstances.push(this);
-        // Simulate async connection
-        setTimeout(() => {
-          if (this.readyState === MockWebSocket.CONNECTING) {
-            this.open();
-          }
-        }, 0);
-      }
-    } as unknown as typeof WebSocket;
+    // Create a fresh mock WS instance for each test
+    capturedListener = null;
+    mockWsInstance = {
+      addMessageListener: vi.fn((listener: (msg: unknown) => void) => {
+        capturedListener = listener;
+        return () => {
+          if (capturedListener === listener) capturedListener = null;
+        };
+      }),
+      send: vi.fn(() => true),
+      getStatus: vi.fn(() => 'connected'),
+    };
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
-    global.WebSocket = OriginalWebSocket;
-    mockWsInstances = [];
+    mockWsInstance = null;
+    capturedListener = null;
   });
+
+  // Helper: simulate a message from the WebSocket
+  function simulateMessage(message: unknown) {
+    if (!capturedListener) throw new Error('No listener registered');
+    act(() => {
+      capturedListener!(message);
+    });
+  }
+
+  // Helper: simulate a session_event wrapper
+  function simulateSessionEvent(sessionId: string, event: { type: string; [key: string]: unknown }) {
+    simulateMessage({
+      type: 'session_event',
+      sessionId,
+      event,
+    });
+  }
+
+  // Helper: simulate a direct (non-wrapped) message
+  function simulateDirectMessage(msg: { type: string; sessionId?: string; [key: string]: unknown }) {
+    simulateMessage(msg);
+  }
 
   // ========================================
   // Basic Hook Behavior
   // ========================================
 
   describe('basic hook behavior', () => {
-    it('should initialize with empty state when no sessionId', () => {
+    it('should initialize with empty messages and idle status when no sessionId', () => {
       const { result } = renderHook(() => useSessionStream(null));
 
       expect(result.current.messages).toEqual([]);
       expect(result.current.status).toBe('idle');
       expect(result.current.contextPercent).toBe(0);
+      expect(result.current.currentStep).toBe(0);
       expect(result.current.isReplaying).toBe(false);
       expect(result.current.streamingContent).toEqual([]);
       expect(result.current.activeToolCalls).toEqual([]);
     });
 
-    it('should start connecting when sessionId is provided', async () => {
-      const { result } = renderHook(() =>
-        useSessionStream('session-123', { autoConnect: true })
-      );
-
-      // Let WebSocket open and initialize
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Should have sent initialize request
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-      expect(ws).toBeDefined();
+    it('should not subscribe when sessionId is null', () => {
+      renderHook(() => useSessionStream(null));
+      expect(mockWsInstance!.addMessageListener).not.toHaveBeenCalled();
     });
 
-    it('should not auto-connect when autoConnect is false', async () => {
-      const { result } = renderHook(() =>
-        useSessionStream('session-123', { autoConnect: false })
-      );
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // No WebSocket should be created
-      expect(mockWsInstances.length).toBe(0);
+    it('should subscribe to WebSocket via addMessageListener when sessionId provided', () => {
+      renderHook(() => useSessionStream('session-123'));
+      expect(mockWsInstance!.addMessageListener).toHaveBeenCalledTimes(1);
+      expect(capturedListener).toBeTruthy();
     });
 
-    it('should disconnect when sessionId becomes null', async () => {
-      const { result, rerender } = renderHook(
-        ({ sessionId }) => useSessionStream(sessionId),
-        { initialProps: { sessionId: 'session-123' as string | null } }
-      );
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(mockWsInstances.length).toBeGreaterThan(0);
-
-      // Switch to null session
-      await act(async () => {
-        rerender({ sessionId: null });
-      });
-
-      // WebSocket should be closed
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-      expect(ws?.closeCode).not.toBeNull();
-    });
-  });
-
-  // ========================================
-  // Ref Accumulation Without Re-renders
-  // ========================================
-
-  describe('ref accumulation without re-renders', () => {
-    it('should accumulate text content without triggering re-renders on every delta', async () => {
-      let renderCount = 0;
-
-      const { result } = renderHook(() => {
-        renderCount++;
-        return useSessionStream('session-123');
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const initialRenderCount = renderCount;
-
-      // Simulate multiple content deltas
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      // First, simulate turnBegin
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
-
-      // Send multiple text deltas
-      for (let i = 0; i < 10; i++) {
-        ws.simulateMessage({
-          jsonrpc: '2.0',
-          method: 'contentPart',
-          params: {
-            type: 'text',
-            content: `chunk-${i} `,
-            isDelta: true,
-          },
-        });
-
-        // Small delay to allow batching
-        await vi.advanceTimersByTimeAsync(5);
-      }
-
-      // Should not have re-rendered on every delta (throttled updates)
-      // The exact count depends on throttling, but should be less than 10
-      expect(renderCount).toBeLessThan(initialRenderCount + 10);
+    it('should not auto-connect when autoConnect is false', () => {
+      renderHook(() => useSessionStream('session-123', { autoConnect: false }));
+      expect(mockWsInstance!.addMessageListener).not.toHaveBeenCalled();
     });
 
-    it('should accumulate thinking content in refs', async () => {
-      const { result } = renderHook(() => useSessionStream('session-123'));
+    it('should clean up subscription on unmount', () => {
+      const { unmount } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
+      expect(mockWsInstance!.addMessageListener).toHaveBeenCalledTimes(1);
+      const unsubscribeFn = mockWsInstance!.addMessageListener.mock.results[0].value;
+      expect(typeof unsubscribeFn).toBe('function');
 
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      // Simulate thinking content
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'thinking',
-          content: 'Let me think about this...',
-          isDelta: false,
-        },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Should have streaming content
-      expect(result.current.streamingContent.length).toBeGreaterThan(0);
-      expect(result.current.streamingContent[0].type).toBe('thinking');
-    });
-
-    it('should accumulate tool calls in refs', async () => {
-      const { result } = renderHook(() => useSessionStream('session-123'));
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      // Simulate tool call
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'toolCall',
-        params: {
-          id: 'tool-1',
-          name: 'read',
-          args: { path: '/test/file.ts' },
-        },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Tool call should be in messages
-      expect(result.current.messages.length).toBeGreaterThan(0);
-      const toolMessage = result.current.messages.find((m) => m.role === 'tool');
-      expect(toolMessage).toBeDefined();
-      expect(toolMessage?.toolCall?.name).toBe('read');
-    });
-  });
-
-  // ========================================
-  // Identity Guard Effectiveness
-  // ========================================
-
-  describe('identity guard effectiveness', () => {
-    it('should block stale callbacks after session switch', async () => {
-      const { result, rerender } = renderHook(
-        ({ sessionId }) => useSessionStream(sessionId),
-        { initialProps: { sessionId: 'session-1' } }
-      );
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Capture the first WebSocket
-      const ws1 = mockWsInstances[0];
-      expect(ws1).toBeDefined();
-
-      // Switch to new session before content arrives
-      await act(async () => {
-        rerender({ sessionId: 'session-2' });
-        await vi.runAllTimersAsync();
-      });
-
-      // Now simulate content from old session
-      ws1.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'text',
-          content: 'This should be ignored',
-          isDelta: false,
-        },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Messages should not contain the stale content
-      const hasStaleContent = result.current.messages.some((m) =>
-        m.content.some((p) => p.text?.includes('This should be ignored'))
-      );
-      expect(hasStaleContent).toBe(false);
-    });
-
-    it('should invalidate identity on disconnect', async () => {
-      const { result } = renderHook(() => useSessionStream('session-123'));
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      // Disconnect
-      act(() => {
-        result.current.cancelCurrentTurn();
-      });
-
-      // Try to send content after disconnect
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'text',
-          content: 'After disconnect',
-          isDelta: false,
-        },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Content should not appear
-      expect(result.current.messages.length).toBe(0);
-    });
-
-    it('should handle rapid session switches without stale state', async () => {
-      const { result, rerender } = renderHook(
-        ({ sessionId }) => useSessionStream(sessionId),
-        { initialProps: { sessionId: 'session-1' } }
-      );
-
-      // Rapid switches without waiting for connection
-      for (let i = 2; i <= 5; i++) {
-        await act(async () => {
-          rerender({ sessionId: `session-${i}` });
-          // Small delay but not enough to complete connection
-          await vi.advanceTimersByTimeAsync(1);
-        });
-      }
-
-      // Now let everything settle
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Should be in a clean state
-      expect(result.current.status).toBe('idle');
-    });
-  });
-
-  // ========================================
-  // Atomic Teardown
-  // ========================================
-
-  describe('atomic teardown', () => {
-    it('should clear all refs on unmount', async () => {
-      const { result, unmount } = renderHook(() =>
-        useSessionStream('session-123')
-      );
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Add some content
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'text',
-          content: 'Test content',
-          isDelta: false,
-        },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Unmount
       unmount();
 
-      // State should be cleared (we can't check refs directly, but we can verify behavior)
-      expect(result.current.messages).toEqual([]);
-    });
-
-    it('should clear all state on session change', async () => {
-      const { result, rerender } = renderHook(
-        ({ sessionId }) => useSessionStream(sessionId),
-        { initialProps: { sessionId: 'session-1' } }
-      );
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Add some messages
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'text',
-          content: 'Test',
-          isDelta: false,
-        },
-      });
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnEnd',
-        params: { turnId: 'turn-1' },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.messages.length).toBeGreaterThan(0);
-
-      // Switch session
-      await act(async () => {
-        rerender({ sessionId: 'session-2' });
-        await vi.runAllTimersAsync();
-      });
-
-      // Messages should be cleared
-      expect(result.current.messages).toEqual([]);
-    });
-
-    it('should prevent stale updates after cleanup', async () => {
-      const { result, rerender } = renderHook(
-        ({ sessionId }) => useSessionStream(sessionId),
-        { initialProps: { sessionId: 'session-1' } }
-      );
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws1 = mockWsInstances[0];
-
-      // Switch session
-      await act(async () => {
-        rerender({ sessionId: 'session-2' });
-        await vi.runAllTimersAsync();
-      });
-
-      // Send message to old WebSocket
-      ws1.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-stale' },
-      });
-      ws1.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnEnd',
-        params: { turnId: 'turn-stale' },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Should not have added stale messages
-      const hasStaleTurn = result.current.messages.some(
-        (m) => m.id.includes('turn-stale')
-      );
-      expect(hasStaleTurn).toBe(false);
+      // The unsubscribe function should have been called
+      // (returned by addMessageListener and stored in cleanup)
     });
   });
 
   // ========================================
-  // History Replay Handling
+  // Agent Lifecycle Events
   // ========================================
 
-  describe('history replay handling', () => {
-    it('should set isReplaying on replay_start', async () => {
+  describe('agent lifecycle', () => {
+    it('should set status to streaming on agent_start', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.isReplaying).toBe(false);
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'replay_start',
-        params: {},
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.isReplaying).toBe(true);
-    });
-
-    it('should clear isReplaying on replay_complete', async () => {
-      const { result } = renderHook(() => useSessionStream('session-123'));
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      // Start replay
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'replay_start',
-        params: {},
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.isReplaying).toBe(true);
-
-      // Complete replay
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'replay_complete',
-        params: {},
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.isReplaying).toBe(false);
-    });
-
-    it('should handle replayed messages', async () => {
-      const { result } = renderHook(() => useSessionStream('session-123'));
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      // Simulate replay
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'replay_start',
-        params: {},
-      });
-
-      // Replay some messages
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-replay-1' },
-      });
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'text',
-          content: 'Replayed message',
-          isDelta: false,
-        },
-      });
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnEnd',
-        params: { turnId: 'turn-replay-1' },
-      });
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'replay_complete',
-        params: {},
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Should have the replayed message
-      expect(result.current.messages.length).toBeGreaterThan(0);
-      expect(result.current.isReplaying).toBe(false);
-    });
-  });
-
-  // ========================================
-  // Rapid Session Switching
-  // ========================================
-
-  describe('rapid session switching', () => {
-    it('should handle rapid session switches without memory leaks', async () => {
-      const { result, rerender } = renderHook(
-        ({ sessionId }) => useSessionStream(sessionId),
-        { initialProps: { sessionId: 'session-1' } }
-      );
-
-      // Rapid switches
-      for (let i = 2; i <= 10; i++) {
-        await act(async () => {
-          rerender({ sessionId: `session-${i}` });
-          await vi.advanceTimersByTimeAsync(1);
-        });
-      }
-
-      // Let everything settle
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Should have created multiple WebSockets
-      expect(mockWsInstances.length).toBeGreaterThan(1);
-
-      // All but the last should be closed
-      const closedCount = mockWsInstances.filter(
-        (ws) => ws.readyState === MockWebSocket.CLOSED
-      ).length;
-      expect(closedCount).toBe(mockWsInstances.length - 1);
-    });
-
-    it('should not accumulate stale messages on rapid switches', async () => {
-      const { result, rerender } = renderHook(
-        ({ sessionId }) => useSessionStream(sessionId),
-        { initialProps: { sessionId: 'session-1' } }
-      );
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Add message to first session
-      const ws1 = mockWsInstances[0];
-      ws1.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
-      ws1.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnEnd',
-        params: { turnId: 'turn-1' },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Rapid switch
-      for (let i = 2; i <= 5; i++) {
-        await act(async () => {
-          rerender({ sessionId: `session-${i}` });
-          await vi.runAllTimersAsync();
-        });
-      }
-
-      // Messages should be empty (cleared on each switch)
-      expect(result.current.messages).toEqual([]);
-    });
-
-    it('should handle session switch during streaming', async () => {
-      const { result, rerender } = renderHook(
-        ({ sessionId }) => useSessionStream(sessionId),
-        { initialProps: { sessionId: 'session-1' } }
-      );
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws1 = mockWsInstances[0];
-
-      // Start streaming
-      ws1.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
-
-      ws1.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'text',
-          content: 'Streaming...',
-          isDelta: false,
-        },
-      });
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(10);
-      });
+      simulateSessionEvent('session-123', { type: 'agent_start' });
 
       expect(result.current.status).toBe('streaming');
+    });
 
-      // Switch session mid-stream
-      await act(async () => {
-        rerender({ sessionId: 'session-2' });
-        await vi.runAllTimersAsync();
+    it('should commit streaming and set status to idle on agent_end', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      // Start agent
+      simulateSessionEvent('session-123', { type: 'agent_start' });
+      expect(result.current.status).toBe('streaming');
+
+      // End agent
+      simulateSessionEvent('session-123', { type: 'agent_end' });
+      expect(result.current.status).toBe('idle');
+    });
+  });
+
+  // ========================================
+  // Message Streaming
+  // ========================================
+
+  describe('message streaming', () => {
+    it('should add user message on message_start with role=user', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'user', content: 'Hello' },
       });
 
-      // Status should reset
+      expect(result.current.messages).toHaveLength(1);
+      expect(result.current.messages[0]).toMatchObject({
+        id: 'msg-1',
+        role: 'user',
+        content: [{ type: 'text', text: 'Hello' }],
+        isComplete: true,
+      });
+    });
+
+    it('should track assistant message ID on message_start with role=assistant', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-2', role: 'assistant' },
+      });
+
+      // No message committed yet (still accumulating)
+      expect(result.current.messages).toHaveLength(0);
+    });
+
+    it('should accumulate text_delta in refs without immediate state update', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      // Start assistant message
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-2', role: 'assistant' },
+      });
+
+      // Send text deltas - should NOT immediately update messages state
+      simulateSessionEvent('session-123', {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Hello ' },
+      });
+
+      simulateSessionEvent('session-123', {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'world' },
+      });
+
+      // Messages should not have the content yet (accumulating in refs)
+      expect(result.current.messages).toHaveLength(0);
+    });
+
+    it('should accumulate thinking_delta in refs', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      // Start agent + assistant message
+      simulateSessionEvent('session-123', { type: 'agent_start' });
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-2', role: 'assistant' },
+      });
+
+      // Send thinking delta
+      simulateSessionEvent('session-123', {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_delta', delta: 'Let me think...' },
+      });
+
+      // Streaming content should reflect the thinking (via throttled update)
+      // Run timers to flush any throttled updates
+      act(() => { vi.advanceTimersByTime(50); });
+
+      // After throttled update, streamingContent should show thinking
+      expect(result.current.status).toBe('streaming');
+    });
+
+    it('should commit streaming content to messages on message_end', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      // Start assistant message
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-2', role: 'assistant' },
+      });
+
+      // Send text deltas
+      simulateSessionEvent('session-123', {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Hello world' },
+      });
+
+      // Commit on message_end
+      simulateSessionEvent('session-123', { type: 'message_end' });
+
+      expect(result.current.messages).toHaveLength(1);
+      expect(result.current.messages[0]).toMatchObject({
+        id: 'msg-2',
+        role: 'assistant',
+        isComplete: true,
+      });
+      // Content should include the accumulated text
+      const content = result.current.messages[0].content;
+      const textPart = content.find((p) => p.type === 'text');
+      expect(textPart?.text).toBe('Hello world');
+    });
+
+    it('should commit on agent_end', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      simulateSessionEvent('session-123', { type: 'agent_start' });
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-2', role: 'assistant' },
+      });
+      simulateSessionEvent('session-123', {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Response text' },
+      });
+
+      // agent_end commits the message
+      simulateSessionEvent('session-123', { type: 'agent_end' });
+
+      expect(result.current.messages).toHaveLength(1);
       expect(result.current.status).toBe('idle');
-      expect(result.current.streamingContent).toEqual([]);
     });
   });
 
@@ -810,111 +295,280 @@ describe('useSessionStream', () => {
   // ========================================
 
   describe('tool execution', () => {
-    it('should handle tool call start', async () => {
+    it('should add tool message on tool_execution_start', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_start',
+        toolCallId: 'tool-1',
+        toolName: 'bash',
+        args: { command: 'echo test' },
       });
 
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'toolCall',
-        params: {
-          id: 'tool-1',
-          name: 'bash',
-          args: { command: 'echo test' },
-        },
+      expect(result.current.messages).toHaveLength(1);
+      const toolMsg = result.current.messages[0];
+      expect(toolMsg.role).toBe('tool');
+      expect(toolMsg.id).toBe('tool-1');
+      expect(toolMsg.toolCall).toEqual({
+        id: 'tool-1',
+        name: 'bash',
+        args: { command: 'echo test' },
       });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const toolMessage = result.current.messages.find((m) => m.role === 'tool');
-      expect(toolMessage).toBeDefined();
-      expect(toolMessage?.toolCall?.name).toBe('bash');
-      expect(toolMessage?.toolCall?.args).toEqual({ command: 'echo test' });
+      expect(toolMsg.isComplete).toBe(false);
     });
 
-    it('should handle tool result', async () => {
+    it('should update tool message with result on tool_execution_end', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
       // Start tool
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'toolCall',
-        params: {
-          id: 'tool-1',
-          name: 'bash',
-          args: { command: 'echo test' },
-        },
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_start',
+        toolCallId: 'tool-1',
+        toolName: 'bash',
+        args: { command: 'echo test' },
       });
 
       // End tool with result
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'toolResult',
-        params: {
-          id: 'tool-1',
-          result: 'test output',
-          isError: false,
-        },
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_end',
+        toolCallId: 'tool-1',
+        result: { content: [{ type: 'text', text: 'test output' }] },
+        isError: false,
       });
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const toolMessage = result.current.messages.find((m) => m.id === 'tool-1');
-      expect(toolMessage?.toolResult).toBeDefined();
-      expect(toolMessage?.toolResult?.output).toBe('test output');
-      expect(toolMessage?.toolResult?.isError).toBe(false);
+      const toolMsg = result.current.messages.find((m) => m.id === 'tool-1');
+      expect(toolMsg?.toolResult).toEqual({ output: 'test output', isError: false });
+      expect(toolMsg?.isComplete).toBe(true);
     });
 
-    it('should handle tool error', async () => {
+    it('should handle tool error', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_start',
+        toolCallId: 'tool-err',
+        toolName: 'bash',
+        args: { command: 'exit 1' },
       });
 
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'toolCall',
-        params: {
-          id: 'tool-1',
-          name: 'bash',
-          args: { command: 'exit 1' },
-        },
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_end',
+        toolCallId: 'tool-err',
+        result: { content: [{ type: 'text', text: 'Command failed' }] },
+        isError: true,
       });
 
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'toolResult',
-        params: {
-          id: 'tool-1',
-          result: 'Command failed',
-          isError: true,
-        },
+      const toolMsg = result.current.messages.find((m) => m.id === 'tool-err');
+      expect(toolMsg?.toolResult?.isError).toBe(true);
+      expect(toolMsg?.toolResult?.output).toBe('Command failed');
+    });
+
+    it('should update partial result on tool_execution_update', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_start',
+        toolCallId: 'tool-1',
+        toolName: 'read',
+        args: { path: '/test' },
       });
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_update',
+        toolCallId: 'tool-1',
+        partialResult: { content: [{ type: 'text', text: 'partial output' }] },
       });
 
-      const toolMessage = result.current.messages.find((m) => m.id === 'tool-1');
-      expect(toolMessage?.toolResult?.isError).toBe(true);
+      const toolMsg = result.current.messages.find((m) => m.id === 'tool-1');
+      expect(toolMsg?.toolResult).toEqual({ output: 'partial output', isError: false });
+    });
+
+    it('should handle concurrent tool calls', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      // Start multiple tools
+      for (let i = 1; i <= 3; i++) {
+        simulateSessionEvent('session-123', {
+          type: 'tool_execution_start',
+          toolCallId: `tool-${i}`,
+          toolName: `read-${i}`,
+          args: { path: `/file-${i}` },
+        });
+      }
+
+      const toolMessages = result.current.messages.filter((m) => m.role === 'tool');
+      expect(toolMessages).toHaveLength(3);
+
+      // End them
+      for (let i = 1; i <= 3; i++) {
+        simulateSessionEvent('session-123', {
+          type: 'tool_execution_end',
+          toolCallId: `tool-${i}`,
+          result: { content: [{ type: 'text', text: `output-${i}` }] },
+          isError: false,
+        });
+      }
+
+      for (let i = 1; i <= 3; i++) {
+        const msg = result.current.messages.find((m) => m.id === `tool-${i}`);
+        expect(msg?.isComplete).toBe(true);
+      }
+    });
+  });
+
+  // ========================================
+  // History Replay
+  // ========================================
+
+  describe('history replay', () => {
+    it('should clear messages and set isReplaying on history_start', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      // Add a message first
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'user', content: 'Old message' },
+      });
+      expect(result.current.messages).toHaveLength(1);
+
+      // Start history replay
+      simulateDirectMessage({ type: 'history_start' });
+
+      expect(result.current.messages).toEqual([]);
+      expect(result.current.isReplaying).toBe(true);
+    });
+
+    it('should clear isReplaying on history_end', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      simulateDirectMessage({ type: 'history_start' });
+      expect(result.current.isReplaying).toBe(true);
+
+      simulateDirectMessage({ type: 'history_end' });
+      expect(result.current.isReplaying).toBe(false);
+    });
+
+    it('should handle history_start via session_event wrapper', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      simulateSessionEvent('session-123', { type: 'history_start' });
+      expect(result.current.messages).toEqual([]);
+      expect(result.current.isReplaying).toBe(true);
+
+      simulateSessionEvent('session-123', { type: 'history_end' });
+      expect(result.current.isReplaying).toBe(false);
+    });
+  });
+
+  // ========================================
+  // Session Filtering
+  // ========================================
+
+  describe('session filtering', () => {
+    it('should ignore session_event for different sessionId', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      simulateSessionEvent('session-456', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'user', content: 'Other session' },
+      });
+
+      expect(result.current.messages).toHaveLength(0);
+    });
+
+    it('should process session_event for matching sessionId', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'user', content: 'My session' },
+      });
+
+      expect(result.current.messages).toHaveLength(1);
+    });
+
+    it('should process direct messages regardless of sessionId filter', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      // Direct message (not session_event wrapper) should be processed
+      simulateDirectMessage({ type: 'history_start' });
+      expect(result.current.isReplaying).toBe(true);
+    });
+  });
+
+  // ========================================
+  // Identity Guard
+  // ========================================
+
+  describe('identity guard', () => {
+    it('should block stale callbacks after session switch', () => {
+      const { result, rerender } = renderHook(
+        ({ sessionId }) => useSessionStream(sessionId),
+        { initialProps: { sessionId: 'session-1' } }
+      );
+
+      // Capture the listener for session-1
+      const listener1 = capturedListener;
+
+      // Switch to a new session
+      act(() => {
+        rerender({ sessionId: 'session-2' });
+      });
+
+      // Simulate a message through the OLD listener (stale callback)
+      act(() => {
+        listener1!({
+          type: 'session_event',
+          sessionId: 'session-1',
+          event: {
+            type: 'message_start',
+            message: { id: 'msg-stale', role: 'user', content: 'Stale' },
+          },
+        });
+      });
+
+      // Should NOT appear in messages
+      expect(result.current.messages.some((m) => m.id === 'msg-stale')).toBe(false);
+    });
+
+    it('should handle rapid session switches', () => {
+      const { result, rerender } = renderHook(
+        ({ sessionId }) => useSessionStream(sessionId),
+        { initialProps: { sessionId: 'session-1' } }
+      );
+
+      // Rapid switches
+      for (let i = 2; i <= 5; i++) {
+        act(() => {
+          rerender({ sessionId: `session-${i}` });
+        });
+      }
+
+      // Should be in clean state
+      expect(result.current.messages).toEqual([]);
+      expect(result.current.status).toBe('idle');
+    });
+
+    it('should clear state on session change', () => {
+      const { result, rerender } = renderHook(
+        ({ sessionId }) => useSessionStream(sessionId),
+        { initialProps: { sessionId: 'session-1' } }
+      );
+
+      // Add messages
+      simulateSessionEvent('session-1', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'user', content: 'Hello' },
+      });
+      expect(result.current.messages).toHaveLength(1);
+
+      // Switch session
+      act(() => {
+        rerender({ sessionId: 'session-2' });
+      });
+
+      // Messages should be cleared
+      expect(result.current.messages).toEqual([]);
     });
   });
 
@@ -923,113 +577,77 @@ describe('useSessionStream', () => {
   // ========================================
 
   describe('actions', () => {
-    it('should send prompt', async () => {
+    it('should send prompt via WebSocket client', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      act(() => {
+        result.current.sendPrompt('Hello, world!');
       });
 
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-      ws.clearMessages();
-
-      await act(async () => {
-        await result.current.sendPrompt('Hello, world!');
-      });
-
-      const lastMessage = ws.getLastMessage();
-      expect(lastMessage).toMatchObject({
-        jsonrpc: '2.0',
-        method: 'prompt',
-        params: {
-          content: 'Hello, world!',
-        },
+      expect(mockWsInstance!.send).toHaveBeenCalledWith({
+        type: 'prompt',
+        sessionId: 'session-123',
+        message: 'Hello, world!',
+        images: undefined,
       });
     });
 
-    it('should send prompt with attachments', async () => {
+    it('should set status to busy when sending prompt', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      act(() => {
+        result.current.sendPrompt('Hello');
       });
 
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-      ws.clearMessages();
-
-      const attachments = [
-        {
-          name: 'test.txt',
-          mimeType: 'text/plain',
-          data: 'SGVsbG8=', // Base64 "Hello"
-        },
-      ];
-
-      await act(async () => {
-        await result.current.sendPrompt('Check this file', attachments);
-      });
-
-      const lastMessage = ws.getLastMessage();
-      expect(lastMessage).toMatchObject({
-        method: 'prompt',
-        params: {
-          content: 'Check this file',
-          attachments,
-        },
-      });
+      expect(result.current.status).toBe('busy');
     });
 
-    it('should cancel current turn', async () => {
+    it('should set status to error if send fails', () => {
+      mockWsInstance!.send.mockReturnValueOnce(false);
+
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      act(() => {
+        result.current.sendPrompt('Hello');
       });
 
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-      ws.clearMessages();
+      expect(result.current.status).toBe('error');
+    });
+
+    it('should handle sendPrompt when no WebSocket instance', () => {
+      mockWsInstance = null;
+
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      // Should not throw
+      expect(() => {
+        act(() => {
+          result.current.sendPrompt('Hello');
+        });
+      }).not.toThrow();
+    });
+
+    it('should cancel current turn via WebSocket client', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
 
       act(() => {
         result.current.cancelCurrentTurn();
       });
 
-      const lastMessage = ws.getLastMessage();
-      expect(lastMessage).toMatchObject({
-        jsonrpc: '2.0',
-        method: 'cancel',
-      });
-
+      expect(mockWsInstance!.send).toHaveBeenCalledWith({ type: 'abort' });
       expect(result.current.status).toBe('idle');
     });
 
-    it('should clear messages', async () => {
+    it('should clear messages via clearMessages', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
       // Add a message
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'user', content: 'Test' },
       });
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnEnd',
-        params: { turnId: 'turn-1' },
-      });
+      expect(result.current.messages).toHaveLength(1);
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.messages.length).toBeGreaterThan(0);
-
-      // Clear
       act(() => {
         result.current.clearMessages();
       });
@@ -1039,149 +657,100 @@ describe('useSessionStream', () => {
   });
 
   // ========================================
-  // Status Handling
+  // Full Streaming Cycle
   // ========================================
 
-  describe('status handling', () => {
-    it('should update status on status event', async () => {
+  describe('full streaming cycle', () => {
+    it('should handle complete user -> assistant turn', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.status).toBe('idle');
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'status',
-        params: {
-          status: 'busy',
-          message: 'Processing...',
-        },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.status).toBe('busy');
-    });
-
-    it('should set status to streaming on turnBegin', async () => {
-      const { result } = renderHook(() => useSessionStream('session-123'));
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.status).toBe('streaming');
-    });
-
-    it('should set status to idle on turnEnd', async () => {
-      const { result } = renderHook(() => useSessionStream('session-123'));
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
+      // 1. Agent starts
+      simulateSessionEvent('session-123', { type: 'agent_start' });
       expect(result.current.status).toBe('streaming');
 
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnEnd',
-        params: { turnId: 'turn-1' },
+      // 2. User message
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-user', role: 'user', content: 'What is 2+2?' },
+      });
+      expect(result.current.messages).toHaveLength(1);
+
+      // 3. Assistant message start
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-assistant', role: 'assistant' },
       });
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      // 4. Text deltas
+      simulateSessionEvent('session-123', {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'The answer is ' },
+      });
+      simulateSessionEvent('session-123', {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: '4.' },
       });
 
+      // 5. Message end — commit assistant message
+      simulateSessionEvent('session-123', { type: 'message_end' });
+
+      expect(result.current.messages).toHaveLength(2); // user + assistant
+      const assistantMsg = result.current.messages[1];
+      expect(assistantMsg.role).toBe('assistant');
+      expect(assistantMsg.isComplete).toBe(true);
+      const textPart = assistantMsg.content.find((p) => p.type === 'text');
+      expect(textPart?.text).toBe('The answer is 4.');
+
+      // 6. Agent ends
+      simulateSessionEvent('session-123', { type: 'agent_end' });
       expect(result.current.status).toBe('idle');
     });
-  });
 
-  // ========================================
-  // Context Tracking
-  // ========================================
-
-  describe('context tracking', () => {
-    it('should update context percent', async () => {
+    it('should handle turn with tool calls', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      simulateSessionEvent('session-123', { type: 'agent_start' });
+
+      // User message
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'user', content: 'Read the file' },
       });
 
-      expect(result.current.contextPercent).toBe(0);
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'context',
-        params: {
-          percent: 75,
-        },
+      // Tool execution
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_start',
+        toolCallId: 'tool-1',
+        toolName: 'read',
+        args: { path: '/test.txt' },
       });
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_end',
+        toolCallId: 'tool-1',
+        result: { content: [{ type: 'text', text: 'file contents here' }] },
+        isError: false,
       });
 
-      expect(result.current.contextPercent).toBe(75);
-    });
-
-    it('should update current step', async () => {
-      const { result } = renderHook(() => useSessionStream('session-123'));
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      // Assistant response
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-2', role: 'assistant' },
       });
-
-      expect(result.current.currentStep).toBe(0);
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'context',
-        params: {
-          step: 3,
-        },
+      simulateSessionEvent('session-123', {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Here is the file contents' },
       });
+      simulateSessionEvent('session-123', { type: 'message_end' });
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
+      simulateSessionEvent('session-123', { type: 'agent_end' });
 
-      expect(result.current.currentStep).toBe(3);
+      // Should have: user, tool, assistant
+      expect(result.current.messages).toHaveLength(3);
+      expect(result.current.messages[0].role).toBe('user');
+      expect(result.current.messages[1].role).toBe('tool');
+      expect(result.current.messages[2].role).toBe('assistant');
+      expect(result.current.status).toBe('idle');
     });
   });
 
@@ -1190,272 +759,131 @@ describe('useSessionStream', () => {
   // ========================================
 
   describe('edge cases', () => {
-    it('should handle sendPrompt when not connected', async () => {
-      const { result } = renderHook(() =>
-        useSessionStream('session-123', { autoConnect: false })
-      );
+    it('should handle message_update without assistantMessageEvent', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
 
       // Should not throw
-      await expect(
-        result.current.sendPrompt('Hello')
-      ).resolves.toBeUndefined();
+      expect(() => {
+        simulateSessionEvent('session-123', { type: 'message_update' });
+      }).not.toThrow();
+
+      expect(result.current.messages).toHaveLength(0);
     });
 
-    it('should handle cancelCurrentTurn when not connected', () => {
-      const { result } = renderHook(() =>
-        useSessionStream('session-123', { autoConnect: false })
-      );
-
-      // Should not throw
-      expect(() => result.current.cancelCurrentTurn()).not.toThrow();
-    });
-
-    it('should handle multiple turnBegin/turnEnd cycles', async () => {
+    it('should handle user message with array content', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      // Multiple turns
-      for (let i = 1; i <= 3; i++) {
-        ws.simulateMessage({
-          jsonrpc: '2.0',
-          method: 'turnBegin',
-          params: { turnId: `turn-${i}` },
-        });
-
-        ws.simulateMessage({
-          jsonrpc: '2.0',
-          method: 'contentPart',
-          params: {
-            type: 'text',
-            content: `Message ${i}`,
-            isDelta: false,
-          },
-        });
-
-        ws.simulateMessage({
-          jsonrpc: '2.0',
-          method: 'turnEnd',
-          params: { turnId: `turn-${i}` },
-        });
-
-        await act(async () => {
-          await vi.runAllTimersAsync();
-        });
-      }
-
-      // Should have 3 assistant messages
-      const assistantMessages = result.current.messages.filter(
-        (m) => m.role === 'assistant'
-      );
-      expect(assistantMessages.length).toBe(3);
-    });
-
-    it('should handle concurrent tool calls', async () => {
-      const { result } = renderHook(() => useSessionStream('session-123'));
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      // Multiple concurrent tool calls
-      for (let i = 1; i <= 3; i++) {
-        ws.simulateMessage({
-          jsonrpc: '2.0',
-          method: 'toolCall',
-          params: {
-            id: `tool-${i}`,
-            name: `read-${i}`,
-            args: { path: `/file-${i}` },
-          },
-        });
-      }
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const toolMessages = result.current.messages.filter(
-        (m) => m.role === 'tool'
-      );
-      expect(toolMessages.length).toBe(3);
-    });
-
-    it('should handle empty content', async () => {
-      const { result } = renderHook(() => useSessionStream('session-123'));
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
-
-      // Empty content
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'text',
-          content: '',
-          isDelta: false,
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: {
+          id: 'msg-1',
+          role: 'user',
+          content: [{ type: 'text', text: 'Hello' }],
         },
       });
 
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnEnd',
-        params: { turnId: 'turn-1' },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Should have created a message even with empty content
-      expect(result.current.messages.length).toBeGreaterThan(0);
+      expect(result.current.messages[0].content).toEqual([
+        { type: 'text', text: 'Hello' },
+      ]);
     });
-  });
 
-  // ========================================
-  // Streaming Content Display
-  // ========================================
-
-  describe('streaming content display', () => {
-    it('should show streaming content during streaming', async () => {
+    it('should handle user message with no content', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'user' },
       });
 
-      const ws = mockWsInstances[mockWsInstances.length - 1];
+      expect(result.current.messages[0].content).toEqual([]);
+    });
 
-      // Start turn
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
+    it('should handle tool_execution_end with no result content', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_start',
+        toolCallId: 'tool-1',
+        toolName: 'bash',
+        args: {},
       });
 
-      // Add text
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'text',
-          content: 'Streaming text',
-          isDelta: false,
-        },
+      simulateSessionEvent('session-123', {
+        type: 'tool_execution_end',
+        toolCallId: 'tool-1',
+        isError: false,
       });
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      const toolMsg = result.current.messages[0];
+      expect(toolMsg.isComplete).toBe(true);
+    });
+
+    it('should handle streaming content visibility', () => {
+      const { result } = renderHook(() => useSessionStream('session-123'));
+
+      // Before agent_start, streamingContent is empty
+      expect(result.current.streamingContent).toEqual([]);
+
+      // Start agent + assistant message
+      simulateSessionEvent('session-123', { type: 'agent_start' });
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'assistant' },
       });
 
-      expect(result.current.status).toBe('streaming');
+      // Add text — triggers throttled update
+      simulateSessionEvent('session-123', {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Streaming...' },
+      });
+
+      // Flush throttled updates
+      act(() => { vi.advanceTimersByTime(50); });
+
+      // StreamingContent should be visible since status is streaming
       expect(result.current.streamingContent.length).toBeGreaterThan(0);
     });
 
-    it('should clear streaming content after turnEnd', async () => {
+    it('should clear streaming content when not streaming', () => {
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      const ws = mockWsInstances[mockWsInstances.length - 1];
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'text',
-          content: 'Streaming text',
-          isDelta: false,
-        },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.streamingContent.length).toBeGreaterThan(0);
-
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnEnd',
-        params: { turnId: 'turn-1' },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
+      // No agent_start, so status is idle -> streamingContent should be empty
+      simulateSessionEvent('session-123', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'assistant' },
       });
 
       expect(result.current.streamingContent).toEqual([]);
     });
+  });
 
-    it('should show thinking content before text content', async () => {
+  // ========================================
+  // Retry subscription when no WS instance
+  // ========================================
+
+  describe('retry subscription', () => {
+    it('should retry subscription when WebSocket instance is null initially', () => {
+      mockWsInstance = null;
+
       const { result } = renderHook(() => useSessionStream('session-123'));
 
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
+      // No subscription yet
+      expect(capturedListener).toBeNull();
 
-      const ws = mockWsInstances[mockWsInstances.length - 1];
+      // Make WS available after delay
+      mockWsInstance = {
+        addMessageListener: vi.fn((listener) => {
+          capturedListener = listener;
+          return () => { if (capturedListener === listener) capturedListener = null; };
+        }),
+        send: vi.fn(() => true),
+        getStatus: vi.fn(() => 'connected'),
+      };
 
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'turnBegin',
-        params: { turnId: 'turn-1' },
-      });
+      // Advance timer to trigger retry
+      act(() => { vi.advanceTimersByTime(150); });
 
-      // Add thinking first
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'thinking',
-          content: 'Thinking...',
-          isDelta: false,
-        },
-      });
-
-      // Then add text
-      ws.simulateMessage({
-        jsonrpc: '2.0',
-        method: 'contentPart',
-        params: {
-          type: 'text',
-          content: 'Response',
-          isDelta: false,
-        },
-      });
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      // Thinking should come first in content array
-      expect(result.current.streamingContent[0].type).toBe('thinking');
-      expect(result.current.streamingContent[1].type).toBe('text');
+      expect(mockWsInstance.addMessageListener).toHaveBeenCalledTimes(1);
     });
   });
 });

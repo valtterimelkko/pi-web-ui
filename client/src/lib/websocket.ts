@@ -122,10 +122,21 @@ export class WebSocketClient {
   private csrfToken: string | null = null;
   // Track if we're reconnecting to a worker-based session
   private pendingSessionReconnect: string | null = null;
+  // Additional message listeners (for useSessionStream hook)
+  private messageListeners: Set<(message: unknown) => void> = new Set();
 
   constructor(options: WebSocketClientOptions) {
     this.options = options;
     this.csrfToken = useAuth.getState().csrfToken;
+  }
+
+  /**
+   * Register a listener for all incoming messages.
+   * Returns an unsubscribe function.
+   */
+  addMessageListener(listener: (message: unknown) => void): () => void {
+    this.messageListeners.add(listener);
+    return () => { this.messageListeners.delete(listener); };
   }
 
   connect(targetSessionId?: string): void {
@@ -322,12 +333,36 @@ export class WebSocketClient {
 
     // Always forward to the general message handler
     this.options.onMessage(message);
+
+    // Notify additional listeners (e.g. useSessionStream)
+    this.messageListeners.forEach(listener => {
+      try { listener(message); } catch (e) { console.error('Message listener error:', e); }
+    });
   }
 }
 
 // Singleton instance
 let wsClient: WebSocketClient | null = null;
 let isConnecting = false;
+
+// Global instance reference for useSessionStream and other consumers
+let globalInstance: WebSocketClient | null = null;
+
+/**
+ * Register a WebSocketClient as the global instance.
+ * Called automatically by createWebSocketClient.
+ */
+export function registerWebSocketInstance(client: WebSocketClient) {
+  globalInstance = client;
+}
+
+/**
+ * Get the global WebSocketClient instance.
+ * Returns null if no client has been created yet.
+ */
+export function getWebSocketInstance(): WebSocketClient | null {
+  return globalInstance;
+}
 
 export function createWebSocketClient(options: WebSocketClientOptions): WebSocketClient {
   // Return existing instance if it exists and is connected or connecting
@@ -350,6 +385,10 @@ export function createWebSocketClient(options: WebSocketClientOptions): WebSocke
       options.onStatusChange?.(status);
     },
   });
+
+  // Register as the global instance
+  registerWebSocketInstance(wsClient);
+
   return wsClient;
 }
 
@@ -360,4 +399,5 @@ export function getWebSocketClient(): WebSocketClient | null {
 export function disconnectWebSocket(): void {
   wsClient?.disconnect();
   wsClient = null;
+  globalInstance = null;
 }
