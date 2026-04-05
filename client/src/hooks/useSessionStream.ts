@@ -5,38 +5,28 @@
  * during content accumulation. All streaming content is accumulated in refs
  * and only committed to state when turns complete.
  *
- * IMPORTANT: This hook does NOT create its own WebSocket connection. It
- * subscribes to the EXISTING singleton WebSocket managed by useWebSocket
- * via getWebSocketInstance().addMessageListener().
- *
  * Key Features:
- * - Subscribes to global singleton WebSocket (no separate connection)
  * - Ref-based accumulation (no re-renders during streaming)
  * - Identity guards prevent stale callbacks after session switches
  * - Atomic teardown with useLayoutEffect (runs before paint)
  * - History replay handling for session switching
  * - Single dependency effect (only sessionId)
  *
- * Event Processing:
- *   agent_start           → setStatus('streaming')
- *   agent_end             → commitStreamingMessage(), setStatus('idle')
- *   message_start(user)   → add to messages immediately
- *   message_start(assist) → track ID, start accumulating
- *   message_update(text)  → accumulate in textRef (NO state update)
- *   message_update(think) → accumulate in thinkingRef (NO state update)
- *   message_end           → commitStreamingMessage()
- *   tool_execution_start  → add tool message to messages
- *   tool_execution_update → update partial tool result
- *   tool_execution_end    → update tool message with result
- *   history_start         → clear messages, set isReplaying
- *   history_end           → setIsReplaying(false)
- *
  * CRITICAL: This is the MOST CRITICAL module for mobile performance.
  */
 
 import { useRef, useState, useLayoutEffect, useCallback } from 'react';
-import { getWebSocketInstance } from '../lib/websocket.js';
-import type { Attachment } from '@pi-web-ui/shared';
+import { JSONRPCClient } from '../lib/jsonrpc-client.js';
+import type {
+  ContentPartEvent,
+  ToolCallEvent,
+  ToolResultEvent,
+  Attachment,
+  StatusEvent,
+} from '@pi-web-ui/shared';
+
+// Use Vite proxy in development, or direct URL in production
+const WS_URL = import.meta.env.VITE_WS_URL || '/ws';
 
 // ============================================================================
 // Types
@@ -126,6 +116,10 @@ export interface UseSessionStreamResult {
 export interface UseSessionStreamOptions {
   /** Enable debug logging */
   debug?: boolean;
+  /** Maximum reconnection attempts (default: 5) */
+  maxReconnectAttempts?: number;
+  /** Base reconnection delay in ms (default: 1000) */
+  reconnectDelay?: number;
   /** Auto-connect on mount (default: true) */
   autoConnect?: boolean;
 }
@@ -133,6 +127,15 @@ export interface UseSessionStreamOptions {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/**
+ * Get the WebSocket base URL
+ */
+function getWebSocketBase(): string {
+  // In browser, construct WebSocket URL from current location
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}${WS_URL}`;
+}
 
 /**
  * Create an empty message
@@ -153,6 +156,7 @@ function createEmptyMessage(role: 'user' | 'assistant' | 'tool'): LiveMessage {
 function buildContentParts(
   text: string,
   thinking: string,
+  toolCalls: Map<string, ToolCallState>
 ): ContentPart[] {
   const parts: ContentPart[] = [];
 
@@ -177,7 +181,6 @@ function buildContentParts(
  * useSessionStream Hook
  *
  * Implements ref-based streaming for optimal mobile performance.
- * Subscribes to the global singleton WebSocket — does NOT create its own connection.
  * All content accumulation happens in refs to avoid re-renders.
  * State is only updated when complete messages are ready.
  *
@@ -217,6 +220,8 @@ export function useSessionStream(
 ): UseSessionStreamResult {
   const {
     debug = false,
+    maxReconnectAttempts = 5,
+    reconnectDelay = 1000,
     autoConnect = true,
   } = options;
 
@@ -236,18 +241,16 @@ export function useSessionStream(
   // Current message being built
   const currentMessageRef = useRef<LiveMessage | null>(null);
 
-  // Current streaming message ID (for matching message_update events)
-  const currentMessageIdRef = useRef<string>('');
+  // WebSocket identity for guard checks
+  const wsIdentityRef = useRef<string>('');
 
-  // Identity guard ref — incremented on each session change
-  const identityRef = useRef<number>(0);
+  // JSON-RPC client
+  const clientRef = useRef<JSONRPCClient | null>(null);
 
-  // Active session ID ref — updated SYNCHRONOUSLY on session_switched
-  // so that subsequent session_event messages in the same WS batch pass the filter
-  const activeSessionIdRef = useRef<string | null>(sessionId);
-
-  // Unsubscribe function for the WebSocket listener
-  const unsubscribeRef = useRef<(() => void) | null>(null);
+  // Connection state refs (not state - we use connectionState from client)
+  const isConnectingRef = useRef<boolean>(false);
+  const reconnectAttemptsRef = useRef<number>(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ========================================
   // STATE ONLY FOR COMPLETE MESSAGES / UI
@@ -268,7 +271,7 @@ export function useSessionStream(
 
   // Streaming content for UI (updated via forceUpdate mechanism)
   const [, forceUpdate] = useState(0);
-  const streamingUpdateTimerRef = useRef<number>(0);
+  const streamingUpdateRef = useRef<number>(0);
   const lastStreamingUpdateRef = useRef<number>(0);
 
   // ========================================
@@ -289,386 +292,512 @@ export function useSessionStream(
   );
 
   // ========================================
+  // IDENTITY GUARD HELPER
+  // ========================================
+
+  /**
+   * Wrap a callback with an identity guard
+   * Returns a wrapped function that checks identity before executing
+   */
+  const withIdentityGuard = useCallback(
+    <T extends (...args: any[]) => any>(callback: T): T => {
+      const identity = wsIdentityRef.current;
+      return ((...args: Parameters<T>) => {
+        // CRITICAL: Check if this callback is still valid
+        if (wsIdentityRef.current !== identity) {
+          log('Stale callback blocked');
+          return;
+        }
+        return callback(...args) as ReturnType<T>;
+      }) as T;
+    },
+    [log]
+  );
+
+  /**
+   * Check if identity is valid for async operations
+   */
+  const checkIdentity = useCallback((expectedIdentity: string): boolean => {
+    return wsIdentityRef.current === expectedIdentity && wsIdentityRef.current !== '';
+  }, []);
+
+  // ========================================
   // STREAMING UPDATE OPTIMIZATION
   // ========================================
 
   /**
-   * Request a streaming content update.
-   * Throttled to max 60fps (16ms intervals).
+   * Request a streaming content update
+   * Throttled to max 60fps (16ms intervals)
    */
   const requestStreamingUpdate = useCallback(() => {
     const now = Date.now();
     const timeSinceLastUpdate = now - lastStreamingUpdateRef.current;
 
+    // Throttle to ~60fps
     if (timeSinceLastUpdate < 16) {
-      if (streamingUpdateTimerRef.current === 0) {
-        streamingUpdateTimerRef.current = window.setTimeout(() => {
-          streamingUpdateTimerRef.current = 0;
+      // Schedule update for later
+      if (streamingUpdateRef.current === 0) {
+        streamingUpdateRef.current = window.setTimeout(() => {
+          streamingUpdateRef.current = 0;
           lastStreamingUpdateRef.current = Date.now();
           forceUpdate((n) => n + 1);
         }, 16 - timeSinceLastUpdate);
       }
     } else {
+      // Update immediately
       lastStreamingUpdateRef.current = now;
       forceUpdate((n) => n + 1);
     }
   }, []);
 
   // ========================================
-  // COMMIT STREAMING MESSAGE
+  // EVENT HANDLERS WITH IDENTITY GUARDS
   // ========================================
 
   /**
-   * Commit the accumulated streaming content to the messages state.
-   * This is the ONLY place where streaming content becomes a message.
+   * Handle content part streaming events
    */
-  const commitStreamingMessage = useCallback(() => {
-    if (currentMessageRef.current) {
-      const finalContent = buildContentParts(
-        textRef.current,
-        thinkingRef.current,
-      );
-
-      currentMessageRef.current.content = finalContent;
-      currentMessageRef.current.isComplete = true;
-
-      // Capture in local variable BEFORE nulling the ref,
-      // because React may defer the setMessages callback.
-      const msg = currentMessageRef.current;
-      setMessages((prev) => [...prev, msg]);
-    }
-
-    // Reset accumulation refs for next message
-    textRef.current = '';
-    thinkingRef.current = '';
-    currentMessageRef.current = null;
-    currentMessageIdRef.current = '';
-  }, []);
-
-  // ========================================
-  // MESSAGE HANDLER (subscribes to global WebSocket)
-  // ========================================
-
-  /**
-   * Process a single incoming message from the global WebSocket.
-   * Uses identityRef to guard against stale callbacks.
-   */
-  const processMessage = useCallback((rawMessage: unknown, identity: number) => {
-    // Identity guard: bail if session has changed
-    if (identityRef.current !== identity) return;
-
-    const msg = rawMessage as { type: string; sessionId?: string; event?: { type: string; [key: string]: unknown }; [key: string]: unknown };
-
-    // Handle top-level messages (type is direct)
-    // and session_event messages (event wrapper from multi-session routing)
-    let eventType: string;
-    let eventData: Record<string, unknown>;
-    let eventSessionId: string | undefined;
-
-    if (msg.type === 'session_event' && msg.event) {
-      // Multi-session event wrapper
-      const sessionEvent = msg as { sessionId: string; event: { type: string; [key: string]: unknown } };
-      eventType = sessionEvent.event.type;
-      eventData = sessionEvent.event;
-      eventSessionId = sessionEvent.sessionId;
-    } else {
-      // Direct top-level message
-      eventType = msg.type;
-      eventData = msg as Record<string, unknown>;
-      eventSessionId = msg.sessionId as string | undefined;
-    }
-
-    // Filter: only process events for our session
-    // For session_event: match activeSessionIdRef (updated synchronously on session_switched)
-    // For top-level events (history_start/end, session_switched): always process
-    if (msg.type === 'session_event' && eventSessionId && 
-        activeSessionIdRef.current && eventSessionId !== activeSessionIdRef.current) {
-      return; // Not for our session
-    }
-
-    switch (eventType) {
-      // ---- Session switched (Pi SDK embeds messages, Claude uses history replay) ----
-      case 'session_switched': {
-        const switchMsg = eventData as {
-          sessionId?: string;
-          messages?: Array<{
-            id: string;
-            role: string;
-            content: string | Array<{ type: string; text?: string; thinking?: string }>;
-            timestamp: number;
-          }>;
-        };
-
-        // Update active session ref SYNCHRONOUSLY so subsequent session_events
-        // in the same WebSocket message batch pass the filter
-        if (switchMsg.sessionId) {
-          activeSessionIdRef.current = switchMsg.sessionId;
+  const handleContentPart = useCallback(
+    withIdentityGuard((params: unknown) => {
+      const event = params as ContentPartEvent;
+      if (event.type === 'text') {
+        if (event.isDelta) {
+          textRef.current += event.content;
+        } else {
+          textRef.current = event.content;
         }
+      } else if (event.type === 'thinking') {
+        if (event.isDelta) {
+          thinkingRef.current += event.content;
+        } else {
+          thinkingRef.current = event.content;
+        }
+      }
 
-        // Load embedded messages (Pi SDK path)
-        if (switchMsg.messages && switchMsg.messages.length > 0) {
-          const loaded: LiveMessage[] = switchMsg.messages.map((m) => {
-            let content: ContentPart[];
-            if (typeof m.content === 'string') {
-              content = m.content ? [{ type: 'text' as const, text: m.content }] : [];
-            } else if (Array.isArray(m.content)) {
-              content = m.content.map((p) => {
-                if (p.type === 'thinking') return { type: 'thinking' as const, thinking: p.thinking || p.text || '' };
-                return { type: 'text' as const, text: p.text || '' };
-              });
-            } else {
-              content = [];
-            }
+      // Update current message ref
+      if (currentMessageRef.current) {
+        currentMessageRef.current.content = buildContentParts(
+          textRef.current,
+          thinkingRef.current,
+          toolCallsRef.current
+        );
+      }
+
+      // Request UI update (throttled)
+      requestStreamingUpdate();
+    }),
+    [withIdentityGuard, requestStreamingUpdate]
+  );
+
+  /**
+   * Handle tool call start events
+   */
+  const handleToolCall = useCallback(
+    withIdentityGuard((params: unknown) => {
+      const event = params as ToolCallEvent;
+      toolCallsRef.current.set(event.id, {
+        id: event.id,
+        name: event.name,
+        args: event.args,
+        status: 'pending',
+      });
+
+      // Create a tool message
+      const toolMessage: LiveMessage = {
+        id: event.id,
+        role: 'tool',
+        content: [],
+        toolCall: {
+          id: event.id,
+          name: event.name,
+          args: event.args,
+        },
+        timestamp: Date.now(),
+        isComplete: false,
+      };
+
+      setMessages((prev) => [...prev, toolMessage]);
+    }),
+    [withIdentityGuard]
+  );
+
+  /**
+   * Handle tool result events
+   */
+  const handleToolResult = useCallback(
+    withIdentityGuard((params: unknown) => {
+      const event = params as ToolResultEvent;
+      const toolCall = toolCallsRef.current.get(event.id);
+      if (toolCall) {
+        toolCall.result = event.result;
+        toolCall.status = event.isError ? 'error' : 'success';
+      }
+
+      // Update the tool message
+      setMessages((prev) =>
+        prev.map((msg) => {
+          if (msg.id === event.id) {
+            const resultText =
+              typeof event.result === 'string'
+                ? event.result
+                : JSON.stringify(event.result);
             return {
-              id: m.id,
-              role: m.role as 'user' | 'assistant' | 'tool',
-              content,
-              timestamp: m.timestamp,
+              ...msg,
+              content: [{ type: 'text' as const, text: resultText }],
+              toolResult: {
+                output: resultText,
+                isError: event.isError,
+              },
               isComplete: true,
             };
-          });
-          setMessages(loaded);
-          setIsReplaying(false);
-        } else {
-          // No embedded messages — history replay will follow (Claude path)
-          // or session is empty
-          setMessages([]);
-        }
-        break;
-      }
+          }
+          return msg;
+        })
+      );
+    }),
+    [withIdentityGuard]
+  );
 
-      // ---- Agent lifecycle ----
-      case 'agent_start':
-        setStatus('streaming');
-        break;
+  /**
+   * Handle turn begin events
+   */
+  const handleTurnBegin = useCallback(
+    withIdentityGuard((params: unknown) => {
+      // Reset refs for new turn
+      textRef.current = '';
+      thinkingRef.current = '';
+      toolCallsRef.current.clear();
 
-      case 'agent_end':
-        commitStreamingMessage();
-        setStatus('idle');
-        break;
+      // Create new message for this turn
+      currentMessageRef.current = createEmptyMessage('assistant');
 
-      // ---- Message streaming ----
-      case 'message_start': {
-        const messageData = (eventData.message as { id?: string; role?: string; content?: unknown }) || {};
-        const messageId = messageData.id || `msg_${Date.now()}`;
-        const role = messageData.role as string;
+      setStatus('streaming');
+    }),
+    [withIdentityGuard]
+  );
 
-        if (role === 'user') {
-          // User messages are complete — add immediately
-          const userMessage: LiveMessage = {
-            id: messageId,
-            role: 'user',
-            content: typeof messageData.content === 'string' && messageData.content
-              ? [{ type: 'text' as const, text: messageData.content }]
-              : Array.isArray(messageData.content)
-                ? messageData.content as ContentPart[]
-                : [],
-            timestamp: Date.now(),
-            isComplete: true,
-          };
-          setMessages((prev) => [...prev, userMessage]);
-        } else if (role === 'assistant') {
-          // Assistant message — start accumulating
-          currentMessageIdRef.current = messageId;
-          textRef.current = '';
-          thinkingRef.current = '';
-          currentMessageRef.current = createEmptyMessage('assistant');
-          currentMessageRef.current.id = messageId;
-        }
-        break;
-      }
-
-      case 'message_update': {
-        const assistantEvent = eventData.assistantMessageEvent as { type?: string; delta?: string } | undefined;
-        if (!assistantEvent) break;
-
-        if (assistantEvent.type === 'text_delta') {
-          textRef.current += (assistantEvent.delta || '');
-        } else if (assistantEvent.type === 'thinking_delta') {
-          thinkingRef.current += (assistantEvent.delta || '');
-        }
-
-        // Update current message ref content (NO state update)
-        if (currentMessageRef.current) {
-          currentMessageRef.current.content = buildContentParts(
-            textRef.current,
-            thinkingRef.current,
-          );
-        }
-
-        // Request throttled UI update for streaming display
-        requestStreamingUpdate();
-        break;
-      }
-
-      case 'message_end':
-        commitStreamingMessage();
-        break;
-
-      // ---- Tool execution ----
-      case 'tool_execution_start': {
-        const { toolCallId, toolName, args } = eventData as unknown as {
-          toolCallId: string;
-          toolName: string;
-          args: unknown;
-        };
-        const toolId = toolCallId || `tool_${Date.now()}`;
-
-        toolCallsRef.current.set(toolId, {
-          id: toolId,
-          name: toolName,
-          args,
-          status: 'pending',
-        });
-
-        const toolMessage: LiveMessage = {
-          id: toolId,
-          role: 'tool',
-          content: [],
-          toolCall: {
-            id: toolId,
-            name: toolName,
-            args,
-          },
-          timestamp: Date.now(),
-          isComplete: false,
-        };
-
-        setMessages((prev) => [...prev, toolMessage]);
-        break;
-      }
-
-      case 'tool_execution_update': {
-        const { toolCallId, partialResult } = eventData as unknown as {
-          toolCallId: string;
-          partialResult?: { content: Array<{ type: string; text?: string }> };
-        };
-        const content = partialResult?.content?.[0]?.text || '';
-
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.id === toolCallId) {
-              return {
-                ...msg,
-                content: content ? [{ type: 'text' as const, text: content }] : msg.content,
-                toolResult: { output: content, isError: false },
-              };
-            }
-            return msg;
-          })
+  /**
+   * Handle turn end events
+   */
+  const handleTurnEnd = useCallback(
+    withIdentityGuard(() => {
+      // Commit accumulated content to state
+      if (currentMessageRef.current) {
+        const finalContent = buildContentParts(
+          textRef.current,
+          thinkingRef.current,
+          toolCallsRef.current
         );
-        break;
+
+        currentMessageRef.current.content = finalContent;
+        currentMessageRef.current.isComplete = true;
+
+        setMessages((prev) => [...prev, currentMessageRef.current!]);
       }
 
-      case 'tool_execution_end': {
-        const { toolCallId, result, isError } = eventData as unknown as {
-          toolCallId: string;
-          result?: { content: Array<{ type: string; text?: string }> };
-          isError: boolean;
-        };
-        const content = result?.content?.[0]?.text || '';
+      // Reset refs for next turn
+      textRef.current = '';
+      thinkingRef.current = '';
+      toolCallsRef.current.clear();
+      currentMessageRef.current = null;
 
-        const toolCall = toolCallsRef.current.get(toolCallId);
-        if (toolCall) {
-          toolCall.result = content;
-          toolCall.status = isError ? 'error' : 'success';
-        }
-
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.id === toolCallId) {
-              return {
-                ...msg,
-                content: content ? [{ type: 'text' as const, text: content }] : msg.content,
-                toolResult: { output: content, isError },
-                isComplete: true,
-              };
-            }
-            return msg;
-          })
-        );
-        break;
-      }
-
-      // ---- History replay ----
-      case 'history_start':
-        setMessages([]);
-        setIsReplaying(true);
-        break;
-
-      case 'history_end':
-        setIsReplaying(false);
-        break;
-    }
-  }, [sessionId, commitStreamingMessage, requestStreamingUpdate]);
-
-  // ========================================
-  // SUBSCRIBE TO GLOBAL WEBSOCKET
-  // ========================================
-
-  useLayoutEffect(() => {
-    if (!sessionId || !autoConnect) {
-      // No session: ensure cleaned up
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-        unsubscribeRef.current = null;
-      }
-      // Clear messages when no session
-      setMessages([]);
       setStatus('idle');
+    }),
+    [withIdentityGuard]
+  );
+
+  /**
+   * Handle status change events
+   */
+  const handleStatus = useCallback(
+    withIdentityGuard((params: unknown) => {
+      const event = params as StatusEvent;
+      setStatus(event.status);
+
+      if (event.status === 'error' && event.message) {
+        log('Agent error:', event.message);
+      }
+    }),
+    [withIdentityGuard, log]
+  );
+
+  /**
+   * Handle replay start
+   */
+  const handleReplayStart = useCallback(
+    withIdentityGuard(() => {
+      setIsReplaying(true);
+      log('Replay started');
+    }),
+    [withIdentityGuard, log]
+  );
+
+  /**
+   * Handle replay complete
+   */
+  const handleReplayComplete = useCallback(
+    withIdentityGuard(() => {
+      setIsReplaying(false);
+      log('Replay complete');
+    }),
+    [withIdentityGuard, log]
+  );
+
+  /**
+   * Handle context update
+   */
+  const handleContextUpdate = useCallback(
+    withIdentityGuard((params: unknown) => {
+      const contextParams = params as { percent?: number; step?: number };
+      if (contextParams.percent !== undefined) {
+        setContextPercent(contextParams.percent);
+      }
+      if (contextParams.step !== undefined) {
+        setCurrentStep(contextParams.step);
+      }
+    }),
+    [withIdentityGuard]
+  );
+
+  /**
+   * Handle user message (for display)
+   */
+  const handleUserMessage = useCallback(
+    withIdentityGuard((params: unknown) => {
+      const msgParams = params as { content: string; attachments?: Attachment[] };
+      const userMessage: LiveMessage = {
+        id: `user_${Date.now()}`,
+        role: 'user',
+        content: [{ type: 'text', text: msgParams.content }],
+        timestamp: Date.now(),
+        isComplete: true,
+      };
+
+      setMessages((prev) => [...prev, userMessage]);
+    }),
+    [withIdentityGuard]
+  );
+
+  // ========================================
+  // CONNECTION MANAGEMENT
+  // ========================================
+
+  /**
+   * Clear reconnect timer
+   */
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Calculate reconnection delay with exponential backoff
+   */
+  const getReconnectDelay = useCallback((): number => {
+    const attempts = reconnectAttemptsRef.current;
+    const baseDelay = reconnectDelay * Math.pow(2, attempts);
+    const jitter = Math.random() * 0.1 * baseDelay;
+    return Math.min(baseDelay + jitter, 30000);
+  }, [reconnectDelay]);
+
+  /**
+   * Connect to the WebSocket
+   */
+  const connect = useCallback(async (): Promise<void> => {
+    if (!sessionId) {
+      log('No session ID, skipping connect');
       return;
     }
 
-    // Increment identity to invalidate any stale callbacks
-    const identity = ++identityRef.current;
+    if (isConnectingRef.current) {
+      log('Already connecting, skipping');
+      return;
+    }
 
-    // Sync active session ref with the new sessionId
-    activeSessionIdRef.current = sessionId;
+    // Generate new identity for this connection
+    const identity = crypto.randomUUID();
+    wsIdentityRef.current = identity;
 
-    // Clear state for the new session UNLESS session_switched already loaded messages
-    // (session_switched fires synchronously before React re-render, so activeSessionIdRef
-    // already points to the new session and messages may already be loaded)
-    // We only clear if the activeSessionIdRef was changed by this effect, not by session_switched
-    // Check: if messages exist and were loaded for this sessionId, don't clear
-    // Simple approach: always clear refs (streaming state), but DON'T clear messages here
-    // — session_switched or history_start handlers manage message clearing
-    textRef.current = '';
-    thinkingRef.current = '';
-    toolCallsRef.current.clear();
-    currentMessageRef.current = null;
-    currentMessageIdRef.current = '';
+    isConnectingRef.current = true;
     setStatus('idle');
 
-    log('Subscribing to global WebSocket, identity=', identity);
+    try {
+      const wsUrl = `${getWebSocketBase()}/sessions/${sessionId}`;
+      log('Connecting to', wsUrl);
 
-    // Get the global WebSocket instance
-    const ws = getWebSocketInstance();
-
-    if (ws) {
-      // Subscribe to messages with identity guard
-      const unsubscribe = ws.addMessageListener((message) => {
-        processMessage(message, identity);
+      const client = new JSONRPCClient({
+        debug,
+        maxReconnectAttempts: 0, // We handle reconnection ourselves
+        requestTimeout: 120000, // 2 minutes for long operations
       });
-      unsubscribeRef.current = unsubscribe;
-    } else {
-      // No WebSocket yet — retry after a short delay
-      // (The WebSocket singleton is created by useWebSocket on mount)
-      log('No WebSocket instance yet, will retry subscription');
-      const timer = setTimeout(() => {
-        if (identityRef.current !== identity) return;
-        const retryWs = getWebSocketInstance();
-        if (retryWs) {
-          const unsubscribe = retryWs.addMessageListener((message) => {
-            processMessage(message, identity);
-          });
-          unsubscribeRef.current = unsubscribe;
-          log('WebSocket subscription established (retry)');
-        } else {
-          log('Still no WebSocket instance after retry');
-        }
-      }, 100);
-      // Clean up retry timer on teardown
-      return () => clearTimeout(timer);
+
+      // Connect to WebSocket
+      await client.connect(wsUrl);
+
+      // Guard: Check identity after async operation
+      if (!checkIdentity(identity)) {
+        log('Connected but identity changed, disconnecting');
+        client.disconnect();
+        return;
+      }
+
+      // Register event handlers
+      const unsubscribers: (() => void)[] = [];
+
+      unsubscribers.push(client.on('contentPart', handleContentPart));
+      unsubscribers.push(client.on('toolCall', handleToolCall));
+      unsubscribers.push(client.on('toolResult', handleToolResult));
+      unsubscribers.push(client.on('turnBegin', handleTurnBegin));
+      unsubscribers.push(client.on('turnEnd', handleTurnEnd));
+      unsubscribers.push(client.on('status', handleStatus));
+      unsubscribers.push(client.on('replay_start', handleReplayStart));
+      unsubscribers.push(client.on('replay_complete', handleReplayComplete));
+      unsubscribers.push(client.on('context', handleContextUpdate));
+      unsubscribers.push(client.on('user_message', handleUserMessage));
+
+      // Handle connection events
+      unsubscribers.push(
+        client.on('disconnected', () => {
+          if (!checkIdentity(identity)) {
+            log('Disconnected for stale identity, ignoring');
+            return;
+          }
+
+          log('Disconnected');
+          setStatus('idle');
+
+          // Attempt reconnection
+          if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+            reconnectAttemptsRef.current++;
+            const delay = getReconnectDelay();
+            log(`Reconnecting in ${delay}ms`);
+
+            reconnectTimerRef.current = setTimeout(() => {
+              if (checkIdentity(identity)) {
+                connect();
+              }
+            }, delay);
+          }
+        })
+      );
+
+      unsubscribers.push(
+        client.on('error', (params) => {
+          if (!checkIdentity(identity)) return;
+          log('Connection error:', params);
+          setStatus('error');
+        })
+      );
+
+      // Initialize connection
+      await client.request('initialize', {
+        capabilities: {
+          streaming: true,
+          attachments: true,
+        },
+      });
+
+      // Guard: Check identity after async operation
+      if (!checkIdentity(identity)) {
+        log('Initialized but identity changed, disconnecting');
+        client.disconnect();
+        unsubscribers.forEach((unsub) => unsub());
+        return;
+      }
+
+      // Store client
+      clientRef.current = client;
+      reconnectAttemptsRef.current = 0;
+
+      log('Connected successfully');
+    } catch (error) {
+      log('Connection failed:', error);
+
+      if (!checkIdentity(identity)) {
+        log('Connection failed but identity changed, ignoring');
+        return;
+      }
+
+      setStatus('error');
+
+      // Attempt reconnection
+      if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+        reconnectAttemptsRef.current++;
+        const delay = getReconnectDelay();
+        log(`Retrying connection in ${delay}ms`);
+
+        reconnectTimerRef.current = setTimeout(() => {
+          if (checkIdentity(identity)) {
+            connect();
+          }
+        }, delay);
+      }
+    } finally {
+      isConnectingRef.current = false;
+    }
+  }, [
+    sessionId,
+    debug,
+    maxReconnectAttempts,
+    checkIdentity,
+    getReconnectDelay,
+    log,
+    handleContentPart,
+    handleToolCall,
+    handleToolResult,
+    handleTurnBegin,
+    handleTurnEnd,
+    handleStatus,
+    handleReplayStart,
+    handleReplayComplete,
+    handleContextUpdate,
+    handleUserMessage,
+  ]);
+
+  /**
+   * Disconnect from the WebSocket
+   */
+  const disconnect = useCallback(() => {
+    log('Disconnecting');
+
+    // Invalidate identity FIRST to prevent stale callbacks
+    wsIdentityRef.current = '';
+
+    // Clear timers
+    clearReconnectTimer();
+    if (streamingUpdateRef.current) {
+      clearTimeout(streamingUpdateRef.current);
+      streamingUpdateRef.current = 0;
+    }
+
+    // Disconnect client
+    if (clientRef.current) {
+      clientRef.current.disconnect();
+      clientRef.current = null;
+    }
+
+    // Reset state
+    setStatus('idle');
+    setIsReplaying(false);
+    reconnectAttemptsRef.current = 0;
+  }, [clearReconnectTimer, log]);
+
+  // ========================================
+  // ATOMIC TEARDOWN (useLayoutEffect)
+  // ========================================
+
+  useLayoutEffect(() => {
+    if (!sessionId) {
+      // No session, ensure disconnected
+      disconnect();
+      return;
+    }
+
+    // Auto-connect if enabled
+    if (autoConnect) {
+      connect();
     }
 
     // ATOMIC TEARDOWN - runs before paint, prevents stale callbacks
@@ -676,78 +805,73 @@ export function useSessionStream(
       log('Cleanup: invalidating all callbacks');
 
       // Invalidate identity FIRST
-      identityRef.current++;
+      wsIdentityRef.current = '';
 
-      // Unsubscribe from WebSocket
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-        unsubscribeRef.current = null;
+      // Clear all timers
+      clearReconnectTimer();
+      if (streamingUpdateRef.current) {
+        clearTimeout(streamingUpdateRef.current);
+        streamingUpdateRef.current = 0;
       }
 
-      // Clear streaming update timer
-      if (streamingUpdateTimerRef.current) {
-        clearTimeout(streamingUpdateTimerRef.current);
-        streamingUpdateTimerRef.current = 0;
+      // Disconnect client
+      if (clientRef.current) {
+        clientRef.current.disconnect();
+        clientRef.current = null;
       }
 
-      // Clear streaming refs (but NOT messages — session_switched may have loaded them)
+      // Clear all refs
       textRef.current = '';
       thinkingRef.current = '';
       toolCallsRef.current.clear();
       currentMessageRef.current = null;
-      currentMessageIdRef.current = '';
 
-      // Don't clear messages here! session_switched handler manages message loading.
-      // Clearing here would wipe messages loaded synchronously by session_switched
-      // before this cleanup runs.
+      // Reset state
+      setMessages([]);
       setStatus('idle');
+      setContextPercent(0);
+      setCurrentStep(0);
       setIsReplaying(false);
     };
-  }, [sessionId]); // ONLY sessionId — handlers use refs
+  }, [sessionId]); // ONLY sessionId - handlers use refs
 
   // ========================================
   // ACTIONS
   // ========================================
 
   /**
-   * Send a prompt to the agent via the global WebSocket
+   * Send a prompt to the agent
    */
   const sendPrompt = useCallback(
-    async (content: string, images?: unknown[]): Promise<void> => {
-      const ws = getWebSocketInstance();
-      if (!ws) {
-        log('Cannot send prompt, no WebSocket instance');
+    async (content: string, attachments?: Attachment[]): Promise<void> => {
+      if (!clientRef.current) {
+        log('Cannot send prompt, not connected');
         return;
       }
 
       setStatus('busy');
 
-      const sent = ws.send({
-        type: 'prompt',
-        sessionId,
-        message: content,
-        images,
-      });
-
-      if (!sent) {
-        log('Failed to send prompt, WebSocket not connected');
+      try {
+        await clientRef.current.request('prompt', { content, attachments });
+      } catch (error) {
+        log('Failed to send prompt:', error);
         setStatus('error');
+        throw error;
       }
     },
-    [sessionId, log]
+    [log]
   );
 
   /**
-   * Cancel the current turn via the global WebSocket
+   * Cancel the current turn
    */
   const cancelCurrentTurn = useCallback(() => {
-    const ws = getWebSocketInstance();
-    if (!ws) {
-      log('Cannot cancel, no WebSocket instance');
+    if (!clientRef.current) {
+      log('Cannot cancel, not connected');
       return;
     }
 
-    ws.send({ type: 'abort' });
+    clientRef.current.notify('cancel', {});
     setStatus('idle');
   }, [log]);
 
@@ -760,7 +884,6 @@ export function useSessionStream(
     thinkingRef.current = '';
     toolCallsRef.current.clear();
     currentMessageRef.current = null;
-    currentMessageIdRef.current = '';
   }, []);
 
   // ========================================

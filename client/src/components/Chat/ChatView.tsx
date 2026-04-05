@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useSessionStore } from '../../store';
 import { useNavigationStore } from '../../store/navigationStore';
 import { useUIStore } from '../../store/uiStore';
@@ -9,47 +9,18 @@ import { NewSessionModal } from '../Session';
 import { ArrowDown } from 'lucide-react';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
-import type { LiveMessage, ContentPart } from '../../hooks/useSessionStream.js';
-import type { Attachment } from '@pi-web-ui/shared';
+import { messagesToLiveMessages } from '../../lib/messageAdapter';
 
 interface ChatViewProps {
-  /** Messages from useSessionStream (already LiveMessage[], no conversion needed) */
-  messages: LiveMessage[];
-  /** Whether the agent is currently streaming a response */
-  isStreaming: boolean;
-  /** Whether the session is replaying history */
-  isReplaying?: boolean;
-  /** Context usage percentage (0-100) */
-  contextPercent?: number;
-  /** Current step number for multi-step operations */
-  currentStep?: number;
-  /** Streaming content for the current message */
-  streamingContent?: ContentPart[];
-  /** Send a prompt to the agent */
-  onSendPrompt: (content: string, attachments?: Attachment[]) => Promise<void>;
-  /** Cancel the current streaming turn */
-  onCancelStream: () => void;
-  /** Open settings modal */
   onOpenSettings?: () => void;
 }
 
-export function ChatView({
-  messages,
-  isStreaming,
-  isReplaying,
-  contextPercent,
-  onSendPrompt,
-  onCancelStream,
-  onOpenSettings,
-}: ChatViewProps) {
-  const currentSessionId = useSessionStore((state) => state.currentSessionId);
+export function ChatView({ onOpenSettings }: ChatViewProps) {
+  const messages = useSessionStore((state) => state.messages);
+  const isStreaming = useSessionStore((state) => state.isStreaming);
   const isLoading = useSessionStore((state) => state.isLoading);
+  const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
-  const currentModel = useSessionStore((state) => state.currentModel);
-  const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
-  const isCompacting = useSessionStore((state) => state.isCompacting);
-  const compactionReason = useSessionStore((state) => state.compactionReason);
-  const sessionData = useSessionStore((state) => state.sessionData);
   const bottomNavCollapsed = useNavigationStore((state) => state.bottomNavCollapsed);
   const sessionInfoOpen = useUIStore((state) => state.sessionInfoOpen);
   const treeViewOpen = useUIStore((state) => state.treeViewOpen);
@@ -68,10 +39,7 @@ export function ChatView({
   const treeEntries: TreeEntry[] = messages.map((msg, index) => ({
     id: msg.id,
     role: msg.role,
-    content: msg.content
-      .map((part) => (part.type === 'text' ? part.text : part.type === 'thinking' ? part.thinking : ''))
-      .filter(Boolean)
-      .join(''),
+    content: typeof msg.content === 'string' ? msg.content : '',
     timestamp: msg.timestamp,
     parentId: index > 0 ? messages[index - 1].id : undefined,
     children: index < messages.length - 1 ? [messages[index + 1].id] : [],
@@ -99,22 +67,6 @@ export function ChatView({
     createNewSession(cwd, sdkType);
   };
 
-  // Derive quotaInfo for the current session
-  const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo ?? null : null;
-
-  // Adapt async sendPrompt to sync signature for MessageInput
-  const handleMessageSend = useCallback((content: string, images?: unknown[]): boolean => {
-    // Fire-and-forget: the async result is handled by the stream lifecycle
-    let sent = false;
-    try {
-      onSendPrompt(content, images as Attachment[]);
-      sent = true;
-    } catch {
-      sent = false;
-    }
-    return sent;
-  }, [onSendPrompt]);
-
   return (
     <div className="flex flex-col h-full bg-white" data-testid="chat-interface">
       {/* Main content area */}
@@ -122,7 +74,7 @@ export function ChatView({
         {/* Message List - Virtualized for performance */}
         <VirtualizedMessageList
           ref={listRef}
-          messages={messages}
+          messages={messagesToLiveMessages(messages)}
           isStreaming={isStreaming}
           onAtBottomChange={handleAtBottomChange}
           hasSession={!!currentSessionId}
@@ -144,21 +96,7 @@ export function ChatView({
         {/* Message Input */}
         <div className={`bg-white pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[70px]' : ''}`}>
           <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
-            <MessageInput
-              disabled={!currentSessionId || isLoading}
-              isStreaming={isStreaming}
-              isCompacting={isCompacting}
-              compactionReason={compactionReason}
-              currentModel={currentModel}
-              contextPercent={contextPercent}
-              currentSessionId={currentSessionId}
-              currentSessionSdkType={currentSessionSdkType}
-              quotaInfo={quotaInfo}
-              onSend={handleMessageSend}
-              onCancel={onCancelStream}
-              onOpenSettings={onOpenSettings}
-              isReplaying={isReplaying}
-            />
+            <MessageInput disabled={!currentSessionId || isLoading} onOpenSettings={onOpenSettings} />
           </div>
         </div>
       </main>

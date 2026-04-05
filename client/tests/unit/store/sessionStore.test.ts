@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useSessionStore, type Session } from '../../../src/store/sessionStore';
+import { useSessionStore, type Message, type Session } from '../../../src/store/sessionStore';
 
 describe('sessionStore', () => {
   beforeEach(() => {
@@ -7,17 +7,22 @@ describe('sessionStore', () => {
     const state = useSessionStore.getState();
     state.setSessions([]);
     state.setCurrentSession(null);
+    state.clearMessages();
     state.setStreaming(false);
     state.setLoading(false);
     state.setError(null);
     state.setExtensionUIRequest(null);
-    // Clear session data directly
+    // Clear session messages cache directly
     useSessionStore.setState({ 
+      sessionMessages: {}, 
+      streamingSessions: {},
       currentSessionId: null,
+      messages: [],
       isStreaming: false,
       isLoading: false,
       error: null,
-      sessionData: {},
+      sessionCache: new Map(),
+      sessionCacheMeta: {},
     });
   });
 
@@ -29,6 +34,32 @@ describe('sessionStore', () => {
     expect(state.isLoading).toBe(false);
     expect(state.error).toBeNull();
     expect(state.extensionUIRequest).toBeNull();
+  });
+
+  it('should add a message', () => {
+    const state = useSessionStore.getState();
+    const message: Message = {
+      id: '1',
+      role: 'user',
+      content: 'Test message',
+      timestamp: Date.now(),
+    };
+    state.addMessage(message);
+    expect(useSessionStore.getState().messages).toHaveLength(1);
+    expect(useSessionStore.getState().messages[0].content).toBe('Test message');
+  });
+
+  it('should update a message', () => {
+    const state = useSessionStore.getState();
+    const message: Message = {
+      id: '1',
+      role: 'assistant',
+      content: 'Initial content',
+      timestamp: Date.now(),
+    };
+    state.addMessage(message);
+    state.updateMessage('1', { content: 'Updated content' });
+    expect(useSessionStore.getState().messages[0].content).toBe('Updated content');
   });
 
   it('should set streaming state', () => {
@@ -75,6 +106,19 @@ describe('sessionStore', () => {
     const state = useSessionStore.getState();
     state.setCurrentSession('session-1');
     expect(useSessionStore.getState().currentSessionId).toBe('session-1');
+  });
+
+  it('should clear messages', () => {
+    const state = useSessionStore.getState();
+    state.addMessage({
+      id: '1',
+      role: 'user',
+      content: 'Test',
+      timestamp: Date.now(),
+    });
+    expect(useSessionStore.getState().messages).toHaveLength(1);
+    state.clearMessages();
+    expect(useSessionStore.getState().messages).toHaveLength(0);
   });
 
   it('should set extension UI request', () => {
@@ -130,6 +174,28 @@ describe('sessionStore', () => {
       expect(useSessionStore.getState().isLoading).toBe(false);
     });
 
+    it('should handle message_start message', () => {
+      const state = useSessionStore.getState();
+      state.handleServerMessage({
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'user', content: 'Hello' },
+      });
+      expect(useSessionStore.getState().messages).toHaveLength(1);
+      expect(useSessionStore.getState().messages[0].id).toBe('msg-1');
+    });
+
+    it('should handle tool_execution_start message', () => {
+      const state = useSessionStore.getState();
+      state.handleServerMessage({
+        type: 'tool_execution_start',
+        toolCallId: 'tool-1',
+        toolName: 'read_file',
+        args: { path: '/test' },
+      });
+      expect(useSessionStore.getState().messages).toHaveLength(1);
+      expect(useSessionStore.getState().messages[0].role).toBe('tool');
+    });
+
     it('should handle extension_ui_request message', () => {
       const state = useSessionStore.getState();
       const request = {
@@ -145,71 +211,142 @@ describe('sessionStore', () => {
       });
       expect(useSessionStore.getState().extensionUIRequest).toEqual(request);
     });
+  });
 
-    it('session_event with message_start does NOT modify store state', () => {
-      // session_event with message type events should be no-ops — 
-      // those are handled by useSessionStream
-      const stateBefore = useSessionStore.getState();
-      const { sessions, currentSessionId, isStreaming, sessionInfo, contextPercent } = stateBefore;
-      
-      stateBefore.handleServerMessage({
-        type: 'session_event',
-        sessionId: 'session-1',
-        event: {
-          type: 'message_start',
-          message: { id: 'msg-1', role: 'user', content: 'Hello' },
-        },
-      });
-
-      const stateAfter = useSessionStore.getState();
-      expect(stateAfter.sessions).toEqual(sessions);
-      expect(stateAfter.currentSessionId).toBe(currentSessionId);
-      expect(stateAfter.isStreaming).toBe(isStreaming);
-      expect(stateAfter.sessionInfo).toEqual(sessionInfo);
-      expect(stateAfter.contextPercent).toBe(contextPercent);
+  describe('background session support', () => {
+    it('should have sessionMessages and streamingSessions in initial state', () => {
+      const state = useSessionStore.getState();
+      expect(state.sessionMessages).toEqual({});
+      expect(state.streamingSessions).toEqual({});
     });
 
-    it('session_event with agent_start updates isStreaming for current session', () => {
-      useSessionStore.setState({ currentSessionId: 'session-1' });
-      expect(useSessionStore.getState().isStreaming).toBe(false);
-
-      useSessionStore.getState().handleServerMessage({
-        type: 'session_event',
-        sessionId: 'session-1',
-        event: { type: 'agent_start' },
-      });
-
-      expect(useSessionStore.getState().isStreaming).toBe(true);
-      expect(useSessionStore.getState().sessionData['session-1']?.status).toBe('streaming');
+    it('should cache messages per session when switching sessions', () => {
+      const state = useSessionStore.getState();
+      
+      // Set first session and add messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      state.addMessage({ id: '2', role: 'assistant', content: 'Response 1', timestamp: 2000 });
+      
+      // Switch to second session
+      state.setCurrentSession('session-2');
+      
+      // First session's messages should be cached
+      expect(state.getSessionMessages('session-1')).toHaveLength(2);
+      expect(state.getSessionMessages('session-1')[0].content).toBe('Message 1');
+      
+      // Current messages should be empty (new session)
+      expect(useSessionStore.getState().messages).toHaveLength(0);
     });
 
-    it('session_event with agent_start does NOT update isStreaming for non-current session', () => {
-      useSessionStore.setState({ currentSessionId: 'session-1' });
+    it('should restore cached messages when switching back to a session', () => {
+      const state = useSessionStore.getState();
       
-      useSessionStore.getState().handleServerMessage({
-        type: 'session_event',
+      // Set first session and add messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Switch to second session
+      state.setCurrentSession('session-2');
+      expect(useSessionStore.getState().messages).toHaveLength(0);
+      
+      // Switch back to first session
+      state.setCurrentSession('session-1');
+      
+      // Should restore cached messages
+      expect(useSessionStore.getState().messages).toHaveLength(1);
+      expect(useSessionStore.getState().messages[0].content).toBe('Message 1');
+    });
+
+    it('should track streaming state per session', () => {
+      const state = useSessionStore.getState();
+      
+      // Set session and start streaming
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      
+      expect(state.isSessionStreaming('session-1')).toBe(true);
+      expect(state.isSessionStreaming('session-2')).toBe(false);
+      
+      // Stop streaming
+      state.setStreaming(false);
+      expect(state.isSessionStreaming('session-1')).toBe(false);
+    });
+
+    it('should preserve streaming state for background sessions', () => {
+      const store = useSessionStore;
+      
+      // Set session 1 and start streaming
+      store.getState().setCurrentSession('session-1');
+      store.getState().setStreaming(true);
+      
+      // Switch to session 2 (background session 1 is still streaming)
+      store.getState().setCurrentSession('session-2');
+      
+      // Session 1 should still be marked as streaming
+      const currentState = store.getState();
+      expect(currentState.streamingSessions['session-1']).toBe(true);
+    });
+
+    it('should clear session messages with clearSessionMessages', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message', timestamp: 1000 });
+      
+      expect(state.getSessionMessages('session-1')).toHaveLength(1);
+      
+      state.clearSessionMessages('session-1');
+      
+      expect(state.getSessionMessages('session-1')).toHaveLength(0);
+    });
+
+    it('should update sessionMessages cache when adding messages', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message', timestamp: 1000 });
+      
+      // Check cache is updated
+      expect(useSessionStore.getState().sessionMessages['session-1']).toHaveLength(1);
+    });
+
+    it('should update sessionMessages cache when updating messages', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'assistant', content: 'Initial', timestamp: 1000 });
+      state.updateMessage('1', { content: 'Updated' });
+      
+      // Check cache is updated
+      const cached = useSessionStore.getState().sessionMessages['session-1'];
+      expect(cached).toHaveLength(1);
+      expect(cached[0].content).toBe('Updated');
+    });
+
+    it('should handle session_switched with message caching', () => {
+      const state = useSessionStore.getState();
+      
+      // Create first session with messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Old message', timestamp: 1000 });
+      
+      // Simulate session_switched from server
+      state.handleServerMessage({
+        type: 'session_switched',
         sessionId: 'session-2',
-        event: { type: 'agent_start' },
+        messages: [
+          { id: '2', role: 'user', content: 'New message', timestamp: 2000 },
+        ],
       });
-
-      // Global isStreaming should not change for non-current session
-      expect(useSessionStore.getState().isStreaming).toBe(false);
-      // But session-2's status should be updated
-      expect(useSessionStore.getState().sessionData['session-2']?.status).toBe('streaming');
-    });
-
-    it('session_event with agent_end updates isStreaming for current session', () => {
-      useSessionStore.setState({ currentSessionId: 'session-1' });
-      useSessionStore.setState({ isStreaming: true });
-
-      useSessionStore.getState().handleServerMessage({
-        type: 'session_event',
-        sessionId: 'session-1',
-        event: { type: 'agent_end' },
-      });
-
-      expect(useSessionStore.getState().isStreaming).toBe(false);
-      expect(useSessionStore.getState().sessionData['session-1']?.status).toBe('idle');
+      
+      // Should have switched to session-2 with its messages
+      expect(useSessionStore.getState().currentSessionId).toBe('session-2');
+      expect(useSessionStore.getState().messages).toHaveLength(1);
+      expect(useSessionStore.getState().messages[0].content).toBe('New message');
+      
+      // Session 1's messages should still be cached
+      expect(useSessionStore.getState().sessionMessages['session-1']).toHaveLength(1);
     });
   });
 
@@ -224,15 +361,18 @@ describe('sessionStore', () => {
         status: 'streaming',
       });
       
+      // Get fresh state after handler runs
       expect(useSessionStore.getState().sessionData['session-1']?.status).toBe('streaming');
     });
 
     it('should sync isStreaming to true when session_status is streaming for current session', () => {
       const state = useSessionStore.getState();
       
+      // Set current session
       state.setCurrentSession('session-1');
       expect(useSessionStore.getState().isStreaming).toBe(false);
       
+      // Receive streaming status for current session
       state.handleServerMessage({
         type: 'session_status',
         sessionId: 'session-1',
@@ -240,15 +380,18 @@ describe('sessionStore', () => {
         status: 'streaming',
       });
       
+      // Global isStreaming should be synced
       expect(useSessionStore.getState().isStreaming).toBe(true);
     });
 
     it('should sync isStreaming to true when session_status is busy for current session', () => {
       const state = useSessionStore.getState();
       
+      // Set current session
       state.setCurrentSession('session-1');
       expect(useSessionStore.getState().isStreaming).toBe(false);
       
+      // Receive busy status for current session
       state.handleServerMessage({
         type: 'session_status',
         sessionId: 'session-1',
@@ -256,16 +399,19 @@ describe('sessionStore', () => {
         status: 'busy',
       });
       
+      // Global isStreaming should be synced
       expect(useSessionStore.getState().isStreaming).toBe(true);
     });
 
     it('should sync isStreaming to false when session_status is idle for current session', () => {
       const state = useSessionStore.getState();
       
+      // Set current session and start streaming
       state.setCurrentSession('session-1');
       state.setStreaming(true);
       expect(useSessionStore.getState().isStreaming).toBe(true);
       
+      // Receive idle status for current session
       state.handleServerMessage({
         type: 'session_status',
         sessionId: 'session-1',
@@ -273,15 +419,18 @@ describe('sessionStore', () => {
         status: 'idle',
       });
       
+      // Global isStreaming should be synced to false
       expect(useSessionStore.getState().isStreaming).toBe(false);
     });
 
     it('should NOT sync isStreaming when session_status is for a different session', () => {
       const state = useSessionStore.getState();
       
+      // Set current session
       state.setCurrentSession('session-1');
       expect(useSessionStore.getState().isStreaming).toBe(false);
       
+      // Receive streaming status for a DIFFERENT session
       state.handleServerMessage({
         type: 'session_status',
         sessionId: 'session-2',
@@ -289,24 +438,31 @@ describe('sessionStore', () => {
         status: 'streaming',
       });
       
+      // Global isStreaming should NOT be affected
       expect(useSessionStore.getState().isStreaming).toBe(false);
+      
+      // But session-2's status should still be updated (get fresh state)
       expect(useSessionStore.getState().sessionData['session-2']?.status).toBe('streaming');
     });
 
     it('should correctly sync when switching from streaming session to new idle session', () => {
       const state = useSessionStore.getState();
       
+      // Simulate being on session-1 which is streaming
       state.setCurrentSession('session-1');
       state.setStreaming(true);
       state.setSessionStatus('session-1', 'streaming');
       expect(useSessionStore.getState().isStreaming).toBe(true);
       
+      // Switch to session-2 (new session)
       state.handleServerMessage({
         type: 'session_created',
         sessionId: 'session-2',
       });
       expect(useSessionStore.getState().currentSessionId).toBe('session-2');
+      // isStreaming is still true at this point (the bug we're fixing)
       
+      // Receive idle status for session-2 (the new current session)
       state.handleServerMessage({
         type: 'session_status',
         sessionId: 'session-2',
@@ -314,17 +470,22 @@ describe('sessionStore', () => {
         status: 'idle',
       });
       
+      // Now isStreaming should be synced to false
       expect(useSessionStore.getState().isStreaming).toBe(false);
+      
+      // session-1 should still be streaming in background (get fresh state)
       expect(useSessionStore.getState().sessionData['session-1']?.status).toBe('streaming');
     });
 
     it('should sync isStreaming to false when session_status is error for current session', () => {
       const state = useSessionStore.getState();
       
+      // Set current session and start streaming
       state.setCurrentSession('session-1');
       state.setStreaming(true);
       expect(useSessionStore.getState().isStreaming).toBe(true);
       
+      // Receive error status for current session
       state.handleServerMessage({
         type: 'session_status',
         sessionId: 'session-1',
@@ -332,86 +493,218 @@ describe('sessionStore', () => {
         status: 'error',
       });
       
+      // Global isStreaming should be synced to false
       expect(useSessionStore.getState().isStreaming).toBe(false);
+    });
+  });
+
+  describe('LRU cache', () => {
+    beforeEach(() => {
+      // Clear sessionCache before each test
+      useSessionStore.setState({ 
+        sessionCache: new Map(),
+        sessionMessages: {},
+        sessionCacheMeta: {},
+      });
+    });
+
+    it('should have sessionCache in initial state', () => {
+      const state = useSessionStore.getState();
+      expect(state.sessionCache).toBeInstanceOf(Map);
+      expect(state.sessionCache.size).toBe(0);
+    });
+
+    it('should cache messages when switching sessions', () => {
+      const state = useSessionStore.getState();
+      
+      // Set first session and add messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Switch to second session
+      state.setCurrentSession('session-2');
+      
+      // First session should be in cache
+      const cache = useSessionStore.getState().sessionCache;
+      expect(cache.has('session-1')).toBe(true);
+      expect(cache.get('session-1')?.messages).toHaveLength(1);
+    });
+
+    it('should restore cached messages when switching back', () => {
+      const state = useSessionStore.getState();
+      
+      // Set first session and add messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Switch to second session
+      state.setCurrentSession('session-2');
+      expect(useSessionStore.getState().messages).toHaveLength(0);
+      
+      // Switch back to first session
+      state.setCurrentSession('session-1');
+      
+      // Should restore cached messages
+      expect(useSessionStore.getState().messages).toHaveLength(1);
+    });
+
+    it('should evict oldest session when cache exceeds limit', () => {
+      const state = useSessionStore.getState();
+      
+      // Add 6 sessions (exceeds MAX_CACHED_SESSIONS = 5)
+      for (let i = 1; i <= 6; i++) {
+        state.setCurrentSession(`session-${i}`);
+        state.addMessage({ id: `msg-${i}`, role: 'user', content: `Message ${i}`, timestamp: i * 1000 });
+      }
+      
+      // Check that eviction happened (should have at most 5)
+      const cache = useSessionStore.getState().sessionCache;
+      expect(cache.size).toBeLessThanOrEqual(5);
+    });
+
+    it('should never evict the current session', () => {
+      const state = useSessionStore.getState();
+      
+      // Create first session
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Create more sessions to trigger eviction
+      for (let i = 2; i <= 7; i++) {
+        state.setCurrentSession(`session-${i}`);
+        state.addMessage({ id: `${i}`, role: 'user', content: `Message ${i}`, timestamp: i * 1000 });
+      }
+      
+      // Current session (session-7) should still be in cache
+      const cache = useSessionStore.getState().sessionCache;
+      expect(cache.has('session-7')).toBe(true);
+    });
+
+    it('should track lastAccess on session switch', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message', timestamp: 1000 });
+      
+      const beforeSwitch = Date.now();
+      state.setCurrentSession('session-2');
+      
+      const cache = useSessionStore.getState().sessionCache;
+      const cached = cache.get('session-1');
+      expect(cached?.lastAccess).toBeGreaterThanOrEqual(beforeSwitch);
+    });
+
+    it('should provide cache statistics via getCacheStats', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message', timestamp: 1000 });
+      
+      const stats = state.getCacheStats();
+      expect(stats.size).toBe(1);
+      expect(stats.maxSize).toBe(5);
+      expect(stats.sessions).toContain('session-1');
+    });
+
+    it('should update cache metadata with messageCount and sizeBytes', () => {
+      const state = useSessionStore.getState();
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Test message content', timestamp: 1000 });
+      
+      const meta = useSessionStore.getState().sessionCacheMeta['session-1'];
+      expect(meta?.messageCount).toBe(1);
+      expect(meta?.sizeBytes).toBeGreaterThan(0);
     });
   });
 
   describe('switchSession', () => {
     beforeEach(() => {
       useSessionStore.setState({ 
-        sessionData: {},
+        sessionCache: new Map(),
+        sessionMessages: {},
+        sessionCacheMeta: {},
+        streamingSessions: {},
       });
     });
 
-    it('should switch sessions', () => {
+    it('should switch sessions atomically', () => {
       const state = useSessionStore.getState();
+      
+      // Set up first session with messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Use switchSession for atomic switch
       state.switchSession('session-2');
       
       expect(useSessionStore.getState().currentSessionId).toBe('session-2');
+      expect(useSessionStore.getState().messages).toHaveLength(0);
     });
 
-    it('should reset streaming state on switch', () => {
+    it('should mark old session as accessed before switching', () => {
       const state = useSessionStore.getState();
-      state.setStreaming(true);
-      expect(useSessionStore.getState().isStreaming).toBe(true);
+      
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message', timestamp: 1000 });
+      
+      const beforeSwitch = Date.now();
+      state.switchSession('session-2');
+      
+      const cache = useSessionStore.getState().sessionCache;
+      const cached = cache.get('session-1');
+      expect(cached?.lastAccess).toBeGreaterThanOrEqual(beforeSwitch);
+    });
 
+    it('should restore cached messages when switching to previously visited session', () => {
+      const state = useSessionStore.getState();
+      
+      // Set up first session with messages
+      state.setCurrentSession('session-1');
+      state.addMessage({ id: '1', role: 'user', content: 'Message 1', timestamp: 1000 });
+      
+      // Switch away
+      state.switchSession('session-2');
+      expect(useSessionStore.getState().messages).toHaveLength(0);
+      
+      // Switch back
+      state.switchSession('session-1');
+      expect(useSessionStore.getState().messages).toHaveLength(1);
+      expect(useSessionStore.getState().messages[0].content).toBe('Message 1');
+    });
+
+    it('should reset streaming state based on streamingSessions', () => {
+      const state = useSessionStore.getState();
+      
+      // Set up session-1 as streaming
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      
+      // Set up session-2 as not streaming
+      state.setCurrentSession('session-2');
+      state.setStreaming(false);
+      
+      // Switch to session-1 (which is streaming)
+      state.switchSession('session-1');
+      expect(useSessionStore.getState().isStreaming).toBe(true);
+      
+      // Switch to session-2 (which is not streaming)
       state.switchSession('session-2');
       expect(useSessionStore.getState().isStreaming).toBe(false);
     });
-  });
 
-  describe('sessionData', () => {
-    it('should have empty sessionData initially', () => {
+    it('should trigger eviction after switch', () => {
       const state = useSessionStore.getState();
-      expect(state.sessionData).toEqual({});
-    });
-
-    it('should update sessionData via updateSessionData', () => {
-      const state = useSessionStore.getState();
-      state.updateSessionData('session-1', { status: 'streaming', contextPercent: 50 });
       
-      const data = useSessionStore.getState().sessionData['session-1'];
-      expect(data?.status).toBe('streaming');
-      expect(data?.contextPercent).toBe(50);
-      expect(data?.lastEventTimestamp).toBeGreaterThan(0);
-    });
-
-    it('should preserve existing sessionData when partially updating', () => {
-      const state = useSessionStore.getState();
-      state.updateSessionData('session-1', { status: 'streaming', contextPercent: 50 });
-      state.updateSessionData('session-1', { contextPercent: 75 });
+      // Create 6 sessions to exceed limit
+      for (let i = 1; i <= 6; i++) {
+        state.switchSession(`session-${i}`);
+        state.addMessage({ id: `${i}`, role: 'user', content: `Message ${i}`, timestamp: i * 1000 });
+      }
       
-      const data = useSessionStore.getState().sessionData['session-1'];
-      expect(data?.status).toBe('streaming'); // preserved
-      expect(data?.contextPercent).toBe(75); // updated
-    });
-  });
-
-  describe('worker status', () => {
-    it('should track worker status', () => {
-      const state = useSessionStore.getState();
-      state.updateWorkerStatus('session-1', 'ready');
-      
-      expect(useSessionStore.getState().workerStatus['session-1']).toBe('ready');
-      expect(useSessionStore.getState().activeWorkers).toContain('session-1');
-    });
-
-    it('should remove worker status', () => {
-      const state = useSessionStore.getState();
-      state.updateWorkerStatus('session-1', 'ready');
-      state.removeWorkerStatus('session-1');
-      
-      expect(useSessionStore.getState().workerStatus['session-1']).toBeUndefined();
-      expect(useSessionStore.getState().activeWorkers).not.toContain('session-1');
-    });
-
-    it('should not include terminated/error workers in activeWorkers', () => {
-      const state = useSessionStore.getState();
-      state.updateWorkerStatus('session-1', 'error');
-      state.updateWorkerStatus('session-2', 'terminated');
-      
-      expect(useSessionStore.getState().activeWorkers).not.toContain('session-1');
-      expect(useSessionStore.getState().activeWorkers).not.toContain('session-2');
+      // Cache should be limited
+      const cache = useSessionStore.getState().sessionCache;
+      expect(cache.size).toBeLessThanOrEqual(5);
     });
   });
 });

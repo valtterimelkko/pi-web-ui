@@ -4,8 +4,44 @@ import { useUIStore } from './uiStore';
 import { getPreferences, patchPreferences } from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
 
-// Message ID tracking and per-session message caching moved to useSessionStream hook.
-// This store handles ONLY session metadata, worker status, and UI state.
+// Maximum sessions to keep in memory (LRU cache limit)
+const MAX_CACHED_SESSIONS = 5;
+
+// Track the current message ID per session for the multi-session event path.
+// Raw Pi SDK events forwarded by multi-session-manager don't include message IDs,
+// so we track the ID assigned at message_start to match subsequent message_update events.
+const currentMessageIdBySession = new Map<string, string>();
+
+/**
+ * LRU cache entry for session messages
+ */
+interface SessionCache {
+  messages: Message[];
+  lastAccess: number;
+}
+
+/**
+ * Estimate message size in bytes for cache tracking
+ */
+function estimateMessageSize(msg: Message): number {
+  let size = 100; // Base overhead
+  if (typeof msg.content === 'string') {
+    size += msg.content.length * 2; // UTF-16 chars
+  } else if (Array.isArray(msg.content)) {
+    msg.content.forEach(block => {
+      size += (block.text?.length || 0) * 2;
+      size += (block.thinking?.length || 0) * 2;
+    });
+  }
+  return size;
+}
+
+/**
+ * Estimate total size of messages array in bytes
+ */
+function estimateMessagesSize(messages: Message[]): number {
+  return messages.reduce((total, msg) => total + estimateMessageSize(msg), 0);
+}
 
 export interface Session {
   id: string;
@@ -20,10 +56,6 @@ export interface Session {
   lastActivity?: string;
 }
 
-/**
- * Message type retained for backward-compatible type exports only.
- * Message state is managed by useSessionStream, not this store.
- */
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'tool';
@@ -38,13 +70,14 @@ export interface Message {
     output: string;
     isError: boolean;
   };
-  isComplete?: boolean;
+  isComplete?: boolean; // Optional for backward compatibility with LiveMessage
 }
 
 /**
- * Per-session metadata (NO messages — those live in useSessionStream)
+ * Per-session data for multi-session support
  */
 export interface SessionData {
+  messages: Message[];
   status: 'idle' | 'busy' | 'streaming' | 'error';
   lastEventTimestamp: number;
   contextPercent: number;
@@ -56,6 +89,17 @@ export interface SessionData {
     isUsingOverage: boolean;
     resetsAt?: number;
   } | null;
+}
+
+/**
+ * Metadata for session cache to enable intelligent cache invalidation
+ */
+interface SessionCacheMeta {
+  fileTimestamp: number;  // Server file modification time when last read
+  lastLocalUpdate: number; // When we last updated from WebSocket events
+  isStreaming: boolean;    // Was streaming when we last saw it
+  messageCount: number;    // Number of messages in cache
+  sizeBytes: number;       // Approximate memory usage
 }
 
 interface ExtensionUIRequest {
@@ -92,93 +136,99 @@ export interface SessionStats {
 export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'error' | 'disconnected' | 'terminated';
 
 interface SessionState {
-  // Session list metadata
   sessions: Session[];
   currentSessionId: string | null;
   currentSessionSdkType: 'pi' | 'claude' | null;
   currentModel: string | null;
-
-  // UI state
+  messages: Message[];
   isStreaming: boolean;
   isLoading: boolean;
+  // Loading state for session switching (rehydration)
   isSwitchingSession: boolean;
   switchingToSessionId: string | null;
   error: string | null;
-
-  // Extension UI
   extensionUIRequest: ExtensionUIRequest | null;
   sessionInfo: SessionStats | null;
-
   // Context usage tracking
   contextPercent: number;
   contextUsed: number;
   contextWindow: number;
-
   // Archive state (persisted)
   archivedSessionPaths: string[];
-
-  // Session loading flag
+  // LRU cache for session messages
+  sessionCache: Map<string, SessionCache>;
+  // Session cache with metadata for intelligent invalidation
+  sessionMessages: Record<string, Message[]>;
+  sessionCacheMeta: Record<string, SessionCacheMeta>;
+  // Track which sessions are streaming (for background processing)
+  streamingSessions: Record<string, boolean>;
+  // Loading state to prevent duplicate adds during initial session load
   isLoadingSessions: boolean;
-
   // Auto-compaction state
   isCompacting: boolean;
   compactionReason: string | null;
 
-  // Per-session lightweight metadata (NO messages)
+  // Multi-session data storage - per-session state for background sessions
   sessionData: Record<string, SessionData>;
 
-  // Worker status tracking
+  // Worker status tracking - for worker-based session architecture
   workerStatus: Record<string, WorkerStatus>;
+  // Active worker sessions - list of sessionIds with active workers
   activeWorkers: string[];
 
   // Claude Direct availability
   claudeAvailable: boolean;
   claudeAuthError: string | null;
 
-  // Web UI display names (persisted)
-  sessionDisplayNames: Record<string, string>;
-
-  // ─── Actions ───────────────────────────────────────────
-
-  // Session list
+  // Actions
   setSessions: (sessions: Session[]) => void;
   setCurrentSession: (sessionId: string | null) => void;
   switchSession: (newSessionId: string) => void;
   setCurrentModel: (modelId: string) => void;
-
-  // UI state
+  addMessage: (message: Message) => void;
+  updateMessage: (id: string, updates: Partial<Message>) => void;
   setStreaming: (isStreaming: boolean) => void;
   setLoading: (isLoading: boolean) => void;
   setSwitchingSession: (isSwitching: boolean, sessionId?: string | null) => void;
   setError: (error: string | null) => void;
+  clearMessages: () => void;
   setExtensionUIRequest: (request: ExtensionUIRequest | null) => void;
   setSessionInfo: (info: SessionStats | null) => void;
-
-  // Archive / display names
   archiveSession: (sessionPath: string) => void;
   unarchiveSession: (sessionPath: string) => void;
   isSessionArchived: (sessionPath: string) => boolean;
+  // Web UI display names (web UI only, not synced to CLI)
+  sessionDisplayNames: Record<string, string>;
   setSessionDisplayName: (sessionPath: string, displayName: string) => void;
   getSessionDisplayName: (sessionPath: string) => string | undefined;
   removeSessionDisplayName: (sessionPath: string) => void;
-
-  // Preferences sync
   initPreferences: () => Promise<void>;
-
-  // Session data actions
+  // Background session helpers
+  getSessionMessages: (sessionId: string) => Message[];
+  isSessionStreaming: (sessionId: string) => boolean;
+  clearSessionMessages: (sessionId: string) => void;
+  // Cache metadata helpers
+  getSessionCacheMeta: (sessionId: string) => SessionCacheMeta | undefined;
+  // LRU cache helpers
+  evictIfNeeded: () => void;
+  getCacheStats: () => { size: number; maxSize: number; sessions: string[] };
+  
+  // Multi-session data actions
   updateSessionData: (sessionId: string, updates: Partial<SessionData>) => void;
+  addMessageToSession: (sessionId: string, message: Message) => void;
+  updateMessageInSession: (sessionId: string, messageId: string, updates: Partial<Message>) => void;
   setSessionStatus: (sessionId: string, status: SessionData['status']) => void;
   cleanupStaleSessionData: (maxSessions?: number) => void;
-
-  // Worker status tracking
+  
+  // Worker status tracking actions
   updateWorkerStatus: (sessionId: string, status: WorkerStatus) => void;
   getWorkerStatus: (sessionId: string) => WorkerStatus | undefined;
   removeWorkerStatus: (sessionId: string) => void;
 
   // Claude Direct availability
   setClaudeAvailable: (available: boolean, error?: string | null) => void;
-
-  // WebSocket event handler
+  
+  // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
 }
 
@@ -189,6 +239,7 @@ export const useSessionStore = create<SessionState>()(
       currentSessionId: null,
       currentSessionSdkType: null,
       currentModel: null,
+      messages: [],
       isStreaming: false,
       isLoading: false,
       isSwitchingSession: false,
@@ -201,17 +252,26 @@ export const useSessionStore = create<SessionState>()(
       contextWindow: 0,
       archivedSessionPaths: [],
       sessionDisplayNames: {},
+      // LRU cache for session messages
+      sessionCache: new Map<string, SessionCache>(),
+      // Session cache with metadata
+      sessionMessages: {},
+      sessionCacheMeta: {},
+      streamingSessions: {},
       isLoadingSessions: false,
+      // Auto-compaction state
       isCompacting: false,
       compactionReason: null,
+      // Multi-session data storage
       sessionData: {},
+      // Worker status tracking
       workerStatus: {},
       activeWorkers: [],
+      // Claude Direct availability
       claudeAvailable: false,
       claudeAuthError: null,
 
-      // ─── Worker status tracking ───────────────────────────
-
+      // Worker status tracking implementation
       updateWorkerStatus: (sessionId: string, status: WorkerStatus) => {
         set((state) => {
           const newWorkerStatus = { ...state.workerStatus, [sessionId]: status };
@@ -249,30 +309,134 @@ export const useSessionStore = create<SessionState>()(
       setSessionInfo: (info) => set({ sessionInfo: info }),
       setCurrentModel: (modelId) => set({ currentModel: modelId }),
 
-      // ─── Session switching ────────────────────────────────
-      // Messages are managed by useSessionStream, not the store.
-      // Message loading happens via useSessionStream + server history replay.
+      // LRU cache eviction: remove least recently used sessions when over limit
+      evictIfNeeded: () => {
+        const state = get();
+        const cache = state.sessionCache;
+        
+        if (cache.size <= MAX_CACHED_SESSIONS) return;
+        
+        // Sort by lastAccess (oldest first)
+        const entries = [...cache.entries()]
+          .sort((a, b) => a[1].lastAccess - b[1].lastAccess);
+        
+        // Remove oldest (but never current session)
+        const currentSessionId = state.currentSessionId;
+        const toEvict: string[] = [];
+        
+        for (const [id] of entries) {
+          if (id !== currentSessionId && cache.size - toEvict.length > MAX_CACHED_SESSIONS) {
+            toEvict.push(id);
+          }
+        }
+        
+        if (toEvict.length > 0) {
+          set((s) => {
+            const newCache = new Map(s.sessionCache);
+            const newSessionMessages = { ...s.sessionMessages };
+            const newSessionCacheMeta = { ...s.sessionCacheMeta };
+            
+            toEvict.forEach(id => {
+              newCache.delete(id);
+              delete newSessionMessages[id];
+              delete newSessionCacheMeta[id];
+            });
+            
+            return {
+              sessionCache: newCache,
+              sessionMessages: newSessionMessages,
+              sessionCacheMeta: newSessionCacheMeta,
+            };
+          });
+        }
+      },
 
+      // Get cache statistics
+      getCacheStats: () => {
+        const cache = get().sessionCache;
+        return {
+          size: cache.size,
+          maxSize: MAX_CACHED_SESSIONS,
+          sessions: [...cache.keys()],
+        };
+      },
+
+      // Atomic session switch - clears old data before loading new
       switchSession: (newSessionId: string) => {
-        set((state) => ({
-          currentSessionId: newSessionId,
-          currentSessionSdkType: state.sessions.find((s) => s.id === newSessionId)?.sdkType ?? null,
-          isStreaming: false,
-        }));
+        set((state) => {
+          const newCache = new Map(state.sessionCache);
+          
+          // Mark old session cache as accessed before switching
+          if (state.currentSessionId) {
+            const oldCache = newCache.get(state.currentSessionId);
+            if (oldCache) {
+              oldCache.lastAccess = Date.now();
+            }
+          }
+          
+          // Get cached messages for new session (or empty)
+          const newSessionCache = newCache.get(newSessionId);
+          const cachedMessages = newSessionCache?.messages || [];
+          
+          // Update lastAccess for new session
+          if (newSessionCache) {
+            newSessionCache.lastAccess = Date.now();
+          } else {
+            // Create new cache entry
+            newCache.set(newSessionId, {
+              messages: cachedMessages,
+              lastAccess: Date.now(),
+            });
+          }
+          
+          return {
+            currentSessionId: newSessionId,
+            currentSessionSdkType: state.sessions.find((s) => s.id === newSessionId)?.sdkType ?? null,
+            messages: cachedMessages,
+            sessionCache: newCache,
+            // Reset streaming state for the new session
+            isStreaming: state.streamingSessions[newSessionId] || false,
+          };
+        });
+        
+        // Trigger eviction after switch
+        get().evictIfNeeded();
       },
 
-      setCurrentSession: (sessionId) => {
-        set((s) => ({
-          currentSessionId: sessionId,
-          currentSessionSdkType: s.sessions.find((session) => session.id === sessionId)?.sdkType ?? null,
-        }));
+      // Background session helpers
+      getSessionMessages: (sessionId: string) => {
+        return get().sessionMessages[sessionId] || [];
+      },
+      
+      isSessionStreaming: (sessionId: string) => {
+        return get().streamingSessions[sessionId] || false;
+      },
+      
+      clearSessionMessages: (sessionId: string) => {
+        set((state) => {
+          const newSessionMessages = { ...state.sessionMessages };
+          const newSessionCacheMeta = { ...state.sessionCacheMeta };
+          const newCache = new Map(state.sessionCache);
+          delete newSessionMessages[sessionId];
+          delete newSessionCacheMeta[sessionId];
+          newCache.delete(sessionId);
+          return { 
+            sessionMessages: newSessionMessages,
+            sessionCacheMeta: newSessionCacheMeta,
+            sessionCache: newCache,
+          };
+        });
       },
 
-      // ─── Session data (metadata only) ─────────────────────
+      getSessionCacheMeta: (sessionId: string) => {
+        return get().sessionCacheMeta[sessionId];
+      },
 
+      // Multi-session data actions
       updateSessionData: (sessionId, updates) => {
         set((state) => {
           const existingData = state.sessionData[sessionId] || {
+            messages: [],
             status: 'idle' as const,
             lastEventTimestamp: 0,
             contextPercent: 0,
@@ -292,9 +456,77 @@ export const useSessionStore = create<SessionState>()(
         });
       },
 
+      addMessageToSession: (sessionId, message) => {
+        set((state) => {
+          const existingData = state.sessionData[sessionId] || {
+            messages: [],
+            status: 'idle' as const,
+            lastEventTimestamp: 0,
+            contextPercent: 0,
+            currentStep: 0,
+            model: null,
+          };
+          const newMessages = [...existingData.messages, message];
+          const newCache = new Map(state.sessionCache);
+          newCache.set(sessionId, {
+            messages: newMessages,
+            lastAccess: Date.now(),
+          });
+          return {
+            sessionData: {
+              ...state.sessionData,
+              [sessionId]: {
+                ...existingData,
+                messages: newMessages,
+                lastEventTimestamp: Date.now(),
+              },
+            },
+            // Also update legacy sessionMessages cache for backward compatibility
+            sessionMessages: {
+              ...state.sessionMessages,
+              [sessionId]: newMessages,
+            },
+            sessionCache: newCache,
+          };
+        });
+      },
+
+      updateMessageInSession: (sessionId, messageId, updates) => {
+        set((state) => {
+          const existingData = state.sessionData[sessionId];
+          if (!existingData) return state;
+          
+          const newMessages = existingData.messages.map((msg) =>
+            msg.id === messageId ? { ...msg, ...updates } : msg
+          );
+          const newCache = new Map(state.sessionCache);
+          newCache.set(sessionId, {
+            messages: newMessages,
+            lastAccess: Date.now(),
+          });
+          return {
+            sessionData: {
+              ...state.sessionData,
+              [sessionId]: {
+                ...existingData,
+                messages: newMessages,
+                lastEventTimestamp: Date.now(),
+              },
+            },
+            // Also update legacy sessionMessages cache for backward compatibility
+            sessionMessages: {
+              ...state.sessionMessages,
+              [sessionId]: newMessages,
+            },
+            sessionCache: newCache,
+          };
+        });
+      },
+
       setSessionStatus: (sessionId, status) => {
         set((state) => {
           const existingData = state.sessionData[sessionId] || {
+            messages: [],
             status: 'idle' as const,
             lastEventTimestamp: 0,
             contextPercent: 0,
@@ -309,6 +541,11 @@ export const useSessionStore = create<SessionState>()(
                 status,
                 lastEventTimestamp: Date.now(),
               },
+            },
+            // Also update streamingSessions for backward compatibility
+            streamingSessions: {
+              ...state.streamingSessions,
+              [sessionId]: status === 'streaming',
             },
           };
         });
@@ -333,15 +570,23 @@ export const useSessionStore = create<SessionState>()(
         if (toRemove.length > 0) {
           set((s) => {
             const newSessionData = { ...s.sessionData };
+            const newSessionMessages = { ...s.sessionMessages };
+            const newStreamingSessions = { ...s.streamingSessions };
+            
             toRemove.forEach(id => {
               delete newSessionData[id];
+              delete newSessionMessages[id];
+              delete newStreamingSessions[id];
             });
-            return { sessionData: newSessionData };
+            
+            return {
+              sessionData: newSessionData,
+              sessionMessages: newSessionMessages,
+              streamingSessions: newStreamingSessions,
+            };
           });
         }
       },
-
-      // ─── Archive / display names ──────────────────────────
 
       archiveSession: (sessionPath) => {
         set((state) => ({
@@ -349,6 +594,7 @@ export const useSessionStore = create<SessionState>()(
             ? state.archivedSessionPaths
             : [...state.archivedSessionPaths, sessionPath],
         }));
+        // Fire-and-forget sync to server so all devices stay in sync
         patchPreferences({ archivedSessionPaths: get().archivedSessionPaths }).catch((e) => {
           console.warn('Failed to sync archive state to server:', e);
         });
@@ -374,6 +620,7 @@ export const useSessionStore = create<SessionState>()(
             [sessionPath]: displayName,
           },
         }));
+        // Fire-and-forget sync to server so all devices stay in sync
         patchPreferences({ sessionDisplayNames: get().sessionDisplayNames }).catch((e) => {
           console.warn('Failed to sync display name to server:', e);
         });
@@ -398,9 +645,12 @@ export const useSessionStore = create<SessionState>()(
         try {
           const serverPrefs = await getPreferences();
           if (serverPrefs.archivedSessionPaths !== undefined) {
+            // Server is the source of truth — overrides localStorage cache
             set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
           }
           if (serverPrefs.sessionDisplayNames !== undefined) {
+            // Merge server display names with local ones
+            // Server wins for conflicts, but local-only entries are preserved
             const currentDisplayNames = get().sessionDisplayNames;
             const mergedDisplayNames = {
               ...currentDisplayNames,
@@ -409,13 +659,13 @@ export const useSessionStore = create<SessionState>()(
             set({ sessionDisplayNames: mergedDisplayNames });
           }
         } catch (e) {
+          // Non-fatal: fall back to whatever is already in localStorage
           console.warn('Failed to load preferences from server, using local cache:', e);
         }
       },
 
-      // ─── Session list ─────────────────────────────────────
-
       setSessions: (sessions) => {
+        // Deduplicate sessions by path (path is the stable identifier)
         const seenPaths = new Set<string>();
         const dedupedSessions = sessions.filter((session) => {
           if (seenPaths.has(session.path)) {
@@ -427,9 +677,145 @@ export const useSessionStore = create<SessionState>()(
         set({ sessions: dedupedSessions, isLoadingSessions: false });
       },
 
-      // ─── Streaming / loading ──────────────────────────────
+      setCurrentSession: (sessionId) => {
+        const state = get();
+        
+        // First, save current session's messages to cache with metadata (if any)
+        if (state.currentSessionId && state.messages.length > 0) {
+          const oldMessages = state.messages;
+          set((s) => {
+            const newCache = new Map(s.sessionCache);
+            newCache.set(s.currentSessionId!, {
+              messages: oldMessages,
+              lastAccess: Date.now(),
+            });
+            return {
+              sessionCache: newCache,
+              sessionMessages: {
+                ...s.sessionMessages,
+                [s.currentSessionId!]: oldMessages,
+              },
+              sessionCacheMeta: {
+                ...s.sessionCacheMeta,
+                [s.currentSessionId!]: {
+                  fileTimestamp: s.sessionCacheMeta[s.currentSessionId!]?.fileTimestamp || 0,
+                  lastLocalUpdate: Date.now(),
+                  isStreaming: s.isStreaming,
+                  messageCount: oldMessages.length,
+                  sizeBytes: estimateMessagesSize(oldMessages),
+                },
+              },
+            };
+          });
+        }
+        
+        // Then, switch to new session and load its cached messages (if any)
+        const cachedMessages = sessionId ? get().sessionMessages[sessionId] || [] : [];
+        set((s) => {
+          const newCache = new Map(s.sessionCache);
+          if (sessionId) {
+            const existingCache = newCache.get(sessionId);
+            newCache.set(sessionId, {
+              messages: existingCache?.messages || cachedMessages,
+              lastAccess: Date.now(),
+            });
+          }
+          return {
+            currentSessionId: sessionId,
+            currentSessionSdkType: s.sessions.find((session) => session.id === sessionId)?.sdkType ?? null,
+            messages: cachedMessages,
+            sessionCache: newCache,
+          };
+        });
+        
+        // Trigger eviction after session switch
+        get().evictIfNeeded();
+      },
 
-      setStreaming: (isStreaming) => set({ isStreaming }),
+      addMessage: (message) => {
+        set((state) => {
+          const newMessages = [...state.messages, message];
+          // Also update the session caches
+          const sessionId = state.currentSessionId;
+          const newSessionMessages = sessionId 
+            ? { ...state.sessionMessages, [sessionId]: newMessages }
+            : state.sessionMessages;
+          const newCache = new Map(state.sessionCache);
+          if (sessionId) {
+            newCache.set(sessionId, {
+              messages: newMessages,
+              lastAccess: Date.now(),
+            });
+          }
+          const newSessionCacheMeta = sessionId 
+            ? {
+                ...state.sessionCacheMeta,
+                [sessionId]: {
+                  ...state.sessionCacheMeta[sessionId],
+                  messageCount: newMessages.length,
+                  sizeBytes: estimateMessagesSize(newMessages),
+                  lastLocalUpdate: Date.now(),
+                },
+              }
+            : state.sessionCacheMeta;
+          return { 
+            messages: newMessages,
+            sessionMessages: newSessionMessages,
+            sessionCache: newCache,
+            sessionCacheMeta: newSessionCacheMeta,
+          };
+        });
+      },
+
+      updateMessage: (id, updates) => {
+        set((state) => {
+          const newMessages = state.messages.map((msg) =>
+            msg.id === id ? { ...msg, ...updates } : msg
+          );
+          // Also update the session caches
+          const sessionId = state.currentSessionId;
+          const newSessionMessages = sessionId 
+            ? { ...state.sessionMessages, [sessionId]: newMessages }
+            : state.sessionMessages;
+          const newCache = new Map(state.sessionCache);
+          if (sessionId) {
+            newCache.set(sessionId, {
+              messages: newMessages,
+              lastAccess: Date.now(),
+            });
+          }
+          const newSessionCacheMeta = sessionId 
+            ? {
+                ...state.sessionCacheMeta,
+                [sessionId]: {
+                  ...state.sessionCacheMeta[sessionId],
+                  messageCount: newMessages.length,
+                  sizeBytes: estimateMessagesSize(newMessages),
+                  lastLocalUpdate: Date.now(),
+                },
+              }
+            : state.sessionCacheMeta;
+          return { 
+            messages: newMessages,
+            sessionMessages: newSessionMessages,
+            sessionCache: newCache,
+            sessionCacheMeta: newSessionCacheMeta,
+          };
+        });
+      },
+
+      setStreaming: (isStreaming) => {
+        set((state) => {
+          const sessionId = state.currentSessionId;
+          const newStreamingSessions = sessionId 
+            ? { ...state.streamingSessions, [sessionId]: isStreaming }
+            : state.streamingSessions;
+          return { 
+            isStreaming,
+            streamingSessions: newStreamingSessions,
+          };
+        });
+      },
       setLoading: (isLoading) => set({ isLoading }),
       setSwitchingSession: (isSwitching, sessionId = null) => set({ 
         isSwitchingSession: isSwitching, 
@@ -437,13 +823,14 @@ export const useSessionStore = create<SessionState>()(
       }),
       setError: (error) => set({ error }),
 
-      // ─── WebSocket event handler ──────────────────────────
+      clearMessages: () => set({ messages: [] }),
 
       handleServerMessage: (message: unknown) => {
         const msg = message as { type: string; [key: string]: unknown };
 
         switch (msg.type) {
           case 'sessions_list': {
+            // Deduplicate sessions by path (path is the stable identifier)
             const rawSessions = (msg.sessions as Array<Session & { sdkType?: 'pi' | 'claude' }>) || [];
             const seenPaths = new Set<string>();
             const dedupedSessions = rawSessions
@@ -457,6 +844,7 @@ export const useSessionStore = create<SessionState>()(
               })
               .map((session) => ({
                 ...session,
+                // Preserve sdkType if the server sends it
                 sdkType: session.sdkType ?? undefined,
               }));
             set({ sessions: dedupedSessions, isLoadingSessions: false });
@@ -468,6 +856,7 @@ export const useSessionStore = create<SessionState>()(
             set({ 
               currentSessionId: createdMsg.sessionId,
               currentSessionSdkType: createdMsg.sdkType ?? null,
+              messages: [], // Clear messages for new session
               contextPercent: 0,
               contextUsed: 0,
               contextWindow: 0,
@@ -476,8 +865,15 @@ export const useSessionStore = create<SessionState>()(
               isSwitchingSession: false,
               switchingToSessionId: null,
             });
-            // Add or update the session entry so UI can reflect sdkType
+            // Clear any cached messages for this session
             set((state) => {
+              const newSessionMessages = { ...state.sessionMessages };
+              const newSessionCacheMeta = { ...state.sessionCacheMeta };
+              const newCache = new Map(state.sessionCache);
+              delete newSessionMessages[createdMsg.sessionId];
+              delete newSessionCacheMeta[createdMsg.sessionId];
+              newCache.delete(createdMsg.sessionId);
+              // Add or update the newly-created session entry immediately so UI can reflect sdkType
               const existingSession = state.sessions.find((s) => s.id === createdMsg.sessionId);
               const updatedSessions = existingSession
                 ? state.sessions.map((s) =>
@@ -496,7 +892,12 @@ export const useSessionStore = create<SessionState>()(
                     },
                     ...state.sessions,
                   ];
-              return { sessions: updatedSessions };
+              return { 
+                sessions: updatedSessions,
+                sessionMessages: newSessionMessages,
+                sessionCacheMeta: newSessionCacheMeta,
+                sessionCache: newCache,
+              };
             });
             break;
           }
@@ -509,10 +910,71 @@ export const useSessionStore = create<SessionState>()(
               contextWindow?: number;
               contextUsed?: number;
               contextPercent?: number;
+              messages?: Array<{
+                id: string;
+                role: 'user' | 'assistant';
+                content: string | ContentPart[];
+                timestamp: number;
+              }>;
+              fileTimestamp?: number;
               isStreaming?: boolean;
             };
             
+            // Transform server messages to client Message format
+            const serverMessages = switchMsg.messages || [];
+            const clientMessages: Message[] = serverMessages.map((serverMsg) => ({
+              id: serverMsg.id,
+              role: serverMsg.role,
+              content: serverMsg.content,
+              timestamp: serverMsg.timestamp,
+            }));
+            
+            // Save current session's messages before switching (if any)
+            const currentId = get().currentSessionId;
+            const currentMessages = get().messages;
+            
+            // Check if we should use server messages or keep local cache
+            // Server file is the source of truth, but we need to handle streaming state
+            const serverFileTimestamp = switchMsg.fileTimestamp || 0;
+            const serverIsStreaming = switchMsg.isStreaming || false;
+            
             set((state) => {
+              const newSessionMessages = { ...state.sessionMessages };
+              const newSessionCacheMeta = { ...state.sessionCacheMeta };
+              const newCache = new Map(state.sessionCache);
+              
+              // Save current session's messages with metadata
+              if (currentId && currentMessages.length > 0) {
+                newSessionMessages[currentId] = currentMessages;
+                newSessionCacheMeta[currentId] = {
+                  fileTimestamp: state.sessionCacheMeta[currentId]?.fileTimestamp || 0,
+                  lastLocalUpdate: Date.now(),
+                  isStreaming: state.isStreaming,
+                  messageCount: currentMessages.length,
+                  sizeBytes: estimateMessagesSize(currentMessages),
+                };
+                newCache.set(currentId, {
+                  messages: currentMessages,
+                  lastAccess: Date.now(),
+                });
+              }
+              
+              // Store the switched session's messages with metadata from server
+              if (switchMsg.sessionId) {
+                newSessionMessages[switchMsg.sessionId] = clientMessages;
+                newSessionCacheMeta[switchMsg.sessionId] = {
+                  fileTimestamp: serverFileTimestamp,
+                  lastLocalUpdate: Date.now(),
+                  isStreaming: serverIsStreaming,
+                  messageCount: clientMessages.length,
+                  sizeBytes: estimateMessagesSize(clientMessages),
+                };
+                newCache.set(switchMsg.sessionId, {
+                  messages: clientMessages,
+                  lastAccess: Date.now(),
+                });
+              }
+              
               // Update sdkType on the switched-to session if server provides it
               const updatedSessions = switchMsg.sdkType
                 ? state.sessions.map((s) =>
@@ -526,25 +988,207 @@ export const useSessionStore = create<SessionState>()(
                 currentSessionId: switchMsg.sessionId,
                 currentSessionSdkType: switchMsg.sdkType ?? state.sessions.find((s) => s.id === switchMsg.sessionId)?.sdkType ?? null,
                 currentModel: switchMsg.model ?? null,
+                messages: clientMessages,
                 contextPercent: switchMsg.contextPercent ?? 0,
                 contextUsed: switchMsg.contextUsed ?? 0,
                 contextWindow: switchMsg.contextWindow ?? 0,
                 sessions: updatedSessions,
-                isStreaming: switchMsg.isStreaming || false,
+                sessionMessages: newSessionMessages,
+                sessionCacheMeta: newSessionCacheMeta,
+                sessionCache: newCache,
+                // If server says streaming, trust it
+                isStreaming: serverIsStreaming,
+                // Clear switching state when session is loaded
                 isSwitchingSession: false,
                 switchingToSessionId: null,
               };
             });
+            
+            // Trigger eviction after session switch
+            get().evictIfNeeded();
             break;
           }
 
           case 'agent_start':
-            set({ isStreaming: true, isLoading: false });
+            set((state) => {
+              const sessionId = state.currentSessionId;
+              const newStreamingSessions = sessionId 
+                ? { ...state.streamingSessions, [sessionId]: true }
+                : state.streamingSessions;
+              const newSessionCacheMeta = { ...state.sessionCacheMeta };
+              if (sessionId) {
+                const currentMeta = newSessionCacheMeta[sessionId] || {};
+                newSessionCacheMeta[sessionId] = {
+                  ...currentMeta,
+                  isStreaming: true,
+                  lastLocalUpdate: Date.now(),
+                  messageCount: currentMeta.messageCount || state.messages.length,
+                  sizeBytes: currentMeta.sizeBytes || estimateMessagesSize(state.messages),
+                };
+              }
+              return { 
+                isStreaming: true, 
+                isLoading: false,
+                streamingSessions: newStreamingSessions,
+                sessionCacheMeta: newSessionCacheMeta,
+              };
+            });
             break;
 
           case 'agent_end':
-            set({ isStreaming: false });
+            set((state) => {
+              const sessionId = state.currentSessionId;
+              const newStreamingSessions = sessionId 
+                ? { ...state.streamingSessions, [sessionId]: false }
+                : state.streamingSessions;
+              const newSessionCacheMeta = { ...state.sessionCacheMeta };
+              if (sessionId) {
+                const currentMeta = newSessionCacheMeta[sessionId] || {};
+                newSessionCacheMeta[sessionId] = {
+                  ...currentMeta,
+                  isStreaming: false,
+                  lastLocalUpdate: Date.now(),
+                  messageCount: state.messages.length,
+                  sizeBytes: estimateMessagesSize(state.messages),
+                };
+              }
+              return { 
+                isStreaming: false,
+                streamingSessions: newStreamingSessions,
+                sessionCacheMeta: newSessionCacheMeta,
+              };
+            });
             break;
+
+          case 'message_start': {
+            const messageData = (msg.message as { id: string; role: string; content: unknown }) || {};
+            const newMessage: Message = {
+              id: messageData.id || `msg_${Date.now()}`,
+              role: messageData.role as 'user' | 'assistant' | 'tool',
+              content: (messageData.content as Message['content']) ?? [],
+              timestamp: Date.now(),
+            };
+            get().addMessage(newMessage);
+            break;
+          }
+
+          case 'message_update': {
+            // Update streaming content
+            const { message: msgData, assistantMessageEvent } = msg as {
+              message?: { id: string; content?: Message['content'] };
+              assistantMessageEvent?: { type: string; delta?: string };
+            };
+            
+            if (msgData?.id && assistantMessageEvent) {
+              const existingMsg = get().messages.find(m => m.id === msgData.id);
+              if (existingMsg) {
+                // Get existing content array or create new one
+                let contentArray: ContentPart[];
+                if (Array.isArray(existingMsg.content)) {
+                  contentArray = [...existingMsg.content];
+                } else if (typeof existingMsg.content === 'string') {
+                  contentArray = existingMsg.content ? [{ type: 'text' as const, text: existingMsg.content }] : [];
+                } else {
+                  contentArray = [];
+                }
+
+                const eventType = assistantMessageEvent.type;
+                const delta = assistantMessageEvent.delta;
+
+                // Handle text content (text_delta)
+                if (eventType === 'text_delta') {
+                  const lastEntry = contentArray[contentArray.length - 1];
+                  if (lastEntry && lastEntry.type === 'text') {
+                    lastEntry.text = (lastEntry.text || '') + delta;
+                  } else {
+                    contentArray.push({ type: 'text' as const, text: delta });
+                  }
+                  get().updateMessage(msgData.id, { content: contentArray });
+                }
+                // Handle thinking content (thinking_delta)
+                else if (eventType === 'thinking_delta') {
+                  const lastEntry = contentArray[contentArray.length - 1];
+                  if (lastEntry && lastEntry.type === 'thinking') {
+                    lastEntry.thinking = (lastEntry.thinking || '') + delta;
+                  } else {
+                    contentArray.push({ type: 'thinking' as const, thinking: delta });
+                  }
+                  get().updateMessage(msgData.id, { content: contentArray });
+                }
+              }
+            }
+            break;
+          }
+
+          case 'message_end': {
+            // Message streaming complete - update cache metadata
+            const { message: msgData } = msg as { message?: { id: string } };
+            if (msgData?.id) {
+              set((state) => {
+                const sessionId = state.currentSessionId;
+                if (sessionId) {
+                  const currentMeta = state.sessionCacheMeta[sessionId] || {};
+                  return {
+                    sessionCacheMeta: {
+                      ...state.sessionCacheMeta,
+                      [sessionId]: {
+                        ...currentMeta,
+                        lastLocalUpdate: Date.now(),
+                        messageCount: state.messages.length,
+                        sizeBytes: estimateMessagesSize(state.messages),
+                      },
+                    },
+                  };
+                }
+                return state;
+              });
+            }
+            break;
+          }
+
+          case 'tool_execution_start': {
+            const { toolCallId, toolName, args } = msg as unknown as {
+              toolCallId: string;
+              toolName: string;
+              args: unknown;
+            };
+            const toolMessage: Message = {
+              id: toolCallId,
+              role: 'tool',
+              content: '',
+              timestamp: Date.now(),
+              toolCall: { id: toolCallId, name: toolName, args },
+            };
+            get().addMessage(toolMessage);
+            break;
+          }
+
+          case 'tool_execution_update': {
+            const { toolCallId, partialResult } = msg as unknown as {
+              toolCallId: string;
+              partialResult?: { content: Array<{ type: string; text?: string }> };
+            };
+            const content = partialResult?.content?.[0]?.text || '';
+            get().updateMessage(toolCallId, { 
+              content,
+              toolResult: { output: content, isError: false },
+            });
+            break;
+          }
+
+          case 'tool_execution_end': {
+            const { toolCallId, result, isError } = msg as unknown as {
+              toolCallId: string;
+              result?: { content: Array<{ type: string; text?: string }> };
+              isError: boolean;
+            };
+            const content = result?.content?.[0]?.text || '';
+            get().updateMessage(toolCallId, {
+              content,
+              toolResult: { output: content, isError },
+            });
+            break;
+          }
 
           case 'error':
             set({ 
@@ -555,6 +1199,7 @@ export const useSessionStore = create<SessionState>()(
             break;
 
           case 'session_update': {
+            // Skip session_update events during initial load to prevent duplicates
             if (get().isLoadingSessions) {
               break;
             }
@@ -566,20 +1211,25 @@ export const useSessionStore = create<SessionState>()(
             };
             
             if (type === 'unlink') {
+              // Remove deleted session (use path for matching)
               set((state) => ({
                 sessions: state.sessions.filter((s) => s.path !== info?.path && s.id !== sessionId),
               }));
             } else if (info) {
+              // Add or update session (dedupe by path)
               set((state) => {
+                // Check if session with this path already exists
                 const existingByPath = state.sessions.findIndex((s) => s.path === info.path);
                 const existingById = state.sessions.findIndex((s) => s.id === info.id);
                 const existingIndex = existingByPath >= 0 ? existingByPath : existingById;
                 
                 if (existingIndex >= 0) {
+                  // Update existing
                   const newSessions = [...state.sessions];
                   newSessions[existingIndex] = info;
                   return { sessions: newSessions };
                 } else {
+                  // Add new
                   return { sessions: [info, ...state.sessions] };
                 }
               });
@@ -607,6 +1257,7 @@ export const useSessionStore = create<SessionState>()(
             const modelId = msg.modelId as string;
             const modelName = modelId.split('/').pop()?.replace(/-/g, ' ') || modelId;
             set({ currentModel: modelId });
+            // Show success toast
             useUIStore.getState().addToast({
               type: 'success',
               message: `Model changed to ${modelName}`,
@@ -618,6 +1269,7 @@ export const useSessionStore = create<SessionState>()(
             const { stats } = msg as unknown as { stats: SessionStats };
             set({ sessionInfo: stats });
             
+            // Record usage for dashboard (fire-and-forget)
             if (stats && stats.tokens.total > 0) {
               import('../lib/api').then(({ recordUsage }) => {
                 recordUsage({
@@ -629,7 +1281,9 @@ export const useSessionStore = create<SessionState>()(
                   cost: stats.cost,
                   messageCount: stats.totalMessages,
                 });
-              }).catch(() => {});
+              }).catch(() => {
+                // Silently ignore recording errors
+              });
             }
             break;
           }
@@ -642,6 +1296,7 @@ export const useSessionStore = create<SessionState>()(
               contextUsed?: number;
               contextPercent?: number;
             };
+            // Show toast notification, reset compaction state, and update context indicators
             set({ 
               isCompacting: false, 
               compactionReason: null,
@@ -649,6 +1304,7 @@ export const useSessionStore = create<SessionState>()(
               contextUsed: contextUsed ?? get().contextUsed,
               contextPercent: contextPercent ?? get().contextPercent,
             });
+            // Also update sessionInfo if it exists to keep it in sync
             if (get().sessionInfo) {
               set({
                 sessionInfo: {
@@ -722,7 +1378,7 @@ export const useSessionStore = create<SessionState>()(
             break;
           }
 
-          // ─── Multi-session event routing ─────────────────
+          // Multi-session event routing
           case 'session_event': {
             const sessionEvent = msg as unknown as {
               sessionId: string;
@@ -730,9 +1386,11 @@ export const useSessionStore = create<SessionState>()(
             };
             const { sessionId, event } = sessionEvent;
             
+            // Route event to the correct session
             switch (event.type) {
               case 'agent_start':
                 get().setSessionStatus(sessionId, 'streaming');
+                // Also update current session if it matches
                 if (get().currentSessionId === sessionId) {
                   set({ isStreaming: true, isLoading: false });
                 }
@@ -740,19 +1398,157 @@ export const useSessionStore = create<SessionState>()(
                 
               case 'agent_end':
                 get().setSessionStatus(sessionId, 'idle');
+                currentMessageIdBySession.delete(sessionId);
+                // Also update current session if it matches
                 if (get().currentSessionId === sessionId) {
                   set({ isStreaming: false });
                 }
                 break;
                 
-              // Message/tool events are handled by useSessionStream hook.
-              // The following cases were moved to useSessionStream for ref-based
-              // streaming without re-renders on every delta:
-              //   message_start, message_update, message_end,
-              //   tool_execution_start, tool_execution_update, tool_execution_end
+              case 'message_start': {
+                const messageData = (event.message as { id: string; role: string; content: unknown }) || {};
+                const newMessage: Message = {
+                  id: messageData.id || `msg_${Date.now()}`,
+                  role: messageData.role as 'user' | 'assistant' | 'tool',
+                  content: (messageData.content as Message['content']) ?? [],
+                  timestamp: Date.now(),
+                };
+                // Track the current message ID for this session so message_update
+                // events (which may arrive without IDs from raw SDK events) can
+                // be routed to the correct message.
+                currentMessageIdBySession.set(sessionId, newMessage.id);
+                get().addMessageToSession(sessionId, newMessage);
+                // Also update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  get().addMessage(newMessage);
+                }
+                break;
+              }
+              
+              case 'message_update': {
+                const { message: msgData, assistantMessageEvent } = event as {
+                  message?: { id: string; content?: Message['content'] };
+                  assistantMessageEvent?: { type: string; delta?: string };
+                };
+                
+                // Use the tracked current message ID as fallback when raw SDK
+                // events arrive without IDs (multi-session-manager bypasses
+                // the EventForwarder's ID injection).
+                const messageId = msgData?.id || currentMessageIdBySession.get(sessionId);
+                
+                if (messageId && assistantMessageEvent) {
+                  const sessionData = get().sessionData[sessionId];
+                  if (sessionData) {
+                    const existingMsg = sessionData.messages.find(m => m.id === messageId);
+                    if (existingMsg) {
+                      let contentArray: ContentPart[];
+                      if (Array.isArray(existingMsg.content)) {
+                        contentArray = [...existingMsg.content];
+                      } else if (typeof existingMsg.content === 'string') {
+                        contentArray = existingMsg.content ? [{ type: 'text' as const, text: existingMsg.content }] : [];
+                      } else {
+                        contentArray = [];
+                      }
+
+                      const eventType = assistantMessageEvent.type;
+                      const delta = assistantMessageEvent.delta;
+
+                      if (eventType === 'text_delta') {
+                        const lastEntry = contentArray[contentArray.length - 1];
+                        if (lastEntry && lastEntry.type === 'text') {
+                          lastEntry.text = (lastEntry.text || '') + delta;
+                        } else {
+                          contentArray.push({ type: 'text' as const, text: delta });
+                        }
+                        get().updateMessageInSession(sessionId, messageId, { content: contentArray });
+                        // Also update current session if it matches
+                        if (get().currentSessionId === sessionId) {
+                          get().updateMessage(messageId, { content: contentArray });
+                        }
+                      } else if (eventType === 'thinking_delta') {
+                        const lastEntry = contentArray[contentArray.length - 1];
+                        if (lastEntry && lastEntry.type === 'thinking') {
+                          lastEntry.thinking = (lastEntry.thinking || '') + delta;
+                        } else {
+                          contentArray.push({ type: 'thinking' as const, thinking: delta });
+                        }
+                        get().updateMessageInSession(sessionId, messageId, { content: contentArray });
+                        // Also update current session if it matches
+                        if (get().currentSessionId === sessionId) {
+                          get().updateMessage(messageId, { content: contentArray });
+                        }
+                      }
+                    }
+                  }
+                }
+                break;
+              }
+              
+              case 'tool_execution_start': {
+                const { toolCallId, toolName, args } = event as unknown as {
+                  toolCallId: string;
+                  toolName: string;
+                  args: unknown;
+                };
+                const toolMessage: Message = {
+                  id: toolCallId,
+                  role: 'tool',
+                  content: '',
+                  timestamp: Date.now(),
+                  toolCall: { id: toolCallId, name: toolName, args },
+                };
+                get().addMessageToSession(sessionId, toolMessage);
+                // Also update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  get().addMessage(toolMessage);
+                }
+                break;
+              }
+              
+              case 'tool_execution_update': {
+                const { toolCallId, partialResult } = event as unknown as {
+                  toolCallId: string;
+                  partialResult?: { content: Array<{ type: string; text?: string }> };
+                };
+                const content = partialResult?.content?.[0]?.text || '';
+                get().updateMessageInSession(sessionId, toolCallId, { 
+                  content,
+                  toolResult: { output: content, isError: false },
+                });
+                // Also update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  get().updateMessage(toolCallId, { 
+                    content,
+                    toolResult: { output: content, isError: false },
+                  });
+                }
+                break;
+              }
+              
+              case 'tool_execution_end': {
+                const { toolCallId, result, isError } = event as unknown as {
+                  toolCallId: string;
+                  result?: { content: Array<{ type: string; text?: string }> };
+                  isError: boolean;
+                };
+                const content = result?.content?.[0]?.text || '';
+                get().updateMessageInSession(sessionId, toolCallId, {
+                  content,
+                  toolResult: { output: content, isError },
+                });
+                // Also update current session if it matches
+                if (get().currentSessionId === sessionId) {
+                  get().updateMessage(toolCallId, {
+                    content,
+                    toolResult: { output: content, isError },
+                  });
+                }
+                break;
+              }
               
               case 'auto_compaction_start': {
                 const { reason } = event as unknown as { reason: string };
+                // Update current session if it matches
                 if (get().currentSessionId === sessionId) {
                   set({ isCompacting: true, compactionReason: reason });
                   useUIStore.getState().addToast({
@@ -770,6 +1566,7 @@ export const useSessionStore = create<SessionState>()(
                   willRetry: boolean;
                   errorMessage?: string;
                 };
+                // Update current session if it matches
                 if (get().currentSessionId === sessionId) {
                   set({ isCompacting: false, compactionReason: null });
                   
@@ -801,14 +1598,18 @@ export const useSessionStore = create<SessionState>()(
               }
 
               case 'session_init': {
+                // Claude session initialized — update model info if available
                 const initData = event as unknown as { model?: string; tools?: string[] };
                 if (initData.model) {
+                  // Update the session's model field in the sessions list
                   set((state) => ({
                     sessions: state.sessions.map((s) =>
                       s.id === sessionId ? { ...s, model: initData.model } : s
                     ),
                   }));
+                  // Also update sessionData
                   get().updateSessionData(sessionId, { model: initData.model });
+                  // Update currentModel if this is the active session
                   if (get().currentSessionId === sessionId) {
                     set({ currentModel: initData.model });
                   }
@@ -817,12 +1618,14 @@ export const useSessionStore = create<SessionState>()(
               }
 
               case 'rate_limit': {
+                // Claude quota / rate-limit info
                 const rateLimitData = event as unknown as {
                   status: string;
                   rateLimitType: string;
                   isUsingOverage: boolean;
                   resetsAt?: number;
                 };
+                // Persist quota info in session data
                 get().updateSessionData(sessionId, {
                   quotaInfo: {
                     status: rateLimitData.status,
@@ -831,6 +1634,7 @@ export const useSessionStore = create<SessionState>()(
                     resetsAt: rateLimitData.resetsAt,
                   },
                 });
+                // Show a warning toast if using paid overage on the active session
                 if (rateLimitData.isUsingOverage && get().currentSessionId === sessionId) {
                   useUIStore.getState().addToast({
                     type: 'warning',
@@ -844,12 +1648,15 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'history_start': {
-            // History replay start — message management is in useSessionStream
+            const histStartMsg = msg as unknown as { sessionId: string };
+            // Clear existing messages for this session to prepare for replay
+            get().clearSessionMessages(histStartMsg.sessionId);
             break;
           }
 
           case 'history_end': {
             const histEndMsg = msg as unknown as { sessionId: string };
+            // Replay complete — set session to idle
             get().setSessionStatus(histEndMsg.sessionId, 'idle');
             break;
           }
@@ -867,6 +1674,7 @@ export const useSessionStore = create<SessionState>()(
             
             get().setSessionStatus(sessionId, status);
             
+            // Update additional session data if provided
             if (currentStep !== undefined || messageCount !== undefined) {
               get().updateSessionData(sessionId, {
                 currentStep: currentStep ?? get().sessionData[sessionId]?.currentStep ?? 0,
@@ -874,6 +1682,8 @@ export const useSessionStore = create<SessionState>()(
             }
             
             // Sync global isStreaming if this is the current session
+            // This ensures the UI (MessageInput) reflects the correct state
+            // when switching sessions or receiving status updates
             if (get().currentSessionId === sessionId) {
               const isStreaming = status === 'streaming' || status === 'busy';
               set({ isStreaming });
@@ -897,12 +1707,16 @@ export const useSessionStore = create<SessionState>()(
             };
             const { sessionId: workerSessionId, status: workerStatus, error: workerError } = workerMsg;
             
+            // Update worker status in store
             get().updateWorkerStatus(workerSessionId, workerStatus);
             
+            // Log worker status changes for debugging
             console.log(`[WorkerStatus] Session ${workerSessionId}: ${workerMsg.previousStatus || 'unknown'} -> ${workerStatus}`);
             
+            // Handle error state
             if (workerStatus === 'error' && workerError) {
               console.error(`[sessionStore] Worker error for session ${workerSessionId}:`, workerError);
+              // Show error toast if this is the current session
               if (get().currentSessionId === workerSessionId) {
                 useUIStore.getState().addToast({
                   type: 'error',
@@ -916,6 +1730,7 @@ export const useSessionStore = create<SessionState>()(
               }
             }
             
+            // Handle terminated state - clean up
             if (workerStatus === 'terminated') {
               get().removeWorkerStatus(workerSessionId);
             }
@@ -931,6 +1746,7 @@ export const useSessionStore = create<SessionState>()(
         sessions: state.sessions,
         archivedSessionPaths: state.archivedSessionPaths,
         sessionDisplayNames: state.sessionDisplayNames,
+        sessionCacheMeta: state.sessionCacheMeta,
       }),
     }
   )

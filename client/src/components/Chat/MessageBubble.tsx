@@ -1,6 +1,8 @@
 import React, { useState, memo, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Copy, Check, Bot } from 'lucide-react';
-import type { LiveMessage, ContentPart } from '../../hooks/useSessionStream.js';
+import type { LiveMessage } from '../../hooks/useSessionStream.js';
 import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -9,7 +11,6 @@ import { SubagentToolCard } from '../Tools/SubagentToolCard';
 import { TodoToolCard } from '../Tools/TodoToolCard';
 import { copyToClipboard } from '../../lib/clipboard';
 import { normalizeToolName } from '../../lib/messageAdapter';
-import { MarkdownRenderer } from '../../lib/markdown';
 
 interface MessageBubbleProps {
   message: LiveMessage;
@@ -57,20 +58,6 @@ function ActivityIndicator({
 }
 
 // Memoized MessageBubble for performance
-/**
- * Fast shallow comparison of ContentPart arrays.
- * Avoids JSON.stringify which allocates a string on every call.
- */
-function contentEqual(a: ContentPart[], b: ContentPart[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i].type !== b[i].type) return false;
-    if (a[i].type === 'text' && a[i].text !== b[i].text) return false;
-    if (a[i].type === 'thinking' && a[i].thinking !== b[i].thinking) return false;
-  }
-  return true;
-}
-
 export const MessageBubble = memo(function MessageBubble({ message, isLast, isCurrentRun, forceExpanded }: MessageBubbleProps) {
   const [showThinking, setShowThinking] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -232,7 +219,73 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
           ) : (
             <>
             <div id={`msg-content-${message.id}`} className={`prose prose-sm max-w-none prose-gray prose-table:w-full prose-compact${shouldCollapse ? ' max-h-[6rem] overflow-hidden' : ''}`}>
-              <MarkdownRenderer content={displayText} />
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  code({ inline, className, children, ...props }: { inline?: boolean; className?: string; children?: React.ReactNode }) {
+                    const match = /language-(\w+)/.exec(className || '');
+                    return !inline ? (
+                      <pre className="bg-slate-100 border border-slate-200 rounded-md p-2 overflow-x-auto my-1.5 text-xs">
+                        <code className={`text-slate-800 ${match ? `language-${match[1]}` : ''}`} {...props}>
+                          {children}
+                        </code>
+                      </pre>
+                    ) : (
+                      <code className="bg-slate-200 text-slate-900 px-1 py-0.5 rounded text-xs font-mono font-medium" {...props}>
+                        {children}
+                      </code>
+                    );
+                  },
+                  // Table components - compact Kimi-style
+                  table: ({ children }) => (
+                    <div className="overflow-x-auto my-1.5">
+                      <table className="w-full border-collapse border border-gray-200 text-xs">
+                        {children}
+                      </table>
+                    </div>
+                  ),
+                  thead: ({ children }) => (
+                    <thead className="bg-gray-50">{children}</thead>
+                  ),
+                  tbody: ({ children }) => (
+                    <tbody className="divide-y divide-gray-200">{children}</tbody>
+                  ),
+                  tr: ({ children }) => (
+                    <tr className="border-b border-gray-200 even:bg-gray-50/50">{children}</tr>
+                  ),
+                  th: ({ children }) => (
+                    <th className="border border-gray-200 px-2 py-1 text-left text-xs font-semibold text-gray-700">
+                      {children}
+                    </th>
+                  ),
+                  td: ({ children }) => (
+                    <td className="border border-gray-200 px-2 py-1 text-xs text-gray-700">
+                      {children}
+                    </td>
+                  ),
+                  p: ({ children }) => <p className="mb-1 last:mb-0 leading-normal text-sm">{children}</p>,
+                  ul: ({ children }) => <ul className="list-disc pl-4 mb-1 space-y-0.5">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal pl-4 mb-1 space-y-0.5">{children}</ol>,
+                  li: ({ children }) => <li className="leading-normal text-sm">{children}</li>,
+                  h1: ({ children }) => <h1 className="text-base font-bold mt-3 mb-1">{children}</h1>,
+                  h2: ({ children }) => <h2 className="text-sm font-bold mt-2.5 mb-1">{children}</h2>,
+                  h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-0.5">{children}</h3>,
+                  h4: ({ children }) => <h4 className="text-sm font-semibold mt-1.5 mb-0.5">{children}</h4>,
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-2 border-gray-300 pl-3 my-1.5 text-gray-600 text-sm italic">
+                      {children}
+                    </blockquote>
+                  ),
+                  hr: () => <hr className="my-2 border-gray-200" />,
+                  a: ({ children, href }) => (
+                    <a href={href} className="text-blue-600 hover:text-blue-700 underline" target="_blank" rel="noopener noreferrer">
+                      {children}
+                    </a>
+                  ),
+                }}
+              >
+                {displayText}
+              </ReactMarkdown>
             </div>
             {shouldCollapse && (
               <>
@@ -271,13 +324,16 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     </div>
   );
 }, (prevProps, nextProps) => {
-  // Fast shallow comparison – avoids JSON.stringify allocation on every call.
-  return prevProps.message.id === nextProps.message.id
-    && contentEqual(prevProps.message.content, nextProps.message.content)
-    && prevProps.isLast === nextProps.isLast
-    && prevProps.isCurrentRun === nextProps.isCurrentRun
-    && prevProps.message.toolResult?.output === nextProps.message.toolResult?.output
-    && prevProps.message.toolResult?.isError === nextProps.message.toolResult?.isError
-    && prevProps.message.isComplete === nextProps.message.isComplete
-    && prevProps.forceExpanded === nextProps.forceExpanded;
+  // Custom comparison for better memoization
+  // Only re-render if message content or last status changes
+  // LiveMessage.content is ContentPart[], compare as JSON for simplicity
+  return (
+    prevProps.message.id === nextProps.message.id &&
+    JSON.stringify(prevProps.message.content) === JSON.stringify(nextProps.message.content) &&
+    prevProps.isLast === nextProps.isLast &&
+    prevProps.isCurrentRun === nextProps.isCurrentRun &&
+    prevProps.message.toolResult?.output === nextProps.message.toolResult?.output &&
+    prevProps.message.toolResult?.isError === nextProps.message.toolResult?.isError &&
+    prevProps.forceExpanded === nextProps.forceExpanded
+  );
 });

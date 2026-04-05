@@ -1,78 +1,117 @@
-import { useRef, useState, useCallback, useEffect, memo } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles } from 'lucide-react';
-import { useDraftStore } from '../../store';
+import { useChatStore, useSessionStore, useDraftStore } from '../../store';
 import { useUIStore } from '../../store/uiStore';
+import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
 import { ContextRing } from '../Usage/ContextRing';
 import { SlashPalette } from './SlashPalette';
 import { uploadFile } from '../../lib/api';
 
-interface UploadedFile {
-  file: File;
-  serverPath: string;
-  uploading: boolean;
-  error?: string;
-}
-
-export interface MessageInputProps {
+interface MessageInputProps {
   disabled?: boolean;
-  isStreaming: boolean;
-  isCompacting?: boolean;
-  compactionReason?: string | null;
-  currentModel?: string | null;
-  contextPercent?: number;
-  currentSessionId?: string | null;
-  currentSessionSdkType?: 'pi' | 'claude' | null;
-  quotaInfo?: { isUsingOverage: boolean; status: string; rateLimitType: string; resetsAt?: number } | null;
-  onSend: (content: string, images?: unknown[]) => boolean;
-  onCancel: () => void;
   onOpenSettings?: () => void;
-  isReplaying?: boolean;
 }
 
-export const MessageInput = memo(function MessageInput({
-  disabled,
-  isStreaming,
-  isCompacting,
-  compactionReason,
-  currentModel,
-  contextPercent = 0,
-  currentSessionId,
-  currentSessionSdkType,
-  quotaInfo,
-  onSend,
-  onCancel,
-  onOpenSettings,
-  isReplaying,
-}: MessageInputProps) {
+export function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Local state for file attachments (formerly useChatStore)
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
-  const [isDragging, setIsDragging] = useState(false);
-  const [showThinking, setShowThinking] = useState(true);
+  const inputValue = useChatStore((state) => state.inputValue);
+  const selectedFiles = useChatStore((state) => state.selectedFiles);
+  const uploadedFiles = useChatStore((state) => state.uploadedFiles);
+  const isDragging = useChatStore((state) => state.isDragging);
+  const showThinking = useChatStore((state) => state.showThinking);
+  const toggleThinking = useChatStore((state) => state.toggleThinking);
+  const setInputValue = useChatStore((state) => state.setInputValue);
+  const addFiles = useChatStore((state) => state.addFiles);
+  const removeFile = useChatStore((state) => state.removeFile);
+  const clearFiles = useChatStore((state) => state.clearFiles);
+  const setIsDragging = useChatStore((state) => state.setIsDragging);
+  const addUploadedFile = useChatStore((state) => state.addUploadedFile);
+  const updateUploadedFile = useChatStore((state) => state.updateUploadedFile);
 
-  // Input value — sourced from draftStore via getState() in callbacks, not subscription
-  const [inputValue, setInputValue] = useState('');
+  const isStreaming = useSessionStore((state) => state.isStreaming);
+  const isCompacting = useSessionStore((state) => state.isCompacting);
+  const compactionReason = useSessionStore((state) => state.compactionReason);
+  const currentModel = useSessionStore((state) => state.currentModel);
+  const contextPercent = useSessionStore((state) => state.contextPercent);
+  const currentSessionId = useSessionStore((state) => state.currentSessionId);
+  const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
+  const sessionData = useSessionStore((state) => state.sessionData);
+
+  // Derive if current session is Claude Direct
+  const isClaudeSession = currentSessionSdkType === 'claude';
+  const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo : null;
+  const { sendPrompt, abortGeneration } = useWebSocket();
+
+  // Draft store for per-session draft persistence
+  const currentDraft = useDraftStore((state) => state.currentDraft);
+  const setDraft = useDraftStore((state) => state.setDraft);
+  const syncCurrentDraft = useDraftStore((state) => state.syncCurrentDraft);
+  const sendDraft = useDraftStore((state) => state.sendDraft);
+  const setSendCallback = useDraftStore((state) => state.setSendCallback);
+
+  // Sync draft when session changes
+  useEffect(() => {
+    syncCurrentDraft();
+  }, [currentSessionId, syncCurrentDraft]);
+
+  // Set up send callback for draft store
+  useEffect(() => {
+    setSendCallback(async (content: string) => {
+      // Check if any files are still uploading
+      const pendingUploads = useChatStore.getState().uploadedFiles.filter(f => f.uploading);
+      if (pendingUploads.length > 0) {
+        return false;
+      }
+
+      // Build message with file context
+      const successfulUploads = useChatStore.getState().uploadedFiles.filter(f => f.serverPath && !f.error);
+      let promptMessage = content;
+      
+      if (successfulUploads.length > 0) {
+        const filePaths = successfulUploads.map(f => f.serverPath).join('\n');
+        const fileNote = successfulUploads.length === 1
+          ? `I've uploaded a file. Please read it at: ${filePaths}`
+          : `I've uploaded ${successfulUploads.length} files. Please read them at:\n${filePaths}`;
+        
+        promptMessage = content
+          ? `${fileNote}\n\n${content}`
+          : fileNote;
+      }
+
+      const images: unknown[] = [];
+      const sent = sendPrompt(promptMessage, images);
+      if (!sent) {
+        // Surface send failure - don't clear draft, show error toast
+        useUIStore.getState().addToast({
+          type: 'error',
+          message: 'Failed to send message. Check your connection and try again.',
+        });
+        return false;
+      }
+
+      // Optimistic user message insertion - immediately show the user's message
+      // The server will eventually send message_start but this ensures instant feedback
+      const store = useSessionStore.getState();
+      if (store.currentSessionId) {
+        store.addMessage({
+          id: `optimistic_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+          role: 'user',
+          content: promptMessage,
+          timestamp: Date.now(),
+          isComplete: true,
+        });
+      }
+
+      return true;
+    });
+  }, [sendPrompt, setSendCallback]);
 
   const [isFocused, setIsFocused] = useState(false);
   const [showCompactModal, setShowCompactModal] = useState(false);
   const [showSlashPalette, setShowSlashPalette] = useState(false);
-
-  // Derive if current session is Claude Direct
-  const isClaudeSession = currentSessionSdkType === 'claude';
-
-  // Load draft on session change — use getState(), NOT a subscription
-  useEffect(() => {
-    if (currentSessionId) {
-      const draft = useDraftStore.getState().getDraft(currentSessionId);
-      setInputValue(draft || '');
-    } else {
-      setInputValue('');
-    }
-  }, [currentSessionId]);
 
   // Format model name for display
   const displayModelName = currentModel
@@ -90,12 +129,13 @@ export const MessageInput = memo(function MessageInput({
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
-
-    // Save to draft store for per-session persistence — use getState()
+    
+    // Save to draft store for per-session persistence
     if (currentSessionId) {
-      useDraftStore.getState().setDraft(currentSessionId, value);
+      setDraft(currentSessionId, value);
     }
-
+    
+    // Also update chat store for backward compatibility
     setInputValue(value);
     adjustTextareaHeight();
 
@@ -108,19 +148,19 @@ export const MessageInput = memo(function MessageInput({
   };
 
   const handleSend = useCallback(async () => {
-    const message = inputValue.trim();
+    const message = currentDraft.trim();
     if (!message && uploadedFiles.length === 0) return;
     if (disabled || isStreaming) return;
+    if (!message && uploadedFiles.length === 0) return;
 
     // Handle slash commands
     if (message === '/compact') {
       setShowCompactModal(true);
       if (currentSessionId) {
-        useDraftStore.getState().setDraft(currentSessionId, '');
+        setDraft(currentSessionId, '');
       }
       setInputValue('');
-      setSelectedFiles([]);
-      setUploadedFiles([]);
+      clearFiles();
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
@@ -130,48 +170,24 @@ export const MessageInput = memo(function MessageInput({
     // Check if any files are still uploading
     const pendingUploads = uploadedFiles.filter(f => f.uploading);
     if (pendingUploads.length > 0) {
+      // Wait for uploads to complete
       return;
     }
 
-    // Build message with file context
-    const successfulUploads = uploadedFiles.filter(f => f.serverPath && !f.error);
-    let promptMessage = message;
-
-    if (successfulUploads.length > 0) {
-      const filePaths = successfulUploads.map(f => f.serverPath).join('\n');
-      const fileNote = successfulUploads.length === 1
-        ? `I've uploaded a file. Please read it at: ${filePaths}`
-        : `I've uploaded ${successfulUploads.length} files. Please read them at:\n${filePaths}`;
-
-      promptMessage = message
-        ? `${fileNote}\n\n${message}`
-        : fileNote;
-    }
-
-    const images: unknown[] = [];
-    const sent = onSend(promptMessage, images);
-
-    if (sent) {
-      // Clear draft after successful send
-      if (currentSessionId) {
-        useDraftStore.getState().clearDraft(currentSessionId);
-      }
+    // Use sendDraft from draftStore for per-session draft handling
+    const success = currentSessionId ? await sendDraft(currentSessionId) : false;
+    
+    // Only clear local state if send was successful
+    if (success) {
       setInputValue('');
-      setSelectedFiles([]);
-      setUploadedFiles([]);
+      clearFiles();
       setShowSlashPalette(false);
 
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
-    } else {
-      // Surface send failure
-      useUIStore.getState().addToast({
-        type: 'error',
-        message: 'Failed to send message. Check your connection and try again.',
-      });
     }
-  }, [inputValue, uploadedFiles, disabled, isStreaming, currentSessionId, onSend]);
+  }, [currentDraft, uploadedFiles, disabled, isStreaming, currentSessionId, sendDraft, setInputValue, clearFiles, setDraft]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter') {
@@ -188,7 +204,7 @@ export const MessageInput = memo(function MessageInput({
   const handleSlashSelect = (command: string) => {
     const newValue = command + ' ';
     if (currentSessionId) {
-      useDraftStore.getState().setDraft(currentSessionId, newValue);
+      setDraft(currentSessionId, newValue);
     }
     setInputValue(newValue);
     setShowSlashPalette(false);
@@ -225,41 +241,40 @@ export const MessageInput = memo(function MessageInput({
   };
 
   const handleFilesAdded = (files: File[]) => {
-    setSelectedFiles(prev => [...prev, ...files]);
+    addFiles(files);
     // Upload each file immediately
     files.forEach((file) => {
-      const uploadEntry: UploadedFile = { file, serverPath: '', uploading: true };
-      setUploadedFiles(prev => [...prev, uploadEntry]);
-
+      addUploadedFile({ file, serverPath: '', uploading: true });
+      
       uploadFile(file)
         .then((result) => {
-          setUploadedFiles(prev =>
-            prev.map(u => (u.file === file && u.uploading) ? { ...u, serverPath: result.path, uploading: false } : u)
-          );
+          // Find the index in the current state
+          const currentUploaded = useChatStore.getState().uploadedFiles;
+          const idx = currentUploaded.findIndex(u => u.file === file && u.uploading);
+          if (idx >= 0) {
+            updateUploadedFile(idx, { serverPath: result.path, uploading: false });
+          }
         })
         .catch((err) => {
-          setUploadedFiles(prev =>
-            prev.map(u => (u.file === file && u.uploading) ? { ...u, uploading: false, error: err.message || 'Upload failed' } : u)
-          );
+          const currentUploaded = useChatStore.getState().uploadedFiles;
+          const idx = currentUploaded.findIndex(u => u.file === file && u.uploading);
+          if (idx >= 0) {
+            updateUploadedFile(idx, { uploading: false, error: err.message || 'Upload failed' });
+          }
         });
     });
   };
 
-  const handleRemoveFile = (index: number) => {
-    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
-    setUploadedFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
   const hasUploads = uploadedFiles.some(f => f.serverPath && !f.uploading);
   const isAnyUploading = uploadedFiles.some(f => f.uploading);
-  const canSend = (inputValue.trim().length > 0 || hasUploads) && !disabled && !isStreaming && !isAnyUploading;
+  const canSend = (currentDraft.trim().length > 0 || hasUploads) && !disabled && !isStreaming && !isAnyUploading;
 
   return (
     <div className="relative">
       {/* Slash palette */}
       {showSlashPalette && (
         <SlashPalette
-          filter={inputValue}
+          filter={currentDraft}
           onSelect={handleSlashSelect}
           onClose={() => setShowSlashPalette(false)}
         />
@@ -286,7 +301,7 @@ export const MessageInput = memo(function MessageInput({
         </div>
         <div className="flex items-center gap-1.5">
           {isClaudeSession && (
-            <span
+            <span 
               className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20 cursor-help"
               title="Claude Direct - Claude Code CLI"
             >
@@ -331,7 +346,7 @@ export const MessageInput = memo(function MessageInput({
               const isUploading = uploadInfo?.uploading;
               const hasError = uploadInfo?.error;
               const isSuccess = uploadInfo?.serverPath && !uploadInfo.uploading;
-
+              
               return (
                 <div
                   key={index}
@@ -352,7 +367,7 @@ export const MessageInput = memo(function MessageInput({
                   {isUploading && <span className="text-xs text-blue-500">uploading...</span>}
                   {hasError && <span className="text-xs text-red-400" title={uploadInfo.error}>failed</span>}
                   <button
-                    onClick={() => handleRemoveFile(index)}
+                    onClick={() => removeFile(index)}
                     className="p-0.5 hover:bg-gray-200 rounded transition-colors"
                     type="button"
                   >
@@ -367,7 +382,7 @@ export const MessageInput = memo(function MessageInput({
         {/* Textarea */}
         <textarea
           ref={textareaRef}
-          value={inputValue}
+          value={currentDraft}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
           onFocus={() => setIsFocused(true)}
@@ -416,7 +431,7 @@ export const MessageInput = memo(function MessageInput({
               <span className="hidden sm:inline text-xs text-gray-500">Thinking</span>
               <span className="sm:hidden text-xs text-gray-500">Think</span>
               <button
-                onClick={() => setShowThinking(prev => !prev)}
+                onClick={toggleThinking}
                 className={`w-8 h-4.5 rounded-full transition-colors relative ${
                   showThinking ? 'bg-blue-500' : 'bg-gray-300'
                 }`}
@@ -434,7 +449,7 @@ export const MessageInput = memo(function MessageInput({
           {/* Send/Stop button */}
           {isStreaming ? (
             <button
-              onClick={onCancel}
+              onClick={abortGeneration}
               className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition-all"
               type="button"
               title="Stop generation"
@@ -470,13 +485,4 @@ export const MessageInput = memo(function MessageInput({
       <CompactModal isOpen={showCompactModal} onClose={() => setShowCompactModal(false)} />
     </div>
   );
-}, (prev, next) => {
-  return prev.disabled === next.disabled
-    && prev.isStreaming === next.isStreaming
-    && prev.isCompacting === next.isCompacting
-    && prev.currentModel === next.currentModel
-    && prev.contextPercent === next.contextPercent
-    && prev.currentSessionId === next.currentSessionId
-    && prev.onSend === next.onSend
-    && prev.onCancel === next.onCancel;
-});
+}
