@@ -549,10 +549,37 @@ describe('useSessionStream', () => {
       expect(result.current.status).toBe('idle');
     });
 
-    it('should clear state on session change', () => {
+    it('should clear messages when session_switched arrives with new messages', () => {
       const { result, rerender } = renderHook(
         ({ sessionId }) => useSessionStream(sessionId),
         { initialProps: { sessionId: 'session-1' } }
+      );
+
+      // Add messages to session-1
+      simulateSessionEvent('session-1', {
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'user', content: 'Hello' },
+      });
+      expect(result.current.messages).toHaveLength(1);
+
+      // Simulate session_switched arriving (before React re-render)
+      act(() => {
+        capturedListener!({
+          type: 'session_switched',
+          sessionId: 'session-2',
+          messages: [{ id: 'old-1', role: 'user', content: 'Old message', timestamp: 1000 }],
+        });
+      });
+
+      // Messages should now be the old session's messages
+      expect(result.current.messages).toHaveLength(1);
+      expect(result.current.messages[0].id).toBe('old-1');
+    });
+
+    it('should clear messages when sessionId becomes null', () => {
+      const { result, rerender } = renderHook(
+        ({ sessionId }) => useSessionStream(sessionId),
+        { initialProps: { sessionId: 'session-1' as string | null } }
       );
 
       // Add messages
@@ -562,9 +589,9 @@ describe('useSessionStream', () => {
       });
       expect(result.current.messages).toHaveLength(1);
 
-      // Switch session
+      // Set sessionId to null
       act(() => {
-        rerender({ sessionId: 'session-2' });
+        rerender({ sessionId: null });
       });
 
       // Messages should be cleared

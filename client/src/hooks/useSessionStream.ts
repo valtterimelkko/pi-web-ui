@@ -242,6 +242,10 @@ export function useSessionStream(
   // Identity guard ref — incremented on each session change
   const identityRef = useRef<number>(0);
 
+  // Active session ID ref — updated SYNCHRONOUSLY on session_switched
+  // so that subsequent session_event messages in the same WS batch pass the filter
+  const activeSessionIdRef = useRef<string | null>(sessionId);
+
   // Unsubscribe function for the WebSocket listener
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
@@ -374,14 +378,65 @@ export function useSessionStream(
       eventSessionId = msg.sessionId as string | undefined;
     }
 
-    // Filter: only process events for our session (if sessionId filtering is needed)
-    // For top-level events like history_start/history_end, we process regardless
-    // For session_event, only process if it matches our sessionId
-    if (msg.type === 'session_event' && sessionId && eventSessionId && eventSessionId !== sessionId) {
+    // Filter: only process events for our session
+    // For session_event: match activeSessionIdRef (updated synchronously on session_switched)
+    // For top-level events (history_start/end, session_switched): always process
+    if (msg.type === 'session_event' && eventSessionId && 
+        activeSessionIdRef.current && eventSessionId !== activeSessionIdRef.current) {
       return; // Not for our session
     }
 
     switch (eventType) {
+      // ---- Session switched (Pi SDK embeds messages, Claude uses history replay) ----
+      case 'session_switched': {
+        const switchMsg = eventData as {
+          sessionId?: string;
+          messages?: Array<{
+            id: string;
+            role: string;
+            content: string | Array<{ type: string; text?: string; thinking?: string }>;
+            timestamp: number;
+          }>;
+        };
+
+        // Update active session ref SYNCHRONOUSLY so subsequent session_events
+        // in the same WebSocket message batch pass the filter
+        if (switchMsg.sessionId) {
+          activeSessionIdRef.current = switchMsg.sessionId;
+        }
+
+        // Load embedded messages (Pi SDK path)
+        if (switchMsg.messages && switchMsg.messages.length > 0) {
+          const loaded: LiveMessage[] = switchMsg.messages.map((m) => {
+            let content: ContentPart[];
+            if (typeof m.content === 'string') {
+              content = m.content ? [{ type: 'text' as const, text: m.content }] : [];
+            } else if (Array.isArray(m.content)) {
+              content = m.content.map((p) => {
+                if (p.type === 'thinking') return { type: 'thinking' as const, thinking: p.thinking || p.text || '' };
+                return { type: 'text' as const, text: p.text || '' };
+              });
+            } else {
+              content = [];
+            }
+            return {
+              id: m.id,
+              role: m.role as 'user' | 'assistant' | 'tool',
+              content,
+              timestamp: m.timestamp,
+              isComplete: true,
+            };
+          });
+          setMessages(loaded);
+          setIsReplaying(false);
+        } else {
+          // No embedded messages — history replay will follow (Claude path)
+          // or session is empty
+          setMessages([]);
+        }
+        break;
+      }
+
       // ---- Agent lifecycle ----
       case 'agent_start':
         setStatus('streaming');
@@ -558,11 +613,31 @@ export function useSessionStream(
         unsubscribeRef.current();
         unsubscribeRef.current = null;
       }
+      // Clear messages when no session
+      setMessages([]);
+      setStatus('idle');
       return;
     }
 
     // Increment identity to invalidate any stale callbacks
     const identity = ++identityRef.current;
+
+    // Sync active session ref with the new sessionId
+    activeSessionIdRef.current = sessionId;
+
+    // Clear state for the new session UNLESS session_switched already loaded messages
+    // (session_switched fires synchronously before React re-render, so activeSessionIdRef
+    // already points to the new session and messages may already be loaded)
+    // We only clear if the activeSessionIdRef was changed by this effect, not by session_switched
+    // Check: if messages exist and were loaded for this sessionId, don't clear
+    // Simple approach: always clear refs (streaming state), but DON'T clear messages here
+    // — session_switched or history_start handlers manage message clearing
+    textRef.current = '';
+    thinkingRef.current = '';
+    toolCallsRef.current.clear();
+    currentMessageRef.current = null;
+    currentMessageIdRef.current = '';
+    setStatus('idle');
 
     log('Subscribing to global WebSocket, identity=', identity);
 
@@ -615,18 +690,17 @@ export function useSessionStream(
         streamingUpdateTimerRef.current = 0;
       }
 
-      // Clear all refs
+      // Clear streaming refs (but NOT messages — session_switched may have loaded them)
       textRef.current = '';
       thinkingRef.current = '';
       toolCallsRef.current.clear();
       currentMessageRef.current = null;
       currentMessageIdRef.current = '';
 
-      // Reset state
-      setMessages([]);
+      // Don't clear messages here! session_switched handler manages message loading.
+      // Clearing here would wipe messages loaded synchronously by session_switched
+      // before this cleanup runs.
       setStatus('idle');
-      setContextPercent(0);
-      setCurrentStep(0);
       setIsReplaying(false);
     };
   }, [sessionId]); // ONLY sessionId — handlers use refs
