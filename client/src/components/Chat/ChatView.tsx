@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useSessionStore } from '../../store';
 import { useNavigationStore } from '../../store/navigationStore';
 import { useUIStore } from '../../store/uiStore';
@@ -36,6 +36,8 @@ interface ChatViewProps {
 export function ChatView({
   messages,
   isStreaming,
+  isReplaying,
+  contextPercent,
   onSendPrompt,
   onCancelStream,
   onOpenSettings,
@@ -43,6 +45,11 @@ export function ChatView({
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const isLoading = useSessionStore((state) => state.isLoading);
   const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
+  const currentModel = useSessionStore((state) => state.currentModel);
+  const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
+  const isCompacting = useSessionStore((state) => state.isCompacting);
+  const compactionReason = useSessionStore((state) => state.compactionReason);
+  const sessionData = useSessionStore((state) => state.sessionData);
   const bottomNavCollapsed = useNavigationStore((state) => state.bottomNavCollapsed);
   const sessionInfoOpen = useUIStore((state) => state.sessionInfoOpen);
   const treeViewOpen = useUIStore((state) => state.treeViewOpen);
@@ -92,6 +99,22 @@ export function ChatView({
     createNewSession(cwd, sdkType);
   };
 
+  // Derive quotaInfo for the current session
+  const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo ?? null : null;
+
+  // Adapt async sendPrompt to sync signature for MessageInput
+  const handleMessageSend = useCallback((content: string, images?: unknown[]): boolean => {
+    // Fire-and-forget: the async result is handled by the stream lifecycle
+    let sent = false;
+    try {
+      onSendPrompt(content, images as Attachment[]);
+      sent = true;
+    } catch {
+      sent = false;
+    }
+    return sent;
+  }, [onSendPrompt]);
+
   return (
     <div className="flex flex-col h-full bg-white" data-testid="chat-interface">
       {/* Main content area */}
@@ -121,7 +144,21 @@ export function ChatView({
         {/* Message Input */}
         <div className={`bg-white pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[70px]' : ''}`}>
           <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
-            <MessageInput disabled={!currentSessionId || isLoading} onOpenSettings={onOpenSettings} />
+            <MessageInput
+              disabled={!currentSessionId || isLoading}
+              isStreaming={isStreaming}
+              isCompacting={isCompacting}
+              compactionReason={compactionReason}
+              currentModel={currentModel}
+              contextPercent={contextPercent}
+              currentSessionId={currentSessionId}
+              currentSessionSdkType={currentSessionSdkType}
+              quotaInfo={quotaInfo}
+              onSend={handleMessageSend}
+              onCancel={onCancelStream}
+              onOpenSettings={onOpenSettings}
+              isReplaying={isReplaying}
+            />
           </div>
         </div>
       </main>

@@ -13,6 +13,11 @@ vi.mock('../../../../src/store', () => ({
       currentSessionId: mockCurrentSessionId,
       isLoading: false,
       getWorkerStatus: () => undefined,
+      currentModel: 'test-model',
+      currentSessionSdkType: 'pi',
+      isCompacting: false,
+      compactionReason: null,
+      sessionData: {},
     };
     return selector(state);
   },
@@ -56,10 +61,23 @@ vi.mock('../../../../src/components/Chat/VirtualizedMessageList', () => ({
 }));
 
 vi.mock('../../../../src/components/Chat/MessageInput', () => ({
-  MessageInput: ({ disabled, onOpenSettings }: { disabled?: boolean; onOpenSettings?: () => void }) => (
+  MessageInput: ({ disabled, onOpenSettings, isStreaming, currentModel, contextPercent, onSend, onCancel }: {
+    disabled?: boolean;
+    onOpenSettings?: () => void;
+    isStreaming?: boolean;
+    currentModel?: string;
+    contextPercent?: number;
+    onSend?: (content: string, images?: unknown[]) => boolean;
+    onCancel?: () => void;
+  }) => (
     <div data-testid="message-input">
       <span data-testid="input-disabled">{String(disabled)}</span>
+      <span data-testid="input-streaming">{String(isStreaming)}</span>
+      <span data-testid="input-model">{currentModel ?? 'none'}</span>
+      <span data-testid="input-context">{contextPercent ?? 0}</span>
       <button data-testid="settings-btn" onClick={onOpenSettings}>Settings</button>
+      <button data-testid="send-btn" onClick={() => onSend?.('test')}>Send</button>
+      <button data-testid="cancel-btn" onClick={onCancel}>Cancel</button>
     </div>
   ),
 }));

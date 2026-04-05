@@ -1,6 +1,6 @@
 import React, { useState, memo, useMemo } from 'react';
 import { Copy, Check, Bot } from 'lucide-react';
-import type { LiveMessage } from '../../hooks/useSessionStream.js';
+import type { LiveMessage, ContentPart } from '../../hooks/useSessionStream.js';
 import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -57,6 +57,20 @@ function ActivityIndicator({
 }
 
 // Memoized MessageBubble for performance
+/**
+ * Fast shallow comparison of ContentPart arrays.
+ * Avoids JSON.stringify which allocates a string on every call.
+ */
+function contentEqual(a: ContentPart[], b: ContentPart[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].type !== b[i].type) return false;
+    if (a[i].type === 'text' && a[i].text !== b[i].text) return false;
+    if (a[i].type === 'thinking' && a[i].thinking !== b[i].thinking) return false;
+  }
+  return true;
+}
+
 export const MessageBubble = memo(function MessageBubble({ message, isLast, isCurrentRun, forceExpanded }: MessageBubbleProps) {
   const [showThinking, setShowThinking] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -257,16 +271,13 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     </div>
   );
 }, (prevProps, nextProps) => {
-  // Custom comparison for better memoization
-  // Only re-render if message content or last status changes
-  // LiveMessage.content is ContentPart[], compare as JSON for simplicity
-  return (
-    prevProps.message.id === nextProps.message.id &&
-    JSON.stringify(prevProps.message.content) === JSON.stringify(nextProps.message.content) &&
-    prevProps.isLast === nextProps.isLast &&
-    prevProps.isCurrentRun === nextProps.isCurrentRun &&
-    prevProps.message.toolResult?.output === nextProps.message.toolResult?.output &&
-    prevProps.message.toolResult?.isError === nextProps.message.toolResult?.isError &&
-    prevProps.forceExpanded === nextProps.forceExpanded
-  );
+  // Fast shallow comparison – avoids JSON.stringify allocation on every call.
+  return prevProps.message.id === nextProps.message.id
+    && contentEqual(prevProps.message.content, nextProps.message.content)
+    && prevProps.isLast === nextProps.isLast
+    && prevProps.isCurrentRun === nextProps.isCurrentRun
+    && prevProps.message.toolResult?.output === nextProps.message.toolResult?.output
+    && prevProps.message.toolResult?.isError === nextProps.message.toolResult?.isError
+    && prevProps.message.isComplete === nextProps.message.isComplete
+    && prevProps.forceExpanded === nextProps.forceExpanded;
 });
