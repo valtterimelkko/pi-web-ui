@@ -9,17 +9,39 @@ import { NewSessionModal } from '../Session';
 import { ArrowDown } from 'lucide-react';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
-import { messagesToLiveMessages } from '../../lib/messageAdapter';
+import type { LiveMessage, ContentPart } from '../../hooks/useSessionStream.js';
+import type { Attachment } from '@pi-web-ui/shared';
 
 interface ChatViewProps {
+  /** Messages from useSessionStream (already LiveMessage[], no conversion needed) */
+  messages: LiveMessage[];
+  /** Whether the agent is currently streaming a response */
+  isStreaming: boolean;
+  /** Whether the session is replaying history */
+  isReplaying?: boolean;
+  /** Context usage percentage (0-100) */
+  contextPercent?: number;
+  /** Current step number for multi-step operations */
+  currentStep?: number;
+  /** Streaming content for the current message */
+  streamingContent?: ContentPart[];
+  /** Send a prompt to the agent */
+  onSendPrompt: (content: string, attachments?: Attachment[]) => Promise<void>;
+  /** Cancel the current streaming turn */
+  onCancelStream: () => void;
+  /** Open settings modal */
   onOpenSettings?: () => void;
 }
 
-export function ChatView({ onOpenSettings }: ChatViewProps) {
-  const messages = useSessionStore((state) => state.messages);
-  const isStreaming = useSessionStore((state) => state.isStreaming);
-  const isLoading = useSessionStore((state) => state.isLoading);
+export function ChatView({
+  messages,
+  isStreaming,
+  onSendPrompt,
+  onCancelStream,
+  onOpenSettings,
+}: ChatViewProps) {
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
+  const isLoading = useSessionStore((state) => state.isLoading);
   const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
   const bottomNavCollapsed = useNavigationStore((state) => state.bottomNavCollapsed);
   const sessionInfoOpen = useUIStore((state) => state.sessionInfoOpen);
@@ -39,7 +61,10 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const treeEntries: TreeEntry[] = messages.map((msg, index) => ({
     id: msg.id,
     role: msg.role,
-    content: typeof msg.content === 'string' ? msg.content : '',
+    content: msg.content
+      .map((part) => (part.type === 'text' ? part.text : part.type === 'thinking' ? part.thinking : ''))
+      .filter(Boolean)
+      .join(''),
     timestamp: msg.timestamp,
     parentId: index > 0 ? messages[index - 1].id : undefined,
     children: index < messages.length - 1 ? [messages[index + 1].id] : [],
@@ -74,7 +99,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         {/* Message List - Virtualized for performance */}
         <VirtualizedMessageList
           ref={listRef}
-          messages={messagesToLiveMessages(messages)}
+          messages={messages}
           isStreaming={isStreaming}
           onAtBottomChange={handleAtBottomChange}
           hasSession={!!currentSessionId}

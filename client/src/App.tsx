@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth, checkAuthStatus } from './hooks/useAuth';
 import { useCopyShortcut } from './hooks/useCopyShortcut';
+import { useSessionStream } from './hooks/useSessionStream';
 import { LoginForm } from './components/Auth/LoginForm';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/Chat';
@@ -58,9 +59,22 @@ function App() {
 
 function AuthenticatedApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const extensionUIRequest = useSessionStore((state) => state.extensionUIRequest);
   const setExtensionUIRequest = useSessionStore((state) => state.setExtensionUIRequest);
   const initPreferences = useSessionStore((state) => state.initPreferences);
+
+  // Get message data from useSessionStream (primary data source)
+  const {
+    messages,
+    status,
+    contextPercent,
+    currentStep,
+    isReplaying,
+    streamingContent,
+    sendPrompt,
+    cancelCurrentTurn,
+  } = useSessionStream(currentSessionId);
 
   // Enable keyboard shortcut for copying last message (Ctrl+Shift+C)
   useCopyShortcut();
@@ -94,7 +108,17 @@ function AuthenticatedApp() {
           <IntegratedHeader onOpenSettings={() => setSettingsOpen(true)} />
           <div className="flex-1 overflow-hidden relative flex">
             <TabPanel tab="chat">
-              <ChatView onOpenSettings={() => setSettingsOpen(true)} />
+              <ChatView
+                messages={messages}
+                isStreaming={status === 'streaming'}
+                isReplaying={isReplaying}
+                contextPercent={contextPercent}
+                currentStep={currentStep}
+                streamingContent={streamingContent}
+                onSendPrompt={sendPrompt}
+                onCancelStream={cancelCurrentTurn}
+                onOpenSettings={() => setSettingsOpen(true)}
+              />
             </TabPanel>
             <TabPanel tab="shell">
               <ShellTab />
