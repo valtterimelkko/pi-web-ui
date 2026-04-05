@@ -77,7 +77,7 @@ function AuthenticatedApp() {
   } = useSessionStream(currentSessionId);
 
   // Enable keyboard shortcut for copying last message (Ctrl+Shift+C)
-  useCopyShortcut();
+  useCopyShortcut(messages);
 
   // Load server-side preferences (archive state, etc.) on mount
   useEffect(() => {

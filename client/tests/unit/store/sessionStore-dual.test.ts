@@ -7,15 +7,10 @@ beforeEach(() => {
   // Reset session store
   useSessionStore.setState({
     sessions: [],
-    sessionMessages: {},
-    streamingSessions: {},
     currentSessionId: null,
-    messages: [],
     isStreaming: false,
     isLoading: false,
     error: null,
-    sessionCache: new Map(),
-    sessionCacheMeta: {},
     sessionData: {},
     claudeAvailable: false,
     claudeAuthError: null,
@@ -107,31 +102,9 @@ describe('sessionStore dual-SDK additions', () => {
     });
   });
 
-  // ─── history_start / history_end ─────────────────────────────────────────
+  // ─── history_end ─────────────────────────────────────────────────────────
 
-  describe('history_start and history_end', () => {
-    it('history_start clears session messages', () => {
-      const sessionId = 'session-replay-1';
-
-      // Pre-populate some messages in the session
-      useSessionStore.getState().setCurrentSession(sessionId);
-      useSessionStore.getState().addMessage({
-        id: 'msg-1',
-        role: 'user',
-        content: 'Old message',
-        timestamp: Date.now(),
-      });
-
-      // history_start should clear messages
-      useSessionStore.getState().handleServerMessage({
-        type: 'history_start',
-        sessionId,
-      });
-
-      const messages = useSessionStore.getState().getSessionMessages(sessionId);
-      expect(messages).toHaveLength(0);
-    });
-
+  describe('history_end', () => {
     it('history_end sets session status to idle', () => {
       const sessionId = 'session-replay-2';
 

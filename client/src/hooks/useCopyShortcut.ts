@@ -1,13 +1,13 @@
 import { useEffect } from 'react';
-import { useSessionStore } from '../store';
 import { copyToClipboard, extractMessageText } from '../lib/clipboard';
+import type { LiveMessage } from './useSessionStream';
 
 /**
  * Hook to handle Ctrl+Shift+C keyboard shortcut for copying the last assistant message
+ *
+ * @param messages - LiveMessage array from useSessionStream (NOT from sessionStore)
  */
-export function useCopyShortcut() {
-  const messages = useSessionStore((state) => state.messages);
-
+export function useCopyShortcut(messages: LiveMessage[]) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       // Check for Ctrl+Shift+C (or Cmd+Shift+C on Mac)
