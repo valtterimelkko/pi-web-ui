@@ -28,6 +28,7 @@ export interface ActiveSession {
   status: SessionStatus;
   subscribers: Set<string>;
   lastActivity: Date;
+  lastEventTimestamp: number; // Timestamp of last received event (for stale detection)
   messageCount: number;
   currentStep: number;
   webUIContext?: WebUIContext;
@@ -92,6 +93,9 @@ export class MultiSessionManager {
   private idleSessionTimeoutMs: number;
   private maxSessions: number;
   private enableMemoryMonitoring: boolean;
+  
+  // Stale streaming detection threshold (5 minutes without events)
+  private readonly staleStreamingThresholdMs = 5 * 60 * 1000;
   
   // Cleanup timer
   private cleanupTimer?: ReturnType<typeof setInterval>;
@@ -231,14 +235,28 @@ export class MultiSessionManager {
     const now = Date.now();
     let cleanedCount = 0;
     
-    // First pass: Clean up idle sessions that have exceeded timeout
+    // First pass: Detect and reset stale streaming sessions
+    // If a session is marked as streaming but hasn't received events for a while,
+    // the agent_end event was likely missed. Reset to idle so cleanup can proceed.
+    for (const [sessionPath, activeSession] of this.sessions.entries()) {
+      if (activeSession.status === 'streaming') {
+        const timeSinceLastEvent = now - activeSession.lastEventTimestamp;
+        if (timeSinceLastEvent > this.staleStreamingThresholdMs) {
+          console.log(`[MultiSessionManager] Detected stale streaming session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), resetting to idle: ${sessionPath}`);
+          activeSession.status = 'idle';
+          activeSession.lastActivity = new Date(); // Update activity so idle timeout starts fresh
+        }
+      }
+    }
+    
+    // Second pass: Clean up idle sessions that have exceeded timeout
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
       // Skip sessions with subscribers (someone is actively viewing)
       if (activeSession.subscribers.size > 0) {
         continue;
       }
       
-      // Skip busy/streaming sessions
+      // Skip busy/streaming sessions (streaming status was reset in first pass if stale)
       if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
         continue;
       }
@@ -260,7 +278,7 @@ export class MultiSessionManager {
       }
     }
     
-    // Second pass: Enforce maxSessions limit by unloading oldest idle sessions
+    // Third pass: Enforce maxSessions limit by unloading oldest idle sessions
     if (this.sessions.size > this.maxSessions) {
       const sessionsToRemove = this.sessions.size - this.maxSessions;
       
@@ -422,6 +440,7 @@ export class MultiSessionManager {
       status: 'idle',
       subscribers: new Set(),
       lastActivity: new Date(),
+      lastEventTimestamp: Date.now(),
       messageCount: 0,
       currentStep: 0,
       webUIContext,
@@ -501,6 +520,7 @@ export class MultiSessionManager {
         status: 'idle',
         subscribers: new Set(),
         lastActivity: new Date(),
+        lastEventTimestamp: Date.now(),
         messageCount: 0,
         currentStep: 0,
         webUIContext,
@@ -718,8 +738,9 @@ export class MultiSessionManager {
       event = this.transformSkillContentEvent(event, skillInfo.skillName);
     }
 
-    // Update last activity
+    // Update last activity and event timestamp
     activeSession.lastActivity = new Date();
+    activeSession.lastEventTimestamp = Date.now();
 
     // Handle specific event types
     switch (event.type) {
