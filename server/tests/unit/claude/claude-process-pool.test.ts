@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 
 // Mock child_process BEFORE importing ClaudeProcessPool
@@ -37,9 +38,6 @@ const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
 
 // Helper to create a proper mock process with PassThrough streams
 function makeMockProcess(pid = 12345) {
-  const { EventEmitter } = require('events');
-  const { PassThrough } = require('stream');
-
   const proc = new EventEmitter();
   proc.stdout = new PassThrough();
   proc.stderr = new PassThrough();

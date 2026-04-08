@@ -178,14 +178,14 @@ function discoverAgents(cwd: string): AgentConfig[] {
   
   // Project agents from .pi/agents/ (walk up from cwd)
   let currentDir = cwd;
-  while (true) {
+  while (currentDir) {
     const projectDir = path.join(currentDir, ".pi", "agents");
     if (fs.existsSync(projectDir)) {
       const entries = fs.readdirSync(projectDir);
       for (const entry of entries) {
         if (entry.endsWith(".md")) {
           const agent = loadAgentFromFile(path.join(projectDir, entry));
-          if (agent) agents.push({ ...agent!, source: "project" });
+          if (agent) agents.push({ ...agent, source: "project" });
         }
       }
       break; // Only look at nearest .pi/agents
@@ -331,10 +331,14 @@ async function runSubagent(
     return { output, usage, exitCode, errorMessage };
   } finally {
     if (tmpPromptPath) {
-      try { fs.unlinkSync(tmpPromptPath); } catch {}
+      try { fs.unlinkSync(tmpPromptPath); } catch {
+        // Best-effort temp file cleanup.
+      }
     }
     if (tmpPromptDir) {
-      try { fs.rmdirSync(tmpPromptDir); } catch {}
+      try { fs.rmdirSync(tmpPromptDir); } catch {
+        // Best-effort temp directory cleanup.
+      }
     }
   }
 }
@@ -354,7 +358,7 @@ function formatEvaluationPrompt(
   
   const report = session.reports[session.reports.length - 1];
   
-  let prompt = `
+  const prompt = `
 ╔══════════════════════════════════════════════════════════════════╗
 ║  ${header.padEnd(62)} ║
 ╠══════════════════════════════════════════════════════════════════╣

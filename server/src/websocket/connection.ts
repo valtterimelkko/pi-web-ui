@@ -252,7 +252,7 @@ export class WebSocketConnectionManager {
     const url = req.url || '';
     if (url.includes('/ws/sessions/') || url.includes('/ws/session/')) {
       // Extract session ID from URL
-      const match = url.match(/\/ws\/sessions?\/([^\/\?]+)/);
+      const match = url.match(/\/ws\/sessions?\/([^/?]+)/);
       if (match) {
         const sessionId = match[1];
         console.log(`JSON-RPC WebSocket upgrade for session: ${sessionId}`);

@@ -910,8 +910,6 @@ describe('JSONRPCClient', () => {
         promises.push(client.request('test'));
       }
       
-      await vi.runAllTimersAsync();
-      
       const ids = mockWs.sentMessages.map(m => (JSON.parse(m) as JSONRPCRequest).id);
       const uniqueIds = new Set(ids);
       

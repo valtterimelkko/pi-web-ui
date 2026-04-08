@@ -43,6 +43,7 @@ coverage/
 playwright-report/
 test-results/
 tests/screenshots/
+cookies.txt
 
 # Python
 __pycache__/

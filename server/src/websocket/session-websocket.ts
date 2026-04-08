@@ -748,7 +748,7 @@ export function createSessionWebSocketHandler(
 ): (ws: WebSocket, req: IncomingMessage) => void {
   return (ws: WebSocket, req: IncomingMessage) => {
     const url = req.url || '';
-    const match = url.match(/\/ws\/session\/([^\/\?]+)/);
+    const match = url.match(/\/ws\/session\/([^/?]+)/);
 
     if (!match) {
       ws.close(1008, 'Invalid session URL');

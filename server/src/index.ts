@@ -35,7 +35,7 @@ async function initialize(): Promise<void> {
       }
 
       // Per-session WebSocket endpoint: /ws/sessions/:sessionId
-      const sessionMatch = url.pathname.match(/^\/ws\/sessions\/([^\/\?]+)$/);
+      const sessionMatch = url.pathname.match(/^\/ws\/sessions\/([^/?]+)$/);
       if (sessionMatch) {
         const sessionId = sessionMatch[1];
 

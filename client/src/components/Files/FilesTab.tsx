@@ -74,7 +74,6 @@ export function FilesTab() {
   useEffect(() => {
     const startPath = session?.cwd || '/root';
     navigate(startPath);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.cwd]);
 
   // ── derived ──────────────────────────────────────────────────────────────

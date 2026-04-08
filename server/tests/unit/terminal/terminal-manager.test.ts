@@ -32,19 +32,22 @@ describe('TerminalManager', () => {
     manager.destroyAll();
   });
 
-  it('has isAvailable method', () => {
+  it('has isAvailable method', async () => {
     // isAvailable reflects whether node-pty loaded successfully
-    expect(typeof manager.isAvailable()).toBe('boolean');
+    const available = await manager.isAvailable();
+    expect(typeof available).toBe('boolean');
   });
 
-  it('returns error when not available and create is called', () => {
-    if (!manager.isAvailable()) {
-      const result = manager.create('client1', '/tmp', 80, 24);
+  it('returns error when not available and create is called', async () => {
+    const available = await manager.isAvailable();
+
+    if (!available) {
+      const result = await manager.create('client1', '/tmp', 80, 24);
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
     } else {
       // If pty is available, just verify basic create works
-      const result = manager.create('client1', '/tmp', 80, 24);
+      const result = await manager.create('client1', '/tmp', 80, 24);
       expect(result.success).toBe(true);
     }
   });

@@ -675,7 +675,11 @@ describe('MultiSessionManager', () => {
       );
       
       consoleSpy.mockRestore();
-      (Date.now as any).mockRestore?.() || vi.restoreAllMocks();
+      if (typeof (Date.now as any).mockRestore === 'function') {
+        (Date.now as any).mockRestore();
+      } else {
+        vi.restoreAllMocks();
+      }
     });
 
     it('should NOT reset streaming sessions that are still receiving events', async () => {
