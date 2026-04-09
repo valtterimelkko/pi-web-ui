@@ -36,9 +36,13 @@ export class ClaudeProcessPool {
    * fully release its session lock before starting a new one.
    */
   private exitPromises: Map<string, Promise<void>> = new Map();
+  /** Grace period (ms) to wait after a process exits before spawning a new one,
+   *  to allow the Claude CLI to release its session lock file. */
+  private postExitGraceMs: number;
 
-  constructor(maxProcesses: number = 10) {
+  constructor(maxProcesses: number = 10, postExitGraceMs: number = 1500) {
     this.maxProcesses = maxProcesses;
+    this.postExitGraceMs = postExitGraceMs;
   }
 
   /**
@@ -60,7 +64,7 @@ export class ClaudeProcessPool {
       console.log(`[ClaudeProcessPool] Waiting for previous process to exit for ${options.sessionId}...`);
       await pendingExit;
       // Grace period: allow Claude CLI to release its session lock file
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, this.postExitGraceMs));
       this.exitPromises.delete(options.sessionId);
     }
 
