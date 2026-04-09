@@ -107,6 +107,8 @@ export class WebSocketConnectionManager {
   private claudeService: ClaudeService;
   /** Session IDs (UUIDs) that are Claude sessions */
   private claudeSessionIds: Set<string> = new Set();
+  /** Claude session subscribers: sessionId → Set of clientIds currently viewing it */
+  private claudeSessionSubscribers: Map<string, Set<string>> = new Map();
 
   constructor() {
     this.wss = new WebSocketServer({ noServer: true });
@@ -606,25 +608,18 @@ export class WebSocketConnectionManager {
         sessionId,
         prompt,
         (normalizedEvent) => {
-          // Convert NormalizedEvent to Pi-compatible format and send as session_event
+          // Convert NormalizedEvent to Pi-compatible format
           const piEvent = normEventToPiFormat(normalizedEvent);
-          // Broadcast to all subscribers of this session
-          const activeSession = this.multiSessionManager.getActiveSession(sessionId);
-          if (activeSession) {
-            for (const subscriberId of activeSession.subscribers) {
-              this.sendMessage(subscriberId, {
-                type: 'session_event',
-                sessionId,
-                event: piEvent,
-              });
+          const message = { type: 'session_event' as const, sessionId, event: piEvent };
+          // Broadcast to ALL clients currently viewing this Claude session
+          const subscribers = this.claudeSessionSubscribers.get(sessionId);
+          if (subscribers && subscribers.size > 0) {
+            for (const subId of subscribers) {
+              this.sendMessage(subId, message);
             }
           } else {
             // Fall back: send only to the requesting client
-            this.sendMessage(clientId, {
-              type: 'session_event',
-              sessionId,
-              event: piEvent,
-            });
+            this.sendMessage(clientId, message);
           }
         },
         (error) => {
@@ -708,6 +703,7 @@ export class WebSocketConnectionManager {
 
         // Register the client as viewing this session
         this.clientViewingSession.set(clientId, sessionId);
+        this.subscribeClientToClaudeSession(clientId, sessionId);
         this.clientCwd.set(clientId, cwd);
 
         console.log(`[handleNewSession] Claude session created: ${sessionId}`);
@@ -774,11 +770,14 @@ export class WebSocketConnectionManager {
     }
 
     if (isClaudeSession) {
-      // Unsubscribe from old session if different
+      // Unsubscribe from old session (Claude or Pi) if different
       if (oldSessionPath && oldSessionPath !== sessionPath) {
+        this.unsubscribeClientFromClaudeSession(clientId, oldSessionPath);
         this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
       }
       this.clientViewingSession.set(clientId, sessionPath);
+      // Register as subscriber for this Claude session
+      this.subscribeClientToClaudeSession(clientId, sessionPath);
       await this.replayClaudeHistory(clientId, sessionPath);
       console.log(`[handleSwitchSession] Client ${clientId} switched to Claude session ${sessionPath}`);
       return;
@@ -1344,6 +1343,7 @@ export class WebSocketConnectionManager {
 
     if (isClaudeSession) {
       this.clientViewingSession.set(clientId, sessionPath);
+      this.subscribeClientToClaudeSession(clientId, sessionPath);
       await this.replayClaudeHistory(clientId, sessionPath);
       return;
     }
@@ -1400,10 +1400,43 @@ export class WebSocketConnectionManager {
         this.multiSessionManager.unsubscribeClient(clientId, sessionPath);
       }
 
+      // Unsubscribe client from all Claude sessions
+      for (const [sessionId, subscribers] of this.claudeSessionSubscribers) {
+        subscribers.delete(clientId);
+        if (subscribers.size === 0) {
+          this.claudeSessionSubscribers.delete(sessionId);
+        }
+      }
+
       // Clean up client tracking data
       this.clientCwd.delete(clientId);
       this.clientViewingSession.delete(clientId);
       this.clients.delete(clientId);
+    }
+  }
+
+  // ── Claude session subscriber helpers ──────────────────────────────────
+
+  /** Register a client as a subscriber to a Claude session's events. */
+  private subscribeClientToClaudeSession(clientId: string, sessionId: string): void {
+    let subscribers = this.claudeSessionSubscribers.get(sessionId);
+    if (!subscribers) {
+      subscribers = new Set();
+      this.claudeSessionSubscribers.set(sessionId, subscribers);
+    }
+    subscribers.add(clientId);
+    console.log(`[ClaudeSubscribe] Client ${clientId} subscribed to Claude session ${sessionId} (${subscribers.size} subscribers)`);
+  }
+
+  /** Remove a client from a Claude session's subscriber set. */
+  private unsubscribeClientFromClaudeSession(clientId: string, sessionId: string): void {
+    const subscribers = this.claudeSessionSubscribers.get(sessionId);
+    if (subscribers) {
+      subscribers.delete(clientId);
+      if (subscribers.size === 0) {
+        this.claudeSessionSubscribers.delete(sessionId);
+      }
+      console.log(`[ClaudeSubscribe] Client ${clientId} unsubscribed from Claude session ${sessionId} (${subscribers.size} remaining)`);
     }
   }
 
