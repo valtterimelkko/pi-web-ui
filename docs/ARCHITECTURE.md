@@ -1,6 +1,6 @@
 # Pi Web UI Architecture
 
-> Comprehensive architecture documentation for the Pi Coding Agent Web Interface
+> Canonical architecture reference for Pi Web UI. Read [`README.md`](../README.md) first for the concise system overview, then use this document for deeper structure and data-flow detail.
 
 ## Table of Contents
 

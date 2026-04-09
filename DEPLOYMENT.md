@@ -1,5 +1,7 @@
 # Deployment Guide
 
+> Production runbook for Pi Web UI. See [`README.md`](./README.md) for the concise operating overview and [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md) for the worker-isolation rationale behind these settings.
+
 ## Production Checklist
 
 - [ ] Change default admin password

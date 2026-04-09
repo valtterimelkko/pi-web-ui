@@ -1,5 +1,7 @@
 # Security
 
+> Canonical security reference for Pi Web UI. See [`README.md`](./README.md) for the overall system and [`AGENTS.md`](./AGENTS.md) for the must-follow implementation rules.
+
 ## Threat Model
 
 ### CSWSH (Cross-Site WebSocket Hijacking)

@@ -1,6 +1,6 @@
 # Process Isolation Design Document
 
-> Architecture design for the Pi Web UI process-per-session implementation
+> Design record for Pi Web UI's process-per-session architecture. See [`README.md`](../README.md) for the concise overview and [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the broader system structure.
 
 ## Executive Summary
 

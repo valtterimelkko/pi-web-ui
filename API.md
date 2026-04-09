@@ -1,5 +1,7 @@
 # API Documentation
 
+> API surface index for Pi Web UI. Start with [`README.md`](./README.md) for the big picture, [`AGENTS.md`](./AGENTS.md) for agent workflow, and [`docs/PROTOCOL.md`](./docs/PROTOCOL.md) for the detailed WebSocket protocol.
+
 ## WebSocket Protocol
 
 ### Connection

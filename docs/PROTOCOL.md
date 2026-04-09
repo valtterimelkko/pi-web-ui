@@ -1,6 +1,6 @@
 # Pi Web UI Protocol Documentation
 
-> JSON-RPC 2.0 WebSocket API for the Pi Coding Agent Web Interface
+> Canonical WebSocket / JSON-RPC reference for Pi Web UI. For the higher-level architecture, see [`ARCHITECTURE.md`](./ARCHITECTURE.md); for the project overview, see [`README.md`](../README.md).
 
 ## Table of Contents
 

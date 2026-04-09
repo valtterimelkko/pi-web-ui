@@ -1,174 +1,106 @@
 # Agent Instructions for Pi Web UI
 
-> **For users**: See [README.md](./README.md). This document is for developers/agents working on the codebase.
+> Auto-loaded developer/agent guide. Start here, then open the canonical docs linked below.
 
-## Your Role
+## Read These Docs by Task
 
-Improve the Pi Web UI with test-driven development. Verify changes via:
-1. `webapp-testing` skill — local dev server testing
-2. `playwright-cli` skill — live site testing (`https://pi.letsautomate.work`)
-3. `npm test` — unit + integration test suite
+- **Project overview / runbook:** [`README.md`](./README.md)
+- **Architecture:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
+- **Wire protocol / WebSocket JSON-RPC:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
+- **API index:** [`API.md`](./API.md)
+- **Security rules:** [`SECURITY.md`](./SECURITY.md)
+- **Deployment / service operations:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
+- **Worker/process isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
 
-## Architecture
+## Mission
 
-```
-Browser (React + Vite)
-  └─ WebSocket /ws  ──────────────────────────────────────────────────────────
-                                                                              │
-Express Server (server/src/)                                                  │
-  ├─ websocket/connection.ts          ← main WS handler, message dispatcher  │
-  ├─ pi/multi-session-manager.ts      ← Pi SDK session lifecycle             │
-  ├─ workers/worker-pool.ts           ← Pi SDK worker processes              │
-  ├─ claude/claude-service.ts         ← Claude Direct session lifecycle      │
-  ├─ claude/claude-process-pool.ts    ← claude -p subprocess pool            │
-  ├─ session-registry.ts              ← unified session index (both SDKs)    │
-  └─ routes/                          ← REST API                             │
+Improve Pi Web UI safely with small, verified changes. Prefer targeted fixes over broad refactors unless the task explicitly requires structural work.
 
-Session storage:
-  ~/.pi/agent/sessions/               ← Pi SDK sessions (JSONL)
-  ~/.pi-web-ui/claude-sessions/       ← Claude Direct sessions (JSONL)
-  ~/.pi-web-ui/session-registry.json  ← unified index
-```
+## Required Workflow
 
-### Dual-SDK Session Paths
+1. **Use TDD for code changes.**
+2. **Keep diffs minimal.**
+3. **Run the relevant checks before finishing:**
+   - `npm run lint`
+   - `npm run typecheck`
+   - `npm run build`
+   - relevant tests (`npm test`, workspace tests, or E2E as appropriate)
+4. **For UI changes:**
+   - use `webapp-testing` for localhost/dev-server verification
+   - use `playwright-cli` only for live/external site verification
+5. **Before commit/push:** review `git status --short` and `git diff --stat`.
 
-**Pi SDK** — persistent worker process per session (`pi --mode rpc`)
-- Managed by `MultiSessionManager` + `WorkerPool`
-- All providers, all extensions, model switching
-- Sessions stored in `~/.pi/agent/sessions/`
+## Repo Map
 
-**Claude Direct** — ephemeral `claude -p` subprocess per turn
-- Managed by `ClaudeService` + `ClaudeProcessPool`
-- **First turn**: `claude -p --session-id <uuid>` (creates session)
-- **Follow-up turns**: `claude -p --resume <uuid>` (avoids session lock)
-- `ANTHROPIC_API_KEY` is explicitly stripped — forces subscription auth, not API key
-- Sessions stored in `~/.pi-web-ui/claude-sessions/`
-- Multiple Claude Direct sessions are fully isolated; sessions can coexist in sidebar
+- `client/` — React + Vite frontend
+- `server/` — Express server, WebSocket handlers, Pi/Claude runtime integration
+- `shared/` — shared protocol/types package used by server and client
+- `tests/` — E2E tests and benchmark scripts
+- `extensions/` — local extension code
+- `docs/` — deeper architecture/protocol/design docs
 
-### Frontend Key Files
-| File | Purpose |
-|------|---------|
-| `client/src/websocket/connection.ts` | Main WS message handler |
-| `client/src/store/sessionStore.ts` | Zustand store, all WS event handling |
-| `client/src/hooks/useWebSocket.ts` | WS send helpers (sendPrompt, setModel etc.) |
-| `client/src/components/Chat/` | Chat UI, message bubbles, tool cards |
-| `client/src/components/Session/NewSessionModal.tsx` | Session creation + SDK selector |
-| `client/src/components/Settings/SettingsModal.tsx` | Model selector (filters by SDK type) |
+## Architecture Facts You Should Know
 
-## Development Workflow
+- Frontend: React + Zustand + Vite
+- Backend: Express + WebSocket
+- Protocol: JSON-RPC-style messaging over WebSocket
+- Two runtime paths:
+  - **Pi SDK sessions** via persistent worker processes
+  - **Claude Direct sessions** via `claude -p` subprocesses
+- Session storage:
+  - Pi SDK: `~/.pi/agent/sessions/`
+  - Claude Direct: `~/.pi-web-ui/claude-sessions/`
+  - unified registry: `~/.pi-web-ui/session-registry.json`
 
-```bash
-npm install          # install deps
-npm run dev          # start dev servers (client + server)
-npm run build        # TypeScript compile + Vite build
-npm test             # run all tests (735+ passing)
-npm run test:e2e     # Playwright E2E tests
-```
+## Key Files
 
-### Making Changes
-1. Write tests first (TDD)
-2. Make minimal changes
-3. `npm run build` — must pass
-4. `npm test` — must not regress
-5. Deploy: `npm run build && sudo systemctl restart pi-web-ui`
+- `client/src/store/sessionStore.ts` — main frontend session state
+- `client/src/hooks/useWebSocket.ts` / `client/src/lib/session-websocket.ts` — client WS helpers
+- `server/src/websocket/connection.ts` — main upgrade/connection handling
+- `server/src/websocket/session-websocket.ts` — per-session WebSocket handling
+- `server/src/pi/multi-session-manager.ts` — Pi SDK session lifecycle
+- `server/src/workers/worker-pool.ts` — worker process pool
+- `server/src/claude/claude-service.ts` — Claude Direct lifecycle
+- `server/src/session-registry.ts` — unified session index
 
-## Debugging
+## Non-Negotiable Security Rules
 
-### WebSocket issues
-- Browser DevTools → Network → WS for connection status
-- Close code 1006 = abnormal close; check `ALLOWED_ORIGINS` in `.env.production`
-- Key file: `server/src/websocket/connection.ts`
+- Add `cookieAuthMiddleware` to protected routes.
+- Validate inputs with Zod.
+- Validate file paths before access.
+- Run prompt-injection detection before forwarding user input to the AI runtime.
+- Preserve origin / auth / CSRF protections when changing WebSocket or auth code.
 
-### Claude Direct issues
-```bash
-which claude                        # must be on PATH
-claude auth status --json           # must show loggedIn: true
-sudo journalctl -u pi-web-ui -f     # look for [ClaudeService] or [ClaudeProcessPool]
-```
-Common problems:
-- `claude` not in PATH for systemd → check `Environment=PATH=` in service file (must include `/root/.local/bin`)
-- "Session ID already in use" → handled by retry + `--resume` logic; if persistent, check for hung `claude` processes: `ps aux | grep "claude -p"`
+See [`SECURITY.md`](./SECURITY.md) for the full security model.
 
-### Pi SDK worker issues
-```bash
-ps aux | grep "pi --mode rpc"       # list active workers
-curl http://localhost:3456/api/health/ready | jq '.workerStats'
-```
+## Debugging Entry Points
 
-### Auth / 401 errors
-- Check JWT cookie in browser DevTools → Application → Cookies
-- Key files: `server/src/security/auth.ts`, `server/src/security/csrf.ts`
+- **WebSocket / JSON-RPC:** `server/src/websocket/connection.ts`, `server/src/websocket/session-websocket.ts`
+- **Auth / CSRF:** `server/src/security/auth.ts`, `server/src/security/csrf.ts`
+- **Pi SDK workers:** `server/src/pi/multi-session-manager.ts`, `server/src/workers/worker-pool.ts`
+- **Claude Direct:** `server/src/claude/claude-service.ts`, `server/src/claude/claude-process-pool.ts`
+- **Health/config:** `server/src/routes/health.ts`, `server/src/routes/config.ts`
 
-### Health endpoints
-```bash
-curl http://localhost:3456/api/health/live    # liveness
-curl http://localhost:3456/api/health/ready   # readiness + worker stats
-curl http://localhost:3456/api/config/validate
-```
+Use [`README.md`](./README.md) for the practical debugging commands by problem type.
 
-## UI Style Guide
+## UI / Product Conventions
 
-The UI uses a **light theme**:
-- Backgrounds: `bg-white`, `bg-gray-50`, `bg-gray-100`
-- Primary accent: `bg-gray-900`, `text-blue-600`
-- Text: `text-gray-900` (primary), `text-gray-500` (secondary)
-- Claude Direct badge: `bg-amber-100 text-amber-700`
+- The app uses a **light theme**. Match existing light UI styles.
+- Avoid introducing noisy UI for raw tool chatter unless the feature explicitly needs it.
+- Do not rely on historical “passing test counts” in old docs; run the current checks.
 
-When adding components, match the existing light theme. Do NOT use the dark slate palette (`bg-slate-900` etc.) — that was replaced.
-
-## UI Message Filtering (Pi SDK verbosity)
-
-The Pi SDK emits many event types that would clutter the chat. `VirtualizedMessageList.tsx` filters them:
-
-| Shown | Hidden |
-|-------|--------|
-| User messages (except raw skill injections) | Tool calls: bash, edit, write, web_search, web_fetch, grep, find, etc. |
-| Assistant text responses | `toolResult` messages (raw output) |
-| Subagent tool cards (hierarchical) | Skill injection content (`<skill name="...">`) |
-| Read tool calls (skill-loading visibility) | |
-
-**Key constant:** `VISIBLE_TOOL_NAMES` set in `VirtualizedMessageList.tsx` — add a tool name here to make its card visible.
-
-Tool cards that ARE shown use `CollapsibleToolCard` — collapsed by default, expandable. Long outputs are truncated (50KB / 2000 lines).
-
-Claude Direct tool names are PascalCase (`Read`, `Bash`, `Edit`) — `normalizeToolName()` in `messageAdapter.ts` maps them to the Pi equivalents for rendering.
-
-## Adding a Component
-1. `client/src/components/MyComponent/MyComponent.tsx` + `index.ts`
-2. Export from `client/src/components/index.ts`
-3. Add tests in `client/tests/unit/components/`
-
-## Adding an API Endpoint
-1. `server/src/routes/my-feature.ts` — add `cookieAuthMiddleware` + `apiLimiter`
-2. Mount in `server/src/app.ts`
-3. Add tests in `server/tests/unit/routes/`
-
-## Testing
+## Handy Commands
 
 ```bash
-npm test                                                    # all tests
-npm test -- server/tests/unit/security/auth.test.ts        # specific file
-npm run test:e2e                                            # E2E (requires server running)
+npm install
+npm run dev
+npm run lint
+npm run typecheck
+npm run build
+npm test
+npm run test:e2e
 ```
 
-**Current status:** 735/737 passing. 2 pre-existing failures in `terminal-manager.test.ts` (unrelated to main functionality).
+## Final Rule
 
-## Security Rules
-
-- Always add `router.use(cookieAuthMiddleware)` on protected routes
-- Validate all input with Zod schemas
-- Validate file paths before access (`validatePath()`)
-- Run `detectPromptInjection()` on user input before forwarding to AI
-
-## Known Issues
-
-1. Session tree navigation doesn't sync with CLI forks (workaround: refresh)
-2. Extension UI timeout hardcoded to 30s (`server/src/pi/extension-ui-handler.ts`)
-3. Claude Direct requires `claude auth login` to have been run on the server
-
-## Resources
-
-- [README.md](./README.md) — user docs, deployment, feature list
-- [API.md](./API.md) — WebSocket + REST protocol reference
-- [SECURITY.md](./SECURITY.md) — security architecture
-- [DEPLOYMENT.md](./DEPLOYMENT.md) — production deployment guide
+If a topic is already documented deeply elsewhere, **link to the canonical doc instead of duplicating it here**.
