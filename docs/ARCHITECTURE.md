@@ -41,9 +41,10 @@ Pi Web UI is a full-featured web interface for the Pi Coding Agent, providing re
 │  ├─────────────────┤    ├─────────────────┤    ├─────────────────┤         │
 │  │ • ChatView      │    │ • useSession    │    │ • sessionStore  │         │
 │  │ • MessageList   │    │   Stream        │    │ • chatStore     │         │
-│  │ • ToolCards     │    │ • useWebSocket  │    │ • authStore     │         │
-│  │ • Sidebar       │    │ • useSession    │    │ • uiStore       │         │
-│  │                 │    │   Tree          │    │                 │         │
+│  │ • ToolCards     │    │ • useWebSocket  │    │ • draftStore    │         │
+│  │ • Sidebar       │    │ • useAuth       │    │ • filesStore    │         │
+│  │ • Shell / Git   │    │ • useTerminal   │    │ • gitStore      │         │
+│  │ • Files / Tree  │    │                 │    │ • navigationStore│        │
 │  └────────┬────────┘    └────────┬────────┘    └────────┬────────┘         │
 │           │                      │                      │                   │
 │           └──────────────────────┼──────────────────────┘                   │
@@ -115,6 +116,22 @@ Pi Web UI is a full-featured web interface for the Pi Coding Agent, providing re
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Runtime Paths and Storage
+
+Pi Web UI currently supports two runtime paths:
+
+1. **Pi SDK path**
+   - main files: `server/src/pi/multi-session-manager.ts`, `server/src/workers/worker-pool.ts`
+   - session storage: `~/.pi/agent/sessions/`
+   - extensions loaded from the Pi agent directory
+
+2. **Claude Direct path**
+   - main files: `server/src/claude/claude-service.ts`, `server/src/claude/claude-process-pool.ts`, `server/src/claude/claude-session-store.ts`
+   - session storage: `~/.pi-web-ui/claude-sessions/`
+   - used for `claude -p` / `--resume` session handling
+
+Both runtime paths are unified in the sidebar and server metadata through `server/src/session-registry.ts` and `~/.pi-web-ui/session-registry.json`.
 
 ---
 
@@ -236,10 +253,10 @@ See [PROTOCOL.md](./PROTOCOL.md) for complete specification.
 │  └─────────────────────────────────────────────────────┘   │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │                authStore (Zustand)                   │   │
-│  │  - Authentication status                            │   │
-│  │  - CSRF token                                       │   │
-│  │  - User info                                        │   │
+│  │              Supporting stores (Zustand)             │   │
+│  │  - draftStore, filesStore, gitStore                 │   │
+│  │  - navigationStore, orchestrationStore             │   │
+│  │  - terminalStore                                   │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐   │
@@ -251,6 +268,15 @@ See [PROTOCOL.md](./PROTOCOL.md) for complete specification.
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Dual Runtime Note
+
+Pi Web UI has two server-side runtime paths:
+
+- **Pi SDK path** — managed by `server/src/pi/multi-session-manager.ts` and `server/src/workers/worker-pool.ts`
+- **Claude Direct path** — managed by `server/src/claude/claude-service.ts` and `server/src/claude/claude-process-pool.ts`
+
+The sidebar and session metadata are unified through `server/src/session-registry.ts`.
 
 ### useSessionStream Hook
 
@@ -393,18 +419,29 @@ App
     │   │   │       ├── TextContent
     │   │   │       ├── ThinkingBlock
     │   │   │       └── ToolCards
-    │   │   │           ├── BashToolCard
-    │   │   │           ├── EditToolCard
-    │   │   │           ├── ReadToolCard
-    │   │   │           └── SubagentToolCard
     │   │   └── MessageInput
-    │   └── EmptyState
+    │   ├── Files / FileBrowser
+    │   ├── Shell / Git / Tasks
+    │   ├── Navigation / Tree
+    │   ├── Orchestration
+    │   └── Extensions / Settings / Usage
     └── StatusBar
         ├── ConnectionStatus
         ├── ModelSelector
         ├── ContextUsage
         └── MessageCount
 ```
+
+### Top-Level Component Areas
+
+The current `client/src/components/` tree includes these major areas:
+
+- `Auth`, `Layout`, `Sidebar`, `StatusBar`
+- `Chat`, `Tools`, `Tree`, `Navigation`
+- `Files`, `FileBrowser`, `Shell`, `Git`, `Tasks`
+- `Session`, `Settings`, `Extensions`, `Orchestration`, `Usage`
+
+Treat this section as a structural map rather than an exhaustive file listing.
 
 ### Message Flow
 
@@ -603,7 +640,7 @@ const MessageBubble = memo(({ message }) => {
 │                                                              │
 │  4. Client stores                                            │
 │     - JWT in httpOnly cookie (automatic)                     │
-│     - CSRF token in authStore                                │
+│     - CSRF token in authentication state                     │
 │                                                              │
 │  5. WebSocket connection                                     │
 │     - Cookie sent automatically                              │
@@ -786,6 +823,8 @@ class MultiSessionManager {
 ## See Also
 
 - [PROTOCOL.md](./PROTOCOL.md) - Complete WebSocket protocol specification
+- [PROCESS-ISOLATION-DESIGN.md](./PROCESS-ISOLATION-DESIGN.md) - Worker/process isolation design record
+- [../DEPLOYMENT.md](../DEPLOYMENT.md) - Production deployment and service operations
 - [../SECURITY.md](../SECURITY.md) - Security architecture details
 - [../API.md](../API.md) - REST API documentation
 - [../AGENTS.md](../AGENTS.md) - Developer guide

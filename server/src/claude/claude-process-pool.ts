@@ -60,13 +60,16 @@ export class ClaudeProcessPool {
     delete claudeEnv.ANTHROPIC_AUTH_TOKEN;  // CRITICAL: forces subscription auth
 
     // ── Spawn the process ───────────────────────────────────────────────────
+    // Use --dangerously-skip-permissions so Claude can run git and other bash
+    // commands without prompting for approval. This is appropriate for a
+    // server-side sandbox where the user already authorised the session.
     const proc = spawn(
       'claude',
       [
         '-p', options.prompt,
         '--output-format', 'stream-json',
         '--verbose',
-        '--permission-mode', 'acceptEdits',
+        '--dangerously-skip-permissions',
         '--model', options.model,
         // First turn: --session-id creates the session.
         // Follow-up turns: --resume avoids the session lock conflict.

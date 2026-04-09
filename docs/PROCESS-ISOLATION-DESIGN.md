@@ -6,6 +6,8 @@
 
 This document describes the design and implementation of the process-per-session architecture for Pi Web UI. This architecture transforms the system from a single-process model to a multi-process model where each AI session runs in its own isolated Node.js worker process.
 
+This document focuses on the **Pi SDK worker architecture**. Claude Direct uses a separate subprocess path under `server/src/claude/` and is documented at a higher level in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
 ## Table of Contents
 
 1. [Motivation](#motivation)
@@ -67,7 +69,7 @@ Process-per-session architecture provides:
 │  └─────────────────────────────────┬─────────────────────────────────────┘  │
 │                                    │                                        │
 │  ┌─────────────────────────────────┴─────────────────────────────────────┐  │
-│  │                  Session Worker Manager                                │  │
+│  │                     Worker Pool + RPC Bridge                           │  │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────────┐ │  │
 │  │  │ Worker Pool  │  │ RPC Protocol │  │ Session RPC Client           │ │  │
 │  │  │ (lifecycle)  │  │ Bridge       │  │ (high-level API)             │ │  │
@@ -723,11 +725,10 @@ function validateSessionPath(requestedPath: string): string | null {
 
 ### File Locations
 
-- **Worker Manager**: `server/src/workers/session-worker-manager.ts`
 - **Worker Pool**: `server/src/workers/worker-pool.ts`
+- **Session Worker**: `server/src/workers/session-worker.ts`
 - **RPC Bridge**: `server/src/workers/rpc-protocol-bridge.ts`
 - **Session RPC Client**: `server/src/workers/session-rpc-client.ts`
-- **Session Worker**: `server/src/workers/session-worker.ts`
 - **Event Normalizer**: `server/src/workers/event-normalizer.ts`
 - **Worker Types**: `server/src/workers/types.ts`
 
