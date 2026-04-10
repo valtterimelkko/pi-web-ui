@@ -305,7 +305,27 @@ export class ClaudeService {
         await this.sessionStore.appendEntry(sessionId, {
           type: 'tool',
           toolName: data?.toolName as string | undefined,
+          toolCallId: data?.toolCallId as string | undefined,
           toolInput: data?.args,
+          timestamp: event.timestamp,
+        });
+        break;
+      }
+
+      case 'tool_execution_end': {
+        // Extract the text content from the result for persistence
+        const resultContent = data?.result as { content?: Array<{ type?: string; text?: string }> } | undefined;
+        const textContent =
+          resultContent?.content
+            ? (resultContent.content as Array<{ type?: string; text?: string }>)
+                .map((c) => c.text ?? '')
+                .join('')
+            : '';
+        await this.sessionStore.appendEntry(sessionId, {
+          type: 'tool_result',
+          toolCallId: data?.toolCallId as string | undefined,
+          toolOutput: textContent,
+          isError: data?.isError as boolean | undefined,
           timestamp: event.timestamp,
         });
         break;

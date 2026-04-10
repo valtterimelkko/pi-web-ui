@@ -38,43 +38,45 @@ export function claudeEntryToEvent(entry: ClaudeMessageEntry): Array<Record<stri
       events.push({ type: 'message_end', message: { id: `user_${entry.timestamp}` } });
       break;
 
-    case 'assistant': {
-      // Assistant message
-      const msgId = `asst_${entry.timestamp}`;
-      events.push({
-        type: 'message_start',
-        message: { id: msgId, role: 'assistant' },
-        timestamp: entry.timestamp,
-      });
-      if (entry.content) {
-        events.push({
-          type: 'message_update',
-          message: { id: msgId },
-          assistantMessageEvent: { type: 'text_delta', delta: entry.content },
-        });
-      }
-      events.push({ type: 'message_end', message: { id: msgId } });
+    case 'assistant':
+      // Assistant message — handled by coalescing in historyToReplayEvents.
+      // Individual assistant entries should not be emitted here because each
+      // text delta would get its own message_start/message_end, fragmenting
+      // the response into dozens of tiny bubbles.  Instead, historyToReplayEvents
+      // merges consecutive assistant entries into a single message.
       break;
-    }
 
     case 'tool': {
-      // Tool call + result
-      const toolId = `tool_${entry.timestamp}`;
+      // Tool call start — use stored toolCallId if available
+      const toolCallId = entry.toolCallId || `tool_${entry.timestamp}`;
       events.push({
         type: 'tool_execution_start',
-        toolCallId: toolId,
+        toolCallId,
         toolName: entry.toolName || 'unknown',
         args: entry.toolInput || {},
         timestamp: entry.timestamp,
       });
+      // If the tool entry already has toolOutput (legacy entries), emit end immediately
       if (entry.toolOutput !== undefined) {
         events.push({
           type: 'tool_execution_end',
-          toolCallId: toolId,
+          toolCallId,
           result: { content: [{ type: 'text', text: entry.toolOutput }] },
-          isError: false,
+          isError: entry.isError ?? false,
         });
       }
+      break;
+    }
+
+    case 'tool_result': {
+      // Tool result — emit tool_execution_end
+      const resultToolCallId = entry.toolCallId || `tool_${entry.timestamp}`;
+      events.push({
+        type: 'tool_execution_end',
+        toolCallId: resultToolCallId,
+        result: { content: [{ type: 'text', text: entry.toolOutput || '' }] },
+        isError: entry.isError ?? false,
+      });
       break;
     }
   }
@@ -84,12 +86,50 @@ export function claudeEntryToEvent(entry: ClaudeMessageEntry): Array<Record<stri
 
 /**
  * Convert full JSONL history to replay events.
- * Returns array of Pi-compatible event objects ready to be sent as session_event messages.
+ * Coalesces consecutive `assistant` entries (text deltas) into single messages
+ * so the UI renders one coherent assistant response instead of many fragments.
  */
 export function historyToReplayEvents(entries: ClaudeMessageEntry[]): Array<Record<string, unknown>> {
   const allEvents: Array<Record<string, unknown>> = [];
-  for (const entry of entries) {
+
+  let i = 0;
+  while (i < entries.length) {
+    const entry = entries[i];
+
+    // Coalesce consecutive assistant entries into a single message
+    if (entry.type === 'assistant') {
+      const coalescedText: string[] = [];
+      const firstTimestamp = entry.timestamp;
+
+      while (i < entries.length && entries[i].type === 'assistant') {
+        if (entries[i].content) {
+          coalescedText.push(entries[i].content!);
+        }
+        i++;
+      }
+
+      // Emit a single message with all accumulated text
+      const msgId = `asst_${firstTimestamp}`;
+      allEvents.push({
+        type: 'message_start',
+        message: { id: msgId, role: 'assistant' },
+        timestamp: firstTimestamp,
+      });
+      if (coalescedText.length > 0) {
+        allEvents.push({
+          type: 'message_update',
+          message: { id: msgId },
+          assistantMessageEvent: { type: 'text_delta', delta: coalescedText.join('') },
+        });
+      }
+      allEvents.push({ type: 'message_end', message: { id: msgId } });
+      continue;
+    }
+
+    // Non-assistant entries are handled individually
     allEvents.push(...claudeEntryToEvent(entry));
+    i++;
   }
+
   return allEvents;
 }

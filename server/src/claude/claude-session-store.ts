@@ -8,7 +8,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 export interface ClaudeMessageEntry {
-  type: 'meta' | 'user' | 'assistant' | 'tool';
+  type: 'meta' | 'user' | 'assistant' | 'tool' | 'tool_result';
   sessionId: string;
   claudeSessionId?: string;
   cwd?: string;
@@ -16,8 +16,10 @@ export interface ClaudeMessageEntry {
   createdAt?: string;
   content?: string;
   toolName?: string;
+  toolCallId?: string;
   toolInput?: unknown;
   toolOutput?: string;
+  isError?: boolean;
   usage?: unknown;
   timestamp: number;
 }

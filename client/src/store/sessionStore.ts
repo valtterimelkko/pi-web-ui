@@ -1658,6 +1658,12 @@ export const useSessionStore = create<SessionState>()(
             const histEndMsg = msg as unknown as { sessionId: string };
             // Replay complete — set session to idle
             get().setSessionStatus(histEndMsg.sessionId, 'idle');
+            // Also clear the global isStreaming flag if this is the current session.
+            // Without this, the UI may stay stuck in streaming state after history
+            // replay (e.g. after WebSocket reconnect / re-auth).
+            if (get().currentSessionId === histEndMsg.sessionId) {
+              set({ isStreaming: false, isLoading: false });
+            }
             break;
           }
 

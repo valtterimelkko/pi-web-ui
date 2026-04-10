@@ -62,38 +62,26 @@ describe('claudeEntryToEvent', () => {
 
   // ─── assistant entry ──────────────────────────────────────────────────────
 
-  it('assistant entry → message_start + message_update + message_end events', () => {
+  it('assistant entry → empty (handled by coalescing in historyToReplayEvents)', () => {
+    // Individual assistant entries are NOT emitted by claudeEntryToEvent.
+    // They are coalesced into single messages by historyToReplayEvents.
     const entry = makeEntry({
       type: 'assistant',
       content: 'I can help with that!',
     });
 
     const events = claudeEntryToEvent(entry);
-    expect(events).toHaveLength(3);
-    expect(events[0].type).toBe('message_start');
-    expect(events[1].type).toBe('message_update');
-    expect(events[2].type).toBe('message_end');
-
-    const updateEvent = events[1] as Record<string, unknown>;
-    const assistantMsgEvent = updateEvent.assistantMessageEvent as {
-      type: string;
-      delta: string;
-    };
-    expect(assistantMsgEvent.type).toBe('text_delta');
-    expect(assistantMsgEvent.delta).toBe('I can help with that!');
+    expect(events).toHaveLength(0);
   });
 
-  it('assistant entry without content → message_start + message_end (no update)', () => {
+  it('assistant entry without content → empty', () => {
     const entry = makeEntry({
       type: 'assistant',
       content: undefined,
     });
 
     const events = claudeEntryToEvent(entry);
-    // No content → no message_update
-    expect(events).toHaveLength(2);
-    expect(events[0].type).toBe('message_start');
-    expect(events[1].type).toBe('message_end');
+    expect(events).toHaveLength(0);
   });
 
   // ─── tool entry ──────────────────────────────────────────────────────────
@@ -132,6 +120,76 @@ describe('claudeEntryToEvent', () => {
     const events = claudeEntryToEvent(entry);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('tool_execution_start');
+  });
+
+  it('tool entry with stored toolCallId → uses it as toolCallId', () => {
+    const entry = makeEntry({
+      type: 'tool',
+      toolName: 'Read',
+      toolCallId: 'toolu_abc123',
+      toolInput: { file_path: '/tmp/test.txt' },
+    });
+
+    const events = claudeEntryToEvent(entry);
+    expect(events).toHaveLength(1);
+    expect((events[0] as Record<string, unknown>).toolCallId).toBe('toolu_abc123');
+  });
+
+  it('tool entry without toolCallId → generates toolCallId from timestamp', () => {
+    const entry = makeEntry({
+      type: 'tool',
+      toolName: 'Read',
+      toolInput: { file_path: '/tmp/test.txt' },
+    });
+
+    const events = claudeEntryToEvent(entry);
+    expect(events).toHaveLength(1);
+    expect((events[0] as Record<string, unknown>).toolCallId).toBe(`tool_${TS}`);
+  });
+
+  // ─── tool_result entry ────────────────────────────────────────────────────
+
+  it('tool_result entry → tool_execution_end event', () => {
+    const entry = makeEntry({
+      type: 'tool_result',
+      toolCallId: 'toolu_abc123',
+      toolOutput: 'command output here',
+      isError: false,
+    });
+
+    const events = claudeEntryToEvent(entry);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('tool_execution_end');
+
+    const endEvent = events[0] as Record<string, unknown>;
+    expect(endEvent.toolCallId).toBe('toolu_abc123');
+    const result = endEvent.result as { content: Array<{ type: string; text: string }> };
+    expect(result.content[0].text).toBe('command output here');
+    expect(endEvent.isError).toBe(false);
+  });
+
+  it('tool_result entry with isError → tool_execution_end with error flag', () => {
+    const entry = makeEntry({
+      type: 'tool_result',
+      toolCallId: 'toolu_err',
+      toolOutput: 'command failed',
+      isError: true,
+    });
+
+    const events = claudeEntryToEvent(entry);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('tool_execution_end');
+    expect((events[0] as Record<string, unknown>).isError).toBe(true);
+  });
+
+  it('tool_result entry without toolCallId → generates from timestamp', () => {
+    const entry = makeEntry({
+      type: 'tool_result',
+      toolOutput: 'output',
+    });
+
+    const events = claudeEntryToEvent(entry);
+    expect((events[0] as Record<string, unknown>).toolCallId).toBe(`tool_${TS}`);
   });
 });
 
@@ -174,5 +232,120 @@ describe('historyToReplayEvents', () => {
     expect(types[7]).toBe('message_end');
 
     expect(events).toHaveLength(8);
+  });
+
+  it('coalesces consecutive assistant entries into a single message', () => {
+    const entries: ClaudeMessageEntry[] = [
+      makeEntry({ type: 'assistant', content: 'Hello ', timestamp: TS + 1 }),
+      makeEntry({ type: 'assistant', content: 'World', timestamp: TS + 2 }),
+      makeEntry({ type: 'assistant', content: '!', timestamp: TS + 3 }),
+    ];
+
+    const events = historyToReplayEvents(entries);
+    const types = events.map((e) => e.type);
+
+    // Should produce exactly one message: start + update + end
+    expect(types).toEqual(['message_start', 'message_update', 'message_end']);
+
+    // The text_delta should contain all three parts joined
+    const updateEvent = events[1] as Record<string, unknown>;
+    const assistantMsgEvent = updateEvent.assistantMessageEvent as { type: string; delta: string };
+    expect(assistantMsgEvent.delta).toBe('Hello World!');
+  });
+
+  it('separates non-consecutive assistant entries into separate messages', () => {
+    const entries: ClaudeMessageEntry[] = [
+      makeEntry({ type: 'assistant', content: 'First response', timestamp: TS + 1 }),
+      makeEntry({ type: 'tool', toolName: 'Read', toolInput: {}, timestamp: TS + 2 }),
+      makeEntry({ type: 'assistant', content: 'Second response', timestamp: TS + 3 }),
+    ];
+
+    const events = historyToReplayEvents(entries);
+    const types = events.map((e) => e.type);
+
+    // First assistant: start + update + end
+    // Tool: start
+    // Second assistant: start + update + end
+    expect(types).toEqual([
+      'message_start', 'message_update', 'message_end',
+      'tool_execution_start',
+      'message_start', 'message_update', 'message_end',
+    ]);
+  });
+
+  it('tool + tool_result entries produce start and end with matching IDs', () => {
+    const entries: ClaudeMessageEntry[] = [
+      makeEntry({
+        type: 'tool',
+        toolName: 'Bash',
+        toolCallId: 'toolu_xyz',
+        toolInput: { command: 'ls' },
+        timestamp: TS + 1,
+      }),
+      makeEntry({
+        type: 'tool_result',
+        toolCallId: 'toolu_xyz',
+        toolOutput: 'file1.txt\nfile2.txt',
+        isError: false,
+        timestamp: TS + 2,
+      }),
+    ];
+
+    const events = historyToReplayEvents(entries);
+    const types = events.map((e) => e.type);
+
+    expect(types).toEqual(['tool_execution_start', 'tool_execution_end']);
+
+    // Both events should reference the same toolCallId
+    expect((events[0] as Record<string, unknown>).toolCallId).toBe('toolu_xyz');
+    expect((events[1] as Record<string, unknown>).toolCallId).toBe('toolu_xyz');
+  });
+
+  it('tool without matching tool_result → only tool_execution_start (pending)', () => {
+    // Legacy behavior: tools without results show as "Running"
+    const entries: ClaudeMessageEntry[] = [
+      makeEntry({
+        type: 'tool',
+        toolName: 'Bash',
+        toolCallId: 'toolu_pending',
+        toolInput: { command: 'ls' },
+        timestamp: TS + 1,
+      }),
+    ];
+
+    const events = historyToReplayEvents(entries);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('tool_execution_start');
+  });
+
+  it('handles mixed assistant deltas and tool calls correctly', () => {
+    const entries: ClaudeMessageEntry[] = [
+      makeEntry({ type: 'assistant', content: 'Let me read ', timestamp: TS + 1 }),
+      makeEntry({ type: 'assistant', content: 'that file.', timestamp: TS + 2 }),
+      makeEntry({
+        type: 'tool',
+        toolName: 'Read',
+        toolCallId: 'toolu_1',
+        toolInput: { file_path: '/a.txt' },
+        timestamp: TS + 3,
+      }),
+      makeEntry({
+        type: 'tool_result',
+        toolCallId: 'toolu_1',
+        toolOutput: 'file A content',
+        timestamp: TS + 4,
+      }),
+      makeEntry({ type: 'assistant', content: 'The file contains A.', timestamp: TS + 5 }),
+    ];
+
+    const events = historyToReplayEvents(entries);
+    const types = events.map((e) => e.type);
+
+    expect(types).toEqual([
+      'message_start', 'message_update', 'message_end',  // coalesced "Let me read that file."
+      'tool_execution_start',                              // Read /a.txt
+      'tool_execution_end',                                // result
+      'message_start', 'message_update', 'message_end',  // "The file contains A."
+    ]);
   });
 });
