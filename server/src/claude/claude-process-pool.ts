@@ -83,18 +83,21 @@ export class ClaudeProcessPool {
     delete claudeEnv.ANTHROPIC_AUTH_TOKEN;  // CRITICAL: forces subscription auth
 
     // ── Spawn the process ───────────────────────────────────────────────────
-    // Use --permission-mode acceptEdits so Claude auto-approves file edits
-    // without prompting. Bash commands may still require approval, which is
-    // a known limitation in the non-interactive `claude -p` context.
+    // Use --permission-mode dontAsk with a broad --allowedTools list so Claude
+    // auto-approves common tools without prompting. In dontAsk mode, any tool NOT
+    // in the allowlist is silently denied (instead of hanging for approval).
+    // This is the recommended approach for non-interactive server-side usage.
     // NOTE: --dangerously-skip-permissions is blocked for root users since
-    // Claude CLI v2.1.100+, so we cannot use it in server-side deployments.
+    // Claude CLI v2.1.100+, so we cannot use it. A future migration to the
+    // Claude Agent SDK would give us canUseTool callbacks for fine-grained control.
     const proc = spawn(
       'claude',
       [
         '-p', options.prompt,
         '--output-format', 'stream-json',
         '--verbose',
-        '--permission-mode', 'acceptEdits',
+        '--permission-mode', 'dontAsk',
+        '--allowedTools', 'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,Skill,TodoWrite',
         '--model', options.model,
         // First turn: --session-id creates the session.
         // Follow-up turns: --resume avoids the session lock conflict.
