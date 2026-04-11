@@ -88,10 +88,26 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
   return response.json() as Promise<UploadedFile>;
 }
 
+/**
+ * Delete a session by ID.
+ */
+export async function deleteSession(sessionId: string): Promise<void> {
+  const response = await fetch(`${API_URL}/api/sessions/${sessionId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+    throw new ApiError(response.status, error.error || `HTTP ${response.status}`);
+  }
+}
+
 export const api = {
   get: apiGet,
   exportSession,
   uploadFile,
+  deleteSession,
 };
 
 /**

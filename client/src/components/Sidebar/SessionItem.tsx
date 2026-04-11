@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Trash2, Edit2, Check, X, Archive, ArchiveRestore, Download, FileText, FileJson, Code, Loader2 } from 'lucide-react';
 import type { Session } from '../../store/sessionStore';
 import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { deleteSession } from '../../lib/api';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { WorkerStatusIndicator } from './WorkerStatusIndicator';
 
@@ -12,20 +13,36 @@ interface SessionItemProps {
   isArchived?: boolean;
 }
 
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+}
+
 export function SessionItem({ session, isActive, isArchived }: SessionItemProps) {
   const { switchSession } = useWebSocket();
   const archiveSession = useSessionStore(state => state.archiveSession);
   const unarchiveSession = useSessionStore(state => state.unarchiveSession);
   const getSessionDisplayName = useSessionStore(state => state.getSessionDisplayName);
   const setSessionDisplayName = useSessionStore(state => state.setSessionDisplayName);
+  const removeSessionDisplayName = useSessionStore(state => state.removeSessionDisplayName);
   const setSwitchingSession = useSessionStore(state => state.setSwitchingSession);
   const sessionData = useSessionStore(state => state.sessionData[session.id]);
   const workerStatus = useSessionStore(state => state.workerStatus[session.id]);
   const isSwitchingSession = useSessionStore(state => state.isSwitchingSession);
   const switchingToSessionId = useSessionStore(state => state.switchingToSessionId);
+  const sessions = useSessionStore(state => state.sessions);
+  const setSessions = useSessionStore(state => state.setSessions);
+  
   const [showActions, setShowActions] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0 });
+  const [isDeleting, setIsDeleting] = useState(false);
+  
+  const itemRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  
   // Use web UI display name if set, otherwise fall back to session name or first message
   const webUIDisplayName = getSessionDisplayName(session.path);
   const [editName, setEditName] = useState(webUIDisplayName || session.name || '');
@@ -37,24 +54,90 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
   // Check if this session is currently being switched to
   const isLoading = isSwitchingSession && switchingToSessionId === session.id;
 
+  // Close context menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(event.target as Node)) {
+        setContextMenu({ visible: false, x: 0, y: 0 });
+      }
+    };
+
+    if (contextMenu.visible) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [contextMenu.visible]);
+
   const handleClick = () => {
-    if (!isActive && !isEditing && !isLoading) {
+    if (!isActive && !isEditing && !isLoading && !contextMenu.visible) {
       // Set switching state for UI feedback
       setSwitchingSession(true, session.id);
       switchSession(session.path);
     }
   };
 
-  const handleDelete = async (e: React.MouseEvent) => {
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
-    if (confirm('Delete this session? This cannot be undone.')) {
-      // TODO: Implement delete via API
-      console.log('Delete session:', session.id);
+    
+    // Position the context menu near the cursor
+    const rect = itemRef.current?.getBoundingClientRect();
+    if (rect) {
+      // Calculate position relative to viewport
+      let x = e.clientX;
+      let y = e.clientY;
+      
+      // Adjust if menu would go off screen
+      const menuWidth = 180;
+      const menuHeight = 200;
+      
+      if (x + menuWidth > window.innerWidth) {
+        x = window.innerWidth - menuWidth - 10;
+      }
+      if (y + menuHeight > window.innerHeight) {
+        y = window.innerHeight - menuHeight - 10;
+      }
+      
+      setContextMenu({ visible: true, x, y });
     }
   };
 
-  const handleStartEdit = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleCloseContextMenu = () => {
+    setContextMenu({ visible: false, x: 0, y: 0 });
+  };
+
+  const handleDelete = async () => {
+    handleCloseContextMenu();
+    if (confirm('Delete this session? This cannot be undone.')) {
+      try {
+        setIsDeleting(true);
+        await deleteSession(session.id);
+        // Remove session from the list
+        const updatedSessions = sessions.filter(s => s.id !== session.id);
+        setSessions(updatedSessions);
+        // Clean up display name if exists
+        removeSessionDisplayName(session.path);
+      } catch (error) {
+        console.error('Failed to delete session:', error);
+        alert('Failed to delete session. Please try again.');
+      } finally {
+        setIsDeleting(false);
+      }
+    }
+  };
+
+  const handleArchive = () => {
+    handleCloseContextMenu();
+    if (isArchived) {
+      unarchiveSession(session.path);
+    } else {
+      archiveSession(session.path);
+    }
+  };
+
+  const handleStartEdit = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    handleCloseContextMenu();
     setIsEditing(true);
     setEditName(webUIDisplayName || session.name || '');
   };
@@ -89,10 +172,12 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
       setIsEditing(false);
       setEditName(webUIDisplayName || session.name || '');
       setShowExportMenu(false);
+      setContextMenu({ visible: false, x: 0, y: 0 });
     }
   };
 
   const handleExport = async (format: 'markdown' | 'json' | 'html') => {
+    handleCloseContextMenu();
     try {
       const response = await fetch(`/api/sessions/${session.id}/export?format=${format}`, {
         credentials: 'include',
@@ -143,155 +228,251 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
   const displayName = isSkillContent(rawName) ? 'New session' : rawName;
 
   return (
-    <div
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
-      onMouseEnter={() => setShowActions(true)}
-      onMouseLeave={() => setShowActions(false)}
-      role="listitem"
-      tabIndex={0}
-      className={`
-        group relative py-2 px-3 rounded-md cursor-pointer transition-all duration-150 outline-none
-        ${isActive
-          ? 'bg-blue-50 border-l-2 border-blue-500'
-          : 'hover:bg-gray-100 border-l-2 border-transparent'
-        }
-      `}
-    >
-      {isEditing ? (
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={editName}
-            onChange={(e) => setEditName(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onClick={(e) => e.stopPropagation()}
-            className="flex-1 px-2 py-1 text-sm bg-white border border-gray-300 rounded text-gray-900 focus:outline-none focus:border-blue-500 text-base"
-            placeholder="Session name"
-            autoFocus
-          />
-          <button
-            onClick={handleSaveEdit}
-            className="p-1 hover:bg-gray-200 rounded transition-colors"
-            title="Save"
-          >
-            <Check className="w-3.5 h-3.5 text-green-600" />
-          </button>
-          <button
-            onClick={handleCancelEdit}
-            className="p-1 hover:bg-gray-200 rounded transition-colors"
-            title="Cancel"
-          >
-            <X className="w-3.5 h-3.5 text-red-500" />
-          </button>
-        </div>
-      ) : (
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-sm text-gray-900 truncate flex-1">
-            {displayName}
-          </p>
-          {session.sdkType === 'claude' && (
-            <span 
-              className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20 cursor-help"
-              title="Claude Direct - uses Claude Code CLI with subscription quota"
+    <>
+      <div
+        ref={itemRef}
+        onClick={handleClick}
+        onKeyDown={handleKeyDown}
+        onMouseEnter={() => setShowActions(true)}
+        onMouseLeave={() => setShowActions(false)}
+        onContextMenu={handleContextMenu}
+        role="listitem"
+        tabIndex={0}
+        className={`
+          group relative py-2 px-3 rounded-md cursor-pointer transition-all duration-150 outline-none
+          ${isActive
+            ? 'bg-blue-50 border-l-2 border-blue-500'
+            : 'hover:bg-gray-100 border-l-2 border-transparent'
+          }
+          ${isDeleting ? 'opacity-50 pointer-events-none' : ''}
+        `}
+      >
+        {isEditing ? (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-1 px-2 py-1 text-sm bg-white border border-gray-300 rounded text-gray-900 focus:outline-none focus:border-blue-500 text-base"
+              placeholder="Session name"
+              autoFocus
+            />
+            <button
+              onClick={handleSaveEdit}
+              className="p-1 hover:bg-gray-200 rounded transition-colors"
+              title="Save"
             >
-              CC
-            </span>
-          )}
+              <Check className="w-3.5 h-3.5 text-green-600" />
+            </button>
+            <button
+              onClick={handleCancelEdit}
+              className="p-1 hover:bg-gray-200 rounded transition-colors"
+              title="Cancel"
+            >
+              <X className="w-3.5 h-3.5 text-red-500" />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm text-gray-900 truncate flex-1">
+              {displayName}
+            </p>
+            {session.sdkType === 'claude' && (
+              <span 
+                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20 cursor-help"
+                title="Claude Direct - uses Claude Code CLI with subscription quota"
+              >
+                CC
+              </span>
+            )}
 
-          <div className="flex items-center gap-1 flex-shrink-0">
-            {/* Actions: hover on desktop; always visible for active session */}
-            {(showActions || isActive) ? (
-              <>
-                {!isArchived && (
-                  <button
-                    onClick={handleStartEdit}
-                    className="p-1 hover:bg-gray-200 rounded transition-colors"
-                    title="Rename session"
-                  >
-                    <Edit2 className="w-3 h-3 text-gray-400" />
-                  </button>
-                )}
-                <div className="relative">
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Actions: hover on desktop; always visible for active session */}
+              {(showActions || isActive) && !contextMenu.visible ? (
+                <>
+                  {!isArchived && (
+                    <button
+                      onClick={handleStartEdit}
+                      className="p-1 hover:bg-gray-200 rounded transition-colors"
+                      title="Rename session"
+                    >
+                      <Edit2 className="w-3 h-3 text-gray-400" />
+                    </button>
+                  )}
+                  <div className="relative">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowExportMenu(!showExportMenu);
+                      }}
+                      className="p-1 hover:bg-gray-200 rounded transition-colors"
+                      title="Export session"
+                    >
+                      <Download className="w-3 h-3 text-gray-400" />
+                    </button>
+                    {showExportMenu && (
+                      <div 
+                        className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 min-w-[120px]"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          onClick={() => handleExport('markdown')}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          Markdown
+                        </button>
+                        <button
+                          onClick={() => handleExport('json')}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                        >
+                          <FileJson className="w-3.5 h-3.5" />
+                          JSON
+                        </button>
+                        <button
+                          onClick={() => handleExport('html')}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                        >
+                          <Code className="w-3.5 h-3.5" />
+                          HTML
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowExportMenu(!showExportMenu);
+                      if (isArchived) {
+                        unarchiveSession(session.path);
+                      } else {
+                        archiveSession(session.path);
+                      }
                     }}
                     className="p-1 hover:bg-gray-200 rounded transition-colors"
-                    title="Export session"
+                    title={isArchived ? 'Restore from archive' : 'Archive session'}
                   >
-                    <Download className="w-3 h-3 text-gray-400" />
+                    {isArchived ? (
+                      <ArchiveRestore className="w-3 h-3 text-blue-500" />
+                    ) : (
+                      <Archive className="w-3 h-3 text-gray-400" />
+                    )}
                   </button>
-                  {showExportMenu && (
-                    <div 
-                      className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 min-w-[120px]"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <button
-                        onClick={() => handleExport('markdown')}
-                        className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        Markdown
-                      </button>
-                      <button
-                        onClick={() => handleExport('json')}
-                        className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
-                      >
-                        <FileJson className="w-3.5 h-3.5" />
-                        JSON
-                      </button>
-                      <button
-                        onClick={() => handleExport('html')}
-                        className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
-                      >
-                        <Code className="w-3.5 h-3.5" />
-                        HTML
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (isArchived) {
-                      unarchiveSession(session.path);
-                    } else {
-                      archiveSession(session.path);
-                    }
-                  }}
-                  className="p-1 hover:bg-gray-200 rounded transition-colors"
-                  title={isArchived ? 'Restore from archive' : 'Archive session'}
-                >
-                  {isArchived ? (
-                    <ArchiveRestore className="w-3 h-3 text-blue-500" />
-                  ) : (
-                    <Archive className="w-3 h-3 text-gray-400" />
-                  )}
-                </button>
-                <button
-                  onClick={handleDelete}
-                  className="p-1 hover:bg-gray-200 rounded transition-colors"
-                  title="Delete session"
-                >
-                  <Trash2 className="w-3 h-3 text-gray-400" />
-                </button>
-              </>
-            ) : isLoading ? (
-              <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
-            ) : workerStatus ? (
-              <WorkerStatusIndicator sessionId={session.id} />
-            ) : isActiveSession ? (
-              <SessionStatusIndicator sessionId={session.id} />
-            ) : (
-              <span className="text-[11px] text-gray-400">
-                {getRelativeTime(session.lastActivity || session.createdAt || new Date())}
-              </span>
-            )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete();
+                    }}
+                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                    title="Delete session"
+                  >
+                    <Trash2 className="w-3 h-3 text-gray-400" />
+                  </button>
+                </>
+              ) : isLoading ? (
+                <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+              ) : workerStatus ? (
+                <WorkerStatusIndicator sessionId={session.id} />
+              ) : isActiveSession ? (
+                <SessionStatusIndicator sessionId={session.id} />
+              ) : (
+                <span className="text-[11px] text-gray-400">
+                  {getRelativeTime(session.lastActivity || session.createdAt || new Date())}
+                </span>
+              )}
+            </div>
           </div>
+        )}
+      </div>
+
+      {/* Context Menu */}
+      {contextMenu.visible && (
+        <div
+          ref={contextMenuRef}
+          className="fixed bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 min-w-[160px]"
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1.5 text-xs font-medium text-gray-400 border-b border-gray-100 mb-1">
+            {displayName.length > 25 ? displayName.slice(0, 25) + '...' : displayName}
+          </div>
+          
+          {!isArchived && (
+            <button
+              onClick={() => handleStartEdit()}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+              Rename
+            </button>
+          )}
+          
+          <div className="relative group/export">
+            <button
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Export
+              <span className="ml-auto text-gray-400">›</span>
+            </button>
+            <div className="hidden group-hover/export:block absolute left-full top-0 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[120px] ml-0.5">
+              <button
+                onClick={() => handleExport('markdown')}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                Markdown
+              </button>
+              <button
+                onClick={() => handleExport('json')}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+              >
+                <FileJson className="w-3.5 h-3.5" />
+                JSON
+              </button>
+              <button
+                onClick={() => handleExport('html')}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+              >
+                <Code className="w-3.5 h-3.5" />
+                HTML
+              </button>
+            </div>
+          </div>
+          
+          <div className="border-t border-gray-100 my-1" />
+          
+          <button
+            onClick={handleArchive}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+          >
+            {isArchived ? (
+              <>
+                <ArchiveRestore className="w-3.5 h-3.5 text-blue-500" />
+                <span className="text-blue-600">Restore</span>
+              </>
+            ) : (
+              <>
+                <Archive className="w-3.5 h-3.5" />
+                Archive
+              </>
+            )}
+          </button>
+          
+          <button
+            onClick={handleDelete}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+            disabled={isDeleting}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            {isDeleting ? 'Deleting...' : 'Delete'}
+          </button>
         </div>
       )}
-    </div>
+    </>
   );
 }
