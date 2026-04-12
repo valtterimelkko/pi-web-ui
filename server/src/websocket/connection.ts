@@ -181,11 +181,14 @@ export class WebSocketConnectionManager {
   }
 
   /**
-   * Set up broadcasting of session status changes to all clients
+   * Set up broadcasting of session status changes to all clients.
+   * Covers both Pi SDK sessions (via MultiSessionManager) and
+   * Claude Direct sessions (via ClaudeService/ClaudeProcessPool).
    */
   private setupSessionStatusBroadcasting(): void {
     // Poll for session status changes every second
     setInterval(() => {
+      // Pi SDK session statuses
       const statuses = this.multiSessionManager.getAllSessionStatuses();
       for (const status of statuses) {
         this.broadcast({
@@ -197,6 +200,21 @@ export class WebSocketConnectionManager {
           messageCount: status.messageCount,
           currentStep: status.currentStep,
         });
+      }
+
+      // Claude Direct session statuses — broadcast to clients viewing active Claude sessions
+      for (const sessionId of this.claudeSessionIds) {
+        const subscribers = this.claudeSubs.getSubscribers(sessionId);
+        if (subscribers.size > 0) {
+          const isRunning = this.claudeService.isRunning(sessionId);
+          this.broadcast({
+            type: 'session_status',
+            sessionId,
+            sessionPath: sessionId,
+            status: isRunning ? 'streaming' : 'idle',
+            lastActivity: new Date().toISOString(),
+          });
+        }
       }
     }, 1000);
   }
@@ -624,8 +642,21 @@ export class WebSocketConnectionManager {
           }
         },
         (error) => {
+          // Broadcast errors to ALL subscribers, not just the requester
+          const subscribers = this.claudeSubs.getSubscribers(sessionId);
           if (error) {
-            this.sendMessage(clientId, { type: 'error', message: error.message, code: 'CLAUDE_ERROR' });
+            for (const subId of subscribers) {
+              this.sendMessage(subId, { type: 'error', message: error.message, code: 'CLAUDE_ERROR' });
+            }
+          }
+
+          // Broadcast agent_end to all subscribers so they see the turn completed
+          for (const subId of subscribers) {
+            this.sendMessage(subId, {
+              type: 'session_event',
+              sessionId,
+              event: { type: 'agent_end', result: null, usage: {} },
+            } as unknown as ServerMessage);
           }
         }
       );
@@ -674,9 +705,19 @@ export class WebSocketConnectionManager {
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) return;
 
-    // Claude session abort
+    // Claude session abort — broadcast state change to all subscribers
     if (this.claudeSessionIds.has(sessionPath)) {
       this.claudeService.abort(sessionPath);
+
+      // Broadcast abort state change (agent_end) to all subscribers
+      const subscribers = this.claudeSubs.getSubscribers(sessionPath);
+      for (const subId of subscribers) {
+        this.sendMessage(subId, {
+          type: 'session_event',
+          sessionId: sessionPath,
+          event: { type: 'agent_end', result: null, usage: {} },
+        } as unknown as ServerMessage);
+      }
       return;
     }
 

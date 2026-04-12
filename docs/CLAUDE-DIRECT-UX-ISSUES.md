@@ -1,7 +1,7 @@
 # Claude Direct Path — UX Issues & Architecture Analysis
 
 > **Date:** 2026-04-12
-> **Status:** Issues 1–3 ready for implementation. Issue 4 + SDK migration deferred.
+> **Status:** Issues 1–3 ✅ **IMPLEMENTED**. Issue 4 + SDK migration deferred.
 > **Context:** Claude Direct path (`server/src/claude/`) is newer than the Pi SDK path and has several UX gaps when interacting via the Web UI.
 
 ---
@@ -10,10 +10,10 @@
 
 When using a **Claude Direct** session in the Pi Web UI:
 
-1. **No "thinking" indicator** — While Claude is actively working (writing, using tools), the Web UI shows "waiting for input" instead of a streaming/thinking state like the Pi SDK path does.
-2. **Can't abort** — The stop button doesn't work or doesn't give feedback that it worked. You have to wait for the process to finish naturally.
-3. **Can't send mid-process messages (steer)** — Typing a message while Claude is running doesn't do anything. No feedback either.
-4. **No mid-turn interaction at all** — The fundamental architecture of `claude -p` subprocess means each turn is fire-and-forget. You wait until it finishes, then send the next prompt.
+1. ~~**No "thinking" indicator**~~ — ✅ **FIXED** — Claude sessions now broadcast `session_status` via the same 1s polling loop as Pi SDK sessions.
+2. ~~**Can't abort**~~ — ✅ **FIXED** — Abort now broadcasts `agent_end` to all subscribers immediately.
+3. ~~**Can't send mid-process messages (steer)**~~ — ✅ **FIXED (partial)** — `onComplete` now broadcasts errors and `agent_end` to ALL subscribers (not just the requester). True mid-turn steer is still blocked by Issue 4.
+4. **No mid-turn interaction at all** — ❌ **DEFERRED** — The fundamental architecture of `claude -p` subprocess means each turn is fire-and-forget. Requires SDK migration.
 
 These issues are especially noticeable when you leave a Claude session running, come back later (possibly via a different browser tab), and the UI doesn't reflect that the session is still actively processing.
 
@@ -122,7 +122,7 @@ const proc = spawn('claude', ['-p', options.prompt, '--output-format', 'stream-j
 
 ## Solutions
 
-### Fix 1: Add Claude session status broadcasting (Small — ~30 min)
+### ✅ Fix 1: Add Claude session status broadcasting (IMPLEMENTED)
 
 Add Claude-aware status polling to `setupSessionStatusBroadcasting()` in `connection.ts`:
 
@@ -149,7 +149,7 @@ setInterval(() => {
 }, 1000);
 ```
 
-### Fix 2: Broadcast `agent_end` and errors to all Claude subscribers (Small — ~20 min)
+### ✅ Fix 2: Broadcast `agent_end` and errors to all Claude subscribers (IMPLEMENTED)
 
 In `handleClaudePrompt()` in `connection.ts`, change `onComplete` to broadcast:
 
@@ -174,7 +174,7 @@ onComplete: (error) => {
 }
 ```
 
-### Fix 3: Fix abort to broadcast state change (Small — ~15 min)
+### ✅ Fix 3: Fix abort to broadcast state change (IMPLEMENTED)
 
 In `handleAbort()` in `connection.ts`, after calling `this.claudeService.abort()`, broadcast to subscribers:
 
@@ -195,7 +195,7 @@ if (this.claudeSessionIds.has(sessionPath)) {
 }
 ```
 
-### Fix 4: Mid-turn interaction / steer (DEFERRED — requires SDK migration)
+### ❌ Fix 4: Mid-turn interaction / steer (DEFERRED — requires SDK migration)
 
 See "Issue 4 + Claude Agent SDK Migration Analysis" below.
 
@@ -290,11 +290,12 @@ session.close();
 
 ---
 
-## Files to Modify (Fixes 1–3)
+## Files Modified (Fixes 1–3 ✅)
 
 | File | Fix | Change |
 |---|---|---|
-| `server/src/websocket/connection.ts` | 1, 2, 3 | Add Claude status broadcasting, broadcast on complete, broadcast on abort |
+| `server/src/websocket/connection.ts` | 1, 2, 3 | Added Claude status broadcasting in `setupSessionStatusBroadcasting()`, broadcast `agent_end`+errors to all subscribers in `onComplete`, broadcast abort state change to all subscribers |
+| `server/tests/unit/websocket/claude-ux-fixes.test.ts` | Tests | New test file covering all three fixes + integration scenarios |
 | No client changes needed | — | Client already handles `session_status` and `agent_end` correctly for any session type |
 
 ## Related Files (Reference)
