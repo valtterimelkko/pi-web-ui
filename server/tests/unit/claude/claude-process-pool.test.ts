@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
+import { mkdir, writeFile, readFile, rm } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 // Mock child_process BEFORE importing ClaudeProcessPool
 vi.mock('child_process', async () => {
@@ -31,7 +34,7 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { ClaudeProcessPool } from '../../../src/claude/claude-process-pool.js';
+import { ClaudeProcessPool, removeStaleSessionLock, removeLockFromFile, resolveClaudeSessionPath } from '../../../src/claude/claude-process-pool.js';
 import { spawn } from 'child_process';
 
 const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
@@ -60,6 +63,23 @@ function makeImmediateMockProcess(pid = 12345) {
     return true;
   });
   return proc;
+}
+
+// Helper: create a mock process that exits with "is already in use" on stderr
+function makeLockedMockProcess(pid = 12345) {
+  const proc = new EventEmitter();
+  proc.stdout = new PassThrough();
+  proc.stderr = new PassThrough();
+  proc.stdin = new PassThrough();
+  proc.pid = pid;
+  proc.kill = vi.fn(() => true);
+  return proc;
+}
+
+// Emit locked exit for a mock process
+function emitLockedExit(proc: ReturnType<typeof makeLockedMockProcess>, claudeSessionId = 'test-claude-session') {
+  (proc.stderr as PassThrough).end(`Error: Session ID ${claudeSessionId} is already in use.\n`);
+  proc.emit('exit', 1, null);
 }
 
 describe('ClaudeProcessPool', () => {
@@ -423,7 +443,7 @@ describe('ClaudeProcessPool', () => {
   // ─── Spawn args ────────────────────────────────────────────────────────────
 
   describe('spawn arguments', () => {
-    it('passes --dangerously-skip-permissions flag', async () => {
+    it('passes --permission-mode dontAsk flag', async () => {
       let capturedArgs: string[] | undefined;
       let capturedProc: ReturnType<typeof makeImmediateMockProcess> | null = null;
 
@@ -445,8 +465,10 @@ describe('ClaudeProcessPool', () => {
       await done;
 
       expect(capturedArgs).toBeDefined();
-      expect(capturedArgs).toContain('--dangerously-skip-permissions');
-      expect(capturedArgs).not.toContain('acceptEdits');
+      expect(capturedArgs).toContain('--permission-mode');
+      // The value after --permission-mode should be 'dontAsk'
+      const modeIdx = capturedArgs!.indexOf('--permission-mode');
+      expect(capturedArgs![modeIdx + 1]).toBe('dontAsk');
     });
 
     it('uses --session-id on first turn', async () => {
@@ -508,5 +530,211 @@ describe('ClaudeProcessPool', () => {
       expect(capturedArgs).toContain(DEFAULT_OPTIONS.claudeSessionId);
       expect(capturedArgs).not.toContain('--session-id');
     });
+  });
+
+  // ─── Session lock cleaning ─────────────────────────────────────────────────
+
+  describe('session lock cleaning on retry', () => {
+    it('calls lock cleaner on first "already in use" retry', async () => {
+      const lockCleaner = vi.fn().mockResolvedValue(false); // no lock found
+      const testPool = new ClaudeProcessPool(3, 0, lockCleaner);
+
+      // First process exits with "is already in use"
+      const proc1 = makeLockedMockProcess();
+      spawnMock.mockImplementationOnce(() => proc1);
+      // Second process (retry) succeeds
+      const proc2 = makeImmediateMockProcess();
+      spawnMock.mockImplementationOnce(() => proc2);
+
+      const done = new Promise<void>((resolve) => {
+        testPool.spawn(DEFAULT_OPTIONS, () => {}, resolve);
+      });
+
+      // Trigger locked exit
+      await new Promise((r) => setTimeout(r, 0));
+      emitLockedExit(proc1, DEFAULT_OPTIONS.claudeSessionId);
+
+      // Wait for the retry and completion (allow time for backoff)
+      await new Promise((r) => setTimeout(r, 2500));
+      // Complete the retry
+      proc2.emit('exit', 0, null);
+      await done;
+
+      // Lock cleaner should have been called with the correct args
+      expect(lockCleaner).toHaveBeenCalledWith(DEFAULT_OPTIONS.cwd, DEFAULT_OPTIONS.claudeSessionId);
+    });
+
+    it('retries quickly (500ms) when lock is successfully removed', async () => {
+      const lockCleaner = vi.fn().mockResolvedValue(true); // lock removed!
+      const testPool = new ClaudeProcessPool(3, 0, lockCleaner);
+
+      // First process exits with "is already in use"
+      const proc1 = makeLockedMockProcess();
+      spawnMock.mockImplementationOnce(() => proc1);
+      // Second process (retry after lock clean) succeeds
+      const proc2 = makeImmediateMockProcess();
+      spawnMock.mockImplementationOnce(() => proc2);
+
+      const done = new Promise<void>((resolve) => {
+        testPool.spawn(DEFAULT_OPTIONS, () => {}, resolve);
+      });
+
+      await new Promise((r) => setTimeout(r, 0));
+      emitLockedExit(proc1, DEFAULT_OPTIONS.claudeSessionId);
+
+      // Wait for quick retry (500ms) + completion
+      await new Promise((r) => setTimeout(r, 1000));
+      proc2.emit('exit', 0, null);
+      await done;
+
+      // Second spawn should have been called (lock was cleaned)
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('falls back to normal backoff when lock cleaner returns false', async () => {
+      const lockCleaner = vi.fn().mockResolvedValue(false); // no lock to remove
+      const testPool = new ClaudeProcessPool(3, 0, lockCleaner);
+
+      // First: locked exit. Second: success.
+      const proc1 = makeLockedMockProcess();
+      spawnMock.mockImplementationOnce(() => proc1);
+      spawnMock.mockImplementationOnce(() => makeImmediateMockProcess());
+
+      const done = new Promise<void>((resolve) => {
+        testPool.spawn(DEFAULT_OPTIONS, () => {}, resolve);
+      });
+
+      await new Promise((r) => setTimeout(r, 0));
+      emitLockedExit(proc1, DEFAULT_OPTIONS.claudeSessionId);
+
+      // Wait for first backoff (1500ms) + retry
+      await new Promise((r) => setTimeout(r, 2500));
+      // Complete the retry process
+      const proc2 = spawnMock.mock.results[1]?.value;
+      if (proc2) proc2.emit('exit', 0, null);
+      await done;
+
+      // Lock cleaner only called once (first retry only)
+      expect(lockCleaner).toHaveBeenCalledTimes(1);
+      // Total 2 spawns: original + 1 retry
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    }, 10000);
+
+    it('continues with backoff even if lock cleaner throws', async () => {
+      const lockCleaner = vi.fn().mockRejectedValue(new Error('fs error'));
+      const testPool = new ClaudeProcessPool(3, 0, lockCleaner);
+
+      // First: locked. Second: success.
+      const proc1 = makeLockedMockProcess();
+      spawnMock.mockImplementationOnce(() => proc1);
+      spawnMock.mockImplementationOnce(() => makeImmediateMockProcess());
+
+      const done = new Promise<void>((resolve) => {
+        testPool.spawn(DEFAULT_OPTIONS, () => {}, resolve);
+      });
+
+      await new Promise((r) => setTimeout(r, 0));
+      emitLockedExit(proc1, DEFAULT_OPTIONS.claudeSessionId);
+
+      // Wait for backoff + retry
+      await new Promise((r) => setTimeout(r, 2500));
+      // Complete the retry
+      const proc2 = spawnMock.mock.results[1]?.value;
+      if (proc2) proc2.emit('exit', 0, null);
+      await done;
+
+      // Should still have retried
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+  });
+});
+
+// ─── removeStaleSessionLock unit tests ───────────────────────────────────────
+
+describe('removeLockFromFile', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = join(tmpdir(), `claude-lock-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(tempDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('removes last-prompt entry from the end of a session file', async () => {
+    const sessionFile = join(tempDir, 'session.jsonl');
+    const content = [
+      '{"type":"user","message":"hello"}',
+      '{"type":"assistant","message":"hi"}',
+      '{"type":"last-prompt","sessionId":"test-session-123"}',
+    ].join('\n');
+    await writeFile(sessionFile, content);
+
+    const result = await removeLockFromFile(sessionFile);
+
+    expect(result).toBe(true);
+    const after = await readFile(sessionFile, 'utf-8');
+    const lines = after.trim().split('\n');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('"user"');
+    expect(lines[1]).toContain('"assistant"');
+    expect(after).not.toContain('last-prompt');
+  });
+
+  it('returns false when no last-prompt entry exists', async () => {
+    const sessionFile = join(tempDir, 'session.jsonl');
+    const content = [
+      '{"type":"user","message":"hello"}',
+      '{"type":"assistant","message":"hi"}',
+    ].join('\n');
+    await writeFile(sessionFile, content);
+
+    const result = await removeLockFromFile(sessionFile);
+
+    expect(result).toBe(false);
+    const after = await readFile(sessionFile, 'utf-8');
+    expect(after.trim().split('\n')).toHaveLength(2);
+  });
+
+  it('returns false when the file does not exist', async () => {
+    const result = await removeLockFromFile(
+      join(tempDir, 'nonexistent.jsonl'),
+    );
+    expect(result).toBe(false);
+  });
+
+  it('handles trailing newlines correctly', async () => {
+    const sessionFile = join(tempDir, 'session.jsonl');
+    const content = [
+      '{"type":"user","message":"hello"}',
+      '{"type":"last-prompt","sessionId":"test-session-789"}',
+      '', // trailing newline
+    ].join('\n');
+    await writeFile(sessionFile, content);
+
+    const result = await removeLockFromFile(sessionFile);
+
+    expect(result).toBe(true);
+    const after = await readFile(sessionFile, 'utf-8');
+    expect(after).not.toContain('last-prompt');
+    expect(after.trim()).toBe('{"type":"user","message":"hello"}');
+  });
+
+  it('only removes last-prompt from the very end, not from the middle', async () => {
+    const sessionFile = join(tempDir, 'session.jsonl');
+    // If the last non-empty line is NOT last-prompt, don't remove anything
+    const content = [
+      '{"type":"last-prompt","sessionId":"old"}',
+      '{"type":"user","message":"hello"}',
+    ].join('\n');
+    await writeFile(sessionFile, content);
+
+    const result = await removeLockFromFile(sessionFile);
+
+    expect(result).toBe(false);
+    const after = await readFile(sessionFile, 'utf-8');
+    expect(after.trim().split('\n')).toHaveLength(2);
   });
 });

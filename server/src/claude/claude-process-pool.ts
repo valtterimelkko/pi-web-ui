@@ -6,6 +6,9 @@
 
 import { spawn, ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { ClaudeEventNormalizer } from './claude-event-normalizer.js';
 
@@ -39,10 +42,14 @@ export class ClaudeProcessPool {
   /** Grace period (ms) to wait after a process exits before spawning a new one,
    *  to allow the Claude CLI to release its session lock file. */
   private postExitGraceMs: number;
+  /** Injectable lock-cleaner for testing. Defaults to removeStaleSessionLock. */
+  private readonly _lockCleaner: (cwd: string, claudeSessionId: string) => Promise<boolean>;
 
-  constructor(maxProcesses: number = 10, postExitGraceMs: number = 1500) {
+  constructor(maxProcesses: number = 10, postExitGraceMs: number = 1500,
+    lockCleaner?: (cwd: string, claudeSessionId: string) => Promise<boolean>) {
     this.maxProcesses = maxProcesses;
     this.postExitGraceMs = postExitGraceMs;
+    this._lockCleaner = lockCleaner ?? removeStaleSessionLock;
   }
 
   /**
@@ -163,7 +170,7 @@ export class ClaudeProcessPool {
       onComplete(new Error(`Claude process spawn error: ${err.message}`));
     });
 
-    proc.on('exit', (code, signal) => {
+    proc.on('exit', async (code, signal) => {
       // Guard: only clean up if this process is still the active one.
       // After an abort + new spawn, a stale exit handler may fire for the old
       // process — we must not delete the new process or emit stale events.
@@ -185,8 +192,30 @@ export class ClaudeProcessPool {
         return;
       }
 
-      // If the process failed because the session is still locked, retry with backoff
+      // If the process failed because the session is still locked, try to remove
+      // the stale lock and retry with backoff.
       if (code !== 0 && stderrOutput.includes('is already in use') && retryCount < 5) {
+        // On first retry attempt, try to strip the stale `last-prompt` lock entry
+        // from the Claude session JSONL.  This is the root cause of persistent
+        // "Session ID already in use" after an abort (SIGTERM).
+        if (retryCount === 0) {
+          try {
+            const cleaned = await this._lockCleaner(options.cwd, options.claudeSessionId);
+            if (cleaned) {
+              console.log(`[ClaudeProcessPool] Removed stale last-prompt lock for ${options.claudeSessionId}, retrying immediately`);
+              // Retry quickly since we've fixed the root cause
+              setTimeout(() => {
+                this.spawn(options, onEvent, onComplete, retryCount + 1).catch((retryErr) => {
+                  onComplete(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
+                });
+              }, 500);
+              return;
+            }
+          } catch (cleanErr) {
+            console.warn('[ClaudeProcessPool] Failed to clean stale lock:', cleanErr);
+          }
+        }
+
         const delay = 1500 + retryCount * 1000; // 1.5s, 2.5s, 3.5s, 4.5s, 5.5s
         console.log(`[ClaudeProcessPool] Session lock detected for ${options.sessionId}, retry ${retryCount + 1}/5 in ${delay}ms...`);
         setTimeout(() => {
@@ -244,4 +273,75 @@ export class ClaudeProcessPool {
   isActive(sessionId: string): boolean {
     return this.activeProcesses.has(sessionId);
   }
+}
+
+// ─── Standalone lock-cleaning function (exported for testing) ────────────────
+
+/**
+ * Resolve the Claude CLI session JSONL path from cwd and claudeSessionId.
+ * Claude stores sessions at:
+ *   ~/.claude/projects/<encoded-cwd>/<claudeSessionId>.jsonl
+ * where <encoded-cwd> is the cwd with '/' replaced by '-'.
+ */
+export function resolveClaudeSessionPath(cwd: string, claudeSessionId: string): string {
+  // Claude encodes the cwd path: '/' → '-', prefixed with '-'
+  // e.g. /root/tasks → -root-tasks
+  const encodedCwd = '-' + cwd.replace(/\//g, '-');
+  return join(homedir(), '.claude', 'projects', encodedCwd, `${claudeSessionId}.jsonl`);
+}
+
+/**
+ * Remove the stale `last-prompt` lock entry from a Claude session JSONL file.
+ *
+ * When a `claude -p` subprocess is killed (SIGTERM), it may leave a
+ * `{"type":"last-prompt",...}` entry in the session file. This acts as a lock
+ * that prevents any future `--resume` from working ("Session ID already in use").
+ *
+ * This function strips the last line if it's a `last-prompt` entry, making
+ * the session resumable again.
+ *
+ * @returns true if a lock was actually removed, false if no lock found or file missing.
+ */
+export async function removeStaleSessionLock(cwd: string, claudeSessionId: string): Promise<boolean> {
+  const filePath = resolveClaudeSessionPath(cwd, claudeSessionId);
+  return removeLockFromFile(filePath);
+}
+
+/**
+ * Core lock-removal logic operating directly on a file path.
+ * Exported for direct unit testing without needing to set up the
+ * full ~/.claude/projects directory structure.
+ */
+export async function removeLockFromFile(filePath: string): Promise<boolean> {
+  let content: string;
+  try {
+    content = await readFile(filePath, 'utf-8');
+  } catch {
+    // File doesn't exist or isn't readable — nothing to clean
+    return false;
+  }
+
+  const lines = content.split('\n');
+  // Walk backwards to find the last non-empty line
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.type === 'last-prompt') {
+        // Remove this line and write back
+        lines.splice(i, 1);
+        const newContent = lines.join('\n').replace(/\n{3,}/g, '\n\n');
+        await writeFile(filePath, newContent.endsWith('\n') ? newContent : newContent + '\n');
+        console.log(`[ClaudeProcessPool] Stripped stale last-prompt lock from ${filePath}`);
+        return true;
+      }
+    } catch {
+      // Not valid JSON — skip
+    }
+    // Found a non-empty, non-last-prompt line — no lock present
+    break;
+  }
+
+  return false;
 }
