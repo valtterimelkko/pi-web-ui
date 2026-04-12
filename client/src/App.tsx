@@ -92,7 +92,7 @@ function AuthenticatedApp() {
         <Sidebar />
         <div className="flex-1 flex flex-col overflow-hidden">
           <IntegratedHeader onOpenSettings={() => setSettingsOpen(true)} />
-          <div className="flex-1 overflow-hidden relative flex">
+          <div className="flex-1 overflow-hidden relative flex pt-12 md:pt-0">
             <TabPanel tab="chat">
               <ChatView onOpenSettings={() => setSettingsOpen(true)} />
             </TabPanel>
