@@ -174,6 +174,37 @@ describe('sessionStore', () => {
       expect(useSessionStore.getState().isLoading).toBe(false);
     });
 
+    it('should handle session_event error for current session', () => {
+      const state = useSessionStore.getState();
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      state.setLoading(true);
+      state.handleServerMessage({
+        type: 'session_event',
+        sessionId: 'session-1',
+        event: { type: 'error', message: '429 The service may be temporarily overloaded' },
+      });
+      expect(useSessionStore.getState().sessionData['session-1']?.status).toBe('error');
+      expect(useSessionStore.getState().error).toBe('429 The service may be temporarily overloaded');
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+      expect(useSessionStore.getState().isLoading).toBe(false);
+    });
+
+    it('should handle session_event error for background session without affecting current session', () => {
+      const state = useSessionStore.getState();
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      state.handleServerMessage({
+        type: 'session_event',
+        sessionId: 'session-2',
+        event: { type: 'error', message: 'Background session error' },
+      });
+      expect(useSessionStore.getState().sessionData['session-2']?.status).toBe('error');
+      // Current session should not be affected
+      expect(useSessionStore.getState().error).toBeNull();
+      expect(useSessionStore.getState().isStreaming).toBe(true);
+    });
+
     it('should handle message_start message', () => {
       const state = useSessionStore.getState();
       state.handleServerMessage({

@@ -1621,6 +1621,24 @@ export const useSessionStore = create<SessionState>()(
                 break;
               }
 
+              case 'error': {
+                const errorMessage = (event.message as string) || 'Unknown error';
+                get().setSessionStatus(sessionId, 'error');
+                // Show toast and update global state if this is the current session
+                if (get().currentSessionId === sessionId) {
+                  set({
+                    error: errorMessage,
+                    isStreaming: false,
+                    isLoading: false,
+                  });
+                  useUIStore.getState().addToast({
+                    type: 'error',
+                    message: errorMessage,
+                  });
+                }
+                break;
+              }
+
               case 'session_init': {
                 // Claude session initialized — update model info if available
                 const initData = event as unknown as { model?: string; tools?: string[] };

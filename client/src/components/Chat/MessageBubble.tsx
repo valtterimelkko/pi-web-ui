@@ -234,16 +234,18 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
-                  code({ inline, className, children, ...props }: { inline?: boolean; className?: string; children?: React.ReactNode }) {
+                  pre: ({ children }) => (
+                    <pre className="bg-slate-100 border border-slate-200 rounded-md p-2 overflow-x-auto my-1.5 text-xs text-slate-800">
+                      {children}
+                    </pre>
+                  ),
+                  code: ({ className, children, ...props }: { className?: string; children?: React.ReactNode }) => {
                     const match = /language-(\w+)/.exec(className || '');
-                    return !inline ? (
-                      <pre className="bg-slate-100 border border-slate-200 rounded-md p-2 overflow-x-auto my-1.5 text-xs">
-                        <code className={`text-slate-800 ${match ? `language-${match[1]}` : ''}`} {...props}>
-                          {children}
-                        </code>
-                      </pre>
-                    ) : (
-                      <code className="bg-slate-200 text-slate-900 px-1 py-0.5 rounded text-xs font-mono font-medium" {...props}>
+                    return (
+                      <code
+                        className={`bg-slate-100 text-slate-800 px-1 py-0.5 rounded text-xs font-mono font-medium [pre_&]:bg-transparent [pre_&]:p-0 [pre_&]:rounded-none [pre_&]:text-inherit ${match ? `language-${match[1]}` : ''}`}
+                        {...props}
+                      >
                         {children}
                       </code>
                     );
