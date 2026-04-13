@@ -1621,6 +1621,21 @@ export const useSessionStore = create<SessionState>()(
                 break;
               }
 
+              case 'api_error': {
+                // API error (e.g. 429 rate limit) embedded in a message with stopReason='error'
+                const apiErrorMsg = (event.message as string) || 'API error occurred';
+                const provider = (event.provider as string) || '';
+                const model = (event.model as string) || '';
+                const detail = provider ? ` (${provider}${model ? '/' + model : ''})` : '';
+                if (get().currentSessionId === sessionId) {
+                  useUIStore.getState().addToast({
+                    type: 'error',
+                    message: `API Error${detail}: ${apiErrorMsg}`,
+                  });
+                }
+                break;
+              }
+
               case 'error': {
                 const errorMessage = (event.message as string) || 'Unknown error';
                 get().setSessionStatus(sessionId, 'error');
@@ -1655,6 +1670,24 @@ export const useSessionStore = create<SessionState>()(
                   if (get().currentSessionId === sessionId) {
                     set({ currentModel: initData.model });
                   }
+                }
+                break;
+              }
+
+              case 'stale_stream_reset': {
+                // Server detected a stale streaming session and reset it to idle
+                const staleMsg = (event.message as string) || 'Session reset from stale streaming state.';
+                get().setSessionStatus(sessionId, 'idle');
+                if (get().currentSessionId === sessionId) {
+                  set({
+                    isStreaming: false,
+                    isLoading: false,
+                    error: staleMsg,
+                  });
+                  useUIStore.getState().addToast({
+                    type: 'warning',
+                    message: staleMsg,
+                  });
                 }
                 break;
               }

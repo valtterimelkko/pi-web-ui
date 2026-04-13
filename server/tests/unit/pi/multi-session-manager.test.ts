@@ -999,6 +999,62 @@ describe('MultiSessionManager', () => {
       expect(status?.status).toBe('error');
     });
 
+    it('should emit api_error event when message has stopReason error (e.g. 429 rate limit)', async () => {
+      const mockSession = createMockAgentSession();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+      
+      mockBroadcast.mockClear();
+      
+      // Simulate a message_start with stopReason='error' (like a 429 from GitHub Copilot)
+      manager.handleAgentEvent('/path/to/session.jsonl', { 
+        type: 'message_start',
+        message: {
+          id: 'msg-429',
+          role: 'assistant',
+          stopReason: 'error',
+          errorMessage: "429 Sorry, you've exhausted this model's rate limit.",
+          provider: 'github-copilot',
+          model: 'claude-sonnet-4.6',
+        }
+      });
+      
+      // Should broadcast both the original message event and an api_error event
+      const apiErrorCalls = mockBroadcast.mock.calls.filter(
+        (call: any[]) => call[1]?.event?.type === 'api_error'
+      );
+      expect(apiErrorCalls.length).toBe(1);
+      expect(apiErrorCalls[0][1]?.event?.message).toBe("429 Sorry, you've exhausted this model's rate limit.");
+    });
+
+    it('should NOT emit api_error for normal message_start without error', async () => {
+      const mockSession = createMockAgentSession();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+      
+      mockBroadcast.mockClear();
+      
+      // Normal message_start
+      manager.handleAgentEvent('/path/to/session.jsonl', { 
+        type: 'message_start',
+        message: {
+          id: 'msg-normal',
+          role: 'assistant',
+          stopReason: 'endTurn',
+        }
+      });
+      
+      // Should only broadcast the original event, no api_error
+      const apiErrorCalls = mockBroadcast.mock.calls.filter(
+        (call: any[]) => call[1]?.event?.type === 'api_error'
+      );
+      expect(apiErrorCalls.length).toBe(0);
+    });
+
     it('should broadcast events to all subscribers', async () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
@@ -1292,7 +1348,7 @@ describe('MultiSessionManager', () => {
       vi.useRealTimers();
     });
 
-    it('should NOT stale-detect pinned streaming sessions', async () => {
+    it('should stale-detect pinned streaming sessions and reset to idle (but NOT unload them)', async () => {
       vi.useFakeTimers();
       
       const mockSession = createMockAgentSession({
@@ -1307,7 +1363,7 @@ describe('MultiSessionManager', () => {
       });
       
       await manager.subscribeClient('client-1', '/path/to/pinned-streaming.jsonl');
-      manager.unsubscribeClient('client-1', '/path/to/pinned-streaming.jsonl');
+      // Keep client-1 subscribed so it receives the stale_stream_reset broadcast
       manager.pinSession('/path/to/pinned-streaming.jsonl');
       
       // Set session to streaming
@@ -1317,12 +1373,20 @@ describe('MultiSessionManager', () => {
       // Advance past stale threshold (15 minutes)
       vi.advanceTimersByTime(20 * 60 * 1000);
       
+      mockBroadcast.mockClear();
       manager.cleanupInactiveSessions();
       
-      // Should still be streaming because pinned
+      // Should be reset to idle (dead worker detected) but NOT unloaded
       const status = manager.getSessionStatus('/path/to/pinned-streaming.jsonl');
-      expect(status?.status).toBe('streaming');
+      expect(status?.status).toBe('idle');
       expect(manager.hasSession('/path/to/pinned-streaming.jsonl')).toBe(true);
+      // Session should NOT have been disposed (pinned protects from cleanup)
+      expect(mockSession.dispose).not.toHaveBeenCalled();
+      // A stale_stream_reset event should have been broadcast to subscribers
+      const staleResetCalls = mockBroadcast.mock.calls.filter(
+        (call: any[]) => call[1]?.event?.type === 'stale_stream_reset'
+      );
+      expect(staleResetCalls.length).toBe(1);
       
       vi.useRealTimers();
     });

@@ -205,6 +205,37 @@ describe('sessionStore', () => {
       expect(useSessionStore.getState().isStreaming).toBe(true);
     });
 
+    it('should handle stale_stream_reset event by setting session idle and showing warning', () => {
+      const state = useSessionStore.getState();
+      state.setCurrentSession('session-1');
+      state.setStreaming(true);
+      state.handleServerMessage({
+        type: 'session_event',
+        sessionId: 'session-1',
+        event: { type: 'stale_stream_reset', message: 'Session reset from stale streaming state.' },
+      });
+      expect(useSessionStore.getState().sessionData['session-1']?.status).toBe('idle');
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+      expect(useSessionStore.getState().isLoading).toBe(false);
+    });
+
+    it('should handle api_error event with provider info', () => {
+      const state = useSessionStore.getState();
+      state.setCurrentSession('session-1');
+      state.handleServerMessage({
+        type: 'session_event',
+        sessionId: 'session-1',
+        event: {
+          type: 'api_error',
+          message: "429 Sorry, you've exhausted this model's rate limit.",
+          provider: 'github-copilot',
+          model: 'claude-sonnet-4.6',
+        },
+      });
+      // Session status should not change (api_error is informational only)
+      expect(useSessionStore.getState().sessionData['session-1']?.status).not.toBe('error');
+    });
+
     it('should handle message_start message', () => {
       const state = useSessionStore.getState();
       state.handleServerMessage({

@@ -243,16 +243,35 @@ export class MultiSessionManager {
     
     // First pass: Detect and reset stale streaming sessions
     // If a session is marked as streaming but hasn't received events for a while,
-    // the agent_end event was likely missed. Reset to idle so cleanup can proceed.
-    // Pinned sessions are never stale-detected — the user explicitly wants them alive.
+    // the agent_end event was likely missed (e.g. API rate-limit exhausted all retries).
+    // Reset to idle so the session can accept new prompts.
+    //
+    // This applies to ALL sessions including pinned ones — pinning protects from
+    // cleanup/eviction, but a dead agent loop still needs detection. For pinned
+    // sessions we only reset the status (not unload), preserving the session in memory.
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
-      if (activeSession.pinned) continue; // Pinned sessions are never stale-detected
       if (activeSession.status === 'streaming') {
         const timeSinceLastEvent = now - activeSession.lastEventTimestamp;
         if (timeSinceLastEvent > this.staleStreamingThresholdMs) {
-          console.log(`[MultiSessionManager] Detected stale streaming session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), resetting to idle: ${sessionPath}`);
-          activeSession.status = 'idle';
-          activeSession.lastActivity = new Date(); // Update activity so idle timeout starts fresh
+          if (activeSession.pinned) {
+            console.log(`[MultiSessionManager] Detected stale streaming PINNED session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), resetting to idle (keeping alive): ${sessionPath}`);
+            activeSession.status = 'idle';
+            activeSession.lastActivity = new Date();
+            // Notify subscribers that the session is now idle so the UI unblocks input
+            this.broadcastToSubscribers(sessionPath, {
+              type: 'session_event',
+              sessionId: activeSession.sessionId,
+              sessionPath: activeSession.sessionPath,
+              event: {
+                type: 'stale_stream_reset',
+                message: `Session was streaming with no activity for ${Math.round(timeSinceLastEvent / 1000)}s. Reset to idle. The agent may have hit an API error (e.g. rate limit). Try sending a new prompt.`,
+              },
+            });
+          } else {
+            console.log(`[MultiSessionManager] Detected stale streaming session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), resetting to idle: ${sessionPath}`);
+            activeSession.status = 'idle';
+            activeSession.lastActivity = new Date();
+          }
         }
       }
     }
@@ -780,6 +799,28 @@ export class MultiSessionManager {
       case 'error':
         activeSession.status = 'error';
         break;
+    }
+
+    // Detect API errors embedded in message events (e.g. 429 rate limits from GitHub Copilot)
+    // The Pi SDK logs these as message entries with stopReason='error' but doesn't emit a
+    // separate 'error' event. We surface them as a synthetic 'api_error' event so the UI
+    // can show the error to the user.
+    if (event.type === 'message_start' || event.type === 'message_update') {
+      const msg = event.message;
+      if (msg?.stopReason === 'error' && msg?.errorMessage) {
+        const apiErrorEvent = {
+          type: 'session_event',
+          sessionId: activeSession.sessionId,
+          sessionPath: activeSession.sessionPath,
+          event: {
+            type: 'api_error',
+            message: msg.errorMessage,
+            provider: msg.provider || msg.api || '',
+            model: msg.model || '',
+          },
+        };
+        this.broadcastToSubscribers(sessionPath, apiErrorEvent);
+      }
     }
 
     // Wrap the event in a session_event envelope with sessionId for proper client routing
