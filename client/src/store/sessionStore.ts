@@ -155,6 +155,8 @@ interface SessionState {
   contextWindow: number;
   // Archive state (persisted)
   archivedSessionPaths: string[];
+  // Pinned sessions (persisted) - protected from idle/stale cleanup
+  pinnedSessionPaths: string[];
   // LRU cache for session messages
   sessionCache: Map<string, SessionCache>;
   // Session cache with metadata for intelligent invalidation
@@ -197,6 +199,9 @@ interface SessionState {
   archiveSession: (sessionPath: string) => void;
   unarchiveSession: (sessionPath: string) => void;
   isSessionArchived: (sessionPath: string) => boolean;
+  pinSession: (sessionPath: string) => void;
+  unpinSession: (sessionPath: string) => void;
+  isSessionPinned: (sessionPath: string) => boolean;
   // Web UI display names (web UI only, not synced to CLI)
   sessionDisplayNames: Record<string, string>;
   setSessionDisplayName: (sessionPath: string, displayName: string) => void;
@@ -251,6 +256,7 @@ export const useSessionStore = create<SessionState>()(
       contextUsed: 0,
       contextWindow: 0,
       archivedSessionPaths: [],
+      pinnedSessionPaths: [],
       sessionDisplayNames: {},
       // LRU cache for session messages
       sessionCache: new Map<string, SessionCache>(),
@@ -611,6 +617,24 @@ export const useSessionStore = create<SessionState>()(
 
       isSessionArchived: (sessionPath) => {
         return get().archivedSessionPaths.includes(sessionPath);
+      },
+
+      pinSession: (sessionPath) => {
+        set((state) => {
+          if (state.pinnedSessionPaths.includes(sessionPath)) return state;
+          if (state.pinnedSessionPaths.length >= 2) return state; // Max 2 pinned
+          return { pinnedSessionPaths: [...state.pinnedSessionPaths, sessionPath] };
+        });
+      },
+
+      unpinSession: (sessionPath) => {
+        set((state) => ({
+          pinnedSessionPaths: state.pinnedSessionPaths.filter(p => p !== sessionPath),
+        }));
+      },
+
+      isSessionPinned: (sessionPath) => {
+        return get().pinnedSessionPaths.includes(sessionPath);
       },
 
       setSessionDisplayName: (sessionPath, displayName) => {
@@ -1743,6 +1767,26 @@ export const useSessionStore = create<SessionState>()(
             
             break;
           }
+
+          case 'session_pinned': {
+            const pinMsg = msg as unknown as { sessionPath: string; pinned: boolean };
+            if (pinMsg.pinned) {
+              get().pinSession(pinMsg.sessionPath);
+            } else {
+              get().unpinSession(pinMsg.sessionPath);
+            }
+            break;
+          }
+
+          case 'session_pin_error': {
+            const pinErrMsg = msg as unknown as { sessionPath: string; error: string };
+            console.warn(`[sessionStore] Pin error for ${pinErrMsg.sessionPath}: ${pinErrMsg.error}`);
+            useUIStore.getState().addToast({
+              type: 'error' as const,
+              message: pinErrMsg.error,
+            });
+            break;
+          }
         }
       },
     }),
@@ -1751,6 +1795,7 @@ export const useSessionStore = create<SessionState>()(
       partialize: (state) => ({ 
         sessions: state.sessions,
         archivedSessionPaths: state.archivedSessionPaths,
+        pinnedSessionPaths: state.pinnedSessionPaths,
         sessionDisplayNames: state.sessionDisplayNames,
         sessionCacheMeta: state.sessionCacheMeta,
       }),

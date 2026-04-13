@@ -49,6 +49,22 @@ export interface UnsubscribeSession {
 }
 
 /**
+ * Client → Server: Pin a session (protect from idle/stale cleanup)
+ */
+export interface PinSession {
+  type: 'pin_session';
+  sessionPath: string;
+}
+
+/**
+ * Client → Server: Unpin a session (allow normal cleanup)
+ */
+export interface UnpinSession {
+  type: 'unpin_session';
+  sessionPath: string;
+}
+
+/**
  * Server → Client: Confirmation of subscription
  */
 export interface SessionSubscribed {
@@ -101,7 +117,9 @@ export type ClientMessage =
   | { type: 'set_session_name'; sessionId: string; name: string }
   // Multi-session subscription types
   | SubscribeSession
-  | UnsubscribeSession;
+  | UnsubscribeSession
+  | PinSession
+  | UnpinSession;
 
 // Session information for listing
 export interface SessionInfo {
@@ -175,6 +193,8 @@ export type ServerMessage =
   | SessionEvent
   | SessionSubscribed
   | SessionUnsubscribed
+  | { type: 'session_pinned'; sessionPath: string; pinned: boolean }
+  | { type: 'session_pin_error'; sessionPath: string; error: string }
   // Forwarded Pi SDK events
   | { type: 'agent_start' }
   | { type: 'agent_end'; messages: unknown[] }
@@ -308,6 +328,24 @@ export function isSessionUnsubscribed(
   );
 }
 
+/**
+ * Type guard for PinSession
+ */
+export function isPinSession(data: unknown): data is PinSession {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return msg.type === 'pin_session' && typeof msg.sessionPath === 'string';
+}
+
+/**
+ * Type guard for UnpinSession
+ */
+export function isUnpinSession(data: unknown): data is UnpinSession {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return msg.type === 'unpin_session' && typeof msg.sessionPath === 'string';
+}
+
 // ============================================================================
 // Multi-Session Factory Functions
 // ============================================================================
@@ -393,6 +431,32 @@ export function createSessionUnsubscribed(
   return {
     type: 'session_unsubscribed',
     sessionId: 'session-123',
+    ...overrides,
+  };
+}
+
+/**
+ * Create a valid PinSession
+ */
+export function createPinSession(
+  overrides: Partial<PinSession> = {}
+): PinSession {
+  return {
+    type: 'pin_session',
+    sessionPath: '/path/to/session.jsonl',
+    ...overrides,
+  };
+}
+
+/**
+ * Create a valid UnpinSession
+ */
+export function createUnpinSession(
+  overrides: Partial<UnpinSession> = {}
+): UnpinSession {
+  return {
+    type: 'unpin_session',
+    sessionPath: '/path/to/session.jsonl',
     ...overrides,
   };
 }

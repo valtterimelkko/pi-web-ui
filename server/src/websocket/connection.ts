@@ -137,12 +137,14 @@ export class WebSocketConnectionManager {
       this.piService,
       this.sendToClient.bind(this),
       {
-        // Unload idle sessions after 15 minutes of inactivity with no subscribers
-        idleSessionTimeoutMs: 15 * 60 * 1000,
+        // Unload idle sessions after 30 minutes of inactivity with no subscribers
+        idleSessionTimeoutMs: 30 * 60 * 1000,
         // Check for cleanup every 1 minute
         cleanupIntervalMs: 60 * 1000,
         // Maximum sessions to keep in memory (unload oldest when exceeded)
         maxSessions: 10,
+        // Maximum pinned sessions allowed (protected from cleanup)
+        maxPinnedSessions: 2,
         // Enable memory monitoring
         enableMemoryMonitoring: true,
       }
@@ -472,6 +474,14 @@ export class WebSocketConnectionManager {
 
       case 'unsubscribe_session':
         await this.handleUnsubscribeSession(clientId, message);
+        break;
+
+      case 'pin_session':
+        this.handlePinSession(clientId, message);
+        break;
+
+      case 'unpin_session':
+        this.handleUnpinSession(clientId, message);
         break;
 
       case 'auth': {
@@ -1431,6 +1441,47 @@ export class WebSocketConnectionManager {
       sessionId,
       sessionPath: message.sessionPath,
     });
+  }
+
+  private handlePinSession(
+    clientId: string,
+    message: { type: 'pin_session'; sessionPath: string }
+  ): void {
+    const success = this.multiSessionManager.pinSession(message.sessionPath);
+    if (success) {
+      this.sendMessage(clientId, {
+        type: 'session_pinned',
+        sessionPath: message.sessionPath,
+        pinned: true,
+      });
+    } else {
+      const hasSession = this.multiSessionManager.hasSession(message.sessionPath);
+      this.sendMessage(clientId, {
+        type: 'session_pin_error',
+        sessionPath: message.sessionPath,
+        error: hasSession ? 'Maximum pinned sessions limit reached' : 'Session not found',
+      });
+    }
+  }
+
+  private handleUnpinSession(
+    clientId: string,
+    message: { type: 'unpin_session'; sessionPath: string }
+  ): void {
+    const success = this.multiSessionManager.unpinSession(message.sessionPath);
+    if (success) {
+      this.sendMessage(clientId, {
+        type: 'session_pinned',
+        sessionPath: message.sessionPath,
+        pinned: false,
+      });
+    } else {
+      this.sendMessage(clientId, {
+        type: 'session_pin_error',
+        sessionPath: message.sessionPath,
+        error: 'Session not found',
+      });
+    }
   }
 
   private handleDisconnect(clientId: string): void {

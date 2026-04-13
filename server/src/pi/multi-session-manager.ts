@@ -32,6 +32,7 @@ export interface ActiveSession {
   messageCount: number;
   currentStep: number;
   webUIContext?: WebUIContext;
+  pinned: boolean; // If true, session is protected from idle/stale cleanup
 }
 
 /**
@@ -45,6 +46,7 @@ export interface SessionStatusInfo {
   messageCount: number;
   currentStep: number;
   subscriberCount: number;
+  pinned: boolean;
 }
 
 /**
@@ -53,12 +55,14 @@ export interface SessionStatusInfo {
 export interface MultiSessionManagerOptions {
   /** How often to check for idle sessions to cleanup (default: 60000ms = 1 minute) */
   cleanupIntervalMs?: number;
-  /** How long a session can be idle with no subscribers before cleanup (default: 900000ms = 15 minutes) */
+  /** How long a session can be idle with no subscribers before cleanup (default: 1800000ms = 30 minutes) */
   idleSessionTimeoutMs?: number;
   /** Maximum number of sessions to keep in memory (default: 10) */
   maxSessions?: number;
   /** Enable memory monitoring and logging (default: true) */
   enableMemoryMonitoring?: boolean;
+  /** Maximum number of sessions that can be pinned (default: 2) */
+  maxPinnedSessions?: number;
 }
 
 /**
@@ -93,9 +97,10 @@ export class MultiSessionManager {
   private idleSessionTimeoutMs: number;
   private maxSessions: number;
   private enableMemoryMonitoring: boolean;
+  private maxPinnedSessions: number;
   
-  // Stale streaming detection threshold (5 minutes without events)
-  private readonly staleStreamingThresholdMs = 5 * 60 * 1000;
+  // Stale streaming detection threshold (15 minutes without events)
+  private readonly staleStreamingThresholdMs = 15 * 60 * 1000;
   
   // Cleanup timer
   private cleanupTimer?: ReturnType<typeof setInterval>;
@@ -111,9 +116,10 @@ export class MultiSessionManager {
     
     // Configure with defaults
     this.cleanupIntervalMs = options.cleanupIntervalMs ?? 60000; // 1 minute
-    this.idleSessionTimeoutMs = options.idleSessionTimeoutMs ?? 900000; // 15 minutes
+    this.idleSessionTimeoutMs = options.idleSessionTimeoutMs ?? 1800000; // 30 minutes
     this.maxSessions = options.maxSessions ?? 10;
     this.enableMemoryMonitoring = options.enableMemoryMonitoring ?? true;
+    this.maxPinnedSessions = options.maxPinnedSessions ?? 2;
     
     // Start cleanup timer
     this.startCleanupTimer();
@@ -123,7 +129,7 @@ export class MultiSessionManager {
       this.startMemoryMonitoring();
     }
     
-    console.log(`[MultiSessionManager] Initialized with cleanupInterval=${this.cleanupIntervalMs}ms, idleTimeout=${this.idleSessionTimeoutMs}ms, maxSessions=${this.maxSessions}`);
+    console.log(`[MultiSessionManager] Initialized with cleanupInterval=${this.cleanupIntervalMs}ms, idleTimeout=${this.idleSessionTimeoutMs}ms, maxSessions=${this.maxSessions}, maxPinned=${this.maxPinnedSessions}`);
   }
   
   /**
@@ -194,10 +200,10 @@ export class MultiSessionManager {
   private aggressiveCleanup(): void {
     let cleanedCount = 0;
     
-    // Clean up all idle sessions regardless of timeout
+    // Clean up all idle sessions regardless of timeout (but never pinned ones)
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
-      // Only clean up sessions that are not currently active
-      if (activeSession.status === 'idle' && activeSession.subscribers.size === 0) {
+      // Only clean up sessions that are not currently active and not pinned
+      if (activeSession.status === 'idle' && activeSession.subscribers.size === 0 && !activeSession.pinned) {
         console.log(`[MultiSessionManager] Aggressive cleanup: disposing session ${sessionPath}`);
         this.disposeSession(sessionPath);
         cleanedCount++;
@@ -208,7 +214,7 @@ export class MultiSessionManager {
     if (this.sessions.size > this.maxSessions) {
       const sessionsToRemove = this.sessions.size - this.maxSessions;
       const idleSessions = Array.from(this.sessions.entries())
-        .filter(([_, s]) => s.status === 'idle')
+        .filter(([_, s]) => s.status === 'idle' && !s.pinned)
         .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
       
       for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
@@ -238,7 +244,9 @@ export class MultiSessionManager {
     // First pass: Detect and reset stale streaming sessions
     // If a session is marked as streaming but hasn't received events for a while,
     // the agent_end event was likely missed. Reset to idle so cleanup can proceed.
+    // Pinned sessions are never stale-detected — the user explicitly wants them alive.
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
+      if (activeSession.pinned) continue; // Pinned sessions are never stale-detected
       if (activeSession.status === 'streaming') {
         const timeSinceLastEvent = now - activeSession.lastEventTimestamp;
         if (timeSinceLastEvent > this.staleStreamingThresholdMs) {
@@ -251,6 +259,9 @@ export class MultiSessionManager {
     
     // Second pass: Clean up idle sessions that have exceeded timeout
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
+      // Pinned sessions are never cleaned up by idle timeout
+      if (activeSession.pinned) continue;
+      
       // Skip sessions with subscribers (someone is actively viewing)
       if (activeSession.subscribers.size > 0) {
         continue;
@@ -279,12 +290,13 @@ export class MultiSessionManager {
     }
     
     // Third pass: Enforce maxSessions limit by unloading oldest idle sessions
+    // Pinned sessions are excluded from eviction
     if (this.sessions.size > this.maxSessions) {
       const sessionsToRemove = this.sessions.size - this.maxSessions;
       
-      // Get idle sessions sorted by last activity (oldest first)
+      // Get idle sessions sorted by last activity (oldest first), excluding pinned
       const idleSessions = Array.from(this.sessions.entries())
-        .filter(([_, s]) => s.status === 'idle' && s.subscribers.size === 0)
+        .filter(([_, s]) => s.status === 'idle' && s.subscribers.size === 0 && !s.pinned)
         .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
       
       for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
@@ -378,9 +390,9 @@ export class MultiSessionManager {
    * Returns true if a session was evicted, false if no idle sessions available.
    */
   private evictOldestIdleSession(): boolean {
-    // Get idle sessions sorted by last activity (oldest first)
+    // Get idle sessions sorted by last activity (oldest first), excluding pinned
     const idleSessions = Array.from(this.sessions.entries())
-      .filter(([_, s]) => s.status === 'idle' && s.subscribers.size === 0)
+      .filter(([_, s]) => s.status === 'idle' && s.subscribers.size === 0 && !s.pinned)
       .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
     
     if (idleSessions.length === 0) {
@@ -444,6 +456,7 @@ export class MultiSessionManager {
       messageCount: 0,
       currentStep: 0,
       webUIContext,
+      pinned: false,
     };
 
     this.sessions.set(sessionPath, activeSession);
@@ -524,6 +537,7 @@ export class MultiSessionManager {
         messageCount: 0,
         currentStep: 0,
         webUIContext,
+        pinned: false,
       };
 
       this.sessions.set(sessionPath, activeSession);
@@ -613,6 +627,7 @@ export class MultiSessionManager {
       messageCount: activeSession.messageCount,
       currentStep: activeSession.currentStep,
       subscriberCount: activeSession.subscribers.size,
+      pinned: activeSession.pinned,
     };
   }
 
@@ -871,6 +886,56 @@ export class MultiSessionManager {
    */
   getActiveSession(sessionPath: string): ActiveSession | undefined {
     return this.sessions.get(sessionPath);
+  }
+
+  /**
+   * Pin a session so it is never cleaned up by idle/stale detection.
+   * Pinned sessions survive idle timeout, stale streaming detection, LRU eviction,
+   * and aggressive cleanup. Only explicit stopSession() or dispose() will remove them.
+   * Returns true if the session was pinned, false if not found or at max pinned limit.
+   */
+  pinSession(sessionPath: string): boolean {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) return false;
+    
+    // Count current pinned sessions
+    const currentPinned = Array.from(this.sessions.values()).filter(s => s.pinned).length;
+    if (currentPinned >= this.maxPinnedSessions && !activeSession.pinned) {
+      console.warn(`[MultiSessionManager] Cannot pin session: already at max pinned limit (${this.maxPinnedSessions})`);
+      return false;
+    }
+    
+    activeSession.pinned = true;
+    console.log(`[MultiSessionManager] Session pinned: ${sessionPath} (${currentPinned + 1}/${this.maxPinnedSessions})`);
+    return true;
+  }
+
+  /**
+   * Unpin a session, allowing normal idle/stale cleanup to apply.
+   * Returns true if the session was unpinned, false if not found.
+   */
+  unpinSession(sessionPath: string): boolean {
+    const activeSession = this.sessions.get(sessionPath);
+    if (!activeSession) return false;
+    
+    activeSession.pinned = false;
+    activeSession.lastActivity = new Date(); // Reset idle clock so it doesn't immediately expire
+    console.log(`[MultiSessionManager] Session unpinned: ${sessionPath}`);
+    return true;
+  }
+
+  /**
+   * Check if a session is pinned.
+   */
+  isSessionPinned(sessionPath: string): boolean {
+    return this.sessions.get(sessionPath)?.pinned ?? false;
+  }
+
+  /**
+   * Get the number of currently pinned sessions.
+   */
+  getPinnedCount(): number {
+    return Array.from(this.sessions.values()).filter(s => s.pinned).length;
   }
 
   /**

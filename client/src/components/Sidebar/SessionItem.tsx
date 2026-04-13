@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Trash2, Edit2, Check, X, Archive, ArchiveRestore, Download, FileText, FileJson, Code, Loader2 } from 'lucide-react';
+import { Trash2, Edit2, Check, X, Archive, ArchiveRestore, Download, FileText, FileJson, Code, Loader2, Pin, PinOff } from 'lucide-react';
 import type { Session } from '../../store/sessionStore';
 import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -20,9 +20,10 @@ interface ContextMenuState {
 }
 
 export function SessionItem({ session, isActive, isArchived }: SessionItemProps) {
-  const { switchSession } = useWebSocket();
+  const { switchSession, pinSession, unpinSession } = useWebSocket();
   const archiveSession = useSessionStore(state => state.archiveSession);
   const unarchiveSession = useSessionStore(state => state.unarchiveSession);
+  const isSessionPinned = useSessionStore(state => state.isSessionPinned);
   const getSessionDisplayName = useSessionStore(state => state.getSessionDisplayName);
   const setSessionDisplayName = useSessionStore(state => state.setSessionDisplayName);
   const removeSessionDisplayName = useSessionStore(state => state.removeSessionDisplayName);
@@ -132,6 +133,15 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
       unarchiveSession(session.path);
     } else {
       archiveSession(session.path);
+    }
+  };
+
+  const handleTogglePin = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (isSessionPinned(session.path)) {
+      unpinSession(session.path);
+    } else {
+      pinSession(session.path);
     }
   };
 
@@ -289,9 +299,24 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
             )}
 
             <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Pin indicator - always visible when pinned */}
+              {isSessionPinned(session.path) && !((showActions || isActive) && !contextMenu.visible) && (
+                <Pin className="w-3 h-3 text-amber-500 fill-amber-500" />
+              )}
               {/* Actions: hover on desktop; always visible for active session */}
               {(showActions || isActive) && !contextMenu.visible ? (
                 <>
+                  <button
+                    onClick={handleTogglePin}
+                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                    title={isSessionPinned(session.path) ? 'Unpin session (allow idle cleanup)' : 'Pin session (protect from cleanup)'}
+                  >
+                    {isSessionPinned(session.path) ? (
+                      <Pin className="w-3 h-3 text-amber-500 fill-amber-500" />
+                    ) : (
+                      <Pin className="w-3 h-3 text-gray-400" />
+                    )}
+                  </button>
                   {!isArchived && (
                     <button
                       onClick={handleStartEdit}
@@ -445,6 +470,23 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
           </div>
           
           <div className="border-t border-gray-100 my-1" />
+          
+          <button
+            onClick={handleTogglePin}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+          >
+            {isSessionPinned(session.path) ? (
+              <>
+                <PinOff className="w-3.5 h-3.5 text-amber-500" />
+                <span className="text-amber-600">Unpin session</span>
+              </>
+            ) : (
+              <>
+                <Pin className="w-3.5 h-3.5" />
+                <span>Pin session</span>
+              </>
+            )}
+          </button>
           
           <button
             onClick={handleArchive}

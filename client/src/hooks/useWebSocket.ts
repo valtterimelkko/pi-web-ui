@@ -142,6 +142,14 @@ export function useWebSocket() {
     return sendMessage({ type: 'set_session_name', sessionId, name });
   }, [sendMessage]);
 
+  const pinSession = useCallback((sessionPath: string) => {
+    return sendMessage({ type: 'pin_session', sessionPath });
+  }, [sendMessage]);
+
+  const unpinSession = useCallback((sessionPath: string) => {
+    return sendMessage({ type: 'unpin_session', sessionPath });
+  }, [sendMessage]);
+
   return {
     sendMessage,
     sendPrompt,
@@ -157,5 +165,7 @@ export function useWebSocket() {
     sendCompact,
     getSessionInfo,
     setSessionName,
+    pinSession,
+    unpinSession,
   };
 }
