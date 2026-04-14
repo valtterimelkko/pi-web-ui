@@ -600,13 +600,22 @@ export const useSessionStore = create<SessionState>()(
       },
 
       archiveSession: (sessionPath) => {
-        set((state) => ({
-          archivedSessionPaths: state.archivedSessionPaths.includes(sessionPath)
+        set((state) => {
+          const newArchived = state.archivedSessionPaths.includes(sessionPath)
             ? state.archivedSessionPaths
-            : [...state.archivedSessionPaths, sessionPath],
-        }));
+            : [...state.archivedSessionPaths, sessionPath];
+          // Auto-unpin when archiving — archived sessions shouldn't consume pin slots
+          const newPinned = state.pinnedSessionPaths.filter(p => p !== sessionPath);
+          return {
+            archivedSessionPaths: newArchived,
+            pinnedSessionPaths: newPinned,
+          };
+        });
         // Fire-and-forget sync to server so all devices stay in sync
-        patchPreferences({ archivedSessionPaths: get().archivedSessionPaths }).catch((e) => {
+        patchPreferences({
+          archivedSessionPaths: get().archivedSessionPaths,
+          pinnedSessionPaths: get().pinnedSessionPaths,
+        }).catch((e) => {
           console.warn('Failed to sync archive state to server:', e);
         });
       },
@@ -686,8 +695,19 @@ export const useSessionStore = create<SessionState>()(
             set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
           }
           if (serverPrefs.pinnedSessionPaths !== undefined) {
-            // Server is the source of truth — overrides localStorage cache
-            set({ pinnedSessionPaths: serverPrefs.pinnedSessionPaths });
+            // Clean stale pins: remove any pinned sessions that are also archived
+            const archivedSet = new Set(serverPrefs.archivedSessionPaths ?? []);
+            const cleanedPins = serverPrefs.pinnedSessionPaths.filter(p => !archivedSet.has(p));
+            if (cleanedPins.length !== serverPrefs.pinnedSessionPaths.length) {
+              console.log(`[initPreferences] Cleaned ${serverPrefs.pinnedSessionPaths.length - cleanedPins.length} stale pinned-also-archived session(s)`);
+            }
+            set({ pinnedSessionPaths: cleanedPins });
+            // Sync the cleaned state back to server if anything was removed
+            if (cleanedPins.length !== serverPrefs.pinnedSessionPaths.length) {
+              patchPreferences({ pinnedSessionPaths: cleanedPins }).catch((e) => {
+                console.warn('Failed to sync cleaned pin state to server:', e);
+              });
+            }
           }
           if (serverPrefs.sessionDisplayNames !== undefined) {
             // Merge server display names with local ones

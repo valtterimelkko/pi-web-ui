@@ -141,8 +141,8 @@ export class WebSocketConnectionManager {
         idleSessionTimeoutMs: 30 * 60 * 1000,
         // Check for cleanup every 1 minute
         cleanupIntervalMs: 60 * 1000,
-        // Maximum sessions to keep in memory (unload oldest when exceeded)
-        maxSessions: 10,
+        // Maximum sessions to keep in memory (4 keeps ~2 GB heap under --max-old-space-size=2048)
+        maxSessions: 4,
         // Maximum pinned sessions allowed (protected from cleanup)
         maxPinnedSessions: 2,
         // Enable memory monitoring
