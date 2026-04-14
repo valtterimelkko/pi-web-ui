@@ -75,6 +75,11 @@ export interface LiveMessage {
   };
   timestamp: number;
   isComplete: boolean;
+  error?: {
+    message: string;
+    provider?: string;
+    model?: string;
+  };
 }
 
 /**

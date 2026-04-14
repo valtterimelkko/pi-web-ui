@@ -71,6 +71,11 @@ export interface Message {
     isError: boolean;
   };
   isComplete?: boolean; // Optional for backward compatibility with LiveMessage
+  error?: {
+    message: string;
+    provider?: string;
+    model?: string;
+  };
 }
 
 /**
@@ -1639,7 +1644,19 @@ export const useSessionStore = create<SessionState>()(
                 const provider = (event.provider as string) || '';
                 const model = (event.model as string) || '';
                 const detail = provider ? ` (${provider}${model ? '/' + model : ''})` : '';
+                
+                // Add error as a persistent message in the chat so it's visible on return
+                const errorId = `api-error-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+                const errorMessage: Message = {
+                  id: errorId,
+                  role: 'assistant',
+                  content: [],
+                  timestamp: Date.now(),
+                  error: { message: apiErrorMsg, provider: provider || undefined, model: model || undefined },
+                };
+                get().addMessageToSession(sessionId, errorMessage);
                 if (get().currentSessionId === sessionId) {
+                  get().addMessage(errorMessage);
                   useUIStore.getState().addToast({
                     type: 'error',
                     message: `API Error${detail}: ${apiErrorMsg}`,
@@ -1727,6 +1744,48 @@ export const useSessionStore = create<SessionState>()(
                     type: 'warning',
                     message: 'Claude session is using extra quota (overage)',
                   });
+                }
+                break;
+              }
+
+              case 'message': {
+                // Raw JSONL entry replayed during history replay.
+                // These arrive when the client reconnects and the server replays the session JSONL.
+                // We only handle error entries (stopReason=error) to surface them visibly.
+                const rawMsg = event as unknown as {
+                  message?: {
+                    id?: string;
+                    role?: string;
+                    content?: unknown;
+                    stopReason?: string;
+                    errorMessage?: string;
+                    provider?: string;
+                    model?: string;
+                  };
+                };
+                const msgData = rawMsg.message;
+                if (msgData?.stopReason === 'error' && msgData?.errorMessage) {
+                  // Skip if we already have an error message with the same ID (dedup)
+                  const existingMsgs = get().sessionMessages[sessionId] || [];
+                  if (msgData.id && existingMsgs.some(m => m.id === msgData.id)) {
+                    break;
+                  }
+                  const replayErrorId = msgData.id || `replay-error-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+                  const replayErrorMessage: Message = {
+                    id: replayErrorId,
+                    role: 'assistant',
+                    content: [],
+                    timestamp: Date.now(),
+                    error: {
+                      message: msgData.errorMessage,
+                      provider: msgData.provider || undefined,
+                      model: msgData.model || undefined,
+                    },
+                  };
+                  get().addMessageToSession(sessionId, replayErrorMessage);
+                  if (get().currentSessionId === sessionId) {
+                    get().addMessage(replayErrorMessage);
+                  }
                 }
                 break;
               }

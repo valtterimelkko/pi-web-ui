@@ -236,6 +236,80 @@ describe('sessionStore', () => {
       expect(useSessionStore.getState().sessionData['session-1']?.status).not.toBe('error');
     });
 
+    it('should persist api_error as a visible error message in the chat', () => {
+      const state = useSessionStore.getState();
+      state.setCurrentSession('session-1');
+      state.handleServerMessage({
+        type: 'session_event',
+        sessionId: 'session-1',
+        event: {
+          type: 'api_error',
+          message: "429 Sorry, you've exhausted this model's rate limit.",
+          provider: 'github-copilot',
+          model: 'claude-sonnet-4.6',
+        },
+      });
+      // Should add an error message to the messages array
+      const msgs = useSessionStore.getState().messages;
+      const errorMsg = msgs.find(m => m.error);
+      expect(errorMsg).toBeDefined();
+      expect(errorMsg!.role).toBe('assistant');
+      expect(errorMsg!.error!.message).toBe("429 Sorry, you've exhausted this model's rate limit.");
+      expect(errorMsg!.error!.provider).toBe('github-copilot');
+      expect(errorMsg!.error!.model).toBe('claude-sonnet-4.6');
+    });
+
+    it('should persist api_error message in sessionData for background sessions', () => {
+      const state = useSessionStore.getState();
+      // session-2 is NOT the current session
+      state.setCurrentSession('session-1');
+      state.handleServerMessage({
+        type: 'session_event',
+        sessionId: 'session-2',
+        event: {
+          type: 'api_error',
+          message: 'API Error occurred',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+        },
+      });
+      // Should add error message to session-2's messages
+      const session2Msgs = useSessionStore.getState().sessionMessages['session-2'];
+      const errorMsg = session2Msgs?.find(m => m.error);
+      expect(errorMsg).toBeDefined();
+      expect(errorMsg!.error!.message).toBe('API Error occurred');
+      // Current session messages should NOT have the error
+      const currentMsgs = useSessionStore.getState().messages;
+      expect(currentMsgs.find(m => m.error)).toBeUndefined();
+    });
+
+    it('should handle raw JSONL message entries with stopReason=error during replay', () => {
+      const state = useSessionStore.getState();
+      state.setCurrentSession('session-1');
+      // Simulate a raw JSONL entry being replayed as a session_event
+      state.handleServerMessage({
+        type: 'session_event',
+        sessionId: 'session-1',
+        event: {
+          type: 'message',
+          message: {
+            id: 'msg-err-1',
+            role: 'assistant',
+            content: [],
+            stopReason: 'error',
+            errorMessage: "429 Sorry, you've exhausted this model's rate limit.",
+            provider: 'github-copilot',
+            model: 'claude-sonnet-4.6',
+          },
+        },
+      });
+      // Should add an error message to the messages array
+      const msgs = useSessionStore.getState().messages;
+      const errorMsg = msgs.find(m => m.error);
+      expect(errorMsg).toBeDefined();
+      expect(errorMsg!.error!.message).toBe("429 Sorry, you've exhausted this model's rate limit.");
+    });
+
     it('should handle message_start message', () => {
       const state = useSessionStore.getState();
       state.handleServerMessage({

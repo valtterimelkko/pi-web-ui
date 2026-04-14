@@ -132,4 +132,42 @@ describe('MessageBubble', () => {
     render(<MessageBubble message={thinkingMessage} />);
     expect(screen.getByText('Here is the answer.')).toBeInTheDocument();
   });
+
+  it('renders error message with error styling', () => {
+    const errorMessage: LiveMessage = {
+      id: 'err-1',
+      role: 'assistant',
+      content: [],
+      timestamp: Date.now(),
+      isComplete: true,
+      error: {
+        message: "429 Sorry, you've exhausted this model's rate limit.",
+        provider: 'github-copilot',
+        model: 'claude-sonnet-4.6',
+      },
+    };
+    const { container } = render(<MessageBubble message={errorMessage} />);
+    // Should show the error message text
+    expect(screen.getByText(/429 Sorry, you've exhausted this model's rate limit/)).toBeInTheDocument();
+    // Should have error-specific styling
+    expect(container.querySelector('.api-error-message')).toBeTruthy();
+  });
+
+  it('renders error message with provider/model info', () => {
+    const errorMessage: LiveMessage = {
+      id: 'err-2',
+      role: 'assistant',
+      content: [],
+      timestamp: Date.now(),
+      isComplete: true,
+      error: {
+        message: 'API Error occurred',
+        provider: 'anthropic',
+        model: 'claude-sonnet-4',
+      },
+    };
+    render(<MessageBubble message={errorMessage} />);
+    expect(screen.getByText(/anthropic/)).toBeInTheDocument();
+    expect(screen.getByText(/claude-sonnet-4/)).toBeInTheDocument();
+  });
 });

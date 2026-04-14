@@ -70,6 +70,7 @@ export function messageToLiveMessage(msg: Message): LiveMessage {
     isComplete: msg.isComplete ?? true, // Default to true for existing messages
     toolCall: msg.toolCall,
     toolResult: msg.toolResult,
+    error: msg.error,
   };
 }
 

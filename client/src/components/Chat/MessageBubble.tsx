@@ -1,7 +1,7 @@
 import React, { useState, memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Copy, Check, Bot } from 'lucide-react';
+import { Copy, Check, Bot, AlertTriangle } from 'lucide-react';
 import type { LiveMessage, ContentPart } from '../../hooks/useSessionStream.js';
 import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
@@ -185,6 +185,24 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
         </div>
       )}
 
+      {/* Error message rendering */}
+      {isAssistant && message.error && (
+        <div className="api-error-message pl-3 pr-8 border-l-2 border-red-400 bg-red-50 rounded-r-lg py-2 px-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-sm text-red-700 font-medium">API Error</p>
+              <p className="text-sm text-red-600 mt-0.5">{message.error.message}</p>
+              {(message.error.provider || message.error.model) && (
+                <p className="text-xs text-red-400 mt-1">
+                  {[message.error.provider, message.error.model].filter(Boolean).join(' / ')}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Activity indicator for messages with no visible content */}
       {isAssistant && !hasVisibleContent && !hasThinking && (
         <div className="pl-4 pr-8 border-l-2 border-gray-200">
@@ -345,6 +363,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     prevProps.isCurrentRun === nextProps.isCurrentRun &&
     prevProps.message.toolResult?.output === nextProps.message.toolResult?.output &&
     prevProps.message.toolResult?.isError === nextProps.message.toolResult?.isError &&
+    prevProps.message.error?.message === nextProps.message.error?.message &&
     prevProps.forceExpanded === nextProps.forceExpanded
   );
 });

@@ -1469,18 +1469,16 @@ export class WebSocketConnectionManager {
     message: { type: 'unpin_session'; sessionPath: string }
   ): void {
     const success = this.multiSessionManager.unpinSession(message.sessionPath);
-    if (success) {
-      this.sendMessage(clientId, {
-        type: 'session_pinned',
-        sessionPath: message.sessionPath,
-        pinned: false,
-      });
-    } else {
-      this.sendMessage(clientId, {
-        type: 'session_pin_error',
-        sessionPath: message.sessionPath,
-        error: 'Session not found',
-      });
+    // Always confirm unpin to client — even if the session isn't in the active
+    // map (e.g. after a restart), the user's intent is to remove the pin.
+    // The client-side state is what matters for UI consistency.
+    this.sendMessage(clientId, {
+      type: 'session_pinned',
+      sessionPath: message.sessionPath,
+      pinned: false,
+    });
+    if (!success) {
+      console.log(`[Connection] Unpin requested for inactive session ${message.sessionPath} — confirmed to client anyway`);
     }
   }
 
