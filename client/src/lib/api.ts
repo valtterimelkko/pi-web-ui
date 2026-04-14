@@ -11,6 +11,7 @@ export interface UploadedFile {
 
 export interface WebUIPreferences {
   archivedSessionPaths?: string[];
+  pinnedSessionPaths?: string[];
   sessionDisplayNames?: Record<string, string>;
 }
 

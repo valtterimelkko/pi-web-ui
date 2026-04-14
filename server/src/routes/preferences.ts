@@ -15,6 +15,7 @@ export const PREFS_FILE = path.join(config.piAgentDir, 'web-ui-prefs.json');
 
 const PreferencesSchema = z.object({
   archivedSessionPaths: z.array(z.string()).optional(),
+  pinnedSessionPaths: z.array(z.string()).optional(),
   sessionDisplayNames: z.record(z.string(), z.string()).optional(),
 }).passthrough(); // preserve any future/unknown keys in the file
 

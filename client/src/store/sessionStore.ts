@@ -625,12 +625,20 @@ export const useSessionStore = create<SessionState>()(
           if (state.pinnedSessionPaths.length >= 2) return state; // Max 2 pinned
           return { pinnedSessionPaths: [...state.pinnedSessionPaths, sessionPath] };
         });
+        // Fire-and-forget sync to server so all devices stay in sync
+        patchPreferences({ pinnedSessionPaths: get().pinnedSessionPaths }).catch((e) => {
+          console.warn('Failed to sync pin state to server:', e);
+        });
       },
 
       unpinSession: (sessionPath) => {
         set((state) => ({
           pinnedSessionPaths: state.pinnedSessionPaths.filter(p => p !== sessionPath),
         }));
+        // Fire-and-forget sync to server so all devices stay in sync
+        patchPreferences({ pinnedSessionPaths: get().pinnedSessionPaths }).catch((e) => {
+          console.warn('Failed to sync unpin state to server:', e);
+        });
       },
 
       isSessionPinned: (sessionPath) => {
@@ -671,6 +679,10 @@ export const useSessionStore = create<SessionState>()(
           if (serverPrefs.archivedSessionPaths !== undefined) {
             // Server is the source of truth — overrides localStorage cache
             set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
+          }
+          if (serverPrefs.pinnedSessionPaths !== undefined) {
+            // Server is the source of truth — overrides localStorage cache
+            set({ pinnedSessionPaths: serverPrefs.pinnedSessionPaths });
           }
           if (serverPrefs.sessionDisplayNames !== undefined) {
             // Merge server display names with local ones
