@@ -322,3 +322,8 @@ services:
 | `PI_MAX_WORKERS` | `10` (adjust based on memory) |
 | `PI_WORKER_MEMORY` | `512` (MB per worker) |
 | `PI_IDLE_TIMEOUT` | `1800000` (30 minutes in ms) |
+| `OPENCODE_SERVER_PORT` | `4096` (OpenCode headless server port) |
+| `OPENCODE_SERVER_HOST` | `127.0.0.1` |
+| `OPENCODE_SERVER_PASSWORD` | Optional basic auth password for OpenCode server |
+| `OPENCODE_ENABLED` | `true` (set to `false` to disable OpenCode Direct) |
+| `OPENCODE_WORKING_DIR` | Working directory for OpenCode server process |

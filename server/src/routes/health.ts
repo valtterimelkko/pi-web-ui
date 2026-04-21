@@ -4,6 +4,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import { getWorkerPool } from './sessions.js';
 import { getCrashLogger } from '../workers/crash-logger.js';
+import { getOpenCodeService } from '../opencode/index.js';
 
 const router = Router();
 
@@ -109,6 +110,28 @@ router.get('/ready', async (_req: Request, res: Response) => {
       message: `Worker pool unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`,
     };
     allHealthy = false;
+  }
+
+  // Check 5: OpenCode Direct availability
+  try {
+    const opencodeService = getOpenCodeService();
+    const available = await opencodeService.isAvailable();
+    if (available && config.opencodeServerEnabled) {
+      checks.opencode = {
+        status: 'ok',
+        message: `OpenCode available (port ${config.opencodeServerPort})`,
+      };
+    } else {
+      checks.opencode = {
+        status: 'warning',
+        message: available ? 'OpenCode available but disabled' : 'OpenCode not installed',
+      };
+    }
+  } catch (error) {
+    checks.opencode = {
+      status: 'warning',
+      message: `OpenCode check failed: ${error instanceof Error ? error.message : 'Unknown'}`,
+    };
   }
 
   const response: {

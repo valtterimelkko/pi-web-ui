@@ -297,6 +297,14 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
                 CC
               </span>
             )}
+            {session.sdkType === 'opencode' && (
+              <span 
+                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/15 text-emerald-600 border border-emerald-500/20 cursor-help"
+                title="OpenCode Direct - uses OpenCode runtime with Z.AI GLM"
+              >
+                OC
+              </span>
+            )}
 
             <div className="flex items-center gap-1 flex-shrink-0">
               {/* Pin indicator - always visible when pinned */}

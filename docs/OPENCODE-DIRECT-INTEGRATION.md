@@ -1,8 +1,10 @@
 # OpenCode Direct Integration Architecture
 
-> Status: proposed architecture
-> 
-> Audience: Pi Web UI maintainers implementing a new runtime path after the existing Pi SDK and Claude Direct paths.
+> Status: implemented
+>
+> Audience: Pi Web UI maintainers working on the OpenCode Direct runtime after its initial delivery.
+>
+> This document is retained as the canonical architecture/rationale reference for the feature. See `docs/OPENCODE-IMPLEMENTATION-PLAN.md` for the phased implementation plan that was executed.
 
 ## 1. Intent
 
@@ -26,12 +28,12 @@ This architecture is specifically motivated by Z.ai GLM Coding Plan policy chang
 
 ## 2. Why this path exists
 
-Pi Web UI currently has two runtime paths:
+Pi Web UI has three runtime paths:
 
 1. **Pi SDK path** — in-process Pi sessions with worker/session lifecycle managed by Pi-specific code.
 2. **Claude Direct path** — `claude -p` subprocesses with custom persistence, replay, and normalization.
 
-OpenCode Direct becomes the third runtime path:
+OpenCode Direct is the third runtime path:
 
 3. **OpenCode Direct path** — OpenCode is the actual agent runtime, while Pi Web UI integrates with it through supported headless surfaces.
 
@@ -47,13 +49,13 @@ The existing Claude Direct implementation is the closest architectural analogue 
 
 ### 3.0 Where to inspect Claude Direct in detail
 
-Agents implementing OpenCode Direct should read the Claude Direct path carefully before planning changes.
+Agents extending or maintaining OpenCode Direct should read the Claude Direct path carefully before planning changes.
 
 Start with these repo docs:
 
 - `README.md`
   - overall product/runtime summary
-  - confirms the two current runtime paths and where Claude Direct fits operationally
+  - confirms the runtime-path overview and where Claude Direct fits operationally
 - `docs/ARCHITECTURE.md`
   - system architecture and runtime-path overview
 - `docs/CLAUDE-DIRECT-UX-ISSUES.md`
@@ -118,7 +120,7 @@ Especially inspect these recent Claude Direct commits and related docs:
 - `3be49e1` — stale last-prompt lock recovery
 - `b42403d` and `docs/CLAUDE-DIRECT-UX-ISSUES.md` — architecture/UX analysis
 
-OpenCode Direct should be planned only after reading enough of the above to understand:
+OpenCode Direct changes should be planned only after reading enough of the above to understand:
 
 1. how Claude Direct is made to look like the Pi SDK path in the UI,
 2. which pieces are generic reusable patterns,
@@ -314,7 +316,7 @@ That means:
 - or a fallback/temporary exploration mode,
 - but **not** the primary production integration shape.
 
-## 5. Proposed architecture
+## 5. Implemented architecture
 
 ## 5.1 High-level shape
 

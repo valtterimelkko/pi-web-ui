@@ -19,6 +19,11 @@ export interface ServerConfig {
   claudeSessionDir: string;
   sessionRegistryPath: string;
   maxClaudeProcesses: number;
+  opencodeServerPort: number;
+  opencodeServerHost: string;
+  opencodeServerPassword: string;
+  opencodeServerEnabled: boolean;
+  opencodeWorkingDir: string;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -52,4 +57,9 @@ export const config: ServerConfig = {
   claudeSessionDir: process.env.CLAUDE_SESSION_DIR || path.join(os.homedir(), '.pi-web-ui', 'claude-sessions'),
   sessionRegistryPath: process.env.SESSION_REGISTRY_PATH || path.join(os.homedir(), '.pi-web-ui', 'session-registry.json'),
   maxClaudeProcesses: parseInt(process.env.MAX_CLAUDE_PROCESSES || '10', 10),
+  opencodeServerPort: parseInt(process.env.OPENCODE_SERVER_PORT || '4096', 10),
+  opencodeServerHost: process.env.OPENCODE_SERVER_HOST || '127.0.0.1',
+  opencodeServerPassword: process.env.OPENCODE_SERVER_PASSWORD || '',
+  opencodeServerEnabled: process.env.OPENCODE_ENABLED !== 'false',
+  opencodeWorkingDir: process.env.OPENCODE_WORKING_DIR || process.cwd(),
 };

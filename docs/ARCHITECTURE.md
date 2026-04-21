@@ -119,7 +119,7 @@ Pi Web UI is a full-featured web interface for the Pi Coding Agent, providing re
 
 ### Runtime Paths and Storage
 
-Pi Web UI currently supports two runtime paths:
+Pi Web UI supports three runtime paths:
 
 1. **Pi SDK path**
    - main files: `server/src/pi/multi-session-manager.ts`, `server/src/workers/worker-pool.ts`
@@ -131,7 +131,14 @@ Pi Web UI currently supports two runtime paths:
    - session storage: `~/.pi-web-ui/claude-sessions/`
    - used for `claude -p` / `--resume` session handling
 
-Both runtime paths are unified in the sidebar and server metadata through `server/src/session-registry.ts` and `~/.pi-web-ui/session-registry.json`.
+3. **OpenCode Direct path**
+   - main files: `server/src/opencode/opencode-service.ts`, `server/src/opencode/opencode-process-manager.ts`, `server/src/opencode/opencode-client.ts`
+   - session storage: OpenCode-owned (no Pi JSONL transcript)
+   - uses a long-lived `opencode serve` process with SSE events and HTTP API
+   - event adapter: `server/src/opencode/opencode-event-adapter.ts` converts SSE events to Pi-normalized format
+   - history replay: `server/src/opencode/opencode-history-replay.ts` converts OpenCode messages to replay events
+
+All runtime paths are unified in the sidebar and server metadata through `server/src/session-registry.ts` and `~/.pi-web-ui/session-registry.json`.
 
 ---
 
@@ -269,12 +276,13 @@ See [PROTOCOL.md](./PROTOCOL.md) for complete specification.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Dual Runtime Note
+### Multi-Runtime Note
 
-Pi Web UI has two server-side runtime paths:
+Pi Web UI has three server-side runtime paths:
 
 - **Pi SDK path** — managed by `server/src/pi/multi-session-manager.ts` and `server/src/workers/worker-pool.ts`
 - **Claude Direct path** — managed by `server/src/claude/claude-service.ts` and `server/src/claude/claude-process-pool.ts`
+- **OpenCode Direct path** — managed by `server/src/opencode/opencode-service.ts` and `server/src/opencode/opencode-process-manager.ts`
 
 The sidebar and session metadata are unified through `server/src/session-registry.ts`.
 

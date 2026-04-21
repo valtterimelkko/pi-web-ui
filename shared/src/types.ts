@@ -1,5 +1,5 @@
 // SDK Type
-export type SdkType = 'pi' | 'claude';
+export type SdkType = 'pi' | 'claude' | 'opencode';
 
 // WebSocket Message Types
 

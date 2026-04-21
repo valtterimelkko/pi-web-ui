@@ -8,6 +8,7 @@ export interface RegistryEntry {
   sdkType: SdkType;        // 'pi' | 'claude'
   path: string;            // For Pi: session path; for Claude: our JSONL file path
   claudeSessionId?: string; // For Claude: the --session-id
+  opencodeSessionId?: string; // For OpenCode: the OpenCode server session ID
   cwd: string;
   model?: string;
   firstMessage: string;
@@ -97,6 +98,11 @@ export class SessionRegistryManager {
     return registry.entries.find(e => e.claudeSessionId === claudeSessionId);
   }
 
+  async getByOpencodeSessionId(opencodeSessionId: string): Promise<RegistryEntry | undefined> {
+    const registry = await this.load();
+    return registry.entries.find(e => e.opencodeSessionId === opencodeSessionId);
+  }
+
   async upsert(entry: Partial<RegistryEntry> & { sdkType: SdkType; cwd: string }): Promise<RegistryEntry> {
     const registry = await this.load();
 
@@ -110,6 +116,9 @@ export class SessionRegistryManager {
     }
     if (existingIndex === -1 && entry.claudeSessionId) {
       existingIndex = registry.entries.findIndex(e => e.claudeSessionId === entry.claudeSessionId);
+    }
+    if (existingIndex === -1 && entry.opencodeSessionId) {
+      existingIndex = registry.entries.findIndex(e => e.opencodeSessionId === entry.opencodeSessionId);
     }
 
     const now = new Date().toISOString();
@@ -134,6 +143,7 @@ export class SessionRegistryManager {
         sdkType: entry.sdkType,
         path: entry.path ?? '',
         claudeSessionId: entry.claudeSessionId,
+        opencodeSessionId: entry.opencodeSessionId,
         cwd: entry.cwd,
         model: entry.model,
         firstMessage: entry.firstMessage ?? '',
@@ -253,15 +263,21 @@ export class SessionRegistryManager {
   }
 }
 
-// Singleton instance
-let registryInstance: SessionRegistryManager | null = null;
+// Singleton instances keyed by registry path
+const registryInstances = new Map<string, SessionRegistryManager>();
 
 export function getSessionRegistry(registryPath?: string): SessionRegistryManager {
-  if (registryInstance === null) {
-    if (!registryPath) {
-      throw new Error('getSessionRegistry: registryPath required for first call');
+  if (!registryPath) {
+    if (registryInstances.size === 1) {
+      return Array.from(registryInstances.values())[0];
     }
-    registryInstance = new SessionRegistryManager(registryPath);
+    throw new Error('getSessionRegistry: registryPath required when no unique registry instance exists');
   }
-  return registryInstance;
+
+  let instance = registryInstances.get(registryPath);
+  if (!instance) {
+    instance = new SessionRegistryManager(registryPath);
+    registryInstances.set(registryPath, instance);
+  }
+  return instance;
 }

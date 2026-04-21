@@ -1,6 +1,6 @@
 # Pi Web UI
 
-A persistent web interface for the Pi Coding Agent, with real-time chat, session management, tool visibility, and support for both Pi SDK sessions and Claude Direct sessions.
+A persistent web interface for the Pi Coding Agent, with real-time chat, session management, tool visibility, and support for Pi SDK, Claude Direct, and OpenCode Direct sessions.
 
 ## Documentation Map
 
@@ -11,6 +11,7 @@ A persistent web interface for the Pi Coding Agent, with real-time chat, session
 - **Security:** [`SECURITY.md`](./SECURITY.md)
 - **Deployment / production runbook:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 - **Worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
+- **OpenCode Direct architecture:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
 
 ## What It Is
 
@@ -21,15 +22,17 @@ It combines:
 - an **Express + WebSocket** backend
 - **Pi SDK** integration for Pi-native sessions and extensions
 - **Claude Direct** integration for `claude -p` sessions
+- **OpenCode Direct** integration for `opencode serve` sessions (Z.AI GLM via OpenCode runtime)
 - **file-backed session persistence** so sessions survive reconnects and service restarts
 
 ## Core Capabilities
 
 - Real-time chat with streamed assistant responses
 - Session list, switching, export, and persistence
-- Dual runtime support:
+- Three runtime paths:
   - **Pi SDK sessions** for Pi extensions/tools and multi-provider model support
   - **Claude Direct sessions** for Claude Code CLI workflows
+  - **OpenCode Direct sessions** for Z.AI GLM via OpenCode headless server
 - Tool execution rendering and file-aware workflows
 - Security hardening: JWT auth, CSRF protection, origin validation, rate limiting
 - Health/config endpoints for operations and debugging
@@ -44,6 +47,7 @@ Browser (React + Vite)
             ├─ REST routes
             ├─ Pi SDK session manager + worker pool
             ├─ Claude Direct service + process pool
+            ├─ OpenCode Direct service + process manager
             └─ unified session registry
 ```
 
@@ -53,6 +57,7 @@ Browser (React + Vite)
 |---|---|---|
 | **Pi SDK** | Persistent Pi worker/session lifecycle with Pi extensions and model switching | `~/.pi/agent/sessions/` |
 | **Claude Direct** | `claude -p` subprocess per turn with Claude session resume support | `~/.pi-web-ui/claude-sessions/` |
+| **OpenCode Direct** | Long-lived `opencode serve` process with SSE-based events and native permission APIs | OpenCode-owned (no Pi JSONL) |
 
 Unified sidebar/session metadata is stored in:
 - `~/.pi-web-ui/session-registry.json`
@@ -67,6 +72,7 @@ For the detailed design, see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) an
 - npm
 - Pi CLI / Pi SDK environment available on the machine
 - For Claude Direct sessions: `claude` installed and authenticated
+- For OpenCode Direct sessions: `opencode` installed and configured with Z.AI provider
 
 ### Install
 
