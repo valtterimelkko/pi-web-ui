@@ -6,8 +6,9 @@
 
 import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
-import { ClaudeProcessPool } from './claude-process-pool.js';
+import { ClaudeProcessPool, resolveClaudeSessionPath } from './claude-process-pool.js';
 import { ClaudeSessionStore } from './claude-session-store.js';
 import { SessionRegistryManager, getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
@@ -182,8 +183,13 @@ export class ClaudeService {
     } catch { /* non-fatal */ }
 
     // Check if this session has had a previous turn (for --resume vs --session-id)
+    // 1. In-memory tracker (accurate within a single process lifetime)
+    // 2. messageCount from registry (may be stale if never updated)
+    // 3. Existence of Claude's own session JSONL file (survives restarts)
+    const claudeSessionFile = resolveClaudeSessionPath(entry.cwd, entry.claudeSessionId);
     const isFollowUp = this.sessionsWithHistory.has(sessionId)
-      || (entry.messageCount != null && entry.messageCount > 0);
+      || (entry.messageCount != null && entry.messageCount > 0)
+      || existsSync(claudeSessionFile);
 
     // Spawn the process
     await this.processPool.spawn(
