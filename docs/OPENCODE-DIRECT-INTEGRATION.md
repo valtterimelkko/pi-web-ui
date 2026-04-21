@@ -1,8 +1,10 @@
 # OpenCode Direct Integration Architecture
 
-> Status: proposed architecture
-> 
+> Status: implemented
+>
 > Audience: Pi Web UI maintainers implementing a new runtime path after the existing Pi SDK and Claude Direct paths.
+>
+> See `docs/OPENCODE-IMPLEMENTATION-PLAN.md` for the phased implementation plan.
 
 ## 1. Intent
 

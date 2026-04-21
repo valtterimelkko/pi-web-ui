@@ -1,6 +1,6 @@
 # OpenCode Direct Integration — Comprehensive Implementation Plan
 
-> **Status:** Plan only. Not yet executing.
+> **Status:** All phases implemented.
 > **Date:** 2026-04-21
 > **Prerequisite reading:** `docs/OPENCODE-DIRECT-INTEGRATION.md` (architecture), `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, `docs/CLAUDE-DIRECT-UX-ISSUES.md`
 > **Goal:** Add a third runtime path (`opencode`) to Pi Web UI, backed by a real `opencode serve` process, with parity to the existing Claude Direct path in the UI and better primitives underneath.

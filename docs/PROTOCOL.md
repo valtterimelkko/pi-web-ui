@@ -824,6 +824,18 @@ interface ErrorEvent {
 }
 ```
 
+#### opencode_available
+
+Sent after authentication to indicate OpenCode Direct runtime availability.
+
+```typescript
+interface OpenCodeAvailableEvent {
+  type: 'opencode_available';
+  available: boolean;
+  error?: string | null;
+}
+```
+
 ---
 
 ### Session Events

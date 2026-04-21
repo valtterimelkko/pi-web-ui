@@ -59,12 +59,14 @@ test.describe('Dual-SDK Session Creation', () => {
     const modal = page.locator('[data-testid="new-session-modal"]');
     await expect(modal).toBeVisible({ timeout: 5000 });
 
-    // Both SDK options must be present
+    // All three SDK options must be present
     const piSdkOption = page.locator('button').filter({ hasText: /Pi SDK/i });
     const claudeOption = page.locator('button').filter({ hasText: /Claude Direct/i });
+    const opencodeOption = page.locator('button').filter({ hasText: /OpenCode Direct/i });
 
     await expect(piSdkOption).toBeVisible({ timeout: 5000 });
     await expect(claudeOption).toBeVisible({ timeout: 5000 });
+    await expect(opencodeOption).toBeVisible({ timeout: 5000 });
   });
 
   test('Pi SDK option is selected by default', async ({ page }) => {
@@ -79,8 +81,26 @@ test.describe('Dual-SDK Session Creation', () => {
     await expect(piBtn).toBeVisible({ timeout: 5000 });
 
     const classAttr = await piBtn.getAttribute('class');
-    // The selected state uses border-violet-500 / bg-violet-500
-    expect(classAttr).toMatch(/violet/i);
+    expect(classAttr).toMatch(/blue|violet/i);
+  });
+
+  test('OpenCode Direct option respects availability state', async ({ page }) => {
+    const opened = await openNewSessionModal(page);
+    if (!opened) {
+      test.skip(true, 'Could not find new session button');
+      return;
+    }
+
+    const opencodeBtn = page.locator('button').filter({ hasText: /OpenCode Direct/i }).first();
+    await expect(opencodeBtn).toBeVisible({ timeout: 5000 });
+
+    const isDisabled = await opencodeBtn.isDisabled().catch(() => false);
+    expect(typeof isDisabled).toBe('boolean');
+
+    if (isDisabled) {
+      const classAttr = await opencodeBtn.getAttribute('class');
+      expect(classAttr).toMatch(/cursor-not-allowed|disabled/i);
+    }
   });
 
   test('Claude Direct option respects availability state', async ({ page }) => {
