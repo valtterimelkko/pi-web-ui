@@ -208,22 +208,43 @@ export class OpenCodeService {
   }>> {
     await this.ensureServer();
     const providers = await this.client.getProviders();
-    const providerMap = (providers as { providers?: Record<string, { name?: string; models?: Record<string, { id?: string; name?: string; limit?: { context?: number; output?: number }; status?: string }> }> }).providers ?? {};
+    const raw = (providers as { providers?: unknown }).providers ?? [];
 
-    const models = Object.entries(providerMap).flatMap(([providerId, provider]) => {
+    let providerList: Array<{ id?: string; name?: string; models?: unknown }>;
+    if (Array.isArray(raw)) {
+      providerList = raw as Array<{ id?: string; name?: string; models?: unknown }>;
+    } else if (raw && typeof raw === 'object') {
+      providerList = Object.entries(raw as Record<string, unknown>)
+        .map(([id, val]) => ({ id, ...(val as Record<string, unknown>) }));
+    } else {
+      providerList = [];
+    }
+
+    const models = providerList.flatMap((provider) => {
+      const providerId = provider.id ?? '';
       if (providerId !== 'zai-coding-plan') return [];
-      const providerName = provider.name ?? providerId;
-      return Object.values(provider.models ?? {})
+
+      let modelEntries: Array<{ id?: string; name?: string; limit?: { context?: number; output?: number }; status?: string }>;
+      const rawModels = provider.models;
+      if (Array.isArray(rawModels)) {
+        modelEntries = rawModels as Array<{ id?: string; name?: string; limit?: { context?: number; output?: number }; status?: string }>;
+      } else if (rawModels && typeof rawModels === 'object') {
+        modelEntries = Object.values(rawModels as Record<string, unknown>) as Array<{ id?: string; name?: string; limit?: { context?: number; output?: number }; status?: string }>;
+      } else {
+        modelEntries = [];
+      }
+
+      return modelEntries
         .filter((model) => model.status !== 'deprecated')
         .map((model) => ({
-          id: `${providerId}/${model.id ?? ''}`,
+          id: model.id ?? '',
           name: model.name ?? (model.id ?? ''),
-          provider: providerName,
+          provider: providerId,
           contextWindow: model.limit?.context ?? 0,
           maxTokens: model.limit?.output ?? 0,
           description: 'OpenCode Direct via Z.AI Coding Plan',
         }))
-        .filter((model) => model.id !== `${providerId}/`);
+        .filter((model) => model.id !== '');
     });
 
     return models.sort((a, b) => a.name.localeCompare(b.name));
