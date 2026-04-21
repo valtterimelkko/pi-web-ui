@@ -43,6 +43,13 @@ export class OpenCodeProcessManager {
       throw new Error('OpenCode integration is disabled');
     }
 
+    // If a server is already running at this address, attach to it without spawning
+    const alreadyUp = await this.isHealthy();
+    if (alreadyUp) {
+      console.log('[OpenCodeProcessManager] Server already running, attaching');
+      return;
+    }
+
     const args = ['serve', '--hostname', this.config.host, '--port', String(this.config.port)];
 
     const env: NodeJS.ProcessEnv = { ...process.env };
@@ -123,7 +130,6 @@ export class OpenCodeProcessManager {
   }
 
   async isHealthy(): Promise<boolean> {
-    if (!this.process) return false;
     try {
       const response = await fetch(this.getBaseUrl(), {
         headers: this.getAuthHeaders(),
