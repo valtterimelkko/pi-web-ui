@@ -281,12 +281,13 @@ export class ClaudeProcessPool {
  * Resolve the Claude CLI session JSONL path from cwd and claudeSessionId.
  * Claude stores sessions at:
  *   ~/.claude/projects/<encoded-cwd>/<claudeSessionId>.jsonl
- * where <encoded-cwd> is the cwd with '/' replaced by '-'.
+ * where <encoded-cwd> is the cwd with '/' and '.' replaced by '-'.
  */
 export function resolveClaudeSessionPath(cwd: string, claudeSessionId: string): string {
-  // Claude encodes the cwd path: '/' → '-', prefixed with '-'
+  // Claude encodes the cwd path: '/' → '-', '.' → '-', prefixed with '-'
   // e.g. /root/tasks → -root-tasks
-  const encodedCwd = '-' + cwd.replace(/\//g, '-');
+  // e.g. /root/.skills-global → -root--skills-global
+  const encodedCwd = '-' + cwd.replace(/[/.]/g, '-');
   return join(homedir(), '.claude', 'projects', encodedCwd, `${claudeSessionId}.jsonl`);
 }
 
@@ -322,25 +323,30 @@ export async function removeLockFromFile(filePath: string): Promise<boolean> {
   }
 
   const lines = content.split('\n');
-  // Walk backwards to find the last non-empty line
+  let removed = 0;
+  // Walk backwards stripping ALL trailing last-prompt entries
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
     if (!line) continue;
     try {
       const parsed = JSON.parse(line);
       if (parsed.type === 'last-prompt') {
-        // Remove this line and write back
         lines.splice(i, 1);
-        const newContent = lines.join('\n').replace(/\n{3,}/g, '\n\n');
-        await writeFile(filePath, newContent.endsWith('\n') ? newContent : newContent + '\n');
-        console.log(`[ClaudeProcessPool] Stripped stale last-prompt lock from ${filePath}`);
-        return true;
+        removed++;
+        continue;
       }
     } catch {
       // Not valid JSON — skip
     }
-    // Found a non-empty, non-last-prompt line — no lock present
+    // Found a non-empty, non-last-prompt line — stop
     break;
+  }
+
+  if (removed > 0) {
+    const newContent = lines.join('\n').replace(/\n{3,}/g, '\n\n');
+    await writeFile(filePath, newContent.endsWith('\n') ? newContent : newContent + '\n');
+    console.log(`[ClaudeProcessPool] Stripped ${removed} stale last-prompt lock(s) from ${filePath}`);
+    return true;
   }
 
   return false;
