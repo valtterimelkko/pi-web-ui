@@ -25,12 +25,17 @@ describe('OpenCodeEventAdapter', () => {
     expect(events[0].sessionId).toBe(SID);
   });
 
-  it('session.status idle → empty', () => {
+  it('session.status idle → agent_end', () => {
     const events = adapter.adaptSSEEvent(
       sse('session.status', { sessionID: SID, status: { type: 'idle' } }),
       SID,
     );
-    expect(events).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('agent_end');
+    expect(events[0].sessionId).toBe(SID);
+    const data = events[0].data as Record<string, unknown>;
+    expect(data.result).toBeNull();
+    expect(data.usage).toEqual({});
   });
 
   it('session.idle → agent_end', () => {
@@ -204,7 +209,8 @@ describe('OpenCodeEventAdapter', () => {
       sse('session.status', { sessionID: SID, status: { type: 'idle' } }),
       SID,
     );
-    expect(step5).toHaveLength(0);
+    expect(step5).toHaveLength(1);
+    expect(step5[0].type).toBe('agent_end');
 
     const step6 = adapter.adaptSSEEvent(
       sse('session.idle', { sessionID: SID }),

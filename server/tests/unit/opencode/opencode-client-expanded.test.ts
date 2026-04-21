@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { OpenCodeClient } from '../../../src/opencode/opencode-client.js';
-import { ReadableStream } from 'node:stream/web';
+import http from 'node:http';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -12,24 +14,25 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function sseResponse(lines: string[]): Response {
-  const encoder = new TextEncoder();
-  let index = 0;
-  const stream = new ReadableStream({
-    pull(controller) {
-      if (index < lines.length) {
-        controller.enqueue(encoder.encode(lines[index]));
-        index++;
-      } else {
-        controller.close();
-      }
-    },
+function mockHttpGet(resOptions: { statusCode?: number; headers?: Record<string, string> } = {}) {
+  const emitter = new EventEmitter() as EventEmitter & { destroy: () => void };
+  const stream = new PassThrough();
+  const statusCode = resOptions.statusCode ?? 200;
+
+  emitter.destroy = vi.fn();
+
+  const mockRes = Object.assign(stream, {
+    statusCode,
+    headers: resOptions.headers ?? { 'content-type': 'text/event-stream' },
+    setEncoding: vi.fn(),
   });
 
-  return new Response(stream as unknown as ReadableStream, {
-    status: 200,
-    headers: { 'Content-Type': 'text/event-stream' },
-  });
+  const spy = vi.spyOn(http, 'get').mockImplementation(((_opts: unknown, cb?: (res: unknown) => void) => {
+    if (cb) cb(mockRes);
+    return emitter as unknown as http.ClientRequest;
+  }) as unknown as typeof http.get);
+
+  return { emitter, stream, mockRes, spy };
 }
 
 describe('OpenCodeClient — getProviders', () => {
@@ -83,6 +86,7 @@ describe('OpenCodeClient — getProviders', () => {
 
 describe('OpenCodeClient — subscribeEvents', () => {
   let cleanup: (() => void) | null = null;
+  let httpSpy: ReturnType<typeof mockHttpGet> | null = null;
 
   beforeEach(() => {
     mockFetch.mockReset();
@@ -93,43 +97,45 @@ describe('OpenCodeClient — subscribeEvents', () => {
       cleanup();
       cleanup = null;
     }
+    if (httpSpy) {
+      httpSpy.spy.mockRestore();
+      httpSpy = null;
+    }
   });
 
   it('returns a cleanup function', () => {
-    const events: Array<unknown> = [];
-    mockFetch.mockResolvedValueOnce(sseResponse([]));
-
+    httpSpy = mockHttpGet();
     const client = new OpenCodeClient('http://localhost:8080', {});
-    cleanup = client.subscribeEvents((event) => events.push(event));
+    cleanup = client.subscribeEvents(() => {});
     expect(typeof cleanup).toBe('function');
   });
 
   it('receives SSE events and parses them', async () => {
+    httpSpy = mockHttpGet();
     const events: Array<unknown> = [];
-    mockFetch.mockResolvedValueOnce(sseResponse([
-      `data: ${JSON.stringify({ type: 'session.idle', properties: { sessionId: 's1' } })}\n\n`,
-    ]));
-
     const client = new OpenCodeClient('http://localhost:8080', {});
     cleanup = client.subscribeEvents((event) => events.push(event));
 
-    await new Promise((r) => setTimeout(r, 100));
+    httpSpy.stream.write(`data: ${JSON.stringify({ type: 'session.idle', properties: { sessionId: 's1' } })}\n\n`);
+
+    await new Promise((r) => setTimeout(r, 50));
 
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({ type: 'session.idle', properties: { sessionId: 's1' } });
   });
 
   it('handles multiple SSE events in a single chunk', async () => {
+    httpSpy = mockHttpGet();
     const events: Array<unknown> = [];
-    mockFetch.mockResolvedValueOnce(sseResponse([
-      `data: ${JSON.stringify({ type: 'message.updated', properties: { a: 1 } })}\n` +
-      `data: ${JSON.stringify({ type: 'session.idle', properties: { b: 2 } })}\n\n`,
-    ]));
-
     const client = new OpenCodeClient('http://localhost:8080', {});
     cleanup = client.subscribeEvents((event) => events.push(event));
 
-    await new Promise((r) => setTimeout(r, 100));
+    httpSpy.stream.write(
+      `data: ${JSON.stringify({ type: 'message.updated', properties: { a: 1 } })}\n` +
+      `data: ${JSON.stringify({ type: 'session.idle', properties: { b: 2 } })}\n\n`,
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
 
     expect(events).toHaveLength(2);
     expect(events[0]).toEqual({ type: 'message.updated', properties: { a: 1 } });
@@ -137,74 +143,80 @@ describe('OpenCodeClient — subscribeEvents', () => {
   });
 
   it('ignores non-data SSE lines', async () => {
+    httpSpy = mockHttpGet();
     const events: Array<unknown> = [];
-    mockFetch.mockResolvedValueOnce(sseResponse([
-      ': this is a comment\n',
-      'event: custom\n',
-      `data: ${JSON.stringify({ type: 'test' })}\n\n`,
-    ]));
-
     const client = new OpenCodeClient('http://localhost:8080', {});
     cleanup = client.subscribeEvents((event) => events.push(event));
 
-    await new Promise((r) => setTimeout(r, 100));
+    httpSpy.stream.write(': this is a comment\n');
+    httpSpy.stream.write('event: custom\n');
+    httpSpy.stream.write(`data: ${JSON.stringify({ type: 'test' })}\n\n`);
+
+    await new Promise((r) => setTimeout(r, 50));
 
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({ type: 'test' });
   });
 
   it('ignores malformed JSON in SSE data lines', async () => {
+    httpSpy = mockHttpGet();
     const events: Array<unknown> = [];
-    mockFetch.mockResolvedValueOnce(sseResponse([
-      'data: not-json\n',
-      `data: ${JSON.stringify({ type: 'valid' })}\n\n`,
-    ]));
-
     const client = new OpenCodeClient('http://localhost:8080', {});
     cleanup = client.subscribeEvents((event) => events.push(event));
 
-    await new Promise((r) => setTimeout(r, 100));
+    httpSpy.stream.write('data: not-json\n');
+    httpSpy.stream.write(`data: ${JSON.stringify({ type: 'valid' })}\n\n`);
+
+    await new Promise((r) => setTimeout(r, 50));
 
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({ type: 'valid' });
   });
 
   it('stops reconnecting after cleanup is called', async () => {
-    const events: Array<unknown> = [];
-    mockFetch.mockResolvedValueOnce(sseResponse([]));
-
+    httpSpy = mockHttpGet();
     const client = new OpenCodeClient('http://localhost:8080', {});
-    cleanup = client.subscribeEvents((event) => events.push(event));
+    cleanup = client.subscribeEvents(() => {});
     cleanup();
     cleanup = null;
 
-    await new Promise((r) => setTimeout(r, 3500));
+    await new Promise((r) => setTimeout(r, 100));
 
-    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(httpSpy.spy).toHaveBeenCalledTimes(1);
   });
 
-  it('passes auth headers in fetch call', () => {
-    const events: Array<unknown> = [];
-    mockFetch.mockResolvedValueOnce(sseResponse([]));
-
+  it('passes auth headers in http.get call', () => {
+    httpSpy = mockHttpGet();
     const client = new OpenCodeClient('http://localhost:8080', {
       Authorization: 'Bearer secret',
     });
-    cleanup = client.subscribeEvents((event) => events.push(event));
+    cleanup = client.subscribeEvents(() => {});
 
-    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(opts.headers).toMatchObject({ Authorization: 'Bearer secret' });
+    const callOpts = httpSpy.spy.mock.calls[0]?.[0] as http.RequestOptions;
+    expect(callOpts.headers).toMatchObject({ Authorization: 'Bearer secret' });
   });
 
-  it('constructs SSE URL with directory parameter', () => {
-    const events: Array<unknown> = [];
-    mockFetch.mockResolvedValueOnce(sseResponse([]));
-
+  it('connects to /global/event path', () => {
+    httpSpy = mockHttpGet();
     const client = new OpenCodeClient('http://localhost:8080', {});
-    cleanup = client.subscribeEvents((event) => events.push(event), '/root/project');
+    cleanup = client.subscribeEvents(() => {});
 
-    const [url] = mockFetch.mock.calls[0] as [string];
-    expect(url).toContain('directory=%2Froot%2Fproject');
+    const callOpts = httpSpy.spy.mock.calls[0]?.[0] as http.RequestOptions;
+    expect(callOpts.path).toBe('/global/event');
+  });
+
+  it('unwraps payload envelope from /global/event', async () => {
+    httpSpy = mockHttpGet();
+    const events: Array<unknown> = [];
+    const client = new OpenCodeClient('http://localhost:8080', {});
+    cleanup = client.subscribeEvents((event) => events.push(event));
+
+    httpSpy.stream.write(`data: ${JSON.stringify({ payload: { type: 'session.idle', properties: { sessionId: 's1' } } })}\n\n`);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: 'session.idle', properties: { sessionId: 's1' } });
   });
 });
 

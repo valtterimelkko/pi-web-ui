@@ -182,12 +182,14 @@ describe('OpenCodeProcessManager', () => {
 
   describe('isHealthy', () => {
     it('returns false when no process is running', async () => {
+      vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('connection refused'));
       const result = await manager.isHealthy();
       expect(result).toBe(false);
     });
 
     it('returns true when fetch succeeds', async () => {
       spawnMock.mockImplementationOnce(() => makeDeferredProcess());
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 200 }));
       await manager.start();
 
       const result = await manager.isHealthy();
@@ -196,6 +198,7 @@ describe('OpenCodeProcessManager', () => {
 
     it('returns false when fetch fails', async () => {
       spawnMock.mockImplementationOnce(() => makeDeferredProcess());
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 200 }));
       await manager.start();
 
       vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('connection refused'));

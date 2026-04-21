@@ -55,7 +55,7 @@ Type=simple
 User=pi
 WorkingDirectory=/opt/pi-web-ui
 Environment=NODE_ENV=production
-Environment=PI_WEB_UI_PORT=3000
+Environment=PORT=3456
 
 # Worker configuration
 Environment=PI_MAX_WORKERS=5
@@ -250,14 +250,14 @@ server {
 
     # API
     location /api/ {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:3456;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
     }
 
     # WebSocket
     location /ws {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:3456;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -279,7 +279,7 @@ RUN npm ci --only=production
 COPY . .
 RUN npm run build
 
-EXPOSE 3000
+EXPOSE 3456
 
 CMD ["node", "server/dist/index.js"]
 ```
@@ -292,7 +292,7 @@ services:
   pi-web-ui:
     build: .
     ports:
-      - "3000:3000"
+      - "3456:3456"
     environment:
       - NODE_ENV=production
       - JWT_SECRET=${JWT_SECRET}
@@ -318,7 +318,7 @@ services:
 | `JWT_SECRET` | Strong random string (32+ chars) |
 | `CSRF_SECRET` | Strong random string (32+ chars) |
 | `ALLOWED_ORIGINS` | Your domain only |
-| `PI_WEB_UI_PORT` | `3000` (or as needed) |
+| `PORT` | `3456` (server port, defaults to `3001` if unset) |
 | `PI_MAX_WORKERS` | `10` (adjust based on memory) |
 | `PI_WORKER_MEMORY` | `512` (MB per worker) |
 | `PI_IDLE_TIMEOUT` | `1800000` (30 minutes in ms) |

@@ -115,6 +115,14 @@ export class OpenCodeEventAdapter {
         if (statusType === 'busy') {
           return [{ type: 'agent_start', sessionId, timestamp, data: {} }];
         }
+        if (statusType === 'idle') {
+          return [{
+            type: 'agent_end',
+            sessionId,
+            timestamp,
+            data: { result: null, usage: {} },
+          }];
+        }
         return [];
       }
 

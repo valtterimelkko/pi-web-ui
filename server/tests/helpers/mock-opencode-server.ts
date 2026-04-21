@@ -52,10 +52,11 @@ export class MockOpenCodeServer {
   }
 
   private route(req: http.IncomingMessage, res: http.ServerResponse, body: unknown): void {
-    const url = req.url ?? '/';
+    const rawUrl = req.url ?? '/';
     const method = req.method ?? 'GET';
+    const url = rawUrl.split('?')[0];
 
-    if (url === '/event' && method === 'GET') {
+    if ((url === '/event' || url === '/global/event') && method === 'GET') {
       this.handleSSE(req, res);
       return;
     }

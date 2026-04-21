@@ -126,6 +126,7 @@ export class OpenCodeService {
     try {
       await this.client.promptAsync(ocSessionId, entry.cwd, prompt, entry.model);
     } catch (err) {
+      console.error(`[OpenCodeService] promptAsync failed:`, err instanceof Error ? err.message : String(err));
       this.completeSession(sessionId, err instanceof Error ? err : new Error(String(err)));
     }
   }
@@ -282,8 +283,9 @@ export class OpenCodeService {
   private async handleSSEEvent(event: OpenCodeSSEEvent): Promise<void> {
     const props = event.properties as Record<string, unknown> | undefined;
     const ocSessionId = (props?.sessionID as string | undefined) ?? (props?.sessionId as string | undefined);
-    if (!ocSessionId) return;
-
+    if (!ocSessionId) {
+      return;
+    }
     const sessionId = this.piSessionByOpencodeId.get(ocSessionId);
     if (!sessionId) {
       const found = await this.registry.getByOpencodeSessionId(ocSessionId);

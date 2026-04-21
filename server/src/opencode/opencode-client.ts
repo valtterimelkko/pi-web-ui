@@ -1,3 +1,4 @@
+import http from 'node:http';
 import type {
   OpenCodeSession,
   OpenCodeMessage,
@@ -102,64 +103,91 @@ export class OpenCodeClient {
     return response.json();
   }
 
-  subscribeEvents(onEvent: (event: OpenCodeSSEEvent) => void, directory?: string): () => void {
-    const url = `${this.baseUrl}${this.withDirectory('/event', directory)}`;
-    const headers: Record<string, string> = { ...this.authHeaders };
-
+  subscribeEvents(onEvent: (event: OpenCodeSSEEvent) => void, _directory?: string): () => void {
+    const path = '/global/event';
     let aborted = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let currentReq: http.ClientRequest | null = null;
+    let eventCount = 0;
+
+    const parsedUrl = new URL(this.baseUrl);
 
     const connect = () => {
-      if (aborted) return () => {};
+      if (aborted) return;
 
-      const controller = new AbortController();
+      const options: http.RequestOptions = {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port,
+        path,
+        method: 'GET',
+        headers: {
+          ...this.authHeaders,
+          Accept: 'text/event-stream',
+          'Cache-Control': 'no-cache',
+        },
+      };
 
-      fetch(url, { headers, signal: controller.signal })
-        .then(async (response) => {
-          if (!response.ok || !response.body) {
-            if (!aborted) reconnectTimer = setTimeout(connect, 3000);
-            return;
-          }
+      console.log('[OpenCodeSSE] Connecting to global event stream');
 
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
+      const req = http.get(options, (res) => {
+        if (res.statusCode !== 200) {
+          console.error(`[OpenCodeSSE] Bad status ${res.statusCode}, reconnecting`);
+          res.resume();
+          if (!aborted) reconnectTimer = setTimeout(connect, 3000);
+          return;
+        }
 
-          // eslint-disable-next-line no-constant-condition
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+        let buffer = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk: string) => {
+          buffer += chunk;
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
 
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() ?? '';
-
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                try {
-                  const data = JSON.parse(line.slice(6)) as OpenCodeSSEEvent;
-                  onEvent(data);
-                } catch {
-                  // ignore malformed SSE data
-                }
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const raw = JSON.parse(line.slice(6)) as { payload?: OpenCodeSSEEvent } | OpenCodeSSEEvent;
+                const data = ('payload' in raw && raw.payload) ? raw.payload : raw as OpenCodeSSEEvent;
+                eventCount++;
+                onEvent(data);
+              } catch (e) {
+                console.error(`[OpenCodeSSE] Parse error:`, e instanceof Error ? e.message : String(e));
               }
             }
           }
+        });
 
-          if (!aborted) reconnectTimer = setTimeout(connect, 3000);
-        })
-        .catch(() => {
+        res.on('end', () => {
+          console.log(`[OpenCodeSSE] Stream ended after ${eventCount} events, reconnecting`);
+          currentReq = null;
           if (!aborted) reconnectTimer = setTimeout(connect, 3000);
         });
 
-      return () => { controller.abort(); };
+        res.on('error', (err) => {
+          console.error(`[OpenCodeSSE] Response error:`, err.message);
+          currentReq = null;
+          if (!aborted) reconnectTimer = setTimeout(connect, 3000);
+        });
+      });
+
+      req.on('error', (err) => {
+        console.error(`[OpenCodeSSE] Request error:`, err.message);
+        currentReq = null;
+        if (!aborted) reconnectTimer = setTimeout(connect, 3000);
+      });
+
+      currentReq = req;
     };
 
-    const cleanup = connect();
+    connect();
 
     return () => {
       aborted = true;
-      cleanup();
+      if (currentReq) {
+        currentReq.destroy();
+        currentReq = null;
+      }
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
   }
