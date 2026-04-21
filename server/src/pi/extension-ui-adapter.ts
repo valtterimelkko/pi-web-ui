@@ -2,6 +2,7 @@ import type {
   ExtensionUIContext,
   ExtensionUIDialogOptions,
   ExtensionCommandContextActions,
+  WorkingIndicatorOptions,
 } from '@mariozechner/pi-coding-agent';
 import type { ExtensionUIRequest } from './extension-ui-handler.js';
 import { getExtensionUIHandler } from './extension-ui-handler.js';
@@ -165,6 +166,14 @@ export function createWebUIContext(webUI: WebUIContext): ExtensionUIContext {
       webUI.sendToClient({
         type: 'working_message',
         message,
+      });
+    },
+
+    // Set the working/loading indicator animation
+    setWorkingIndicator(options?: WorkingIndicatorOptions): void {
+      webUI.sendToClient({
+        type: 'working_indicator',
+        options,
       });
     },
 

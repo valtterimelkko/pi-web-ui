@@ -58,7 +58,7 @@ export class PiService {
     
     this.resourceLoader = new DefaultResourceLoader({
       cwd: process.cwd(),
-      agentDir: config.piAgentDir || undefined,
+      agentDir: config.piAgentDir || `${process.cwd()}/.pi/agent`,
     });
   }
 
