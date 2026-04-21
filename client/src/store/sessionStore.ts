@@ -50,7 +50,7 @@ export interface Session {
   messageCount: number;
   cwd: string;
   name?: string;
-  sdkType?: 'pi' | 'claude';  // optional for backward compatibility
+  sdkType?: 'pi' | 'claude' | 'opencode';  // optional for backward compatibility
   model?: string;              // current model
   createdAt?: string;
   lastActivity?: string;
@@ -143,7 +143,7 @@ export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'error'
 interface SessionState {
   sessions: Session[];
   currentSessionId: string | null;
-  currentSessionSdkType: 'pi' | 'claude' | null;
+  currentSessionSdkType: 'pi' | 'claude' | 'opencode' | null;
   currentModel: string | null;
   messages: Message[];
   isStreaming: boolean;
@@ -186,6 +186,10 @@ interface SessionState {
   // Claude Direct availability
   claudeAvailable: boolean;
   claudeAuthError: string | null;
+
+  // OpenCode Direct availability
+  opencodeAvailable: boolean;
+  opencodeAuthError: string | null;
 
   // Actions
   setSessions: (sessions: Session[]) => void;
@@ -237,7 +241,10 @@ interface SessionState {
 
   // Claude Direct availability
   setClaudeAvailable: (available: boolean, error?: string | null) => void;
-  
+
+  // OpenCode Direct availability
+  setOpencodeAvailable: (available: boolean, error?: string | null) => void;
+
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
 }
@@ -281,6 +288,8 @@ export const useSessionStore = create<SessionState>()(
       // Claude Direct availability
       claudeAvailable: false,
       claudeAuthError: null,
+      opencodeAvailable: false,
+      opencodeAuthError: null,
 
       // Worker status tracking implementation
       updateWorkerStatus: (sessionId: string, status: WorkerStatus) => {
@@ -315,6 +324,7 @@ export const useSessionStore = create<SessionState>()(
       },
 
       setClaudeAvailable: (available, error = null) => set({ claudeAvailable: available, claudeAuthError: error }),
+      setOpencodeAvailable: (available, error = null) => set({ opencodeAvailable: available, opencodeAuthError: error }),
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),
@@ -892,7 +902,7 @@ export const useSessionStore = create<SessionState>()(
         switch (msg.type) {
           case 'sessions_list': {
             // Deduplicate sessions by path (path is the stable identifier)
-            const rawSessions = (msg.sessions as Array<Session & { sdkType?: 'pi' | 'claude' }>) || [];
+            const rawSessions = (msg.sessions as Array<Session & { sdkType?: 'pi' | 'claude' | 'opencode' }>) || [];
             const seenPaths = new Set<string>();
             const dedupedSessions = rawSessions
               .filter((session) => {
@@ -913,7 +923,7 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'session_created': {
-            const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' };
+            const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' };
             set({ 
               currentSessionId: createdMsg.sessionId,
               currentSessionSdkType: createdMsg.sdkType ?? null,
@@ -966,7 +976,7 @@ export const useSessionStore = create<SessionState>()(
           case 'session_switched': {
             const switchMsg = msg as unknown as {
               sessionId: string;
-              sdkType?: 'pi' | 'claude';
+              sdkType?: 'pi' | 'claude' | 'opencode';
               model?: string;
               contextWindow?: number;
               contextUsed?: number;
@@ -1866,6 +1876,12 @@ export const useSessionStore = create<SessionState>()(
           case 'claude_available': {
             const claudeMsg = msg as unknown as { available: boolean; error?: string | null };
             get().setClaudeAvailable(claudeMsg.available, claudeMsg.error || null);
+            break;
+          }
+
+          case 'opencode_available': {
+            const ocMsg = msg as unknown as { available: boolean; error?: string | null };
+            get().setOpencodeAvailable(ocMsg.available, ocMsg.error || null);
             break;
           }
 

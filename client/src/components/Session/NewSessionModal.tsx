@@ -7,7 +7,7 @@ import { useSessionStore } from '../../store';
 interface NewSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreateSession: (cwd?: string, sdkType?: 'pi' | 'claude') => void;
+  onCreateSession: (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode') => void;
 }
 
 interface DirectoryItem {
@@ -24,11 +24,11 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   const [error, setError] = useState<string | null>(null);
   const [showRecentFolders, setShowRecentFolders] = useState(true);
   const [pathInput, setPathInput] = useState('/root');
-  const [sdkType, setSdkType] = useState<'pi' | 'claude'>('pi');
+  const [sdkType, setSdkType] = useState<'pi' | 'claude' | 'opencode'>('pi');
   const recentDropdownRef = useRef<HTMLDivElement>(null);
 
   const { recentFolders, addRecentFolder, getRecentFolders } = useUIStore();
-  const { claudeAvailable, claudeAuthError } = useSessionStore();
+  const { claudeAvailable, claudeAuthError, opencodeAvailable, opencodeAuthError } = useSessionStore();
   const topRecentFolders = getRecentFolders(8);
 
   const fetchDirectories = async (path: string) => {
@@ -161,7 +161,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
         {/* SDK Type Selector */}
         <div className="px-3 sm:px-4 pt-2 pb-2 border-b border-gray-200 flex-shrink-0">
           <p className="text-xs font-medium text-gray-500 mb-1.5">Session Type</p>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {/* Pi SDK option */}
             <button
               onClick={() => setSdkType('pi')}
@@ -195,6 +195,28 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
               </span>
               <span className="text-xs text-gray-500 mt-0.5 sm:hidden">
                 {claudeAvailable ? 'Subscription' : (claudeAuthError || 'Not available')}
+              </span>
+            </button>
+
+            {/* OpenCode Direct option — mirrors Claude Direct pattern exactly */}
+            <button
+              onClick={() => opencodeAvailable && setSdkType('opencode')}
+              disabled={!opencodeAvailable}
+              title={opencodeAuthError || undefined}
+              className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
+                !opencodeAvailable
+                  ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                  : sdkType === 'opencode'
+                  ? 'border-emerald-500 bg-emerald-50 text-gray-900'
+                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+              }`}
+            >
+              <span className="text-sm font-medium">OpenCode Direct</span>
+              <span className="text-xs text-gray-500 mt-0.5 hidden sm:inline">
+                {opencodeAvailable ? 'Z.AI GLM • OpenCode runtime' : (opencodeAuthError || 'Not available')}
+              </span>
+              <span className="text-xs text-gray-500 mt-0.5 sm:hidden">
+                {opencodeAvailable ? 'Z.AI GLM' : (opencodeAuthError || 'Not available')}
               </span>
             </button>
           </div>
