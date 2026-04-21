@@ -14,6 +14,11 @@ describe('Dual-SDK type guards and structure', () => {
       const sdkType: SdkType = 'claude';
       expect(sdkType).toBe('claude');
     });
+
+    it('SdkType can be "opencode"', () => {
+      const sdkType: SdkType = 'opencode';
+      expect(sdkType).toBe('opencode');
+    });
   });
 
   // ─── SessionInfo ─────────────────────────────────────────────────────────
