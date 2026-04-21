@@ -67,7 +67,7 @@ describe('OpenCodeClient', () => {
 
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(opts.method).toBe('POST');
-    expect(JSON.parse(opts.body as string)).toEqual({ message: 'hello world' });
+    expect(JSON.parse(opts.body as string)).toEqual({ parts: [{ type: 'text', text: 'hello world' }] });
   });
 
   it('abort(sessionId) calls POST /session/:id/abort', async () => {

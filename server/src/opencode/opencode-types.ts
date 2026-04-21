@@ -1,25 +1,74 @@
 export interface OpenCodeSession {
   id: string;
-  title?: string;
-  createdAt?: string;
-  metadata?: Record<string, unknown>;
+  slug: string;
+  version: string;
+  projectID: string;
+  directory: string;
+  title: string;
+  time: {
+    created: number;
+    updated: number;
+  };
+  summary?: {
+    additions: number;
+    deletions: number;
+    files: number;
+  };
 }
 
-export interface OpenCodeMessage {
+export interface OpenCodeMessageInfo {
   id: string;
+  sessionID: string;
   role: 'user' | 'assistant';
-  parts: OpenCodeMessagePart[];
-  createdAt?: string;
+  parentID?: string;
+  mode?: string;
+  agent?: string;
+  path?: { cwd: string; root: string };
+  cost?: number;
+  tokens?: {
+    total?: number;
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    cache?: { write?: number; read?: number };
+  };
+  modelID?: string;
+  providerID?: string;
+  model?: { providerID: string; modelID: string };
+  time: {
+    created: number;
+    completed?: number;
+  };
+  finish?: string;
+  summary?: { diffs: unknown[] };
 }
 
 export interface OpenCodeMessagePart {
-  type: 'text' | 'tool-invocation' | 'tool-result' | 'reasoning' | string;
+  type: 'text' | 'step-start' | 'step-finish' | 'tool-invocation' | string;
+  id: string;
+  sessionID: string;
+  messageID: string;
   text?: string;
+  time?: { start?: number; end?: number };
+  snapshot?: string;
+  reason?: string;
+  tokens?: {
+    total?: number;
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    cache?: { write?: number; read?: number };
+  };
+  cost?: number;
   toolInvocationId?: string;
   toolName?: string;
   args?: unknown;
   result?: unknown;
-  state?: 'partial' | 'result' | 'call' | string;
+}
+
+export interface OpenCodeMessage {
+  info: OpenCodeMessageInfo;
+  parts: OpenCodeMessagePart[];
 }
 
 export interface OpenCodeSSEEvent {
@@ -28,7 +77,7 @@ export interface OpenCodeSSEEvent {
   data?: unknown;
 }
 
-export type OpenCodeSessionStatus = 'idle' | 'running' | 'error';
+export type OpenCodeSessionStatusType = 'idle' | 'busy';
 
 export interface OpenCodePermissionRequest {
   id: string;

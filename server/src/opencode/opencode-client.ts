@@ -1,7 +1,6 @@
 import type {
   OpenCodeSession,
   OpenCodeMessage,
-  OpenCodeSessionStatus,
   OpenCodeSSEEvent,
 } from './opencode-types.js';
 
@@ -46,23 +45,17 @@ export class OpenCodeClient {
     return response.json() as Promise<OpenCodeSession>;
   }
 
-  async getSessionStatus(id: string): Promise<OpenCodeSessionStatus> {
-    const response = await this.request(`/session/${id}/status`);
-    const data = await response.json() as { status: OpenCodeSessionStatus };
-    return data.status;
-  }
-
   async promptAsync(sessionId: string, message: string): Promise<void> {
     await this.request(`/session/${sessionId}/prompt_async`, {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ parts: [{ type: 'text', text: message }] }),
     });
   }
 
   async sendMessage(sessionId: string, message: string): Promise<unknown> {
     const response = await this.request(`/session/${sessionId}/message`, {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ parts: [{ type: 'text', text: message }] }),
     });
     return response.json();
   }

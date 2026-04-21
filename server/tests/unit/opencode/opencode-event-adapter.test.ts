@@ -15,15 +15,29 @@ describe('OpenCodeEventAdapter', () => {
     return { type, properties };
   }
 
-  it('session:running → agent_start', () => {
-    const events = adapter.adaptSSEEvent(sse('session:running'), SID);
+  it('session.status busy → agent_start', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('session.status', { sessionID: SID, status: { type: 'busy' } }),
+      SID,
+    );
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('agent_start');
     expect(events[0].sessionId).toBe(SID);
   });
 
-  it('session:idle → agent_end', () => {
-    const events = adapter.adaptSSEEvent(sse('session:idle'), SID);
+  it('session.status idle → empty', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('session.status', { sessionID: SID, status: { type: 'idle' } }),
+      SID,
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  it('session.idle → agent_end', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('session.idle', { sessionID: SID }),
+      SID,
+    );
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('agent_end');
     expect(events[0].sessionId).toBe(SID);
@@ -32,9 +46,12 @@ describe('OpenCodeEventAdapter', () => {
     expect(data.usage).toEqual({});
   });
 
-  it('message:create with role assistant → message_start', () => {
+  it('message.updated (assistant, no finish) → message_start', () => {
     const events = adapter.adaptSSEEvent(
-      sse('message:create', { id: 'msg-1', role: 'assistant' }),
+      sse('message.updated', {
+        sessionID: SID,
+        info: { id: 'msg-1', role: 'assistant' },
+      }),
       SID,
     );
     expect(events).toHaveLength(1);
@@ -44,9 +61,37 @@ describe('OpenCodeEventAdapter', () => {
     expect(data.role).toBe('assistant');
   });
 
-  it('message:update with text → message_update', () => {
+  it('message.updated (assistant, with finish) → message_end', () => {
     const events = adapter.adaptSSEEvent(
-      sse('message:update', { id: 'msg-1', role: 'assistant', text: 'Hello' }),
+      sse('message.updated', {
+        sessionID: SID,
+        info: { id: 'msg-1', role: 'assistant', finish: 'stop' },
+      }),
+      SID,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('message_end');
+    const data = events[0].data as Record<string, unknown>;
+    expect(data.id).toBe('msg-1');
+  });
+
+  it('message.updated without info → empty', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.updated', {}),
+      SID,
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  it('message.part.delta → message_update with text delta', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.delta', {
+        sessionID: SID,
+        messageID: 'msg-1',
+        partID: 'prt-1',
+        field: 'text',
+        delta: 'Hello',
+      }),
       SID,
     );
     expect(events).toHaveLength(1);
@@ -57,87 +102,139 @@ describe('OpenCodeEventAdapter', () => {
     expect(assistantEvent.delta).toBe('Hello');
   });
 
-  it('message:complete → message_end', () => {
+  it('message.part.delta without delta → empty', () => {
     const events = adapter.adaptSSEEvent(
-      sse('message:complete', { id: 'msg-1' }),
+      sse('message.part.delta', { messageID: 'msg-1' }),
       SID,
     );
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('message_end');
-    const data = events[0].data as Record<string, unknown>;
-    expect(data.id).toBe('msg-1');
-  });
-
-  it('message:complete without id → empty', () => {
-    const events = adapter.adaptSSEEvent(sse('message:complete', {}), SID);
     expect(events).toHaveLength(0);
   });
 
-  it('tool:call → tool_execution_start', () => {
+  it('message.part.delta without messageID → empty', () => {
     const events = adapter.adaptSSEEvent(
-      sse('tool:call', { id: 'tool-1', name: 'Read', args: { file_path: '/tmp/a.txt' } }),
+      sse('message.part.delta', { delta: 'Hello' }),
       SID,
     );
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('tool_execution_start');
-    const data = events[0].data as Record<string, unknown>;
-    expect(data.toolCallId).toBe('tool-1');
-    expect(data.toolName).toBe('Read');
-    expect(data.args).toEqual({ file_path: '/tmp/a.txt' });
+    expect(events).toHaveLength(0);
   });
 
-  it('tool:result → tool_execution_end', () => {
+  it('message.part.updated step-start → empty', () => {
     const events = adapter.adaptSSEEvent(
-      sse('tool:result', { toolInvocationId: 'tool-1', result: 'file contents' }),
+      sse('message.part.updated', {
+        sessionID: SID,
+        part: { id: 'prt-1', messageID: 'msg-1', type: 'step-start' },
+      }),
+      SID,
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  it('message.part.updated step-finish with tool reason → tool_execution_end', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-tool-1',
+          messageID: 'msg-1',
+          type: 'step-finish',
+          reason: 'tool',
+          snapshot: 'Read file contents',
+        },
+      }),
       SID,
     );
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('tool_execution_end');
     const data = events[0].data as Record<string, unknown>;
-    expect(data.toolCallId).toBe('tool-1');
+    expect(data.toolCallId).toBe('prt-tool-1');
     expect(data.isError).toBe(false);
-    const result = data.result as { content: Array<{ type: string; text: string }> };
-    expect(result.content[0].text).toBe('file contents');
   });
 
-  it('tool:result with object result → JSON stringified', () => {
+  it('message.part.updated step-finish with stop reason → empty', () => {
     const events = adapter.adaptSSEEvent(
-      sse('tool:result', { toolInvocationId: 'tool-2', result: { foo: 'bar' } }),
+      sse('message.part.updated', {
+        sessionID: SID,
+        part: { id: 'prt-1', messageID: 'msg-1', type: 'step-finish', reason: 'stop' },
+      }),
       SID,
     );
-    const data = events[0].data as Record<string, unknown>;
-    const result = data.result as { content: Array<{ type: string; text: string }> };
-    expect(result.content[0].text).toBe('{"foo":"bar"}');
+    expect(events).toHaveLength(0);
+  });
+
+  it('message.part.updated without part → empty', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.updated', {}),
+      SID,
+    );
+    expect(events).toHaveLength(0);
   });
 
   it('unknown event type → opencode_raw', () => {
-    const events = adapter.adaptSSEEvent(sse('custom:unknown', { foo: 42 }), SID);
+    const events = adapter.adaptSSEEvent(sse('server.heartbeat', {}), SID);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('opencode_raw');
-    expect(events[0].data).toEqual({ type: 'custom:unknown', properties: { foo: 42 } });
   });
 
-  it('permission:request → permission_request event', () => {
-    const events = adapter.adaptSSEEvent(
-      sse('permission:request', { id: 'perm-1', toolName: 'Write', args: { path: '/tmp/x' }, description: 'Write file' }),
+  it('full text streaming lifecycle', () => {
+    const step1 = adapter.adaptSSEEvent(
+      sse('session.status', { sessionID: SID, status: { type: 'busy' } }),
       SID,
     );
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('permission_request');
-    const data = events[0].data as Record<string, unknown>;
-    expect(data.permissionId).toBe('perm-1');
-    expect(data.toolName).toBe('Write');
-    expect(data.description).toBe('Write file');
+    expect(step1[0].type).toBe('agent_start');
+
+    const step2 = adapter.adaptSSEEvent(
+      sse('message.updated', { sessionID: SID, info: { id: 'msg-1', role: 'assistant' } }),
+      SID,
+    );
+    expect(step2[0].type).toBe('message_start');
+
+    const step3 = adapter.adaptSSEEvent(
+      sse('message.part.delta', { sessionID: SID, messageID: 'msg-1', partID: 'prt-1', field: 'text', delta: 'Hello' }),
+      SID,
+    );
+    expect(step3[0].type).toBe('message_update');
+
+    const step4 = adapter.adaptSSEEvent(
+      sse('message.updated', { sessionID: SID, info: { id: 'msg-1', role: 'assistant', finish: 'stop' } }),
+      SID,
+    );
+    expect(step4[0].type).toBe('message_end');
+
+    const step5 = adapter.adaptSSEEvent(
+      sse('session.status', { sessionID: SID, status: { type: 'idle' } }),
+      SID,
+    );
+    expect(step5).toHaveLength(0);
+
+    const step6 = adapter.adaptSSEEvent(
+      sse('session.idle', { sessionID: SID }),
+      SID,
+    );
+    expect(step6[0].type).toBe('agent_end');
   });
 
   describe('messageToReplayEvents', () => {
+    function makeMsg(overrides: Partial<OpenCodeMessage> & { id?: string; role?: 'user' | 'assistant' }): OpenCodeMessage {
+      const id = overrides.id ?? `msg_${Math.random().toString(36).slice(2, 8)}`;
+      const role = overrides.role ?? 'user';
+      return {
+        info: {
+          id,
+          sessionID: 'ses-test',
+          role,
+          time: { created: 1735689600000 },
+          ...((overrides.info as Record<string, unknown>) ?? {}),
+        },
+        parts: overrides.parts ?? [],
+      };
+    }
+
     it('user message → correct message_start/update/end sequence', () => {
-      const msg: OpenCodeMessage = {
+      const msg = makeMsg({
         id: 'msg-user-1',
         role: 'user',
-        parts: [{ type: 'text', text: 'Hello assistant' }],
-        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
-      };
+        parts: [{ type: 'text', text: 'Hello assistant', id: 'prt-u1', sessionID: 'ses-test', messageID: 'msg-user-1' }],
+      });
 
       const events = adapter.messageToReplayEvents(msg, SID);
       expect(events).toHaveLength(3);
@@ -154,16 +251,15 @@ describe('OpenCodeEventAdapter', () => {
       expect(assistantEvent.delta).toBe('Hello assistant');
     });
 
-    it('assistant message with text + tool parts → correct event sequence', () => {
-      const msg: OpenCodeMessage = {
+    it('assistant message with text parts → correct event sequence', () => {
+      const msg = makeMsg({
         id: 'msg-asst-1',
         role: 'assistant',
         parts: [
-          { type: 'text', text: 'Let me read that file.' },
-          { type: 'tool-invocation', toolInvocationId: 'tool-1', toolName: 'Read', args: { file_path: '/tmp/a.txt' }, result: 'file contents here' },
+          { type: 'text', text: 'Let me read that file.', id: 'prt-1', sessionID: 'ses-test', messageID: 'msg-asst-1' },
+          { type: 'text', text: 'Here is more text.', id: 'prt-2', sessionID: 'ses-test', messageID: 'msg-asst-1' },
         ],
-        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
-      };
+      });
 
       const events = adapter.messageToReplayEvents(msg, SID);
 
@@ -172,53 +268,46 @@ describe('OpenCodeEventAdapter', () => {
         'message_start',
         'message_update',
         'message_end',
-        'tool_execution_start',
-        'tool_execution_end',
+        'message_start',
+        'message_update',
+        'message_end',
       ]);
 
-      const toolStart = events[3].data as Record<string, unknown>;
-      expect(toolStart.toolCallId).toBe('tool-1');
-      expect(toolStart.toolName).toBe('Read');
+      const firstStart = events[0].data as Record<string, unknown>;
+      expect(firstStart.id).toBe('prt-1');
+      expect(firstStart.role).toBe('assistant');
 
-      const toolEnd = events[4].data as Record<string, unknown>;
-      expect(toolEnd.toolCallId).toBe('tool-1');
-      const result = toolEnd.result as { content: Array<{ type: string; text: string }> };
-      expect(result.content[0].text).toBe('file contents here');
+      const secondStart = events[3].data as Record<string, unknown>;
+      expect(secondStart.id).toBe('prt-2');
     });
 
-    it('assistant message with tool-result part → tool_execution_start + end', () => {
-      const msg: OpenCodeMessage = {
-        id: 'msg-asst-2',
+    it('message with empty parts → no events', () => {
+      const msg = makeMsg({
+        id: 'msg-empty',
         role: 'assistant',
-        parts: [
-          { type: 'tool-result', toolInvocationId: 'tool-2', toolName: 'Bash', args: { cmd: 'ls' }, result: 'file1\nfile2' },
-        ],
-        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
-      };
+        parts: [],
+      });
 
       const events = adapter.messageToReplayEvents(msg, SID);
-      const types = events.map(e => e.type);
-      expect(types).toEqual(['tool_execution_start', 'tool_execution_end']);
+      expect(events).toHaveLength(0);
     });
 
-    it('message with no createdAt uses current time', () => {
-      const msg: OpenCodeMessage = {
-        id: 'msg-no-date',
+    it('preserves timestamp from info.time.created', () => {
+      const msg = makeMsg({
+        id: 'msg-ts',
         role: 'user',
-        parts: [{ type: 'text', text: 'hi' }],
-      };
+        parts: [{ type: 'text', text: 'hi', id: 'prt-ts', sessionID: 'ses-test', messageID: 'msg-ts' }],
+      });
 
       const events = adapter.messageToReplayEvents(msg, SID);
-      expect(events).toHaveLength(3);
-      expect(typeof events[0].timestamp).toBe('number');
-      expect(events[0].timestamp).toBeGreaterThan(0);
+      expect(events[0].timestamp).toBe(1735689600000);
     });
   });
 
   describe('reset', () => {
     it('clears internal session state', () => {
       adapter.adaptSSEEvent(
-        sse('message:create', { id: 'msg-1', role: 'assistant' }),
+        sse('message.updated', { sessionID: SID, info: { id: 'msg-1', role: 'assistant' } }),
         SID,
       );
 
@@ -226,20 +315,7 @@ describe('OpenCodeEventAdapter', () => {
 
       const fresh = new OpenCodeEventAdapter();
       expect(adapter).toBeInstanceOf(OpenCodeEventAdapter);
-    });
-  });
-
-  describe('data fallback (event.data)', () => {
-    it('uses event.data when properties is absent', () => {
-      const event: OpenCodeSSEEvent = {
-        type: 'message:create',
-        data: { id: 'msg-d-1', role: 'assistant' },
-      };
-      const events = adapter.adaptSSEEvent(event, SID);
-      expect(events).toHaveLength(1);
-      expect(events[0].type).toBe('message_start');
-      const data = events[0].data as Record<string, unknown>;
-      expect(data.id).toBe('msg-d-1');
+      expect(fresh).toBeInstanceOf(OpenCodeEventAdapter);
     });
   });
 });

@@ -7,10 +7,11 @@ export function opencodeMessagesToReplayEvents(
   const events: Array<Record<string, unknown>> = [];
 
   for (const message of messages) {
-    const timestamp = new Date(message.createdAt ?? Date.now()).getTime();
-    const msgId = message.id;
+    const info = message.info;
+    const timestamp = info.time.created ?? Date.now();
+    const msgId = info.id;
 
-    if (message.role === 'user') {
+    if (info.role === 'user') {
       const text = message.parts
         .filter(p => p.type === 'text')
         .map(p => p.text ?? '')
@@ -26,7 +27,7 @@ export function opencodeMessagesToReplayEvents(
         message: { id: msgId },
         timestamp,
       });
-    } else if (message.role === 'assistant') {
+    } else if (info.role === 'assistant') {
       for (const part of message.parts) {
         if (part.type === 'text' && part.text) {
           const partId = `${msgId}_text_${events.length}`;

@@ -204,7 +204,7 @@ export class OpenCodeService {
   }
 
   private async handleSSEEvent(event: OpenCodeSSEEvent): Promise<void> {
-    const props = (event.properties ?? event.data) as Record<string, unknown> | undefined;
+    const props = event.properties as Record<string, unknown> | undefined;
     const ocSessionId = props?.sessionId as string | undefined;
     if (!ocSessionId) return;
 
