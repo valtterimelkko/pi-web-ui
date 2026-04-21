@@ -16,6 +16,7 @@ export class OpenCodeService {
   private subscribers: OpenCodeSessionSubscribers;
   private registry;
   private runningSessions: Set<string> = new Set();
+  private pendingPermissions: Map<string, string> = new Map(); // permissionId → piSessionId
   private sseUnsubscribe: (() => void) | null = null;
   private sseStarted: boolean = false;
   private promptCallbacks: Map<string, {
@@ -227,6 +228,13 @@ export class OpenCodeService {
 
     const callback = this.promptCallbacks.get(sessionId);
     for (const evt of normalized) {
+      // Track pending permissions
+      if (evt.type === 'permission_request' && evt.data) {
+        const permId = (evt.data as Record<string, unknown>).permissionId as string;
+        if (permId) {
+          this.pendingPermissions.set(permId, sessionId);
+        }
+      }
       if (callback) {
         try { callback.onEvent(evt); } catch { /* non-fatal */ }
       }
@@ -237,6 +245,21 @@ export class OpenCodeService {
         this.completeSession(sessionId);
       }
     }
+  }
+
+  isPendingPermission(permissionId: string): boolean {
+    return this.pendingPermissions.has(permissionId);
+  }
+
+  getSessionForPermission(permissionId: string): string | undefined {
+    return this.pendingPermissions.get(permissionId);
+  }
+
+  async resolvePermission(permissionId: string, approved: boolean): Promise<void> {
+    const piSessionId = this.pendingPermissions.get(permissionId);
+    if (!piSessionId) throw new Error(`Unknown permission: ${permissionId}`);
+    await this.replyPermission(piSessionId, permissionId, approved);
+    this.pendingPermissions.delete(permissionId);
   }
 
   async shutdown(): Promise<void> {

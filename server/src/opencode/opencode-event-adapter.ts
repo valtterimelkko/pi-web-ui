@@ -62,6 +62,22 @@ export class OpenCodeEventAdapter {
           return [];
         }
 
+        if (partType === 'tool-invocation') {
+          const partID = part.id as string;
+          const toolName = part.toolName as string | undefined ?? 'unknown';
+          const args = part.args;
+          return [{
+            type: 'tool_execution_start',
+            sessionId,
+            timestamp,
+            data: {
+              toolCallId: partID,
+              toolName,
+              input: args ?? {},
+            },
+          }];
+        }
+
         if (partType === 'step-finish') {
           const reason = part.reason as string | undefined;
           if (reason === 'tool') {
@@ -100,6 +116,33 @@ export class OpenCodeEventAdapter {
           timestamp,
           data: { result: null, usage: {} },
         }];
+      }
+
+      case 'permission.updated': {
+        const permission = props.permission as Record<string, unknown> | undefined;
+        if (!permission) return [];
+        const permId = permission.id as string;
+        const metadata = permission.metadata as Record<string, unknown> | undefined;
+        const toolName = (metadata?.toolName as string | undefined)
+          ?? (permission.tool as string | undefined)
+          ?? 'unknown';
+        const args = metadata?.input ?? permission.args;
+        const status = permission.status as string | undefined;
+        if (status === 'pending' || status === undefined) {
+          return [{
+            type: 'permission_request',
+            sessionId,
+            timestamp,
+            data: {
+              permissionId: permId,
+              toolName,
+              args,
+              title: `Allow ${toolName}?`,
+              description: `OpenCode wants to run: ${toolName}${args ? '\n' + JSON.stringify(args, null, 2) : ''}`,
+            },
+          }];
+        }
+        return [];
       }
 
       default:

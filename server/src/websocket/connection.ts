@@ -754,6 +754,35 @@ export class WebSocketConnectionManager {
         sessionId,
         prompt,
         (normalizedEvent) => {
+          // Intercept permission_request — broadcast as extension_ui_request instead
+          if (normalizedEvent.type === 'permission_request') {
+            const permData = normalizedEvent.data as Record<string, unknown>;
+            const uiRequest = {
+              type: 'extension_ui_request' as const,
+              request: {
+                id: permData.permissionId as string,
+                type: 'confirm' as const,
+                method: `opencode.permission.${permData.toolName ?? 'tool'}`,
+                params: {
+                  title: permData.title ?? `Allow ${permData.toolName}?`,
+                  description: permData.description ?? '',
+                  toolName: permData.toolName,
+                  args: permData.args,
+                },
+                timeout: 120000,
+              },
+            };
+            const subscribers = this.opencodeSubs.getSubscribers(sessionId);
+            if (subscribers.size > 0) {
+              for (const subId of subscribers) {
+                this.sendMessage(subId, uiRequest);
+              }
+            } else {
+              this.sendMessage(clientId, uiRequest);
+            }
+            return;
+          }
+
           const piEvent = normEventToPiFormat(normalizedEvent);
           const msg = { type: 'session_event' as const, sessionId, event: piEvent };
           const subscribers = this.opencodeSubs.getSubscribers(sessionId);
@@ -1560,6 +1589,20 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'extension_ui_response'; response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean } }
   ): Promise<void> {
+    const { id, approved, cancelled } = message.response;
+
+    // Check if this is an OpenCode permission response
+    if (this.opencodeService.isPendingPermission(id)) {
+      const isApproved = approved === true && cancelled !== true;
+      try {
+        await this.opencodeService.resolvePermission(id, isApproved);
+      } catch (e) {
+        console.error('[handleExtensionUiResponse] OpenCode permission reply failed:', e);
+      }
+      return;
+    }
+
+    // Otherwise fall through to Pi extension UI handler
     const { getExtensionUIHandler } = await import('../pi/extension-ui-handler.js');
     const handler = getExtensionUIHandler();
     handler.handleResponse(message.response);
