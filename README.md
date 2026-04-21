@@ -1,6 +1,6 @@
 # Pi Web UI
 
-A persistent web interface for the Pi Coding Agent, with real-time chat, session management, tool visibility, and support for both Pi SDK sessions and Claude Direct sessions.
+A persistent web interface for the Pi Coding Agent, with real-time chat, session management, tool visibility, and support for Pi SDK, Claude Direct, and OpenCode Direct sessions.
 
 ## Documentation Map
 
@@ -11,6 +11,7 @@ A persistent web interface for the Pi Coding Agent, with real-time chat, session
 - **Security:** [`SECURITY.md`](./SECURITY.md)
 - **Deployment / production runbook:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 - **Worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
+- **OpenCode Direct architecture:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
 
 ## What It Is
 
@@ -28,7 +29,7 @@ It combines:
 
 - Real-time chat with streamed assistant responses
 - Session list, switching, export, and persistence
-- Dual/three-runtime support:
+- Three runtime paths:
   - **Pi SDK sessions** for Pi extensions/tools and multi-provider model support
   - **Claude Direct sessions** for Claude Code CLI workflows
   - **OpenCode Direct sessions** for Z.AI GLM via OpenCode headless server
@@ -44,10 +45,10 @@ Browser (React + Vite)
        └─ Express server (server/src)
             ├─ WebSocket handlers
             ├─ REST routes
-             ├─ Pi SDK session manager + worker pool
-             ├─ Claude Direct service + process pool
-             ├─ OpenCode Direct service + process manager
-             └─ unified session registry
+            ├─ Pi SDK session manager + worker pool
+            ├─ Claude Direct service + process pool
+            ├─ OpenCode Direct service + process manager
+            └─ unified session registry
 ```
 
 ### Session Runtime Paths

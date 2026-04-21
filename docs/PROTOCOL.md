@@ -824,9 +824,22 @@ interface ErrorEvent {
 }
 ```
 
+#### claude_available
+
+Sent after authentication to indicate Claude Direct runtime availability.
+
+```typescript
+interface ClaudeAvailableEvent {
+  type: 'claude_available';
+  available: boolean;
+  error?: string | null;
+}
+```
+
 #### opencode_available
 
 Sent after authentication to indicate OpenCode Direct runtime availability.
+This is emitted after successful auth even when OpenCode is unavailable, in which case `available` is `false` and `error` may explain why.
 
 ```typescript
 interface OpenCodeAvailableEvent {
