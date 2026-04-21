@@ -18,6 +18,8 @@ import { config } from '../config.js';
 import { validateCsrfToken, hasCsrfToken } from '../security/csrf.js';
 import { getClaudeService, type ClaudeService } from '../claude/index.js';
 import { ClaudeSessionSubscribers } from '../claude/claude-session-subscribers.js';
+import { getOpenCodeService, type OpenCodeService } from '../opencode/index.js';
+import { OpenCodeSessionSubscribers } from '../opencode/opencode-session-subscribers.js';
 import { getSessionRegistry } from '../session-registry.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 
@@ -110,6 +112,9 @@ export class WebSocketConnectionManager {
   private claudeSessionIds: Set<string> = new Set();
   /** Claude session subscribers: tracks which clients are viewing which Claude sessions */
   private claudeSubs = new ClaudeSessionSubscribers();
+  private opencodeService: OpenCodeService;
+  private opencodeSessionIds: Set<string> = new Set();
+  private opencodeSubs = new OpenCodeSessionSubscribers();
 
   constructor() {
     this.wss = new WebSocketServer({ noServer: true });
@@ -117,6 +122,7 @@ export class WebSocketConnectionManager {
     this.sessionPool = new SessionPool(this.piService);
     this.eventForwarder = new EventForwarder(this.sendToClient.bind(this));
     this.claudeService = getClaudeService();
+    this.opencodeService = getOpenCodeService();
 
     // Log Claude availability on startup
     this.claudeService.isAvailable().then(async (available) => {
@@ -130,6 +136,7 @@ export class WebSocketConnectionManager {
 
     // Restore Claude session IDs from registry on startup
     void this.restoreClaudeSessionIds();
+    void this.restoreOpencodeSessionIds();
 
     // Create MultiSessionManager with broadcast function
     // Configure aggressive cleanup for lazy session management
@@ -182,6 +189,21 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private async restoreOpencodeSessionIds(): Promise<void> {
+    try {
+      const registry = getSessionRegistry();
+      const opencodeSessions = await registry.listBySdkType('opencode');
+      for (const entry of opencodeSessions) {
+        this.opencodeSessionIds.add(entry.id);
+      }
+      if (opencodeSessions.length > 0) {
+        console.log(`[WebUI] Restored ${opencodeSessions.length} OpenCode session ID(s) from registry`);
+      }
+    } catch (err) {
+      console.warn('[WebUI] Failed to restore OpenCode session IDs from registry:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   /**
    * Set up broadcasting of session status changes to all clients.
    * Covers both Pi SDK sessions (via MultiSessionManager) and
@@ -209,6 +231,20 @@ export class WebSocketConnectionManager {
         const subscribers = this.claudeSubs.getSubscribers(sessionId);
         if (subscribers.size > 0) {
           const isRunning = this.claudeService.isRunning(sessionId);
+          this.broadcast({
+            type: 'session_status',
+            sessionId,
+            sessionPath: sessionId,
+            status: isRunning ? 'streaming' : 'idle',
+            lastActivity: new Date().toISOString(),
+          });
+        }
+      }
+
+      for (const sessionId of this.opencodeSessionIds) {
+        const subscribers = this.opencodeSubs.getSubscribers(sessionId);
+        if (subscribers.size > 0) {
+          const isRunning = this.opencodeService.isRunning(sessionId);
           this.broadcast({
             type: 'session_status',
             sessionId,
@@ -551,6 +587,29 @@ export class WebSocketConnectionManager {
             error: 'Claude availability check failed',
           } as unknown as ServerMessage);
         });
+
+        void this.opencodeService.isAvailable().then(async (available) => {
+          if (available) {
+            const setup = await this.opencodeService.validateSetup();
+            this.sendMessage(clientId, {
+              type: 'opencode_available',
+              available: setup.ok,
+              error: setup.ok ? null : (setup.error ?? null),
+            } as unknown as ServerMessage);
+          } else {
+            this.sendMessage(clientId, {
+              type: 'opencode_available',
+              available: false,
+              error: 'OpenCode not installed',
+            } as unknown as ServerMessage);
+          }
+        }).catch(() => {
+          this.sendMessage(clientId, {
+            type: 'opencode_available',
+            available: false,
+            error: 'OpenCode availability check failed',
+          } as unknown as ServerMessage);
+        });
         break;
       }
 
@@ -590,6 +649,11 @@ export class WebSocketConnectionManager {
     }
 
     // Check if this is a Claude session — dispatch to Claude handler
+    if (this.opencodeSessionIds.has(sessionPath)) {
+      await this.handleOpencodePrompt(clientId, sessionPath, message.message, message.images);
+      return;
+    }
+
     if (this.claudeSessionIds.has(sessionPath)) {
       await this.handleClaudePrompt(clientId, sessionPath, message.message, message.images);
       return;
@@ -679,6 +743,53 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private async handleOpencodePrompt(
+    clientId: string,
+    sessionId: string,
+    prompt: string,
+    _images?: ImageContent[]
+  ): Promise<void> {
+    try {
+      await this.opencodeService.sendPrompt(
+        sessionId,
+        prompt,
+        (normalizedEvent) => {
+          const piEvent = normEventToPiFormat(normalizedEvent);
+          const msg = { type: 'session_event' as const, sessionId, event: piEvent };
+          const subscribers = this.opencodeSubs.getSubscribers(sessionId);
+          if (subscribers.size > 0) {
+            for (const subId of subscribers) {
+              this.sendMessage(subId, msg);
+            }
+          } else {
+            this.sendMessage(clientId, msg);
+          }
+        },
+        (error) => {
+          const subscribers = this.opencodeSubs.getSubscribers(sessionId);
+          if (error) {
+            for (const subId of subscribers) {
+              this.sendMessage(subId, { type: 'error', message: error.message, code: 'OPENCODE_ERROR' });
+            }
+          }
+          for (const subId of subscribers) {
+            this.sendMessage(subId, {
+              type: 'session_event',
+              sessionId,
+              event: { type: 'agent_end', result: null, usage: {} },
+            } as unknown as ServerMessage);
+          }
+        },
+      );
+    } catch (error) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'OpenCode prompt failed',
+        code: 'OPENCODE_ERROR',
+      });
+    }
+  }
+
   private async handleSteer(clientId: string, message: { type: 'steer'; message: string }): Promise<void> {
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
@@ -719,8 +830,20 @@ export class WebSocketConnectionManager {
     if (this.claudeSessionIds.has(sessionPath)) {
       this.claudeService.abort(sessionPath);
 
-      // Broadcast abort state change (agent_end) to all subscribers
       const subscribers = this.claudeSubs.getSubscribers(sessionPath);
+      for (const subId of subscribers) {
+        this.sendMessage(subId, {
+          type: 'session_event',
+          sessionId: sessionPath,
+          event: { type: 'agent_end', result: null, usage: {} },
+        } as unknown as ServerMessage);
+      }
+      return;
+    }
+
+    if (this.opencodeSessionIds.has(sessionPath)) {
+      this.opencodeService.abort(sessionPath);
+      const subscribers = this.opencodeSubs.getSubscribers(sessionPath);
       for (const subId of subscribers) {
         this.sendMessage(subId, {
           type: 'session_event',
@@ -739,12 +862,36 @@ export class WebSocketConnectionManager {
 
   private async handleNewSession(
     clientId: string,
-    message: { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' }
+    message: { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' | 'opencode' }
   ): Promise<void> {
     console.log(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}, sdkType=${message.sdkType || 'pi'}`);
 
     const cwd = message.cwd || process.cwd();
     const sdkType = message.sdkType || 'pi';
+
+    if (sdkType === 'opencode') {
+      try {
+        const { sessionId } = await this.opencodeService.createSession(cwd);
+        this.opencodeSessionIds.add(sessionId);
+        this.clientViewingSession.set(clientId, sessionId);
+        this.opencodeSubs.subscribe(clientId, sessionId);
+        this.clientCwd.set(clientId, cwd);
+
+        this.sendMessage(clientId, {
+          type: 'session_created',
+          sessionId,
+          sessionPath: sessionId,
+          sdkType: 'opencode',
+        } as unknown as ServerMessage);
+      } catch (error) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to create OpenCode session',
+          code: 'SESSION_CREATE_FAILED',
+        });
+      }
+      return;
+    }
 
     if (sdkType === 'claude') {
       try {
@@ -822,16 +969,41 @@ export class WebSocketConnectionManager {
     }
 
     if (isClaudeSession) {
-      // Unsubscribe from old session (Claude or Pi) if different
       if (oldSessionPath && oldSessionPath !== sessionPath) {
         this.claudeSubs.unsubscribe(clientId, oldSessionPath);
         this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
       }
       this.clientViewingSession.set(clientId, sessionPath);
-      // Register as subscriber for this Claude session
       this.claudeSubs.subscribe(clientId, sessionPath);
       await this.replayClaudeHistory(clientId, sessionPath);
       console.log(`[handleSwitchSession] Client ${clientId} switched to Claude session ${sessionPath}`);
+      return;
+    }
+
+    let isOpencodeSession = this.opencodeSessionIds.has(sessionPath);
+    if (!isOpencodeSession) {
+      try {
+        const registry = getSessionRegistry();
+        const entry = await registry.get(sessionPath);
+        if (entry?.sdkType === 'opencode') {
+          isOpencodeSession = true;
+          this.opencodeSessionIds.add(sessionPath);
+        }
+      } catch {
+        // ignore lookup failures
+      }
+    }
+
+    if (isOpencodeSession) {
+      if (oldSessionPath && oldSessionPath !== sessionPath) {
+        this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
+        this.claudeSubs.unsubscribe(clientId, oldSessionPath);
+        this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
+      }
+      this.clientViewingSession.set(clientId, sessionPath);
+      this.opencodeSubs.subscribe(clientId, sessionPath);
+      await this.replayOpencodeHistory(clientId, sessionPath);
+      console.log(`[handleSwitchSession] Client ${clientId} switched to OpenCode session ${sessionPath}`);
       return;
     }
 
@@ -949,7 +1121,43 @@ export class WebSocketConnectionManager {
       this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
     } catch (error) {
       console.error(`[replayClaudeHistory] Error replaying history for ${sessionId}:`, error);
-      // Non-fatal: client will have empty history
+    }
+  }
+
+  private async replayOpencodeHistory(clientId: string, sessionId: string): Promise<void> {
+    const registry = getSessionRegistry();
+    const entry = await registry.get(sessionId);
+    if (!entry) {
+      this.sendMessage(clientId, { type: 'error', message: 'OpenCode session not found', code: 'SESSION_NOT_FOUND' } as unknown as ServerMessage);
+      return;
+    }
+
+    this.sendMessage(clientId, {
+      type: 'session_switched',
+      sessionId,
+      sessionPath: sessionId,
+      sdkType: 'opencode',
+      model: entry.model ?? '',
+      messages: [],
+      fileTimestamp: 0,
+      isStreaming: this.opencodeService.isRunning(sessionId),
+    } as unknown as ServerMessage);
+
+    try {
+      const events = await this.opencodeService.getReplayEvents(sessionId);
+      if (events.length === 0) return;
+
+      this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
+      for (const evt of events) {
+        this.sendMessage(clientId, {
+          type: 'session_event',
+          sessionId,
+          event: evt,
+        } as unknown as ServerMessage);
+      }
+      this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
+    } catch (error) {
+      console.error('[replayOpencodeHistory] Error:', error);
     }
   }
 
@@ -1086,7 +1294,7 @@ export class WebSocketConnectionManager {
     const piSessions = await this.piService.listAllSessions();
 
     const formattedPiSessions: Array<{
-      id: string; path: string; sdkType: 'pi' | 'claude';
+      id: string; path: string;       sdkType: 'pi' | 'claude' | 'opencode';
       firstMessage: string; messageCount: number; cwd: string;
       name?: string; createdAt: string; lastActivity: string;
     }> = piSessions.map(s => ({
@@ -1119,6 +1327,24 @@ export class WebSocketConnectionManager {
       allSessions = [...formattedPiSessions, ...formattedClaudeSessions];
     } catch (e) {
       console.warn('[handleGetSessions] Failed to load Claude sessions:', e instanceof Error ? e.message : String(e));
+    }
+
+    try {
+      const opencodeEntries = await this.opencodeService.listSessions();
+      const formattedOpencodeSessions = opencodeEntries.map(entry => ({
+        id: entry.id,
+        path: entry.id,
+        sdkType: 'opencode' as const,
+        firstMessage: entry.firstMessage || '',
+        messageCount: entry.messageCount || 0,
+        cwd: entry.cwd || '',
+        name: undefined,
+        createdAt: entry.createdAt || new Date().toISOString(),
+        lastActivity: entry.lastActivity || new Date().toISOString(),
+      }));
+      allSessions = [...allSessions, ...formattedOpencodeSessions];
+    } catch (e) {
+      console.warn('[handleGetSessions] Failed to load OpenCode sessions:', e instanceof Error ? e.message : String(e));
     }
 
     this.sendMessage(clientId, {
@@ -1221,6 +1447,15 @@ export class WebSocketConnectionManager {
           code: 'MODEL_CHANGE_FAILED',
         });
       }
+      return;
+    }
+
+    if (this.opencodeSessionIds.has(sessionPath)) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'Model change for OpenCode sessions is not yet supported',
+        code: 'NOT_IMPLEMENTED',
+      });
       return;
     }
 
@@ -1493,6 +1728,7 @@ export class WebSocketConnectionManager {
 
       // Unsubscribe client from all Claude sessions
       this.claudeSubs.unsubscribeAll(clientId);
+      this.opencodeSubs.unsubscribeAll(clientId);
 
       // Clean up client tracking data
       this.clientCwd.delete(clientId);
