@@ -45,6 +45,85 @@ This path exists because:
 
 The existing Claude Direct implementation is the closest architectural analogue and should be treated as the baseline pattern.
 
+### 3.0 Where to inspect Claude Direct in detail
+
+Agents implementing OpenCode Direct should read the Claude Direct path carefully before planning changes.
+
+Start with these repo docs:
+
+- `README.md`
+  - overall product/runtime summary
+  - confirms the two current runtime paths and where Claude Direct fits operationally
+- `docs/ARCHITECTURE.md`
+  - system architecture and runtime-path overview
+- `docs/CLAUDE-DIRECT-UX-ISSUES.md`
+  - highly relevant analysis of the Claude Direct path, including implemented fixes, architectural trade-offs, and why some Claude Direct constraints came from `claude -p`
+- `docs/PROTOCOL.md`
+  - shared client/server event contract used by the UI
+
+Then inspect these implementation files:
+
+- `server/src/claude/claude-service.ts`
+  - Claude session lifecycle, registry integration, prompt dispatch, persistence hooks
+- `server/src/claude/claude-process-pool.ts`
+  - subprocess spawning, permission-mode strategy, abort handling, busy/retry/lock recovery
+- `server/src/claude/claude-event-normalizer.ts`
+  - raw Claude stream → Pi Web UI normalized events
+- `server/src/claude/claude-session-store.ts`
+  - Claude-specific JSONL persistence owned by Pi Web UI
+- `server/src/claude/claude-history-replay.ts`
+  - conversion from stored Claude JSONL entries into replayable Pi Web UI events
+- `server/src/claude/claude-session-subscribers.ts`
+  - multi-viewer subscriber fanout model
+- `server/src/websocket/connection.ts`
+  - runtime routing, session switching, replay triggering, subscriber broadcasts, abort path, status broadcasting
+- `server/src/session-registry.ts`
+  - unified session registry used across Pi SDK and Claude Direct
+
+Also inspect the client-side consumers that make the runtime paths feel unified:
+
+- `client/src/store/sessionStore.ts`
+  - message/event handling for live streaming, replay, tool cards, and session status
+- `client/src/lib/history-replay.ts`
+  - frontend replay buffering/ordering behaviour
+- `client/src/hooks/useSessionStream.ts`
+  - streaming/session interaction model
+
+Useful tests for understanding expected Claude Direct behaviour:
+
+- `server/tests/unit/claude/claude-event-normalizer.test.ts`
+- `server/tests/unit/claude/claude-history-replay.test.ts`
+- `server/tests/unit/claude/claude-process-pool.test.ts`
+- `server/tests/unit/websocket/claude-ux-fixes.test.ts`
+- `tests/e2e/claude-session-chat.spec.ts`
+- `tests/e2e/claude-model-selector.spec.ts`
+
+Commit history worth reading for practical improvements and regressions:
+
+```bash
+git log --oneline --decorate -50
+git log --oneline --decorate --grep="Claude Direct"
+```
+
+Especially inspect these recent Claude Direct commits and related docs:
+
+- `c7b42b2` — dual-SDK architecture introduction
+- `8b402e6` — use `--resume` for follow-up turns
+- `8335a3e` — capture confirmed Claude session ID
+- `8f5a782` / `181c131` / `6a81913` — permission mode evolution
+- `09f131e` — abort recoverability improvements
+- `aff8fbc` — multi-subscriber broadcasting
+- `58826a0` — session replay/tool-running fixes
+- `819b080` — Claude Direct UX fixes
+- `3be49e1` — stale last-prompt lock recovery
+- `b42403d` and `docs/CLAUDE-DIRECT-UX-ISSUES.md` — architecture/UX analysis
+
+OpenCode Direct should be planned only after reading enough of the above to understand:
+
+1. how Claude Direct is made to look like the Pi SDK path in the UI,
+2. which pieces are generic reusable patterns,
+3. and which pieces were Claude-specific workarounds that OpenCode should avoid.
+
 ### 3.1 What Claude Direct currently does
 
 The Claude Direct runtime path uses:
@@ -671,6 +750,8 @@ Instead, OpenCode provider auth should be configured using supported OpenCode me
 For OpenCode-backed GLM usage, provider config should point to the **real OpenCode Z.AI Coding Plan provider**, not a Pi-created imitation.
 
 ## 14. Similarities vs differences with Claude Direct
+
+Before implementing this section in code, re-read Section 3.0 above and inspect the actual Claude Direct files and tests. The implementation goal is not to copy Claude Direct line-for-line, but to preserve its successful integration patterns while replacing Claude-specific subprocess workarounds with OpenCode-native server/API flows.
 
 ## 14.1 Similarities we want
 
