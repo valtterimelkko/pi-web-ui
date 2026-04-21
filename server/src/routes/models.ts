@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { getPiService } from '../pi/index.js';
+import { getOpenCodeService } from '../opencode/index.js';
 import { apiLimiter } from '../security/rate-limit.js';
 
 const router = Router();
@@ -11,6 +12,15 @@ router.use(apiLimiter);
 // GET /api/models - List available models
 router.get('/', async (req: Request, res: Response) => {
   try {
+    const sdkType = typeof req.query.sdkType === 'string' ? req.query.sdkType : 'pi';
+
+    if (sdkType === 'opencode') {
+      const opencodeService = getOpenCodeService();
+      const models = await opencodeService.getAvailableModels();
+      res.json({ models });
+      return;
+    }
+
     const piService = getPiService();
     const models = await piService.getAvailableModels();
     

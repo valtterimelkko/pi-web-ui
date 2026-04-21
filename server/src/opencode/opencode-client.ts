@@ -13,6 +13,12 @@ export class OpenCodeClient {
     this.authHeaders = authHeaders;
   }
 
+  private withDirectory(path: string, directory?: string): string {
+    if (!directory) return path;
+    const separator = path.includes('?') ? '&' : '?';
+    return `${path}${separator}directory=${encodeURIComponent(directory)}`;
+  }
+
   private async request(path: string, options: RequestInit = {}): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     const response = await fetch(url, {
@@ -30,8 +36,11 @@ export class OpenCodeClient {
     return response;
   }
 
-  async createSession(): Promise<OpenCodeSession> {
-    const response = await this.request('/session', { method: 'POST' });
+  async createSession(directory?: string): Promise<OpenCodeSession> {
+    const response = await this.request(this.withDirectory('/session', directory), {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
     return response.json() as Promise<OpenCodeSession>;
   }
 
@@ -45,10 +54,22 @@ export class OpenCodeClient {
     return response.json() as Promise<OpenCodeSession>;
   }
 
-  async promptAsync(sessionId: string, message: string): Promise<void> {
-    await this.request(`/session/${sessionId}/prompt_async`, {
+  async promptAsync(sessionId: string, directory: string, message: string, modelId?: string): Promise<void> {
+    const body: Record<string, unknown> = {
+      parts: [{ type: 'text', text: message }],
+    };
+
+    if (modelId) {
+      const [providerID, ...modelParts] = modelId.split('/');
+      const resolvedModelID = modelParts.join('/');
+      if (providerID && resolvedModelID) {
+        body.model = { providerID, modelID: resolvedModelID };
+      }
+    }
+
+    await this.request(this.withDirectory(`/session/${sessionId}/prompt_async`, directory), {
       method: 'POST',
-      body: JSON.stringify({ parts: [{ type: 'text', text: message }] }),
+      body: JSON.stringify(body),
     });
   }
 
@@ -60,29 +81,29 @@ export class OpenCodeClient {
     return response.json();
   }
 
-  async getMessages(sessionId: string): Promise<OpenCodeMessage[]> {
-    const response = await this.request(`/session/${sessionId}/message`);
+  async getMessages(sessionId: string, directory: string): Promise<OpenCodeMessage[]> {
+    const response = await this.request(this.withDirectory(`/session/${sessionId}/message`, directory));
     return response.json() as Promise<OpenCodeMessage[]>;
   }
 
-  async abort(sessionId: string): Promise<void> {
-    await this.request(`/session/${sessionId}/abort`, { method: 'POST' });
+  async abort(sessionId: string, directory: string): Promise<void> {
+    await this.request(this.withDirectory(`/session/${sessionId}/abort`, directory), { method: 'POST' });
   }
 
-  async replyPermission(sessionId: string, permissionId: string, approved: boolean): Promise<void> {
-    await this.request(`/session/${sessionId}/permissions/${permissionId}`, {
+  async replyPermission(sessionId: string, directory: string, permissionId: string, approved: boolean): Promise<void> {
+    await this.request(this.withDirectory(`/session/${sessionId}/permissions/${permissionId}`, directory), {
       method: 'POST',
-      body: JSON.stringify({ response: approved }),
+      body: JSON.stringify({ response: approved ? 'once' : 'reject' }),
     });
   }
 
-  async getProviders(): Promise<unknown> {
-    const response = await this.request('/config/providers');
+  async getProviders(directory?: string): Promise<unknown> {
+    const response = await this.request(this.withDirectory('/config/providers', directory));
     return response.json();
   }
 
-  subscribeEvents(onEvent: (event: OpenCodeSSEEvent) => void): () => void {
-    const url = `${this.baseUrl}/event`;
+  subscribeEvents(onEvent: (event: OpenCodeSSEEvent) => void, directory?: string): () => void {
+    const url = `${this.baseUrl}${this.withDirectory('/event', directory)}`;
     const headers: Record<string, string> = { ...this.authHeaders };
 
     let aborted = false;

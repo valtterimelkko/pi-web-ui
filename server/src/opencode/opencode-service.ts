@@ -72,7 +72,7 @@ export class OpenCodeService {
   async createSession(cwd: string): Promise<{ sessionId: string; opencodeSessionId: string }> {
     await this.ensureServer();
 
-    const opencodeSession = await this.client.createSession();
+    const opencodeSession = await this.client.createSession(cwd);
     const sessionId = randomUUID();
 
     this.opencodeSessionIds.set(sessionId, opencodeSession.id);
@@ -82,6 +82,7 @@ export class OpenCodeService {
       id: sessionId,
       sdkType: 'opencode',
       path: sessionId,
+      opencodeSessionId: opencodeSession.id,
       cwd,
       firstMessage: '',
       messageCount: 0,
@@ -102,7 +103,7 @@ export class OpenCodeService {
       throw new Error(`OpenCode session not found: ${sessionId}`);
     }
 
-    const ocSessionId = this.opencodeSessionIds.get(sessionId);
+    const ocSessionId = await this.getOpencodeSessionId(sessionId);
     if (!ocSessionId) {
       throw new Error(`Registry entry for ${sessionId} is missing opencodeSessionId`);
     }
@@ -123,7 +124,7 @@ export class OpenCodeService {
     try { onEvent(agentStartEvent); } catch { /* non-fatal */ }
 
     try {
-      await this.client.promptAsync(ocSessionId, prompt);
+      await this.client.promptAsync(ocSessionId, entry.cwd, prompt, entry.model);
     } catch (err) {
       this.completeSession(sessionId, err instanceof Error ? err : new Error(String(err)));
     }
@@ -140,11 +141,14 @@ export class OpenCodeService {
   }
 
   abort(sessionId: string): void {
-    const ocSessionId = this.opencodeSessionIds.get(sessionId);
-    if (!ocSessionId) return;
-
-    this.client.abort(ocSessionId).catch((err) => {
-      console.error('[OpenCodeService] Abort failed:', err);
+    void this.registry.get(sessionId).then((entry) => {
+      if (!entry) return;
+      return this.getOpencodeSessionId(sessionId).then((ocSessionId) => {
+        if (!ocSessionId) return;
+        return this.client.abort(ocSessionId, entry.cwd).catch((err) => {
+          console.error('[OpenCodeService] Abort failed:', err);
+        });
+      });
     });
     this.completeSession(sessionId);
   }
@@ -154,12 +158,15 @@ export class OpenCodeService {
   }
 
   async getReplayEvents(sessionId: string): Promise<Array<Record<string, unknown>>> {
-    const ocSessionId = this.opencodeSessionIds.get(sessionId);
+    const entry = await this.registry.get(sessionId);
+    if (!entry) return [];
+
+    const ocSessionId = await this.getOpencodeSessionId(sessionId);
     if (!ocSessionId) return [];
 
     try {
       await this.ensureServer();
-      const messages = await this.client.getMessages(ocSessionId);
+      const messages = await this.client.getMessages(ocSessionId, entry.cwd);
       return opencodeMessagesToReplayEvents(messages, sessionId);
     } catch (err) {
       console.error('[OpenCodeService] Failed to get replay events:', err);
@@ -172,9 +179,11 @@ export class OpenCodeService {
     permissionId: string,
     approved: boolean,
   ): Promise<void> {
-    const ocSessionId = this.opencodeSessionIds.get(sessionId);
+    const entry = await this.registry.get(sessionId);
+    if (!entry) return;
+    const ocSessionId = await this.getOpencodeSessionId(sessionId);
     if (!ocSessionId) return;
-    await this.client.replyPermission(ocSessionId, permissionId, approved);
+    await this.client.replyPermission(ocSessionId, entry.cwd, permissionId, approved);
   }
 
   async listSessions() {
@@ -187,6 +196,51 @@ export class OpenCodeService {
 
   getSubscriberTracker(): OpenCodeSessionSubscribers {
     return this.subscribers;
+  }
+
+  async getAvailableModels(): Promise<Array<{
+    id: string;
+    name: string;
+    provider: string;
+    contextWindow: number;
+    maxTokens: number;
+    description: string;
+  }>> {
+    await this.ensureServer();
+    const providers = await this.client.getProviders();
+    const providerMap = (providers as { providers?: Record<string, { name?: string; models?: Record<string, { id?: string; name?: string; limit?: { context?: number; output?: number }; status?: string }> }> }).providers ?? {};
+
+    const models = Object.entries(providerMap).flatMap(([providerId, provider]) => {
+      if (providerId !== 'zai-coding-plan') return [];
+      const providerName = provider.name ?? providerId;
+      return Object.values(provider.models ?? {})
+        .filter((model) => model.status !== 'deprecated')
+        .map((model) => ({
+          id: `${providerId}/${model.id ?? ''}`,
+          name: model.name ?? (model.id ?? ''),
+          provider: providerName,
+          contextWindow: model.limit?.context ?? 0,
+          maxTokens: model.limit?.output ?? 0,
+          description: 'OpenCode Direct via Z.AI Coding Plan',
+        }))
+        .filter((model) => model.id !== `${providerId}/`);
+    });
+
+    return models.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async setModel(sessionId: string, modelId: string): Promise<string> {
+    const entry = await this.registry.get(sessionId);
+    if (!entry) throw new Error(`OpenCode session not found: ${sessionId}`);
+    await this.registry.upsert({
+      ...entry,
+      id: entry.id,
+      sdkType: 'opencode',
+      cwd: entry.cwd,
+      model: modelId,
+      opencodeSessionId: entry.opencodeSessionId,
+    });
+    return modelId;
   }
 
   private async ensureServer(): Promise<void> {
@@ -206,21 +260,33 @@ export class OpenCodeService {
 
   private async handleSSEEvent(event: OpenCodeSSEEvent): Promise<void> {
     const props = event.properties as Record<string, unknown> | undefined;
-    const ocSessionId = props?.sessionId as string | undefined;
+    const ocSessionId = (props?.sessionID as string | undefined) ?? (props?.sessionId as string | undefined);
     if (!ocSessionId) return;
 
     const sessionId = this.piSessionByOpencodeId.get(ocSessionId);
     if (!sessionId) {
-      const all = await this.registry.listBySdkType('opencode');
-      const found = all.find(e => {
-        const entryOcId = this.opencodeSessionIds.get(e.id);
-        return entryOcId === ocSessionId;
-      });
+      const found = await this.registry.getByOpencodeSessionId(ocSessionId);
+      if (found?.opencodeSessionId) {
+        this.opencodeSessionIds.set(found.id, found.opencodeSessionId);
+        this.piSessionByOpencodeId.set(found.opencodeSessionId, found.id);
+      }
       if (!found) return;
       await this.forwardSSEToSession(event, found.id);
       return;
     }
     await this.forwardSSEToSession(event, sessionId);
+  }
+
+  private async getOpencodeSessionId(sessionId: string): Promise<string | undefined> {
+    const cached = this.opencodeSessionIds.get(sessionId);
+    if (cached) return cached;
+
+    const entry = await this.registry.get(sessionId);
+    if (!entry?.opencodeSessionId) return undefined;
+
+    this.opencodeSessionIds.set(sessionId, entry.opencodeSessionId);
+    this.piSessionByOpencodeId.set(entry.opencodeSessionId, sessionId);
+    return entry.opencodeSessionId;
   }
 
   private async forwardSSEToSession(event: OpenCodeSSEEvent, sessionId: string): Promise<void> {

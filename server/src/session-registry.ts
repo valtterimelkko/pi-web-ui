@@ -143,6 +143,7 @@ export class SessionRegistryManager {
         sdkType: entry.sdkType,
         path: entry.path ?? '',
         claudeSessionId: entry.claudeSessionId,
+        opencodeSessionId: entry.opencodeSessionId,
         cwd: entry.cwd,
         model: entry.model,
         firstMessage: entry.firstMessage ?? '',
@@ -262,15 +263,21 @@ export class SessionRegistryManager {
   }
 }
 
-// Singleton instance
-let registryInstance: SessionRegistryManager | null = null;
+// Singleton instances keyed by registry path
+const registryInstances = new Map<string, SessionRegistryManager>();
 
 export function getSessionRegistry(registryPath?: string): SessionRegistryManager {
-  if (registryInstance === null) {
-    if (!registryPath) {
-      throw new Error('getSessionRegistry: registryPath required for first call');
+  if (!registryPath) {
+    if (registryInstances.size === 1) {
+      return Array.from(registryInstances.values())[0];
     }
-    registryInstance = new SessionRegistryManager(registryPath);
+    throw new Error('getSessionRegistry: registryPath required when no unique registry instance exists');
   }
-  return registryInstance;
+
+  let instance = registryInstances.get(registryPath);
+  if (!instance) {
+    instance = new SessionRegistryManager(registryPath);
+    registryInstances.set(registryPath, instance);
+  }
+  return instance;
 }

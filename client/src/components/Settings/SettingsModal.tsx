@@ -40,8 +40,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const errorMessage = useSessionStore((state) => state.error);
   const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   
-  // Check if current session is a Claude Direct session
+  // Runtime-specific model handling
   const isClaudeSession = useMemo(() => currentSessionSdkType === 'claude', [currentSessionSdkType]);
+  const isOpenCodeSession = useMemo(() => currentSessionSdkType === 'opencode', [currentSessionSdkType]);
 
   // Fetch models on mount (or use Claude models for Claude sessions)
   useEffect(() => {
@@ -70,7 +71,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         });
         
         const response = await Promise.race([
-          api.get('/api/models') as Promise<{ models: Model[] }>,
+          api.get(`/api/models?sdkType=${isOpenCodeSession ? 'opencode' : 'pi'}`) as Promise<{ models: Model[] }>,
           timeoutPromise
         ]);
         
@@ -87,7 +88,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     };
 
     fetchModels();
-  }, [isOpen, isClaudeSession]); // Depend on isOpen and isClaudeSession
+  }, [isOpen, isClaudeSession, isOpenCodeSession, storeCurrentModel]); // Depend on runtime and current model
 
   // Update current model when storeCurrentModel changes (separate from fetch)
   useEffect(() => {
@@ -178,11 +179,22 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   Claude Direct
                 </span>
               )}
+              {isOpenCodeSession && (
+                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700 border border-emerald-200">
+                  OpenCode Direct
+                </span>
+              )}
             </h3>
             {isClaudeSession && (
               <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
                 <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
                 <span>Claude Direct sessions only support Claude models (Opus, Sonnet, Haiku).</span>
+              </div>
+            )}
+            {isOpenCodeSession && (
+              <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
+                <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>OpenCode Direct sessions use OpenCode-backed Z.AI Coding Plan models.</span>
               </div>
             )}
             {isLoading ? (
@@ -208,7 +220,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                               setTimeout(() => reject(new Error('Request timeout')), 10000);
                             });
                             const response = await Promise.race([
-                              api.get('/api/models') as Promise<{ models: Model[] }>,
+                              api.get(`/api/models?sdkType=${isOpenCodeSession ? 'opencode' : 'pi'}`) as Promise<{ models: Model[] }>,
                               timeoutPromise
                             ]);
                             const modelList = response.models || [];

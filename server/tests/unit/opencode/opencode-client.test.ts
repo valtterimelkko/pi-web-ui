@@ -19,15 +19,15 @@ describe('OpenCodeClient', () => {
     mockFetch.mockReset();
   });
 
-  it('createSession() calls POST /session with correct headers', async () => {
+  it('createSession() calls POST /session with directory query and correct headers', async () => {
     const session = { id: 'sess-1' };
     mockFetch.mockResolvedValueOnce(jsonResponse(session));
 
-    const result = await client.createSession();
+    const result = await client.createSession('/root');
 
     expect(result).toEqual(session);
     expect(mockFetch).toHaveBeenCalledWith(
-      'http://localhost:8080/session',
+      'http://localhost:8080/session?directory=%2Froot',
       expect.objectContaining({ method: 'POST' }),
     );
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
@@ -47,52 +47,59 @@ describe('OpenCodeClient', () => {
     );
   });
 
-  it('getMessages(sessionId) calls GET /session/:id/message', async () => {
+  it('getMessages(sessionId) calls GET /session/:id/message with directory query', async () => {
     const msgs = [{ id: 'm1', role: 'user' as const, parts: [] }];
     mockFetch.mockResolvedValueOnce(jsonResponse(msgs));
 
-    const result = await client.getMessages('sess-42');
+    const result = await client.getMessages('sess-42', '/root');
 
     expect(result).toEqual(msgs);
     expect(mockFetch).toHaveBeenCalledWith(
-      'http://localhost:8080/session/sess-42/message',
+      'http://localhost:8080/session/sess-42/message?directory=%2Froot',
       expect.anything(),
     );
   });
 
-  it('promptAsync(sessionId, msg) calls POST /session/:id/prompt_async with body', async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({}));
+  it('promptAsync(sessionId, msg) calls POST /session/:id/prompt_async with directory query and model object', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
-    await client.promptAsync('sess-5', 'hello world');
+    await client.promptAsync('sess-5', '/root', 'hello world', 'zai-coding-plan/glm-5.1');
 
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:8080/session/sess-5/prompt_async?directory=%2Froot',
+      expect.anything(),
+    );
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(opts.method).toBe('POST');
-    expect(JSON.parse(opts.body as string)).toEqual({ parts: [{ type: 'text', text: 'hello world' }] });
+    expect(JSON.parse(opts.body as string)).toEqual({
+      model: { providerID: 'zai-coding-plan', modelID: 'glm-5.1' },
+      parts: [{ type: 'text', text: 'hello world' }],
+    });
   });
 
-  it('abort(sessionId) calls POST /session/:id/abort', async () => {
+  it('abort(sessionId) calls POST /session/:id/abort with directory query', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(null));
 
-    await client.abort('sess-9');
+    await client.abort('sess-9', '/root');
 
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(opts.method).toBe('POST');
     expect(mockFetch).toHaveBeenCalledWith(
-      'http://localhost:8080/session/sess-9/abort',
+      'http://localhost:8080/session/sess-9/abort?directory=%2Froot',
       expect.anything(),
     );
   });
 
-  it('replyPermission(sessionId, permId, true) calls POST with correct body', async () => {
+  it('replyPermission(sessionId, permId, true) calls POST with OpenCode response semantics', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(null));
 
-    await client.replyPermission('sess-1', 'perm-7', true);
+    await client.replyPermission('sess-1', '/root', 'perm-7', true);
 
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(opts.method).toBe('POST');
-    expect(JSON.parse(opts.body as string)).toEqual({ response: true });
+    expect(JSON.parse(opts.body as string)).toEqual({ response: 'once' });
     expect(mockFetch).toHaveBeenCalledWith(
-      'http://localhost:8080/session/sess-1/permissions/perm-7',
+      'http://localhost:8080/session/sess-1/permissions/perm-7?directory=%2Froot',
       expect.anything(),
     );
   });

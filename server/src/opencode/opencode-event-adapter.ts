@@ -3,6 +3,7 @@ import type { OpenCodeSSEEvent, OpenCodeMessage } from './opencode-types.js';
 
 export class OpenCodeEventAdapter {
   private currentMessageIdBySession: Map<string, string> = new Map();
+  private partTypeById: Map<string, string> = new Map();
 
   adaptSSEEvent(event: OpenCodeSSEEvent, sessionId: string): NormalizedEvent[] {
     const timestamp = Date.now();
@@ -13,7 +14,10 @@ export class OpenCodeEventAdapter {
       case 'message.part.delta': {
         const delta = props.delta as string | undefined;
         const messageID = props.messageID as string | undefined;
-        if (!delta || !messageID) return [];
+        const partID = props.partID as string | undefined;
+        const field = props.field as string | undefined;
+        if (!delta || !messageID || field !== 'text') return [];
+        if (partID && this.partTypeById.get(partID) === 'reasoning') return [];
 
         return [{
           type: 'message_update',
@@ -57,21 +61,26 @@ export class OpenCodeEventAdapter {
         const part = props.part as Record<string, unknown> | undefined;
         if (!part) return [];
         const partType = part.type as string;
+        const partID = part.id as string | undefined;
+        if (partID) {
+          this.partTypeById.set(partID, partType);
+        }
 
-        if (partType === 'step-start') {
+        if (partType === 'step-start' || partType === 'reasoning' || partType === 'text') {
           return [];
         }
 
         if (partType === 'tool-invocation') {
-          const partID = part.id as string;
+          const toolCallPartId = part.id as string;
           const toolName = part.toolName as string | undefined ?? 'unknown';
           const args = part.args;
+          const toolCallId = (part.toolInvocationId as string | undefined) ?? toolCallPartId;
           return [{
             type: 'tool_execution_start',
             sessionId,
             timestamp,
             data: {
-              toolCallId: partID,
+              toolCallId,
               toolName,
               input: args ?? {},
             },
@@ -190,5 +199,6 @@ export class OpenCodeEventAdapter {
 
   reset(): void {
     this.currentMessageIdBySession.clear();
+    this.partTypeById.clear();
   }
 }

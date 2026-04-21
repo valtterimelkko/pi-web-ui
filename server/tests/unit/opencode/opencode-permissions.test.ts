@@ -231,12 +231,12 @@ describe('OpenCode Permission Bridge', () => {
 
       try {
         const client = new OpenCodeClient('http://localhost:4096', {});
-        await client.replyPermission('sess-1', 'perm-1', true);
+        await client.replyPermission('sess-1', '/root', 'perm-1', true);
 
         const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
-        expect(url).toBe('http://localhost:4096/session/sess-1/permissions/perm-1');
+        expect(url).toBe('http://localhost:4096/session/sess-1/permissions/perm-1?directory=%2Froot');
         expect(opts.method).toBe('POST');
-        expect(JSON.parse(opts.body as string)).toEqual({ response: true });
+        expect(JSON.parse(opts.body as string)).toEqual({ response: 'once' });
       } finally {
         vi.unstubAllGlobals();
       }
@@ -255,10 +255,10 @@ describe('OpenCode Permission Bridge', () => {
 
       try {
         const client = new OpenCodeClient('http://localhost:4096', {});
-        await client.replyPermission('sess-1', 'perm-2', false);
+        await client.replyPermission('sess-1', '/root', 'perm-2', false);
 
         const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
-        expect(JSON.parse(opts.body as string)).toEqual({ response: false });
+        expect(JSON.parse(opts.body as string)).toEqual({ response: 'reject' });
       } finally {
         vi.unstubAllGlobals();
       }

@@ -28,33 +28,33 @@ describe('OpenCode Integration — Session Lifecycle', () => {
   });
 
   it('creates a session via HTTP API', async () => {
-    const session = await client.createSession();
+    const session = await client.createSession('/tmp');
     expect(session.id).toBeDefined();
     expect(session.id).toMatch(/^oc-mock-/);
   });
 
   it('lists sessions after creation', async () => {
-    await client.createSession();
-    await client.createSession();
+    await client.createSession('/tmp');
+    await client.createSession('/tmp');
 
     const sessions = await client.listSessions();
     expect(sessions.length).toBeGreaterThanOrEqual(2);
   });
 
   it('gets a specific session by ID', async () => {
-    const session = await client.createSession();
+    const session = await client.createSession('/tmp');
     const fetched = await client.getSession(session.id);
     expect(fetched.id).toBe(session.id);
   });
 
   it('sends a prompt via prompt_async and verifies messages are stored', async () => {
-    const session = await client.createSession();
+    const session = await client.createSession('/tmp');
 
-    await client.promptAsync(session.id, 'hello integration test');
+    await client.promptAsync(session.id, '/tmp', 'hello integration test');
 
     await new Promise(r => setTimeout(r, 300));
 
-    const messages = await client.getMessages(session.id);
+    const messages = await client.getMessages(session.id, '/tmp');
     expect(messages.length).toBeGreaterThanOrEqual(2);
 
     const roles = messages.map(m => m.info.role);
@@ -63,10 +63,10 @@ describe('OpenCode Integration — Session Lifecycle', () => {
   });
 
   it('aborts a running session', async () => {
-    const session = await client.createSession();
+    const session = await client.createSession('/tmp');
 
-    await client.promptAsync(session.id, 'long running task');
-    await client.abort(session.id);
+    await client.promptAsync(session.id, '/tmp', 'long running task');
+    await client.abort(session.id, '/tmp');
 
     const requests = mockServer.getRequests();
     const abortReq = requests.find(r => r.url.includes('/abort'));
@@ -75,11 +75,11 @@ describe('OpenCode Integration — Session Lifecycle', () => {
   });
 
   it('sends a synchronous message and gets a response', async () => {
-    const session = await client.createSession();
+    const session = await client.createSession('/tmp');
 
     await client.sendMessage(session.id, 'sync hello');
 
-    const messages = await client.getMessages(session.id);
+    const messages = await client.getMessages(session.id, '/tmp');
     expect(messages.length).toBeGreaterThanOrEqual(2);
     const userMsg = messages.find(m => m.info.role === 'user');
     const assistantMsg = messages.find(m => m.info.role === 'assistant');
@@ -95,10 +95,10 @@ describe('OpenCode Integration — History Replay', () => {
     await mockServer.start();
     const client = new OpenCodeClient(`http://127.0.0.1:${port}`, {});
 
-    const session = await client.createSession();
+    const session = await client.createSession('/tmp');
     await client.sendMessage(session.id, 'test replay');
 
-    const messages = await client.getMessages(session.id);
+    const messages = await client.getMessages(session.id, '/tmp');
     const events = opencodeMessagesToReplayEvents(messages, 'pi-session-1');
 
     expect(events.length).toBeGreaterThan(0);
@@ -121,10 +121,10 @@ describe('OpenCode Integration — History Replay', () => {
     await mockServer.start();
     const client = new OpenCodeClient(`http://127.0.0.1:${port}`, {});
 
-    const session = await client.createSession();
+    const session = await client.createSession('/tmp');
     await client.sendMessage(session.id, 'multi-turn 1');
 
-    const messages = await client.getMessages(session.id);
+    const messages = await client.getMessages(session.id, '/tmp');
     const events = opencodeMessagesToReplayEvents(messages, 'pi-session-1');
 
     const startEvents = events.filter(e => e.type === 'message_start');
@@ -150,8 +150,8 @@ describe('OpenCode Integration — SSE Event Adapter', () => {
       { type: 'message.updated', properties: { sessionId, info: { id: 'm1', role: 'user' } } },
       { type: 'message.updated', properties: { sessionId, info: { id: 'm1', role: 'user', finish: 'stop' } } },
       { type: 'message.updated', properties: { sessionId, info: { id: 'm2', role: 'assistant' } } },
-      { type: 'message.part.delta', properties: { sessionId, messageID: 'm2', delta: 'Hello ' } },
-      { type: 'message.part.delta', properties: { sessionId, messageID: 'm2', delta: 'World' } },
+      { type: 'message.part.delta', properties: { sessionId, messageID: 'm2', field: 'text', delta: 'Hello ' } },
+      { type: 'message.part.delta', properties: { sessionId, messageID: 'm2', field: 'text', delta: 'World' } },
       { type: 'message.updated', properties: { sessionId, info: { id: 'm2', role: 'assistant', finish: 'stop' } } },
       { type: 'session.idle', properties: { sessionId } },
     ];

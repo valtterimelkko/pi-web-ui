@@ -1480,11 +1480,16 @@ export class WebSocketConnectionManager {
     }
 
     if (this.opencodeSessionIds.has(sessionPath)) {
-      this.sendMessage(clientId, {
-        type: 'error',
-        message: 'Model change for OpenCode sessions is not yet supported',
-        code: 'NOT_IMPLEMENTED',
-      });
+      try {
+        const normalizedModel = await this.opencodeService.setModel(sessionPath, message.modelId);
+        this.sendMessage(clientId, { type: 'model_changed', modelId: normalizedModel });
+      } catch (error) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to change model',
+          code: 'MODEL_CHANGE_FAILED',
+        });
+      }
       return;
     }
 
