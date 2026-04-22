@@ -4,6 +4,9 @@ import { useUIStore } from './uiStore';
 import { getPreferences, patchPreferences } from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
 
+import { useTransferStore } from './transferStore';
+
+
 // Maximum sessions to keep in memory (LRU cache limit)
 const MAX_CACHED_SESSIONS = 5;
 
@@ -1958,6 +1961,35 @@ export const useSessionStore = create<SessionState>()(
               type: 'error' as const,
               message: pinErrMsg.error,
             });
+            break;
+          }
+
+          case 'session_transfer_completed': {
+            const transferMsg = msg as unknown as {
+              sourceSessionId: string;
+              targetSessionId: string;
+              createdNewSession: boolean;
+            };
+            console.log(`[sessionStore] Transfer completed: ${transferMsg.sourceSessionId} -> ${transferMsg.targetSessionId}`);
+            useTransferStore.getState().setSucceeded(transferMsg.targetSessionId);
+            if (transferMsg.createdNewSession) {
+              useUIStore.getState().addToast({
+                type: 'success' as const,
+                message: 'Session context transferred successfully',
+              });
+            }
+            break;
+          }
+
+          case 'session_transfer_failed': {
+            const failMsg = msg as unknown as {
+              sourceSessionId: string;
+              targetSessionId?: string;
+              message: string;
+              code: string;
+            };
+            console.warn(`[sessionStore] Transfer failed: ${failMsg.code} - ${failMsg.message}`);
+            useTransferStore.getState().setFailed(failMsg.code, failMsg.message);
             break;
           }
         }

@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { Trash2, Edit2, Check, X, Archive, ArchiveRestore, Download, FileText, FileJson, Code, Loader2, Pin, PinOff } from 'lucide-react';
+import { Trash2, Edit2, Check, X, Archive, ArchiveRestore, Download, FileText, FileJson, Code, Loader2, Pin, PinOff, GripVertical } from 'lucide-react';
 import type { Session } from '../../store/sessionStore';
 import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { useTransferStore } from '../../store/transferStore';
 import { deleteSession } from '../../lib/api';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { WorkerStatusIndicator } from './WorkerStatusIndicator';
@@ -11,6 +12,8 @@ interface SessionItemProps {
   session: Session;
   isActive: boolean;
   isArchived?: boolean;
+  isDropTarget?: boolean;
+  onDrop?: (sourceSessionId: string) => void;
 }
 
 interface ContextMenuState {
@@ -19,7 +22,7 @@ interface ContextMenuState {
   y: number;
 }
 
-export function SessionItem({ session, isActive, isArchived }: SessionItemProps) {
+export function SessionItem({ session, isActive, isArchived, isDropTarget, onDrop }: SessionItemProps) {
   const { switchSession, pinSession, unpinSession } = useWebSocket();
   const archiveSession = useSessionStore(state => state.archiveSession);
   const unarchiveSession = useSessionStore(state => state.unarchiveSession);
@@ -34,19 +37,123 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
   const switchingToSessionId = useSessionStore(state => state.switchingToSessionId);
   const sessions = useSessionStore(state => state.sessions);
   const setSessions = useSessionStore(state => state.setSessions);
+  const transferDragging = useTransferStore(state => state.isDragging);
+  const transferSource = useTransferStore(state => state.source);
+  const hoverTargetId = useTransferStore(state => state.hoverTargetId);
+  const setHoverTarget = useTransferStore(state => state.setHoverTarget);
+  const startDrag = useTransferStore(state => state.startDrag);
+  const endDrag = useTransferStore(state => state.endDrag);
+  const openConfirmExisting = useTransferStore(state => state.openConfirmExisting);
   
   const [showActions, setShowActions] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0 });
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
   
   const itemRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const dragStartPos = useRef<{ x: number; y: number } | null>(null);
+  const isDraggingRef = useRef(false);
   
   // Use web UI display name if set, otherwise fall back to session name or first message
   const webUIDisplayName = getSessionDisplayName(session.path);
   const [editName, setEditName] = useState(webUIDisplayName || session.name || '');
+
+  const isSelfDrop = transferSource?.sessionId === session.id;
+  const isValidDropTarget = isDropTarget && transferDragging && !isSelfDrop && !isArchived;
+  const isHighlighted = isDragOver && isValidDropTarget;
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (isEditing || contextMenu.visible) return;
+    if (e.button !== 0) return;
+    dragStartPos.current = { x: e.clientX, y: e.clientY };
+    isDraggingRef.current = false;
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!dragStartPos.current) return;
+    const dx = e.clientX - dragStartPos.current.x;
+    const dy = e.clientY - dragStartPos.current.y;
+    if (!isDraggingRef.current && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
+      isDraggingRef.current = true;
+      startDrag({
+        sessionId: session.id,
+        displayName: webUIDisplayName || session.name || session.firstMessage || 'Session',
+        sdkType: session.sdkType || 'pi',
+        cwd: session.cwd,
+      });
+    }
+  };
+
+  const handleMouseUp = () => {
+    dragStartPos.current = null;
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        endDrag();
+      }
+      dragStartPos.current = null;
+    };
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
+  }, [endDrag]);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!isValidDropTarget) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (hoverTargetId !== session.id) {
+      setHoverTarget(session.id);
+    }
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragOver(false);
+    if (hoverTargetId === session.id) {
+      setHoverTarget(null);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    setHoverTarget(null);
+    if (!isValidDropTarget) return;
+    const sourceId = e.dataTransfer.getData('application/session-id');
+    if (!sourceId || sourceId === session.id) return;
+    if (onDrop) {
+      onDrop(sourceId);
+    } else {
+      const sourceSession = useSessionStore.getState().sessions.find(s => s.id === sourceId);
+      if (sourceSession) {
+        const sourceDisplayName = useSessionStore.getState().getSessionDisplayName(sourceSession.path) || sourceSession.name || 'Session';
+        openConfirmExisting(
+          {
+            sessionId: sourceSession.id,
+            displayName: sourceDisplayName,
+            sdkType: sourceSession.sdkType || 'pi',
+            cwd: sourceSession.cwd,
+          },
+          {
+            sessionId: session.id,
+            displayName: webUIDisplayName || session.name || 'Session',
+            sdkType: session.sdkType || 'pi',
+            cwd: session.cwd,
+          },
+        );
+      }
+    }
+    endDrag();
+  };
 
   // Check if session has active status (streaming or busy)
   const sessionStatus = sessionData?.status;
@@ -246,15 +353,29 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
         onMouseEnter={() => setShowActions(true)}
         onMouseLeave={() => setShowActions(false)}
         onContextMenu={handleContextMenu}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('application/session-id', session.id);
+          e.dataTransfer.effectAllowed = 'copy';
+        }}
         role="listitem"
         tabIndex={0}
         className={`
-          group relative py-2 px-3 rounded-md cursor-pointer transition-all duration-150 outline-none
+          group relative py-2 px-3 rounded-md cursor-pointer transition-all duration-150 outline-none select-none
           ${isActive
             ? 'bg-blue-50 border-l-2 border-blue-500'
             : 'hover:bg-gray-100 border-l-2 border-transparent'
           }
           ${isDeleting ? 'opacity-50 pointer-events-none' : ''}
+          ${isHighlighted ? 'ring-2 ring-blue-400 bg-blue-50' : ''}
+          ${transferDragging && !isValidDropTarget && transferSource?.sessionId !== session.id ? 'opacity-60' : ''}
+          ${transferDragging && transferSource?.sessionId === session.id ? 'opacity-40 ring-2 ring-blue-300 bg-blue-50' : ''}
         `}
       >
         {isEditing ? (
@@ -286,6 +407,7 @@ export function SessionItem({ session, isActive, isArchived }: SessionItemProps)
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2">
+            <GripVertical className="w-3 h-3 text-gray-300 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab" />
             <p className="text-sm text-gray-900 truncate flex-1">
               {displayName}
             </p>

@@ -3,9 +3,11 @@ import { PanelLeft, PanelRight, Plus, RefreshCw, Sun, Moon, ChevronRight, Coins 
 import { useSessionStore, useUIStore } from '../../store';
 import { useChatStore } from '../../store/chatStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { useTransferStore } from '../../store/transferStore';
 import { SessionList } from './SessionList';
 import { SessionFilters } from './SessionFilters';
 import { NewSessionModal } from '../Session';
+import { TransferConfirmationModal } from './TransferConfirmationModal';
 import { SessionItem } from './SessionItem';
 import { TokenUsageDashboard } from '../Usage';
 
@@ -56,6 +58,40 @@ export function Sidebar() {
   const handleCreateSession = (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode') => {
     createNewSession(cwd, sdkType);
   };
+
+  const transferStatus = useTransferStore(state => state.status);
+  const transferSource = useTransferStore(state => state.source);
+  const transferTargetMode = useTransferStore(state => state.targetMode);
+  const existingTarget = useTransferStore(state => state.existingTarget);
+  const newTargetRuntime = useTransferStore(state => state.newTargetRuntime);
+  const newTargetCwd = useTransferStore(state => state.newTargetCwd);
+  const transferScope = useTransferStore(state => state.scope);
+  const transferSetSubmitting = useTransferStore(state => state.setSubmitting);
+  const transferSetSucceeded = useTransferStore(state => state.setSucceeded);
+  const transferSetFailed = useTransferStore(state => state.setFailed);
+  const transferReset = useTransferStore(state => state.reset);
+  const { sendMessage } = useWebSocket();
+
+  const handleTransferConfirm = () => {
+    if (!transferSource) return;
+    transferSetSubmitting();
+    const payload: Record<string, unknown> = {
+      type: 'transfer_session_context',
+      sourceSessionId: transferSource.sessionId,
+      scope: transferScope,
+      sourceDisplayName: transferSource.displayName,
+    };
+    if (transferTargetMode === 'existing' && existingTarget?.sessionId) {
+      payload.targetSessionId = existingTarget.sessionId;
+    } else if (transferTargetMode === 'new') {
+      payload.createNew = true;
+      payload.targetSdkType = newTargetRuntime;
+      payload.targetCwd = newTargetCwd;
+    }
+    sendMessage(payload);
+  };
+
+  const isTransferModalOpen = transferStatus === 'confirming' || transferStatus === 'submitting' || transferStatus === 'succeeded' || transferStatus === 'failed';
 
   if (!sidebarOpen) {
     return (
@@ -223,6 +259,11 @@ export function Sidebar() {
         isOpen={showUsageDashboard}
         onClose={() => setShowUsageDashboard(false)}
       />
+
+      {/* Transfer Confirmation Modal */}
+      {isTransferModalOpen && (
+        <TransferConfirmationModal onConfirm={handleTransferConfirm} />
+      )}
     </>
   );
 }

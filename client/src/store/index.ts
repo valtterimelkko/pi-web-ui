@@ -6,3 +6,4 @@ export { useNavigationStore } from './navigationStore';
 export { useTerminalStore } from './terminalStore';
 export { useGitStore } from './gitStore';
 export { useFilesStore, type FileEntry } from './filesStore';
+export { useTransferStore } from './transferStore';
