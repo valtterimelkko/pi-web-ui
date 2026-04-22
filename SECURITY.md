@@ -1,63 +1,149 @@
 # Security
 
-> Canonical security reference for Pi Web UI. See [`README.md`](./README.md) for the overall system and [`AGENTS.md`](./AGENTS.md) for the must-follow implementation rules.
+> Canonical security reference for Pi Web UI. See [`README.md`](./README.md) for system context and [`AGENTS.md`](./AGENTS.md) for must-follow implementation rules.
 
-## Threat Model
+## Core Security Model
 
-### CSWSH (Cross-Site WebSocket Hijacking)
-**Mitigation:** Origin validation on WebSocket upgrade
-- All origins must be in `ALLOWED_ORIGINS` whitelist
-- Invalid origins receive 1008 close code
+Pi Web UI protects both a normal web application surface and a high-privilege agent/runtime surface.
 
-### XSS (Cross-Site Scripting)
-**Mitigation:**
-- Content Security Policy headers
-- React's built-in XSS protection
-- No user input rendered as HTML
+The important consequence is: **changes to auth, WebSocket routing, file access, or runtime forwarding can become security-sensitive very quickly.**
 
-### CSRF (Cross-Site Request Forgery)
-**Mitigation:**
-- Double-submit cookie pattern
-- CSRF token required for state changes
-- Tokens validated server-side
+## Main Defences
 
-### Prompt Injection
-**Mitigation:**
-- Pattern detection for known injection attempts
-- Structured prompts with clear boundaries
-- User input sanitized before processing
+### 1. Cookie-based authentication
 
-### Path Traversal
-**Mitigation:**
-- Path validation against allowed directories
-- `realpath()` resolution before access
-- No access outside project directories
+- Auth is handled with JWTs stored in cookies.
+- Protected REST routes use `cookieAuthMiddleware`.
+- Token generation and verification live under:
+  - `server/src/security/auth.ts`
+  - `server/src/middleware/auth.ts`
 
-### Credential Theft
-**Mitigation:**
-- httpOnly cookies (JavaScript cannot access)
-- Secure flag in production
-- Short token expiry (15 min)
+### 2. CSRF protection
 
-## Security Headers
+- WebSocket and state-changing flows require CSRF validation.
+- Do not remove or weaken the auth + CSRF handshake.
+- Relevant files:
+  - `server/src/security/csrf.ts`
+  - `server/src/websocket/connection.ts`
 
-The application uses Helmet for security headers:
+### 3. Origin validation / WebSocket protection
 
-- `X-Frame-Options: DENY`
-- `X-Content-Type-Options: nosniff`
-- `X-XSS-Protection: 1; mode=block`
-- `Content-Security-Policy` (strict)
+- WebSocket upgrades validate origin against `ALLOWED_ORIGINS`.
+- This protects against cross-site WebSocket hijacking.
+- Preserve this when changing WebSocket auth or reverse-proxy behaviour.
 
-## Rate Limiting
+### 4. Prompt-injection detection
 
-- 100 requests per minute per IP
-- Applied to all API endpoints
-- WebSocket messages also rate-limited
+- User prompts are screened before being forwarded to Pi SDK, Claude Direct, or OpenCode Direct.
+- Detection currently uses pattern-based checks in:
+  - `server/src/security/prompt-injection.ts`
+- Do not bypass this stage when adding new runtime paths or prompt-like entry points.
 
-## Audit Logging
+### 5. File/path validation
 
-Security events are logged:
-- Authentication attempts (success/failure)
-- WebSocket connection origins
-- File access attempts
-- Extension UI requests
+- File operations must validate paths before access.
+- Never trust client-supplied paths.
+- Validate against allowed roots and use resolved/real paths where relevant.
+
+### 6. Rate limiting
+
+- HTTP and WebSocket surfaces are rate-limited.
+- Relevant code:
+  - `server/src/security/rate-limit.ts`
+
+## Threat Model Summary
+
+### Cross-site WebSocket hijacking
+Mitigation:
+- origin allowlist
+- authenticated WebSocket session
+- CSRF token handshake
+
+### Cross-site request forgery
+Mitigation:
+- CSRF token validation
+- cookie auth middleware on protected routes
+
+### XSS
+Mitigation:
+- React escaping by default
+- no direct unsafe HTML rendering for user content
+- security headers via Helmet / server config
+
+### Prompt injection / runtime manipulation
+Mitigation:
+- prompt-injection detection before forwarding to runtimes
+- runtime routing stays server-side
+- permission/approval flows remain explicit
+
+### Path traversal / arbitrary file access
+Mitigation:
+- explicit path validation
+- constrained file APIs
+- avoid raw filesystem access from unvalidated request data
+
+### Resource abuse / denial of service
+Mitigation:
+- rate limiting
+- worker/session cleanup rules
+- runtime-specific lifecycle guards
+- pinned-session limits
+
+## Runtime-specific Security Notes
+
+### Pi SDK
+- Pi sessions and tools can access local resources via approved tool calls.
+- Preserve extension approval and session lifecycle protections.
+
+### Claude Direct
+- Runs `claude -p` subprocesses server-side.
+- Treat subprocess spawning, environment inheritance, and abort handling as sensitive.
+
+### OpenCode Direct
+- Uses a local `opencode serve` backend.
+- If enabled, OpenCode availability and permission approval must stay server-mediated.
+- Do not expose OpenCode backend credentials or control surfaces directly to the browser.
+
+## Headers and Browser Protections
+
+The app uses standard browser-hardening controls such as:
+- CSP-related protection
+- frame protections
+- MIME sniffing protections
+
+Check server bootstrap/config if these need to change, and treat changes as security-sensitive.
+
+## Audit / Logging Expectations
+
+Security-relevant events should remain visible in logs where appropriate, for example:
+- login success/failure
+- invalid auth/CSRF attempts
+- suspicious prompt-injection hits
+- runtime availability failures
+- unusual permission/approval behaviour
+
+## Rules for Contributors
+
+Do not:
+- remove `cookieAuthMiddleware` from protected routes
+- bypass CSRF checks for convenience
+- forward user text directly to runtimes without prompt-injection checks
+- trust client file paths without validation
+- weaken origin validation to “make local testing easier” without a narrowly scoped reason
+
+Do:
+- validate request bodies with Zod or equivalent
+- preserve auth/origin/CSRF checks during refactors
+- keep runtime-specific permission bridges server-side
+- update this doc when the security model materially changes
+
+## Files Worth Reading Before Security-sensitive Changes
+
+- `server/src/middleware/auth.ts`
+- `server/src/security/auth.ts`
+- `server/src/security/csrf.ts`
+- `server/src/security/prompt-injection.ts`
+- `server/src/security/rate-limit.ts`
+- `server/src/websocket/connection.ts`
+- `server/src/routes/files.ts`
+- `server/src/routes/config.ts`

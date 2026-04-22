@@ -1,68 +1,69 @@
 # Pi Web UI
 
-A persistent web interface for the Pi Coding Agent, with real-time chat, session management, tool visibility, and support for Pi SDK, Claude Direct, and OpenCode Direct sessions.
+A persistent browser UI for coding-agent sessions with real-time streaming, unified session management, and three backend runtime paths:
+
+- **Pi SDK**
+- **Claude Direct**
+- **OpenCode Direct**
 
 ## Documentation Map
 
-- **Agent/developer quick rules:** [`AGENTS.md`](./AGENTS.md)
+- **Quick agent/developer rules:** [`AGENTS.md`](./AGENTS.md)
 - **Architecture:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
-- **Protocol details:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
-- **API index:** [`API.md`](./API.md)
+- **WebSocket protocol:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
+- **REST/API index:** [`API.md`](./API.md)
 - **Security:** [`SECURITY.md`](./SECURITY.md)
 - **Deployment / production runbook:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
-- **Worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
+- **Pi worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
 - **OpenCode Direct architecture:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
+- **Tests:** [`tests/README.md`](./tests/README.md)
 
 ## What It Is
 
-Pi Web UI is a browser-based interface for running the Pi Coding Agent with persistent sessions and operational visibility.
+Pi Web UI is a web interface around multiple agent runtimes.
 
 It combines:
 - a **React + Vite** frontend
 - an **Express + WebSocket** backend
-- **Pi SDK** integration for Pi-native sessions and extensions
-- **Claude Direct** integration for `claude -p` sessions
-- **OpenCode Direct** integration for `opencode serve` sessions (Z.AI GLM via OpenCode runtime)
-- **file-backed session persistence** so sessions survive reconnects and service restarts
+- a **unified sidebar/session registry** across runtimes
+- **runtime-specific adapters** so Pi SDK, Claude Direct, and OpenCode Direct feel similar in the UI
+- **persistent storage** so sessions survive reconnects and, depending on runtime, process restarts
+
+## Runtime Paths
+
+| Runtime | What it uses | Best described as | Primary persistence |
+|---|---|---|---|
+| **Pi SDK** | Pi SDK + Pi worker/session lifecycle | Pi-native path with extensions/tools | `~/.pi/agent/sessions/` |
+| **Claude Direct** | `claude -p` subprocesses | Claude CLI path with Pi-owned replay/persistence | `~/.pi-web-ui/claude-sessions/` |
+| **OpenCode Direct** | `opencode serve` + HTTP/SSE | OpenCode-backed path for supported Z.AI GLM usage | OpenCode runtime + Pi registry metadata |
+
+Unified session metadata lives in:
+- `~/.pi-web-ui/session-registry.json`
 
 ## Core Capabilities
 
-- Real-time chat with streamed assistant responses
-- Session list, switching, export, and persistence
-- Three runtime paths:
-  - **Pi SDK sessions** for Pi extensions/tools and multi-provider model support
-  - **Claude Direct sessions** for Claude Code CLI workflows
-  - **OpenCode Direct sessions** for Z.AI GLM via OpenCode headless server
-- Tool execution rendering and file-aware workflows
-- Security hardening: JWT auth, CSRF protection, origin validation, rate limiting
-- Health/config endpoints for operations and debugging
+- Real-time streamed chat
+- Create, switch, pin, rename, and export sessions
+- Unified session list across all three runtimes
+- Tool execution rendering and history replay
+- Runtime availability reporting (`claude_available`, `opencode_available`)
+- OpenCode permission bridge via the existing extension approval UI
+- Security hardening: cookie auth, CSRF, origin validation, rate limiting, prompt-injection detection
+- Health/config/model endpoints for debugging and operations
 
 ## Architecture at a Glance
 
 ```text
-Browser (React + Vite)
-  └─ WebSocket /ws and /ws/sessions/:sessionId
-       └─ Express server (server/src)
-            ├─ WebSocket handlers
-            ├─ REST routes
+Browser (React + Zustand + Vite)
+  └─ WebSocket /ws + REST /api/*
+       └─ Express server
+            ├─ security + auth middleware
+            ├─ runtime-aware WebSocket router
             ├─ Pi SDK session manager + worker pool
             ├─ Claude Direct service + process pool
-            ├─ OpenCode Direct service + process manager
+            ├─ OpenCode Direct service + process manager/client
             └─ unified session registry
 ```
-
-### Session Runtime Paths
-
-| Path | What it is | Stored in |
-|---|---|---|
-| **Pi SDK** | Persistent Pi worker/session lifecycle with Pi extensions and model switching | `~/.pi/agent/sessions/` |
-| **Claude Direct** | `claude -p` subprocess per turn with Claude session resume support | `~/.pi-web-ui/claude-sessions/` |
-| **OpenCode Direct** | Long-lived `opencode serve` process with SSE-based events and native permission APIs | OpenCode-owned (no Pi JSONL) |
-
-Unified sidebar/session metadata is stored in:
-- `~/.pi-web-ui/session-registry.json`
-
-For the detailed design, see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) and [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md).
 
 ## Quick Start
 
@@ -71,8 +72,8 @@ For the detailed design, see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) an
 - Node.js 20+
 - npm
 - Pi CLI / Pi SDK environment available on the machine
-- For Claude Direct sessions: `claude` installed and authenticated
-- For OpenCode Direct sessions: `opencode` installed and configured with Z.AI provider
+- For **Claude Direct**: `claude` installed and authenticated
+- For **OpenCode Direct**: `opencode` installed and configured
 
 ### Install
 
@@ -81,8 +82,6 @@ npm install
 ```
 
 ### Configure
-
-Create a local env file from the example:
 
 ```bash
 cp .env.example .env
@@ -94,12 +93,19 @@ At minimum, set strong values for:
 JWT_SECRET=your-random-secret
 CSRF_SECRET=your-random-secret
 AUTH_PASSWORD=your-password-or-bcrypt-hash
-ALLOWED_ORIGINS=http://localhost:<your-frontend-port>
+ALLOWED_ORIGINS=http://localhost:<frontend-port>
 ```
 
-Set `ALLOWED_ORIGINS` to match the frontend URL you actually use locally. In this repo, common local setups use either `5173` or `3457` for the frontend, depending on configuration.
+If using OpenCode Direct locally, also check:
 
-See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for production-grade values and service configuration.
+```bash
+OPENCODE_ENABLED=true
+OPENCODE_SERVER_HOST=127.0.0.1
+OPENCODE_SERVER_PORT=4096
+OPENCODE_WORKING_DIR=/path/to/workspace-or-default-root
+```
+
+See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for production values and service guidance.
 
 ### Run Locally
 
@@ -107,9 +113,7 @@ See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for production-grade values and service c
 npm run dev
 ```
 
-If you are unsure which ports your local setup uses, check `client/vite.config.ts` and your `.env` / `.env.example` values.
-
-Useful project commands:
+Useful commands:
 
 ```bash
 npm run lint
@@ -119,9 +123,21 @@ npm test
 npm run test:e2e
 ```
 
+## Repo Layout
+
+```text
+client/       React frontend
+server/       Express server and runtime integrations
+shared/       shared protocol/types package
+docs/         architecture / protocol / design docs
+tests/        Playwright E2E + benchmarks
+server/tests/ server unit/integration tests
+extensions/   local extension code
+```
+
 ## Day-to-Day Development
 
-### Recommended verification flow
+Recommended verification flow:
 
 1. Make the smallest change that solves the problem.
 2. Run:
@@ -130,25 +146,26 @@ npm run test:e2e
    npm run typecheck
    npm run build
    ```
-3. Run the relevant tests:
+3. Run relevant tests:
    ```bash
    npm test
    ```
-4. For local UI behaviour, use the `webapp-testing` skill.
-5. For live-site verification, use the `playwright-cli` skill.
+4. For localhost UI verification, use `webapp-testing`.
+5. For live external sites, use `playwright-cli`.
 
-See [`AGENTS.md`](./AGENTS.md) for the compact agent workflow.
+See [`AGENTS.md`](./AGENTS.md) for the compact contributor workflow.
 
 ## Debugging by Problem Type
 
-### 1. WebSocket / streaming issues
+### WebSocket / streaming / session routing
 
 Check:
 - browser DevTools → Network → WS
 - `server/src/websocket/connection.ts`
 - `server/src/websocket/session-websocket.ts`
+- `client/src/store/sessionStore.ts`
 
-Useful checks (replace `<server-port>` with your actual backend port):
+Useful endpoints:
 
 ```bash
 curl http://localhost:<server-port>/api/health/live
@@ -156,15 +173,26 @@ curl http://localhost:<server-port>/api/health/ready
 curl http://localhost:<server-port>/api/config/validate
 ```
 
-Common symptoms:
-- abnormal close / auth failure
-- stuck streaming state
-- missing session replay
-- bad origin / CSRF / cookie handling
+### Pi SDK path
 
-Protocol details live in [`docs/PROTOCOL.md`](./docs/PROTOCOL.md).
+Check:
+- `server/src/pi/multi-session-manager.ts`
+- `server/src/workers/worker-pool.ts`
+- `server/src/pi/pi-service.ts`
 
-### 2. Claude Direct issues
+Useful checks:
+
+```bash
+ps aux | grep "pi --mode rpc"
+curl http://localhost:<server-port>/api/health/ready | jq '.workerStats'
+```
+
+### Claude Direct path
+
+Check:
+- `server/src/claude/claude-service.ts`
+- `server/src/claude/claude-process-pool.ts`
+- `server/src/claude/claude-history-replay.ts`
 
 Useful checks:
 
@@ -174,49 +202,35 @@ claude auth status --json
 sudo journalctl -u pi-web-ui -f
 ```
 
-Relevant files:
-- `server/src/claude/claude-service.ts`
-- `server/src/claude/claude-process-pool.ts`
+See also [`docs/CLAUDE-DIRECT-UX-ISSUES.md`](./docs/CLAUDE-DIRECT-UX-ISSUES.md).
 
-Common symptoms:
-- `claude` missing from PATH for systemd
-- auth/session lock issues
-- follow-up turns not resuming correctly
+### OpenCode Direct path
 
-### 3. Pi SDK worker / session issues
+Check:
+- `server/src/opencode/opencode-service.ts`
+- `server/src/opencode/opencode-process-manager.ts`
+- `server/src/opencode/opencode-client.ts`
+- `server/src/opencode/opencode-event-adapter.ts`
 
 Useful checks:
 
 ```bash
-ps aux | grep "pi --mode rpc"
-curl http://localhost:<server-port>/api/health/ready | jq '.workerStats'
+which opencode
+curl http://localhost:<server-port>/api/health/ready | jq '.checks.opencode'
+curl "http://localhost:<server-port>/api/models?sdkType=opencode"
 ```
 
-Relevant files:
-- `server/src/pi/multi-session-manager.ts`
-- `server/src/workers/worker-pool.ts`
-- `server/src/session-registry.ts`
+See [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md).
 
-Common symptoms:
-- worker spawn failure
-- worker OOM / crash isolation problems
-- stale or missing session state
-
-### 4. Auth / CSRF / 401 issues
+### Auth / CSRF / 401 issues
 
 Check:
-- browser cookies / JWT presence
-- CSRF token exchange
 - `server/src/security/auth.ts`
 - `server/src/security/csrf.ts`
+- `server/src/middleware/auth.ts`
+- browser cookies / JWT / CSRF flow
 
-Useful endpoint:
-
-```bash
-curl http://localhost:<server-port>/api/config/validate
-```
-
-### 5. Build / type / integration issues
+### Build / type / test issues
 
 Run in order:
 
@@ -227,11 +241,7 @@ npm run build
 npm test
 ```
 
-Because this is a workspace repo, `shared/` must build before server/client consumers. That ordering is already handled by the root scripts in `package.json`.
-
 ## Production Operations
-
-### Start / stop / restart / status
 
 ```bash
 sudo systemctl start pi-web-ui
@@ -241,80 +251,23 @@ sudo systemctl status pi-web-ui
 sudo journalctl -u pi-web-ui -f
 ```
 
-### Enable / disable on boot
+For full deployment, reverse proxy, service env, and runtime-specific configuration, see [`DEPLOYMENT.md`](./DEPLOYMENT.md).
 
-```bash
-sudo systemctl enable pi-web-ui
-sudo systemctl disable pi-web-ui
-```
+## Updating Dependencies
 
-### Deploy / redeploy
-
-```bash
-npm run build
-sudo systemctl restart pi-web-ui
-```
-
-### Undeploy
-
-If you need to take the service out of rotation quickly:
-
-```bash
-sudo systemctl stop pi-web-ui
-sudo systemctl disable pi-web-ui
-```
-
-For full production setup, reverse proxy configuration, service file details, and worker memory tuning, see [`DEPLOYMENT.md`](./DEPLOYMENT.md).
-
-## Updating the Pi SDK to the Latest Version
-
-The web UI depends on `@mariozechner/pi-coding-agent` inside this repo. Updating a globally installed Pi CLI does **not** update the copy used by the web UI.
-
-### Update steps
-
-```bash
-# Update workspace dependencies
-npm install @mariozechner/pi-coding-agent@latest -w server
-npm install @mariozechner/pi-coding-agent@latest -w .
-
-# Rebuild and verify
-npm run lint
-npm run typecheck
-npm run build
-npm test
-```
-
-If the checks pass, restart the service if needed:
-
-```bash
-sudo systemctl restart pi-web-ui
-```
-
-### Places to inspect if the SDK changed behaviour
-
-- `server/src/pi/pi-service.ts`
-- `server/src/pi/event-forwarder.ts`
-- `server/src/workers/`
+The repo uses workspace packages. For runtime-sensitive upgrades, inspect:
+- `server/src/pi/`
+- `server/src/claude/`
+- `server/src/opencode/`
 - `shared/src/`
 
-Typical breakage after SDK upgrades:
-- renamed event types
+Typical breakage after upgrades:
+- changed event payload shapes
 - changed session/runtime APIs
-- changed model metadata or event payload shapes
+- changed model metadata or provider lists
 
-## Repo Layout
+## Contributor Notes
 
-```text
-client/     React frontend
-server/     Express server + runtime integration
-shared/     shared protocol/types package
-tests/      E2E tests and benchmarks
-docs/       architecture / protocol / design docs
-extensions/ local extension code
-```
-
-## Notes for Agents and Contributors
-
-- Keep overview docs short and signpost to the canonical deep docs.
-- Prefer editing the canonical source doc over duplicating the same information elsewhere.
-- For agent-specific working rules, read [`AGENTS.md`](./AGENTS.md).
+- Keep overview docs short and signpost to canonical deep docs.
+- Prefer updating the canonical doc instead of duplicating information.
+- `AGENTS.md` and `CLAUDE.md` should stay identical.

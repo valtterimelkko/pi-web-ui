@@ -1,102 +1,59 @@
 # Performance Benchmarks
 
-This directory contains performance benchmarks for measuring mobile improvements in the Pi Web UI.
+This folder contains benchmark suites for Pi Web UI frontend performance.
 
-## Quick Start
+## What These Benchmarks Cover
 
-Run all benchmarks:
+The current suites focus mainly on:
+- session switching behaviour
+- typing latency
+- render performance
+- cache/memory behaviour
+- mobile-oriented performance scenarios
+
+Files:
+- `mobile-performance.ts`
+- `memory-usage.ts`
+- `comparison.ts`
+- `index.ts`
+
+## Run Benchmarks
+
+### Full benchmark pass
 ```bash
 npm run benchmark
 ```
 
-Run quick manual benchmarks:
+### Quick benchmark pass
 ```bash
 npm run benchmark:quick
 ```
 
-## Benchmark Suites
-
-### Mobile Performance (`mobile-performance.ts`)
-
-Measures key performance metrics for mobile optimization:
-
-- **Session Switch Performance**
-  - Cold cache switch time
-  - Warm cache switch time
-  - Switch with large message list
-
-- **Typing Latency**
-  - Short message typing
-  - Medium message typing
-  - Long message typing
-
-- **Render Performance**
-  - Message list with 50 items
-  - Message list with 500 items
-
-- **Touch Interaction**
-  - Button tap response time
-  - Scroll performance
-
-### Memory Usage (`memory-usage.ts`)
-
-Measures memory efficiency:
-
-- **Per-Session Memory**
-  - Small session memory footprint
-  - Large session memory footprint
-  - Sessions with code blocks
-
-- **LRU Cache Effectiveness**
-  - Cache eviction behavior
-  - Access order preservation
-  - Memory bounding
-
-- **Memory Cleanup**
-  - Session unload cleanup
-  - Repeated load/unload cycles
-
-- **Heap Usage** (Chrome/Chromium only)
-  - Heap size before/after
-  - GC pressure testing
-
-## Targets vs Baseline
-
-| Metric | Baseline (Before) | Target (After) | Improvement |
-|--------|-------------------|----------------|-------------|
-| Session Switch (cold) | 3000ms | 1000ms | 66% |
-| Session Switch (warm) | 500ms | 100ms | 80% |
-| Typing Latency | 500ms | 100ms | 80% |
-| Memory per Session | 15MB | 5MB | 66% |
-| Cached Sessions Max | 10 | 5 | 50% |
-
 ## Output
 
-Benchmark results are saved to:
-- Console output (human-readable)
-- `results/benchmark-results.json` (machine-readable)
+Results are typically written to:
+- console output
+- `tests/benchmarks/results/`
+
+## Interpreting Results
+
+Treat these as **engineering benchmarks**, not as a full substitute for real device or full E2E testing.
+
+Use them to compare:
+- before/after performance changes
+- session-cache behaviour
+- render regressions
+- mobile-oriented UI improvements
 
 ## Notes
 
-- These are **synthetic benchmarks** - real mobile testing should be done on actual devices
-- Memory benchmarks use `performance.memory` API (Chrome/Chromium only)
-- Some benchmarks may have different results in CI vs local development
-- Run multiple times for consistent results
+- Some memory metrics depend on browser/runtime support.
+- Benchmark numbers can vary between local machines and CI.
+- Re-run several times before drawing strong conclusions from small deltas.
 
 ## Adding New Benchmarks
 
-1. Create a new file in `tests/benchmarks/`
-2. Use `bench()` from vitest for benchmarking
-3. Export baseline and target metrics
-4. Update this README
-
-Example:
-```typescript
-import { bench, describe } from 'vitest'
-
-describe('My Benchmark', () => {
-  bench('my-test', async () => {
-    // Your benchmark code
-  }, { time: 1000, iterations: 10 })
-})
-```
+1. Add a new benchmark file in `tests/benchmarks/`
+2. Use the project's benchmark tooling/config in this folder
+3. Keep the benchmark narrowly focused and reproducible
+4. Update this README if the benchmark category changes meaningfully

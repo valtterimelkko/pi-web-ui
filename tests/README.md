@@ -1,112 +1,99 @@
-# Pi Web UI Testing Suite
+# Pi Web UI Test Guide
 
-This directory contains comprehensive tests for the Pi Web UI project.
+This directory contains browser-level tests, benchmark scripts, and a few helper scripts for Pi Web UI.
 
-## Test Structure
+For server unit/integration tests, also see:
+- `server/tests/`
 
-```
-tests/
-├── server/                     # Server-side tests
-│   └── unit/
-│       ├── security/          # Security function tests
-│       │   ├── auth.test.ts
-│       │   ├── input-validation.test.ts
-│       │   └── prompt-injection.test.ts
-│       ├── websocket/         # WebSocket tests
-│       │   └── connection.test.ts
-│       ├── routes/            # API route tests
-│       │   └── sessions.test.ts
-│       └── pi-service.test.ts # Pi service tests
-└── client/                     # Client-side tests
-    ├── setup.ts               # Test setup and mocks
-    └── unit/
-        ├── components/        # Component tests
-        │   └── Chat/
-        │       └── MessageBubble.test.tsx
-        └── store/             # State management tests
-            └── sessionStore.test.ts
-```
+## Test Layers
+
+### 1. Browser E2E tests
+Located in:
+- `tests/e2e/`
+
+These cover user-visible behaviour such as:
+- auth and initial app load
+- session creation
+- session switching
+- runtime-specific flows for Claude Direct and OpenCode Direct
+- mobile / protocol / persistence / cross-tab behaviour
+
+Notable files include:
+- `tests/e2e/dual-sdk-session-creation.spec.ts`
+- `tests/e2e/claude-session-chat.spec.ts`
+- `tests/e2e/opencode-session-chat.spec.ts`
+- `tests/e2e/opencode-session-switch.spec.ts`
+
+### 2. Benchmarks
+Located in:
+- `tests/benchmarks/`
+
+These focus on UI performance and memory-related scenarios.
+
+### 3. Helper scripts
+This folder also contains a small number of shell/Python helpers used for specific verification workflows.
+Treat them as supplemental, not the main automated test surface.
 
 ## Running Tests
 
-### Run all tests
+### All tests
 ```bash
 npm test
 ```
 
-### Run server tests only
-```bash
-npm run test --workspace=server
-```
-
-### Run client tests only
-```bash
-npm run test --workspace=client
-```
-
-### Run tests with coverage
-```bash
-npm run test:coverage
-```
-
-### Run E2E tests
+### E2E tests
 ```bash
 npm run test:e2e
 ```
 
-### Manual testing (servers only)
+### Benchmarks
 ```bash
-./scripts/test-e2e.sh --manual
+npm run benchmark
 ```
 
-## Test Coverage Goals
-
-| Module | Target Coverage |
-|--------|-----------------|
-| Security | 90%+ |
-| Pi Service | 85%+ |
-| WebSocket | 85%+ |
-| API Routes | 80%+ |
-| Frontend Components | 70%+ |
-
-## Writing Tests
-
-### Server Tests
-
-Server tests use Vitest with Node.js environment:
-
-```typescript
-import { describe, it, expect } from 'vitest';
-import { myFunction } from '../../../src/my-module.js';
-
-describe('My Module', () => {
-  it('should do something', () => {
-    const result = myFunction();
-    expect(result).toBe(true);
-  });
-});
+### Quick benchmark pass
+```bash
+npm run benchmark:quick
 ```
 
-### Client Tests
+## Server-side Tests
 
-Client tests use Vitest with jsdom environment and React Testing Library:
+Server unit/integration coverage lives under:
+- `server/tests/unit/`
+- `server/tests/integration/`
 
-```typescript
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { MyComponent } from '../../../src/components/MyComponent';
+That includes coverage for:
+- Pi worker/session logic
+- Claude Direct replay and process handling
+- OpenCode Direct client/service/event handling
+- WebSocket routing
+- route handlers and security helpers
 
-describe('MyComponent', () => {
-  it('renders correctly', () => {
-    render(<MyComponent />);
-    expect(screen.getByText('Hello')).toBeInTheDocument();
-  });
-});
+## When to Run What
+
+### Small backend fix
+Run:
+```bash
+npm run lint
+npm run typecheck
+npm run build
+npm test
 ```
 
-## Configuration
+### UI change
+Run the checks above, plus:
+```bash
+npm run test:e2e
+```
 
-- Server: `server/vitest.config.ts`
-- Client: `client/vitest.config.ts`
+### Runtime-path change
+If you touched Pi SDK / Claude Direct / OpenCode Direct routing or replay logic, prefer:
+- unit tests for the affected runtime module(s)
+- relevant WebSocket tests
+- relevant E2E runtime tests
 
-Both configs include coverage reporting with v8 provider.
+## Notes
+
+- Some runtime-specific tests may depend on optional tools being installed locally.
+- OpenCode Direct tests are especially sensitive to `opencode` availability in fully live scenarios.
+- Prefer the canonical app commands from the root `package.json` unless you are targeting one workspace deliberately.

@@ -1,52 +1,102 @@
 # Deployment Guide
 
-> Production runbook for Pi Web UI. See [`README.md`](./README.md) for the concise operating overview and [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md) for the worker-isolation rationale behind these settings.
+> Production runbook for Pi Web UI. See [`README.md`](./README.md) for the concise overview, [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for system structure, and [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md) for the Pi worker-isolation rationale.
+
+## What You Are Deploying
+
+Pi Web UI is a single web application that fronts three runtime paths:
+
+- **Pi SDK** — worker-managed Pi sessions
+- **Claude Direct** — `claude -p` subprocess sessions
+- **OpenCode Direct** — `opencode serve`-backed sessions
+
+Operationally, this means deployment must consider:
+- the Node/Express server itself
+- Pi worker capacity and memory
+- availability of `claude` if Claude Direct is needed
+- availability of `opencode` if OpenCode Direct is needed
 
 ## Production Checklist
 
-- [ ] Change default admin password
-- [ ] Set strong JWT_SECRET and CSRF_SECRET
-- [ ] Configure ALLOWED_ORIGINS correctly
-- [ ] Enable HTTPS/WSS
-- [ ] Set up proper logging
-- [ ] Configure firewall rules
-- [ ] Set up monitoring
-- [ ] Configure worker process limits (see Worker Architecture below)
+- [ ] Set strong `JWT_SECRET` and `CSRF_SECRET`
+- [ ] Set a real `AUTH_PASSWORD` / hash
+- [ ] Set `ALLOWED_ORIGINS` correctly
+- [ ] Enable HTTPS / WSS
+- [ ] Configure systemd or equivalent restart policy
+- [ ] Confirm Pi CLI / SDK availability
+- [ ] Confirm `claude` availability if using Claude Direct
+- [ ] Confirm `opencode` availability if using OpenCode Direct
+- [ ] Configure logging / monitoring
+- [ ] Verify `npm run build` succeeds before restart
 
-## Worker Architecture
+## Recommended Environment Variables
 
-Pi Web UI uses a worker pool architecture for handling AI agent tasks. Each worker runs in an isolated process with configurable memory limits.
+### Core app
 
-### Memory Requirements
+| Variable | Notes |
+|---|---|
+| `NODE_ENV` | `production` |
+| `PORT` | backend port |
+| `JWT_SECRET` | strong random secret |
+| `CSRF_SECRET` | strong random secret |
+| `AUTH_PASSWORD` | password or bcrypt hash |
+| `ALLOWED_ORIGINS` | frontend origins allowed to connect |
 
-| Configuration | Memory Required | Description |
-|--------------|-----------------|-------------|
-| **Minimum** | 2GB | Server only, minimal agents |
-| **Recommended** | 4GB | Server + 5-8 workers |
-| **Production** | **6GB** | Server + 10-15 workers |
+### Pi worker path
 
-**Total memory calculation:**
-- Base server: ~512MB
-- Per worker: ~350-512MB (depends on model and task complexity)
-- Example: 6GB supports server + ~10-12 concurrent workers
+| Variable | Default | Purpose |
+|---|---:|---|
+| `PI_MAX_WORKERS` | `5` | max concurrent Pi workers |
+| `PI_WORKER_MEMORY` | `512` | MB per worker |
+| `PI_IDLE_TIMEOUT` | `1800000` | Pi worker idle timeout |
 
-### Worker Process Configuration
+### OpenCode Direct
 
-Workers are configured via environment variables:
+| Variable | Default | Purpose |
+|---|---:|---|
+| `OPENCODE_ENABLED` | `true` | enable/disable OpenCode Direct |
+| `OPENCODE_SERVER_HOST` | `127.0.0.1` | OpenCode server bind host |
+| `OPENCODE_SERVER_PORT` | `4096` | OpenCode server port |
+| `OPENCODE_SERVER_PASSWORD` | empty | optional basic-auth password for OpenCode server |
+| `OPENCODE_WORKING_DIR` | `process.cwd()` | default OpenCode working dir |
+| `OPENCODE_MAX_SESSIONS` | `4` | max active OpenCode sessions tracked by lifecycle logic |
+| `OPENCODE_IDLE_TIMEOUT_MS` | `1800000` | idle timeout |
+| `OPENCODE_STALE_STREAMING_MS` | `900000` | stale-stream reset window |
+| `OPENCODE_MAX_PINNED_SESSIONS` | `2` | max pinned OpenCode sessions |
+| `OPENCODE_CLEANUP_INTERVAL_MS` | `60000` | cleanup loop interval |
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PI_MAX_WORKERS` | 5 | Maximum concurrent workers |
-| `PI_WORKER_MEMORY` | 512 | Memory per worker (MB) |
-| `PI_IDLE_TIMEOUT` | 1800000 | Worker idle timeout (ms) - 30 minutes |
+## Runtime Capacity Notes
 
-### systemd Service
+### Pi SDK worker path
 
-Create `/etc/systemd/system/pi-web-ui.service`:
+This is the main memory-sensitive runtime because it uses worker processes.
+
+Typical rough sizing:
+- base server: a few hundred MB+
+- each Pi worker: roughly hundreds of MB depending on task/tool load
+- leave headroom for builds, subprocesses, and runtime bursts
+
+### Claude Direct
+
+Claude Direct uses on-demand subprocesses rather than a persistent worker pool. Operational concerns are mostly:
+- `claude` binary on PATH
+- auth/session behaviour
+- logs and subprocess cleanup
+
+### OpenCode Direct
+
+OpenCode Direct adds a long-lived `opencode serve` process when enabled and used. Ensure:
+- the binary exists on the host
+- the chosen port is free
+- any password/basic-auth settings are aligned with Pi Web UI config
+
+## systemd Example
+
+Example `/etc/systemd/system/pi-web-ui.service`:
 
 ```ini
 [Unit]
-Description=Pi Web UI - Web Interface for Pi Coding Agent
+Description=Pi Web UI
 After=network.target
 Wants=network.target
 
@@ -56,18 +106,15 @@ User=pi
 WorkingDirectory=/opt/pi-web-ui
 Environment=NODE_ENV=production
 Environment=PORT=3456
-
-# Worker configuration
 Environment=PI_MAX_WORKERS=5
 Environment=PI_WORKER_MEMORY=512
 Environment=PI_IDLE_TIMEOUT=1800000
-
+Environment=OPENCODE_ENABLED=true
+Environment=OPENCODE_SERVER_HOST=127.0.0.1
+Environment=OPENCODE_SERVER_PORT=4096
 ExecStart=/usr/bin/node server/dist/index.js
 Restart=on-failure
 RestartSec=10
-
-# Memory limits (adjust based on PI_MAX_WORKERS)
-# 6GB total for production with 10-15 workers
 MemoryMax=6G
 MemoryHigh=5G
 
@@ -75,159 +122,16 @@ MemoryHigh=5G
 WantedBy=multi-user.target
 ```
 
-Enable and start:
+Then:
+
 ```bash
+sudo systemctl daemon-reload
 sudo systemctl enable pi-web-ui
 sudo systemctl start pi-web-ui
 sudo systemctl status pi-web-ui
 ```
 
-### Systemd Override for Worker Configuration
-
-To customize worker settings without modifying the main service file, create an override:
-
-```bash
-sudo systemctl edit pi-web-ui
-```
-
-Add the following override configuration:
-
-```ini
-[Service]
-# Increase memory limit for worker processes
-# 6GB recommended for production with 10-15 workers
-MemoryMax=6G
-MemoryHigh=5G
-
-# Environment for worker configuration
-Environment="PI_MAX_WORKERS=15"
-Environment="PI_WORKER_MEMORY=512"
-Environment="PI_IDLE_TIMEOUT=1800000"
-```
-
-Apply changes:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart pi-web-ui
-```
-
-### Monitoring Worker Processes
-
-Monitor worker status using systemd tools:
-
-```bash
-# View service status and memory usage
-systemctl status pi-web-ui
-
-# Monitor resource usage in real-time
-systemctl status pi-web-ui -l --no-pager
-
-# Check memory consumption
-systemctl show pi-web-ui -p MemoryCurrent
-
-# View worker process tree
-ps auxf | grep pi-web-ui
-
-# Check for OOM kills
-journalctl -u pi-web-ui -n 100 | grep -i "oom\|killed"
-```
-
-Monitor via application logs:
-```bash
-# View logs
-journalctl -u pi-web-ui -f
-
-# Check for worker-related log entries
-journalctl -u pi-web-ui | grep -i "worker\|spawn\|exit"
-```
-
-### Troubleshooting Worker Issues
-
-#### Workers Not Starting
-
-**Symptoms:** Tasks queue but no workers process them
-
-**Diagnostic Steps:**
-1. Check memory availability:
-   ```bash
-   free -h
-   systemctl status pi-web-ui -p MemoryCurrent
-   ```
-2. Verify worker limits:
-   ```bash
-   systemctl show pi-web-ui --property=Environment
-   ```
-3. Check logs for spawn errors:
-   ```bash
-   journalctl -u pi-web-ui -n 50 | grep -i "spawn\|fork\|worker"
-   ```
-
-**Common Fixes:**
-- Increase `MemoryMax` if OOM killed
-- Reduce `PI_MAX_WORKERS` if memory constrained
-- Check file descriptor limits: `ulimit -n`
-
-#### Memory-Related Worker Crashes
-
-**Symptoms:** Workers exit with code 137 (OOM) or memory errors
-
-**Diagnostic Steps:**
-1. Check for OOM kills:
-   ```bash
-   dmesg | grep -i "oom\|pi-web-ui"
-   ```
-2. Monitor memory over time:
-   ```bash
-   systemd-cgtop /system.slice/pi-web-ui.service
-   ```
-
-**Common Fixes:**
-- Reduce `PI_WORKER_MEMORY` per worker
-- Decrease `PI_MAX_WORKERS`
-- Add swap space for burst capacity:
-   ```bash
-   sudo fallocate -l 2G /swapfile
-   sudo chmod 600 /swapfile
-   sudo mkswap /swapfile
-   sudo swapon /swapfile
-   ```
-
-#### Worker Timeouts
-
-**Symptoms:** Long-running tasks killed mid-execution
-
-**Diagnostic Steps:**
-1. Check for timeout errors in logs
-2. Verify `PI_IDLE_TIMEOUT` setting
-
-**Common Fixes:**
-- Increase `PI_IDLE_TIMEOUT` for long-running tasks:
-  ```bash
-  # 1 hour timeout
-  Environment="PI_IDLE_TIMEOUT=3600000"
-  ```
-- Implement task chunking for very long operations
-
-#### High Worker Turnover
-
-**Symptoms:** Workers constantly spawning and exiting
-
-**Diagnostic Steps:**
-1. Check worker exit codes:
-   ```bash
-   journalctl -u pi-web-ui | grep "worker.*exit"
-   ```
-2. Monitor spawn rate:
-   ```bash
-   journalctl -u pi-web-ui | grep -c "worker.*spawn"
-   ```
-
-**Common Fixes:**
-- Increase `PI_IDLE_TIMEOUT` to keep workers warm
-- Check for application errors causing crashes
-- Verify memory limits aren't too restrictive
-
-## Nginx Configuration
+## Nginx Example
 
 ```nginx
 server {
@@ -237,25 +141,17 @@ server {
     ssl_certificate /etc/letsencrypt/live/pi.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/pi.example.com/privkey.pem;
 
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-
-    # Static files
     location / {
         root /opt/pi-web-ui/client/dist;
         try_files $uri $uri/ /index.html;
     }
 
-    # API
     location /api/ {
         proxy_pass http://127.0.0.1:3456;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
     }
 
-    # WebSocket
     location /ws {
         proxy_pass http://127.0.0.1:3456;
         proxy_http_version 1.1;
@@ -266,64 +162,87 @@ server {
 }
 ```
 
-## Docker Deployment
+## Common Operational Checks
 
-```dockerfile
-FROM node:20-alpine
+### General
 
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm ci --only=production
-
-COPY . .
-RUN npm run build
-
-EXPOSE 3456
-
-CMD ["node", "server/dist/index.js"]
+```bash
+sudo systemctl status pi-web-ui
+sudo journalctl -u pi-web-ui -f
+curl http://localhost:<port>/api/health/live
+curl http://localhost:<port>/api/health/ready
 ```
 
-**Docker Compose with Worker Configuration:**
+### Pi SDK path
 
-```yaml
-version: '3.8'
-services:
-  pi-web-ui:
-    build: .
-    ports:
-      - "3456:3456"
-    environment:
-      - NODE_ENV=production
-      - JWT_SECRET=${JWT_SECRET}
-      - CSRF_SECRET=${CSRF_SECRET}
-      # Worker configuration
-      - PI_MAX_WORKERS=10
-      - PI_WORKER_MEMORY=512
-      - PI_IDLE_TIMEOUT=1800000
-    deploy:
-      resources:
-        limits:
-          memory: 6G
-        reservations:
-          memory: 2G
-    restart: unless-stopped
+```bash
+curl http://localhost:<port>/api/health/ready | jq '.workerStats'
+ps aux | grep "pi --mode rpc"
 ```
 
-## Environment Variables
+### Claude Direct
 
-| Variable | Production Value |
-|----------|-----------------|
-| `NODE_ENV` | `production` |
-| `JWT_SECRET` | Strong random string (32+ chars) |
-| `CSRF_SECRET` | Strong random string (32+ chars) |
-| `ALLOWED_ORIGINS` | Your domain only |
-| `PORT` | `3456` (server port, defaults to `3001` if unset) |
-| `PI_MAX_WORKERS` | `10` (adjust based on memory) |
-| `PI_WORKER_MEMORY` | `512` (MB per worker) |
-| `PI_IDLE_TIMEOUT` | `1800000` (30 minutes in ms) |
-| `OPENCODE_SERVER_PORT` | `4096` (OpenCode headless server port) |
-| `OPENCODE_SERVER_HOST` | `127.0.0.1` |
-| `OPENCODE_SERVER_PASSWORD` | Optional basic auth password for OpenCode server |
-| `OPENCODE_ENABLED` | `true` (set to `false` to disable OpenCode Direct) |
-| `OPENCODE_WORKING_DIR` | Working directory for OpenCode server process |
+```bash
+which claude
+claude auth status --json
+```
+
+### OpenCode Direct
+
+```bash
+which opencode
+curl http://localhost:<port>/api/health/ready | jq '.checks.opencode'
+curl "http://localhost:<port>/api/models?sdkType=opencode"
+```
+
+## Troubleshooting
+
+### Build or startup failure
+
+```bash
+npm run lint
+npm run typecheck
+npm run build
+```
+
+### Worker pressure / OOM on Pi path
+
+- reduce `PI_MAX_WORKERS`
+- reduce `PI_WORKER_MEMORY` only if you know sessions can tolerate it
+- increase host RAM / swap if appropriate
+- inspect `journalctl` and OOM logs
+
+### Claude Direct unavailable
+
+- verify `claude` is on PATH for the service user
+- verify auth state for the same user running the service
+- check `server/src/claude/` logs/errors in journal output
+
+### OpenCode Direct unavailable
+
+- verify `opencode` is on PATH for the service user
+- verify `OPENCODE_ENABLED=true`
+- verify port and host settings
+- inspect `server/src/opencode/opencode-process-manager.ts` behaviour via logs
+
+## Deploy / Redeploy Flow
+
+```bash
+npm install
+npm run build
+sudo systemctl restart pi-web-ui
+sudo systemctl status pi-web-ui
+```
+
+Recommended post-redeploy validation:
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+curl http://localhost:<port>/api/health/ready
+```
+
+## Docker Note
+
+Docker is possible, but if you rely on Pi CLI, Claude CLI auth, or local OpenCode runtime state, containerisation adds complexity around credentials, mounted state, and runtime binaries. If using Docker, plan those mounts explicitly rather than assuming a pure stateless web app.

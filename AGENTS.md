@@ -1,16 +1,17 @@
 # Agent Instructions for Pi Web UI
 
-> Auto-loaded developer/agent guide. Start here, then open the canonical docs linked below.
+> Auto-loaded quick guide. Read this first, then follow the canonical docs linked below.
 
-## Read These Docs by Task
+## Start Here
 
-- **Project overview / runbook:** [`README.md`](./README.md)
+- **Overview / runbook:** [`README.md`](./README.md)
 - **Architecture:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
-- **Wire protocol / WebSocket JSON-RPC:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
-- **API index:** [`API.md`](./API.md)
+- **WebSocket protocol:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
+- **REST/API index:** [`API.md`](./API.md)
 - **Security rules:** [`SECURITY.md`](./SECURITY.md)
-- **Deployment / service operations:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
-- **Worker/process isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
+- **Deployment / ops:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
+- **Pi worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
+- **OpenCode Direct design:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
 
 ## Mission
 
@@ -33,61 +34,65 @@ Improve Pi Web UI safely with small, verified changes. Prefer targeted fixes ove
 ## Repo Map
 
 - `client/` — React + Vite frontend
-- `server/` — Express server, WebSocket handlers, Pi/Claude runtime integration
-- `shared/` — shared protocol/types package used by server and client
-- `tests/` — E2E tests and benchmark scripts
+- `server/` — Express server, REST routes, WebSocket handlers, runtime integrations
+- `shared/` — shared protocol and type definitions
+- `tests/` — Playwright E2E tests and benchmark scripts
+- `server/tests/` — server unit/integration tests
 - `extensions/` — local extension code
-- `docs/` — deeper architecture/protocol/design docs
+- `docs/` — canonical architecture / protocol / design notes
 
 ## Architecture Facts You Should Know
 
-- Frontend: React + Zustand + Vite
-- Backend: Express + WebSocket
-- Protocol: JSON-RPC-style messaging over WebSocket
-- Two runtime paths:
-  - **Pi SDK sessions** via persistent worker processes
-  - **Claude Direct sessions** via `claude -p` subprocesses
-- Session storage:
-  - Pi SDK: `~/.pi/agent/sessions/`
-  - Claude Direct: `~/.pi-web-ui/claude-sessions/`
-  - unified registry: `~/.pi-web-ui/session-registry.json`
+- Frontend: **React + Zustand + Vite**
+- Backend: **Express + WebSocket**
+- Protocol: **JSON message protocol over `/ws`** with session-aware event routing
+- Three runtime paths:
+  - **Pi SDK** — Pi-native sessions, extensions, worker lifecycle, `~/.pi/agent/sessions/`
+  - **Claude Direct** — `claude -p` subprocess path with Pi-owned JSONL persistence, `~/.pi-web-ui/claude-sessions/`
+  - **OpenCode Direct** — `opencode serve` backend for OpenCode/Z.AI GLM sessions, with Pi Web UI storing registry metadata only
+- Unified session registry: `~/.pi-web-ui/session-registry.json`
 
 ## Key Files
 
 - `client/src/store/sessionStore.ts` — main frontend session state
-- `client/src/hooks/useWebSocket.ts` / `client/src/lib/session-websocket.ts` — client WS helpers
-- `server/src/websocket/connection.ts` — main upgrade/connection handling
-- `server/src/websocket/session-websocket.ts` — per-session WebSocket handling
-- `server/src/pi/multi-session-manager.ts` — Pi SDK session lifecycle
-- `server/src/workers/worker-pool.ts` — worker process pool
-- `server/src/claude/claude-service.ts` — Claude Direct lifecycle
-- `server/src/session-registry.ts` — unified session index
+- `client/src/hooks/useWebSocket.ts` — client WebSocket actions
+- `client/src/components/Session/NewSessionModal.tsx` — runtime picker
+- `server/src/websocket/connection.ts` — main runtime router and event fanout
+- `server/src/websocket/protocol.ts` — shared WebSocket message types
+- `server/src/pi/multi-session-manager.ts` — Pi SDK lifecycle / cleanup / pinning
+- `server/src/claude/claude-service.ts` — Claude Direct lifecycle and replay
+- `server/src/opencode/opencode-service.ts` — OpenCode Direct lifecycle and replay
+- `server/src/session-registry.ts` — unified cross-runtime session index
+- `server/src/routes/models.ts` / `server/src/routes/health.ts` — runtime-aware REST endpoints
 
 ## Non-Negotiable Security Rules
 
-- Add `cookieAuthMiddleware` to protected routes.
-- Validate inputs with Zod.
-- Validate file paths before access.
-- Run prompt-injection detection before forwarding user input to the AI runtime.
-- Preserve origin / auth / CSRF protections when changing WebSocket or auth code.
+- Add `cookieAuthMiddleware` to protected REST routes.
+- Validate inputs with Zod or equivalent schema checks.
+- Validate file paths before file access.
+- Run prompt-injection detection before forwarding user text to any runtime.
+- Preserve origin, auth, and CSRF protections when changing WebSocket or auth code.
 
-See [`SECURITY.md`](./SECURITY.md) for the full security model.
+See [`SECURITY.md`](./SECURITY.md) for the canonical security model.
 
 ## Debugging Entry Points
 
-- **WebSocket / JSON-RPC:** `server/src/websocket/connection.ts`, `server/src/websocket/session-websocket.ts`
-- **Auth / CSRF:** `server/src/security/auth.ts`, `server/src/security/csrf.ts`
-- **Pi SDK workers:** `server/src/pi/multi-session-manager.ts`, `server/src/workers/worker-pool.ts`
+- **WebSocket / routing:** `server/src/websocket/connection.ts`, `server/src/websocket/session-websocket.ts`
+- **Auth / CSRF:** `server/src/security/auth.ts`, `server/src/security/csrf.ts`, `server/src/middleware/auth.ts`
+- **Pi SDK path:** `server/src/pi/multi-session-manager.ts`, `server/src/workers/worker-pool.ts`
 - **Claude Direct:** `server/src/claude/claude-service.ts`, `server/src/claude/claude-process-pool.ts`
-- **Health/config:** `server/src/routes/health.ts`, `server/src/routes/config.ts`
+- **OpenCode Direct:** `server/src/opencode/opencode-service.ts`, `server/src/opencode/opencode-process-manager.ts`, `server/src/opencode/opencode-client.ts`
+- **Registry / persistence:** `server/src/session-registry.ts`
+- **Health / config:** `server/src/routes/health.ts`, `server/src/routes/config.ts`, `server/src/routes/models.ts`
 
-Use [`README.md`](./README.md) for the practical debugging commands by problem type.
+Use [`README.md`](./README.md) for practical debugging commands by problem type.
 
 ## UI / Product Conventions
 
-- The app uses a **light theme**. Match existing light UI styles.
-- Avoid introducing noisy UI for raw tool chatter unless the feature explicitly needs it.
-- Do not rely on historical “passing test counts” in old docs; run the current checks.
+- The app uses a **light theme**.
+- Keep runtime differences understandable, but avoid noisy raw tool chatter unless the feature explicitly needs it.
+- Keep the unified-session UX intact across Pi SDK, Claude Direct, and OpenCode Direct.
+- Do not rely on historical test counts in old docs; run the current checks.
 
 ## Handy Commands
 
