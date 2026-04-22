@@ -9,6 +9,36 @@ import type { OpenCodeConfig, OpenCodeSSEEvent } from './opencode-types.js';
 import { getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
 
+interface ActiveSessionMeta {
+  lastActivity: number;
+  lastEventTimestamp: number;
+  pinned: boolean;
+  status: 'idle' | 'streaming' | 'error';
+}
+
+export interface OpenCodeSessionStatus {
+  sessionId: string;
+  status: string;
+  lastActivity: Date;
+  pinned: boolean;
+}
+
+export interface OpenCodeLifecycleConfig {
+  maxSessions: number;
+  idleTimeoutMs: number;
+  staleStreamingMs: number;
+  maxPinnedSessions: number;
+  cleanupIntervalMs: number;
+}
+
+const DEFAULT_LIFECYCLE: OpenCodeLifecycleConfig = {
+  maxSessions: 4,
+  idleTimeoutMs: 30 * 60 * 1000,
+  staleStreamingMs: 15 * 60 * 1000,
+  maxPinnedSessions: 2,
+  cleanupIntervalMs: 60 * 1000,
+};
+
 export class OpenCodeService {
   private processManager: OpenCodeProcessManager;
   private client: OpenCodeClient;
@@ -16,7 +46,7 @@ export class OpenCodeService {
   private subscribers: OpenCodeSessionSubscribers;
   private registry;
   private runningSessions: Set<string> = new Set();
-  private pendingPermissions: Map<string, string> = new Map(); // permissionId → piSessionId
+  private pendingPermissions: Map<string, string> = new Map();
   private sseUnsubscribe: (() => void) | null = null;
   private sseStarted: boolean = false;
   private promptCallbacks: Map<string, {
@@ -26,7 +56,11 @@ export class OpenCodeService {
   private opencodeSessionIds: Map<string, string> = new Map();
   private piSessionByOpencodeId: Map<string, string> = new Map();
 
-  constructor(cfg: { registryPath: string }) {
+  private lifecycle: OpenCodeLifecycleConfig;
+  private sessionMeta: Map<string, ActiveSessionMeta> = new Map();
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(cfg: { registryPath: string; lifecycle?: Partial<OpenCodeLifecycleConfig> }) {
     const opencodeConfig: OpenCodeConfig = {
       host: config.opencodeServerHost,
       port: config.opencodeServerPort,
@@ -43,6 +77,154 @@ export class OpenCodeService {
     this.eventAdapter = new OpenCodeEventAdapter();
     this.subscribers = new OpenCodeSessionSubscribers();
     this.registry = getSessionRegistry(cfg.registryPath);
+
+    this.lifecycle = {
+      maxSessions: config.opencodeMaxSessions ?? DEFAULT_LIFECYCLE.maxSessions,
+      idleTimeoutMs: config.opencodeIdleTimeoutMs ?? DEFAULT_LIFECYCLE.idleTimeoutMs,
+      staleStreamingMs: config.opencodeStaleStreamingMs ?? DEFAULT_LIFECYCLE.staleStreamingMs,
+      maxPinnedSessions: config.opencodeMaxPinnedSessions ?? DEFAULT_LIFECYCLE.maxPinnedSessions,
+      cleanupIntervalMs: config.opencodeCleanupIntervalMs ?? DEFAULT_LIFECYCLE.cleanupIntervalMs,
+    };
+    if (cfg.lifecycle) {
+      Object.assign(this.lifecycle, cfg.lifecycle);
+    }
+
+    this.startCleanupInterval();
+  }
+
+  private startCleanupInterval(): void {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupIdleSessions();
+    }, this.lifecycle.cleanupIntervalMs);
+    if (this.cleanupTimer.unref) {
+      this.cleanupTimer.unref();
+    }
+  }
+
+  private cleanupIdleSessions(): void {
+    const now = Date.now();
+
+    for (const [sessionId, meta] of this.sessionMeta) {
+      if (meta.status === 'streaming' && now - meta.lastEventTimestamp > this.lifecycle.staleStreamingMs) {
+        if (meta.pinned) {
+          meta.status = 'idle';
+          this.runningSessions.delete(sessionId);
+          const callback = this.promptCallbacks.get(sessionId);
+          if (callback) {
+            this.promptCallbacks.delete(sessionId);
+            callback.onComplete(new Error('Session stale-streaming reset (pinned session kept alive)'));
+          }
+          void this.registry.updateStatus(sessionId, 'idle');
+        } else {
+          meta.status = 'idle';
+          this.runningSessions.delete(sessionId);
+          const callback = this.promptCallbacks.get(sessionId);
+          if (callback) {
+            this.promptCallbacks.delete(sessionId);
+            callback.onComplete(new Error('Session stale-streaming reset'));
+          }
+          void this.registry.updateStatus(sessionId, 'idle');
+        }
+      }
+    }
+
+    for (const [sessionId, meta] of this.sessionMeta) {
+      if (meta.status === 'error') {
+        this.removeSession(sessionId);
+        continue;
+      }
+
+      if (meta.pinned) continue;
+      if (this.runningSessions.has(sessionId)) continue;
+      if (this.subscribers.getSubscriberCount(sessionId) > 0) continue;
+
+      if (now - meta.lastActivity > this.lifecycle.idleTimeoutMs) {
+        this.removeSession(sessionId);
+      }
+    }
+
+    if (this.sessionMeta.size > this.lifecycle.maxSessions) {
+      const candidates = [...this.sessionMeta.entries()]
+        .filter(([id, m]) => m.status === 'idle' && !m.pinned && this.subscribers.getSubscriberCount(id) === 0)
+        .sort((a, b) => a[1].lastActivity - b[1].lastActivity);
+
+      while (this.sessionMeta.size > this.lifecycle.maxSessions && candidates.length > 0) {
+        const [evictId] = candidates.shift()!;
+        this.removeSession(evictId);
+      }
+    }
+  }
+
+  private removeSession(sessionId: string): void {
+    this.sessionMeta.delete(sessionId);
+    this.runningSessions.delete(sessionId);
+    this.promptCallbacks.delete(sessionId);
+    this.opencodeSessionIds.delete(sessionId);
+
+    for (const [ocId, piId] of this.piSessionByOpencodeId) {
+      if (piId === sessionId) {
+        this.piSessionByOpencodeId.delete(ocId);
+        break;
+      }
+    }
+  }
+
+  pinSession(sessionId: string): boolean {
+    const meta = this.sessionMeta.get(sessionId);
+    if (!meta) return false;
+    if (meta.pinned) return true;
+
+    const pinnedCount = this.getPinnedCount();
+    if (pinnedCount >= this.lifecycle.maxPinnedSessions) return false;
+
+    meta.pinned = true;
+    return true;
+  }
+
+  unpinSession(sessionId: string): boolean {
+    const meta = this.sessionMeta.get(sessionId);
+    if (!meta) return false;
+    meta.pinned = false;
+    meta.lastActivity = Date.now();
+    return true;
+  }
+
+  isSessionPinned(sessionId: string): boolean {
+    return this.sessionMeta.get(sessionId)?.pinned ?? false;
+  }
+
+  getPinnedCount(): number {
+    let count = 0;
+    for (const meta of this.sessionMeta.values()) {
+      if (meta.pinned) count++;
+    }
+    return count;
+  }
+
+  getSessionStatuses(): OpenCodeSessionStatus[] {
+    const statuses: OpenCodeSessionStatus[] = [];
+    for (const [sessionId, meta] of this.sessionMeta) {
+      statuses.push({
+        sessionId,
+        status: this.runningSessions.has(sessionId) ? 'streaming' : meta.status,
+        lastActivity: new Date(meta.lastActivity),
+        pinned: meta.pinned,
+      });
+    }
+    return statuses;
+  }
+
+  hasSession(sessionId: string): boolean {
+    return this.sessionMeta.has(sessionId);
+  }
+
+  touchSession(sessionId: string): void {
+    const meta = this.sessionMeta.get(sessionId);
+    if (meta) {
+      meta.lastActivity = Date.now();
+      meta.lastEventTimestamp = Date.now();
+    }
   }
 
   async isAvailable(): Promise<boolean> {
@@ -72,11 +254,22 @@ export class OpenCodeService {
   async createSession(cwd: string): Promise<{ sessionId: string; opencodeSessionId: string }> {
     await this.ensureServer();
 
+    if (this.sessionMeta.size >= this.lifecycle.maxSessions) {
+      this.evictOldestIdleSession();
+    }
+
     const opencodeSession = await this.client.createSession(cwd);
     const sessionId = randomUUID();
 
     this.opencodeSessionIds.set(sessionId, opencodeSession.id);
     this.piSessionByOpencodeId.set(opencodeSession.id, sessionId);
+
+    this.sessionMeta.set(sessionId, {
+      lastActivity: Date.now(),
+      lastEventTimestamp: Date.now(),
+      pinned: false,
+      status: 'idle',
+    });
 
     await this.registry.upsert({
       id: sessionId,
@@ -90,6 +283,22 @@ export class OpenCodeService {
     });
 
     return { sessionId, opencodeSessionId: opencodeSession.id };
+  }
+
+  private evictOldestIdleSession(): boolean {
+    const candidates = [...this.sessionMeta.entries()]
+      .filter(([, m]) => m.status === 'idle' && !m.pinned)
+      .sort((a, b) => a[1].lastActivity - b[1].lastActivity);
+
+    if (candidates.length === 0) {
+      console.warn('[OpenCodeService] Cannot evict: all sessions are busy or pinned');
+      return false;
+    }
+
+    const [evictId] = candidates[0];
+    console.log(`[OpenCodeService] Evicting idle session ${evictId} to make room`);
+    this.removeSession(evictId);
+    return true;
   }
 
   async sendPrompt(
@@ -110,6 +319,20 @@ export class OpenCodeService {
 
     await this.ensureServer();
     await this.ensureSSESubscription();
+
+    let meta = this.sessionMeta.get(sessionId);
+    if (!meta) {
+      meta = {
+        lastActivity: Date.now(),
+        lastEventTimestamp: Date.now(),
+        pinned: false,
+        status: 'idle',
+      };
+      this.sessionMeta.set(sessionId, meta);
+    }
+    meta.status = 'streaming';
+    meta.lastActivity = Date.now();
+    meta.lastEventTimestamp = Date.now();
 
     await this.registry.updateStatus(sessionId, 'running');
     this.runningSessions.add(sessionId);
@@ -133,6 +356,11 @@ export class OpenCodeService {
 
   private completeSession(sessionId: string, error?: Error): void {
     this.runningSessions.delete(sessionId);
+    const meta = this.sessionMeta.get(sessionId);
+    if (meta) {
+      meta.status = error ? 'error' : 'idle';
+      meta.lastActivity = Date.now();
+    }
     const callback = this.promptCallbacks.get(sessionId);
     if (callback) {
       this.promptCallbacks.delete(sessionId);
@@ -313,11 +541,16 @@ export class OpenCodeService {
   }
 
   private async forwardSSEToSession(event: OpenCodeSSEEvent, sessionId: string): Promise<void> {
+    const meta = this.sessionMeta.get(sessionId);
+    if (meta) {
+      meta.lastEventTimestamp = Date.now();
+      meta.lastActivity = Date.now();
+    }
+
     const normalized = this.eventAdapter.adaptSSEEvent(event, sessionId);
 
     const callback = this.promptCallbacks.get(sessionId);
     for (const evt of normalized) {
-      // Track pending permissions
       if (evt.type === 'permission_request' && evt.data) {
         const permId = (evt.data as Record<string, unknown>).permissionId as string;
         if (permId) {
@@ -352,6 +585,10 @@ export class OpenCodeService {
   }
 
   async shutdown(): Promise<void> {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
     if (this.sseUnsubscribe) {
       this.sseUnsubscribe();
       this.sseUnsubscribe = null;

@@ -245,12 +245,14 @@ export class WebSocketConnectionManager {
         const subscribers = this.opencodeSubs.getSubscribers(sessionId);
         if (subscribers.size > 0) {
           const isRunning = this.opencodeService.isRunning(sessionId);
+          const isPinned = this.opencodeService.isSessionPinned(sessionId);
           this.broadcast({
             type: 'session_status',
             sessionId,
             sessionPath: sessionId,
             status: isRunning ? 'streaming' : 'idle',
             lastActivity: new Date().toISOString(),
+            pinned: isPinned,
           });
         }
       }
@@ -1031,6 +1033,7 @@ export class WebSocketConnectionManager {
       }
       this.clientViewingSession.set(clientId, sessionPath);
       this.opencodeSubs.subscribe(clientId, sessionPath);
+      this.opencodeService.touchSession(sessionPath);
       await this.replayOpencodeHistory(clientId, sessionPath);
       console.log(`[handleSwitchSession] Client ${clientId} switched to OpenCode session ${sessionPath}`);
       return;
@@ -1730,6 +1733,24 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'pin_session'; sessionPath: string }
   ): void {
+    if (this.opencodeSessionIds.has(message.sessionPath)) {
+      const success = this.opencodeService.pinSession(message.sessionPath);
+      if (success) {
+        this.sendMessage(clientId, {
+          type: 'session_pinned',
+          sessionPath: message.sessionPath,
+          pinned: true,
+        });
+      } else {
+        const hasSession = this.opencodeService.hasSession(message.sessionPath);
+        this.sendMessage(clientId, {
+          type: 'session_pin_error',
+          sessionPath: message.sessionPath,
+          error: hasSession ? 'Maximum pinned sessions limit reached' : 'Session not found',
+        });
+      }
+      return;
+    }
     const success = this.multiSessionManager.pinSession(message.sessionPath);
     if (success) {
       this.sendMessage(clientId, {
@@ -1751,10 +1772,16 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'unpin_session'; sessionPath: string }
   ): void {
+    if (this.opencodeSessionIds.has(message.sessionPath)) {
+      this.opencodeService.unpinSession(message.sessionPath);
+      this.sendMessage(clientId, {
+        type: 'session_pinned',
+        sessionPath: message.sessionPath,
+        pinned: false,
+      });
+      return;
+    }
     const success = this.multiSessionManager.unpinSession(message.sessionPath);
-    // Always confirm unpin to client — even if the session isn't in the active
-    // map (e.g. after a restart), the user's intent is to remove the pin.
-    // The client-side state is what matters for UI consistency.
     this.sendMessage(clientId, {
       type: 'session_pinned',
       sessionPath: message.sessionPath,

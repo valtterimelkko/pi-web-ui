@@ -24,6 +24,11 @@ export interface ServerConfig {
   opencodeServerPassword: string;
   opencodeServerEnabled: boolean;
   opencodeWorkingDir: string;
+  opencodeMaxSessions: number;
+  opencodeIdleTimeoutMs: number;
+  opencodeStaleStreamingMs: number;
+  opencodeMaxPinnedSessions: number;
+  opencodeCleanupIntervalMs: number;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -62,4 +67,9 @@ export const config: ServerConfig = {
   opencodeServerPassword: process.env.OPENCODE_SERVER_PASSWORD || '',
   opencodeServerEnabled: process.env.OPENCODE_ENABLED !== 'false',
   opencodeWorkingDir: process.env.OPENCODE_WORKING_DIR || process.cwd(),
+  opencodeMaxSessions: parseInt(process.env.OPENCODE_MAX_SESSIONS || '4', 10),
+  opencodeIdleTimeoutMs: parseInt(process.env.OPENCODE_IDLE_TIMEOUT_MS || '1800000', 10),
+  opencodeStaleStreamingMs: parseInt(process.env.OPENCODE_STALE_STREAMING_MS || '900000', 10),
+  opencodeMaxPinnedSessions: parseInt(process.env.OPENCODE_MAX_PINNED_SESSIONS || '2', 10),
+  opencodeCleanupIntervalMs: parseInt(process.env.OPENCODE_CLEANUP_INTERVAL_MS || '60000', 10),
 };
