@@ -89,16 +89,51 @@ OpenCode Direct adds a long-lived `opencode serve` process when enabled and used
 - the binary exists on the host
 - the chosen port is free
 - any password/basic-auth settings are aligned with Pi Web UI config
+- consider managing `opencode serve` with its own systemd unit so it survives Pi Web UI restarts and server reboots
 
 ## systemd Example
+
+### OpenCode serve service (recommended)
+
+If you use OpenCode Direct, run `opencode serve` under its own systemd unit so it stays up independently of Pi Web UI restarts and server reboots.
+
+Example `/etc/systemd/system/opencode-serve.service`:
+
+```ini
+[Unit]
+Description=OpenCode Server - Headless API backend for Pi Web UI
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pi-web-ui
+Environment=PATH=/home/pi/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/home/pi/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4097
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opencode-serve
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Adjust the `User`, `WorkingDirectory`, `ExecStart`, and `Environment=PATH` values to match your host.
+
+### Pi Web UI service
 
 Example `/etc/systemd/system/pi-web-ui.service`:
 
 ```ini
 [Unit]
 Description=Pi Web UI
-After=network.target
-Wants=network.target
+After=network.target opencode-serve.service
+Wants=network.target opencode-serve.service
 
 [Service]
 Type=simple
@@ -111,7 +146,7 @@ Environment=PI_WORKER_MEMORY=512
 Environment=PI_IDLE_TIMEOUT=1800000
 Environment=OPENCODE_ENABLED=true
 Environment=OPENCODE_SERVER_HOST=127.0.0.1
-Environment=OPENCODE_SERVER_PORT=4096
+Environment=OPENCODE_SERVER_PORT=4097
 ExecStart=/usr/bin/node server/dist/index.js
 Restart=on-failure
 RestartSec=10
@@ -126,6 +161,8 @@ Then:
 
 ```bash
 sudo systemctl daemon-reload
+sudo systemctl enable opencode-serve
+sudo systemctl start opencode-serve
 sudo systemctl enable pi-web-ui
 sudo systemctl start pi-web-ui
 sudo systemctl status pi-web-ui

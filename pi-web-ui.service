@@ -1,7 +1,7 @@
 [Unit]
 Description=Pi Web UI - Web Interface for Pi Coding Agent
-After=network.target
-Wants=network.target
+After=network.target opencode-serve.service
+Wants=network.target opencode-serve.service
 
 [Service]
 Type=simple
