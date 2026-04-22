@@ -89,6 +89,25 @@ The app uses JSON messages with a `type` field rather than strict JSON-RPC frami
 { type: 'extension_ui_response', response: { id: string, approved?: boolean, value?: unknown, cancelled?: boolean } }
 ```
 
+### Session context transfer
+
+Transfer the visible transcript of one session into another (including across runtimes).
+
+```typescript
+{
+  type: 'transfer_session_context';
+  sourceSessionId: string;
+  targetSessionId?: string;       // required when not creating new
+  createNew?: boolean;
+  targetSdkType?: 'pi' | 'claude' | 'opencode';  // required when createNew
+  targetCwd?: string;             // required when createNew
+  scope: 'visible_recent' | 'visible_full';
+  sourceDisplayName?: string;     // optional: sidebar name override
+}
+```
+
+The server responds with either `session_transfer_completed` or `session_transfer_failed`.
+
 ## Server → Client Messages
 
 ### Connection and runtime availability
@@ -153,6 +172,24 @@ These are the normalized event shapes the frontend usually sees inside `session_
 { type: 'extension_error', extensionPath: string, event: string, error: string }
 ```
 
+### Session context transfer responses
+
+```typescript
+{ type: 'session_transfer_completed', sourceSessionId: string, targetSessionId: string, createdNewSession: boolean }
+{ type: 'session_transfer_failed', sourceSessionId: string, targetSessionId?: string, message: string, code: string }
+```
+
+Transfer error codes:
+- `TRANSFER_SOURCE_NOT_FOUND` — source session does not exist
+- `TRANSFER_TARGET_NOT_FOUND` — target session does not exist
+- `TRANSFER_TARGET_BUSY` — target session is streaming
+- `TRANSFER_SELF_TRANSFER` — source and target are the same
+- `TRANSFER_EMPTY_SOURCE` — no visible content to transfer
+- `TRANSFER_INVALID_SCOPE` — scope is not `visible_recent` or `visible_full`
+- `TRANSFER_INVALID_REQUEST` — malformed request
+- `TRANSFER_RUNTIME_UNAVAILABLE` — requested runtime not available
+- `TRANSFER_DISPATCH_FAILED` — handoff injection failed
+
 ## Runtime-specific Behaviour Behind the Same Protocol
 
 ### Pi SDK
@@ -188,6 +225,15 @@ Common codes include:
 - `RATE_LIMIT`
 - `INTERNAL_ERROR`
 - `OPENCODE_ERROR`
+- `TRANSFER_SOURCE_NOT_FOUND`
+- `TRANSFER_TARGET_NOT_FOUND`
+- `TRANSFER_TARGET_BUSY`
+- `TRANSFER_SELF_TRANSFER`
+- `TRANSFER_EMPTY_SOURCE`
+- `TRANSFER_INVALID_SCOPE`
+- `TRANSFER_INVALID_REQUEST`
+- `TRANSFER_RUNTIME_UNAVAILABLE`
+- `TRANSFER_DISPATCH_FAILED`
 
 Example:
 
