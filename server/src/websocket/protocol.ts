@@ -119,7 +119,9 @@ export type ClientMessage =
   | SubscribeSession
   | UnsubscribeSession
   | PinSession
-  | UnpinSession;
+  | UnpinSession
+  // Session context transfer
+  | TransferSessionContext;
 
 // Session information for listing
 export interface SessionInfo {
@@ -217,7 +219,10 @@ export type ServerMessage =
   | { type: 'session_name_updated'; sessionId: string; name: string }
   | { type: 'session_name_changed'; sessionId: string; name: string }
   | { type: 'claude_available'; available: boolean; error: string | null }
-  | { type: 'opencode_available'; available: boolean; error: string | null };
+  | { type: 'opencode_available'; available: boolean; error: string | null }
+  // Session context transfer responses
+  | SessionTransferCompleted
+  | SessionTransferFailed;
 
 // Message type guards
 export function isClientMessage(data: unknown): data is ClientMessage {
@@ -345,6 +350,46 @@ export function isUnpinSession(data: unknown): data is UnpinSession {
   if (typeof data !== 'object' || data === null) return false;
   const msg = data as Record<string, unknown>;
   return msg.type === 'unpin_session' && typeof msg.sessionPath === 'string';
+}
+
+// ============================================================================
+// Session Context Transfer Protocol Types
+// ============================================================================
+
+export interface TransferSessionContext {
+  type: 'transfer_session_context';
+  sourceSessionId: string;
+  targetSessionId?: string;
+  createNew?: boolean;
+  targetSdkType?: 'pi' | 'claude' | 'opencode';
+  targetCwd?: string;
+  scope: 'visible_recent' | 'visible_full';
+  sourceDisplayName?: string;
+}
+
+export interface SessionTransferCompleted {
+  type: 'session_transfer_completed';
+  sourceSessionId: string;
+  targetSessionId: string;
+  createdNewSession: boolean;
+}
+
+export interface SessionTransferFailed {
+  type: 'session_transfer_failed';
+  sourceSessionId: string;
+  targetSessionId?: string;
+  message: string;
+  code: string;
+}
+
+export function isTransferSessionContext(data: unknown): data is TransferSessionContext {
+  if (typeof data !== 'object' || data === null) return false;
+  const msg = data as Record<string, unknown>;
+  return (
+    msg.type === 'transfer_session_context' &&
+    typeof msg.sourceSessionId === 'string' &&
+    (msg.scope === 'visible_recent' || msg.scope === 'visible_full')
+  );
 }
 
 // ============================================================================

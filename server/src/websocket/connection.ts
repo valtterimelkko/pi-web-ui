@@ -13,6 +13,7 @@ import { SessionPool } from '../pi/session-pool.js';
 import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
+import { isTransferSessionContext } from './protocol.js';
 import { handleSessionWebSocket } from './session-websocket.js';
 import { config } from '../config.js';
 import { validateCsrfToken, hasCsrfToken } from '../security/csrf.js';
@@ -615,12 +616,65 @@ export class WebSocketConnectionManager {
         break;
       }
 
+      case 'transfer_session_context':
+        await this.handleTransferSessionContext(clientId, message);
+        break;
+
       default:
         this.sendMessage(clientId, {
           type: 'error',
           message: `Unknown message type: ${(message as { type: string }).type}`,
           code: 'INVALID_MESSAGE',
         });
+    }
+  }
+
+  private async handleTransferSessionContext(
+    clientId: string,
+    message: ClientMessage,
+  ): Promise<void> {
+    if (!isTransferSessionContext(message)) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'Invalid transfer_session_context message format',
+        code: 'INVALID_MESSAGE',
+      });
+      return;
+    }
+
+    const { TransferService } = await import('../session-transfer/transfer-service.js');
+
+    const transferService = new TransferService({
+      registry: getSessionRegistry(),
+      claudeService: this.claudeService,
+      opencodeService: this.opencodeService,
+    });
+
+    const result = await transferService.executeTransfer({
+      sourceSessionId: message.sourceSessionId,
+      targetSessionId: message.targetSessionId,
+      createNew: message.createNew,
+      targetSdkType: message.targetSdkType,
+      targetCwd: message.targetCwd,
+      scope: message.scope,
+      sourceDisplayName: message.sourceDisplayName,
+    });
+
+    if (result.success) {
+      this.sendMessage(clientId, {
+        type: 'session_transfer_completed',
+        sourceSessionId: result.sourceSessionId,
+        targetSessionId: result.targetSessionId,
+        createdNewSession: result.createdNewSession,
+      } as unknown as ServerMessage);
+    } else {
+      this.sendMessage(clientId, {
+        type: 'session_transfer_failed',
+        sourceSessionId: result.sourceSessionId,
+        targetSessionId: result.targetSessionId || undefined,
+        message: result.error?.message ?? 'Transfer failed',
+        code: result.error?.code ?? 'INTERNAL_ERROR',
+      } as unknown as ServerMessage);
     }
   }
 
