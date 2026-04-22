@@ -42,3 +42,5 @@ export { extractPiTranscript } from './pi-source-adapter.js';
 export { extractClaudeTranscript } from './claude-source-adapter.js';
 export { extractOpenCodeTranscript } from './opencode-source-adapter.js';
 export type { OpenCodeReplayLoader } from './opencode-source-adapter.js';
+export { TransferService } from './transfer-service.js';
+export type { TransferServiceConfig, TransferResult } from './transfer-service.js';

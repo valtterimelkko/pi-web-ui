@@ -260,6 +260,10 @@ export class ClaudeService {
     return this.processPool.isActive(sessionId);
   }
 
+  async loadSessionHistory(sessionId: string) {
+    return this.sessionStore.loadHistory(sessionId);
+  }
+
   /** Update the model for a session (persisted in registry). */
   async setModel(sessionId: string, model: string): Promise<'opus' | 'sonnet' | 'haiku'> {
     const entry = await this.registry.get(sessionId);
