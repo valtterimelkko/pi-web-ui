@@ -187,13 +187,16 @@ function getSkillContentInfo(message: LiveMessage): { isSkillContent: boolean; s
 
 /**
  * Tool names that should be visible as cards in the message list.
- * Includes both Pi SDK names (lowercase) and Claude SDK equivalents (PascalCase).
+ * Includes Pi SDK names (lowercase), Claude SDK equivalents (PascalCase),
+ * and OpenCode tool names.
  */
 const VISIBLE_TOOL_NAMES = new Set([
   // Pi SDK names
   'subagent', 'read', 'todo',
   // Claude SDK equivalents (PascalCase)
   'Agent', 'Task', 'Read', 'TodoWrite', 'TodoRead',
+  // OpenCode tool names (PascalCase)
+  'Bash', 'Write', 'Edit', 'Grep', 'Glob', 'WebSearch', 'WebFetch',
 ]);
 
 function ToolGroupToggle({

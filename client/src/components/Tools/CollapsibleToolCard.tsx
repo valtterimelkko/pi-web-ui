@@ -328,7 +328,8 @@ function parseWebFetchOutput(output: string): { chars: number; truncated: boolea
 
 // Tools that should hide their raw output and show only a brief summary
 // These are "intermediate" tools where the assistant processes the output
-const BRIEF_ONLY_TOOLS = ['read', 'web_search', 'web_fetch', 'fetch', 'search'];
+// Includes Pi SDK names (lowercase), Claude names, and OpenCode names (PascalCase)
+const BRIEF_ONLY_TOOLS = ['read', 'web_search', 'web_fetch', 'fetch', 'search', 'Read', 'WebSearch', 'WebFetch', 'Grep', 'Glob'];
 
 // Tool output section (result)
 const ToolOutput = memo(function ToolOutput({ 
@@ -352,14 +353,14 @@ const ToolOutput = memo(function ToolOutput({
   const todoInfo = toolName === 'todo' ? parseTodoOutput(output) : null;
   
   // Parse read tool output for brief display (don't show file contents)
-  const readInfo = toolName === 'read' ? parseReadOutput(output) : null;
+  const readInfo = toolName === 'read' || toolName === 'Read' ? parseReadOutput(output) : null;
   
   // Parse web search output for brief display
-  const webSearchInfo = toolName === 'web_search' || toolName === 'search' 
+  const webSearchInfo = toolName === 'web_search' || toolName === 'search' || toolName === 'WebSearch' || toolName === 'Grep' || toolName === 'Glob'
     ? parseWebSearchOutput(output) : null;
   
   // Parse web fetch output for brief display
-  const webFetchInfo = toolName === 'web_fetch' || toolName === 'fetch' 
+  const webFetchInfo = toolName === 'web_fetch' || toolName === 'fetch' || toolName === 'WebFetch'
     ? parseWebFetchOutput(output) : null;
   
   // Check if this tool should only show brief summary (hide raw output)

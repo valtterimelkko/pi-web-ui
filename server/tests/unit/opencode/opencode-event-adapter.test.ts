@@ -153,6 +153,61 @@ describe('OpenCodeEventAdapter', () => {
     const data = events[0].data as Record<string, unknown>;
     expect(data.toolCallId).toBe('prt-tool-1');
     expect(data.isError).toBe(false);
+    const result = data.result as { content: Array<{ type: string; text: string }> };
+    expect(result.content[0].text).toBe('Read file contents');
+  });
+
+  it('step-finish tool extracts result field when available', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-tool-2',
+          type: 'step-finish',
+          reason: 'tool',
+          result: 'the file content',
+        },
+      }),
+      SID,
+    );
+    const data = events[0].data as Record<string, unknown>;
+    const result = data.result as { content: Array<{ type: string; text: string }> };
+    expect(result.content[0].text).toBe('the file content');
+  });
+
+  it('step-finish tool extracts result object as JSON', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-tool-3',
+          type: 'step-finish',
+          reason: 'tool',
+          result: { files: ['a.ts', 'b.ts'] },
+        },
+      }),
+      SID,
+    );
+    const data = events[0].data as Record<string, unknown>;
+    const result = data.result as { content: Array<{ type: string; text: string }> };
+    expect(result.content[0].text).toBe('{"files":["a.ts","b.ts"]}');
+  });
+
+  it('step-finish tool falls back to empty string when no result or snapshot', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-tool-4',
+          type: 'step-finish',
+          reason: 'tool',
+        },
+      }),
+      SID,
+    );
+    const data = events[0].data as Record<string, unknown>;
+    const result = data.result as { content: Array<{ type: string; text: string }> };
+    expect(result.content[0].text).toBe('');
   });
 
   it('message.part.updated step-finish with stop reason → empty', () => {
@@ -174,8 +229,14 @@ describe('OpenCodeEventAdapter', () => {
     expect(events).toHaveLength(0);
   });
 
-  it('unknown event type → opencode_raw', () => {
+  it('unknown event type → empty by default (debug off)', () => {
     const events = adapter.adaptSSEEvent(sse('server.heartbeat', {}), SID);
+    expect(events).toHaveLength(0);
+  });
+
+  it('unknown event type → opencode_raw when debug enabled', () => {
+    const debugAdapter = new OpenCodeEventAdapter(true);
+    const events = debugAdapter.adaptSSEEvent(sse('server.heartbeat', {}), SID);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('opencode_raw');
   });

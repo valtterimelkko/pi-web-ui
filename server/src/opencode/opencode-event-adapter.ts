@@ -1,9 +1,15 @@
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { OpenCodeSSEEvent, OpenCodeMessage } from './opencode-types.js';
+import { config } from '../config.js';
 
 export class OpenCodeEventAdapter {
   private currentMessageIdBySession: Map<string, string> = new Map();
   private partTypeById: Map<string, string> = new Map();
+  private debugRawEvents: boolean;
+
+  constructor(debugRawEvents?: boolean) {
+    this.debugRawEvents = debugRawEvents ?? config.opencodeDebugRawEvents;
+  }
 
   adaptSSEEvent(event: OpenCodeSSEEvent, sessionId: string): NormalizedEvent[] {
     const timestamp = Date.now();
@@ -91,13 +97,18 @@ export class OpenCodeEventAdapter {
           const reason = part.reason as string | undefined;
           if (reason === 'tool') {
             const partID = part.id as string;
+            const resultText = typeof part.result === 'string'
+              ? part.result
+              : part.result != null
+                ? JSON.stringify(part.result)
+                : (part.snapshot as string | undefined) ?? '';
             return [{
               type: 'tool_execution_end',
               sessionId,
               timestamp,
               data: {
                 toolCallId: partID,
-                result: { content: [{ type: 'text', text: JSON.stringify(part) }] },
+                result: { content: [{ type: 'text', text: resultText }] },
                 isError: false,
               },
             }];
@@ -163,12 +174,15 @@ export class OpenCodeEventAdapter {
       }
 
       default:
-        return [{
-          type: 'opencode_raw',
-          sessionId,
-          timestamp,
-          data: event,
-        }];
+        if (this.debugRawEvents) {
+          return [{
+            type: 'opencode_raw',
+            sessionId,
+            timestamp,
+            data: event,
+          }];
+        }
+        return [];
     }
   }
 

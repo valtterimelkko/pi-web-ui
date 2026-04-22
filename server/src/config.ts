@@ -29,6 +29,7 @@ export interface ServerConfig {
   opencodeStaleStreamingMs: number;
   opencodeMaxPinnedSessions: number;
   opencodeCleanupIntervalMs: number;
+  opencodeDebugRawEvents: boolean;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -72,4 +73,5 @@ export const config: ServerConfig = {
   opencodeStaleStreamingMs: parseInt(process.env.OPENCODE_STALE_STREAMING_MS || '900000', 10),
   opencodeMaxPinnedSessions: parseInt(process.env.OPENCODE_MAX_PINNED_SESSIONS || '2', 10),
   opencodeCleanupIntervalMs: parseInt(process.env.OPENCODE_CLEANUP_INTERVAL_MS || '60000', 10),
+  opencodeDebugRawEvents: process.env.OPENCODE_DEBUG_RAW_EVENTS === 'true',
 };
