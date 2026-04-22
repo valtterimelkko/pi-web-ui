@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect, memo } from 'react';
-import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles } from 'lucide-react';
+import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles, Map, Wrench } from 'lucide-react';
 import { useChatStore, useSessionStore, useDraftStore } from '../../store';
 import { useUIStore } from '../../store/uiStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -45,6 +45,11 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
 
   // Derive if current session is Claude Direct
   const isClaudeSession = currentSessionSdkType === 'claude';
+  const isOpencodeSession = currentSessionSdkType === 'opencode';
+  const opencodeAgentMode = useSessionStore((state) =>
+    currentSessionId ? state.opencodeAgentModes[currentSessionId] ?? 'build' : 'build'
+  );
+  const setOpencodeAgentMode = useSessionStore((state) => state.setOpencodeAgentMode);
   const { sendPrompt, abortGeneration } = useWebSocket();
 
   // Draft store for per-session draft persistence
@@ -84,7 +89,10 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
       }
 
       const images: unknown[] = [];
-      const sent = sendPrompt(promptMessage, images);
+      const agent = useSessionStore.getState().currentSessionSdkType === 'opencode'
+        ? useSessionStore.getState().opencodeAgentModes[currentSessionId ?? ''] ?? 'build'
+        : undefined;
+      const sent = sendPrompt(promptMessage, images, agent);
       if (!sent) {
         // Surface send failure - don't clear draft, show error toast
         useUIStore.getState().addToast({
@@ -109,7 +117,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
 
       return true;
     });
-  }, [sendPrompt, setSendCallback]);
+  }, [sendPrompt, setSendCallback, currentSessionId]);
 
   const [isFocused, setIsFocused] = useState(false);
   const [showCompactModal, setShowCompactModal] = useState(false);
@@ -302,6 +310,30 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
           )}
         </div>
         <div className="flex items-center gap-1.5">
+          {isOpencodeSession && (
+            <button
+              onClick={() => {
+                if (currentSessionId) {
+                  const next = opencodeAgentMode === 'build' ? 'plan' : 'build';
+                  setOpencodeAgentMode(currentSessionId, next);
+                }
+              }}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                opencodeAgentMode === 'plan'
+                  ? 'bg-purple-500/15 text-purple-600 border-purple-500/25'
+                  : 'bg-emerald-500/15 text-emerald-600 border-emerald-500/25'
+              }`}
+              title={opencodeAgentMode === 'plan' ? 'Plan mode: analysis only, no edits' : 'Build mode: full code execution'}
+              type="button"
+            >
+              {opencodeAgentMode === 'plan' ? (
+                <Map className="w-3 h-3" />
+              ) : (
+                <Wrench className="w-3 h-3" />
+              )}
+              {opencodeAgentMode === 'plan' ? 'Plan' : 'Build'}
+            </button>
+          )}
           {isClaudeSession && (
             <span 
               className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20 cursor-help"

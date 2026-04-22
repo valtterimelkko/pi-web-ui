@@ -191,6 +191,9 @@ interface SessionState {
   opencodeAvailable: boolean;
   opencodeAuthError: string | null;
 
+  // OpenCode Direct agent mode per session ('build' | 'plan')
+  opencodeAgentModes: Record<string, 'build' | 'plan'>;
+
   // Actions
   setSessions: (sessions: Session[]) => void;
   setCurrentSession: (sessionId: string | null) => void;
@@ -245,6 +248,10 @@ interface SessionState {
   // OpenCode Direct availability
   setOpencodeAvailable: (available: boolean, error?: string | null) => void;
 
+  // OpenCode Direct agent mode
+  setOpencodeAgentMode: (sessionId: string, mode: 'build' | 'plan') => void;
+  getOpencodeAgentMode: (sessionId: string) => 'build' | 'plan';
+
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
 }
@@ -290,6 +297,7 @@ export const useSessionStore = create<SessionState>()(
       claudeAuthError: null,
       opencodeAvailable: false,
       opencodeAuthError: null,
+      opencodeAgentModes: {},
 
       // Worker status tracking implementation
       updateWorkerStatus: (sessionId: string, status: WorkerStatus) => {
@@ -325,6 +333,13 @@ export const useSessionStore = create<SessionState>()(
 
       setClaudeAvailable: (available, error = null) => set({ claudeAvailable: available, claudeAuthError: error }),
       setOpencodeAvailable: (available, error = null) => set({ opencodeAvailable: available, opencodeAuthError: error }),
+
+      setOpencodeAgentMode: (sessionId, mode) => set((state) => ({
+        opencodeAgentModes: { ...state.opencodeAgentModes, [sessionId]: mode },
+      })),
+      getOpencodeAgentMode: (sessionId) => {
+        return get().opencodeAgentModes[sessionId] ?? 'build';
+      },
 
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),

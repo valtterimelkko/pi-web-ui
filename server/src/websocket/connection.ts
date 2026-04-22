@@ -630,7 +630,7 @@ export class WebSocketConnectionManager {
 
   private async handlePrompt(
     clientId: string,
-    message: { type: 'prompt'; sessionId: string; message: string; images?: ImageContent[] }
+    message: { type: 'prompt'; sessionId: string; message: string; images?: ImageContent[]; agent?: string }
   ): Promise<void> {
     // Prompt injection check
     const injectionCheck = detectPromptInjection(message.message);
@@ -652,7 +652,7 @@ export class WebSocketConnectionManager {
 
     // Check if this is a Claude session — dispatch to Claude handler
     if (this.opencodeSessionIds.has(sessionPath)) {
-      await this.handleOpencodePrompt(clientId, sessionPath, message.message, message.images);
+      await this.handleOpencodePrompt(clientId, sessionPath, message.message, message.images, message.agent);
       return;
     }
 
@@ -749,14 +749,14 @@ export class WebSocketConnectionManager {
     clientId: string,
     sessionId: string,
     prompt: string,
-    _images?: ImageContent[]
+    _images?: ImageContent[],
+    agent?: string,
   ): Promise<void> {
     try {
       await this.opencodeService.sendPrompt(
         sessionId,
         prompt,
         (normalizedEvent) => {
-          // Intercept permission_request — broadcast as extension_ui_request instead
           if (normalizedEvent.type === 'permission_request') {
             const permData = normalizedEvent.data as Record<string, unknown>;
             const uiRequest = {
@@ -811,6 +811,7 @@ export class WebSocketConnectionManager {
             } as unknown as ServerMessage);
           }
         },
+        agent,
       );
     } catch (error) {
       this.sendMessage(clientId, {

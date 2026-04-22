@@ -286,3 +286,44 @@ describe('OpenCodeClient — promptAsync without model', () => {
     expect(body.model).toBeUndefined();
   });
 });
+
+describe('OpenCodeClient — promptAsync with agent parameter', () => {
+  let client: OpenCodeClient;
+
+  beforeEach(() => {
+    client = new OpenCodeClient('http://localhost:8080', {});
+    mockFetch.mockReset();
+  });
+
+  it('includes agent field in body when agent is provided', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await client.promptAsync('sess-5', '/root', 'plan this task', undefined, 'plan');
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string);
+    expect(body.agent).toBe('plan');
+    expect(body.parts).toEqual([{ type: 'text', text: 'plan this task' }]);
+  });
+
+  it('includes agent="build" when build mode is specified', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await client.promptAsync('sess-5', '/root', 'implement this', 'zai-coding-plan/glm-5.1', 'build');
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string);
+    expect(body.agent).toBe('build');
+    expect(body.model).toEqual({ providerID: 'zai-coding-plan', modelID: 'glm-5.1' });
+  });
+
+  it('omits agent field when agent is undefined', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await client.promptAsync('sess-5', '/root', 'hello', undefined, undefined);
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string);
+    expect(body.agent).toBeUndefined();
+  });
+});

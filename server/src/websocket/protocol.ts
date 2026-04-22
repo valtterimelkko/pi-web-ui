@@ -99,7 +99,7 @@ export interface ImageContent {
 // Client → Server messages
 export type ClientMessage =
   | { type: 'auth'; csrfToken: string }
-  | { type: 'prompt'; sessionId: string; message: string; images?: ImageContent[] }
+  | { type: 'prompt'; sessionId: string; message: string; images?: ImageContent[]; agent?: string }
   | { type: 'steer'; message: string }
   | { type: 'follow_up'; message: string }
   | { type: 'abort' }

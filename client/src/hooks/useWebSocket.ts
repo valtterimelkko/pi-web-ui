@@ -79,7 +79,7 @@ export function useWebSocket() {
     return clientRef.current?.send(message) ?? false;
   }, []);
 
-  const sendPrompt = useCallback((message: string, images?: unknown[]) => {
+  const sendPrompt = useCallback((message: string, images?: unknown[], agent?: string) => {
     if (!currentSessionId) {
       console.error('No active session');
       return false;
@@ -89,6 +89,7 @@ export function useWebSocket() {
       sessionId: currentSessionId,
       message,
       images,
+      agent,
     });
   }, [sendMessage, currentSessionId]);
 

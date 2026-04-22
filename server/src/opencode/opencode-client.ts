@@ -55,7 +55,7 @@ export class OpenCodeClient {
     return response.json() as Promise<OpenCodeSession>;
   }
 
-  async promptAsync(sessionId: string, directory: string, message: string, modelId?: string): Promise<void> {
+  async promptAsync(sessionId: string, directory: string, message: string, modelId?: string, agent?: string): Promise<void> {
     const body: Record<string, unknown> = {
       parts: [{ type: 'text', text: message }],
     };
@@ -66,6 +66,10 @@ export class OpenCodeClient {
       if (providerID && resolvedModelID) {
         body.model = { providerID, modelID: resolvedModelID };
       }
+    }
+
+    if (agent) {
+      body.agent = agent;
     }
 
     await this.request(this.withDirectory(`/session/${sessionId}/prompt_async`, directory), {

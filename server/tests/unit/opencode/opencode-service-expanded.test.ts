@@ -439,6 +439,46 @@ describe('OpenCodeService — sendPrompt (single service instance)', () => {
     expect(service.isRunning(sessionId)).toBe(false);
   });
 
+  it('passes agent parameter to promptAsync when provided', async () => {
+    const sess = allMocks();
+    const { sessionId } = await service.createSession('/tmp');
+
+    let capturedBody: string | null = null;
+    allMocks(sess, {
+      '/prompt_async': () => {
+        capturedBody = (mockFetch.mock.calls[mockFetch.mock.calls.length - 1]?.[1] as RequestInit)?.body as string;
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    await service.sendPrompt(sessionId, 'analyze this code', vi.fn(), vi.fn(), 'plan');
+
+    expect(capturedBody).toBeTruthy();
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed.agent).toBe('plan');
+    expect(parsed.parts).toEqual([{ type: 'text', text: 'analyze this code' }]);
+  });
+
+  it('omits agent when not provided (default build mode)', async () => {
+    const sess = allMocks();
+    const { sessionId } = await service.createSession('/tmp');
+
+    let capturedBody: string | null = null;
+    allMocks(sess, {
+      '/prompt_async': () => {
+        capturedBody = (mockFetch.mock.calls[mockFetch.mock.calls.length - 1]?.[1] as RequestInit)?.body as string;
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    await service.sendPrompt(sessionId, 'implement feature', vi.fn(), vi.fn());
+
+    expect(capturedBody).toBeTruthy();
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed.agent).toBeUndefined();
+    expect(parsed.parts).toEqual([{ type: 'text', text: 'implement feature' }]);
+  });
+
   it('marks session as running during prompt and completes on agent_end SSE', async () => {
     const sess = allMocks();
     const { sessionId, opencodeSessionId } = await service.createSession('/tmp');

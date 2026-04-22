@@ -306,6 +306,7 @@ export class OpenCodeService {
     prompt: string,
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
+    agent?: string,
   ): Promise<void> {
     const entry = await this.registry.get(sessionId);
     if (!entry) {
@@ -347,7 +348,7 @@ export class OpenCodeService {
     try { onEvent(agentStartEvent); } catch { /* non-fatal */ }
 
     try {
-      await this.client.promptAsync(ocSessionId, entry.cwd, prompt, entry.model);
+      await this.client.promptAsync(ocSessionId, entry.cwd, prompt, entry.model, agent);
     } catch (err) {
       console.error(`[OpenCodeService] promptAsync failed:`, err instanceof Error ? err.message : String(err));
       this.completeSession(sessionId, err instanceof Error ? err : new Error(String(err)));
