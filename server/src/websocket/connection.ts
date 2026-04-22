@@ -1405,6 +1405,73 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    // Claude Direct session info
+    if (this.claudeSessionIds.has(sessionPath)) {
+      try {
+        const claudeStats = await this.claudeService.getSessionStats(sessionPath);
+        if (!claudeStats) {
+          this.sendMessage(clientId, { type: 'error', message: 'Claude session not found', code: 'SESSION_NOT_FOUND' });
+          return;
+        }
+        this.sendMessage(clientId, {
+          type: 'session_info',
+          stats: {
+            sessionFile: undefined,
+            sessionId: claudeStats.sessionId,
+            cwd: claudeStats.cwd,
+            userMessages: claudeStats.userMessages,
+            assistantMessages: claudeStats.assistantMessages,
+            toolCalls: claudeStats.toolCalls,
+            toolResults: claudeStats.toolResults,
+            totalMessages: claudeStats.totalMessages,
+            tokens: claudeStats.tokens,
+            cost: claudeStats.cost,
+            model: claudeStats.model,
+            contextWindow: undefined,
+            contextUsed: undefined,
+            contextPercent: undefined,
+          },
+        });
+      } catch (error) {
+        this.sendMessage(clientId, { type: 'error', message: error instanceof Error ? error.message : 'Failed to get Claude session info', code: 'INTERNAL_ERROR' });
+      }
+      return;
+    }
+
+    // OpenCode Direct session info
+    if (this.opencodeSessionIds.has(sessionPath)) {
+      try {
+        const ocStats = await this.opencodeService.getSessionStats(sessionPath);
+        if (!ocStats) {
+          this.sendMessage(clientId, { type: 'error', message: 'OpenCode session not found', code: 'SESSION_NOT_FOUND' });
+          return;
+        }
+        this.sendMessage(clientId, {
+          type: 'session_info',
+          stats: {
+            sessionFile: undefined,
+            sessionId: ocStats.sessionId,
+            cwd: ocStats.cwd,
+            userMessages: ocStats.userMessages,
+            assistantMessages: ocStats.assistantMessages,
+            toolCalls: ocStats.toolCalls,
+            toolResults: ocStats.toolResults,
+            totalMessages: ocStats.totalMessages,
+            tokens: ocStats.tokens,
+            cost: ocStats.cost,
+            model: ocStats.model,
+            contextWindow: undefined,
+            contextUsed: undefined,
+            contextPercent: undefined,
+          },
+        });
+      } catch (error) {
+        this.sendMessage(clientId, { type: 'error', message: error instanceof Error ? error.message : 'Failed to get OpenCode session info', code: 'INTERNAL_ERROR' });
+      }
+      return;
+    }
+
+    // Pi SDK session info (original path)
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
     if (!agentSession) {
       this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
@@ -1752,6 +1819,26 @@ export class WebSocketConnectionManager {
       }
       return;
     }
+
+    if (this.claudeSessionIds.has(message.sessionPath)) {
+      const success = this.claudeService.pinSession(message.sessionPath);
+      if (success) {
+        this.sendMessage(clientId, {
+          type: 'session_pinned',
+          sessionPath: message.sessionPath,
+          pinned: true,
+        });
+      } else {
+        const hasSession = this.claudeService.hasSession(message.sessionPath);
+        this.sendMessage(clientId, {
+          type: 'session_pin_error',
+          sessionPath: message.sessionPath,
+          error: hasSession ? 'Maximum pinned sessions limit reached' : 'Session not found',
+        });
+      }
+      return;
+    }
+
     const success = this.multiSessionManager.pinSession(message.sessionPath);
     if (success) {
       this.sendMessage(clientId, {
@@ -1782,6 +1869,17 @@ export class WebSocketConnectionManager {
       });
       return;
     }
+
+    if (this.claudeSessionIds.has(message.sessionPath)) {
+      this.claudeService.unpinSession(message.sessionPath);
+      this.sendMessage(clientId, {
+        type: 'session_pinned',
+        sessionPath: message.sessionPath,
+        pinned: false,
+      });
+      return;
+    }
+
     const success = this.multiSessionManager.unpinSession(message.sessionPath);
     this.sendMessage(clientId, {
       type: 'session_pinned',

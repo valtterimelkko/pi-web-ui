@@ -424,6 +424,61 @@ export class OpenCodeService {
     return this.registry.get(sessionId);
   }
 
+  async getSessionStats(sessionId: string): Promise<{
+    sessionId: string;
+    cwd: string;
+    model: string | undefined;
+    userMessages: number;
+    assistantMessages: number;
+    toolCalls: number;
+    toolResults: number;
+    totalMessages: number;
+    tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+    cost: number;
+    pinned: boolean;
+  } | null> {
+    const entry = await this.registry.get(sessionId);
+    if (!entry || entry.sdkType !== 'opencode') return null;
+
+    const events = await this.getReplayEvents(sessionId);
+
+    let userMessages = 0;
+    let assistantMessages = 0;
+    let toolCalls = 0;
+    let toolResults = 0;
+
+    for (const evt of events) {
+      const type = (evt as Record<string, unknown>).type as string;
+      switch (type) {
+        case 'message_start':
+        case 'message_end': {
+          const msg = (evt as Record<string, unknown>).message as { role?: string } | undefined;
+          if (msg?.role === 'user') userMessages++;
+          else if (msg?.role === 'assistant') assistantMessages++;
+          break;
+        }
+        case 'tool_execution_start': toolCalls++; break;
+        case 'tool_execution_end': toolResults++; break;
+      }
+    }
+
+    const meta = this.sessionMeta.get(sessionId);
+
+    return {
+      sessionId,
+      cwd: entry.cwd,
+      model: entry.model,
+      userMessages,
+      assistantMessages,
+      toolCalls,
+      toolResults,
+      totalMessages: userMessages + assistantMessages + toolCalls + toolResults,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      cost: 0,
+      pinned: meta?.pinned ?? false,
+    };
+  }
+
   getSubscriberTracker(): OpenCodeSessionSubscribers {
     return this.subscribers;
   }

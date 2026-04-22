@@ -37,6 +37,9 @@ export class ClaudeService {
   private registry: SessionRegistryManager;
   /** Track sessions that have completed at least one turn */
   private sessionsWithHistory: Set<string> = new Set();
+  /** In-memory pin tracking for Claude sessions */
+  private pinnedSessions: Set<string> = new Set();
+  private static readonly MAX_PINNED_SESSIONS = 2;
 
   constructor(cfg: {
     claudeSessionDir: string;
@@ -281,6 +284,100 @@ export class ClaudeService {
 
   async listSessions() {
     return this.registry.listBySdkType('claude');
+  }
+
+  // ── Pinning ─────────────────────────────────────────────────────────────
+
+  pinSession(sessionId: string): boolean {
+    if (!this.hasSession(sessionId)) return false;
+    if (this.pinnedSessions.has(sessionId)) return true;
+    if (this.pinnedSessions.size >= ClaudeService.MAX_PINNED_SESSIONS) return false;
+    this.pinnedSessions.add(sessionId);
+    return true;
+  }
+
+  unpinSession(sessionId: string): boolean {
+    return this.pinnedSessions.delete(sessionId);
+  }
+
+  isSessionPinned(sessionId: string): boolean {
+    return this.pinnedSessions.has(sessionId);
+  }
+
+  hasSession(sessionId: string): boolean {
+    return this.pinnedSessions.has(sessionId)
+      || this.processPool.isActive(sessionId)
+      || this.sessionsWithHistory.has(sessionId);
+  }
+
+  /**
+   * Check if a session exists in the registry (async, for thorough lookups).
+   */
+  async sessionExistsInRegistry(sessionId: string): Promise<boolean> {
+    const entry = await this.registry.get(sessionId);
+    return entry?.sdkType === 'claude';
+  }
+
+  /**
+   * Build session stats for the session info modal.
+   */
+  async getSessionStats(sessionId: string): Promise<{
+    sessionId: string;
+    cwd: string;
+    model: string | undefined;
+    userMessages: number;
+    assistantMessages: number;
+    toolCalls: number;
+    toolResults: number;
+    totalMessages: number;
+    tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+    cost: number;
+    pinned: boolean;
+  } | null> {
+    const entry = await this.registry.get(sessionId);
+    if (!entry || entry.sdkType !== 'claude') return null;
+
+    const history = await this.sessionStore.loadHistory(sessionId);
+
+    let userMessages = 0;
+    let assistantMessages = 0;
+    let toolCalls = 0;
+    let toolResults = 0;
+    let totalTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+
+    for (const entry of history) {
+      switch (entry.type) {
+        case 'user': userMessages++; break;
+        case 'assistant': assistantMessages++; break;
+        case 'tool': toolCalls++; break;
+        case 'tool_result': toolResults++; break;
+        case 'meta': {
+          const usage = entry.usage as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
+          if (usage) {
+            totalTokens.input += usage.input_tokens ?? 0;
+            totalTokens.output += usage.output_tokens ?? 0;
+            totalTokens.cacheRead += usage.cache_read_input_tokens ?? 0;
+            totalTokens.cacheWrite += usage.cache_creation_input_tokens ?? 0;
+          }
+          break;
+        }
+      }
+    }
+    totalTokens.total = totalTokens.input + totalTokens.output + totalTokens.cacheRead + totalTokens.cacheWrite;
+
+    return {
+      sessionId,
+      cwd: entry.cwd,
+      model: entry.model,
+      userMessages,
+      assistantMessages,
+      toolCalls,
+      toolResults,
+      totalMessages: userMessages + assistantMessages + toolCalls + toolResults,
+      tokens: totalTokens,
+      cost: 0,
+      pinned: this.pinnedSessions.has(sessionId),
+    };
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
