@@ -31,3 +31,9 @@ export {
   formatTranscriptBody,
   buildHandoffPayload,
 } from './transfer-framing.js';
+
+export {
+  replayEventsToVisibleItems,
+  applyScope,
+  buildVisibleTranscript,
+} from './visible-transcript.js';
