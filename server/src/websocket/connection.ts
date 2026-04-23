@@ -828,6 +828,7 @@ export class WebSocketConnectionManager {
     _images?: ImageContent[],
     agent?: string,
   ): Promise<void> {
+    console.log(`[handleOpencodePrompt] clientId=${clientId}, sessionId=${sessionId}, promptLen=${prompt.length}`);
     try {
       await this.opencodeService.sendPrompt(
         sessionId,
