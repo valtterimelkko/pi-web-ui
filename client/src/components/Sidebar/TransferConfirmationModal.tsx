@@ -522,11 +522,11 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
                   const targetId = createdSessionId || (targetMode === 'existing' ? existingTarget?.sessionId : undefined);
                   if (targetId) {
                     const session = useSessionStore.getState().sessions.find(s => s.id === targetId);
-                    cancel();
                     if (session?.path) {
                       wsSwitchSession(session.path);
                     }
                     localSwitchSession(targetId);
+                    cancel();
                   } else {
                     cancel();
                   }
