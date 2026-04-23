@@ -97,6 +97,7 @@ export class TransferService {
     let targetSessionId = request.targetSessionId ?? '';
     let createdNewSession = false;
     let targetSessionPath: string | undefined;
+    let targetSdkType: SdkType | undefined;
 
     if (request.createNew) {
       const createResult = await this.createTargetSession(request);
@@ -113,7 +114,11 @@ export class TransferService {
       targetSessionPath = createResult.sessionPath;
       createdNewSession = true;
     } else {
-      const targetEntry = await this.config.registry.get(targetSessionId);
+      let targetEntry = await this.config.registry.get(targetSessionId)
+        || await this.config.registry.getByPath(targetSessionId);
+      if (!targetEntry) {
+        targetEntry = await this.resolvePiSessionFallback(targetSessionId);
+      }
       if (!targetEntry) {
         return {
           success: false,
@@ -139,13 +144,16 @@ export class TransferService {
           },
         };
       }
+
+      targetSessionPath = targetEntry.path;
+      targetSdkType = targetEntry.sdkType;
     }
 
     const handoff = buildHandoffPayload(sourceResult.transcript);
 
     const dispatchResult = await this.dispatchToTarget(
       targetSessionId,
-      request.createNew ? request.targetSdkType! : (await this.config.registry.get(targetSessionId))!.sdkType,
+      request.createNew ? request.targetSdkType! : targetSdkType!,
       handoff.fullText,
       targetSessionPath,
     );
