@@ -634,6 +634,7 @@ export class WebSocketConnectionManager {
     message: ClientMessage,
   ): Promise<void> {
     if (!isTransferSessionContext(message)) {
+      console.warn('[Transfer] Invalid message format:', JSON.stringify(message).slice(0, 200));
       this.sendMessage(clientId, {
         type: 'error',
         message: 'Invalid transfer_session_context message format',
@@ -642,12 +643,18 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    console.log(`[Transfer] Request: source=${message.sourceSessionId}, target=${message.targetSessionId || 'new'}, createNew=${message.createNew}, sdk=${message.targetSdkType}, cwd=${message.targetCwd}, scope=${message.scope}`);
+
     const { TransferService } = await import('../session-transfer/transfer-service.js');
 
     const transferService = new TransferService({
       registry: getSessionRegistry(),
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
+      createPiSession: async (cwd: string) => {
+        const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd);
+        return { sessionId: status.sessionId, sessionPath: status.sessionPath };
+      },
     });
 
     const result = await transferService.executeTransfer({
@@ -661,6 +668,17 @@ export class WebSocketConnectionManager {
     });
 
     if (result.success) {
+      console.log(`[Transfer] Success: ${result.sourceSessionId} -> ${result.targetSessionId} (new=${result.createdNewSession})`);
+      if (result.createdNewSession && result.targetSessionPath) {
+        this.clientViewingSession.set(clientId, result.targetSessionPath);
+        this.clientCwd.set(clientId, message.targetCwd || '');
+        this.sendMessage(clientId, {
+          type: 'session_created',
+          sessionId: result.targetSessionId,
+          sessionPath: result.targetSessionPath,
+          sdkType: result.targetSdkType,
+        });
+      }
       this.sendMessage(clientId, {
         type: 'session_transfer_completed',
         sourceSessionId: result.sourceSessionId,
@@ -668,6 +686,7 @@ export class WebSocketConnectionManager {
         createdNewSession: result.createdNewSession,
       } as unknown as ServerMessage);
     } else {
+      console.warn(`[Transfer] Failed: ${result.sourceSessionId} -> ${result.targetSessionId || 'new'}: ${result.error?.code} - ${result.error?.message}`);
       this.sendMessage(clientId, {
         type: 'session_transfer_failed',
         sourceSessionId: result.sourceSessionId,

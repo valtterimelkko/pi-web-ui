@@ -1,3 +1,5 @@
+import fs from 'fs/promises';
+import path from 'path';
 import type { SessionRegistryManager, RegistryEntry } from '../session-registry.js';
 import type { ClaudeService } from '../claude/claude-service.js';
 import type { OpenCodeService } from '../opencode/opencode-service.js';
@@ -16,6 +18,7 @@ export interface TransferServiceConfig {
   claudeService: ClaudeService | null;
   opencodeService: OpenCodeService | null;
   piSessionDir?: string;
+  createPiSession?: (cwd: string) => Promise<{ sessionId: string; sessionPath: string }>;
 }
 
 export interface TransferResult {
@@ -23,6 +26,8 @@ export interface TransferResult {
   sourceSessionId: string;
   targetSessionId: string;
   createdNewSession: boolean;
+  targetSessionPath?: string;
+  targetSdkType?: SdkType;
   error?: {
     code: string;
     message: string;
@@ -51,7 +56,16 @@ export class TransferService {
       };
     }
 
-    const sourceEntry = await this.config.registry.get(request.sourceSessionId);
+    let sourceEntry = await this.config.registry.get(request.sourceSessionId);
+
+    if (!sourceEntry) {
+      sourceEntry = await this.config.registry.getByPath(request.sourceSessionId);
+    }
+
+    if (!sourceEntry) {
+      sourceEntry = await this.resolvePiSessionFallback(request.sourceSessionId);
+    }
+
     if (!sourceEntry) {
       return {
         success: false,
@@ -81,6 +95,7 @@ export class TransferService {
 
     let targetSessionId = request.targetSessionId ?? '';
     let createdNewSession = false;
+    let targetSessionPath: string | undefined;
 
     if (request.createNew) {
       const createResult = await this.createTargetSession(request);
@@ -94,6 +109,7 @@ export class TransferService {
         };
       }
       targetSessionId = createResult.sessionId;
+      targetSessionPath = createResult.sessionPath;
       createdNewSession = true;
     } else {
       const targetEntry = await this.config.registry.get(targetSessionId);
@@ -130,6 +146,7 @@ export class TransferService {
       targetSessionId,
       request.createNew ? request.targetSdkType! : (await this.config.registry.get(targetSessionId))!.sdkType,
       handoff.fullText,
+      targetSessionPath,
     );
 
     if (!dispatchResult.success) {
@@ -147,7 +164,53 @@ export class TransferService {
       sourceSessionId: request.sourceSessionId,
       targetSessionId,
       createdNewSession,
+      targetSessionPath,
+      targetSdkType: request.createNew ? request.targetSdkType : undefined,
     };
+  }
+
+  private async resolvePiSessionFallback(sessionIdOrPath: string): Promise<RegistryEntry | undefined> {
+    const piSessionDir = this.config.piSessionDir || path.join(process.env.HOME || '/root', '.pi/agent/sessions');
+    try {
+      const candidates: string[] = [];
+      if (sessionIdOrPath.includes('/') && sessionIdOrPath.endsWith('.jsonl')) {
+        candidates.push(sessionIdOrPath);
+      }
+      if (!sessionIdOrPath.includes('/')) {
+        const dirs = await fs.readdir(piSessionDir, { withFileTypes: true });
+        for (const dir of dirs) {
+          if (!dir.isDirectory()) continue;
+          const subDir = path.join(piSessionDir, dir.name);
+          const files = await fs.readdir(subDir);
+          for (const f of files) {
+            if (f.endsWith('.jsonl') && f.includes(sessionIdOrPath)) {
+              candidates.push(path.join(subDir, f));
+            }
+          }
+        }
+      }
+      for (const candidate of candidates) {
+        try {
+          const stat = await fs.stat(candidate);
+          if (!stat.isFile()) continue;
+          const dirName = path.basename(path.dirname(candidate));
+          const inner = dirName.replace(/^--/, '').replace(/--$/, '');
+          const cwd = '/' + inner.replace(/--/g, '/');
+          return {
+            id: sessionIdOrPath,
+            sdkType: 'pi' as const,
+            path: candidate,
+            cwd,
+            firstMessage: '',
+            messageCount: 0,
+            createdAt: stat.birthtime.toISOString(),
+            lastActivity: stat.mtime.toISOString(),
+            status: 'idle' as const,
+          };
+        } catch { /* file not accessible */ }
+      }
+    } catch { /* session dir not readable */ }
+    return undefined;
   }
 
   private async extractSource(entry: RegistryEntry, request: TransferRequest): Promise<SourceAdapterResult> {
@@ -193,7 +256,7 @@ export class TransferService {
 
   private async createTargetSession(
     request: TransferRequest,
-  ): Promise<{ success: true; sessionId: string } | { success: false; sessionId: string; error: { code: string; message: string } }> {
+  ): Promise<{ success: true; sessionId: string; sessionPath?: string } | { success: false; sessionId: string; error: { code: string; message: string } }> {
     const sdkType = request.targetSdkType!;
     const cwd = request.targetCwd!;
 
@@ -239,11 +302,23 @@ export class TransferService {
       }
 
       case 'pi': {
-        return {
-          success: false,
-          sessionId: '',
-          error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Creating new Pi SDK sessions via transfer is not yet supported' },
-        };
+        if (!this.config.createPiSession) {
+          return {
+            success: false,
+            sessionId: '',
+            error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Pi SDK session creation not available in transfer context' },
+          };
+        }
+        try {
+          const result = await this.config.createPiSession(cwd);
+          return { success: true, sessionId: result.sessionId, sessionPath: result.sessionPath };
+        } catch (err) {
+          return {
+            success: false,
+            sessionId: '',
+            error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Failed to create Pi session: ${err instanceof Error ? err.message : String(err)}` },
+          };
+        }
       }
 
       default:
@@ -272,6 +347,7 @@ export class TransferService {
     targetSessionId: string,
     sdkType: SdkType,
     handoffText: string,
+    directPath?: string,
   ): Promise<{ success: true } | { success: false; error: { code: string; message: string } }> {
     switch (sdkType) {
       case 'claude': {
@@ -319,7 +395,28 @@ export class TransferService {
       }
 
       case 'pi': {
-        return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Pi SDK target dispatch not yet supported' } };
+        try {
+          let filePath = directPath;
+          if (!filePath) {
+            const entry = await this.config.registry.get(targetSessionId)
+              || await this.config.registry.getByPath(targetSessionId)
+              || await this.resolvePiSessionFallback(targetSessionId);
+            filePath = entry?.path;
+          }
+          if (filePath) {
+            const record = JSON.stringify({
+              type: 'message',
+              role: 'user',
+              content: handoffText,
+              timestamp: Date.now(),
+            }) + '\n';
+            await fs.appendFile(filePath, record, 'utf-8');
+            return { success: true };
+          }
+          return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: 'Pi dispatch failed: could not resolve session file path' } };
+        } catch (err) {
+          return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Pi dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
+        }
       }
 
       default:

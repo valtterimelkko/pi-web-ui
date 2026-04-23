@@ -85,6 +85,7 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
   const createdSessionId = useTransferStore((s) => s.createdSessionId);
 
   const { claudeAvailable, claudeAuthError, opencodeAvailable, opencodeAuthError } = useSessionStore();
+  const switchSession = useSessionStore((s) => s.switchSession);
   const recentFolders = useUIStore((s) => s.recentFolders);
   const getRecentFolders = useUIStore((s) => s.getRecentFolders);
 
@@ -515,7 +516,15 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
             </button>
             {isSucceeded ? (
               <button
-                onClick={cancel}
+                onClick={() => {
+                  if (createdSessionId || (targetMode === 'existing' && existingTarget?.sessionId)) {
+                    const targetId = createdSessionId || existingTarget!.sessionId;
+                    cancel();
+                    switchSession(targetId!);
+                  } else {
+                    cancel();
+                  }
+                }}
                 className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-700 rounded-lg text-white transition-colors flex items-center gap-2 text-sm"
               >
                 <Check className="w-4 h-4" />
