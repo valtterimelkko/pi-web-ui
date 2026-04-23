@@ -390,7 +390,16 @@ export class TransferService {
             this.config.opencodeService!.sendPrompt(
               targetSessionId,
               handoffText,
-              () => {},
+              (event) => {
+                if (event.type === 'permission_request' && event.data) {
+                  const permData = event.data as Record<string, unknown>;
+                  const permId = permData.permissionId as string;
+                  if (permId) {
+                    console.log(`[Transfer] Auto-approving permission ${permId} for transfer dispatch`);
+                    void this.config.opencodeService!.replyPermission(targetSessionId, permId, true);
+                  }
+                }
+              },
               (err) => {
                 if (err) reject(err);
                 else resolve();

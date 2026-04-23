@@ -22,8 +22,15 @@ export class OpenCodeEventAdapter {
         const messageID = props.messageID as string | undefined;
         const partID = props.partID as string | undefined;
         const field = props.field as string | undefined;
-        if (!delta || !messageID || field !== 'text') return [];
+        const propKeys = Object.keys(props).join(',');
+        console.log(`[EventAdapter] message.part.delta: field=${field}, delta=${delta ? `"${delta.slice(0, 40)}"` : 'undefined'}, messageID=${messageID ?? 'undefined'}, partID=${partID ?? 'undefined'}, props=[${propKeys}]`);
+        if (!delta || !messageID || field !== 'text') {
+          console.log(`[EventAdapter] delta DROPPED by guard`);
+          return [];
+        }
         if (partID && this.partTypeById.get(partID) === 'reasoning') return [];
+
+        console.log(`[EventAdapter] delta passed: field=${field}, deltaLen=${delta.length}, partID=${partID}`);
 
         return [{
           type: 'message_update',
@@ -146,8 +153,10 @@ export class OpenCodeEventAdapter {
         }];
       }
 
-      case 'permission.updated': {
-        const permission = props.permission as Record<string, unknown> | undefined;
+      case 'permission.updated':
+      case 'permission.asked': {
+        console.log(`[EventAdapter] permission event type=${type}, props keys=${Object.keys(props).join(',')}`);
+        const permission = (props.permission ?? props) as Record<string, unknown> | undefined;
         if (!permission) return [];
         const permId = permission.id as string;
         const metadata = permission.metadata as Record<string, unknown> | undefined;
