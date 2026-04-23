@@ -159,14 +159,16 @@ export class SessionRegistryManager {
   }
 
   async updateStatus(id: string, status: RegistryEntry['status']): Promise<void> {
-    const registry = await this.load();
-    const entry = registry.entries.find(e => e.id === id);
-    if (entry) {
-      entry.status = status;
-      entry.lastActivity = new Date().toISOString();
-      await this.save();
-    } else {
-      console.warn(`[SessionRegistry] updateStatus: entry not found for id=${id}`);
+    try {
+      const registry = await this.load();
+      const entry = registry.entries.find(e => e.id === id);
+      if (entry) {
+        entry.status = status;
+        entry.lastActivity = new Date().toISOString();
+        await this.save();
+      }
+    } catch (err) {
+      console.error(`[SessionRegistry] updateStatus failed for id=${id}:`, err instanceof Error ? err.message : String(err));
     }
   }
 
