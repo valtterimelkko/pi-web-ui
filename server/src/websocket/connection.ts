@@ -1110,7 +1110,7 @@ export class WebSocketConnectionManager {
       }
       this.clientViewingSession.set(clientId, sessionPath);
       this.opencodeSubs.subscribe(clientId, sessionPath);
-      this.opencodeService.touchSession(sessionPath);
+      await this.opencodeService.touchSession(sessionPath);
       await this.replayOpencodeHistory(clientId, sessionPath);
       console.log(`[handleSwitchSession] Client ${clientId} switched to OpenCode session ${sessionPath}`);
       return;
@@ -1873,12 +1873,12 @@ export class WebSocketConnectionManager {
     });
   }
 
-  private handlePinSession(
+  private async handlePinSession(
     clientId: string,
     message: { type: 'pin_session'; sessionPath: string }
-  ): void {
+  ): Promise<void> {
     if (this.opencodeSessionIds.has(message.sessionPath)) {
-      const success = this.opencodeService.pinSession(message.sessionPath);
+      const success = await this.opencodeService.pinSession(message.sessionPath);
       if (success) {
         this.sendMessage(clientId, {
           type: 'session_pinned',

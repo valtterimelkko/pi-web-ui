@@ -77,12 +77,12 @@ describe('OpenCodeService — Session Lifecycle', () => {
   describe('pinSession', () => {
     it('pins an existing session', async () => {
       const sessionId = await createTestSession(service);
-      expect(service.pinSession(sessionId)).toBe(true);
+      expect(await service.pinSession(sessionId)).toBe(true);
       expect(service.isSessionPinned(sessionId)).toBe(true);
     });
 
-    it('returns false for unknown sessions', () => {
-      expect(service.pinSession('unknown')).toBe(false);
+    it('returns false for unknown sessions', async () => {
+      expect(await service.pinSession('unknown')).toBe(false);
     });
 
     it('enforces max pinned sessions limit', async () => {
@@ -90,22 +90,22 @@ describe('OpenCodeService — Session Lifecycle', () => {
       const s2 = await createTestSession(service);
       const s3 = await createTestSession(service);
 
-      expect(service.pinSession(s1)).toBe(true);
-      expect(service.pinSession(s2)).toBe(true);
-      expect(service.pinSession(s3)).toBe(false);
+      expect(await service.pinSession(s1)).toBe(true);
+      expect(await service.pinSession(s2)).toBe(true);
+      expect(await service.pinSession(s3)).toBe(false);
     });
 
     it('returns true when pinning an already-pinned session', async () => {
       const sessionId = await createTestSession(service);
-      expect(service.pinSession(sessionId)).toBe(true);
-      expect(service.pinSession(sessionId)).toBe(true);
+      expect(await service.pinSession(sessionId)).toBe(true);
+      expect(await service.pinSession(sessionId)).toBe(true);
     });
   });
 
   describe('unpinSession', () => {
     it('unpins a pinned session', async () => {
       const sessionId = await createTestSession(service);
-      service.pinSession(sessionId);
+      await service.pinSession(sessionId);
       expect(service.unpinSession(sessionId)).toBe(true);
       expect(service.isSessionPinned(sessionId)).toBe(false);
     });
@@ -119,12 +119,12 @@ describe('OpenCodeService — Session Lifecycle', () => {
       const s2 = await createTestSession(service);
       const s3 = await createTestSession(service);
 
-      service.pinSession(s1);
-      service.pinSession(s2);
-      expect(service.pinSession(s3)).toBe(false);
+      await service.pinSession(s1);
+      await service.pinSession(s2);
+      expect(await service.pinSession(s3)).toBe(false);
 
       service.unpinSession(s1);
-      expect(service.pinSession(s3)).toBe(true);
+      expect(await service.pinSession(s3)).toBe(true);
     });
   });
 
@@ -137,9 +137,9 @@ describe('OpenCodeService — Session Lifecycle', () => {
     it('returns correct count after pinning', async () => {
       const s1 = await createTestSession(service);
       const s2 = await createTestSession(service);
-      service.pinSession(s1);
+      await service.pinSession(s1);
       expect(service.getPinnedCount()).toBe(1);
-      service.pinSession(s2);
+      await service.pinSession(s2);
       expect(service.getPinnedCount()).toBe(2);
     });
   });
@@ -157,7 +157,7 @@ describe('OpenCodeService — Session Lifecycle', () => {
 
     it('reflects pinned state in statuses', async () => {
       const sessionId = await createTestSession(service);
-      service.pinSession(sessionId);
+      await service.pinSession(sessionId);
       const statuses = service.getSessionStatuses();
       const found = statuses.find(s => s.sessionId === sessionId);
       expect(found!.pinned).toBe(true);
@@ -171,7 +171,7 @@ describe('OpenCodeService — Session Lifecycle', () => {
       const beforeTime = before.lastActivity.getTime();
 
       await new Promise(r => setTimeout(r, 10));
-      service.touchSession(sessionId);
+      await service.touchSession(sessionId);
 
       const after = service.getSessionStatuses().find(s => s.sessionId === sessionId)!;
       expect(after.lastActivity.getTime()).toBeGreaterThanOrEqual(beforeTime);
@@ -209,7 +209,7 @@ describe('OpenCodeService — Session Lifecycle', () => {
 
     it('does not remove pinned sessions even when idle', async () => {
       const sessionId = await createTestSession(service);
-      service.pinSession(sessionId);
+      await service.pinSession(sessionId);
 
       const internals = service as unknown as {
         sessionMeta: Map<string, { lastActivity: number; pinned: boolean; status: string; lastEventTimestamp: number }>;
@@ -274,7 +274,7 @@ describe('OpenCodeService — Session Lifecycle', () => {
 
     it('keeps pinned sessions alive during stale reset', async () => {
       const sessionId = await createTestSession(service);
-      service.pinSession(sessionId);
+      await service.pinSession(sessionId);
 
       const internals = service as unknown as {
         sessionMeta: Map<string, { lastActivity: number; pinned: boolean; status: string; lastEventTimestamp: number }>;
@@ -326,7 +326,7 @@ describe('OpenCodeService — Session Lifecycle', () => {
       const s2 = await createTestSession(service);
       const s3 = await createTestSession(service);
 
-      service.pinSession(s1);
+      await service.pinSession(s1);
 
       const internals = service as unknown as {
         sessionMeta: Map<string, { lastActivity: number; pinned: boolean; status: string; lastEventTimestamp: number }>;
@@ -339,6 +339,36 @@ describe('OpenCodeService — Session Lifecycle', () => {
       internals.cleanupIdleSessions();
 
       expect(service.hasSession(s1)).toBe(true);
+    });
+  });
+
+  describe('ensureSession rehydrates from registry', () => {
+    it('restores sessionMeta from registry after cleanup', async () => {
+      const sessionId = await createTestSession(service);
+
+      const internals = service as unknown as {
+        sessionMeta: Map<string, { lastActivity: number; pinned: boolean; status: string; lastEventTimestamp: number }>;
+        cleanupIdleSessions: () => void;
+      };
+
+      internals.sessionMeta.delete(sessionId);
+      expect(internals.sessionMeta.has(sessionId)).toBe(false);
+
+      const restored = await service.ensureSession(sessionId);
+      expect(restored).toBe(true);
+      expect(internals.sessionMeta.has(sessionId)).toBe(true);
+    });
+
+    it('allows pinning after sessionMeta was restored via ensureSession', async () => {
+      const sessionId = await createTestSession(service);
+
+      const internals = service as unknown as {
+        sessionMeta: Map<string, { lastActivity: number; pinned: boolean; status: string; lastEventTimestamp: number }>;
+      };
+      internals.sessionMeta.delete(sessionId);
+
+      expect(await service.pinSession(sessionId)).toBe(true);
+      expect(service.isSessionPinned(sessionId)).toBe(true);
     });
   });
 

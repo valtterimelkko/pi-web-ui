@@ -170,7 +170,29 @@ export class OpenCodeService {
     }
   }
 
-  pinSession(sessionId: string): boolean {
+  async ensureSession(sessionId: string): Promise<boolean> {
+    if (this.sessionMeta.has(sessionId)) return true;
+
+    const entry = await this.registry.get(sessionId);
+    if (!entry || entry.sdkType !== 'opencode') return false;
+
+    if (entry.opencodeSessionId) {
+      this.opencodeSessionIds.set(sessionId, entry.opencodeSessionId);
+      this.piSessionByOpencodeId.set(entry.opencodeSessionId, sessionId);
+    }
+
+    this.sessionMeta.set(sessionId, {
+      lastActivity: Date.now(),
+      lastEventTimestamp: Date.now(),
+      pinned: false,
+      status: 'idle',
+    });
+
+    return true;
+  }
+
+  async pinSession(sessionId: string): Promise<boolean> {
+    await this.ensureSession(sessionId);
     const meta = this.sessionMeta.get(sessionId);
     if (!meta) return false;
     if (meta.pinned) return true;
@@ -219,7 +241,8 @@ export class OpenCodeService {
     return this.sessionMeta.has(sessionId);
   }
 
-  touchSession(sessionId: string): void {
+  async touchSession(sessionId: string): Promise<void> {
+    await this.ensureSession(sessionId);
     const meta = this.sessionMeta.get(sessionId);
     if (meta) {
       meta.lastActivity = Date.now();

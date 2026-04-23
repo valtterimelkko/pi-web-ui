@@ -426,7 +426,7 @@ describe('OpenCode WebSocket Routing', () => {
     it('subscribes client, touches session, and replays history', async () => {
       const sessionId = 'oc-uuid-switch';
       const opencodeService = {
-        touchSession: vi.fn(),
+        touchSession: vi.fn().mockResolvedValue(undefined),
         getReplayEvents: vi.fn().mockResolvedValue([
           { type: 'message_start', data: { id: 'm1', role: 'user' } },
           { type: 'message_update', data: { id: 'm1' } },
@@ -488,11 +488,11 @@ describe('OpenCode WebSocket Routing', () => {
   });
 
   describe('pin_session / unpin_session for OpenCode', () => {
-    it('routes pin to opencodeService.pinSession and sends session_pinned', () => {
+    it('routes pin to opencodeService.pinSession and sends session_pinned', async () => {
       const sessionId = 'oc-uuid-pin';
       const opencodeService = {
-        pinSession: vi.fn().mockReturnValue(true),
-        hasSession: vi.fn().mockReturnValue(true),
+        pinSession: vi.fn().mockResolvedValue(true),
+        hasSession: vi.fn().mockResolvedValue(true),
       };
       const opencodeSessionIds = new Set([sessionId]);
 
@@ -503,7 +503,7 @@ describe('OpenCode WebSocket Routing', () => {
       const clientId = 'client-1';
 
       if (opencodeSessionIds.has(sessionId)) {
-        const success = opencodeService.pinSession(sessionId);
+        const success = await opencodeService.pinSession(sessionId);
         if (success) {
           sendMessage(clientId, {
             type: 'session_pinned',
@@ -521,10 +521,10 @@ describe('OpenCode WebSocket Routing', () => {
       });
     });
 
-    it('sends session_pin_error when pin limit reached', () => {
+    it('sends session_pin_error when pin limit reached', async () => {
       const sessionId = 'oc-uuid-pinlim';
       const opencodeService = {
-        pinSession: vi.fn().mockReturnValue(false),
+        pinSession: vi.fn().mockResolvedValue(false),
         hasSession: vi.fn().mockReturnValue(true),
       };
       const opencodeSessionIds = new Set([sessionId]);
@@ -536,7 +536,7 @@ describe('OpenCode WebSocket Routing', () => {
       const clientId = 'client-1';
 
       if (opencodeSessionIds.has(sessionId)) {
-        const success = opencodeService.pinSession(sessionId);
+        const success = await opencodeService.pinSession(sessionId);
         if (!success) {
           const hasSession = opencodeService.hasSession(sessionId);
           sendMessage(clientId, {
