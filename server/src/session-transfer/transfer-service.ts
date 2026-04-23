@@ -19,6 +19,7 @@ export interface TransferServiceConfig {
   opencodeService: OpenCodeService | null;
   piSessionDir?: string;
   createPiSession?: (cwd: string) => Promise<{ sessionId: string; sessionPath: string }>;
+  sendPiPrompt?: (sessionPath: string, message: string) => Promise<void>;
 }
 
 export interface TransferResult {
@@ -396,6 +397,10 @@ export class TransferService {
 
       case 'pi': {
         try {
+          if (this.config.sendPiPrompt && directPath) {
+            await this.config.sendPiPrompt(directPath, handoffText);
+            return { success: true };
+          }
           let filePath = directPath;
           if (!filePath) {
             const entry = await this.config.registry.get(targetSessionId)

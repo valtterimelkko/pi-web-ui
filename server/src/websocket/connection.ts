@@ -655,6 +655,9 @@ export class WebSocketConnectionManager {
         const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd);
         return { sessionId: status.sessionId, sessionPath: status.sessionPath };
       },
+      sendPiPrompt: async (sessionPath: string, message: string) => {
+        await this.multiSessionManager.prompt(sessionPath, message);
+      },
     });
 
     const result = await transferService.executeTransfer({

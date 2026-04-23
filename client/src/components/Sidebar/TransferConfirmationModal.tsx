@@ -17,6 +17,7 @@ import {
 import { useTransferStore, type TransferScope } from '../../store/transferStore';
 import { useSessionStore } from '../../store';
 import { useUIStore } from '../../store/uiStore';
+import { useWebSocket } from '../../hooks/useWebSocket';
 import { api } from '../../lib/api';
 
 interface TransferConfirmationModalProps {
@@ -85,7 +86,8 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
   const createdSessionId = useTransferStore((s) => s.createdSessionId);
 
   const { claudeAvailable, claudeAuthError, opencodeAvailable, opencodeAuthError } = useSessionStore();
-  const switchSession = useSessionStore((s) => s.switchSession);
+  const localSwitchSession = useSessionStore((s) => s.switchSession);
+  const { switchSession: wsSwitchSession } = useWebSocket();
   const recentFolders = useUIStore((s) => s.recentFolders);
   const getRecentFolders = useUIStore((s) => s.getRecentFolders);
 
@@ -517,10 +519,14 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
             {isSucceeded ? (
               <button
                 onClick={() => {
-                  if (createdSessionId || (targetMode === 'existing' && existingTarget?.sessionId)) {
-                    const targetId = createdSessionId || existingTarget!.sessionId;
+                  const targetId = createdSessionId || (targetMode === 'existing' ? existingTarget?.sessionId : undefined);
+                  if (targetId) {
+                    const session = useSessionStore.getState().sessions.find(s => s.id === targetId);
                     cancel();
-                    switchSession(targetId!);
+                    if (session?.path) {
+                      wsSwitchSession(session.path);
+                    }
+                    localSwitchSession(targetId);
                   } else {
                     cancel();
                   }
