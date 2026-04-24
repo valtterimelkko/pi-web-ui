@@ -107,6 +107,45 @@ describe('OpenCodeEventAdapter', () => {
     expect(assistantEvent.delta).toBe('Hello');
   });
 
+  it('message.part.delta with omitted field → message_update with text delta', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.delta', {
+        sessionID: SID,
+        messageID: 'msg-1',
+        partID: 'prt-1',
+        delta: 'Hello without explicit field',
+      }),
+      SID,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('message_update');
+    const data = events[0].data as Record<string, unknown>;
+    const assistantEvent = data.assistantMessageEvent as { type: string; delta: string };
+    expect(assistantEvent.delta).toBe('Hello without explicit field');
+  });
+
+  it('message.part.updated completed text part → message_update fallback', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-text-1',
+          messageID: 'msg-1',
+          type: 'text',
+          text: 'Completed text body',
+          time: { start: 1, end: 2 },
+        },
+      }),
+      SID,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('message_update');
+    const data = events[0].data as Record<string, unknown>;
+    expect(data.id).toBe('msg-1');
+    const assistantEvent = data.assistantMessageEvent as { type: string; delta: string };
+    expect(assistantEvent.delta).toBe('Completed text body');
+  });
+
   it('message.part.delta without delta → empty', () => {
     const events = adapter.adaptSSEEvent(
       sse('message.part.delta', { messageID: 'msg-1' }),
@@ -132,6 +171,91 @@ describe('OpenCodeEventAdapter', () => {
       SID,
     );
     expect(events).toHaveLength(0);
+  });
+
+  it('message.part.updated tool with running state → tool_execution_start', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-tool-running',
+          messageID: 'msg-1',
+          type: 'tool',
+          tool: 'read',
+          callID: 'call-read-1',
+          state: {
+            status: 'running',
+            input: { filePath: '/tmp/example.txt' },
+          },
+        },
+      }),
+      SID,
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('tool_execution_start');
+    const data = events[0].data as Record<string, unknown>;
+    expect(data.toolCallId).toBe('call-read-1');
+    expect(data.toolName).toBe('read');
+    expect(data.input).toEqual({ filePath: '/tmp/example.txt' });
+  });
+
+  it('message.part.updated tool with completed state → tool_execution_end', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-tool-complete',
+          messageID: 'msg-1',
+          type: 'tool',
+          tool: 'bash',
+          callID: 'call-bash-1',
+          state: {
+            status: 'completed',
+            input: { command: 'pwd' },
+            output: '/root/pi-web-ui',
+          },
+        },
+      }),
+      SID,
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('tool_execution_end');
+    const data = events[0].data as Record<string, unknown>;
+    expect(data.toolCallId).toBe('call-bash-1');
+    expect(data.isError).toBe(false);
+    const result = data.result as { content: Array<{ type: string; text: string }> };
+    expect(result.content[0].text).toBe('/root/pi-web-ui');
+  });
+
+  it('message.part.updated tool with error state → errored tool_execution_end', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-tool-error',
+          messageID: 'msg-1',
+          type: 'tool',
+          tool: 'read',
+          callID: 'call-read-error',
+          state: {
+            status: 'error',
+            input: { filePath: '/root/secret' },
+            error: 'Access denied',
+          },
+        },
+      }),
+      SID,
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('tool_execution_end');
+    const data = events[0].data as Record<string, unknown>;
+    expect(data.toolCallId).toBe('call-read-error');
+    expect(data.isError).toBe(true);
+    const result = data.result as { content: Array<{ type: string; text: string }> };
+    expect(result.content[0].text).toBe('Access denied');
   });
 
   it('message.part.updated step-finish with tool reason → tool_execution_end', () => {

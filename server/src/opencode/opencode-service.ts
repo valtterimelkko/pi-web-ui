@@ -331,27 +331,16 @@ export class OpenCodeService {
     onComplete: (error?: Error) => void,
     agent?: string,
   ): Promise<void> {
-    console.log(`[OpenCodeService] sendPrompt start for ${sessionId}`);
-
     const entry = await this.registry.get(sessionId);
     if (!entry) {
-      console.error(`[OpenCodeService] sendPrompt: session not found in registry: ${sessionId}`);
       throw new Error(`OpenCode session not found: ${sessionId}`);
     }
-    console.log(`[OpenCodeService] sendPrompt: registry lookup OK, cwd=${entry.cwd}, ocSessionId=${entry.opencodeSessionId}`);
-
     const ocSessionId = await this.getOpencodeSessionId(sessionId);
     if (!ocSessionId) {
-      console.error(`[OpenCodeService] sendPrompt: missing opencodeSessionId for ${sessionId}`);
       throw new Error(`Registry entry for ${sessionId} is missing opencodeSessionId`);
     }
-    console.log(`[OpenCodeService] sendPrompt: ocSessionId=${ocSessionId}`);
-
-    console.log(`[OpenCodeService] sendPrompt: ensuring server...`);
     await this.ensureServer();
-    console.log(`[OpenCodeService] sendPrompt: ensuring SSE subscription... (sseStarted=${this.sseStarted})`);
     await this.ensureSSESubscription();
-    console.log(`[OpenCodeService] sendPrompt: SSE subscription ready`);
 
     let meta = this.sessionMeta.get(sessionId);
     if (!meta) {
@@ -380,9 +369,7 @@ export class OpenCodeService {
     try { onEvent(agentStartEvent); } catch { /* non-fatal */ }
 
     try {
-      console.log(`[OpenCodeService] sendPrompt: calling promptAsync for ocSessionId=${ocSessionId}`);
       await this.client.promptAsync(ocSessionId, entry.cwd, prompt, entry.model, agent);
-      console.log(`[OpenCodeService] sendPrompt: promptAsync returned OK`);
     } catch (err) {
       console.error(`[OpenCodeService] promptAsync failed:`, err instanceof Error ? err.message : String(err));
       this.completeSession(sessionId, err instanceof Error ? err : new Error(String(err)));
@@ -601,13 +588,8 @@ export class OpenCodeService {
   private async handleSSEEvent(event: OpenCodeSSEEvent): Promise<void> {
     const props = event.properties as Record<string, unknown> | undefined;
     const ocSessionId = (props?.sessionID as string | undefined) ?? (props?.sessionId as string | undefined);
-    if (!ocSessionId) {
-      const evtType = event.type || (event as unknown as Record<string, unknown>).type || 'unknown';
-      console.log(`[OpenCodeSSE] Event without sessionID: type=${evtType}, keys=${Object.keys(event).join(',')}`);
-      return;
-    }
+    if (!ocSessionId) return;
     const sessionId = this.piSessionByOpencodeId.get(ocSessionId);
-    console.log(`[OpenCodeSSE] Event ocSessionId=${ocSessionId} → piSessionId=${sessionId ?? 'NOT FOUND'}, type=${event.type}`);
     if (!sessionId) {
       const found = await this.registry.getByOpencodeSessionId(ocSessionId);
       if (found?.opencodeSessionId) {
@@ -643,7 +625,6 @@ export class OpenCodeService {
     const normalized = this.eventAdapter.adaptSSEEvent(event, sessionId);
 
     const callback = this.promptCallbacks.get(sessionId);
-    console.log(`[forwardSSEToSession] sessionId=${sessionId}, normalized=${normalized.length} events, hasCallback=${!!callback}`);
     for (const evt of normalized) {
       if (evt.type === 'permission_request' && evt.data) {
         const permId = (evt.data as Record<string, unknown>).permissionId as string;

@@ -22,15 +22,9 @@ export class OpenCodeEventAdapter {
         const messageID = props.messageID as string | undefined;
         const partID = props.partID as string | undefined;
         const field = props.field as string | undefined;
-        const propKeys = Object.keys(props).join(',');
-        console.log(`[EventAdapter] message.part.delta: field=${field}, delta=${delta ? `"${delta.slice(0, 40)}"` : 'undefined'}, messageID=${messageID ?? 'undefined'}, partID=${partID ?? 'undefined'}, props=[${propKeys}]`);
-        if (!delta || !messageID || field !== 'text') {
-          console.log(`[EventAdapter] delta DROPPED by guard`);
-          return [];
-        }
+        if (!delta || !messageID) return [];
+        if (field !== undefined && field !== 'text') return [];
         if (partID && this.partTypeById.get(partID) === 'reasoning') return [];
-
-        console.log(`[EventAdapter] delta passed: field=${field}, deltaLen=${delta.length}, partID=${partID}`);
 
         return [{
           type: 'message_update',
@@ -79,15 +73,53 @@ export class OpenCodeEventAdapter {
           this.partTypeById.set(partID, partType);
         }
 
-        if (partType === 'step-start' || partType === 'reasoning' || partType === 'text') {
+        if (partType === 'step-start' || partType === 'reasoning') {
           return [];
         }
 
-        if (partType === 'tool-invocation') {
+        if (partType === 'text') {
+          const text = part.text as string | undefined;
+          const messageID = part.messageID as string | undefined;
+          const time = part.time as Record<string, unknown> | undefined;
+          if (!text || !messageID || time?.end === undefined) return [];
+          return [{
+            type: 'message_update',
+            sessionId,
+            timestamp,
+            data: {
+              id: messageID,
+              assistantMessageEvent: { type: 'text_delta', delta: text },
+            },
+          }];
+        }
+
+        if (partType === 'tool-invocation' || partType === 'tool') {
           const toolCallPartId = part.id as string;
-          const toolName = part.toolName as string | undefined ?? 'unknown';
-          const args = part.args;
-          const toolCallId = (part.toolInvocationId as string | undefined) ?? toolCallPartId;
+          const state = part.state as Record<string, unknown> | undefined;
+          const status = state?.status as string | undefined;
+          const toolName = (part.toolName as string | undefined)
+            ?? (part.tool as string | undefined)
+            ?? 'unknown';
+          const args = part.args ?? state?.input ?? {};
+          const toolCallId = (part.toolInvocationId as string | undefined)
+            ?? (part.callID as string | undefined)
+            ?? toolCallPartId;
+
+          if (status === 'completed' || status === 'error') {
+            const output = state?.output ?? state?.error ?? part.result ?? '';
+            const resultText = typeof output === 'string' ? output : JSON.stringify(output);
+            return [{
+              type: 'tool_execution_end',
+              sessionId,
+              timestamp,
+              data: {
+                toolCallId,
+                result: { content: [{ type: 'text', text: resultText }] },
+                isError: status === 'error',
+              },
+            }];
+          }
+
           return [{
             type: 'tool_execution_start',
             sessionId,
@@ -95,7 +127,7 @@ export class OpenCodeEventAdapter {
             data: {
               toolCallId,
               toolName,
-              input: args ?? {},
+              input: args,
             },
           }];
         }
@@ -155,16 +187,24 @@ export class OpenCodeEventAdapter {
 
       case 'permission.updated':
       case 'permission.asked': {
-        console.log(`[EventAdapter] permission event type=${type}, props keys=${Object.keys(props).join(',')}`);
-        const permission = (props.permission ?? props) as Record<string, unknown> | undefined;
-        if (!permission) return [];
-        const permId = permission.id as string;
-        const metadata = permission.metadata as Record<string, unknown> | undefined;
+        const nestedPermission = props.permission as Record<string, unknown> | undefined;
+        if (type === 'permission.updated' && !nestedPermission) return [];
+
+        const permission = nestedPermission ?? props;
+        const permId = (permission.id as string | undefined)
+          ?? (props.id as string | undefined)
+          ?? (permission.permissionID as string | undefined)
+          ?? (props.permissionID as string | undefined);
+        if (!permId) return [];
+
+        const metadata = (permission.metadata as Record<string, unknown> | undefined)
+          ?? (props.metadata as Record<string, unknown> | undefined);
         const toolName = (metadata?.toolName as string | undefined)
           ?? (permission.tool as string | undefined)
+          ?? (props.tool as string | undefined)
           ?? 'unknown';
-        const args = metadata?.input ?? permission.args;
-        const status = permission.status as string | undefined;
+        const args = metadata?.input ?? permission.args ?? props.args;
+        const status = (permission.status as string | undefined) ?? (props.status as string | undefined);
         if (status === 'pending' || status === undefined) {
           return [{
             type: 'permission_request',

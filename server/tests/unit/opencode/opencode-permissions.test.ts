@@ -10,6 +10,70 @@ describe('OpenCode Permission Bridge', () => {
   });
 
   describe('SSE permission events → normalized permission_request events', () => {
+    it('maps permission.asked with top-level id and nested permission metadata to permission_request', () => {
+      const event: OpenCodeSSEEvent = {
+        type: 'permission.asked',
+        properties: {
+          sessionID: 'oc-sess-1',
+          id: 'perm-top-level',
+          permission: {
+            tool: 'bash',
+            metadata: {
+              toolName: 'bash',
+              input: { command: 'npm test' },
+            },
+          },
+        },
+      };
+
+      const normalized = adapter.adaptSSEEvent(event, 'pi-session-1');
+
+      expect(normalized.length).toBe(1);
+      expect(normalized[0].type).toBe('permission_request');
+      expect(normalized[0].data).toMatchObject({
+        permissionId: 'perm-top-level',
+        toolName: 'bash',
+        args: { command: 'npm test' },
+      });
+    });
+
+    it('maps permission.asked with top-level fields to permission_request', () => {
+      const event: OpenCodeSSEEvent = {
+        type: 'permission.asked',
+        properties: {
+          sessionID: 'oc-sess-1',
+          id: 'perm-flat',
+          tool: 'edit',
+          args: { filePath: '/tmp/a.txt' },
+        },
+      };
+
+      const normalized = adapter.adaptSSEEvent(event, 'pi-session-1');
+
+      expect(normalized.length).toBe(1);
+      expect(normalized[0].data).toMatchObject({
+        permissionId: 'perm-flat',
+        toolName: 'edit',
+        args: { filePath: '/tmp/a.txt' },
+      });
+    });
+
+    it('ignores permission.asked without any permission id', () => {
+      const event: OpenCodeSSEEvent = {
+        type: 'permission.asked',
+        properties: {
+          sessionID: 'oc-sess-1',
+          permission: {
+            tool: 'bash',
+          },
+        },
+      };
+
+      const normalized = adapter.adaptSSEEvent(event, 'pi-session-1');
+
+      expect(normalized).toEqual([]);
+    });
+
     it('maps permission.updated with status=pending to permission_request', () => {
       const event: OpenCodeSSEEvent = {
         type: 'permission.updated',
