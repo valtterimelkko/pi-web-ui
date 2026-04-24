@@ -252,8 +252,9 @@ This strongly influenced the idea that the Agent OS could use the **Pi Web UI ba
 
 ### 3. Current Pi extension ecosystem
 
-#### Extension directory consulted
+#### Extension directories consulted
 - `/root/.pi/agent/extensions`
+- `/root/.skills-global/skills-global`
 
 #### Extensions seen as relevant to Agent OS direction
 - `/root/.pi/agent/extensions/memory`
@@ -273,6 +274,8 @@ These extensions reinforced the understanding that the current stack already con
 - memory
 - web access
 - capability discovery
+
+In addition, the global skills library at `/root/.skills-global/skills-global` is an important part of the broader capability layer around the stack. It contains many reusable task/domain skills that materially shape how the current environment works in practice, and it should be considered a key signpost for any future agent trying to understand the capability surface that may feed into the Agent OS.
 
 This contributed to the conclusion that the current system is already **OS-like in composition**.
 
@@ -389,6 +392,7 @@ This document should be treated as a **continuity anchor** for future reflection
 - Pi Web UI architecture: `/root/pi-web-ui/docs/ARCHITECTURE.md`
 - Current memory extension: `/root/.pi/agent/extensions/memory/`
 - Current extensions ecosystem: `/root/.pi/agent/extensions/`
+- Global skills library: `/root/.skills-global/skills-global/`
 - AAMS architecture: `/root/pi-enhancement/aams/ARCHITECTURE.md`
 - Professional context draft: `/root/postpilot/knowledge/professional-context.md`
 
