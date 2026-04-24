@@ -101,7 +101,11 @@ export class MultiSessionManager {
   
   // Stale streaming detection threshold (15 minutes without events)
   private readonly staleStreamingThresholdMs = 15 * 60 * 1000;
-  
+
+  // Grace period after API error before synthetic agent_end (default 60s)
+  private readonly apiErrorGracePeriodMs = 60 * 1000;
+  private apiErrorGraceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
   // Cleanup timer
   private cleanupTimer?: ReturnType<typeof setInterval>;
   private memoryCheckTimer?: ReturnType<typeof setInterval>;
@@ -346,6 +350,8 @@ export class MultiSessionManager {
   private disposeSession(sessionPath: string): void {
     const activeSession = this.sessions.get(sessionPath);
     if (!activeSession) return;
+
+    this.cancelApiErrorGraceTimer(sessionPath);
     
     // Dispose the agent session
     try {
@@ -385,6 +391,8 @@ export class MultiSessionManager {
   private unloadSession(sessionPath: string): void {
     const activeSession = this.sessions.get(sessionPath);
     if (!activeSession) return;
+
+    this.cancelApiErrorGraceTimer(sessionPath);
     
     // Dispose the agent session (this flushes to disk automatically)
     try {
@@ -776,6 +784,10 @@ export class MultiSessionManager {
     activeSession.lastActivity = new Date();
     activeSession.lastEventTimestamp = Date.now();
 
+    // Any new event cancels a pending API-error grace timer — the SDK
+    // retried (or continued) so the session is not dead after all.
+    this.cancelApiErrorGraceTimer(sessionPath);
+
     // Handle specific event types
     switch (event.type) {
       case 'agent_start':
@@ -805,6 +817,10 @@ export class MultiSessionManager {
     // The Pi SDK logs these as message entries with stopReason='error' but doesn't emit a
     // separate 'error' event. We surface them as a synthetic 'api_error' event so the UI
     // can show the error to the user.
+    //
+    // Additionally, if no further events arrive within a grace period the agent loop is
+    // considered dead (the SDK gave up or all retries failed). We then emit a synthetic
+    // agent_end so the UI unblocks input instead of staying frozen for up to 15 minutes.
     if (event.type === 'message_start' || event.type === 'message_update') {
       const msg = event.message;
       if (msg?.stopReason === 'error' && msg?.errorMessage) {
@@ -820,6 +836,10 @@ export class MultiSessionManager {
           },
         };
         this.broadcastToSubscribers(sessionPath, apiErrorEvent);
+
+        if (activeSession.status === 'streaming') {
+          this.scheduleApiErrorGraceTimer(sessionPath);
+        }
       }
     }
 
@@ -833,6 +853,62 @@ export class MultiSessionManager {
 
     // Broadcast the wrapped event to all subscribers
     this.broadcastToSubscribers(sessionPath, sessionEvent);
+  }
+
+  /**
+   * Schedule a grace-period timer after an API error. If no further events
+   * arrive before it fires, the agent loop is considered dead and we emit
+   * a synthetic agent_end so the UI unblocks.
+   */
+  private scheduleApiErrorGraceTimer(sessionPath: string): void {
+    this.cancelApiErrorGraceTimer(sessionPath);
+
+    const timer = setTimeout(() => {
+      this.apiErrorGraceTimers.delete(sessionPath);
+
+      const activeSession = this.sessions.get(sessionPath);
+      if (!activeSession) return;
+      // If the session already moved to idle (e.g. a real agent_end arrived
+      // and the timer raced), do nothing.
+      if (activeSession.status !== 'streaming') return;
+
+      console.log(
+        `[MultiSessionManager] API-error grace period expired with no further events, ` +
+        `emitting synthetic agent_end for: ${sessionPath}`
+      );
+      activeSession.status = 'idle';
+      activeSession.lastActivity = new Date();
+
+      this.broadcastToSubscribers(sessionPath, {
+        type: 'session_event',
+        sessionId: activeSession.sessionId,
+        sessionPath: activeSession.sessionPath,
+        event: { type: 'agent_end', result: null, usage: {} },
+      });
+
+      this.broadcastToSubscribers(sessionPath, {
+        type: 'session_status',
+        sessionId: activeSession.sessionId,
+        sessionPath: activeSession.sessionPath,
+        status: 'idle',
+        lastActivity: activeSession.lastActivity.toISOString(),
+      });
+    }, this.apiErrorGracePeriodMs);
+
+    if (timer.unref) timer.unref();
+    this.apiErrorGraceTimers.set(sessionPath, timer);
+  }
+
+  /**
+   * Cancel a pending API-error grace timer (called when a new event arrives,
+   * meaning the SDK retried/continued successfully).
+   */
+  private cancelApiErrorGraceTimer(sessionPath: string): void {
+    const existing = this.apiErrorGraceTimers.get(sessionPath);
+    if (existing) {
+      clearTimeout(existing);
+      this.apiErrorGraceTimers.delete(sessionPath);
+    }
   }
 
   /**
@@ -1057,6 +1133,10 @@ export class MultiSessionManager {
       clearInterval(this.memoryCheckTimer);
       this.memoryCheckTimer = undefined;
     }
+    for (const timer of this.apiErrorGraceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.apiErrorGraceTimers.clear();
     console.log('[MultiSessionManager] Cleanup timer stopped');
   }
 

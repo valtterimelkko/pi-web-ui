@@ -1055,6 +1055,201 @@ describe('MultiSessionManager', () => {
       expect(apiErrorCalls.length).toBe(0);
     });
 
+    describe('API error grace period', () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('should emit synthetic agent_end after grace period if no further events arrive', async () => {
+        const mockSession = createMockAgentSession();
+        mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+        const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+        await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+        // Start agent turn
+        manager.handleAgentEvent('/path/to/session.jsonl', { type: 'agent_start' });
+        expect(manager.getSessionStatus('/path/to/session.jsonl')?.status).toBe('streaming');
+
+        mockBroadcast.mockClear();
+
+        // API error arrives (429)
+        manager.handleAgentEvent('/path/to/session.jsonl', {
+          type: 'message_start',
+          message: {
+            id: 'msg-429',
+            role: 'assistant',
+            stopReason: 'error',
+            errorMessage: '429 rate limit exceeded',
+            provider: 'github-copilot',
+          },
+        });
+
+        // Status should still be streaming (grace period hasn't elapsed)
+        expect(manager.getSessionStatus('/path/to/session.jsonl')?.status).toBe('streaming');
+
+        // Advance past grace period (60 seconds)
+        vi.advanceTimersByTime(61_000);
+
+        // Now status should be idle
+        expect(manager.getSessionStatus('/path/to/session.jsonl')?.status).toBe('idle');
+
+        // Should have broadcast a synthetic agent_end
+        const agentEndCalls = mockBroadcast.mock.calls.filter(
+          (call: any[]) => call[1]?.event?.type === 'agent_end'
+        );
+        expect(agentEndCalls.length).toBe(1);
+        expect(agentEndCalls[0][1]?.event?.result).toBeNull();
+      });
+
+      it('should cancel grace timer when a new event arrives (SDK retried)', async () => {
+        const mockSession = createMockAgentSession();
+        mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+        const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+        await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+        manager.handleAgentEvent('/path/to/session.jsonl', { type: 'agent_start' });
+        mockBroadcast.mockClear();
+
+        // API error
+        manager.handleAgentEvent('/path/to/session.jsonl', {
+          type: 'message_start',
+          message: {
+            id: 'msg-429',
+            role: 'assistant',
+            stopReason: 'error',
+            errorMessage: '429 rate limit exceeded',
+          },
+        });
+
+        // 30 seconds later, SDK retries successfully and sends a normal event
+        vi.advanceTimersByTime(30_000);
+        manager.handleAgentEvent('/path/to/session.jsonl', {
+          type: 'message_update',
+          message: { id: 'msg-retry', content: 'retrying...' },
+          assistantMessageEvent: { type: 'content_part_delta', delta: 'retrying...' },
+        });
+
+        // Advance well past the original grace period
+        vi.advanceTimersByTime(90_000);
+
+        // Status should STILL be streaming — grace timer was cancelled
+        expect(manager.getSessionStatus('/path/to/session.jsonl')?.status).toBe('streaming');
+
+        // No synthetic agent_end should have been broadcast
+        const agentEndCalls = mockBroadcast.mock.calls.filter(
+          (call: any[]) => call[1]?.event?.type === 'agent_end'
+        );
+        expect(agentEndCalls.length).toBe(0);
+      });
+
+      it('should not schedule grace timer for non-streaming sessions', async () => {
+        const mockSession = createMockAgentSession();
+        mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+        const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+        await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+        // Session is idle (no agent_start)
+        expect(manager.getSessionStatus('/path/to/session.jsonl')?.status).toBe('idle');
+
+        mockBroadcast.mockClear();
+
+        // API error arrives on idle session
+        manager.handleAgentEvent('/path/to/session.jsonl', {
+          type: 'message_start',
+          message: {
+            id: 'msg-err',
+            role: 'assistant',
+            stopReason: 'error',
+            errorMessage: 'some error',
+          },
+        });
+
+        // Advance past grace period
+        vi.advanceTimersByTime(90_000);
+
+        // No synthetic agent_end should have been broadcast
+        const agentEndCalls = mockBroadcast.mock.calls.filter(
+          (call: any[]) => call[1]?.event?.type === 'agent_end'
+        );
+        expect(agentEndCalls.length).toBe(0);
+      });
+
+      it('should clean up grace timers when session is disposed', async () => {
+        const mockSession = createMockAgentSession();
+        mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+        const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+        await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+        manager.handleAgentEvent('/path/to/session.jsonl', { type: 'agent_start' });
+
+        // API error starts grace timer
+        manager.handleAgentEvent('/path/to/session.jsonl', {
+          type: 'message_start',
+          message: {
+            id: 'msg-429',
+            role: 'assistant',
+            stopReason: 'error',
+            errorMessage: '429 rate limit exceeded',
+          },
+        });
+
+        // Stop the manager (which clears all grace timers)
+        manager.stopCleanupTimer();
+
+        // Advance past grace period — timer should have been cancelled
+        vi.advanceTimersByTime(90_000);
+
+        // No synthetic agent_end broadcast because timer was cancelled
+        const agentEndCalls = mockBroadcast.mock.calls.filter(
+          (call: any[]) => call[1]?.event?.type === 'agent_end'
+        );
+        expect(agentEndCalls.length).toBe(0);
+      });
+
+      it('should not fire if real agent_end arrives before grace period', async () => {
+        const mockSession = createMockAgentSession();
+        mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+        const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+        await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+        manager.handleAgentEvent('/path/to/session.jsonl', { type: 'agent_start' });
+        mockBroadcast.mockClear();
+
+        // API error
+        manager.handleAgentEvent('/path/to/session.jsonl', {
+          type: 'message_start',
+          message: {
+            id: 'msg-429',
+            role: 'assistant',
+            stopReason: 'error',
+            errorMessage: '429 rate limit exceeded',
+          },
+        });
+
+        // Real agent_end arrives 10 seconds later
+        vi.advanceTimersByTime(10_000);
+        manager.handleAgentEvent('/path/to/session.jsonl', { type: 'agent_end' });
+
+        // Advance well past grace period
+        vi.advanceTimersByTime(90_000);
+
+        // Only one agent_end (the real one), no synthetic duplicate
+        const agentEndCalls = mockBroadcast.mock.calls.filter(
+          (call: any[]) => call[1]?.event?.type === 'agent_end'
+        );
+        expect(agentEndCalls.length).toBe(1);
+      });
+    });
+
     it('should broadcast events to all subscribers', async () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
