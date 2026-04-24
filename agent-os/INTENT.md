@@ -6,6 +6,9 @@ _Last updated: 2026-04-23_
 
 This document records the current **intent**, **conceptual direction**, and **influences** behind the planned Agent OS.
 
+Related file:
+- `./MEMORY-INTENT.md` — dedicated reflection on what the Agent OS memory is for and how it may be structured
+
 It is written so that a future agent with **no prior chat context** can quickly understand:
 - what the Agent OS is trying to become
 - what problem it is primarily trying to solve
@@ -340,6 +343,10 @@ It directly influenced the understanding that:
 ## Clarified distinction: memory vs wiki
 
 A major conceptual clarification from this reflection:
+
+For the fuller memory-specific reflection, see:
+- `./MEMORY-INTENT.md`
+
 
 ### Effective memory (needed early)
 Should primarily help with:
