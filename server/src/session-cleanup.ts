@@ -1,7 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { getSessionRegistry } from './session-registry.js';
-import { readPreferences, writePreferences, type Preferences, PREFS_FILE } from './routes/preferences.js';
+import { withPrefsLock, PREFS_FILE } from './routes/preferences.js';
+import type { Preferences } from './routes/preferences.js';
 import type { MultiSessionManager } from './pi/multi-session-manager.js';
 import type { ClaudeService } from './claude/index.js';
 import type { OpenCodeService } from './opencode/index.js';
@@ -103,48 +104,46 @@ export class SessionCleanupService {
     result: SessionCleanupResult,
     prefsPath?: string,
   ): Promise<void> {
-    const prefs = await readPreferences(prefsPath ?? PREFS_FILE);
-    const pinnedPaths = prefs.pinnedSessionPaths ?? [];
-    if (pinnedPaths.length === 0) return;
+    const toUnpin = await withPrefsLock(async (read, write) => {
+      const prefs = await read();
+      const pinnedPaths = prefs.pinnedSessionPaths ?? [];
+      if (pinnedPaths.length === 0) return [];
 
-    const registry = getSessionRegistry();
-    const now = Date.now();
-    const toUnpin: string[] = [];
+      const registry = getSessionRegistry();
+      const now = Date.now();
+      const expired: string[] = [];
 
-    for (const sessionPath of pinnedPaths) {
-      let lastActivity: number | undefined;
+      for (const sessionPath of pinnedPaths) {
+        let lastActivity: number | undefined;
 
-      const inMemory = this.getInMemoryLastActivity(sessionPath);
-      if (inMemory !== undefined) {
-        lastActivity = inMemory;
-      }
+        const inMemory = this.getInMemoryLastActivity(sessionPath);
+        if (inMemory !== undefined) {
+          lastActivity = inMemory;
+        }
 
-      if (lastActivity === undefined) {
-        const entry = await registry.get(sessionPath)
-          ?? await registry.getByPath(sessionPath)
-          ?? await registry.getByClaudeSessionId(sessionPath)
-          ?? await registry.getByOpencodeSessionId(sessionPath);
-        if (entry?.lastActivity) {
-          lastActivity = new Date(entry.lastActivity).getTime();
+        if (lastActivity === undefined) {
+          const entry = await registry.get(sessionPath)
+            ?? await registry.getByPath(sessionPath)
+            ?? await registry.getByClaudeSessionId(sessionPath)
+            ?? await registry.getByOpencodeSessionId(sessionPath);
+          if (entry?.lastActivity) {
+            lastActivity = new Date(entry.lastActivity).getTime();
+          }
+        }
+
+        if (lastActivity === undefined) continue;
+
+        if (now - lastActivity > this.config.pinInactivityMs) {
+          expired.push(sessionPath);
         }
       }
 
-      if (lastActivity === undefined) continue;
+      if (expired.length === 0) return [];
 
-      if (now - lastActivity > this.config.pinInactivityMs) {
-        toUnpin.push(sessionPath);
-      }
-    }
-
-    if (toUnpin.length === 0) return;
-
-    const updatedPins = pinnedPaths.filter(p => !toUnpin.includes(p));
-
-    const merged: Preferences = {
-      ...prefs,
-      pinnedSessionPaths: updatedPins,
-    };
-    await writePreferences(merged, prefsPath ?? PREFS_FILE);
+      prefs.pinnedSessionPaths = pinnedPaths.filter(p => !expired.includes(p));
+      await write(prefs);
+      return expired;
+    }, prefsPath ?? PREFS_FILE);
 
     for (const sessionId of toUnpin) {
       this.unpinInRuntimes(sessionId);
@@ -178,30 +177,34 @@ export class SessionCleanupService {
     result: SessionCleanupResult,
     prefsPath?: string,
   ): Promise<void> {
-    const prefs = await readPreferences(prefsPath ?? PREFS_FILE);
-    const archivedPaths = prefs.archivedSessionPaths ?? [];
-    if (archivedPaths.length === 0) return;
-
+    const filePath = prefsPath ?? PREFS_FILE;
     const registry = getSessionRegistry();
     const now = Date.now();
+
     const toDelete: string[] = [];
 
-    for (const sessionPath of archivedPaths) {
-      const entry = await registry.get(sessionPath)
-        ?? await registry.getByPath(sessionPath)
-        ?? await registry.getByClaudeSessionId(sessionPath)
-        ?? await registry.getByOpencodeSessionId(sessionPath);
+    await withPrefsLock(async (read) => {
+      const prefs = await read();
+      const archivedPaths = prefs.archivedSessionPaths ?? [];
+      if (archivedPaths.length === 0) return;
 
-      if (!entry) {
-        toDelete.push(sessionPath);
-        continue;
-      }
+      for (const sessionPath of archivedPaths) {
+        const entry = await registry.get(sessionPath)
+          ?? await registry.getByPath(sessionPath)
+          ?? await registry.getByClaudeSessionId(sessionPath)
+          ?? await registry.getByOpencodeSessionId(sessionPath);
 
-      const lastActivity = entry.lastActivity ? new Date(entry.lastActivity).getTime() : 0;
-      if (now - lastActivity > this.config.archiveRetentionMs) {
-        toDelete.push(sessionPath);
+        if (!entry) {
+          toDelete.push(sessionPath);
+          continue;
+        }
+
+        const lastActivity = entry.lastActivity ? new Date(entry.lastActivity).getTime() : 0;
+        if (now - lastActivity > this.config.archiveRetentionMs) {
+          toDelete.push(sessionPath);
+        }
       }
-    }
+    }, filePath);
 
     if (toDelete.length === 0) return;
 
@@ -218,13 +221,6 @@ export class SessionCleanupService {
         }
 
         this.unpinInRuntimes(sessionId);
-
-        const cleanedArchived = (prefs.archivedSessionPaths ?? []).filter(p => p !== sessionId);
-        const cleanedPins = (prefs.pinnedSessionPaths ?? []).filter(p => p !== sessionId);
-        prefs.archivedSessionPaths = cleanedArchived;
-        prefs.pinnedSessionPaths = cleanedPins;
-        await writePreferences(prefs, prefsPath ?? PREFS_FILE);
-
         result.deleted.push(sessionId);
         console.log(`[SessionCleanup] Deleted archived session: ${sessionId}`);
       } catch (err) {
@@ -234,6 +230,16 @@ export class SessionCleanupService {
         });
         console.error(`[SessionCleanup] Failed to delete session ${sessionId}:`, err instanceof Error ? err.message : String(err));
       }
+    }
+
+    const deletedSet = new Set(toDelete.filter(id => !result.errors.some(e => e.sessionId === id)));
+    if (deletedSet.size > 0) {
+      await withPrefsLock(async (read, write) => {
+        const prefs = await read();
+        prefs.archivedSessionPaths = (prefs.archivedSessionPaths ?? []).filter(p => !deletedSet.has(p));
+        prefs.pinnedSessionPaths = (prefs.pinnedSessionPaths ?? []).filter(p => !deletedSet.has(p));
+        await write(prefs);
+      }, filePath);
     }
   }
 

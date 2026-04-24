@@ -267,3 +267,143 @@ describe('Preferences Route', () => {
     });
   });
 });
+
+// ── Robustness tests (atomic writes, corrupt file, mutex) ─────────────────────
+
+describe('Preferences Robustness', () => {
+  let tmpFile: string;
+
+  beforeEach(() => {
+    vi.resetModules();
+    tmpFile = path.join(os.tmpdir(), `pi-prefs-robust-${Date.now()}.json`);
+  });
+
+  afterEach(async () => {
+    await fs.unlink(tmpFile).catch(() => {});
+    await fs.unlink(tmpFile + '.tmp').catch(() => {});
+    vi.restoreAllMocks();
+  });
+
+  async function loadModule() {
+    vi.doMock('../../../src/config.js', () => ({
+      config: { piAgentDir: path.dirname(tmpFile) },
+    }));
+    vi.doMock('../../../src/middleware/auth.js', () => ({
+      cookieAuthMiddleware: (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
+    }));
+    vi.doMock('../../../src/security/rate-limit.js', () => ({
+      apiLimiter: (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
+    }));
+    return import('../../../src/routes/preferences.js');
+  }
+
+  describe('atomic writes', () => {
+    it('should not leave a .tmp file after successful write', async () => {
+      const { writePreferences } = await loadModule();
+      await writePreferences({ archivedSessionPaths: ['/a'] }, tmpFile);
+
+      const exists = await fs.stat(tmpFile + '.tmp').then(() => true).catch(() => false);
+      expect(exists).toBe(false);
+
+      const data = JSON.parse(await fs.readFile(tmpFile, 'utf-8'));
+      expect(data.archivedSessionPaths).toEqual(['/a']);
+    });
+
+    it('should replace file contents atomically via rename', async () => {
+      const { writePreferences, readPreferences } = await loadModule();
+
+      await writePreferences({ archivedSessionPaths: ['/first'] }, tmpFile);
+      await writePreferences({ archivedSessionPaths: ['/second'] }, tmpFile);
+
+      const prefs = await readPreferences(tmpFile);
+      expect(prefs.archivedSessionPaths).toEqual(['/second']);
+    });
+  });
+
+  describe('corrupt file handling', () => {
+    it('should return empty prefs for corrupt (non-JSON) file', async () => {
+      const { readPreferences } = await loadModule();
+      await fs.mkdir(path.dirname(tmpFile), { recursive: true });
+      await fs.writeFile(tmpFile, 'NOT VALID JSON{{{', 'utf-8');
+
+      const prefs = await readPreferences(tmpFile);
+      expect(prefs.archivedSessionPaths).toEqual([]);
+    });
+
+    it('should return empty prefs for missing file (ENOENT)', async () => {
+      const { readPreferences } = await loadModule();
+      const prefs = await readPreferences(tmpFile);
+      expect(prefs.archivedSessionPaths).toEqual([]);
+    });
+
+    it('should return empty prefs for empty file', async () => {
+      const { readPreferences } = await loadModule();
+      await fs.mkdir(path.dirname(tmpFile), { recursive: true });
+      await fs.writeFile(tmpFile, '', 'utf-8');
+
+      const prefs = await readPreferences(tmpFile);
+      expect(prefs.archivedSessionPaths).toEqual([]);
+    });
+  });
+
+  describe('withPrefsLock', () => {
+    it('should serialize concurrent read-modify-write cycles', async () => {
+      const { withPrefsLock, writePreferences } = await loadModule();
+      await writePreferences({ archivedSessionPaths: [], pinnedSessionPaths: [] }, tmpFile);
+
+      const concurrency = 10;
+      let resolved = 0;
+
+      const tasks = Array.from({ length: concurrency }, (_, i) =>
+        withPrefsLock(async (read, write) => {
+          const prefs = await read();
+          const arr = prefs.archivedSessionPaths ?? [];
+          arr.push(`session-${i}`);
+          prefs.archivedSessionPaths = arr;
+          await write(prefs);
+          resolved++;
+        }, tmpFile),
+      );
+
+      await Promise.all(tasks);
+      expect(resolved).toBe(concurrency);
+
+      const final = JSON.parse(await fs.readFile(tmpFile, 'utf-8'));
+      expect(final.archivedSessionPaths).toHaveLength(concurrency);
+      for (let i = 0; i < concurrency; i++) {
+        expect(final.archivedSessionPaths).toContain(`session-${i}`);
+      }
+    });
+
+    it('should provide cached read within the same lock', async () => {
+      const { withPrefsLock, writePreferences } = await loadModule();
+      await writePreferences({ archivedSessionPaths: ['/initial'], pinnedSessionPaths: [] }, tmpFile);
+
+      await withPrefsLock(async (read, write) => {
+        const first = await read();
+        const second = await read();
+        expect(first).toBe(second);
+
+        first.archivedSessionPaths = ['/updated'];
+        await write(first);
+
+        const third = await read();
+        expect(third.archivedSessionPaths).toEqual(['/updated']);
+      }, tmpFile);
+
+      const final = JSON.parse(await fs.readFile(tmpFile, 'utf-8'));
+      expect(final.archivedSessionPaths).toEqual(['/updated']);
+    });
+
+    it('should release lock even if fn throws', async () => {
+      const { withPrefsLock } = await loadModule();
+
+      await expect(
+        withPrefsLock(async () => { throw new Error('boom'); }, tmpFile),
+      ).rejects.toThrow('boom');
+
+      const result = await withPrefsLock(async (read) => read(), tmpFile);
+      expect(result.archivedSessionPaths).toEqual([]);
+    });
+  });
+});

@@ -470,4 +470,106 @@ describe('SessionCleanupService', () => {
       expect(archMs).toBe(90 * 24 * 60 * 60 * 1000);
     });
   });
+
+  describe('robustness', () => {
+    it('should write prefs only once after batch-deleting multiple sessions', async () => {
+      const ids = ['batch-1', 'batch-2', 'batch-3'];
+      await writePrefs({
+        archivedSessionPaths: ids,
+        pinnedSessionPaths: [],
+      });
+
+      for (const id of ids) {
+        mockRegistryEntries.set(id, {
+          id, sdkType: 'opencode', path: id,
+          lastActivity: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+        });
+      }
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).toHaveLength(3);
+
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).toEqual([]);
+    });
+
+    it('should preserve non-deleted archived sessions during batch delete', async () => {
+      const oldId = 'batch-old';
+      const recentId = 'batch-recent';
+      await writePrefs({
+        archivedSessionPaths: [oldId, recentId],
+        pinnedSessionPaths: [],
+      });
+
+      mockRegistryEntries.set(oldId, {
+        id: oldId, sdkType: 'opencode', path: oldId,
+        lastActivity: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+      mockRegistryEntries.set(recentId, {
+        id: recentId, sdkType: 'opencode', path: recentId,
+        lastActivity: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).toEqual([oldId]);
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).toEqual([recentId]);
+    });
+
+    it('should not lose prefs data when a deletion errors mid-batch', async () => {
+      const okId = 'batch-ok';
+      const errId = 'batch-err';
+      const keepId = 'batch-keep';
+      await writePrefs({
+        archivedSessionPaths: [okId, errId, keepId],
+        pinnedSessionPaths: [],
+      });
+
+      mockRegistryEntries.set(okId, {
+        id: okId, sdkType: 'opencode', path: okId,
+        lastActivity: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+      mockRegistryEntries.set(errId, {
+        id: errId, sdkType: 'pi', path: '/nonexistent/dir',
+        lastActivity: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+      mockRegistryEntries.set(keepId, {
+        id: keepId, sdkType: 'opencode', path: keepId,
+        lastActivity: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+
+      const { getSessionRegistry } = await import('../../src/session-registry.js');
+      const origDelete = getSessionRegistry().delete;
+      let deleteCallCount = 0;
+      getSessionRegistry().delete = vi.fn(async (id: string) => {
+        deleteCallCount++;
+        if (id === errId) throw new Error('Registry delete failed');
+        mockRegistryEntries.delete(id);
+      });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      getSessionRegistry().delete = origDelete;
+
+      expect(result.deleted).toContain(okId);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].sessionId).toBe(errId);
+
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).toContain(errId);
+      expect(prefs.archivedSessionPaths).toContain(keepId);
+      expect(prefs.archivedSessionPaths).not.toContain(okId);
+    });
+  });
 });
