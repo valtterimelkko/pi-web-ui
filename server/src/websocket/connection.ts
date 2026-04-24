@@ -864,12 +864,25 @@ export class WebSocketConnectionManager {
           const piEvent = normEventToPiFormat(normalizedEvent);
           const msg = { type: 'session_event' as const, sessionId, event: piEvent };
           const subscribers = this.opencodeSubs.getSubscribers(sessionId);
-          if (subscribers.size > 0) {
-            for (const subId of subscribers) {
-              this.sendMessage(subId, msg);
+          const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
+          for (const subId of targets) {
+            this.sendMessage(subId, msg);
+          }
+
+          if (normalizedEvent.type === 'agent_end') {
+            const ctxUsage = this.opencodeService.getContextUsage(sessionId);
+            if (ctxUsage) {
+              const ctxMsg = {
+                type: 'context_update' as const,
+                sessionId,
+                contextWindow: ctxUsage.contextWindow,
+                contextUsed: ctxUsage.tokens,
+                contextPercent: ctxUsage.percent,
+              };
+              for (const subId of targets) {
+                this.sendMessage(subId, ctxMsg as unknown as ServerMessage);
+              }
             }
-          } else {
-            this.sendMessage(clientId, msg);
           }
         },
         (error) => {

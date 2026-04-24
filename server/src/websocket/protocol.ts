@@ -190,6 +190,7 @@ export type ServerMessage =
   | { type: 'model_changed'; modelId: string }
   | { type: 'thinking_level_changed'; level: string }
   | { type: 'compaction_result'; summary: string; tokensBefore: number; contextWindow?: number; contextUsed?: number; contextPercent?: number }
+  | { type: 'context_update'; sessionId: string; contextWindow?: number; contextUsed?: number; contextPercent?: number }
   // Multi-session protocol types
   | SessionStatusBroadcast
   | SessionEvent

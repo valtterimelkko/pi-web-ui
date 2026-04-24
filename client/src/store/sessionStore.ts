@@ -1411,6 +1411,33 @@ export const useSessionStore = create<SessionState>()(
             break;
           }
 
+          case 'context_update': {
+            const ctxMsg = msg as unknown as {
+              sessionId: string;
+              contextWindow?: number;
+              contextUsed?: number;
+              contextPercent?: number;
+            };
+            if (get().currentSessionId === ctxMsg.sessionId) {
+              set({
+                contextWindow: ctxMsg.contextWindow ?? get().contextWindow,
+                contextUsed: ctxMsg.contextUsed ?? get().contextUsed,
+                contextPercent: ctxMsg.contextPercent ?? get().contextPercent,
+              });
+              if (get().sessionInfo) {
+                set({
+                  sessionInfo: {
+                    ...get().sessionInfo!,
+                    contextWindow: ctxMsg.contextWindow ?? get().sessionInfo!.contextWindow,
+                    contextUsed: ctxMsg.contextUsed ?? get().sessionInfo!.contextUsed,
+                    contextPercent: ctxMsg.contextPercent ?? get().sessionInfo!.contextPercent,
+                  },
+                });
+              }
+            }
+            break;
+          }
+
           case 'auto_compaction_start': {
             const { reason } = msg as unknown as { reason: string };
             set({ isCompacting: true, compactionReason: reason });

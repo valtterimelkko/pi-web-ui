@@ -18,6 +18,7 @@ interface ActiveSessionMeta {
   contextWindow: number;
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
   cost: number;
+  perMessageTokens: Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; cost: number }>;
 }
 
 export interface OpenCodeSessionStatus {
@@ -205,6 +206,7 @@ export class OpenCodeService {
       contextWindow: 0,
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       cost: 0,
+      perMessageTokens: new Map(),
     });
 
     return true;
@@ -319,6 +321,7 @@ export class OpenCodeService {
       contextWindow: 0,
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       cost: 0,
+      perMessageTokens: new Map(),
     });
 
     await this.registry.upsert({
@@ -380,6 +383,7 @@ export class OpenCodeService {
         contextWindow: 0,
         tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         cost: 0,
+        perMessageTokens: new Map(),
       };
       this.sessionMeta.set(sessionId, meta);
     }
@@ -691,18 +695,36 @@ export class OpenCodeService {
       const info = props.info as Record<string, unknown> | undefined;
       if (!info) return;
       const tokens = info.tokens as { total?: number; input?: number; output?: number; reasoning?: number; cache?: { write?: number; read?: number } } | undefined;
-      if (tokens) {
-        meta.tokens = {
-          input: (meta.tokens.input || 0) + (tokens.input ?? 0),
-          output: (meta.tokens.output || 0) + (tokens.output ?? 0),
-          cacheRead: (meta.tokens.cacheRead || 0) + (tokens.cache?.read ?? 0),
-          cacheWrite: (meta.tokens.cacheWrite || 0) + (tokens.cache?.write ?? 0),
-          total: (meta.tokens.total || 0) + (tokens.total ?? 0),
+      const messageID = info.id as string | undefined;
+      if (tokens && messageID) {
+        const newMsgTokens = {
+          input: tokens.input ?? 0,
+          output: tokens.output ?? 0,
+          cacheRead: tokens.cache?.read ?? 0,
+          cacheWrite: tokens.cache?.write ?? 0,
+          total: tokens.total ?? 0,
+          cost: (info.cost as number) ?? 0,
         };
-        meta.contextUsed = meta.tokens.total;
-        if (info.cost != null) {
-          meta.cost += (info.cost as number) || 0;
+        const prev = meta.perMessageTokens.get(messageID);
+        meta.perMessageTokens.set(messageID, newMsgTokens);
+
+        if (prev) {
+          meta.tokens.input += newMsgTokens.input - prev.input;
+          meta.tokens.output += newMsgTokens.output - prev.output;
+          meta.tokens.cacheRead += newMsgTokens.cacheRead - prev.cacheRead;
+          meta.tokens.cacheWrite += newMsgTokens.cacheWrite - prev.cacheWrite;
+          meta.tokens.total += newMsgTokens.total - prev.total;
+          meta.cost += newMsgTokens.cost - prev.cost;
+        } else {
+          meta.tokens.input += newMsgTokens.input;
+          meta.tokens.output += newMsgTokens.output;
+          meta.tokens.cacheRead += newMsgTokens.cacheRead;
+          meta.tokens.cacheWrite += newMsgTokens.cacheWrite;
+          meta.tokens.total += newMsgTokens.total;
+          meta.cost += newMsgTokens.cost;
         }
+        meta.contextUsed = meta.tokens.total;
+
         const modelID = info.modelID as string | undefined;
         if (modelID && meta.contextWindow === 0) {
           const cw = this.modelContextWindows.get(modelID);
@@ -716,19 +738,36 @@ export class OpenCodeService {
       if (!part) return;
       const partType = part.type as string | undefined;
       if (partType === 'step-finish') {
+        const partID = part.id as string | undefined;
         const tokens = part.tokens as { total?: number; input?: number; output?: number; reasoning?: number; cache?: { write?: number; read?: number } } | undefined;
-        if (tokens) {
-          meta.tokens = {
-            input: (meta.tokens.input || 0) + (tokens.input ?? 0),
-            output: (meta.tokens.output || 0) + (tokens.output ?? 0),
-            cacheRead: (meta.tokens.cacheRead || 0) + (tokens.cache?.read ?? 0),
-            cacheWrite: (meta.tokens.cacheWrite || 0) + (tokens.cache?.write ?? 0),
-            total: (meta.tokens.total || 0) + (tokens.total ?? 0),
+        if (tokens && partID) {
+          const newStepTokens = {
+            input: tokens.input ?? 0,
+            output: tokens.output ?? 0,
+            cacheRead: tokens.cache?.read ?? 0,
+            cacheWrite: tokens.cache?.write ?? 0,
+            total: tokens.total ?? 0,
+            cost: (part.cost as number) ?? 0,
           };
-          meta.contextUsed = meta.tokens.total;
-          if (part.cost != null) {
-            meta.cost += (part.cost as number) || 0;
+          const prev = meta.perMessageTokens.get(partID);
+          meta.perMessageTokens.set(partID, newStepTokens);
+
+          if (prev) {
+            meta.tokens.input += newStepTokens.input - prev.input;
+            meta.tokens.output += newStepTokens.output - prev.output;
+            meta.tokens.cacheRead += newStepTokens.cacheRead - prev.cacheRead;
+            meta.tokens.cacheWrite += newStepTokens.cacheWrite - prev.cacheWrite;
+            meta.tokens.total += newStepTokens.total - prev.total;
+            meta.cost += newStepTokens.cost - prev.cost;
+          } else {
+            meta.tokens.input += newStepTokens.input;
+            meta.tokens.output += newStepTokens.output;
+            meta.tokens.cacheRead += newStepTokens.cacheRead;
+            meta.tokens.cacheWrite += newStepTokens.cacheWrite;
+            meta.tokens.total += newStepTokens.total;
+            meta.cost += newStepTokens.cost;
           }
+          meta.contextUsed = meta.tokens.total;
         }
       }
     }
