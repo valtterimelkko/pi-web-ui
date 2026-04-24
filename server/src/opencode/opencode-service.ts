@@ -238,6 +238,10 @@ export class OpenCodeService {
       perMessageTokens: new Map(),
     });
 
+    if (this.modelContextWindows.size === 0) {
+      void this.cacheModelContextWindows();
+    }
+
     return true;
   }
 
@@ -727,6 +731,16 @@ export class OpenCodeService {
     if (event.type === 'message.updated') {
       const info = props.info as Record<string, unknown> | undefined;
       if (!info) return;
+
+      const modelID = info.modelID as string | undefined;
+      const providerID = info.providerID as string | undefined;
+      if (modelID && meta.contextWindow === 0) {
+        const cw = this.modelContextWindows.get(modelID)
+          ?? (providerID ? this.modelContextWindows.get(`${providerID}/${modelID}`) : undefined);
+        if (cw) meta.contextWindow = cw;
+      }
+
+      const role = info.role as string | undefined;
       const tokens = info.tokens as { total?: number; input?: number; output?: number; reasoning?: number; cache?: { write?: number; read?: number } } | undefined;
       const messageID = info.id as string | undefined;
       if (tokens && messageID) {
@@ -756,51 +770,9 @@ export class OpenCodeService {
           meta.tokens.total += newMsgTokens.total;
           meta.cost += newMsgTokens.cost;
         }
-        meta.contextUsed = meta.tokens.total;
 
-        const modelID = info.modelID as string | undefined;
-        if (modelID && meta.contextWindow === 0) {
-          const cw = this.modelContextWindows.get(modelID);
-          if (cw) meta.contextWindow = cw;
-        }
-      }
-    }
-
-    if (event.type === 'message.part.updated') {
-      const part = props.part as Record<string, unknown> | undefined;
-      if (!part) return;
-      const partType = part.type as string | undefined;
-      if (partType === 'step-finish') {
-        const partID = part.id as string | undefined;
-        const tokens = part.tokens as { total?: number; input?: number; output?: number; reasoning?: number; cache?: { write?: number; read?: number } } | undefined;
-        if (tokens && partID) {
-          const newStepTokens = {
-            input: tokens.input ?? 0,
-            output: tokens.output ?? 0,
-            cacheRead: tokens.cache?.read ?? 0,
-            cacheWrite: tokens.cache?.write ?? 0,
-            total: tokens.total ?? 0,
-            cost: (part.cost as number) ?? 0,
-          };
-          const prev = meta.perMessageTokens.get(partID);
-          meta.perMessageTokens.set(partID, newStepTokens);
-
-          if (prev) {
-            meta.tokens.input += newStepTokens.input - prev.input;
-            meta.tokens.output += newStepTokens.output - prev.output;
-            meta.tokens.cacheRead += newStepTokens.cacheRead - prev.cacheRead;
-            meta.tokens.cacheWrite += newStepTokens.cacheWrite - prev.cacheWrite;
-            meta.tokens.total += newStepTokens.total - prev.total;
-            meta.cost += newStepTokens.cost - prev.cost;
-          } else {
-            meta.tokens.input += newStepTokens.input;
-            meta.tokens.output += newStepTokens.output;
-            meta.tokens.cacheRead += newStepTokens.cacheRead;
-            meta.tokens.cacheWrite += newStepTokens.cacheWrite;
-            meta.tokens.total += newStepTokens.total;
-            meta.cost += newStepTokens.cost;
-          }
-          meta.contextUsed = meta.tokens.total;
+        if (role === 'assistant') {
+          meta.contextUsed = newMsgTokens.input;
         }
       }
     }
@@ -808,7 +780,11 @@ export class OpenCodeService {
 
   getContextUsage(sessionId: string): { contextWindow: number; tokens: number; percent: number } | null {
     const meta = this.sessionMeta.get(sessionId);
-    if (!meta || meta.contextWindow === 0) return null;
+    if (!meta) return null;
+    if (meta.contextWindow === 0) {
+      void this.cacheModelContextWindows();
+      return null;
+    }
     const percent = Math.round((meta.contextUsed / meta.contextWindow) * 100);
     return { contextWindow: meta.contextWindow, tokens: meta.contextUsed, percent: Math.min(percent, 100) };
   }
@@ -822,10 +798,14 @@ export class OpenCodeService {
       for (const m of models) {
         if (m.contextWindow > 0) {
           this.modelContextWindows.set(m.id, m.contextWindow);
+          const shortId = m.id.includes('/') ? m.id.split('/').slice(1).join('/') : m.id;
+          if (shortId !== m.id) {
+            this.modelContextWindows.set(shortId, m.contextWindow);
+          }
         }
       }
     } catch {
-      // ignore — will retry on next getAvailableModels call
+      // ignore — will retry on next call
     }
   }
 

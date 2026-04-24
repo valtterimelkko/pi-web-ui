@@ -869,7 +869,7 @@ export class WebSocketConnectionManager {
             this.sendMessage(subId, msg);
           }
 
-          if (normalizedEvent.type === 'agent_end') {
+          if (normalizedEvent.type === 'agent_end' || normalizedEvent.type === 'message_end') {
             const ctxUsage = this.opencodeService.getContextUsage(sessionId);
             if (ctxUsage) {
               const ctxMsg = {
