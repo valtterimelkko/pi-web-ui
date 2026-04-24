@@ -32,6 +32,18 @@ describe('OpenCodeClient', () => {
     );
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(opts.headers).toMatchObject({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(opts.body as string)).toEqual({});
+  });
+
+  it('createSession() can set session permission rules', async () => {
+    const session = { id: 'sess-1' };
+    const permission = [{ permission: '*', action: 'allow' as const, pattern: '*' }];
+    mockFetch.mockResolvedValueOnce(jsonResponse(session));
+
+    await client.createSession('/root', permission);
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(opts.body as string)).toEqual({ permission });
   });
 
   it('listSessions() calls GET /session', async () => {
@@ -90,18 +102,27 @@ describe('OpenCodeClient', () => {
     );
   });
 
-  it('replyPermission(sessionId, permId, true) calls POST with OpenCode response semantics', async () => {
+  it('replyPermission(sessionId, permId, true) defaults to always for OpenCode response semantics', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(null));
 
     await client.replyPermission('sess-1', '/root', 'perm-7', true);
 
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(opts.method).toBe('POST');
-    expect(JSON.parse(opts.body as string)).toEqual({ response: 'once' });
+    expect(JSON.parse(opts.body as string)).toEqual({ response: 'always' });
     expect(mockFetch).toHaveBeenCalledWith(
       'http://localhost:8080/session/sess-1/permissions/perm-7?directory=%2Froot',
       expect.anything(),
     );
+  });
+
+  it('replyPermission(sessionId, permId, true, once) can approve only once', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(null));
+
+    await client.replyPermission('sess-1', '/root', 'perm-7', true, 'once');
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(opts.body as string)).toEqual({ response: 'once' });
   });
 
   it('includes auth headers when password is set', async () => {

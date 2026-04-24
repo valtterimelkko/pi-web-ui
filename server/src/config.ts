@@ -30,6 +30,8 @@ export interface ServerConfig {
   opencodeMaxPinnedSessions: number;
   opencodeCleanupIntervalMs: number;
   opencodeDebugRawEvents: boolean;
+  opencodeTrustedPermissions: boolean;
+  opencodePermissionApproveMode: 'once' | 'always';
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -74,4 +76,6 @@ export const config: ServerConfig = {
   opencodeMaxPinnedSessions: parseInt(process.env.OPENCODE_MAX_PINNED_SESSIONS || '2', 10),
   opencodeCleanupIntervalMs: parseInt(process.env.OPENCODE_CLEANUP_INTERVAL_MS || '60000', 10),
   opencodeDebugRawEvents: process.env.OPENCODE_DEBUG_RAW_EVENTS === 'true',
+  opencodeTrustedPermissions: process.env.OPENCODE_TRUSTED_PERMISSIONS === 'true',
+  opencodePermissionApproveMode: process.env.OPENCODE_PERMISSION_APPROVE_MODE === 'once' ? 'once' : 'always',
 };

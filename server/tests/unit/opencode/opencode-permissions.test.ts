@@ -282,7 +282,7 @@ describe('OpenCode Permission Bridge', () => {
   });
 
   describe('permission reply flow via client', () => {
-    it('replyPermission sends approved=true to correct endpoint', async () => {
+    it('replyPermission sends approved=true as always to reduce repeat prompts', async () => {
       const { OpenCodeClient } = await import('../../../src/opencode/opencode-client.js');
 
       const mockFetch = vi.fn().mockResolvedValue(
@@ -300,7 +300,7 @@ describe('OpenCode Permission Bridge', () => {
         const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
         expect(url).toBe('http://localhost:4096/session/sess-1/permissions/perm-1?directory=%2Froot');
         expect(opts.method).toBe('POST');
-        expect(JSON.parse(opts.body as string)).toEqual({ response: 'once' });
+        expect(JSON.parse(opts.body as string)).toEqual({ response: 'always' });
       } finally {
         vi.unstubAllGlobals();
       }

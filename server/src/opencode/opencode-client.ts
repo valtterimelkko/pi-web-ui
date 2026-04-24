@@ -3,6 +3,7 @@ import type {
   OpenCodeSession,
   OpenCodeMessage,
   OpenCodeSSEEvent,
+  OpenCodePermissionRule,
 } from './opencode-types.js';
 
 export class OpenCodeClient {
@@ -37,10 +38,10 @@ export class OpenCodeClient {
     return response;
   }
 
-  async createSession(directory?: string): Promise<OpenCodeSession> {
+  async createSession(directory?: string, permission?: OpenCodePermissionRule[]): Promise<OpenCodeSession> {
     const response = await this.request(this.withDirectory('/session', directory), {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify(permission ? { permission } : {}),
     });
     return response.json() as Promise<OpenCodeSession>;
   }
@@ -95,10 +96,16 @@ export class OpenCodeClient {
     await this.request(this.withDirectory(`/session/${sessionId}/abort`, directory), { method: 'POST' });
   }
 
-  async replyPermission(sessionId: string, directory: string, permissionId: string, approved: boolean): Promise<void> {
+  async replyPermission(
+    sessionId: string,
+    directory: string,
+    permissionId: string,
+    approved: boolean,
+    approveMode: 'once' | 'always' = 'always',
+  ): Promise<void> {
     await this.request(this.withDirectory(`/session/${sessionId}/permissions/${permissionId}`, directory), {
       method: 'POST',
-      body: JSON.stringify({ response: approved ? 'once' : 'reject' }),
+      body: JSON.stringify({ response: approved ? approveMode : 'reject' }),
     });
   }
 

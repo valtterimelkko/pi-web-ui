@@ -5,7 +5,7 @@ import { OpenCodeClient } from './opencode-client.js';
 import { OpenCodeEventAdapter } from './opencode-event-adapter.js';
 import { opencodeMessagesToReplayEvents } from './opencode-history-replay.js';
 import { OpenCodeSessionSubscribers } from './opencode-session-subscribers.js';
-import type { OpenCodeConfig, OpenCodeSSEEvent } from './opencode-types.js';
+import type { OpenCodeConfig, OpenCodeSSEEvent, OpenCodePermissionRule } from './opencode-types.js';
 import { getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
 
@@ -38,6 +38,17 @@ const DEFAULT_LIFECYCLE: OpenCodeLifecycleConfig = {
   maxPinnedSessions: 2,
   cleanupIntervalMs: 60 * 1000,
 };
+
+export const TRUSTED_OPENCODE_PERMISSION_RULES: OpenCodePermissionRule[] = [
+  { permission: '*', action: 'allow', pattern: '*' },
+  // Keep catastrophic disk/system operations blocked even in trusted unattended mode.
+  { permission: 'bash', action: 'deny', pattern: 'mkfs *' },
+  { permission: 'bash', action: 'deny', pattern: 'dd *' },
+  { permission: 'bash', action: 'deny', pattern: 'shutdown *' },
+  { permission: 'bash', action: 'deny', pattern: 'reboot *' },
+  { permission: 'bash', action: 'deny', pattern: 'rm -rf /' },
+  { permission: 'bash', action: 'deny', pattern: 'rm -rf /*' },
+];
 
 export class OpenCodeService {
   private processManager: OpenCodeProcessManager;
@@ -281,7 +292,10 @@ export class OpenCodeService {
       this.evictOldestIdleSession();
     }
 
-    const opencodeSession = await this.client.createSession(cwd);
+    const permissionRules = config.opencodeTrustedPermissions
+      ? TRUSTED_OPENCODE_PERMISSION_RULES
+      : undefined;
+    const opencodeSession = await this.client.createSession(cwd, permissionRules);
     const sessionId = randomUUID();
 
     this.opencodeSessionIds.set(sessionId, opencodeSession.id);
@@ -434,7 +448,13 @@ export class OpenCodeService {
     if (!entry) return;
     const ocSessionId = await this.getOpencodeSessionId(sessionId);
     if (!ocSessionId) return;
-    await this.client.replyPermission(ocSessionId, entry.cwd, permissionId, approved);
+    await this.client.replyPermission(
+      ocSessionId,
+      entry.cwd,
+      permissionId,
+      approved,
+      config.opencodePermissionApproveMode,
+    );
   }
 
   async listSessions() {

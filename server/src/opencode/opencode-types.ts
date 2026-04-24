@@ -1,3 +1,11 @@
+export type OpenCodePermissionAction = 'allow' | 'ask' | 'deny';
+
+export interface OpenCodePermissionRule {
+  permission: string;
+  action: OpenCodePermissionAction;
+  pattern: string;
+}
+
 export interface OpenCodeSession {
   id: string;
   slug: string;
@@ -14,6 +22,7 @@ export interface OpenCodeSession {
     deletions: number;
     files: number;
   };
+  permission?: OpenCodePermissionRule[] | null;
 }
 
 export interface OpenCodeMessageInfo {
