@@ -14,6 +14,10 @@ interface ActiveSessionMeta {
   lastEventTimestamp: number;
   pinned: boolean;
   status: 'idle' | 'streaming' | 'error';
+  contextUsed: number;
+  contextWindow: number;
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  cost: number;
 }
 
 export interface OpenCodeSessionStatus {
@@ -197,6 +201,10 @@ export class OpenCodeService {
       lastEventTimestamp: Date.now(),
       pinned: false,
       status: 'idle',
+      contextUsed: 0,
+      contextWindow: 0,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      cost: 0,
     });
 
     return true;
@@ -287,6 +295,7 @@ export class OpenCodeService {
 
   async createSession(cwd: string): Promise<{ sessionId: string; opencodeSessionId: string }> {
     await this.ensureServer();
+    await this.cacheModelContextWindows();
 
     if (this.sessionMeta.size >= this.lifecycle.maxSessions) {
       this.evictOldestIdleSession();
@@ -306,6 +315,10 @@ export class OpenCodeService {
       lastEventTimestamp: Date.now(),
       pinned: false,
       status: 'idle',
+      contextUsed: 0,
+      contextWindow: 0,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      cost: 0,
     });
 
     await this.registry.upsert({
@@ -363,6 +376,10 @@ export class OpenCodeService {
         lastEventTimestamp: Date.now(),
         pinned: false,
         status: 'idle',
+        contextUsed: 0,
+        contextWindow: 0,
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        cost: 0,
       };
       this.sessionMeta.set(sessionId, meta);
     }
@@ -514,8 +531,8 @@ export class OpenCodeService {
       toolCalls,
       toolResults,
       totalMessages: userMessages + assistantMessages + toolCalls + toolResults,
-      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      cost: 0,
+      tokens: meta?.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      cost: meta?.cost ?? 0,
       pinned: meta?.pinned ?? false,
     };
   }
@@ -640,6 +657,8 @@ export class OpenCodeService {
     if (meta) {
       meta.lastEventTimestamp = Date.now();
       meta.lastActivity = Date.now();
+
+      this.updateMetaFromSSE(event, meta);
     }
 
     const normalized = this.eventAdapter.adaptSSEEvent(event, sessionId);
@@ -661,6 +680,80 @@ export class OpenCodeService {
       if (evt.type === 'agent_end') {
         this.completeSession(sessionId);
       }
+    }
+  }
+
+  private updateMetaFromSSE(event: OpenCodeSSEEvent, meta: ActiveSessionMeta): void {
+    const props = event.properties as Record<string, unknown> | undefined;
+    if (!props) return;
+
+    if (event.type === 'message.updated') {
+      const info = props.info as Record<string, unknown> | undefined;
+      if (!info) return;
+      const tokens = info.tokens as { total?: number; input?: number; output?: number; reasoning?: number; cache?: { write?: number; read?: number } } | undefined;
+      if (tokens) {
+        meta.tokens = {
+          input: (meta.tokens.input || 0) + (tokens.input ?? 0),
+          output: (meta.tokens.output || 0) + (tokens.output ?? 0),
+          cacheRead: (meta.tokens.cacheRead || 0) + (tokens.cache?.read ?? 0),
+          cacheWrite: (meta.tokens.cacheWrite || 0) + (tokens.cache?.write ?? 0),
+          total: (meta.tokens.total || 0) + (tokens.total ?? 0),
+        };
+        meta.contextUsed = meta.tokens.total;
+        if (info.cost != null) {
+          meta.cost += (info.cost as number) || 0;
+        }
+        const modelID = info.modelID as string | undefined;
+        if (modelID && meta.contextWindow === 0) {
+          const cw = this.modelContextWindows.get(modelID);
+          if (cw) meta.contextWindow = cw;
+        }
+      }
+    }
+
+    if (event.type === 'message.part.updated') {
+      const part = props.part as Record<string, unknown> | undefined;
+      if (!part) return;
+      const partType = part.type as string | undefined;
+      if (partType === 'step-finish') {
+        const tokens = part.tokens as { total?: number; input?: number; output?: number; reasoning?: number; cache?: { write?: number; read?: number } } | undefined;
+        if (tokens) {
+          meta.tokens = {
+            input: (meta.tokens.input || 0) + (tokens.input ?? 0),
+            output: (meta.tokens.output || 0) + (tokens.output ?? 0),
+            cacheRead: (meta.tokens.cacheRead || 0) + (tokens.cache?.read ?? 0),
+            cacheWrite: (meta.tokens.cacheWrite || 0) + (tokens.cache?.write ?? 0),
+            total: (meta.tokens.total || 0) + (tokens.total ?? 0),
+          };
+          meta.contextUsed = meta.tokens.total;
+          if (part.cost != null) {
+            meta.cost += (part.cost as number) || 0;
+          }
+        }
+      }
+    }
+  }
+
+  getContextUsage(sessionId: string): { contextWindow: number; tokens: number; percent: number } | null {
+    const meta = this.sessionMeta.get(sessionId);
+    if (!meta || meta.contextWindow === 0) return null;
+    const percent = Math.round((meta.contextUsed / meta.contextWindow) * 100);
+    return { contextWindow: meta.contextWindow, tokens: meta.contextUsed, percent: Math.min(percent, 100) };
+  }
+
+  private modelContextWindows: Map<string, number> = new Map();
+
+  async cacheModelContextWindows(): Promise<void> {
+    try {
+      const models = await this.getAvailableModels();
+      this.modelContextWindows.clear();
+      for (const m of models) {
+        if (m.contextWindow > 0) {
+          this.modelContextWindows.set(m.id, m.contextWindow);
+        }
+      }
+    } catch {
+      // ignore — will retry on next getAvailableModels call
     }
   }
 

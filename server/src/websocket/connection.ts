@@ -1241,6 +1241,8 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    const contextUsage = this.opencodeService.getContextUsage(sessionId);
+
     this.sendMessage(clientId, {
       type: 'session_switched',
       sessionId,
@@ -1250,6 +1252,9 @@ export class WebSocketConnectionManager {
       messages: [],
       fileTimestamp: 0,
       isStreaming: this.opencodeService.isRunning(sessionId),
+      contextWindow: contextUsage?.contextWindow ?? undefined,
+      contextUsed: contextUsage?.tokens ?? undefined,
+      contextPercent: contextUsage?.percent ?? undefined,
     } as unknown as ServerMessage);
 
     try {
@@ -1522,6 +1527,7 @@ export class WebSocketConnectionManager {
           this.sendMessage(clientId, { type: 'error', message: 'OpenCode session not found', code: 'SESSION_NOT_FOUND' });
           return;
         }
+        const ocContextUsage = this.opencodeService.getContextUsage(sessionPath);
         this.sendMessage(clientId, {
           type: 'session_info',
           stats: {
@@ -1536,9 +1542,9 @@ export class WebSocketConnectionManager {
             tokens: ocStats.tokens,
             cost: ocStats.cost,
             model: ocStats.model,
-            contextWindow: undefined,
-            contextUsed: undefined,
-            contextPercent: undefined,
+            contextWindow: ocContextUsage?.contextWindow ?? undefined,
+            contextUsed: ocContextUsage?.tokens ?? undefined,
+            contextPercent: ocContextUsage?.percent ?? undefined,
           },
         });
       } catch (error) {

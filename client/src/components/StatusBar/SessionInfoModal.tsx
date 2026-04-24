@@ -14,6 +14,7 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
   const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   const sessionData = useSessionStore((state) => state.sessionData);
   const isClaudeSession = currentSessionSdkType === 'claude';
+  const isOpencodeSession = currentSessionSdkType === 'opencode';
   const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo : null;
   const { getSessionInfo } = useWebSocket();
   const [isLoading, setIsLoading] = useState(false);
@@ -159,6 +160,14 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                       </span>
                       <span className="text-sm text-gray-900">Claude Direct</span>
                       <span className="text-xs text-gray-400">(Claude Code CLI)</span>
+                    </div>
+                  ) : isOpencodeSession ? (
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700 border border-emerald-200">
+                        OC
+                      </span>
+                      <span className="text-sm text-gray-900">OpenCode Direct</span>
+                      <span className="text-xs text-gray-400">(OpenCode + Z.AI GLM)</span>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
