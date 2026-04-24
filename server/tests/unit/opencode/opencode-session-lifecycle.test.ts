@@ -62,6 +62,7 @@ describe('OpenCodeService — Session Lifecycle', () => {
         staleStreamingMs: 2000,
         maxPinnedSessions: 2,
         cleanupIntervalMs: 60000,
+        serverMaxUptimeMs: 1000,
       },
     });
   });
@@ -369,6 +370,47 @@ describe('OpenCodeService — Session Lifecycle', () => {
 
       expect(await service.pinSession(sessionId)).toBe(true);
       expect(service.isSessionPinned(sessionId)).toBe(true);
+    });
+  });
+
+  describe('OpenCode server recycle', () => {
+    it('recycles an idle healthy server after max uptime', async () => {
+      const recycle = vi.fn().mockResolvedValue(undefined);
+      const internals = service as unknown as {
+        processManager: {
+          getStatus: () => { healthy: boolean; uptimeMs: number; managed: boolean };
+          recycle: (reason: string) => Promise<void>;
+        };
+        recycleServerIfNeeded: () => Promise<boolean>;
+      };
+      internals.processManager = {
+        getStatus: () => ({ healthy: true, uptimeMs: 5000, managed: true }),
+        recycle,
+      };
+
+      await expect(internals.recycleServerIfNeeded()).resolves.toBe(true);
+      expect(recycle).toHaveBeenCalledWith(expect.stringContaining('uptime'));
+    });
+
+    it('defers server recycle while a session is running', async () => {
+      const sessionId = await createTestSession(service);
+      const recycle = vi.fn().mockResolvedValue(undefined);
+      const internals = service as unknown as {
+        runningSessions: Set<string>;
+        processManager: {
+          getStatus: () => { healthy: boolean; uptimeMs: number; managed: boolean };
+          recycle: (reason: string) => Promise<void>;
+        };
+        recycleServerIfNeeded: () => Promise<boolean>;
+      };
+      internals.runningSessions.add(sessionId);
+      internals.processManager = {
+        getStatus: () => ({ healthy: true, uptimeMs: 5000, managed: true }),
+        recycle,
+      };
+
+      await expect(internals.recycleServerIfNeeded()).resolves.toBe(false);
+      expect(recycle).not.toHaveBeenCalled();
     });
   });
 

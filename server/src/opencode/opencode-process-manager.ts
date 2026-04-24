@@ -2,6 +2,14 @@ import { spawn, ChildProcess } from 'node:child_process';
 import { execSync } from 'node:child_process';
 import type { OpenCodeConfig } from './opencode-types.js';
 
+export interface OpenCodeProcessStatus {
+  healthy: boolean;
+  managed: boolean;
+  pid?: number;
+  startedAt?: number;
+  uptimeMs?: number;
+}
+
 export class OpenCodeProcessManager {
   private config: OpenCodeConfig;
   private process: ChildProcess | null = null;
@@ -10,6 +18,8 @@ export class OpenCodeProcessManager {
   private restartCount: number = 0;
   private maxRestarts: number = 5;
   private shuttingDown: boolean = false;
+  private serverStartedAt: number | null = null;
+  private attachedExternal: boolean = false;
 
   constructor(config: OpenCodeConfig) {
     this.config = config;
@@ -30,6 +40,7 @@ export class OpenCodeProcessManager {
       return;
     }
 
+    this.shuttingDown = false;
     this.starting = this.doStart();
     try {
       await this.starting;
@@ -47,6 +58,8 @@ export class OpenCodeProcessManager {
     const alreadyUp = await this.isHealthy();
     if (alreadyUp) {
       console.log('[OpenCodeProcessManager] Server already running, attaching');
+      this.serverStartedAt = this.serverStartedAt ?? Date.now();
+      this.attachedExternal = true;
       return;
     }
 
@@ -67,12 +80,16 @@ export class OpenCodeProcessManager {
       console.error('[OpenCodeProcessManager] Process error:', err.message);
       this.process = null;
       this.healthy = false;
+      this.serverStartedAt = null;
+      this.attachedExternal = false;
     });
 
     this.process.on('exit', (code, signal) => {
       console.log(`[OpenCodeProcessManager] Process exited code=${code} signal=${signal}`);
       this.process = null;
       this.healthy = false;
+      this.serverStartedAt = null;
+      this.attachedExternal = false;
       if (!this.shuttingDown && this.restartCount < this.maxRestarts) {
         const delay = Math.min(1000 * Math.pow(2, this.restartCount), 30000);
         this.restartCount++;
@@ -87,6 +104,8 @@ export class OpenCodeProcessManager {
     });
 
     await this.waitForHealthy();
+    this.serverStartedAt = Date.now();
+    this.attachedExternal = false;
     this.restartCount = 0;
   }
 
@@ -112,16 +131,27 @@ export class OpenCodeProcessManager {
 
   async stop(): Promise<void> {
     this.shuttingDown = true;
-    if (!this.process) return;
+    if (!this.process) {
+      this.healthy = false;
+      this.serverStartedAt = null;
+      this.attachedExternal = false;
+      return;
+    }
 
     return new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
         this.process?.kill('SIGKILL');
+        this.healthy = false;
+        this.serverStartedAt = null;
+        this.attachedExternal = false;
         resolve();
       }, 5000);
 
       this.process!.on('exit', () => {
         clearTimeout(timeout);
+        this.healthy = false;
+        this.serverStartedAt = null;
+        this.attachedExternal = false;
         resolve();
       });
 
@@ -140,6 +170,59 @@ export class OpenCodeProcessManager {
     } catch {
       this.healthy = false;
       return false;
+    }
+  }
+
+  getStatus(): OpenCodeProcessStatus {
+    const startedAt = this.serverStartedAt ?? undefined;
+    return {
+      healthy: this.healthy,
+      managed: Boolean(this.process) && !this.attachedExternal,
+      pid: this.process?.pid,
+      startedAt,
+      uptimeMs: startedAt ? Date.now() - startedAt : undefined,
+    };
+  }
+
+  async recycle(reason: string): Promise<void> {
+    console.log(`[OpenCodeProcessManager] Recycling OpenCode server: ${reason}`);
+    this.shuttingDown = true;
+
+    if (this.process) {
+      await this.stop();
+    } else if (this.attachedExternal) {
+      this.killExternalServer();
+      this.healthy = false;
+      this.serverStartedAt = null;
+      this.attachedExternal = false;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    this.shuttingDown = false;
+    await this.start();
+  }
+
+  private killExternalServer(): void {
+    const pattern = `opencode serve.*--port ${this.config.port}`;
+    let output = '';
+    try {
+      output = execSync(`pgrep -f ${JSON.stringify(pattern)}`, { timeout: 2000, encoding: 'utf-8' });
+    } catch {
+      return;
+    }
+
+    const currentPid = process.pid;
+    const pids = output
+      .split(/\s+/)
+      .map(pid => Number(pid))
+      .filter(pid => Number.isInteger(pid) && pid > 0 && pid !== currentPid);
+
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        // Already exited or not permitted; best effort.
+      }
     }
   }
 

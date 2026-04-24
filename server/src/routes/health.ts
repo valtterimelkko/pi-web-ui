@@ -117,9 +117,13 @@ router.get('/ready', async (_req: Request, res: Response) => {
     const opencodeService = getOpenCodeService();
     const available = await opencodeService.isAvailable();
     if (available && config.opencodeServerEnabled) {
+      const processStatus = opencodeService.getProcessStatus();
+      const uptimeSuffix = processStatus.uptimeMs !== undefined
+        ? `, uptime ${Math.round(processStatus.uptimeMs / 1000)}s${processStatus.managed ? '' : ', external/attached'}`
+        : '';
       checks.opencode = {
         status: 'ok',
-        message: `OpenCode available (port ${config.opencodeServerPort})`,
+        message: `OpenCode available (port ${config.opencodeServerPort}${uptimeSuffix})`,
       };
     } else {
       checks.opencode = {

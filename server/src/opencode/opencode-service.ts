@@ -34,6 +34,7 @@ export interface OpenCodeLifecycleConfig {
   staleStreamingMs: number;
   maxPinnedSessions: number;
   cleanupIntervalMs: number;
+  serverMaxUptimeMs: number;
 }
 
 const DEFAULT_LIFECYCLE: OpenCodeLifecycleConfig = {
@@ -42,6 +43,7 @@ const DEFAULT_LIFECYCLE: OpenCodeLifecycleConfig = {
   staleStreamingMs: 15 * 60 * 1000,
   maxPinnedSessions: 2,
   cleanupIntervalMs: 60 * 1000,
+  serverMaxUptimeMs: 24 * 60 * 60 * 1000,
 };
 
 export const TRUSTED_OPENCODE_PERMISSION_RULES: OpenCodePermissionRule[] = [
@@ -100,6 +102,7 @@ export class OpenCodeService {
       staleStreamingMs: config.opencodeStaleStreamingMs ?? DEFAULT_LIFECYCLE.staleStreamingMs,
       maxPinnedSessions: config.opencodeMaxPinnedSessions ?? DEFAULT_LIFECYCLE.maxPinnedSessions,
       cleanupIntervalMs: config.opencodeCleanupIntervalMs ?? DEFAULT_LIFECYCLE.cleanupIntervalMs,
+      serverMaxUptimeMs: config.opencodeServerMaxUptimeMs ?? DEFAULT_LIFECYCLE.serverMaxUptimeMs,
     };
     if (cfg.lifecycle) {
       Object.assign(this.lifecycle, cfg.lifecycle);
@@ -112,6 +115,7 @@ export class OpenCodeService {
     if (this.cleanupTimer) return;
     this.cleanupTimer = setInterval(() => {
       this.cleanupIdleSessions();
+      void this.recycleServerIfNeeded();
     }, this.lifecycle.cleanupIntervalMs);
     if (this.cleanupTimer.unref) {
       this.cleanupTimer.unref();
@@ -170,6 +174,31 @@ export class OpenCodeService {
         this.removeSession(evictId);
       }
     }
+  }
+
+  private async recycleServerIfNeeded(): Promise<boolean> {
+    if (this.lifecycle.serverMaxUptimeMs <= 0) return false;
+
+    const status = this.processManager.getStatus();
+    if (!status.uptimeMs || status.uptimeMs < this.lifecycle.serverMaxUptimeMs) return false;
+
+    if (this.runningSessions.size > 0) {
+      console.log(
+        `[OpenCodeService] OpenCode server uptime ${status.uptimeMs}ms exceeds ${this.lifecycle.serverMaxUptimeMs}ms; recycle deferred for ${this.runningSessions.size} running session(s)`,
+      );
+      return false;
+    }
+
+    if (!status.healthy) return false;
+
+    console.log(
+      `[OpenCodeService] Recycling idle OpenCode server after ${status.uptimeMs}ms uptime`,
+    );
+    this.sseUnsubscribe?.();
+    this.sseUnsubscribe = null;
+    this.sseStarted = false;
+    await this.processManager.recycle(`idle uptime ${status.uptimeMs}ms exceeded ${this.lifecycle.serverMaxUptimeMs}ms`);
+    return true;
   }
 
   private removeSession(sessionId: string): void {
@@ -243,6 +272,10 @@ export class OpenCodeService {
       if (meta.pinned) count++;
     }
     return count;
+  }
+
+  getProcessStatus() {
+    return this.processManager.getStatus();
   }
 
   getSessionStatuses(): OpenCodeSessionStatus[] {

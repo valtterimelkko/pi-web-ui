@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, beforeAll, vi, afterEach, afterAll } from 'vitest';
 import { OpenCodeService } from '../../../src/opencode/opencode-service.js';
+import { config } from '../../../src/config.js';
 import type { OpenCodeSession, OpenCodeMessage } from '../../../src/opencode/opencode-types.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -109,6 +110,34 @@ describe('OpenCodeService', () => {
       const entry = await service.getSession(sessionId);
       expect(entry?.cwd).toBe('/root');
       expect(entry?.opencodeSessionId).toBe(session.id);
+    });
+
+    it('sends trusted session permission rules when enabled', async () => {
+      const session = makeSession({ directory: '/root' });
+      const previous = config.opencodeTrustedPermissions;
+      config.opencodeTrustedPermissions = true;
+      let capturedBody = '';
+
+      mockFetch.mockImplementation((url: string, opts: RequestInit) => {
+        if (url.includes('/config/providers')) {
+          return Promise.resolve(jsonResponse({ providers: {} }));
+        }
+        if (url.includes('/session?directory=')) {
+          capturedBody = opts.body as string;
+          return Promise.resolve(jsonResponse(session));
+        }
+        return Promise.resolve(jsonResponse(null));
+      });
+
+      try {
+        await service.createSession('/root');
+      } finally {
+        config.opencodeTrustedPermissions = previous;
+      }
+
+      const parsed = JSON.parse(capturedBody) as { permission: Array<{ permission: string; action: string; pattern: string }> };
+      expect(parsed.permission).toContainEqual({ permission: '*', action: 'allow', pattern: '*' });
+      expect(parsed.permission).toContainEqual({ permission: 'bash', action: 'deny', pattern: 'dd *' });
     });
   });
 

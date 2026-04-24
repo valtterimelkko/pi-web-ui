@@ -103,7 +103,16 @@ OPENCODE_ENABLED=true
 OPENCODE_SERVER_HOST=127.0.0.1
 OPENCODE_SERVER_PORT=4096
 OPENCODE_WORKING_DIR=/path/to/workspace-or-default-root
+
+# Optional: reduce approval prompts for trusted, unattended OpenCode Direct work.
+OPENCODE_TRUSTED_PERMISSIONS=false
+OPENCODE_PERMISSION_APPROVE_MODE=always
+
+# Optional: recycle the OpenCode backend after 24h, but only while idle.
+OPENCODE_SERVER_MAX_UPTIME_MS=86400000
 ```
+
+`OPENCODE_TRUSTED_PERMISSIONS=true` creates new OpenCode Direct sessions with permissive session-level rules for long-running autonomous work while still denying catastrophic disk/system shell patterns. `OPENCODE_SERVER_MAX_UPTIME_MS` is idle-aware: Pi Web UI defers recycling while an OpenCode session is actively running.
 
 See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for production values and service guidance.
 

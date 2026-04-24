@@ -130,7 +130,7 @@ Instead:
 4. `opencode-history-replay.ts` converts messages into replay events
 5. frontend rehydrates the session view using the same event model used elsewhere
 
-## Permission Bridge
+## Permission Bridge and Trusted Sessions
 
 A key feature of OpenCode Direct is that OpenCode permission requests are bridged into the UI's existing approval mechanism.
 
@@ -140,6 +140,16 @@ At a high level:
 3. the browser shows the approval UI
 4. the browser sends `extension_ui_response`
 5. Pi Web UI resolves the permission back through OpenCode APIs
+
+By default, user approval replies use OpenCode's `always` response semantics (`OPENCODE_PERMISSION_APPROVE_MODE=always`) so repeated matching prompts in the same OpenCode session are reduced. Set `OPENCODE_PERMISSION_APPROVE_MODE=once` to preserve one-shot approval behaviour.
+
+For long-running trusted tasks, Pi Web UI can create new OpenCode Direct sessions with session-level permission rules by setting:
+
+```bash
+OPENCODE_TRUSTED_PERMISSIONS=true
+```
+
+In trusted mode, routine OpenCode actions are allowed automatically, including external-directory access, while Pi Web UI still adds deny rules for catastrophic shell patterns such as `mkfs *`, `dd *`, `shutdown *`, `reboot *`, `rm -rf /`, and `rm -rf /*`. This is intended for trusted deployment/maintenance sessions where repeated browser approval would prevent independent work.
 
 This keeps the browser experience aligned with the rest of the app instead of inventing a completely separate permission UX.
 
@@ -161,10 +171,20 @@ OpenCode Direct depends on:
 - OpenCode runtime configuration being valid
 - optional server password / host / port settings being aligned
 
+Pi Web UI runs or attaches to a long-lived `opencode serve` process. To avoid stale backend state after long uptimes or binary upgrades, the OpenCode process manager tracks whether the server is managed or externally attached and exposes uptime in the readiness health check. The service can recycle the backend automatically when it is idle and older than:
+
+```bash
+OPENCODE_SERVER_MAX_UPTIME_MS=86400000
+```
+
+Set the value to `0` to disable idle-aware recycling. Recycling is deferred while any OpenCode Direct session is actively running, so long-running tasks are not interrupted by a blind timer.
+
 Useful places to inspect:
 - `server/src/routes/health.ts`
 - `server/src/routes/models.ts`
 - `server/src/websocket/connection.ts`
+- `server/src/opencode/opencode-process-manager.ts`
+- `server/src/opencode/opencode-service.ts`
 
 ## What to Read Next
 

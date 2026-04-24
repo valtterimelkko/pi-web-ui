@@ -32,6 +32,7 @@ export interface ServerConfig {
   opencodeDebugRawEvents: boolean;
   opencodeTrustedPermissions: boolean;
   opencodePermissionApproveMode: 'once' | 'always';
+  opencodeServerMaxUptimeMs: number;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -78,4 +79,5 @@ export const config: ServerConfig = {
   opencodeDebugRawEvents: process.env.OPENCODE_DEBUG_RAW_EVENTS === 'true',
   opencodeTrustedPermissions: process.env.OPENCODE_TRUSTED_PERMISSIONS === 'true',
   opencodePermissionApproveMode: process.env.OPENCODE_PERMISSION_APPROVE_MODE === 'once' ? 'once' : 'always',
+  opencodeServerMaxUptimeMs: parseInt(process.env.OPENCODE_SERVER_MAX_UPTIME_MS || '86400000', 10),
 };

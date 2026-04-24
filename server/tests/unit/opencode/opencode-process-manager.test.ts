@@ -65,7 +65,7 @@ describe('OpenCodeProcessManager', () => {
       const proc = makeDeferredProcess();
       return proc;
     });
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('connection refused'));
   });
 
   afterEach(() => {
@@ -97,6 +97,9 @@ describe('OpenCodeProcessManager', () => {
         const proc = makeDeferredProcess();
         return proc;
       });
+      vi.spyOn(globalThis, 'fetch')
+        .mockRejectedValueOnce(new Error('connection refused'))
+        .mockResolvedValue(new Response(null, { status: 200 }));
 
       await manager.start();
 
@@ -115,6 +118,9 @@ describe('OpenCodeProcessManager', () => {
 
     it('is idempotent - calling twice does not spawn twice', async () => {
       spawnMock.mockImplementationOnce(() => makeDeferredProcess());
+      vi.spyOn(globalThis, 'fetch')
+        .mockRejectedValueOnce(new Error('connection refused'))
+        .mockResolvedValue(new Response(null, { status: 200 }));
 
       await manager.start();
       await manager.start();
@@ -128,6 +134,49 @@ describe('OpenCodeProcessManager', () => {
 
       await expect(manager.start()).rejects.toThrow('OpenCode integration is disabled');
     });
+
+    it('records external attached status when server is already healthy', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+
+      await manager.start();
+
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(manager.getStatus()).toMatchObject({
+        healthy: true,
+        managed: false,
+      });
+      expect(manager.getStatus().startedAt).toEqual(expect.any(Number));
+    });
+  });
+
+  describe('recycle', () => {
+    it('stops a managed process and starts a fresh one', async () => {
+      let firstProc: ReturnType<typeof makeDeferredProcess> | null = null;
+      let secondProc: ReturnType<typeof makeDeferredProcess> | null = null;
+      spawnMock
+        .mockImplementationOnce(() => {
+          firstProc = makeDeferredProcess(111);
+          return firstProc;
+        })
+        .mockImplementationOnce(() => {
+          secondProc = makeDeferredProcess(222);
+          return secondProc;
+        });
+      vi.spyOn(globalThis, 'fetch')
+        .mockRejectedValueOnce(new Error('connection refused'))
+        .mockResolvedValueOnce(new Response(null, { status: 200 }))
+        .mockRejectedValueOnce(new Error('connection refused'))
+        .mockResolvedValue(new Response(null, { status: 200 }));
+
+      await manager.start();
+      const recyclePromise = manager.recycle('test recycle');
+      firstProc!.emit('exit', null, 'SIGTERM');
+      await recyclePromise;
+
+      expect(firstProc!.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(secondProc).not.toBeNull();
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('stop', () => {
@@ -137,6 +186,9 @@ describe('OpenCodeProcessManager', () => {
         capturedProc = makeDeferredProcess();
         return capturedProc;
       });
+      vi.spyOn(globalThis, 'fetch')
+        .mockRejectedValueOnce(new Error('connection refused'))
+        .mockResolvedValue(new Response(null, { status: 200 }));
 
       await manager.start();
       expect(capturedProc).not.toBeNull();
@@ -189,7 +241,7 @@ describe('OpenCodeProcessManager', () => {
 
     it('returns true when fetch succeeds', async () => {
       spawnMock.mockImplementationOnce(() => makeDeferredProcess());
-      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 200 }));
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
       await manager.start();
 
       const result = await manager.isHealthy();

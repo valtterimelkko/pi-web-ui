@@ -3,10 +3,12 @@ import express from 'express';
 import request from 'supertest';
 
 const mockIsAvailable = vi.fn();
+const mockGetProcessStatus = vi.fn(() => ({ healthy: true, managed: true, uptimeMs: 1234 }));
 
 vi.mock('../../../src/opencode/index.js', () => ({
   getOpenCodeService: vi.fn().mockReturnValue({
     isAvailable: mockIsAvailable,
+    getProcessStatus: mockGetProcessStatus,
   }),
 }));
 
@@ -62,6 +64,7 @@ describe('Health Routes — OpenCode check', () => {
     expect(response.body.checks.opencode).toBeDefined();
     expect(response.body.checks.opencode.status).toBe('ok');
     expect(response.body.checks.opencode.message).toContain('4096');
+    expect(response.body.checks.opencode.message).toContain('uptime');
   });
 
   it('reports OpenCode as warning when available but disabled', async () => {
