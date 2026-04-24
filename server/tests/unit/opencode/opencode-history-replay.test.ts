@@ -151,6 +151,125 @@ describe('opencodeMessagesToReplayEvents', () => {
     expect(endEvent.isError).toBe(false);
   });
 
+  it('assistant message with current OpenCode tool part shape replays completed tool result', () => {
+    const messages: OpenCodeMessage[] = [
+      makeMessage({
+        info: {
+          id: 'msg_current_tool',
+          sessionID: 'ses-test',
+          role: 'assistant',
+          time: { created: new Date('2024-01-15T10:00:00.000Z').getTime() },
+        },
+        parts: [
+          {
+            type: 'tool',
+            tool: 'bash',
+            callID: 'call_current_1',
+            state: {
+              status: 'completed',
+              input: { command: 'echo hello', description: 'Say hello' },
+              output: 'hello\n',
+            },
+            id: 'prt-tool-current',
+            sessionID: 'ses-test',
+            messageID: 'msg_current_tool',
+          },
+        ],
+      }),
+    ];
+
+    const events = opencodeMessagesToReplayEvents(messages, PI_SESSION_ID);
+    const types = events.map(e => e.type);
+
+    expect(types).toEqual(['tool_execution_start', 'tool_execution_end']);
+    expect(events[0]).toMatchObject({
+      type: 'tool_execution_start',
+      toolCallId: 'call_current_1',
+      toolName: 'bash',
+      args: { command: 'echo hello', description: 'Say hello' },
+    });
+    expect(events[1]).toMatchObject({
+      type: 'tool_execution_end',
+      toolCallId: 'call_current_1',
+      isError: false,
+      result: { content: [{ type: 'text', text: 'hello\n' }] },
+    });
+  });
+
+  it('assistant message with current OpenCode running tool part replays only start event', () => {
+    const messages: OpenCodeMessage[] = [
+      makeMessage({
+        info: {
+          id: 'msg_running_tool',
+          sessionID: 'ses-test',
+          role: 'assistant',
+          time: { created: new Date('2024-01-15T10:00:00.000Z').getTime() },
+        },
+        parts: [
+          {
+            type: 'tool',
+            tool: 'bash',
+            callID: 'call_running_1',
+            state: {
+              status: 'running',
+              input: { command: 'sleep 60' },
+            },
+            id: 'prt-tool-running',
+            sessionID: 'ses-test',
+            messageID: 'msg_running_tool',
+          },
+        ],
+      }),
+    ];
+
+    const events = opencodeMessagesToReplayEvents(messages, PI_SESSION_ID);
+
+    expect(events).toEqual([expect.objectContaining({
+      type: 'tool_execution_start',
+      toolCallId: 'call_running_1',
+      toolName: 'bash',
+      args: { command: 'sleep 60' },
+    })]);
+  });
+
+  it('assistant message aborted while tools are running replays tool end errors', () => {
+    const messages: OpenCodeMessage[] = [
+      makeMessage({
+        info: {
+          id: 'msg_aborted_tool',
+          sessionID: 'ses-test',
+          role: 'assistant',
+          time: { created: 1705312800000, completed: 1705312805000 },
+          error: { name: 'MessageAbortedError', data: { message: 'Aborted' } },
+        },
+        parts: [
+          {
+            type: 'tool',
+            tool: 'bash',
+            callID: 'call_aborted_1',
+            state: {
+              status: 'running',
+              input: { command: 'cat /tmp/file' },
+            },
+            id: 'prt-tool-aborted',
+            sessionID: 'ses-test',
+            messageID: 'msg_aborted_tool',
+          },
+        ],
+      }),
+    ];
+
+    const events = opencodeMessagesToReplayEvents(messages, PI_SESSION_ID);
+
+    expect(events.map(e => e.type)).toEqual(['tool_execution_start', 'tool_execution_end']);
+    expect(events[1]).toMatchObject({
+      type: 'tool_execution_end',
+      toolCallId: 'call_aborted_1',
+      isError: true,
+      result: { content: [{ type: 'text', text: 'Aborted' }] },
+    });
+  });
+
   it('tool-invocation with object result → serializes to JSON', () => {
     const messages: OpenCodeMessage[] = [
       makeMessage({

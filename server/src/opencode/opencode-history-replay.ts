@@ -47,24 +47,35 @@ export function opencodeMessagesToReplayEvents(
             message: { id: partId },
             timestamp,
           });
-        } else if (part.type === 'tool-invocation') {
-          const toolCallId = part.toolInvocationId ?? `tool_${timestamp}_${events.length}`;
+        } else if (part.type === 'tool-invocation' || part.type === 'tool') {
+          const toolCallId = part.toolInvocationId ?? part.callID ?? `tool_${timestamp}_${events.length}`;
+          const toolName = part.toolName ?? part.tool ?? 'unknown';
+          const args = part.args ?? part.state?.input ?? {};
+          const status = part.state?.status;
+
           events.push({
             type: 'tool_execution_start',
             toolCallId,
-            toolName: part.toolName ?? 'unknown',
-            args: part.args ?? {},
+            toolName,
+            args,
             timestamp,
           });
-          if (part.result !== undefined) {
-            const resultText = typeof part.result === 'string'
-              ? part.result
-              : JSON.stringify(part.result);
+
+          const messageError = info.error?.data?.message ?? info.error?.name;
+          const hasResult = part.result !== undefined
+            || status === 'completed'
+            || status === 'error'
+            || (status === 'running' && messageError !== undefined && info.time.completed !== undefined);
+          if (hasResult) {
+            const output = part.result ?? part.state?.output ?? part.state?.error ?? messageError ?? '';
+            const resultText = typeof output === 'string'
+              ? output
+              : JSON.stringify(output);
             events.push({
               type: 'tool_execution_end',
               toolCallId,
               result: { content: [{ type: 'text', text: resultText }] },
-              isError: false,
+              isError: status === 'error' || (status === 'running' && messageError !== undefined),
               timestamp,
             });
           }

@@ -40,6 +40,7 @@ export interface OpenCodeMessageInfo {
     completed?: number;
   };
   finish?: string;
+  error?: { name?: string; data?: { message?: string } };
   summary?: { diffs: unknown[] };
 }
 
@@ -64,6 +65,14 @@ export interface OpenCodeMessagePart {
   toolName?: string;
   args?: unknown;
   result?: unknown;
+  tool?: string;
+  callID?: string;
+  state?: {
+    status?: string;
+    input?: unknown;
+    output?: unknown;
+    error?: unknown;
+  };
 }
 
 export interface OpenCodeMessage {
