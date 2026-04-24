@@ -495,6 +495,158 @@ describe('OpenCodeEventAdapter', () => {
     });
   });
 
+  describe('tool event deduplication', () => {
+    it('suppresses duplicate tool_execution_start for same toolCallId', () => {
+      const toolEvent = sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-read-1',
+          messageID: 'msg-1',
+          type: 'tool',
+          tool: 'read',
+          callID: 'call-read-dup',
+          state: { status: 'running', input: { filePath: '/tmp/a.txt' } },
+        },
+      });
+
+      const first = adapter.adaptSSEEvent(toolEvent, SID);
+      expect(first).toHaveLength(1);
+      expect(first[0].type).toBe('tool_execution_start');
+
+      const second = adapter.adaptSSEEvent(toolEvent, SID);
+      expect(second).toHaveLength(0);
+
+      const third = adapter.adaptSSEEvent(toolEvent, SID);
+      expect(third).toHaveLength(0);
+    });
+
+    it('emits tool_execution_start once and tool_execution_end once for a full lifecycle', () => {
+      const startEvent = sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-read-1',
+          messageID: 'msg-1',
+          type: 'tool',
+          tool: 'read',
+          callID: 'call-read-lifecycle',
+          state: { status: 'running', input: { filePath: '/tmp/a.txt' } },
+        },
+      });
+
+      const events1 = adapter.adaptSSEEvent(startEvent, SID);
+      expect(events1).toHaveLength(1);
+      expect(events1[0].type).toBe('tool_execution_start');
+
+      const duplicateStart = adapter.adaptSSEEvent(startEvent, SID);
+      expect(duplicateStart).toHaveLength(0);
+
+      const endEvent = sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-read-1',
+          messageID: 'msg-1',
+          type: 'tool',
+          tool: 'read',
+          callID: 'call-read-lifecycle',
+          state: { status: 'completed', input: { filePath: '/tmp/a.txt' }, output: 'file content' },
+        },
+      });
+
+      const events2 = adapter.adaptSSEEvent(endEvent, SID);
+      expect(events2).toHaveLength(1);
+      expect(events2[0].type).toBe('tool_execution_end');
+
+      const duplicateEnd = adapter.adaptSSEEvent(endEvent, SID);
+      expect(duplicateEnd).toHaveLength(0);
+    });
+
+    it('deduplicates step-finish tool_execution_end against tool-invocation completion', () => {
+      const toolComplete = sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-dedup-1',
+          messageID: 'msg-1',
+          type: 'tool',
+          tool: 'read',
+          callID: 'prt-dedup-1',
+          state: { status: 'completed', output: 'contents' },
+        },
+      });
+
+      const events1 = adapter.adaptSSEEvent(toolComplete, SID);
+      expect(events1).toHaveLength(1);
+      expect(events1[0].type).toBe('tool_execution_end');
+
+      const stepFinish = sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-dedup-1',
+          type: 'step-finish',
+          reason: 'tool',
+          snapshot: 'contents',
+        },
+      });
+
+      const events2 = adapter.adaptSSEEvent(stepFinish, SID);
+      expect(events2).toHaveLength(0);
+    });
+
+    it('allows different toolCallIds to emit independently', () => {
+      const tool1 = sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-1',
+          type: 'tool',
+          tool: 'read',
+          callID: 'call-1',
+          state: { status: 'running', input: { filePath: '/a.txt' } },
+        },
+      });
+
+      const tool2 = sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-2',
+          type: 'tool',
+          tool: 'bash',
+          callID: 'call-2',
+          state: { status: 'running', input: { command: 'ls' } },
+        },
+      });
+
+      const e1 = adapter.adaptSSEEvent(tool1, SID);
+      const e2 = adapter.adaptSSEEvent(tool2, SID);
+      expect(e1).toHaveLength(1);
+      expect(e2).toHaveLength(1);
+      expect((e1[0].data as Record<string, unknown>).toolCallId).toBe('call-1');
+      expect((e2[0].data as Record<string, unknown>).toolCallId).toBe('call-2');
+    });
+
+    it('reset clears dedup state so same toolCallId can emit again', () => {
+      const toolEvent = sse('message.part.updated', {
+        sessionID: SID,
+        part: {
+          id: 'prt-1',
+          type: 'tool',
+          tool: 'read',
+          callID: 'call-reset-test',
+          state: { status: 'running', input: { filePath: '/a.txt' } },
+        },
+      });
+
+      const e1 = adapter.adaptSSEEvent(toolEvent, SID);
+      expect(e1).toHaveLength(1);
+
+      const e2 = adapter.adaptSSEEvent(toolEvent, SID);
+      expect(e2).toHaveLength(0);
+
+      adapter.reset();
+
+      const e3 = adapter.adaptSSEEvent(toolEvent, SID);
+      expect(e3).toHaveLength(1);
+    });
+  });
+
   describe('reset', () => {
     it('clears internal session state', () => {
       adapter.adaptSSEEvent(

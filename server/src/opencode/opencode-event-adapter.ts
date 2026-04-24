@@ -5,6 +5,8 @@ import { config } from '../config.js';
 export class OpenCodeEventAdapter {
   private currentMessageIdBySession: Map<string, string> = new Map();
   private partTypeById: Map<string, string> = new Map();
+  private emittedToolStarts: Set<string> = new Set();
+  private emittedToolEnds: Set<string> = new Set();
   private debugRawEvents: boolean;
 
   constructor(debugRawEvents?: boolean) {
@@ -106,6 +108,8 @@ export class OpenCodeEventAdapter {
             ?? toolCallPartId;
 
           if (status === 'completed' || status === 'error') {
+            if (this.emittedToolEnds.has(toolCallId)) return [];
+            this.emittedToolEnds.add(toolCallId);
             const output = state?.output ?? state?.error ?? part.result ?? '';
             const resultText = typeof output === 'string' ? output : JSON.stringify(output);
             return [{
@@ -120,6 +124,8 @@ export class OpenCodeEventAdapter {
             }];
           }
 
+          if (this.emittedToolStarts.has(toolCallId)) return [];
+          this.emittedToolStarts.add(toolCallId);
           return [{
             type: 'tool_execution_start',
             sessionId,
@@ -136,6 +142,8 @@ export class OpenCodeEventAdapter {
           const reason = part.reason as string | undefined;
           if (reason === 'tool') {
             const partID = part.id as string;
+            if (this.emittedToolEnds.has(partID)) return [];
+            this.emittedToolEnds.add(partID);
             const resultText = typeof part.result === 'string'
               ? part.result
               : part.result != null
@@ -271,5 +279,7 @@ export class OpenCodeEventAdapter {
   reset(): void {
     this.currentMessageIdBySession.clear();
     this.partTypeById.clear();
+    this.emittedToolStarts.clear();
+    this.emittedToolEnds.clear();
   }
 }
