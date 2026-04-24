@@ -177,6 +177,11 @@ export function createWebUIContext(webUI: WebUIContext): ExtensionUIContext {
       });
     },
 
+    // Autocomplete provider composition is not supported in Web UI mode
+    addAutocompleteProvider(): void {
+      // No-op: Web UI manages its own input autocomplete
+    },
+
     // Set a widget - not fully supported in Web UI, sent as notification
     setWidget(
       key: string,

@@ -37,7 +37,7 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "^0.68.1",
+    "@mariozechner/pi-coding-agent": "^0.70.0",
     "@types/multer": "^2.1.0",
     "compression": "^1.8.1",
     "multer": "^2.1.1"
