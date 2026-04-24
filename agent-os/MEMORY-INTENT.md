@@ -19,6 +19,7 @@ This is **not** yet an implementation plan and **not** a locked architecture. It
 
 See also:
 - `./INTENT.md` — broader Agent OS intent
+- `./MEMORY-STABILITY-INTENT.md` — reflection on what should become long-term memory versus role-, project-, horizon-, or history-level memory
 
 ---
 
@@ -283,6 +284,9 @@ or
 ## Imagined layered architecture (not yet a plan)
 
 The following layered view currently seems valuable.
+
+For a fuller reflection on what belongs in each durability layer, see:
+- `./MEMORY-STABILITY-INTENT.md`
 
 ### Layer A — Stable personal memory
 A small, high-trust layer that captures durable identity context.
