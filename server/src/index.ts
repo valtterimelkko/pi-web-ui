@@ -7,12 +7,14 @@ import { config } from './config.js';
 import { WebSocketConnectionManager } from './websocket/index.js';
 import { handleTerminalWebSocket } from './terminal/terminal-websocket.js';
 import { initializePiService, startSessionWatcher, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
+import { SessionCleanupService } from './session-cleanup.js';
 
 const app = createApp();
 const server = createServer(app);
 
 // Initialize WebSocket connection manager
 let wsManager: WebSocketConnectionManager | null = null;
+let sessionCleanup: SessionCleanupService | null = null;
 
 // Initialize Pi service and WebSocket manager
 async function initialize(): Promise<void> {
@@ -96,6 +98,15 @@ async function initialize(): Promise<void> {
     });
 
     console.log('WebSocket server ready at /ws');
+
+    // Start session cleanup service (auto-unpin after 24h, auto-delete archived after 90 days)
+    sessionCleanup = new SessionCleanupService();
+    sessionCleanup.bindRuntimes({
+      multiSessionManager: wsManager.getMultiSessionManager(),
+      claudeService: wsManager.getClaudeService(),
+      opencodeService: wsManager.getOpenCodeService(),
+    });
+    sessionCleanup.start();
   } catch (error) {
     console.error('Failed to initialize:', error);
     process.exit(1);
@@ -124,6 +135,10 @@ async function shutdown(): Promise<void> {
 
   if (wsManager) {
     await wsManager.close();
+  }
+
+  if (sessionCleanup) {
+    sessionCleanup.stop();
   }
 
   server.close(() => {

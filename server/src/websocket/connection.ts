@@ -2095,6 +2095,14 @@ export class WebSocketConnectionManager {
     return this.multiSessionManager;
   }
 
+  getClaudeService(): ClaudeService {
+    return this.claudeService;
+  }
+
+  getOpenCodeService(): OpenCodeService {
+    return this.opencodeService;
+  }
+
   /**
    * Close all connections and cleanup
    */
