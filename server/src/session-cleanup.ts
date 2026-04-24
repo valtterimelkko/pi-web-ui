@@ -195,7 +195,10 @@ export class SessionCleanupService {
           ?? await registry.getByOpencodeSessionId(sessionPath);
 
         if (!entry) {
-          toDelete.push(sessionPath);
+          const exists = await this.sessionFilesExist(sessionPath);
+          if (!exists) {
+            toDelete.push(sessionPath);
+          }
           continue;
         }
 
@@ -240,6 +243,34 @@ export class SessionCleanupService {
         prefs.pinnedSessionPaths = (prefs.pinnedSessionPaths ?? []).filter(p => !deletedSet.has(p));
         await write(prefs);
       }, filePath);
+    }
+  }
+
+  private async sessionFilesExist(sessionPath: string): Promise<boolean> {
+    if (sessionPath.endsWith('.jsonl') || sessionPath.startsWith(this.config.piSessionDir)) {
+      try {
+        await fs.access(sessionPath);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    if (!sessionPath.includes('/')) {
+      const jsonlFile = path.join(this.config.claudeSessionDir, `${sessionPath}.jsonl`);
+      try {
+        await fs.access(jsonlFile);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    try {
+      await fs.access(sessionPath);
+      return true;
+    } catch {
+      return false;
     }
   }
 

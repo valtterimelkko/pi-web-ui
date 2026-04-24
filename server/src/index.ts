@@ -2,12 +2,14 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { createServer } from 'http';
+import path from 'path';
 import { createApp } from './app.js';
 import { config } from './config.js';
 import { WebSocketConnectionManager } from './websocket/index.js';
 import { handleTerminalWebSocket } from './terminal/terminal-websocket.js';
 import { initializePiService, startSessionWatcher, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
 import { SessionCleanupService } from './session-cleanup.js';
+import { getSessionRegistry } from './session-registry.js';
 
 const app = createApp();
 const server = createServer(app);
@@ -98,6 +100,15 @@ async function initialize(): Promise<void> {
     });
 
     console.log('WebSocket server ready at /ws');
+
+    // Rebuild session registry from disk (ensures Pi sessions are indexed)
+    try {
+      const registry = getSessionRegistry(config.sessionRegistryPath);
+      const piSessionDir = path.join(config.piAgentDir, 'sessions');
+      await registry.rebuildFromPiSessions(piSessionDir);
+    } catch (err) {
+      console.warn('[Startup] Failed to rebuild session registry from Pi sessions:', err instanceof Error ? err.message : String(err));
+    }
 
     // Start session cleanup service (auto-unpin after 24h, auto-delete archived after 90 days)
     sessionCleanup = new SessionCleanupService();

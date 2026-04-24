@@ -334,8 +334,8 @@ describe('SessionCleanupService', () => {
       expect(result.deleted).not.toContain(sessionId);
     });
 
-    it('should clean up stale archived entries with no registry entry', async () => {
-      const ghostSession = 'ghost-no-registry';
+    it('should clean up stale archived entries with no registry entry and no files on disk', async () => {
+      const ghostSession = 'ghost-no-registry-no-files';
       await writePrefs({ archivedSessionPaths: [ghostSession], pinnedSessionPaths: [] });
 
       const service = makeService();
@@ -346,6 +346,24 @@ describe('SessionCleanupService', () => {
       expect(result.deleted).toContain(ghostSession);
       const prefs = await readPrefs();
       expect(prefs.archivedSessionPaths).not.toContain(ghostSession);
+    });
+
+    it('should NOT remove archived entries not in registry if files still exist on disk', async () => {
+      const piSessionDir = path.join(tmpDir, 'pi-sessions', '--root-test--');
+      await fs.mkdir(piSessionDir, { recursive: true });
+      const sessionFile = path.join(piSessionDir, '2026-01-01T00-00-00-000Z_test.jsonl');
+      await fs.writeFile(sessionFile, 'test', 'utf-8');
+
+      await writePrefs({ archivedSessionPaths: [sessionFile], pinnedSessionPaths: [] });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).not.toContain(sessionFile);
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).toContain(sessionFile);
     });
 
     it('should also remove from pinnedSessionPaths when deleting', async () => {
