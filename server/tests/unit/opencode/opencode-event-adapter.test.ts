@@ -162,7 +162,7 @@ describe('OpenCodeEventAdapter', () => {
     expect(events).toHaveLength(0);
   });
 
-  it('message.part.updated step-start → empty', () => {
+  it('message.part.updated step-start → activity message_update', () => {
     const events = adapter.adaptSSEEvent(
       sse('message.part.updated', {
         sessionID: SID,
@@ -170,7 +170,12 @@ describe('OpenCodeEventAdapter', () => {
       }),
       SID,
     );
-    expect(events).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('message_update');
+    expect((events[0].data as Record<string, unknown>).assistantMessageEvent).toEqual({
+      type: 'activity',
+      activity: 'Processing...',
+    });
   });
 
   it('message.part.updated tool with running state → tool_execution_start', () => {
@@ -334,15 +339,20 @@ describe('OpenCodeEventAdapter', () => {
     expect(result.content[0].text).toBe('');
   });
 
-  it('message.part.updated step-finish with stop reason → empty', () => {
+  it('message.part.updated step-finish with stop reason → step_summary message_update', () => {
     const events = adapter.adaptSSEEvent(
       sse('message.part.updated', {
         sessionID: SID,
-        part: { id: 'prt-1', messageID: 'msg-1', type: 'step-finish', reason: 'stop' },
+        part: { id: 'prt-1', messageID: 'msg-1', type: 'step-finish', reason: 'stop', tokens: { total: 100, input: 80, output: 20 } },
       }),
       SID,
     );
-    expect(events).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('message_update');
+    expect((events[0].data as Record<string, unknown>).assistantMessageEvent).toMatchObject({
+      type: 'step_summary',
+      tokens: { input: 80, output: 20, total: 100 },
+    });
   });
 
   it('message.part.updated without part → empty', () => {

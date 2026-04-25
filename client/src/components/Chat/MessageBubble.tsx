@@ -108,7 +108,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
   const [manuallyExpanded, setManuallyExpanded] = useState(false);
   const isLongContent = useMemo(() => {
     if (!displayText) return false;
-    return displayText.split('\n').length > 6 || displayText.length > 300;
+    return displayText.split('\n').length > 15 || displayText.length > 800;
   }, [displayText]);
   const shouldCollapse = isStreaming && !isLast && isCurrentRun && isAssistant && hasVisibleContent && isLongContent && !manuallyExpanded;
 

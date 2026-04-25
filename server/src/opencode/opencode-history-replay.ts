@@ -27,7 +27,7 @@ export function opencodeMessagesToReplayEvents(
         message: { id: msgId },
         timestamp,
       });
-    } else if (info.role === 'assistant') {
+      } else if (info.role === 'assistant') {
       for (const part of message.parts) {
         if (part.type === 'text' && part.text) {
           const partId = `${msgId}_text_${events.length}`;
@@ -79,6 +79,24 @@ export function opencodeMessagesToReplayEvents(
               timestamp,
             });
           }
+        } else if (part.type === 'step-start') {
+          const stepPartId = `${msgId}_step_${events.length}`;
+          events.push({
+            type: 'message_start',
+            message: { id: stepPartId, role: 'assistant' },
+            timestamp,
+          });
+          events.push({
+            type: 'message_update',
+            message: { id: stepPartId },
+            assistantMessageEvent: { type: 'activity', activity: 'Processing step...' },
+            timestamp,
+          });
+          events.push({
+            type: 'message_end',
+            message: { id: stepPartId },
+            timestamp,
+          });
         }
       }
     }

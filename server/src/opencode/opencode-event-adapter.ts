@@ -75,7 +75,21 @@ export class OpenCodeEventAdapter {
           this.partTypeById.set(partID, partType);
         }
 
-        if (partType === 'step-start' || partType === 'reasoning') {
+        if (partType === 'step-start') {
+          const messageID = part.messageID as string | undefined;
+          if (!messageID) return [];
+          return [{
+            type: 'message_update',
+            sessionId,
+            timestamp,
+            data: {
+              id: messageID,
+              assistantMessageEvent: { type: 'activity', activity: 'Processing...' },
+            },
+          }];
+        }
+
+        if (partType === 'reasoning') {
           return [];
         }
 
@@ -157,6 +171,25 @@ export class OpenCodeEventAdapter {
                 toolCallId: partID,
                 result: { content: [{ type: 'text', text: resultText }] },
                 isError: false,
+              },
+            }];
+          }
+          if (reason === 'stop') {
+            const messageID = part.messageID as string | undefined;
+            const tokens = part.tokens as Record<string, number> | undefined;
+            if (!messageID) return [];
+            return [{
+              type: 'message_update',
+              sessionId,
+              timestamp,
+              data: {
+                id: messageID,
+                assistantMessageEvent: {
+                  type: 'step_summary',
+                  tokens: tokens
+                    ? { input: tokens.input ?? tokens.read ?? 0, output: tokens.output ?? tokens.write ?? 0, total: tokens.total ?? 0 }
+                    : undefined,
+                },
               },
             }];
           }
@@ -269,6 +302,38 @@ export class OpenCodeEventAdapter {
             { type: 'message_update', sessionId: piSessionId, timestamp, data: { id: partId, assistantMessageEvent: { type: 'text_delta', delta: part.text } } },
             { type: 'message_end', sessionId: piSessionId, timestamp, data: { id: partId } },
           );
+        } else if (part.type === 'tool-invocation' || part.type === 'tool') {
+          const toolCallId = (part.toolInvocationId ?? part.callID ?? part.id) as string;
+          const toolName = (part.toolName ?? part.tool ?? 'unknown') as string;
+          const args = part.args ?? part.state?.input ?? {};
+          const status = part.state?.status;
+          const messageError = info.error?.data?.message ?? info.error?.name;
+
+          events.push({
+            type: 'tool_execution_start',
+            sessionId: piSessionId,
+            timestamp,
+            data: { toolCallId, toolName, input: args },
+          });
+
+          const hasResult = part.result !== undefined
+            || status === 'completed'
+            || status === 'error'
+            || (status === 'running' && messageError !== undefined && info.time.completed !== undefined);
+          if (hasResult) {
+            const output = part.result ?? part.state?.output ?? part.state?.error ?? messageError ?? '';
+            const resultText = typeof output === 'string' ? output : JSON.stringify(output);
+            events.push({
+              type: 'tool_execution_end',
+              sessionId: piSessionId,
+              timestamp,
+              data: {
+                toolCallId,
+                result: { content: [{ type: 'text', text: resultText }] },
+                isError: status === 'error' || (status === 'running' && messageError !== undefined),
+              },
+            });
+          }
         }
       }
     }

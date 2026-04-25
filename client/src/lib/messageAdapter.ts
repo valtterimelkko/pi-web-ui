@@ -46,6 +46,14 @@ export function normalizeToolName(name: string): string {
     'ExitPlanMode': 'exit_plan_mode',
     'Skill': 'skill',
     'AskUserQuestion': 'ask_user',
+    'ListDir': 'list_dir',
+    'Mkdir': 'mkdir',
+    'Copy': 'copy',
+    'Move': 'move',
+    'Delete': 'delete',
+    'FileRead': 'read',
+    'FileWrite': 'write',
+    'FileEdit': 'edit',
   };
   return map[name] ?? name;
 }

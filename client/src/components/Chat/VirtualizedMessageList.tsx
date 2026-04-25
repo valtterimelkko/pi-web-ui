@@ -192,11 +192,19 @@ function getSkillContentInfo(message: LiveMessage): { isSkillContent: boolean; s
  */
 const VISIBLE_TOOL_NAMES = new Set([
   // Pi SDK names
-  'subagent', 'read', 'todo',
+  'subagent', 'read', 'todo', 'bash', 'write', 'edit', 'grep', 'glob',
+  'web_search', 'web_fetch', 'search', 'fetch',
+  'think', 'skill', 'ask_user',
   // Claude SDK equivalents (PascalCase)
   'Agent', 'Task', 'Read', 'TodoWrite', 'TodoRead',
+  'Bash', 'Write', 'Edit', 'Grep', 'Glob',
+  'WebSearch', 'WebFetch',
+  'EnterPlanMode', 'ExitPlanMode',
+  'Skill', 'AskUserQuestion',
   // OpenCode tool names (PascalCase)
-  'Bash', 'Write', 'Edit', 'Grep', 'Glob', 'WebSearch', 'WebFetch',
+  'Read_tool', 'Bash_tool', 'Write_tool', 'Edit_tool',
+  'Grep_tool', 'Glob_tool', 'WebSearch_tool', 'WebFetch_tool',
+  'TodoRead_tool', 'TodoWrite_tool',
 ]);
 
 function ToolGroupToggle({

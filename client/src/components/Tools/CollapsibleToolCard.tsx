@@ -326,10 +326,10 @@ function parseWebFetchOutput(output: string): { chars: number; truncated: boolea
   return null;
 }
 
-// Tools that should hide their raw output and show only a brief summary
-// These are "intermediate" tools where the assistant processes the output
-// Includes Pi SDK names (lowercase), Claude names, and OpenCode names (PascalCase)
-const BRIEF_ONLY_TOOLS = ['read', 'web_search', 'web_fetch', 'fetch', 'search', 'Read', 'WebSearch', 'WebFetch', 'Grep', 'Glob'];
+// Tools that should show expanded output by default (previously "brief-only").
+// Removed read, grep, glob from the brief list so users can see full tool output.
+// Only web_search/web_fetch remain brief since those are typically very large responses.
+const BRIEF_ONLY_TOOLS = ['web_search', 'web_fetch', 'fetch', 'search', 'WebSearch', 'WebFetch'];
 
 // Tool output section (result)
 const ToolOutput = memo(function ToolOutput({ 
@@ -569,7 +569,7 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
 }: CollapsibleToolCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showResult, setShowResult] = useState(false);
-  const [showInputs, setShowInputs] = useState(false);
+  const [showInputs, setShowInputs] = useState(true);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const hasResult = result !== undefined && result !== null;
@@ -584,12 +584,13 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
     }
   }, [forceExpanded]);
 
-  // Auto-expand the result section when a tool returns an error
+  // Auto-expand the result section when a tool completes (error or success)
   useEffect(() => {
-    if (isError) {
+    if (hasResult) {
       setShowResult(true);
+      setIsExpanded(true);
     }
-  }, [isError]);
+  }, [hasResult]);
 
   // Track elapsed time for pending operations
   useEffect(() => {
