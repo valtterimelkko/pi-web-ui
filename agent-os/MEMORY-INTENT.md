@@ -367,6 +367,14 @@ A good memory should support something like:
 
 This reduces clutter and helps keep recall relevant.
 
+It also suggests an important broader Agent OS principle:
+- memory retrieval should likely happen before capability selection is finalised
+- the system should know enough about role/project/thread/horizon context before deciding which skill, workflow, or operating branch to activate
+
+In other words:
+- memory should help govern capability activation
+- not merely annotate it afterwards
+
 ### 3. Preserve boundaries and attribution
 
 The memory must avoid mixing unrelated projects and roles.
@@ -401,7 +409,20 @@ It should likely be:
 - stronger within a role cluster
 - more selective across unrelated roles
 
-### 7. Prefer practical continuity over conceptual richness in v1
+### 7. Keep memory visible as a system layer
+
+A useful emerging conceptual pattern is that memory should likely appear as a first-class layer in the Agent OS, not as a hidden implementation detail.
+
+This does not mean the product surface must literally expose a memory dashboard.
+It means the Agent OS should conceptually treat memory as:
+- a major operating subsystem
+- a source of task startup context
+- a routing influence
+- a target for post-task stabilisation and update
+
+This helps distinguish the Agent OS from a generic tool launcher or chat wrapper.
+
+### 8. Prefer practical continuity over conceptual richness in v1
 
 The first memory should help the user start work quickly and correctly.
 

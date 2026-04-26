@@ -6,8 +6,9 @@ _Last updated: 2026-04-23_
 
 This document records the current **intent**, **conceptual direction**, and **influences** behind the planned Agent OS.
 
-Related file:
+Related files:
 - `./MEMORY-INTENT.md` — dedicated reflection on what the Agent OS memory is for and how it may be structured
+- `./CONCEPTUAL-PATTERNS.md` — intention-level conceptual patterns and emerging architectural shape
 
 It is written so that a future agent with **no prior chat context** can quickly understand:
 - what the Agent OS is trying to become
@@ -138,6 +139,28 @@ rather than only relying on one generic agent with every skill attached.
 
 This direction is still exploratory, but it has already influenced the conceptual framing.
 
+### 6. Memory should govern capability activation, not the other way around
+
+A later reflection clarified an important boundary:
+- the Agent OS should not become capability-first
+- it should not primarily be conceived as a dashboard of tools, skills, or modules
+- memory-backed continuity should remain the governing logic
+
+This means structured capabilities are still valuable, but they should likely be activated through context such as:
+- who the user is
+- which role is active
+- which project is active
+- which thread is being continued
+- what the near-future horizon suggests is likely relevant now
+
+A useful concise framing is:
+
+> continuity should govern capability activation
+
+rather than:
+
+> capabilities defining the primary shape of the system.
+
 ---
 
 ## What the Agent OS should eventually make possible
@@ -176,6 +199,10 @@ The current stack already contains many OS-like layers:
 
 This means the Agent OS idea is not starting from zero; it is emerging from an already OS-like composition.
 
+This also strengthens a later conceptual pattern:
+- the Agent OS likely needs an explicit **conductor/orchestration layer**
+- but that conductor should sit on top of the Pi-based substrate rather than being identified with one specific external harness
+
 ### B. Weak memory is the main blocker to becoming a true task-based Agent OS
 
 The biggest blocker identified so far is not primarily:
@@ -208,6 +235,29 @@ However, current reflection is that:
 
 This is an important directional conclusion.
 
+### F. Emerging conceptual patterns are becoming clearer, even before a plan exists
+
+The Agent OS is still pre-plan, but some conceptual patterns now appear strong enough to preserve at the intent level:
+- a central conductor/orchestration layer is likely useful
+- domain-organised capability groupings are likely useful
+- memory should remain a first-class system layer
+- custom integrations should likely have an explicit conceptual place
+- the system likely needs a clearer end-to-end flow model for how work moves through context, retrieval, orchestration, execution, and memory update
+- named runnable units such as skills/tasks/workflows are likely useful
+
+However, these patterns should be interpreted under one stronger rule:
+- **continuity should govern capability activation**
+- not the reverse
+
+This means the Agent OS should not primarily be designed as:
+- a dashboard of tools
+- a catalogue of skills
+- a capability-first control centre
+
+Instead, it should likely become:
+- a memory-first task operating layer
+- where identity, role, project, thread, and horizon context determine which capabilities become active and relevant
+
 ---
 
 ## Key influences and signposts
@@ -222,16 +272,35 @@ The following items directly shaped the current intent.
   - highlighted the importance of **memory**
   - highlighted **skills** as reusable, structured capability
   - suggested thinking in terms of **domains/functions/categories of work**
-  - reinforced the idea of a **dashboard/command-centre** as an access layer
   - also served as a contrast: the Agent OS should **not** simply be a Claude Code-based clone
+- Clarified caution after later reflection:
+  - the dashboard/command-centre aesthetic should **not** be treated as a pattern to copy into the Agent OS intent directly
+  - the useful takeaway is capability legibility, not dashboard imitation
 
 #### Video 2
 - URL: https://youtu.be/uhMCy25NBfw?si=6AAUiRKVUUR3R478
 - Influence on intent:
   - strengthened the idea that the system should be **task-oriented**
-  - strengthened interest in a **kanban-like/dashboard** interaction model
   - reinforced the idea of managing **goals/tasks instead of terminals/sessions**
   - highlighted the value of a command-centre layer while also clarifying that backend/runtime abstraction matters
+- Clarified caution after later reflection:
+  - dashboard format should remain open and undecided
+  - no dashboard pattern should be treated as part of the Agent OS intent at this stage
+
+#### Video 3
+- URL: https://youtu.be/5PDEy_gthU8
+- Influence on intent:
+  - reinforced the usefulness of a **central conductor/orchestration layer**
+  - reinforced the usefulness of **domain-organised capability pillars** such as research, content, productivity, memory, and integrations
+  - highlighted the usefulness of making **memory a first-class visible subsystem**
+  - highlighted the usefulness of a **custom integration layer** for external tools, CLIs, APIs, and MCP-like capability surfaces
+  - highlighted the usefulness of a **clear flow model** from user request to orchestration to specialised execution
+  - highlighted the usefulness of **named runnable operating units** such as skills/tasks/workflows
+- Clarified caution after analysis:
+  - these are useful as conceptual patterns, not as a system to copy literally
+  - the video appears more capability-first, whereas the Agent OS should remain memory-first
+  - the dashboard look/format is not a pattern to adopt
+  - automation is conceptually interesting, but should not be treated as an early priority while memory and continuity remain unresolved
 
 ### 2. Pi Web UI as backend substrate
 
@@ -407,9 +476,12 @@ At this point:
 - no final memory design has been chosen
 - no final UI/dashboard design has been chosen
 - no final task/category/agent model has been chosen
+- no final conductor/capability-flow design has been chosen
+- no final surface format has been chosen, and dashboard imitation should not be assumed
 
 But the intent is now much clearer:
 - build toward a task-based Agent OS
 - grounded in persistent continuity
 - with effective memory as the most important missing layer
 - using the existing Pi-based stack as the likely foundation
+- with emerging conceptual patterns documented, but still intentionally below the level of a concrete plan
