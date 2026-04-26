@@ -61,6 +61,12 @@ const providerStyles: Record<string, { icon: typeof Github; color: string; bgCol
     bgColor: 'bg-red-50',
     label: 'xAI',
   },
+  'deepseek': {
+    icon: Cpu,
+    color: 'text-blue-600',
+    bgColor: 'bg-blue-50',
+    label: 'DeepSeek',
+  },
   'default': {
     icon: Cpu,
     color: 'text-gray-500',
@@ -78,6 +84,7 @@ function getProviderStyle(provider: string) {
   if (key.includes('openai') || key.includes('gpt')) return providerStyles['openai'];
   if (key.includes('google') || key.includes('gemini')) return providerStyles['google'];
   if (key.includes('xai') || key.includes('grok')) return providerStyles['xai'];
+  if (key.includes('deepseek')) return providerStyles['deepseek'];
   return providerStyles['default'];
 }
 

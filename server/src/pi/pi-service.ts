@@ -40,6 +40,22 @@ export class PiService {
       ? `${config.piAgentDir}/auth.json`
       : undefined);
     
+    // Explicitly register DeepSeek API key from environment if available.
+    // The Pi SDK auto-detects env vars, but the web UI server may run in a
+    // non-interactive context (systemd, npm scripts) that doesn't source
+    // shell profiles like ~/.bashrc where the key might be exported.
+    const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
+    if (deepseekApiKey) {
+      this.authStorage.setRuntimeApiKey('deepseek', deepseekApiKey);
+      // Persist to auth.json so future restarts don't depend on the env var.
+      // This matches how GitHub Copilot and other OAuth providers work:
+      // once authenticated, the credential lives in auth.json and is
+      // available to both CLI and web UI regardless of shell environment.
+      if (!this.authStorage.has('deepseek')) {
+        this.authStorage.set('deepseek', { type: 'api_key', key: deepseekApiKey });
+      }
+    }
+    
     this.modelRegistry = ModelRegistry.create(this.authStorage);
     
     // Log any ModelRegistry errors (e.g., models.json issues)
