@@ -121,6 +121,28 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     }
   };
 
+  const CopyButton = ({ position }: { position: 'top' | 'bottom' }) => (
+    <button
+      onClick={handleCopy}
+      className={`
+        p-2 rounded-lg transition-all duration-200 touch-manipulation
+        ${copied
+          ? 'bg-green-100 text-green-600'
+          : 'bg-gray-100 text-gray-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700'
+        }
+        ${position === 'top' ? 'absolute top-1 right-1' : 'mt-2 ml-auto block'}
+      `}
+      title={copied ? 'Copied!' : 'Copy message'}
+      aria-label={copied ? 'Copied to clipboard' : 'Copy message to clipboard'}
+    >
+      {copied ? (
+        <Check className="w-4 h-4" />
+      ) : (
+        <Copy className="w-4 h-4" />
+      )}
+    </button>
+  );
+
   const formatTime = (timestamp: number): string => {
     return new Date(timestamp).toLocaleTimeString('en-US', {
       hour: '2-digit',
@@ -223,25 +245,9 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
             }
           `}
         >
-          {/* Copy button - always visible on mobile, hover-only on desktop; hidden when collapsed */}
+          {/* Copy button - top */}
           {isAssistant && !isStreamingThis && !shouldCollapse && (
-            <button
-              onClick={handleCopy}
-              className={`
-                absolute top-1 right-1 p-1.5 rounded-md transition-all duration-200
-                ${copied
-                  ? 'bg-green-100 text-green-600'
-                  : 'bg-gray-100 text-gray-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700'
-                }
-              `}
-              title={copied ? 'Copied!' : 'Copy message'}
-            >
-              {copied ? (
-                <Check className="w-3.5 h-3.5" />
-              ) : (
-                <Copy className="w-3.5 h-3.5" />
-              )}
-            </button>
+            <CopyButton position="top" />
           )}
 
           {isStreamingThis ? (
@@ -343,6 +349,10 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
               >
                 ▴ Show less
               </button>
+            )}
+            {/* Copy button - bottom */}
+            {isAssistant && !isStreamingThis && !shouldCollapse && (
+              <CopyButton position="bottom" />
             )}
             </>
           )}
