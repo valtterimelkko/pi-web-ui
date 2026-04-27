@@ -12,7 +12,9 @@ The important consequence is: **changes to auth, WebSocket routing, file access,
 
 ### 1. Cookie-based authentication
 
-- Auth is handled with JWTs stored in cookies.
+- Auth is handled with session tokens (JWT) stored in httpOnly cookies.
+- A single long-lived session token is issued on login (default 30 days).
+- Session expiration is primarily managed upstream by Authelia SSO/MFA.
 - Protected REST routes use `cookieAuthMiddleware`.
 - Token generation and verification live under:
   - `server/src/security/auth.ts`

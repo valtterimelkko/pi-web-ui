@@ -4,10 +4,8 @@ import { persist } from 'zustand/middleware';
 interface AuthState {
   isAuthenticated: boolean;
   csrfToken: string | null;
-  expiresIn: number | null;
   login: (password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
-  refresh: () => Promise<void>;
   setCsrfToken: (token: string) => void;
 }
 
@@ -18,35 +16,33 @@ export const useAuth = create<AuthState>()(
     (set, _get) => ({
       isAuthenticated: false,
       csrfToken: null,
-      expiresIn: null,
-      
+
       login: async (password: string) => {
         try {
           const response = await fetch(`${API_BASE}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ password }),
-            credentials: 'include', // Important for cookies
+            credentials: 'include',
           });
-          
+
           const data = await response.json();
-          
+
           if (!response.ok) {
             return { success: false, error: data.error || 'Login failed' };
           }
-          
+
           set({
             isAuthenticated: true,
             csrfToken: data.csrfToken,
-            expiresIn: data.expiresIn,
           });
-          
+
           return { success: true };
         } catch (_error) {
           return { success: false, error: 'Network error' };
         }
       },
-      
+
       logout: async () => {
         try {
           await fetch(`${API_BASE}/auth/logout`, {
@@ -56,34 +52,10 @@ export const useAuth = create<AuthState>()(
         } catch (error) {
           console.error('Logout error:', error);
         } finally {
-          set({ isAuthenticated: false, csrfToken: null, expiresIn: null });
-        }
-      },
-      
-      refresh: async () => {
-        try {
-          // Get refresh token from cookie (automatic)
-          const response = await fetch(`${API_BASE}/auth/refresh`, {
-            method: 'POST',
-            credentials: 'include',
-          });
-          
-          if (!response.ok) {
-            set({ isAuthenticated: false, csrfToken: null });
-            return;
-          }
-          
-          const data = await response.json();
-          set({
-            isAuthenticated: true,
-            csrfToken: data.csrfToken,
-            expiresIn: data.expiresIn,
-          });
-        } catch (_error) {
           set({ isAuthenticated: false, csrfToken: null });
         }
       },
-      
+
       setCsrfToken: (token: string) => {
         set({ csrfToken: token });
       },
@@ -95,14 +67,19 @@ export const useAuth = create<AuthState>()(
   )
 );
 
-// Check auth status on load
 export async function checkAuthStatus(): Promise<boolean> {
   try {
     const response = await fetch(`${API_BASE}/auth/me`, {
       credentials: 'include',
     });
-    return response.ok;
+    if (response.ok) {
+      useAuth.setState({ isAuthenticated: true });
+      return true;
+    }
+    useAuth.setState({ isAuthenticated: false });
+    return false;
   } catch {
+    useAuth.setState({ isAuthenticated: false });
     return false;
   }
 }

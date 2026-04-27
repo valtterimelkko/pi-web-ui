@@ -9,7 +9,6 @@ export interface ServerConfig {
   nodeEnv: string;
   jwtSecret: string;
   jwtExpiresIn: string;
-  jwtRefreshExpiresIn: string;
   allowedOrigins: string[];
   authPassword: string;
   rateLimitWindowMs: number;
@@ -51,8 +50,7 @@ export const config: ServerConfig = {
   jwtSecret: isProduction 
     ? getRequiredEnvVar('JWT_SECRET')
     : (process.env.JWT_SECRET || 'dev-secret-change-in-production'),
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '15m',
-  jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '30d',
   allowedOrigins: process.env.ALLOWED_ORIGINS 
     ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
     : ['http://localhost:5173', 'http://localhost:3000'],

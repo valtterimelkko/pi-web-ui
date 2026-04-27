@@ -1,20 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { generateTokens, verifyToken } from './auth.js';
+import { generateSessionToken, verifyToken } from './auth.js';
 import { generateCsrfToken, validateCsrfToken, invalidateCsrfToken } from './csrf.js';
 import { detectPromptInjection, sanitizePrompt } from './prompt-injection.js';
 import { loginSchema, promptSchema, browseSchema } from './input-validation.js';
 
 describe('JWT Authentication', () => {
-  it('should generate valid tokens', () => {
-    const tokens = generateTokens('user-123');
-    expect(tokens.accessToken).toBeDefined();
-    expect(tokens.refreshToken).toBeDefined();
-    expect(tokens.expiresIn).toBeGreaterThan(0);
+  it('should generate a valid session token', () => {
+    const token = generateSessionToken('user-123');
+    expect(token).toBeDefined();
+    expect(token.split('.')).toHaveLength(3);
   });
 
   it('should verify valid tokens', () => {
-    const tokens = generateTokens('user-456');
-    const payload = verifyToken(tokens.accessToken);
+    const token = generateSessionToken('user-456');
+    const payload = verifyToken(token);
     expect(payload).not.toBeNull();
     expect(payload?.userId).toBe('user-456');
     expect(payload?.exp).toBeGreaterThan(0);
@@ -31,15 +30,15 @@ describe('CSRF Protection', () => {
     const sessionId = 'session-123';
     const token = generateCsrfToken(sessionId);
     expect(token).toBeDefined();
-    expect(token.length).toBe(64); // 32 bytes hex encoded
-    
+    expect(token.length).toBe(64);
+
     expect(validateCsrfToken(sessionId, token)).toBe(true);
   });
 
   it('should reject invalid CSRF tokens', () => {
     const sessionId = 'session-456';
     generateCsrfToken(sessionId);
-    
+
     expect(validateCsrfToken(sessionId, 'invalid-token')).toBe(false);
     expect(validateCsrfToken('wrong-session', 'any-token')).toBe(false);
   });
@@ -48,7 +47,7 @@ describe('CSRF Protection', () => {
     const sessionId = 'session-789';
     const token = generateCsrfToken(sessionId);
     expect(validateCsrfToken(sessionId, token)).toBe(true);
-    
+
     invalidateCsrfToken(sessionId);
     expect(validateCsrfToken(sessionId, token)).toBe(false);
   });
@@ -97,10 +96,10 @@ describe('Input Validation', () => {
   it('should validate prompt schema', () => {
     const valid = { sessionId: 's1', message: 'Hello' };
     expect(promptSchema.safeParse(valid).success).toBe(true);
-    
+
     const invalid = { sessionId: '', message: '' };
     expect(promptSchema.safeParse(invalid).success).toBe(false);
-    
+
     const tooLong = { sessionId: 's1', message: 'x'.repeat(100001) };
     expect(promptSchema.safeParse(tooLong).success).toBe(false);
   });

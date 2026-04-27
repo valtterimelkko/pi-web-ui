@@ -3,7 +3,6 @@ import {
   validateBody,
   validateQuery,
   loginSchema,
-  refreshTokenSchema,
   newSessionSchema,
   switchSessionSchema,
   promptSchema,
@@ -25,18 +24,6 @@ describe('Input Validation', () => {
 
       it('should reject missing password', () => {
         const result = loginSchema.safeParse({});
-        expect(result.success).toBe(false);
-      });
-    });
-
-    describe('refreshTokenSchema', () => {
-      it('should validate correct refresh token data', () => {
-        const result = refreshTokenSchema.safeParse({ refreshToken: 'some-token' });
-        expect(result.success).toBe(true);
-      });
-
-      it('should reject empty refresh token', () => {
-        const result = refreshTokenSchema.safeParse({ refreshToken: '' });
         expect(result.success).toBe(false);
       });
     });

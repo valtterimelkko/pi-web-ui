@@ -1,40 +1,32 @@
 import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcrypt';
 import { config } from '../config.js';
-import { generateTokens, verifyToken } from '../security/auth.js';
+import { generateSessionToken, verifyToken } from '../security/auth.js';
 import { generateCsrfToken, invalidateCsrfToken } from '../security/csrf.js';
 import { authLimiter } from '../security/rate-limit.js';
 import { validateBody, loginSchema } from '../security/input-validation.js';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 
-// Express Request type extension is in src/types/express.d.ts
-
 const router = Router();
 
-// Cookie options for JWT
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: config.nodeEnv === 'production',
   sameSite: config.nodeEnv === 'production' ? ('strict' as const) : ('lax' as const),
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  maxAge: 30 * 24 * 60 * 60 * 1000,
   path: '/',
 };
 
-// POST /api/auth/login - Login with password
 router.post('/login', authLimiter, validateBody(loginSchema), async (req: Request, res: Response) => {
   try {
     const { password } = req.body;
-    
-    // Single-user mode: compare against configured password
-    // Support both bcrypt hash (starts with $2) and plain text (for development only)
+
     const storedPassword = config.authPassword;
     let validPassword: boolean;
-    
+
     if (storedPassword.startsWith('$2')) {
-      // bcrypt hash
       validPassword = await bcrypt.compare(password, storedPassword);
     } else {
-      // Plain text - ONLY allowed in development mode
       if (config.nodeEnv === 'production') {
         console.error('SECURITY ERROR: Plain text password detected in production. Use bcrypt hash.');
         res.status(500).json({ error: 'Server configuration error' });
@@ -42,26 +34,22 @@ router.post('/login', authLimiter, validateBody(loginSchema), async (req: Reques
       }
       validPassword = password === storedPassword;
     }
-    
+
     if (!validPassword) {
       res.status(401).json({ error: 'Invalid password' });
       return;
     }
-    
-    const userId = 'default-user'; // Single user mode
-    const tokens = generateTokens(userId);
+
+    const userId = 'default-user';
+    const token = generateSessionToken(userId);
     const csrfToken = generateCsrfToken(userId);
-    
-    // Set JWT in httpOnly cookie
-    res.cookie('accessToken', tokens.accessToken, COOKIE_OPTIONS);
-    res.cookie('refreshToken', tokens.refreshToken, { ...COOKIE_OPTIONS, maxAge: 7 * 24 * 60 * 60 * 1000 });
-    
-    // Send CSRF token in header and response body
+
+    res.cookie('accessToken', token, COOKIE_OPTIONS);
+
     res.setHeader('X-CSRF-Token', csrfToken);
     res.json({
       success: true,
-      expiresIn: tokens.expiresIn,
-      csrfToken, // Also in body for WebSocket handshake
+      csrfToken,
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -69,61 +57,15 @@ router.post('/login', authLimiter, validateBody(loginSchema), async (req: Reques
   }
 });
 
-// POST /api/auth/logout - Logout
 router.post('/logout', (req: Request, res: Response) => {
   const userId = req.user?.userId ?? 'default-user';
   invalidateCsrfToken(userId);
-  
+
   res.clearCookie('accessToken', { path: '/' });
-  res.clearCookie('refreshToken', { path: '/' });
-  
+
   res.json({ success: true });
 });
 
-// POST /api/auth/refresh - Refresh tokens
-router.post('/refresh', (req: Request, res: Response) => {
-  // Get refresh token from cookie (preferred) or body
-  const cookieHeader = req.headers.cookie;
-  let refreshToken: string | undefined;
-  
-  if (cookieHeader) {
-    const match = cookieHeader.match(/(?:^|;\s*)refreshToken=([^;]+)/);
-    if (match) {
-      refreshToken = match[1];
-    }
-  }
-  
-  // Fallback to body (for backward compatibility)
-  if (!refreshToken && req.body?.refreshToken) {
-    refreshToken = req.body.refreshToken;
-  }
-  
-  if (!refreshToken) {
-    res.status(401).json({ error: 'No refresh token provided' });
-    return;
-  }
-  
-  const payload = verifyToken(refreshToken);
-  if (!payload) {
-    res.status(401).json({ error: 'Invalid refresh token' });
-    return;
-  }
-  
-  const tokens = generateTokens(payload.userId);
-  const csrfToken = generateCsrfToken(payload.userId);
-  
-  res.cookie('accessToken', tokens.accessToken, COOKIE_OPTIONS);
-  res.cookie('refreshToken', tokens.refreshToken, { ...COOKIE_OPTIONS, maxAge: 7 * 24 * 60 * 60 * 1000 });
-  
-  res.setHeader('X-CSRF-Token', csrfToken);
-  res.json({
-    success: true,
-    expiresIn: tokens.expiresIn,
-    csrfToken,
-  });
-});
-
-// GET /api/auth/me - Get current user
 router.get('/me', cookieAuthMiddleware, (req: Request, res: Response) => {
   res.json({
     user: {
