@@ -1,0 +1,124 @@
+# Pi Web UI Codebase Map
+
+> Token-efficient file-to-purpose index. Use this to find where a concept is implemented without grepping.
+
+## Frontend (`client/src/`)
+
+### State
+- `store/sessionStore.ts` — Main frontend session state: messages, streaming, switching, cache, pinning, archiving, worker status, Claude/OpenCode availability.
+- `store/transferStore.ts` — Session context transfer UI state.
+- `store/uiStore.ts` — UI chrome state (modals, toasts, navigation).
+- `store/chatStore.ts` — Chat input/draft state.
+
+### WebSocket / API
+- `hooks/useWebSocket.ts` — Client WebSocket connection manager, sends actions to server.
+- `lib/api.ts` — REST API client.
+- `lib/session-websocket.ts` — Session-specific WebSocket client.
+
+### Session / Chat UI
+- `components/Session/NewSessionModal.tsx` — Runtime picker (Pi / Claude / OpenCode).
+- `components/Sidebar/SessionItem.tsx` — Sidebar session row (drag source, pin, archive, rename).
+- `components/Sidebar/SessionList.tsx` — Sidebar container.
+- `components/Sidebar/TransferConfirmationModal.tsx` — Context transfer confirmation UX.
+- `components/Chat/ChatView.tsx` — Main chat surface.
+- `components/Chat/MessageList.tsx` — Message list rendering.
+- `components/Chat/MessageBubble.tsx` — Individual message bubble.
+- `components/Chat/MessageInput.tsx` — Chat input box.
+
+### Tools / Extensions
+- `components/Tools/ToolCallCard.tsx` — Tool execution card.
+- `components/Tools/CollapsibleToolCard.tsx` — Collapsible tool display.
+- `components/Extensions/ExtensionDialog.tsx` — Approval/dialog UI for extensions and OpenCode permissions.
+
+## Backend (`server/src/`)
+
+### WebSocket / Routing
+- `websocket/connection.ts` — **Main runtime router.** All Pi/Claude/OpenCode prompts, aborts, switches, and events flow through here. Contains `normEventToPiFormat()` and subscriber fanout.
+- `websocket/protocol.ts` — Shared WebSocket message type definitions and guards.
+- `websocket/session-websocket.ts` — JSON-RPC endpoint for Pi SDK worker communication (`/ws/sessions/:sessionId`).
+- `websocket/handlers.ts` — Legacy WebSocket message handlers.
+
+### Pi SDK Path (`server/src/pi/`)
+- `pi/multi-session-manager.ts` — **Pi session lifecycle, idle cleanup, pinning, stale-stream reset (15min threshold), API-error grace timer (60s), memory monitoring, skill-content transformation.**
+- `pi/pi-service.ts` — Pi SDK service facade.
+- `pi/event-forwarder.ts` — Bridges Pi SDK events into WebSocket broadcasts.
+- `pi/session-pool.ts` — Session object pool.
+- `pi/parallel/session-orchestrator.ts` — Parallel agent session orchestration (worktrees).
+- `pi/parallel/worktree-manager.ts` — Git worktree management for parallel sessions.
+- `pi/parallel/plan-parser.ts` — Parses parallel execution plans.
+- `pi/parallel/merge-coordinator.ts` — Coordinates merge of parallel session results.
+
+### Workers (`server/src/workers/`)
+- `workers/worker-pool.ts` — Pi worker process pool, spawn/kill lifecycle.
+- `workers/session-rpc-client.ts` — RPC client for talking to Pi workers.
+- `workers/rpc-protocol-bridge.ts` — Bridges between JSON-RPC and internal protocol.
+- `workers/event-normalizer.ts` — Normalizes Pi worker events.
+- `workers/session-worker.ts` — Individual Pi worker process script.
+
+### Claude Direct Path (`server/src/claude/`)
+- `claude/claude-service.ts` — Claude Direct lifecycle, session registry integration, prompt dispatch, stats.
+- `claude/claude-process-pool.ts` — `claude -p` subprocess management, spawn, abort, lock handling.
+- `claude/claude-event-normalizer.ts` — Converts Claude NDJSON stream into `NormalizedEvent`.
+- `claude/claude-history-replay.ts` — Reconstructs session history from Pi-owned JSONL for UI replay.
+- `claude/claude-session-store.ts` — JSONL persistence (`~/.pi-web-ui/claude-sessions/`).
+- `claude/claude-session-subscribers.ts` — Multi-viewer fanout for Claude sessions.
+
+### OpenCode Direct Path (`server/src/opencode/`)
+- `opencode/opencode-service.ts` — OpenCode Direct lifecycle, prompt dispatch, context-window tracking, session cleanup, trusted permissions.
+- `opencode/opencode-process-manager.ts` — `opencode serve` lifecycle, health checks, idle-aware recycling.
+- `opencode/opencode-client.ts` — HTTP client for OpenCode server APIs and SSE subscription.
+- `opencode/opencode-event-adapter.ts` — Adapts OpenCode SSE into `NormalizedEvent`; contains tool-event deduplication logic.
+- `opencode/opencode-history-replay.ts` — Converts OpenCode message history into replay events.
+- `opencode/opencode-session-subscribers.ts` — Multi-viewer fanout for OpenCode sessions.
+- `opencode/opencode-types.ts` — OpenCode-specific type definitions.
+
+### Session Transfer (`server/src/session-transfer/`)
+- `session-transfer/transfer-service.ts` — Orchestrates cross-runtime context transfer.
+- `session-transfer/visible-transcript.ts` — Builds canonical visible transcript from replay events.
+- `session-transfer/transfer-framing.ts` — Builds the handoff message wrapper.
+- `session-transfer/transfer-validation.ts` — Validates transfer requests.
+- `session-transfer/pi-source-adapter.ts` — Extracts visible transcript from Pi sessions.
+- `session-transfer/claude-source-adapter.ts` — Extracts visible transcript from Claude JSONL.
+- `session-transfer/opencode-source-adapter.ts` — Extracts visible transcript from OpenCode replay.
+
+### Registry / Persistence
+- `session-registry.ts` — Unified cross-runtime session index (`~/.pi-web-ui/session-registry.json`). Atomic tmp+rename writes.
+- `session-cleanup.ts` — Scheduled cleanup of archived/pinned sessions.
+
+### Security
+- `security/auth.ts` — JWT cookie generation and verification.
+- `security/csrf.ts` — CSRF token generation and validation.
+- `security/prompt-injection.ts` — Pattern-based prompt injection detection.
+- `security/rate-limit.ts` — HTTP and WebSocket rate limiting.
+- `security/websocket.ts` — WebSocket auth handshake.
+- `middleware/auth.ts` — Express auth middleware.
+
+### REST Routes (`server/src/routes/`)
+- `routes/health.ts` — Health/readiness probes, runtime availability.
+- `routes/models.ts` — Model listing (Pi and OpenCode).
+- `routes/auth.ts` — Login/logout.
+- `routes/sessions.ts` — Session CRUD, export.
+- `routes/files.ts` — File browsing and reading (with path validation).
+- `routes/extensions.ts` — Extension listing and toggling.
+- `routes/preferences.ts` — User preferences (pins, archives, display names).
+- `routes/config.ts` — Config validation endpoint.
+- `routes/terminal.ts` — Terminal session management.
+- `routes/git.ts` — Git operations.
+
+### Config / Bootstrap
+- `config.ts` — Environment variable parsing and defaults.
+- `app.ts` — Express app setup.
+- `index.ts` — Server entry point.
+
+## Shared Package (`shared/src/`)
+
+- `protocol-types.ts` — **The contract.** `NormalizedEvent`, `WorkerStatus`, `InternalCommand`, `SessionEventEnvelope`, git types, terminal types.
+- `protocol/jsonrpc.ts` — JSON-RPC message types and utilities.
+- `types.ts` — Legacy shared types (`SdkType`, `Session`, `Message`, etc.).
+- `constants.ts` — Shared constants.
+
+## Tests
+
+- `tests/e2e/` — Playwright E2E tests (auth, session creation, switching, runtime-specific flows).
+- `server/tests/unit/` — Server unit tests (runtime adapters, WebSocket routing, security).
+- `server/tests/integration/` — Cross-module integration tests.

@@ -1,6 +1,12 @@
-# Session Context Transfer Frontend Plan
+# HISTORICAL — Session Context Transfer Frontend Plan
 
-> Status: **proposed**
+> Status: **IMPLEMENTED** — kept for historical reference only.
+>
+> The session context transfer feature described here has already been implemented. This document is a design-history record, not the current source of truth.
+>
+> For current behaviour, read:
+> - [`../PROTOCOL.md`](../PROTOCOL.md) (transfer protocol messages)
+> - [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
 >
 > Audience: frontend maintainers and coding agents implementing the browser/UI side of session context transfer.
 >

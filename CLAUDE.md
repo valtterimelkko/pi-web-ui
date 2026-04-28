@@ -12,6 +12,23 @@
 - **Deployment / ops:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 - **Pi worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
 - **OpenCode Direct design:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
+- **Code map:** [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md)
+- **Event pipeline:** [`docs/EVENT-PIPELINE.md`](./docs/EVENT-PIPELINE.md)
+- **Known sharp edges:** [`docs/SHARP-EDGES.md`](./docs/SHARP-EDGES.md)
+
+## Quick Reference — If you need to change X, read Y
+
+| Task | File(s) |
+|---|---|
+| WebSocket message / protocol type | `shared/src/protocol-types.ts`, `server/src/websocket/protocol.ts`, `client/src/store/sessionStore.ts` |
+| Runtime-specific replay / events | `server/src/<runtime>/<runtime>-event-*.ts`, `server/src/<runtime>/<runtime>-history-replay.ts` |
+| Session lifecycle / cleanup / pinning | `server/src/pi/multi-session-manager.ts` |
+| Add a REST route | `server/src/routes/*.ts` → add `cookieAuthMiddleware` |
+| Auth / CSRF / security | `server/src/security/*.ts`, `SECURITY.md` |
+| Config / env var | `server/src/config.ts`, `.env.example`, `DEPLOYMENT.md` |
+| Add a new runtime | See [`docs/ADDING-A-RUNTIME.md`](./docs/ADDING-A-RUNTIME.md) |
+| Fix a frontend store issue | `client/src/store/sessionStore.ts` |
+| UI component / modal | `client/src/components/Session/NewSessionModal.tsx` |
 
 ## Mission
 

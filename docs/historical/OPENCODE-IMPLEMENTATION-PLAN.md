@@ -1,13 +1,13 @@
-# OpenCode Direct Implementation Plan
+# HISTORICAL — OpenCode Direct Implementation Plan
 
-> Status: **historical**
+> Status: **IMPLEMENTED** — kept for historical reference only.
 >
-> The OpenCode Direct path described here has already been implemented. Keep this document as a design-history record, not as the current source of truth.
+> The OpenCode Direct path described here has already been implemented. This document is a design-history record, not the current source of truth.
 >
 > For current behaviour, read:
-> - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)
-> - [`ARCHITECTURE.md`](./ARCHITECTURE.md)
-> - [`PROTOCOL.md`](./PROTOCOL.md)
+> - [`../OPENCODE-DIRECT-INTEGRATION.md`](../OPENCODE-DIRECT-INTEGRATION.md)
+> - [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
+> - [`../PROTOCOL.md`](../PROTOCOL.md)
 
 ## What This Document Is
 

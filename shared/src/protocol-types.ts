@@ -6,10 +6,10 @@
 import type { AgentMessage, ThinkingLevel } from '@mariozechner/pi-agent-core';
 import type { ImageContent, Model } from '@mariozechner/pi-ai';
 
-// Worker status
+/** Pi SDK worker lifecycle status. Used by worker pool and frontend worker indicators. */
 export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'terminated' | 'error';
 
-// Worker options for spawning
+/** Options passed when spawning a Pi SDK worker process. */
 export interface WorkerOptions {
   sessionPath: string;
   model?: string;
@@ -17,7 +17,7 @@ export interface WorkerOptions {
   maxOldSpaceSize?: number; // Memory limit in MB, default 512
 }
 
-// Worker metadata
+/** Snapshot of a Pi SDK worker process state. */
 export interface WorkerInfo {
   sessionPath: string;
   status: WorkerStatus;
@@ -28,7 +28,7 @@ export interface WorkerInfo {
   error?: string;
 }
 
-// Internal command format (to be converted to RPC)
+/** Commands sent from the main server to a Pi SDK worker via RPC. */
 export type InternalCommand = 
   | { type: 'prompt'; message: string; images?: ImageContent[] }
   | { type: 'steer'; message: string; images?: ImageContent[] }
@@ -38,7 +38,12 @@ export type InternalCommand =
   | { type: 'set_thinking_level'; level: ThinkingLevel }
   | { type: 'compact'; customInstructions?: string };
 
-// Normalized event format (internal representation)
+/**
+ * Common event shape produced by all runtime adapters (Pi SDK, Claude Direct, OpenCode Direct)
+ * before being converted to the frontend-compatible format in connection.ts.
+ *
+ * This is the normalization contract: every runtime must emit events in this shape.
+ */
 export interface NormalizedEvent {
   type: string;
   sessionId?: string;
@@ -46,14 +51,15 @@ export interface NormalizedEvent {
   data: unknown;
 }
 
-// Session event wrapper for WebSocket
+/** Wrapper sent over WebSocket to route a NormalizedEvent to the correct client session. */
 export interface SessionEventEnvelope {
   type: 'session_event';
   sessionId: string;
   event: NormalizedEvent;
 }
 
-// Git types
+// --- Git types ---
+
 export interface GitFileStatus {
   path: string;
   staged: boolean;
@@ -94,7 +100,8 @@ export interface GitDiff {
   deletions: number;
 }
 
-// Terminal types
+// --- Terminal types ---
+
 export interface TerminalSessionInfo {
   clientId: string;
   cwd: string;
@@ -105,7 +112,8 @@ export interface TerminalSessionInfo {
   lastActivity: number;
 }
 
-// Enhanced file entry
+// --- File types ---
+
 export interface FileEntry {
   name: string;
   path: string;
@@ -116,7 +124,8 @@ export interface FileEntry {
   extension?: string;
 }
 
-// Pool statistics
+// --- Pool statistics ---
+
 export interface WorkerPoolStats {
   active: number;
   idle: number;
