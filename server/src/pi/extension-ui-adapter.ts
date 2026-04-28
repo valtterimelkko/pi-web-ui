@@ -177,6 +177,11 @@ export function createWebUIContext(webUI: WebUIContext): ExtensionUIContext {
       });
     },
 
+    // Set working visibility - not applicable in Web UI mode
+    setWorkingVisible(_visible: boolean): void {
+      // Web UI manages working visibility independently
+    },
+
     // Autocomplete provider composition is not supported in Web UI mode
     addAutocompleteProvider(): void {
       // No-op: Web UI manages its own input autocomplete
