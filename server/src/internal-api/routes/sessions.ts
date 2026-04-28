@@ -104,6 +104,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         case 'pi':
         default: {
           const status = await multiSessionManager.createAndSubscribe(internalClientId, cwd);
+          // Register Pi session in the unified registry so it appears in
+          // session lists, web UI sidebar, and cross-runtime lookups.
+          await sessionRegistry.upsert({
+            id: status.sessionId,
+            sdkType: 'pi',
+            path: status.sessionPath,
+            cwd,
+            firstMessage: '',
+            messageCount: 0,
+            status: 'idle',
+          });
           sendJson(res, 201, {
             sessionId: status.sessionId,
             sessionPath: status.sessionPath,
@@ -469,14 +480,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       case 'pi':
       default: {
+        // For Pi SDK, look up the file path from the registry entry
         const entry = await sessionRegistry.get(sessionId);
         if (!entry) {
           throw new Error(`Pi session not found: ${sessionId}`);
         }
-
         const sessionPath = entry.path;
         // Ensure the session is loaded and subscribed
-        const status = await multiSessionManager.subscribeClient(internalClientId, sessionPath);
+        await multiSessionManager.subscribeClient(internalClientId, sessionPath);
         const agentSession = multiSessionManager.getAgentSession(sessionPath);
         if (!agentSession) {
           throw new Error(`Pi session not loaded: ${sessionId}`);
