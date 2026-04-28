@@ -40,6 +40,8 @@ export interface InternalApiConfig {
   tokenPath?: string;
   /** Enable the API (default: true if config present) */
   enabled?: boolean;
+  /** Callback invoked when a session is created via the API */
+  onSessionCreated?: (sessionId: string, sessionPath: string, runtime: string) => void;
 }
 
 const DEFAULT_SOCKET_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api.sock');
@@ -101,6 +103,7 @@ export class InternalApiServer {
       multiSessionManager: this.multiSessionManager,
       sessionRegistry: this.sessionRegistry,
       internalClientId: this.internalClientId,
+      onSessionCreated: this.config.onSessionCreated,
     });
 
     const modelsDeps: ModelsRoutesDeps = {

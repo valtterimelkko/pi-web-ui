@@ -130,6 +130,26 @@ async function initialize(): Promise<void> {
             apiKey: config.internalApiKey || undefined,
             tokenPath: config.internalApiTokenPath,
             enabled: config.internalApiEnabled,
+            // Notify all WebSocket clients when a session is created via the API
+            onSessionCreated: (sessionId, sessionPath, runtime) => {
+              wsManager!.broadcast({
+                type: 'session_update',
+                changeType: 'add',
+                path: sessionPath,
+                sessionId,
+                info: {
+                  id: sessionId,
+                  path: sessionPath,
+                  sdkType: runtime,
+                  cwd: process.cwd(),
+                  firstMessage: '',
+                  messageCount: 0,
+                  name: `API: ${runtime}`,
+                  createdAt: new Date().toISOString(),
+                  lastActivity: new Date().toISOString(),
+                },
+              });
+            },
           },
           claudeService: wsManager.getClaudeService(),
           opencodeService: wsManager.getOpenCodeService(),

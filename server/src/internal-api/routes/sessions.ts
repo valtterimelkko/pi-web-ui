@@ -37,6 +37,8 @@ export interface SessionRoutesDeps {
   sessionRegistry: SessionRegistryManager;
   /** Internal API client ID prefix for Pi SDK sessions */
   internalClientId: string;
+  /** Callback to notify WebSocket clients of new sessions */
+  onSessionCreated?: (sessionId: string, sessionPath: string, runtime: string) => void;
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps) {
@@ -46,6 +48,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     multiSessionManager,
     sessionRegistry,
     internalClientId,
+    onSessionCreated,
   } = deps;
 
   async function handleCreateSession(
@@ -77,6 +80,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             cwd,
             createdAt: new Date().toISOString(),
           } satisfies CreateSessionResponse);
+          onSessionCreated?.(sessionId, sessionId, 'claude');
           return;
         }
 
@@ -98,6 +102,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             cwd,
             createdAt: new Date().toISOString(),
           } satisfies CreateSessionResponse);
+          onSessionCreated?.(sessionId, sessionId, 'opencode');
           return;
         }
 
@@ -123,6 +128,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             cwd,
             createdAt: new Date().toISOString(),
           } satisfies CreateSessionResponse);
+          onSessionCreated?.(status.sessionId, status.sessionPath, 'pi');
           return;
         }
       }
