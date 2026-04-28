@@ -28,7 +28,10 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
   const recentDropdownRef = useRef<HTMLDivElement>(null);
 
   const { recentFolders, addRecentFolder, getRecentFolders } = useUIStore();
-  const { claudeAvailable, claudeAuthError, opencodeAvailable, opencodeAuthError } = useSessionStore();
+  const claudeAvailable = useSessionStore(s => s.claudeAvailable);
+  const claudeAuthError = useSessionStore(s => s.claudeAuthError);
+  const opencodeAvailable = useSessionStore(s => s.opencodeAvailable);
+  const opencodeAuthError = useSessionStore(s => s.opencodeAuthError);
   const topRecentFolders = getRecentFolders(8);
 
   const fetchDirectories = async (path: string) => {

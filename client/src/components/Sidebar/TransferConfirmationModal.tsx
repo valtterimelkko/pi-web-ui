@@ -85,7 +85,10 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
   const setNewTargetCwd = useTransferStore((s) => s.setNewTargetCwd);
   const createdSessionId = useTransferStore((s) => s.createdSessionId);
 
-  const { claudeAvailable, claudeAuthError, opencodeAvailable, opencodeAuthError } = useSessionStore();
+  const claudeAvailable = useSessionStore(s => s.claudeAvailable);
+  const claudeAuthError = useSessionStore(s => s.claudeAuthError);
+  const opencodeAvailable = useSessionStore(s => s.opencodeAvailable);
+  const opencodeAuthError = useSessionStore(s => s.opencodeAuthError);
   const localSwitchSession = useSessionStore((s) => s.switchSession);
   const { switchSession: wsSwitchSession } = useWebSocket();
   const recentFolders = useUIStore((s) => s.recentFolders);

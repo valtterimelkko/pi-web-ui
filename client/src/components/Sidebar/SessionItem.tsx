@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Trash2, Edit2, Check, X, Archive, ArchiveRestore, Download, FileText, FileJson, Code, Loader2, Pin, PinOff, GripVertical } from 'lucide-react';
 import type { Session } from '../../store/sessionStore';
 import { useSessionStore } from '../../store';
@@ -22,7 +22,7 @@ interface ContextMenuState {
   y: number;
 }
 
-export function SessionItem({ session, isActive, isArchived, isDropTarget, onDrop }: SessionItemProps) {
+export const SessionItem = React.memo(function SessionItem({ session, isActive, isArchived, isDropTarget, onDrop }: SessionItemProps) {
   const { switchSession, pinSession, unpinSession } = useWebSocket();
   const archiveSession = useSessionStore(state => state.archiveSession);
   const unarchiveSession = useSessionStore(state => state.unarchiveSession);
@@ -647,4 +647,4 @@ export function SessionItem({ session, isActive, isArchived, isDropTarget, onDro
       )}
     </>
   );
-}
+});

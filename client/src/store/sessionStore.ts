@@ -1,14 +1,80 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import { useUIStore } from './uiStore';
 import { getPreferences, patchPreferences } from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
 
 import { useTransferStore } from './transferStore';
 
+// ============================================================================
+// Throttled localStorage for Zustand persist
+// ============================================================================
+// Zustand's persist middleware writes to storage on EVERY set() call.
+// During streaming, this can mean 50-200+ localStorage writes per second
+// which causes blocking I/O on mobile devices (10-50ms each).
+//
+// This wrapper debounces writes: state changes are buffered and flushed
+// at most once per second. On app hide (visibilitychange), pending writes
+// are flushed immediately so no state is lost.
+// ============================================================================
+
+const STORAGE_KEY = 'pi-web-ui-session';
+
+let throttleWriteTimer: ReturnType<typeof setTimeout> | null = null;
+let throttlePendingValue: string | null = null;
+
+// Flush on page hide so no state is lost
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && throttlePendingValue !== null && throttleWriteTimer !== null) {
+      clearTimeout(throttleWriteTimer);
+      throttleWriteTimer = null;
+      try {
+        localStorage.setItem(STORAGE_KEY, throttlePendingValue);
+      } catch { /* quota exceeded — silently ignore */ }
+      throttlePendingValue = null;
+    }
+  });
+}
+
+const throttledStorage = {
+  getItem: (name: string): string | null => {
+    try {
+      return localStorage.getItem(name);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (name: string, value: string): void => {
+    // Only write if value actually changed
+    if (value === throttlePendingValue) return;
+    throttlePendingValue = value;
+
+    if (throttleWriteTimer !== null) {
+      clearTimeout(throttleWriteTimer);
+    }
+    throttleWriteTimer = setTimeout(() => {
+      throttleWriteTimer = null;
+      try {
+        localStorage.setItem(name, value);
+      } catch { /* quota exceeded — silently ignore */ }
+      throttlePendingValue = null;
+    }, 1000);
+  },
+  removeItem: (name: string): void => {
+    if (throttleWriteTimer !== null) {
+      clearTimeout(throttleWriteTimer);
+      throttleWriteTimer = null;
+    }
+    throttlePendingValue = null;
+    localStorage.removeItem(name);
+  },
+};
 
 // Maximum sessions to keep in memory (LRU cache limit)
-const MAX_CACHED_SESSIONS = 5;
+// Kept low (2) to reduce memory pressure on mobile devices.
+// Holds current session + one recently-accessed session for fast switching.
+const MAX_CACHED_SESSIONS = 2;
 
 // Track the current message ID per session for the multi-session event path.
 // Raw Pi SDK events forwarded by multi-session-manager don't include message IDs,
@@ -2023,13 +2089,17 @@ export const useSessionStore = create<SessionState>()(
       },
     }),
     {
-      name: 'pi-web-ui-session',
+      name: STORAGE_KEY,
+      storage: createJSONStorage(() => throttledStorage),
       partialize: (state) => ({ 
         sessions: state.sessions,
         archivedSessionPaths: state.archivedSessionPaths,
         pinnedSessionPaths: state.pinnedSessionPaths,
         sessionDisplayNames: state.sessionDisplayNames,
-        sessionCacheMeta: state.sessionCacheMeta,
+        // Note: sessionCacheMeta is intentionally NOT persisted.
+        // It changes on every message event (messageCount, sizeBytes) and
+        // would cause excessive localStorage writes during streaming.
+        // It is rebuilt from cache on app startup — lossless.
       }),
     }
   )

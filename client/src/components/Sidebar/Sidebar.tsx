@@ -12,7 +12,10 @@ import { SessionItem } from './SessionItem';
 import { TokenUsageDashboard } from '../Usage';
 
 export function Sidebar() {
-  const { sessions, currentSessionId, archivedSessionPaths, sessionDisplayNames } = useSessionStore();
+  const sessions = useSessionStore(s => s.sessions);
+  const currentSessionId = useSessionStore(s => s.currentSessionId);
+  const archivedSessionPaths = useSessionStore(s => s.archivedSessionPaths);
+  const sessionDisplayNames = useSessionStore(s => s.sessionDisplayNames);
   const { sidebarOpen, toggleSidebar } = useChatStore();
   const { createNewSession, getSessions } = useWebSocket();
   const { theme, toggleTheme } = useUIStore();

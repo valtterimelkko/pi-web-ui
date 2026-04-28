@@ -5,7 +5,7 @@
 ## Frontend (`client/src/`)
 
 ### State
-- `store/sessionStore.ts` — Main frontend session state: messages, streaming, switching, cache, pinning, archiving, worker status, Claude/OpenCode availability.
+- `store/sessionStore.ts` — Main frontend session state: messages, streaming, switching, LRU cache (2 sessions), pinning, archiving, worker status, Claude/OpenCode availability. Uses throttled persist storage and individual Zustand selectors for mobile runtime performance.
 - `store/transferStore.ts` — Session context transfer UI state.
 - `store/uiStore.ts` — UI chrome state (modals, toasts, navigation).
 - `store/chatStore.ts` — Chat input/draft state.

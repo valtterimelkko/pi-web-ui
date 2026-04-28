@@ -76,8 +76,14 @@ WebSocket upgrades are rejected at the origin check before authentication is eve
 
 ## Frontend
 
-### Session cache LRU eviction is 5 sessions
-`MAX_CACHED_SESSIONS = 5`. Switching between many sessions causes cache eviction. If messages appear to disappear when switching back, they are being re-fetched from the server replay path.
+### Session cache LRU eviction (2 sessions)
+`MAX_CACHED_SESSIONS = 2` (reduced from 5 for mobile CPU/memory optimization). Holds current + one recently-accessed session. Switching between many sessions causes cache eviction — if messages appear to disappear when switching back, they are being re-fetched from the server replay path.
+
+### Zustand persist is throttled
+`sessionStore.ts` uses a debounced `localStorage` wrapper: writes are batched to at most once per second instead of on every `set()` call. This prevents streaming from causing 50-200+ blocking I/O writes per second. On tab hide, pending writes are flushed immediately.
+
+### Zustand selectors prevent over-render
+Heavy components (Sidebar, TransferConfirmationModal, NewSessionModal) subscribe via individual Zustand selectors, not the entire store. If you add a new component to the session store, use `useSessionStore(s => s.specificField)` instead of destructuring `useSessionStore()`.
 
 ### `agent_end` is the frontend's streaming unlock signal
 The frontend input box stays disabled from `agent_start` until `agent_end`. If your runtime adapter forgets to emit `agent_end`, the UI appears frozen even though the backend is idle.
