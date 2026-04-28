@@ -91,6 +91,9 @@ export class MultiSessionManager {
   private clientSubscriptions: Map<string, Set<string>> = new Map(); // clientId -> Set<sessionPath>
   private clientViewingSession: Map<string, string> = new Map(); // clientId -> sessionPath
   private webUIContextProvider?: WebUIContextProvider;
+
+  // Internal API event observers (sessionPath -> callback)
+  private apiObservers: Map<string, Set<(event: unknown) => void>> = new Map();
   
   // Configuration
   private cleanupIntervalMs: number;
@@ -638,6 +641,68 @@ export class MultiSessionManager {
   }
 
   /**
+   * Register an API observer for a specific session.
+   * Internal API consumers use this to receive events without a WebSocket.
+   * Multiple observers can be registered per session.
+   */
+  addApiObserver(sessionPath: string, callback: (event: unknown) => void): void {
+    if (!this.apiObservers.has(sessionPath)) {
+      this.apiObservers.set(sessionPath, new Set());
+    }
+    this.apiObservers.get(sessionPath)!.add(callback);
+  }
+
+  /**
+   * Remove a previously registered API observer.
+   */
+  removeApiObserver(sessionPath: string, callback: (event: unknown) => void): void {
+    const observers = this.apiObservers.get(sessionPath);
+    if (observers) {
+      observers.delete(callback);
+      if (observers.size === 0) {
+        this.apiObservers.delete(sessionPath);
+      }
+    }
+  }
+
+  /**
+   * Normalize a raw Pi SDK event to the NormalizedEvent shape
+   * so the internal API sees the same format as Claude/OpenCode events.
+   */
+  private normalizeEventForApi(event: Record<string, unknown>): Record<string, unknown> {
+    // If already looks like NormalizedEvent (has data + timestamp), return as-is
+    if (event.data !== undefined && event.timestamp !== undefined) {
+      return event;
+    }
+
+    const normalized: Record<string, unknown> = {
+      type: event.type,
+      timestamp: Date.now(),
+      data: {},
+    };
+
+    // Copy known top-level Pi SDK fields into data
+    const dataFields = [
+      'message', 'toolCallId', 'toolName', 'args', 'result', 'isError',
+      'partialResult', 'step', 'turnIndex', 'sessionId', 'errorMessage',
+      'provider', 'model', 'usage', 'reason', 'aborted', 'willRetry',
+      'attempt', 'maxAttempts', 'delayMs', 'extensionPath', 'id', 'role',
+    ];
+    for (const field of dataFields) {
+      if (field in event) {
+        (normalized.data as Record<string, unknown>)[field] = event[field];
+      }
+    }
+
+    // Copy assistantMessageEvent for message_update events
+    if (event.assistantMessageEvent) {
+      (normalized.data as Record<string, unknown>).assistantMessageEvent = event.assistantMessageEvent;
+    }
+
+    return normalized;
+  }
+
+  /**
    * Get the status of a session.
    */
   getSessionStatus(sessionPath: string): SessionStatusInfo | undefined {
@@ -853,6 +918,21 @@ export class MultiSessionManager {
 
     // Broadcast the wrapped event to all subscribers
     this.broadcastToSubscribers(sessionPath, sessionEvent);
+
+    // Forward the raw event to internal API observers
+    // Normalize Pi SDK events to the same shape as NormalizedEvent
+    // (Claude/OpenCode already emit NormalizedEvent natively)
+    const observers = this.apiObservers.get(sessionPath);
+    if (observers && observers.size > 0) {
+      const normalized = this.normalizeEventForApi(event);
+      for (const observer of observers) {
+        try {
+          observer(normalized);
+        } catch {
+          // Non-fatal: don't kill the session over an observer error
+        }
+      }
+    }
   }
 
   /**

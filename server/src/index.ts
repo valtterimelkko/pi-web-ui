@@ -7,7 +7,7 @@ import { createApp } from './app.js';
 import { config } from './config.js';
 import { WebSocketConnectionManager } from './websocket/index.js';
 import { handleTerminalWebSocket } from './terminal/terminal-websocket.js';
-import { initializePiService, startSessionWatcher, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
+import { initializePiService, startSessionWatcher, getPiService, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
 import { SessionCleanupService } from './session-cleanup.js';
 import { getSessionRegistry } from './session-registry.js';
 
@@ -17,6 +17,7 @@ const server = createServer(app);
 // Initialize WebSocket connection manager
 let wsManager: WebSocketConnectionManager | null = null;
 let sessionCleanup: SessionCleanupService | null = null;
+let internalApiServer: import('./internal-api/index.js').InternalApiServer | null = null;
 
 // Initialize Pi service and WebSocket manager
 async function initialize(): Promise<void> {
@@ -118,6 +119,30 @@ async function initialize(): Promise<void> {
       opencodeService: wsManager.getOpenCodeService(),
     });
     sessionCleanup.start();
+
+    // Start internal API server (local backend API for other applications)
+    if (config.internalApiEnabled) {
+      try {
+        const { InternalApiServer } = await import('./internal-api/index.js');
+        internalApiServer = new InternalApiServer({
+          config: {
+            socketPath: config.internalApiSocketPath,
+            apiKey: config.internalApiKey || undefined,
+            tokenPath: config.internalApiTokenPath,
+            enabled: config.internalApiEnabled,
+          },
+          claudeService: wsManager.getClaudeService(),
+          opencodeService: wsManager.getOpenCodeService(),
+          multiSessionManager: wsManager.getMultiSessionManager(),
+          sessionRegistry: getSessionRegistry(config.sessionRegistryPath),
+          piService: getPiService(),
+        });
+        await internalApiServer.start();
+        console.log(`[InternalAPI] Started on Unix socket: ${config.internalApiSocketPath}`);
+      } catch (err) {
+        console.error('[InternalAPI] Failed to start internal API:', err instanceof Error ? err.message : String(err));
+      }
+    }
   } catch (error) {
     console.error('Failed to initialize:', error);
     process.exit(1);
@@ -150,6 +175,10 @@ async function shutdown(): Promise<void> {
 
   if (sessionCleanup) {
     sessionCleanup.stop();
+  }
+
+  if (internalApiServer) {
+    await internalApiServer.stop();
   }
 
   server.close(() => {
