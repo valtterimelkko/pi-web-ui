@@ -109,14 +109,18 @@ export function collectAnswerEvent(collector: EventCollector, event: NormalizedE
   switch (event.type) {
     case 'message_update': {
       const msg = data?.assistantMessageEvent as Record<string, unknown> | undefined;
-      const content = msg?.content as Array<{ type: string; text?: string; thinking?: string }> | undefined;
+      if (!msg) break;
+
+      // Handle both content format (Pi SDK) and text_delta format (Claude Direct/OpenCode)
+      const content = msg.content as Array<{ type: string; text?: string; thinking?: string }> | undefined;
       if (content) {
         for (const block of content) {
-          // Skip thinking blocks and tool blocks
           if (block.type === 'text' && block.text) {
             collector.textParts.push(block.text);
           }
         }
+      } else if (msg.type === 'text_delta' && typeof msg.delta === 'string') {
+        collector.textParts.push(msg.delta);
       }
       break;
     }
@@ -170,7 +174,10 @@ export function writeTaskEvent(write: SSEWriter, event: NormalizedEvent): void {
     }
     case 'message_update': {
       const msg = data?.assistantMessageEvent as Record<string, unknown> | undefined;
-      const content = msg?.content as Array<{ type: string; text?: string; thinking?: string }> | undefined;
+      if (!msg) break;
+
+      // Handle both content format (Pi SDK) and text_delta format (Claude Direct/OpenCode)
+      const content = msg.content as Array<{ type: string; text?: string; thinking?: string }> | undefined;
       if (content) {
         for (const block of content) {
           if (block.type === 'text' && block.text) {
@@ -182,6 +189,12 @@ export function writeTaskEvent(write: SSEWriter, event: NormalizedEvent): void {
           }
           // Skip thinking blocks even in tasks mode
         }
+      } else if (msg.type === 'text_delta' && typeof msg.delta === 'string') {
+        write('message_update', {
+          type: 'message_update',
+          message: { id: data?.id },
+          text: msg.delta,
+        });
       }
       break;
     }

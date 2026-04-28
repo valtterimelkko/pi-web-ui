@@ -429,6 +429,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   /**
    * Execute a prompt on the appropriate runtime, streaming events.
+   * Returns a promise that resolves when the turn completes.
    */
   async function executePrompt(
     sessionId: string,
@@ -439,14 +440,31 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   ): Promise<void> {
     switch (runtime) {
       case 'claude': {
-        // For Claude, we use the native callback pattern
-        await claudeService.sendPrompt(sessionId, message, onEvent, onComplete);
-        break;
+        // Claude sendPrompt resolves when process spawns, not when it finishes.
+        // We need to wrap it to wait for onComplete.
+        return new Promise<void>((resolve) => {
+          const wrappedComplete = (error?: Error) => {
+            onComplete(error);
+            resolve();
+          };
+          claudeService.sendPrompt(sessionId, message, onEvent, wrappedComplete).catch((err) => {
+            onComplete(err instanceof Error ? err : new Error(String(err)));
+            resolve();
+          });
+        });
       }
 
       case 'opencode': {
-        await opencodeService.sendPrompt(sessionId, message, onEvent, onComplete);
-        break;
+        return new Promise<void>((resolve) => {
+          const wrappedComplete = (error?: Error) => {
+            onComplete(error);
+            resolve();
+          };
+          opencodeService.sendPrompt(sessionId, message, onEvent, wrappedComplete).catch((err) => {
+            onComplete(err instanceof Error ? err : new Error(String(err)));
+            resolve();
+          });
+        });
       }
 
       case 'pi':

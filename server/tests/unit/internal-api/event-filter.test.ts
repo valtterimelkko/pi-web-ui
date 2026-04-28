@@ -103,6 +103,20 @@ describe('collectAnswerEvent (verbosity=answers)', () => {
     expect(collector.complete).toBe(false);
   });
 
+  it('collects text from text_delta format (Claude Direct/OpenCode)', () => {
+    const collector = createEventCollector();
+    const event = makeEvent('message_update', {
+      id: 'msg_1',
+      assistantMessageEvent: {
+        type: 'text_delta',
+        delta: 'The capital is Paris.',
+      },
+    });
+
+    collectAnswerEvent(collector, event);
+    expect(collector.textParts).toEqual(['The capital is Paris.']);
+  });
+
   it('joins multiple text parts in order', () => {
     const collector = createEventCollector();
 
@@ -161,6 +175,22 @@ describe('writeTaskEvent (verbosity=tasks)', () => {
       id: 'msg_1',
       assistantMessageEvent: {
         content: [{ type: 'text', text: 'Here is the result.' }],
+      },
+    }));
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('message_update');
+    expect((events[0].data as Record<string, unknown>).text).toBe('Here is the result.');
+  });
+
+  it('emits text from text_delta format (Claude Direct/OpenCode)', () => {
+    const { events, writer } = captureSSE();
+
+    writeTaskEvent(writer, makeEvent('message_update', {
+      id: 'msg_1',
+      assistantMessageEvent: {
+        type: 'text_delta',
+        delta: 'Here is the result.',
       },
     }));
 
