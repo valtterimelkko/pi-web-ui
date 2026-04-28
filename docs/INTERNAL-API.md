@@ -7,12 +7,61 @@
 > Do NOT read the rest of the Pi Web UI documentation unless you need to
 > understand the internal implementation.
 
-## Overview
+## What is Pi Web UI?
 
-The Internal API exposes all three agent runtimes (Pi SDK, Claude Direct,
-OpenCode Direct) through a single HTTP interface. Sessions created via this
-API appear in the web UI sidebar and vice versa — they share the same
-underlying session registry.
+Pi Web UI is a custom-built browser interface around **three different AI
+coding-agent runtimes**. It provides persistent chat sessions with real-time
+streaming, tool-execution rendering, session history, and runtime management —
+all behind a single unified sidebar.
+
+Under the hood, each runtime slot exists for a different reason:
+
+### The Three Runtimes
+
+| Runtime | What it uses | Why it exists |
+|---|---|---|
+| **Pi SDK** | [Pi Coding Agent](https://github.com/mariozechner/pi-coding-agent) via its SDK | The native path. When models are available through the Pi model registry and you want extensions, custom tools, and the full Pi experience. |
+| **Claude Direct** | `claude -p` subprocess (Claude Code CLI) | Claude's monthly subscription does not allow external coding-agent harnesses to use Claude via the Anthropic API — Claude Code must be the agent environment. So Pi Web UI spawns Claude Code directly via its CLI, normalizes its NDJSON output into the same event model the UI understands, and owns the persistence layer so sessions survive restarts. |
+| **OpenCode Direct** | `opencode serve` HTTP/SSE backend | Z.AI's GLM models (via the coding-plan provider) currently recognise OpenCode as a valid coding-agent harness but not Pi. Rather than bypass this, Pi Web UI integrates with the OpenCode server backend, adapting OpenCode SSE events into the same common event model. The OpenCode backend owns transcript storage; Pi Web UI stores registry metadata and replay transforms. |
+
+All three runtimes are surfaced through a **unified session list** so the
+runtime difference is transparent at the UI level — you create sessions,
+switch between them, and see tool cards and message history the same way
+regardless of backend.
+
+### What the Web UI Offers
+
+- **Create sessions** on any of the three runtimes with model selection
+- **Real-time streaming chat** with message deltas, tool execution cards,
+  thinking blocks, and agent state indicators
+- **Session persistence** — sessions survive browser refresh, reconnect,
+  and (for Claude and OpenCode) server restart
+- **Session pinning** — protect long-running sessions from idle/timeout eviction
+- **History replay** — previously sent messages and tool calls are restored
+  when switching sessions
+- **Model switching** — change models mid-session (runtime-dependent)
+- **Session export** — export session transcripts to HTML
+- **Session context transfer** — transfer the visible transcript of one session
+  into another (including across runtimes)
+
+### What the Internal API Adds
+
+The Internal API takes all of the above backend functionality and exposes it
+as a **local-only HTTP API** over a Unix domain socket. Other applications
+running on the same machine can:
+
+- **Create, list, and manage sessions** across all three runtimes
+- **Send prompts** and receive answers (final text or full streaming events)
+- **Discover available models** — always live, no restart needed
+- **Share sessions with the web UI** — sessions created via the API appear in
+  the browser sidebar in real time, and web UI sessions can be queried via
+  the API
+
+It does NOT duplicate the backend. It wraps the existing `ClaudeService`,
+`OpenCodeService`, and `MultiSessionManager` objects — the same ones the
+web UI uses.
+
+## Overview
 
 ### Key Properties
 
