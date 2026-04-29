@@ -4,7 +4,7 @@ import { useNavigationStore } from '../../store/navigationStore';
 import { useUIStore } from '../../store/uiStore';
 import { VirtualizedMessageList, type VirtualizedMessageListHandle } from './VirtualizedMessageList';
 import { MessageInput } from './MessageInput';
-import { DictationButton } from './DictationButton';
+
 import { TreeView, type TreeEntry } from '../Tree';
 import { NewSessionModal } from '../Session';
 import { ArrowDown } from 'lucide-react';
@@ -88,17 +88,6 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
     <div className="flex flex-col h-full bg-white" data-testid="chat-interface">
       {/* Main content area */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
-        {/* Dictation button - upper right */}
-        {currentSessionId && (
-          <div className="absolute top-2 right-3 z-20">
-            <DictationButton
-              state={dictation.state}
-              onToggle={dictation.toggle}
-              errorMessage={dictation.errorMessage}
-            />
-          </div>
-        )}
-
         {/* Message List - Virtualized for performance */}
         <VirtualizedMessageList
           ref={listRef}
@@ -124,7 +113,13 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         {/* Message Input */}
         <div className={`bg-white pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[70px]' : ''}`}>
           <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
-            <MessageInput disabled={!currentSessionId || isLoading} onOpenSettings={onOpenSettings} />
+            <MessageInput
+              disabled={!currentSessionId || isLoading}
+              onOpenSettings={onOpenSettings}
+              dictationState={dictation.state}
+              onDictationToggle={dictation.toggle}
+              dictationErrorMessage={dictation.errorMessage}
+            />
           </div>
         </div>
       </main>

@@ -1,6 +1,6 @@
 import { Mic, MicOff, Loader2 } from 'lucide-react';
 
-type DictationButtonState = 'idle' | 'recording' | 'processing' | 'error';
+export type DictationButtonState = 'idle' | 'recording' | 'processing' | 'error';
 
 interface DictationButtonProps {
   state: DictationButtonState;

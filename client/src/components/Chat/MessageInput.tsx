@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback, useEffect, memo } from 'react';
 import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles, Map, Wrench } from 'lucide-react';
+import { DictationButton, type DictationButtonState } from './DictationButton';
 import { useChatStore, useSessionStore, useDraftStore } from '../../store';
 import { useUIStore } from '../../store/uiStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -11,9 +12,12 @@ import { uploadFile } from '../../lib/api';
 interface MessageInputProps {
   disabled?: boolean;
   onOpenSettings?: () => void;
+  dictationState?: DictationButtonState;
+  onDictationToggle?: () => void;
+  dictationErrorMessage?: string;
 }
 
-export const MessageInput = memo(function MessageInput({ disabled, onOpenSettings }: MessageInputProps) {
+export const MessageInput = memo(function MessageInput({ disabled, onOpenSettings, dictationState, onDictationToggle, dictationErrorMessage }: MessageInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -479,6 +483,15 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
               </button>
             </div>
           </div>
+
+          {/* Dictation button */}
+          {onDictationToggle && (
+            <DictationButton
+              state={dictationState ?? 'idle'}
+              onToggle={onDictationToggle}
+              errorMessage={dictationErrorMessage}
+            />
+          )}
 
           {/* Send/Stop button */}
           {isStreaming ? (
