@@ -1,13 +1,15 @@
-import { useEffect, useState, useRef, useMemo } from 'react';
-import { useSessionStore } from '../../store';
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { useSessionStore, useDraftStore } from '../../store';
 import { useNavigationStore } from '../../store/navigationStore';
 import { useUIStore } from '../../store/uiStore';
 import { VirtualizedMessageList, type VirtualizedMessageListHandle } from './VirtualizedMessageList';
 import { MessageInput } from './MessageInput';
+import { DictationButton } from './DictationButton';
 import { TreeView, type TreeEntry } from '../Tree';
 import { NewSessionModal } from '../Session';
 import { ArrowDown } from 'lucide-react';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { useDictation } from '../../hooks/useDictation';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
 import { messagesToLiveMessages } from '../../lib/messageAdapter';
 
@@ -31,6 +33,17 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const [showScrollButton, setShowScrollButton] = useState(false);
   const listRef = useRef<VirtualizedMessageListHandle>(null);
   const { createNewSession } = useWebSocket();
+  const setDraft = useDraftStore((s) => s.setDraft);
+
+  const handleDictationTranscript = useCallback((text: string) => {
+    if (currentSessionId) {
+      const existing = useDraftStore.getState().getDraft(currentSessionId);
+      const separator = existing ? '\n' : '';
+      setDraft(currentSessionId, existing + separator + text);
+    }
+  }, [currentSessionId, setDraft]);
+
+  const dictation = useDictation(handleDictationTranscript);
 
   // Get worker status for current session
   const workerStatus = currentSessionId ? getWorkerStatus(currentSessionId) : undefined;
@@ -75,6 +88,17 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
     <div className="flex flex-col h-full bg-white" data-testid="chat-interface">
       {/* Main content area */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
+        {/* Dictation button - upper right */}
+        {currentSessionId && (
+          <div className="absolute top-2 right-3 z-20">
+            <DictationButton
+              state={dictation.state}
+              onToggle={dictation.toggle}
+              errorMessage={dictation.errorMessage}
+            />
+          </div>
+        )}
+
         {/* Message List - Virtualized for performance */}
         <VirtualizedMessageList
           ref={listRef}

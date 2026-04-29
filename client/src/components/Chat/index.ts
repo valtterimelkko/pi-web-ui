@@ -6,3 +6,4 @@ export { MessageInput } from './MessageInput';
 export { StreamingText } from './StreamingText';
 export { ThinkingBlock } from './ThinkingBlock';
 export { SlashPalette } from './SlashPalette';
+export { DictationButton } from './DictationButton';

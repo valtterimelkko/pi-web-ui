@@ -16,6 +16,7 @@ import configRoutes from './routes/config.js';
 import usageRoutes from './routes/usage.js';
 import { gitRouter } from './routes/git.js';
 import { terminalRouter } from './routes/terminal.js';
+import dictationRoutes from './routes/dictation.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -44,6 +45,7 @@ export function createApp(): express.Application {
 
   // Body parsing
   app.use(express.json());
+  app.use(express.raw({ type: 'application/octet-stream', limit: '50mb' }));
 
   // Rate limiting
   app.use(rateLimit({
@@ -93,6 +95,9 @@ export function createApp(): express.Application {
 
   // Terminal management routes
   app.use('/api/terminal', terminalRouter);
+
+  // Dictation (voice-to-text) routes
+  app.use('/api/dictation', dictationRoutes);
 
   // Serve static files from client/dist in production
   if (config.nodeEnv === 'production') {

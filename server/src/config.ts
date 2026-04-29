@@ -36,6 +36,7 @@ export interface ServerConfig {
   internalApiSocketPath: string;
   internalApiKey: string;
   internalApiTokenPath: string;
+  dictationOpenaiApiKey: string;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -86,4 +87,5 @@ export const config: ServerConfig = {
   internalApiSocketPath: process.env.INTERNAL_API_SOCKET_PATH || path.join(os.homedir(), '.pi-web-ui', 'internal-api.sock'),
   internalApiKey: process.env.INTERNAL_API_KEY || '',
   internalApiTokenPath: process.env.INTERNAL_API_TOKEN_PATH || path.join(os.homedir(), '.pi-web-ui', 'internal-api-token'),
+  dictationOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',
 };
