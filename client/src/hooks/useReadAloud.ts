@@ -27,7 +27,7 @@ function getAudioContext(): AudioContext {
   return audioCtx;
 }
 
-function stopCurrentAudio() {
+export function stopCurrentAudio() {
   if (currentSource) {
     try {
       currentSource.stop();
