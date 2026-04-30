@@ -4,10 +4,10 @@ import { DriveModeModelPicker } from '../../../../src/components/DriveMode/Drive
 
 vi.mock('../../../../src/store/driveModeStore', () => ({
   DRIVE_MODE_MODELS: [
-    { id: 'kimi-for-coding', displayName: 'Kimi for Coding', sdkType: 'pi' },
+    { id: 'kimi-coding/kimi-for-coding', displayName: 'Kimi for Coding', sdkType: 'pi' },
     { id: 'zai-coding-plan/glm-5.1', displayName: 'GLM-5.1', sdkType: 'opencode' },
-    { id: 'codex/gpt-5.4', displayName: 'Codex / GPT-5.4', sdkType: 'pi' },
-    { id: 'codex/gpt-5.5', displayName: 'Codex / GPT-5.5', sdkType: 'pi' },
+    { id: 'github-copilot/gpt-5.4', displayName: 'Codex / GPT-5.4', sdkType: 'pi' },
+    { id: 'github-copilot/gpt-5.5', displayName: 'Codex / GPT-5.5', sdkType: 'pi' },
   ],
 }));
 
@@ -45,7 +45,7 @@ describe('DriveModeModelPicker', () => {
     render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
     fireEvent.click(screen.getByText('Kimi for Coding'));
     expect(mockOnSelect).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'kimi-for-coding', displayName: 'Kimi for Coding', sdkType: 'pi' })
+      expect.objectContaining({ id: 'kimi-coding/kimi-for-coding', displayName: 'Kimi for Coding', sdkType: 'pi' })
     );
   });
 

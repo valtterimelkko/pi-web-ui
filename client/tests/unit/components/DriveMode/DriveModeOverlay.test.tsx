@@ -33,7 +33,7 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
     subscribe: vi.fn(),
   }),
   DRIVE_MODE_MODELS: [
-    { id: 'kimi-for-coding', displayName: 'Kimi for Coding', sdkType: 'pi' },
+    { id: 'kimi-coding/kimi-for-coding', displayName: 'Kimi for Coding', sdkType: 'pi' },
     { id: 'zai-coding-plan/glm-5.1', displayName: 'GLM-5.1', sdkType: 'opencode' },
   ],
 }));
@@ -244,9 +244,9 @@ describe('DriveModeOverlay', () => {
     });
 
     driveModeStoreState.phase = 'folder-pick';
-    driveModeStoreState.selectedModelId = 'kimi-for-coding';
+    driveModeStoreState.selectedModelId = 'kimi-coding/kimi-for-coding';
     mockDriveModeStoreState.phase = 'folder-pick';
-    mockDriveModeStoreState.selectedModelId = 'kimi-for-coding';
+    mockDriveModeStoreState.selectedModelId = 'kimi-coding/kimi-for-coding';
 
     render(<DriveModeOverlay />);
     fireEvent.click(screen.getByText('Select Folder'));

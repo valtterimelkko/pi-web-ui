@@ -96,7 +96,8 @@ export function DriveModeOverlay() {
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
   const sessionDisplayName = activeSession?.name || activeSession?.firstMessage?.slice(0, 50) || 'New Session';
-  const modelName = activeSession?.model || currentModel || 'Default model';
+  const selectedModel = DRIVE_MODE_MODELS.find(m => m.id === selectedModelId);
+  const modelName = selectedModel?.displayName || activeSession?.model || currentModel || 'Default model';
 
   return (
     <div className="fixed inset-0 z-50 bg-white dark:bg-gray-950 flex flex-col overflow-hidden">
