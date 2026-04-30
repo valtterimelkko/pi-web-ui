@@ -158,7 +158,12 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
   const ActionButtons = ({ position }: { position: 'top' | 'bottom' }) => {
     const buttons = (
       <>
-        <ReadAloudButton state={readAloud.state} onClick={handleReadAloud} />
+        <ReadAloudButton
+          state={readAloud.state}
+          speedEnabled={readAloud.speedEnabled}
+          onClick={handleReadAloud}
+          onToggleSpeed={readAloud.toggleSpeed}
+        />
         <CopyButton />
       </>
     );
