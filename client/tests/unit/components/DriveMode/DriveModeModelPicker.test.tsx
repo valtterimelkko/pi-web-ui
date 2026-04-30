@@ -41,43 +41,19 @@ describe('DriveModeModelPicker', () => {
     expect(ocBadges.length).toBe(1);
   });
 
-  it('tapping a model selects it (radio behavior)', () => {
+  it('tapping a model immediately calls onSelect', () => {
     render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
     fireEvent.click(screen.getByText('Kimi for Coding'));
-    const createButton = screen.getByText('Next') as HTMLButtonElement;
-    expect(createButton.disabled).toBe(false);
-  });
-
-  it('only one model selected at a time', () => {
-    render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
-    fireEvent.click(screen.getByText('Kimi for Coding'));
-    fireEvent.click(screen.getByText('GLM-5.1'));
-    // After selecting GLM-5.1, clicking Next should call onSelect with GLM-5.1
-    fireEvent.click(screen.getByText('Next'));
     expect(mockOnSelect).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'zai-coding-plan/glm-5.1' })
+      expect.objectContaining({ id: 'kimi-for-coding', displayName: 'Kimi for Coding', sdkType: 'pi' })
     );
   });
 
-  it('"Next" button disabled until model selected', () => {
+  it('tapping a different model calls onSelect with that model', () => {
     render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
-    const createButton = screen.getByText('Next') as HTMLButtonElement;
-    expect(createButton.disabled).toBe(true);
-  });
-
-  it('"Next" enabled after model selected', () => {
-    render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
-    fireEvent.click(screen.getByText('Kimi for Coding'));
-    const createButton = screen.getByText('Next') as HTMLButtonElement;
-    expect(createButton.disabled).toBe(false);
-  });
-
-  it('clicking "Next" calls onSelect with selected model', () => {
-    render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
-    fireEvent.click(screen.getByText('Kimi for Coding'));
-    fireEvent.click(screen.getByText('Next'));
+    fireEvent.click(screen.getByText('GLM-5.1'));
     expect(mockOnSelect).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'kimi-for-coding', displayName: 'Kimi for Coding', sdkType: 'pi' })
+      expect.objectContaining({ id: 'zai-coding-plan/glm-5.1', displayName: 'GLM-5.1', sdkType: 'opencode' })
     );
   });
 
