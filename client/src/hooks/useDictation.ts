@@ -150,5 +150,5 @@ export function useDictation(onTranscript: (text: string) => void) {
     }
   }, [state, startRecording, stopRecording]);
 
-  return { state, errorMessage, toggle };
+  return { state, errorMessage, toggle, startRecording, stopRecording };
 }

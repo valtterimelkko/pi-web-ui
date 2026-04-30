@@ -7,3 +7,4 @@ export { useTerminalStore } from './terminalStore';
 export { useGitStore } from './gitStore';
 export { useFilesStore, type FileEntry } from './filesStore';
 export { useTransferStore } from './transferStore';
+export { useDriveModeStore, type DriveModePhase, type DriveModeModel } from './driveModeStore';
