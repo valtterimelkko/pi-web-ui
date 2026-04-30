@@ -24,7 +24,6 @@ test.describe('Drive Mode', () => {
     const driveModeButton = page.locator('button[aria-label="Enter Drive Mode"]');
     await driveModeButton.click();
 
-    // Should see the entry screen
     await expect(page.locator('text=Pi Drive Mode')).toBeVisible({ timeout: 10000 });
     await expect(page.getByRole('button', { name: 'Start a new session' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Continue an existing session' })).toBeVisible();
@@ -42,16 +41,48 @@ test.describe('Drive Mode', () => {
     await expect(page.locator('text=Codex / GPT-5.5')).toBeVisible();
   });
 
+  test('Model picker → folder picker flow', async ({ page }) => {
+    const driveModeButton = page.locator('button[aria-label="Enter Drive Mode"]');
+    await driveModeButton.click();
+
+    await page.getByRole('button', { name: 'Start a new session' }).click();
+    await expect(page.locator('text=Choose a Model')).toBeVisible({ timeout: 10000 });
+
+    // Select a model
+    await page.locator('text=Kimi for Coding').click();
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    // Should see folder picker
+    await expect(page.locator('text=Choose a Folder')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('Full new session flow creates session and reaches dictate screen', async ({ page }) => {
+    const driveModeButton = page.locator('button[aria-label="Enter Drive Mode"]');
+    await driveModeButton.click();
+
+    await page.getByRole('button', { name: 'Start a new session' }).click();
+    await expect(page.locator('text=Choose a Model')).toBeVisible({ timeout: 10000 });
+
+    // Select Kimi for Coding (Pi SDK)
+    await page.locator('text=Kimi for Coding').click();
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    // Should see folder picker
+    await expect(page.locator('text=Choose a Folder')).toBeVisible({ timeout: 10000 });
+
+    // Use the current folder (/root) by clicking "Select This Folder"
+    await page.getByRole('button', { name: 'Select This Folder' }).click();
+
+    // Should transition to dictate screen
+    await expect(page.locator('text=Tap to speak')).toBeVisible({ timeout: 15000 });
+  });
+
   test('Exit button closes overlay', async ({ page }) => {
     const driveModeButton = page.locator('button[aria-label="Enter Drive Mode"]');
     await driveModeButton.click();
 
     await expect(page.locator('text=Pi Drive Mode')).toBeVisible();
-
-    // Click exit
     await page.locator('text=Exit Drive Mode').click();
-
-    // Overlay should be gone
     await expect(page.locator('text=Pi Drive Mode')).not.toBeVisible({ timeout: 10000 });
   });
 
@@ -60,9 +91,7 @@ test.describe('Drive Mode', () => {
     await driveModeButton.click();
 
     await expect(page.locator('text=Pi Drive Mode')).toBeVisible();
-
     await page.keyboard.press('Escape');
-
     await expect(page.locator('text=Pi Drive Mode')).not.toBeVisible({ timeout: 10000 });
   });
 });
