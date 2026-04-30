@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog, ArrowUp, History, ChevronDown, ChevronUp, Star } from 'lucide-react';
+import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog, ArrowUp, History, ChevronDown, ChevronUp, Star, Mic } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useUIStore } from '../../store/uiStore';
 import { useSessionStore } from '../../store';
@@ -8,6 +8,7 @@ interface NewSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCreateSession: (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode') => void;
+  onOpenDriveMode?: () => void;
 }
 
 interface DirectoryItem {
@@ -15,7 +16,7 @@ interface DirectoryItem {
   path: string;
 }
 
-export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSessionModalProps) {
+export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveMode }: NewSessionModalProps) {
   const [currentPath, setCurrentPath] = useState<string>('/root');
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<DirectoryItem[]>([]);
@@ -385,6 +386,19 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession }: NewSession
             >
               Cancel
             </button>
+            {onOpenDriveMode && (
+              <button
+                onClick={() => {
+                  onClose();
+                  onOpenDriveMode();
+                }}
+                disabled={isCreating}
+                className="px-3 sm:px-4 py-2 border border-blue-500 text-blue-600 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-1.5 text-sm"
+              >
+                <Mic className="w-3.5 h-3.5" />
+                Drive Mode
+              </button>
+            )}
             <button
               onClick={handleSelectAndCreate}
               disabled={isCreating}

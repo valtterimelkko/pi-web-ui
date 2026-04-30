@@ -18,7 +18,7 @@ export function Sidebar() {
   const sessionDisplayNames = useSessionStore(s => s.sessionDisplayNames);
   const { sidebarOpen, toggleSidebar } = useChatStore();
   const { createNewSession, getSessions } = useWebSocket();
-  const { theme, toggleTheme } = useUIStore();
+  const { theme, toggleTheme, openDriveMode } = useUIStore();
   const [filter, setFilter] = useState('');
   const [cwdFilter, setCwdFilter] = useState<string | null>(null);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
@@ -255,6 +255,10 @@ export function Sidebar() {
         isOpen={showNewSessionModal}
         onClose={() => setShowNewSessionModal(false)}
         onCreateSession={handleCreateSession}
+        onOpenDriveMode={() => {
+          setShowNewSessionModal(false);
+          openDriveMode();
+        }}
       />
 
       {/* Token Usage Dashboard */}

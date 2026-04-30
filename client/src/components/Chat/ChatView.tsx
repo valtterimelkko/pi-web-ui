@@ -28,6 +28,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const treeViewOpen = useUIStore((state) => state.treeViewOpen);
   const closeSessionInfo = useUIStore((state) => state.closeSessionInfo);
   const closeTreeView = useUIStore((state) => state.closeTreeView);
+  const openDriveMode = useUIStore((state) => state.openDriveMode);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
@@ -147,6 +148,10 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         isOpen={showNewSessionModal}
         onClose={() => setShowNewSessionModal(false)}
         onCreateSession={handleCreateSession}
+        onOpenDriveMode={() => {
+          setShowNewSessionModal(false);
+          openDriveMode();
+        }}
       />
 
       {/* Session Info Modal */}
