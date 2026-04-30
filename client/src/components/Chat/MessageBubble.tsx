@@ -2,6 +2,8 @@ import React, { useState, memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check, Bot, AlertTriangle } from 'lucide-react';
+import { ReadAloudButton } from './ReadAloudButton';
+import { useReadAloud } from '../../hooks/useReadAloud';
 import type { LiveMessage, ContentPart } from '../../hooks/useSessionStream.js';
 import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
@@ -112,6 +114,8 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
   }, [displayText]);
   const shouldCollapse = isStreaming && !isLast && isCurrentRun && isAssistant && hasVisibleContent && isLongContent && !manuallyExpanded;
 
+  const readAloud = useReadAloud(message.id);
+
   const handleCopy = async () => {
     if (!displayText) return;
     const success = await copyToClipboard(displayText, 'Message copied to clipboard');
@@ -121,7 +125,16 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     }
   };
 
-  const CopyButton = ({ position }: { position: 'top' | 'bottom' }) => (
+  const handleReadAloud = () => {
+    if (!displayText) return;
+    if (readAloud.state === 'playing') {
+      readAloud.stop();
+    } else {
+      void readAloud.play(displayText);
+    }
+  };
+
+  const CopyButton = () => (
     <button
       onClick={handleCopy}
       className={`
@@ -130,7 +143,6 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
           ? 'bg-green-100 text-green-600'
           : 'bg-gray-100 text-gray-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-gray-200 hover:text-gray-700'
         }
-        ${position === 'top' ? 'absolute top-1 right-1' : 'mt-2 ml-auto block'}
       `}
       title={copied ? 'Copied!' : 'Copy message'}
       aria-label={copied ? 'Copied to clipboard' : 'Copy message to clipboard'}
@@ -142,6 +154,29 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
       )}
     </button>
   );
+
+  const ActionButtons = ({ position }: { position: 'top' | 'bottom' }) => {
+    const buttons = (
+      <>
+        <ReadAloudButton state={readAloud.state} onClick={handleReadAloud} />
+        <CopyButton />
+      </>
+    );
+
+    if (position === 'top') {
+      return (
+        <div className="absolute top-1 right-1 flex items-center gap-1">
+          {buttons}
+        </div>
+      );
+    }
+
+    return (
+      <div className="mt-2 ml-auto flex items-center gap-1">
+        {buttons}
+      </div>
+    );
+  };
 
   const formatTime = (timestamp: number): string => {
     return new Date(timestamp).toLocaleTimeString('en-US', {
@@ -245,9 +280,9 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
             }
           `}
         >
-          {/* Copy button - top */}
+          {/* Action buttons - top */}
           {isAssistant && !isStreamingThis && !shouldCollapse && (
-            <CopyButton position="top" />
+            <ActionButtons position="top" />
           )}
 
           {isStreamingThis ? (
@@ -350,9 +385,9 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
                 ▴ Show less
               </button>
             )}
-            {/* Copy button - bottom */}
+            {/* Action buttons - bottom */}
             {isAssistant && !isStreamingThis && !shouldCollapse && (
-              <CopyButton position="bottom" />
+              <ActionButtons position="bottom" />
             )}
             </>
           )}

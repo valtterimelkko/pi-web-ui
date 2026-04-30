@@ -39,26 +39,21 @@ export function optionalAuthMiddleware(req: Request, res: Response, next: NextFu
 
 export function cookieAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   const cookieHeader = req.headers.cookie;
-  
   if (!cookieHeader) {
     res.status(401).json({ error: 'No authentication cookie' });
     return;
   }
-  
-  const match = cookieHeader.match(/(?:^|;\s*)accessToken=([^;]+)/);
+  const match = cookieHeader.match(/(?:^|;)\s*accessToken=([^;]+)/);
   if (!match) {
     res.status(401).json({ error: 'No authentication token in cookie' });
     return;
   }
-  
   const token = match[1];
   const payload = verifyToken(token);
-  
   if (!payload) {
     res.status(401).json({ error: 'Invalid or expired token' });
     return;
   }
-  
   req.user = payload;
   next();
 }

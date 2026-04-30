@@ -17,6 +17,7 @@ import usageRoutes from './routes/usage.js';
 import { gitRouter } from './routes/git.js';
 import { terminalRouter } from './routes/terminal.js';
 import dictationRoutes from './routes/dictation.js';
+import ttsRoutes from './routes/tts.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -98,6 +99,9 @@ export function createApp(): express.Application {
 
   // Dictation (voice-to-text) routes
   app.use('/api/dictation', dictationRoutes);
+
+  // Text-to-speech (read-aloud) routes
+  app.use('/api/tts', ttsRoutes);
 
   // Serve static files from client/dist in production
   if (config.nodeEnv === 'production') {

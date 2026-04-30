@@ -37,6 +37,7 @@ export interface ServerConfig {
   internalApiKey: string;
   internalApiTokenPath: string;
   dictationOpenaiApiKey: string;
+  ttsOpenaiApiKey: string;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -88,4 +89,5 @@ export const config: ServerConfig = {
   internalApiKey: process.env.INTERNAL_API_KEY || '',
   internalApiTokenPath: process.env.INTERNAL_API_TOKEN_PATH || path.join(os.homedir(), '.pi-web-ui', 'internal-api-token'),
   dictationOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',
+  ttsOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.TTS_OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',
 };

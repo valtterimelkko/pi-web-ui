@@ -14,6 +14,15 @@ vi.mock('../../../src/store', () => ({
   },
 }));
 
+// Mock useReadAloud hook
+vi.mock('../../../src/hooks/useReadAloud', () => ({
+  useReadAloud: () => ({
+    state: 'idle',
+    play: vi.fn(),
+    stop: vi.fn(),
+  }),
+}));
+
 describe('MessageBubble', () => {
   const mockUserMessage: LiveMessage = {
     id: '1',
