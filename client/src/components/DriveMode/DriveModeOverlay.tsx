@@ -8,6 +8,7 @@ import { DRIVE_MODE_MODELS } from './driveModeModels';
 import type { DriveModeModel } from '../../store/driveModeStore';
 import { DriveModeEntry } from './DriveModeEntry';
 import { DriveModeModelPicker } from './DriveModeModelPicker';
+import { DriveModeFolderPicker } from './DriveModeFolderPicker';
 import { DriveModeSessionPicker } from './DriveModeSessionPicker';
 import { DriveModeDictate } from './DriveModeDictate';
 
@@ -23,7 +24,7 @@ export function DriveModeOverlay() {
 
   // Session creation flow: watch for new session after createNewSession
   useEffect(() => {
-    if (phase === 'model-pick' && selectedModelId && currentSessionId && currentSessionId !== prevSessionIdRef.current) {
+    if ((phase === 'folder-pick' || phase === 'model-pick') && selectedModelId && currentSessionId && currentSessionId !== prevSessionIdRef.current) {
       // New session was created
       const model = DRIVE_MODE_MODELS.find(m => m.id === selectedModelId);
       if (model) {
@@ -31,6 +32,7 @@ export function DriveModeOverlay() {
       }
       setActiveSession(currentSessionId);
       setPhase('dictate');
+      // Session created successfully
     }
     prevSessionIdRef.current = currentSessionId;
   }, [currentSessionId, selectedModelId, phase, setModel, setActiveSession, setPhase]);
@@ -63,12 +65,19 @@ export function DriveModeOverlay() {
 
   const handleSelectModel = (model: DriveModeModel) => {
     selectModel(model.id);
-    createNewSession(undefined, model.sdkType);
+    setPhase('folder-pick');
+  };
+
+  const handleSelectFolder = (path: string) => {
+    const model = DRIVE_MODE_MODELS.find(m => m.id === selectedModelId);
+    if (!model) return;
+    createNewSession(path, model.sdkType);
     // Set a timeout; if session isn't created in 10s, show error
     setTimeout(() => {
       const store = useDriveModeStore.getState();
-      if (store.phase === 'model-pick' && store.selectedModelId === model.id) {
+      if ((store.phase === 'folder-pick' || store.phase === 'model-pick') && store.selectedModelId === model.id) {
         useUIStore.getState().addToast({ type: 'error', message: 'Failed to create session. Please try again.' });
+        // Creation failed, stay in folder-pick
       }
     }, 10000);
   };
@@ -101,6 +110,12 @@ export function DriveModeOverlay() {
       {phase === 'model-pick' && (
         <DriveModeModelPicker
           onSelect={handleSelectModel}
+          onBack={handleBack}
+        />
+      )}
+      {phase === 'folder-pick' && (
+        <DriveModeFolderPicker
+          onSelectFolder={handleSelectFolder}
           onBack={handleBack}
         />
       )}

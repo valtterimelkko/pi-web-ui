@@ -71,6 +71,15 @@ vi.mock('../../../../src/components/DriveMode/DriveModeModelPicker', () => ({
   ),
 }));
 
+vi.mock('../../../../src/components/DriveMode/DriveModeFolderPicker', () => ({
+  DriveModeFolderPicker: (props: { onSelectFolder: (path: string) => void; onBack: () => void }) => (
+    <div data-testid="drive-mode-folder-picker">
+      <button onClick={() => props.onSelectFolder('/root/project')}>Select Folder</button>
+      <button onClick={props.onBack}>Back</button>
+    </div>
+  ),
+}));
+
 vi.mock('../../../../src/components/DriveMode/DriveModeSessionPicker', () => ({
   DriveModeSessionPicker: (props: { onSelectSession: (sessionId: string, sessionPath: string) => void; onBack: () => void }) => (
     <div data-testid="drive-mode-session-picker">
@@ -178,6 +187,12 @@ describe('DriveModeOverlay', () => {
     expect(screen.getByTestId('drive-mode-model-picker')).toBeInTheDocument();
   });
 
+  it('phase routing: folder-pick → DriveModeFolderPicker', () => {
+    driveModeStoreState.phase = 'folder-pick';
+    render(<DriveModeOverlay />);
+    expect(screen.getByTestId('drive-mode-folder-picker')).toBeInTheDocument();
+  });
+
   it('phase routing: session-pick → DriveModeSessionPicker', () => {
     driveModeStoreState.phase = 'session-pick';
     render(<DriveModeOverlay />);
@@ -228,13 +243,13 @@ describe('DriveModeOverlay', () => {
       return selector ? selector(mockUIStoreState) : mockUIStoreState;
     });
 
-    driveModeStoreState.phase = 'model-pick';
+    driveModeStoreState.phase = 'folder-pick';
     driveModeStoreState.selectedModelId = 'kimi-for-coding';
-    mockDriveModeStoreState.phase = 'model-pick';
+    mockDriveModeStoreState.phase = 'folder-pick';
     mockDriveModeStoreState.selectedModelId = 'kimi-for-coding';
 
     render(<DriveModeOverlay />);
-    fireEvent.click(screen.getByText('Select Model'));
+    fireEvent.click(screen.getByText('Select Folder'));
 
     vi.advanceTimersByTime(10000);
 

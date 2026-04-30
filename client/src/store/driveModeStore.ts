@@ -6,6 +6,7 @@ export { _DRIVE_MODE_MODELS as DRIVE_MODE_MODELS };
 export type DriveModePhase =
   | 'entry'
   | 'model-pick'
+  | 'folder-pick'
   | 'session-pick'
   | 'dictate'
   | 'agent-working'

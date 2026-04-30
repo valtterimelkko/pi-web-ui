@@ -44,7 +44,7 @@ describe('DriveModeModelPicker', () => {
   it('tapping a model selects it (radio behavior)', () => {
     render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
     fireEvent.click(screen.getByText('Kimi for Coding'));
-    const createButton = screen.getByText('Create Session') as HTMLButtonElement;
+    const createButton = screen.getByText('Next') as HTMLButtonElement;
     expect(createButton.disabled).toBe(false);
   });
 
@@ -52,30 +52,30 @@ describe('DriveModeModelPicker', () => {
     render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
     fireEvent.click(screen.getByText('Kimi for Coding'));
     fireEvent.click(screen.getByText('GLM-5.1'));
-    // After selecting GLM-5.1, clicking Create Session should call onSelect with GLM-5.1
-    fireEvent.click(screen.getByText('Create Session'));
+    // After selecting GLM-5.1, clicking Next should call onSelect with GLM-5.1
+    fireEvent.click(screen.getByText('Next'));
     expect(mockOnSelect).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'zai-coding-plan/glm-5.1' })
     );
   });
 
-  it('"Create Session" button disabled until model selected', () => {
+  it('"Next" button disabled until model selected', () => {
     render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
-    const createButton = screen.getByText('Create Session') as HTMLButtonElement;
+    const createButton = screen.getByText('Next') as HTMLButtonElement;
     expect(createButton.disabled).toBe(true);
   });
 
-  it('"Create Session" enabled after model selected', () => {
+  it('"Next" enabled after model selected', () => {
     render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
     fireEvent.click(screen.getByText('Kimi for Coding'));
-    const createButton = screen.getByText('Create Session') as HTMLButtonElement;
+    const createButton = screen.getByText('Next') as HTMLButtonElement;
     expect(createButton.disabled).toBe(false);
   });
 
-  it('clicking "Create Session" calls onSelect with selected model', () => {
+  it('clicking "Next" calls onSelect with selected model', () => {
     render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
     fireEvent.click(screen.getByText('Kimi for Coding'));
-    fireEvent.click(screen.getByText('Create Session'));
+    fireEvent.click(screen.getByText('Next'));
     expect(mockOnSelect).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'kimi-for-coding', displayName: 'Kimi for Coding', sdkType: 'pi' })
     );

@@ -71,7 +71,7 @@ export function DriveModeModelPicker({ onSelect, onBack }: DriveModeModelPickerP
           }`}
           type="button"
         >
-          Create Session
+          Next
         </button>
       </div>
     </div>
