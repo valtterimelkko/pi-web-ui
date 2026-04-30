@@ -1,4 +1,7 @@
 import { create } from 'zustand';
+import { DRIVE_MODE_MODELS as _DRIVE_MODE_MODELS } from '../components/DriveMode/driveModeModels';
+
+export { _DRIVE_MODE_MODELS as DRIVE_MODE_MODELS };
 
 export type DriveModePhase =
   | 'entry'
