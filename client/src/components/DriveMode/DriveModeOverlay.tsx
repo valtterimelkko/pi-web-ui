@@ -16,7 +16,7 @@ export function DriveModeOverlay() {
   const isOpen = useUIStore((s) => s.driveModeOpen);
   const closeDriveMode = useUIStore((s) => s.closeDriveMode);
   const { phase, close, selectedModelId, activeSessionId, setPhase, selectModel, setActiveSession, reset } = useDriveModeStore();
-  const { createNewSession, switchSession, setModel } = useWebSocket();
+  const { createNewSession, switchSession, setModel, abortGeneration } = useWebSocket();
   const sessions = useSessionStore((s) => s.sessions);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const currentModel = useSessionStore((s) => s.currentModel);
@@ -132,6 +132,7 @@ export function DriveModeOverlay() {
           modelName={modelName}
           sessionDisplayName={sessionDisplayName}
           onExit={handleClose}
+          onAbort={abortGeneration}
         />
       )}
     </div>

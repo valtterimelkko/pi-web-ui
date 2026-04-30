@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react';
-import { Mic, MicOff } from 'lucide-react';
+import { Mic, MicOff, Square } from 'lucide-react';
 import { useDriveModeStore } from '../../store/driveModeStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useDriveModeDictation } from '../../hooks/useDriveModeDictation';
@@ -11,6 +11,7 @@ export interface DriveModeDictateProps {
   modelName: string;
   sessionDisplayName: string;
   onExit: () => void;
+  onAbort?: () => void;
 }
 
 export function DriveModeDictate({
@@ -18,6 +19,7 @@ export function DriveModeDictate({
   modelName,
   sessionDisplayName,
   onExit,
+  onAbort,
 }: DriveModeDictateProps) {
   const dictation = useDriveModeDictation(sessionId);
   const readAloud = useReadAloud('drive-mode');
@@ -156,6 +158,18 @@ export function DriveModeDictate({
       >
         {getStatusText()}
       </div>
+
+      {/* Stop button — only when agent is working */}
+      {phase === 'agent-working' && onAbort && (
+        <button
+          onClick={onAbort}
+          className="mt-4 px-6 py-3 rounded-xl bg-red-600 text-white text-base font-medium hover:bg-red-700 active:scale-[0.98] transition-colors flex items-center gap-2 select-none touch-manipulation"
+          type="button"
+        >
+          <Square className="w-4 h-4 fill-current" />
+          Stop
+        </button>
+      )}
 
       {/* Error message */}
       {dictation.state === 'error' && dictation.errorMessage && (
