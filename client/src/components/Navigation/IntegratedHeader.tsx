@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { MessageSquare, Terminal, FolderOpen, GitBranch, ListTodo, Info, ChevronsUpDown, ChevronUp, type LucideIcon } from 'lucide-react';
+import { MessageSquare, Terminal, FolderOpen, GitBranch, ListTodo, Info, ChevronsUpDown, ChevronUp, Car, type LucideIcon } from 'lucide-react';
 import { useNavigationStore } from '../../store/navigationStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useUIStore } from '../../store/uiStore';
@@ -21,6 +21,7 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
   const session = sessions.find((s) => s.id === currentSessionId);
   const openSessionInfo = useUIStore((state) => state.openSessionInfo);
   const openTreeView = useUIStore((state) => state.openTreeView);
+  const openDriveMode = useUIStore((state) => state.openDriveMode);
 
   // Suppress unused warning - onOpenSettings may be used in future
   void onOpenSettings;
@@ -82,6 +83,16 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
               </button>
             </div>
           )}
+
+          {/* Drive Mode button - always visible */}
+          <button
+            onClick={openDriveMode}
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+            title="Drive Mode"
+            aria-label="Enter Drive Mode"
+          >
+            <Car className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+          </button>
         </div>
       </div>
 
