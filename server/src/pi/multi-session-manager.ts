@@ -457,9 +457,11 @@ export class MultiSessionManager {
 
     console.log(`[MultiSessionManager] Creating new session for client ${clientId} with cwd: ${cwd}`);
 
-    // Create the session with the correct cwd
+    // Use a temporary unique clientId to avoid handler key collisions when
+    // the same client creates multiple sessions concurrently.
+    const tempClientId = `multi-create-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const agentSession = await this.piService.createSession({
-      clientId: `multi-${clientId}`,
+      clientId: tempClientId,
       cwd,
     });
 
@@ -469,8 +471,9 @@ export class MultiSessionManager {
       throw new Error('Failed to create session file');
     }
 
-    // Set up event handler for this session
-    this.piService.setEventHandler(`multi-${clientId}`, (event) => {
+    // Register the handler under the session path key (same pattern as subscribeClient)
+    // so each session gets its own unique handler that won't collide.
+    this.piService.setEventHandler(`multi-${sessionPath}`, (event) => {
       this.handleAgentEvent(sessionPath, event);
     });
 

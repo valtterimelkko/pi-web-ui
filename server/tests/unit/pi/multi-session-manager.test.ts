@@ -28,6 +28,7 @@ export interface SessionStatusInfo {
 // Mock types
 interface MockAgentSession {
   sessionId: string;
+  sessionFile: string;
   sessionPath: string;
   subscribe: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
@@ -81,9 +82,12 @@ vi.mock('../../../src/config.js', () => ({
  * Helper to create a mock AgentSession
  */
 function createMockAgentSession(overrides: Partial<MockAgentSession> = {}): MockAgentSession {
+  const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const sessionFile = `/default/session/${sessionId}.jsonl`;
   return {
-    sessionId: `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    sessionPath: '/default/session/path.jsonl',
+    sessionId,
+    sessionFile,
+    sessionPath: sessionFile,
     subscribe: vi.fn(),
     dispose: vi.fn(),
     setModel: vi.fn(),
@@ -148,6 +152,180 @@ describe('MultiSessionManager', () => {
     it('should accept options (for future extensibility)', () => {
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast, {});
       expect(manager).toBeDefined();
+    });
+  });
+
+  describe('createAndSubscribe', () => {
+    it('should create a new session and subscribe the client', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'new-session-1',
+        sessionFile: '/path/to/new-session-1.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      const result = await manager.createAndSubscribe('client-1', '/work');
+
+      expect(result.sessionId).toBe('new-session-1');
+      expect(result.status).toBe('idle');
+      expect(result.subscriberCount).toBe(1);
+    });
+
+    it('should register event handler with session-path-based key', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'handler-key-test',
+        sessionFile: '/path/to/handler-key.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/work');
+
+      expect(mockPiService.setEventHandler).toHaveBeenCalledWith(
+        'multi-/path/to/handler-key.jsonl',
+        expect.any(Function)
+      );
+    });
+
+    it('should pass cwd to createSession', async () => {
+      const mockSession = createMockAgentSession({
+        sessionFile: '/path/to/cwd-test.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/custom/cwd');
+
+      expect(mockPiService.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: '/custom/cwd',
+        })
+      );
+    });
+
+    it('should use unique clientId per session creation (not collide)', async () => {
+      const mockSession1 = createMockAgentSession({
+        sessionId: 'session-a',
+        sessionFile: '/path/to/session-a.jsonl',
+      });
+      const mockSession2 = createMockAgentSession({
+        sessionId: 'session-b',
+        sessionFile: '/path/to/session-b.jsonl',
+      });
+      mockPiService.createSession
+        .mockResolvedValueOnce(mockSession1)
+        .mockResolvedValueOnce(mockSession2);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+
+      await manager.createAndSubscribe('client-1', '/work');
+      await manager.createAndSubscribe('client-1', '/work');
+
+      const calls = mockPiService.setEventHandler.mock.calls;
+      expect(calls.length).toBe(2);
+
+      expect(calls[0][0]).toBe('multi-/path/to/session-a.jsonl');
+      expect(calls[1][0]).toBe('multi-/path/to/session-b.jsonl');
+
+      expect(calls[0][0]).not.toBe(calls[1][0]);
+    });
+
+    it('should route events to the correct session when same client creates multiple sessions', async () => {
+      const mockSessionA = createMockAgentSession({
+        sessionId: 'session-a',
+        sessionFile: '/path/to/session-a.jsonl',
+      });
+      const mockSessionB = createMockAgentSession({
+        sessionId: 'session-b',
+        sessionFile: '/path/to/session-b.jsonl',
+      });
+      mockPiService.createSession
+        .mockResolvedValueOnce(mockSessionA)
+        .mockResolvedValueOnce(mockSessionB);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+
+      await manager.createAndSubscribe('client-1', '/work');
+      await manager.createAndSubscribe('client-1', '/work');
+
+      mockBroadcast.mockClear();
+
+      manager.handleAgentEvent('/path/to/session-a.jsonl', {
+        type: 'message_start',
+        message: { id: 'msg-a', role: 'user', content: 'Hello A' },
+      });
+      manager.handleAgentEvent('/path/to/session-b.jsonl', {
+        type: 'message_start',
+        message: { id: 'msg-b', role: 'user', content: 'Hello B' },
+      });
+
+      const broadcasts = mockBroadcast.mock.calls;
+      const sessionABroadcasts = broadcasts.filter(
+        (c: any[]) => c[1]?.sessionId === 'session-a'
+      );
+      const sessionBBroadcasts = broadcasts.filter(
+        (c: any[]) => c[1]?.sessionId === 'session-b'
+      );
+
+      expect(sessionABroadcasts.length).toBe(1);
+      expect(sessionBBroadcasts.length).toBe(1);
+
+      expect(sessionABroadcasts[0][1].event.message.id).toBe('msg-a');
+      expect(sessionBBroadcasts[0][1].event.message.id).toBe('msg-b');
+    });
+
+    it('should throw if session creation fails to produce a session file', async () => {
+      const mockSession = createMockAgentSession({
+        sessionFile: undefined as any,
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+
+      await expect(manager.createAndSubscribe('client-1', '/work')).rejects.toThrow(
+        'Failed to create session file'
+      );
+      expect(mockSession.dispose).toHaveBeenCalled();
+    });
+
+    it('should throw on empty clientId', async () => {
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+
+      await expect(manager.createAndSubscribe('', '/work')).rejects.toThrow('Invalid client ID');
+    });
+
+    it('should track client subscriptions for multiple created sessions', async () => {
+      const mockSession1 = createMockAgentSession({
+        sessionFile: '/path/to/s1.jsonl',
+      });
+      const mockSession2 = createMockAgentSession({
+        sessionFile: '/path/to/s2.jsonl',
+      });
+      mockPiService.createSession
+        .mockResolvedValueOnce(mockSession1)
+        .mockResolvedValueOnce(mockSession2);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/work');
+      await manager.createAndSubscribe('client-1', '/work');
+
+      const subs = manager.getClientSubscriptions('client-1');
+      expect(subs).toContain('/path/to/s1.jsonl');
+      expect(subs).toContain('/path/to/s2.jsonl');
+      expect(subs.length).toBe(2);
+    });
+
+    it('should allow webUIContext to be passed through', async () => {
+      const mockSession = createMockAgentSession({
+        sessionFile: '/path/to/ctx.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      const webUIContext = { workingDirectory: '/work' } as any;
+      const result = await manager.createAndSubscribe('client-1', '/work', webUIContext);
+
+      expect(result).toBeDefined();
     });
   });
 
