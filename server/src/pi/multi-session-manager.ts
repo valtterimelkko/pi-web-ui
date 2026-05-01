@@ -28,11 +28,12 @@ export interface ActiveSession {
   status: SessionStatus;
   subscribers: Set<string>;
   lastActivity: Date;
-  lastEventTimestamp: number; // Timestamp of last received event (for stale detection)
+  lastEventTimestamp: number;
   messageCount: number;
   currentStep: number;
   webUIContext?: WebUIContext;
-  pinned: boolean; // If true, session is protected from idle/stale cleanup
+  pinned: boolean;
+  handlerKey: string;
 }
 
 /**
@@ -364,7 +365,7 @@ export class MultiSessionManager {
     }
     
     // Remove event handler
-    this.piService.removeEventHandler(`multi-${sessionPath}`);
+    this.piService.removeEventHandler(activeSession.handlerKey);
     
     // Remove from sessions map
     this.sessions.delete(sessionPath);
@@ -405,14 +406,9 @@ export class MultiSessionManager {
     }
     
     // Remove event handler
-    this.piService.removeEventHandler(`multi-${sessionPath}`);
-    
-    // Remove from sessions map
+    this.piService.removeEventHandler(activeSession.handlerKey);
+
     this.sessions.delete(sessionPath);
-    
-    // Note: We intentionally do NOT clear client viewing references or subscriptions
-    // because the client might still be "viewing" the session in the UI,
-    // just not subscribed to events. When they click back, we'll rehydrate.
   }
 
   /**
@@ -460,22 +456,31 @@ export class MultiSessionManager {
     // Use a temporary unique clientId to avoid handler key collisions when
     // the same client creates multiple sessions concurrently.
     const tempClientId = `multi-create-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    // We don't know sessionPath until after createSession returns, but the Pi
+    // SDK's session.subscribe() closure already captures tempClientId for its
+    // handler lookup.  Use a let-binding so the closure below resolves correctly
+    // once sessionPath is known.
+    let sessionPath: string;
+
+    // Register the handler under tempClientId BEFORE creating the session so
+    // that the SDK's subscription closure (which looks up tempClientId) finds it.
+    this.piService.setEventHandler(tempClientId, (event) => {
+      this.handleAgentEvent(sessionPath, event);
+    });
+
     const agentSession = await this.piService.createSession({
       clientId: tempClientId,
       cwd,
     });
 
-    const sessionPath = agentSession.sessionFile;
-    if (!sessionPath) {
+    const resolvedSessionPath = agentSession.sessionFile;
+    if (!resolvedSessionPath) {
+      this.piService.removeEventHandler(tempClientId);
       agentSession.dispose();
       throw new Error('Failed to create session file');
     }
-
-    // Register the handler under the session path key (same pattern as subscribeClient)
-    // so each session gets its own unique handler that won't collide.
-    this.piService.setEventHandler(`multi-${sessionPath}`, (event) => {
-      this.handleAgentEvent(sessionPath, event);
-    });
+    sessionPath = resolvedSessionPath;
 
     // Create the active session entry
     const activeSession: ActiveSession = {
@@ -490,6 +495,7 @@ export class MultiSessionManager {
       currentStep: 0,
       webUIContext,
       pinned: false,
+      handlerKey: tempClientId,
     };
 
     this.sessions.set(sessionPath, activeSession);
@@ -571,6 +577,7 @@ export class MultiSessionManager {
         currentStep: 0,
         webUIContext,
         pinned: false,
+        handlerKey: `multi-${sessionPath}`,
       };
 
       this.sessions.set(sessionPath, activeSession);
@@ -1273,7 +1280,7 @@ export class MultiSessionManager {
     }
 
     // Remove event handler
-    this.piService.removeEventHandler(`multi-${sessionPath}`);
+    this.piService.removeEventHandler(activeSession.handlerKey);
 
     // Remove from sessions map
     this.sessions.delete(sessionPath);
@@ -1310,7 +1317,7 @@ export class MultiSessionManager {
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
       try {
         activeSession.agentSession.dispose();
-        this.piService.removeEventHandler(`multi-${sessionPath}`);
+        this.piService.removeEventHandler(activeSession.handlerKey);
       } catch (error) {
         console.error(
           `[MultiSessionManager] Error disposing session ${sessionPath}:`,

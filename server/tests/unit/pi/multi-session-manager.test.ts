@@ -171,7 +171,7 @@ describe('MultiSessionManager', () => {
       expect(result.subscriberCount).toBe(1);
     });
 
-    it('should register event handler with session-path-based key', async () => {
+    it('should register event handler under the same key passed to createSession', async () => {
       const mockSession = createMockAgentSession({
         sessionId: 'handler-key-test',
         sessionFile: '/path/to/handler-key.jsonl',
@@ -181,10 +181,17 @@ describe('MultiSessionManager', () => {
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.createAndSubscribe('client-1', '/work');
 
-      expect(mockPiService.setEventHandler).toHaveBeenCalledWith(
-        'multi-/path/to/handler-key.jsonl',
-        expect.any(Function)
-      );
+      const setHandlerCalls = mockPiService.setEventHandler.mock.calls;
+      const createSessionCalls = mockPiService.createSession.mock.calls;
+
+      expect(setHandlerCalls.length).toBeGreaterThanOrEqual(1);
+      expect(createSessionCalls.length).toBeGreaterThanOrEqual(1);
+
+      const handlerKey = setHandlerCalls[0][0] as string;
+      const createClientId = createSessionCalls[0][0].clientId as string;
+
+      expect(handlerKey).toBe(createClientId);
+      expect(handlerKey).toMatch(/^multi-create-/);
     });
 
     it('should pass cwd to createSession', async () => {
@@ -221,13 +228,18 @@ describe('MultiSessionManager', () => {
       await manager.createAndSubscribe('client-1', '/work');
       await manager.createAndSubscribe('client-1', '/work');
 
-      const calls = mockPiService.setEventHandler.mock.calls;
-      expect(calls.length).toBe(2);
+      const createCalls = mockPiService.createSession.mock.calls;
+      const setCalls = mockPiService.setEventHandler.mock.calls;
 
-      expect(calls[0][0]).toBe('multi-/path/to/session-a.jsonl');
-      expect(calls[1][0]).toBe('multi-/path/to/session-b.jsonl');
+      // Each createSession call used a unique clientId
+      expect(createCalls[0][0].clientId).not.toBe(createCalls[1][0].clientId);
 
-      expect(calls[0][0]).not.toBe(calls[1][0]);
+      // Each setEventHandler was called with the same key as its corresponding createSession
+      expect(setCalls[0][0]).toBe(createCalls[0][0].clientId);
+      expect(setCalls[1][0]).toBe(createCalls[1][0].clientId);
+
+      // All keys are unique
+      expect(setCalls[0][0]).not.toBe(setCalls[1][0]);
     });
 
     it('should route events to the correct session when same client creates multiple sessions', async () => {
@@ -326,6 +338,80 @@ describe('MultiSessionManager', () => {
       const result = await manager.createAndSubscribe('client-1', '/work', webUIContext);
 
       expect(result).toBeDefined();
+    });
+
+    it('should deliver events via the SDK dispatch path (handler key matches createSession clientId)', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'sdk-dispatch-test',
+        sessionFile: '/path/to/sdk-dispatch.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/work');
+
+      const createCall = mockPiService.createSession.mock.calls[0];
+      const setCall = mockPiService.setEventHandler.mock.calls[0];
+      const sdkClientId = createCall[0].clientId;
+      const handlerKey = setCall[0];
+      const registeredHandler = setCall[1] as (event: any) => void;
+
+      expect(sdkClientId).toBe(handlerKey);
+
+      // Simulate the Pi SDK dispatch: the subscription closure in createSession
+      // would look up eventHandlers.get(sdkClientId) and call it.
+      // Since the handler was registered under the same key, it should be found.
+      registeredHandler({
+        type: 'agent_start',
+      });
+      registeredHandler({
+        type: 'message_start',
+        message: { id: 'msg-1', role: 'assistant', content: 'Hello' },
+      });
+
+      const broadcasts = mockBroadcast.mock.calls.filter(
+        (c: any[]) => c[1]?.sessionId === 'sdk-dispatch-test'
+      );
+      expect(broadcasts.length).toBe(2);
+      expect(broadcasts[0][1].event.type).toBe('agent_start');
+      expect(broadcasts[1][1].event.type).toBe('message_start');
+    });
+
+    it('should clean up handler under tempClientId on stopSession', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'cleanup-test',
+        sessionFile: '/path/to/cleanup.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/work');
+
+      const setCall = mockPiService.setEventHandler.mock.calls[0];
+      const handlerKey = setCall[0] as string;
+
+      mockPiService.removeEventHandler.mockClear();
+
+      const stopped = manager.stopSession('/path/to/cleanup.jsonl');
+      expect(stopped).toBe(true);
+      expect(mockPiService.removeEventHandler).toHaveBeenCalledWith(handlerKey);
+    });
+
+    it('should clean up handler on failed session creation', async () => {
+      const mockSession = createMockAgentSession({
+        sessionFile: undefined as any,
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+
+      const setCall = mockPiService.setEventHandler.mock.calls;
+      await expect(manager.createAndSubscribe('client-1', '/work')).rejects.toThrow(
+        'Failed to create session file'
+      );
+
+      const handlerKey = setCall[0][0] as string;
+      expect(mockPiService.removeEventHandler).toHaveBeenCalledWith(handlerKey);
     });
   });
 
