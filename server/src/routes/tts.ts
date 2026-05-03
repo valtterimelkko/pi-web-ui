@@ -49,7 +49,7 @@ router.post('/', async (req: Request, res: Response) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini-tts',
+        model: config.ttsModel,
         voice: selectedVoice,
         input: trimmedText,
         response_format: 'mp3',

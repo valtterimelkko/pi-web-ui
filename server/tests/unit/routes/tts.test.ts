@@ -8,6 +8,7 @@ vi.mock('../../../src/middleware/auth.js', () => ({
 vi.mock('../../../src/config.js', () => ({
   config: {
     ttsOpenaiApiKey: 'sk-test-key',
+    ttsModel: 'tts-1',
   },
 }));
 
@@ -39,6 +40,23 @@ describe('TTS Routes', () => {
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toBe('audio/mpeg');
       expect(res.body).toEqual(fakeAudio);
+    });
+
+    it('should use configured TTS model', async () => {
+      const fakeAudio = Buffer.from('fake-mp3-data');
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => fakeAudio.buffer.slice(fakeAudio.byteOffset, fakeAudio.byteOffset + fakeAudio.byteLength),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const res = await request(app)
+        .post('/api/tts')
+        .send({ text: 'Hello world' });
+
+      expect(res.status).toBe(200);
+      const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(fetchBody.model).toBe('tts-1');
     });
 
     it('should use default voice when voice is omitted', async () => {
