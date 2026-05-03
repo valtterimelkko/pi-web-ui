@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcrypt';
 import { config } from '../config.js';
-import { generateSessionToken, verifyToken } from '../security/auth.js';
+import { generateSessionToken } from '../security/auth.js';
 import { generateCsrfToken, invalidateCsrfToken } from '../security/csrf.js';
 import { authLimiter } from '../security/rate-limit.js';
 import { validateBody, loginSchema } from '../security/input-validation.js';
@@ -67,10 +67,20 @@ router.post('/logout', (req: Request, res: Response) => {
 });
 
 router.get('/me', cookieAuthMiddleware, (req: Request, res: Response) => {
+  const userId = req.user?.userId;
+  if (!userId) {
+    res.status(401).json({ error: 'Not authenticated' });
+    return;
+  }
+
+  const csrfToken = generateCsrfToken(userId);
+
+  res.setHeader('X-CSRF-Token', csrfToken);
   res.json({
     user: {
-      id: req.user!.userId,
+      id: userId,
     },
+    csrfToken,
   });
 });
 

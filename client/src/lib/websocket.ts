@@ -139,6 +139,10 @@ export class WebSocketClient {
     this.setStatus('connecting');
 
     try {
+      // The CSRF token is refreshed by checkAuthStatus() on app startup.
+      // Re-read it for every connection so a singleton client does not keep
+      // using a token that expired or was invalidated by a server restart.
+      this.csrfToken = useAuth.getState().csrfToken;
       this.ws = new WebSocket(WS_URL);
 
       this.ws.onopen = () => {

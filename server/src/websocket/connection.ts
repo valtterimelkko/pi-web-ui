@@ -96,6 +96,69 @@ export interface WebSocketClient {
   sessionId?: string;
 }
 
+type ClaudeAvailabilityService = Pick<ClaudeService, 'isAvailable' | 'validateAuth'>;
+type OpenCodeAvailabilityService = Pick<OpenCodeService, 'isAvailable' | 'validateSetup'>;
+
+export async function sendRuntimeAvailabilityStatus(
+  clientId: string,
+  claudeService: ClaudeAvailabilityService,
+  opencodeService: OpenCodeAvailabilityService,
+  sendMessage: (clientId: string, message: ServerMessage) => void,
+): Promise<void> {
+  await Promise.all([
+    (async () => {
+      try {
+        const available = await claudeService.isAvailable();
+        if (available) {
+          const auth = await claudeService.validateAuth();
+          sendMessage(clientId, {
+            type: 'claude_available',
+            available: auth.ok,
+            error: auth.ok ? null : (auth.error ?? null),
+          } as ServerMessage);
+        } else {
+          sendMessage(clientId, {
+            type: 'claude_available',
+            available: false,
+            error: 'Claude Code not installed',
+          } as ServerMessage);
+        }
+      } catch {
+        sendMessage(clientId, {
+          type: 'claude_available',
+          available: false,
+          error: 'Claude availability check failed',
+        } as ServerMessage);
+      }
+    })(),
+    (async () => {
+      try {
+        const available = await opencodeService.isAvailable();
+        if (available) {
+          const setup = await opencodeService.validateSetup();
+          sendMessage(clientId, {
+            type: 'opencode_available',
+            available: setup.ok,
+            error: setup.ok ? null : (setup.error ?? null),
+          } as ServerMessage);
+        } else {
+          sendMessage(clientId, {
+            type: 'opencode_available',
+            available: false,
+            error: 'OpenCode not installed',
+          } as ServerMessage);
+        }
+      } catch {
+        sendMessage(clientId, {
+          type: 'opencode_available',
+          available: false,
+          error: 'OpenCode availability check failed',
+        } as ServerMessage);
+      }
+    })(),
+  ]);
+}
+
 export class WebSocketConnectionManager {
   private wss: WebSocketServer;
   private clients: Map<string, WebSocketClient> = new Map();
@@ -277,6 +340,17 @@ export class WebSocketConnectionManager {
 
       // Send authenticated message
       this.sendMessage(clientId, { type: 'authenticated', sessionId: clientId });
+
+      // Runtime availability is read-only and should be sent as soon as the
+      // cookie-authenticated WebSocket is established. Previously this was only
+      // sent after the CSRF auth message, so stale/missing CSRF tokens made the
+      // New Session modal incorrectly grey out Claude Direct and OpenCode Direct.
+      void sendRuntimeAvailabilityStatus(
+        clientId,
+        this.claudeService,
+        this.opencodeService,
+        this.sendMessage.bind(this),
+      );
 
       // Set up event forwarding for this client
       this.piService.setEventHandler(clientId, (event) => {
@@ -567,52 +641,6 @@ export class WebSocketConnectionManager {
           status: 'authenticated'
         });
 
-        // Send Claude availability status
-        void this.claudeService.isAvailable().then(async (available) => {
-          if (available) {
-            const auth = await this.claudeService.validateAuth();
-            this.sendMessage(clientId, {
-              type: 'claude_available',
-              available: auth.ok,
-              error: auth.ok ? null : (auth.error ?? null),
-            } as unknown as ServerMessage);
-          } else {
-            this.sendMessage(clientId, {
-              type: 'claude_available',
-              available: false,
-              error: 'Claude Code not installed',
-            } as unknown as ServerMessage);
-          }
-        }).catch(() => {
-          this.sendMessage(clientId, {
-            type: 'claude_available',
-            available: false,
-            error: 'Claude availability check failed',
-          } as unknown as ServerMessage);
-        });
-
-        void this.opencodeService.isAvailable().then(async (available) => {
-          if (available) {
-            const setup = await this.opencodeService.validateSetup();
-            this.sendMessage(clientId, {
-              type: 'opencode_available',
-              available: setup.ok,
-              error: setup.ok ? null : (setup.error ?? null),
-            } as unknown as ServerMessage);
-          } else {
-            this.sendMessage(clientId, {
-              type: 'opencode_available',
-              available: false,
-              error: 'OpenCode not installed',
-            } as unknown as ServerMessage);
-          }
-        }).catch(() => {
-          this.sendMessage(clientId, {
-            type: 'opencode_available',
-            available: false,
-            error: 'OpenCode availability check failed',
-          } as unknown as ServerMessage);
-        });
         break;
       }
 

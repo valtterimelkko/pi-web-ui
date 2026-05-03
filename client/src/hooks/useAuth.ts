@@ -73,13 +73,21 @@ export async function checkAuthStatus(): Promise<boolean> {
       credentials: 'include',
     });
     if (response.ok) {
-      useAuth.setState({ isAuthenticated: true });
+      const data = await response.json().catch(() => ({})) as { csrfToken?: unknown };
+      const csrfToken = typeof data.csrfToken === 'string'
+        ? data.csrfToken
+        : response.headers.get('X-CSRF-Token');
+
+      useAuth.setState({
+        isAuthenticated: true,
+        ...(csrfToken ? { csrfToken } : {}),
+      });
       return true;
     }
-    useAuth.setState({ isAuthenticated: false });
+    useAuth.setState({ isAuthenticated: false, csrfToken: null });
     return false;
   } catch {
-    useAuth.setState({ isAuthenticated: false });
+    useAuth.setState({ isAuthenticated: false, csrfToken: null });
     return false;
   }
 }
