@@ -287,6 +287,12 @@ export function createWebUIContext(webUI: WebUIContext): ExtensionUIContext {
       // Not supported in Web UI mode
     },
 
+    // Get the current editor component - not supported in Web UI
+    getEditorComponent(): undefined {
+      // Custom editor components not supported in Web UI mode
+      return undefined;
+    },
+
     // Get the current theme - returns undefined as Web UI manages its own theming
     get theme() {
       // Web UI manages its own theme
