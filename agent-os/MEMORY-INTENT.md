@@ -1,6 +1,6 @@
 # Agent OS Memory Intent
 
-_Last updated: 2026-04-24_
+_Last updated: 2026-05-05_
 
 ## Purpose of this document
 
@@ -252,6 +252,8 @@ Its purpose is instead to:
 
 This layer is important, but should remain subordinate to the more useful structured memory above it.
 
+Detailed execution history should usually remain **evidence** rather than **default startup context**. The system should prefer compressed continuity summaries (handoff packets, outcome summaries) first, while preserving deeper history for inspection, recovery, and trust. This protects active memory from being overwhelmed by raw logs, retries, and failed attempts that belong in an evidence layer rather than in primary working context.
+
 ---
 
 ## Emerging structural intuition
@@ -427,6 +429,14 @@ This helps distinguish the Agent OS from a generic tool launcher or chat wrapper
 The first memory should help the user start work quickly and correctly.
 
 Any richer knowledge organisation should remain secondary to this goal in the early versions.
+
+### 9. Treat blocked and interrupted states as continuity signals
+
+The memory should not treat interruptions, blocked states, or execution failures as simply missing or lost information. A task may be blocked by missing input, missing context, unresolved dependency, or execution failure, and the memory should preserve that status explicitly rather than letting it disappear into raw history. Blocked states are first-class continuity signals, not noise.
+
+### 10. Preserve an attempt ledger for important work objects
+
+The memory should likely support an **attempt ledger** for important durable work objects, so that retries, failures, reviewer feedback, and resumptions remain inspectable as evidence without all of that material automatically becoming active memory. This keeps the memory trustworthy without polluting warm-start context.
 
 ---
 

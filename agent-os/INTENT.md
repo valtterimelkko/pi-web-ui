@@ -1,6 +1,6 @@
 # Agent OS Intent
 
-_Last updated: 2026-04-23_
+_Last updated: 2026-05-05_
 
 ## Purpose of this document
 
@@ -83,11 +83,17 @@ rather than around:
 - low-level runtime mechanics
 - generic agent processes as the primary user-facing abstraction
 
+The Agent OS should likely make room for **durable work objects** that persist beyond one runtime session, so that ongoing tasks can carry state, attribution, and continuity forward without depending on a single live chat or session thread. This means some units of work should not be transient session activity, but should remain inspectable and resumable across time.
+
 ### 2. Memory-first continuity is more important than a flashy dashboard
 
 A dashboard or command-centre may matter, and a kanban-like visual surface is appealing, but the deeper requirement is **memory-backed continuity**.
 
 Without strong memory, the UI would still require too much re-contextualisation.
+
+The Agent OS will likely need to distinguish between **memory continuity** and **execution continuity**. Memory continuity preserves trusted context — what the system knows about the user, the role, the project, and the near-future horizon. Execution continuity preserves the state, dependencies, history, and resumability of ongoing work — what is currently running, what is blocked, what has been retried, what handoff is available. Both matter, but they are not the same problem, and the current reflection has been stronger on memory-side thinking than on work-state thinking.
+
+A likely next conceptual gap is not only memory quality, but the lack of a clear model for durable work-state continuity: handoffs, retries, blocked states, dependency readiness, and recovery.
 
 ### 3. More "memory" than "wiki" in v1
 
@@ -244,6 +250,7 @@ The Agent OS is still pre-plan, but some conceptual patterns now appear strong e
 - custom integrations should likely have an explicit conceptual place
 - the system likely needs a clearer end-to-end flow model for how work moves through context, retrieval, orchestration, execution, and memory update
 - named runnable units such as skills/tasks/workflows are likely useful
+- the concept of **durable work objects** with explicit state, handoffs, and run history is growing stronger from external benchmarks (see Hermes Kanban analysis and YOUTUBE-MEMORY-BENCHMARK.md)
 
 However, these patterns should be interpreted under one stronger rule:
 - **continuity should govern capability activation**
@@ -474,7 +481,8 @@ The Agent OS is currently in an early reflection/design phase.
 At this point:
 - no concrete implementation proposal has been locked
 - no final memory design has been chosen
-- no final UI/dashboard design has been chosen
+- no final UI/dashboard design has been chosen, and if a kanban-like or command-centre surface emerges later, it should be treated as a **projection** of deeper continuity structures rather than as the primary ontology of the system
+- for early versions, execution continuity may need to remain **local-first and single-user** in scope, prioritising trusted continuation over distributed workflow complexity
 - no final task/category/agent model has been chosen
 - no final conductor/capability-flow design has been chosen
 - no final surface format has been chosen, and dashboard imitation should not be assumed

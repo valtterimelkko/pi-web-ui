@@ -1,6 +1,6 @@
 # Agent OS Conceptual Patterns
 
-_Last updated: 2026-04-26_
+_Last updated: 2026-05-05_
 
 ## Purpose of this document
 
@@ -55,6 +55,7 @@ Its likely conceptual role would be to:
 - route work into appropriate capabilities
 - coordinate downstream skills, workflows, integrations, and agents
 - help stabilise useful outcomes back into memory
+- dispatch, resume, recover, and retry durable work objects when appropriate, always in service of continuity rather than as a separate workflow engine identity
 
 ### Important clarification
 
@@ -107,6 +108,8 @@ with domain capabilities activated inside that context.
 So the likely conceptual relationship is:
 - **context structure first**
 - **capability domains second**
+
+Role-aware grouping may become useful for visibility and routing, but should remain a secondary view layered on top of deeper context structures such as role, project, and thread rather than replacing them.
 
 ---
 
@@ -234,6 +237,18 @@ but also more naturally as:
 
 with the system identifying which reusable operating unit is most relevant.
 
+### Structured handoff between operating units
+
+The Agent OS should likely support **structured handoff packets** between work stages. These should compress what happened (summary, outcome, decisions, changed artefacts, blockers, recommended next action) into a form that can be reused by later operating units without forcing the next step to reconstruct context from raw history. This is one of the strongest operational patterns observed in the Hermes Kanban benchmark and aligns naturally with the continuity-first philosophy.
+
+### Operational task states
+
+A future Agent OS may need lightweight **operational states** for durable work objects, such as: triage, ready, active, blocked, completed, and abandoned/recoverable. These should be treated as execution semantics — useful for routing, visibility, and recovery — rather than as the primary product identity or as a replacement for deeper memory/context structures.
+
+### Dependency types beyond task-to-task
+
+Dependencies in the Agent OS should likely not be limited to one task waiting on another. They may also include artefact readiness, context readiness, human review required, and handoff availability. This aligns with the broader principle that continuity depends on whether the right context and evidence exist, not only on whether a prior task has completed.
+
 ---
 
 ## Governing principle: continuity should govern capability activation
@@ -351,3 +366,7 @@ It only claims that these conceptual patterns now appear strong enough to preser
 The clearest current conceptual direction is:
 
 > Build the Agent OS as a memory-first, continuity-governed task operating layer on top of the Pi-based substrate, with a conductor layer, domain-organised capabilities, first-class memory, reusable operating units, and explicit integration surfaces — but without collapsing the system into dashboard imitation or capability-first thinking.
+
+A useful synthesis of the operational layer is:
+
+> Memory should decide relevance, durable work objects should carry execution continuity, structured handoffs should compress what moves forward, and run history should preserve evidence without overwhelming active context.
