@@ -36,7 +36,7 @@ export function BottomNav() {
     return (
       <button
         onClick={toggleBottomNav}
-        className="md:hidden fixed bottom-4 left-4 z-40 p-3 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-700 transition-colors"
+        className="md:hidden fixed bottom-16 left-4 z-40 p-3 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-700 transition-colors"
         style={{ marginBottom: 'env(safe-area-inset-bottom, 0px)' }}
         title="Show navigation"
         aria-label="Show navigation"
