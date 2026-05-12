@@ -112,7 +112,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         )}
 
         {/* Message Input */}
-        <div className={`bg-white pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[90px] md:pb-[70px]' : ''}`}>
+        <div className={`bg-white pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[70px]' : ''}`}>
           <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
             <MessageInput
               disabled={!currentSessionId || isLoading}
