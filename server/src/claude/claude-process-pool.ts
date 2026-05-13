@@ -318,13 +318,11 @@ export async function removeLockFromFile(filePath: string): Promise<boolean> {
   try {
     content = await readFile(filePath, 'utf-8');
   } catch {
-    // File doesn't exist or isn't readable — nothing to clean
     return false;
   }
 
   const lines = content.split('\n');
   let removed = 0;
-  // Walk backwards stripping ALL trailing last-prompt entries
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
     if (!line) continue;
@@ -333,13 +331,10 @@ export async function removeLockFromFile(filePath: string): Promise<boolean> {
       if (parsed.type === 'last-prompt') {
         lines.splice(i, 1);
         removed++;
-        continue;
       }
     } catch {
       // Not valid JSON — skip
     }
-    // Found a non-empty, non-last-prompt line — stop
-    break;
   }
 
   if (removed > 0) {

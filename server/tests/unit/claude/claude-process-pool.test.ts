@@ -722,19 +722,51 @@ describe('removeLockFromFile', () => {
     expect(after.trim()).toBe('{"type":"user","message":"hello"}');
   });
 
-  it('only removes last-prompt from the very end, not from the middle', async () => {
+  it('removes last-prompt even when buried behind other entries (SIGTERM abort scenario)', async () => {
     const sessionFile = join(tempDir, 'session.jsonl');
-    // If the last non-empty line is NOT last-prompt, don't remove anything
+    // After SIGTERM abort, Claude CLI may write ai-title and tool results
+    // AFTER the last-prompt lock, burying it in the middle of the file.
     const content = [
-      '{"type":"last-prompt","sessionId":"old"}',
       '{"type":"user","message":"hello"}',
+      '{"type":"assistant","message":"working..."}',
+      '{"type":"last-prompt","lastPrompt":"do the thing","leafUuid":"abc-123"}',
+      '{"type":"ai-title","aiTitle":"My Session"}',
+      '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"Exit code 137"}]}}',
     ].join('\n');
     await writeFile(sessionFile, content);
 
     const result = await removeLockFromFile(sessionFile);
 
-    expect(result).toBe(false);
+    expect(result).toBe(true);
     const after = await readFile(sessionFile, 'utf-8');
-    expect(after.trim().split('\n')).toHaveLength(2);
+    const lines = after.trim().split('\n');
+    expect(lines).toHaveLength(4);
+    expect(after).not.toContain('last-prompt');
+    expect(lines[0]).toContain('"user"');
+    expect(lines[1]).toContain('"assistant"');
+    expect(lines[2]).toContain('ai-title');
+    expect(lines[3]).toContain('tool_result');
+  });
+
+  it('removes ALL last-prompt entries from the file', async () => {
+    const sessionFile = join(tempDir, 'session.jsonl');
+    const content = [
+      '{"type":"user","message":"first prompt"}',
+      '{"type":"last-prompt","lastPrompt":"first prompt"}',
+      '{"type":"assistant","message":"response"}',
+      '{"type":"last-prompt","lastPrompt":"second prompt"}',
+      '{"type":"user","message":"second prompt"}',
+      '{"type":"last-prompt","lastPrompt":"third prompt"}',
+      '{"type":"ai-title","aiTitle":"Session Title"}',
+    ].join('\n');
+    await writeFile(sessionFile, content);
+
+    const result = await removeLockFromFile(sessionFile);
+
+    expect(result).toBe(true);
+    const after = await readFile(sessionFile, 'utf-8');
+    const lines = after.trim().split('\n');
+    expect(lines).toHaveLength(4);
+    expect(after).not.toContain('last-prompt');
   });
 });
