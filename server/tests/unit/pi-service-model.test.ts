@@ -29,6 +29,9 @@ vi.mock('@mariozechner/pi-coding-agent', () => {
     AuthStorage: {
       create: vi.fn().mockReturnValue({
         getAll: vi.fn().mockReturnValue([]),
+        setRuntimeApiKey: vi.fn(),
+        has: vi.fn().mockReturnValue(false),
+        set: vi.fn(),
       }),
     },
     ModelRegistry: {

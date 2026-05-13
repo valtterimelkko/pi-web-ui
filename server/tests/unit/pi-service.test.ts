@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PiService, getPiService, initializePiService } from '../../src/pi/pi-service.js';
 
 // Mock the pi-coding-agent module
+// Track DefaultResourceLoader constructor calls
+const resourceLoaderInstances: Array<{ cwd: string; agentDir: string }> = [];
+
 vi.mock('@mariozechner/pi-coding-agent', () => ({
   createAgentSession: vi.fn().mockResolvedValue({
     session: {
@@ -57,6 +60,9 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
   AuthStorage: {
     create: vi.fn().mockReturnValue({
       getAll: vi.fn().mockReturnValue([]),
+      setRuntimeApiKey: vi.fn(),
+      has: vi.fn().mockReturnValue(false),
+      set: vi.fn(),
     }),
   },
   ModelRegistry: {
@@ -71,10 +77,15 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
       getError: vi.fn().mockReturnValue(null),
     }),
   },
-  DefaultResourceLoader: vi.fn().mockImplementation(() => ({
-    reload: vi.fn().mockResolvedValue(undefined),
-    getExtensions: vi.fn().mockReturnValue({ extensions: [], errors: [] }),
-  })),
+  DefaultResourceLoader: vi.fn().mockImplementation((opts: { cwd: string; agentDir: string }) => {
+    resourceLoaderInstances.push({ cwd: opts.cwd, agentDir: opts.agentDir });
+    return {
+      reload: vi.fn().mockResolvedValue(undefined),
+      getExtensions: vi.fn().mockReturnValue({ extensions: [], errors: [] }),
+      getSkills: vi.fn().mockReturnValue({ skills: [], diagnostics: [] }),
+      getAgentsFiles: vi.fn().mockReturnValue({ agentsFiles: [] }),
+    };
+  }),
 }));
 
 // Mock config
@@ -97,6 +108,7 @@ describe('PiService', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    resourceLoaderInstances.length = 0;
   });
 
   describe('constructor', () => {
@@ -244,6 +256,82 @@ describe('PiService', () => {
 
     it('should handle removing non-existent client', () => {
       expect(() => service.removeClient('non-existent')).not.toThrow();
+    });
+  });
+
+  describe('per-session resourceLoader', () => {
+    it('should create a per-session resourceLoader with the session cwd', async () => {
+      await service.createSession({ clientId: 'client-1', cwd: '/root/tasks' });
+
+      const sessionInstances = resourceLoaderInstances.filter(
+        i => i.cwd === '/root/tasks'
+      );
+      expect(sessionInstances.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should NOT pass process.cwd() to the per-session resourceLoader when cwd is specified', async () => {
+      await service.createSession({ clientId: 'client-2', cwd: '/root/tasks' });
+
+      const sessionInstances = resourceLoaderInstances.filter(
+        i => i.cwd === '/root/tasks'
+      );
+      const wrongInstances = resourceLoaderInstances.filter(
+        i => i.cwd === process.cwd() && i !== resourceLoaderInstances[0]
+      );
+
+      expect(sessionInstances.length).toBeGreaterThanOrEqual(1);
+      expect(wrongInstances.length).toBe(0);
+    });
+
+    it('should create separate resourceLoaders for sessions with different cwds', async () => {
+      await service.createSession({ clientId: 'client-a', cwd: '/root/project-a' });
+      await service.createSession({ clientId: 'client-b', cwd: '/root/project-b' });
+
+      const aInstances = resourceLoaderInstances.filter(i => i.cwd === '/root/project-a');
+      const bInstances = resourceLoaderInstances.filter(i => i.cwd === '/root/project-b');
+
+      expect(aInstances.length).toBe(1);
+      expect(bInstances.length).toBe(1);
+    });
+
+    it('should create a constructor-time resourceLoader with process.cwd() for shared use', () => {
+      expect(resourceLoaderInstances.length).toBeGreaterThanOrEqual(1);
+      expect(resourceLoaderInstances[0].cwd).toBe(process.cwd());
+    });
+
+    it('should pass the configured agentDir to the per-session resourceLoader', async () => {
+      await service.createSession({ clientId: 'client-1', cwd: '/root/tasks' });
+
+      const sessionInstances = resourceLoaderInstances.filter(
+        i => i.cwd === '/root/tasks'
+      );
+      expect(sessionInstances[0].agentDir).toBe('/tmp/pi-agent');
+    });
+
+    it('should create a per-session resourceLoader even when cwd is not provided (falls back to process.cwd)', async () => {
+      await service.createSession({ clientId: 'client-1' });
+
+      const fallbackInstances = resourceLoaderInstances.filter(
+        i => i.cwd === process.cwd()
+      );
+      expect(fallbackInstances.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should pass per-session resourceLoader to createAgentSession', async () => {
+      const { createAgentSession } = await import('@mariozechner/pi-coding-agent');
+
+      await service.createSession({ clientId: 'client-rl', cwd: '/root/my-project' });
+
+      expect(createAgentSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: '/root/my-project',
+        })
+      );
+
+      const lastCall = (createAgentSession as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+      const passedLoader = lastCall?.[0]?.resourceLoader;
+      expect(passedLoader).toBeDefined();
+      expect(passedLoader.reload).toHaveBeenCalled();
     });
   });
 

@@ -80,9 +80,11 @@ export class PiService {
 
   async initialize(): Promise<void> {
     await this.resourceLoader.reload();
-    
-    // Log loaded extensions for debugging
-    const extensions = this.resourceLoader.getExtensions();
+
+    this.logExtensions(this.resourceLoader.getExtensions());
+  }
+
+  private logExtensions(extensions: ReturnType<DefaultResourceLoader['getExtensions']>): void {
     if (extensions.extensions.length > 0) {
       console.log('Loaded extensions:');
       extensions.extensions.forEach(ext => {
@@ -99,6 +101,14 @@ export class PiService {
       console.error('Extension loading errors:');
       extensions.errors.forEach(err => console.error(`  - ${err.path}: ${err.error}`));
     }
+  }
+
+  private async createSessionResourceLoader(cwd: string): Promise<DefaultResourceLoader> {
+    const agentDir = config.piAgentDir || `${process.cwd()}/.pi/agent`;
+    const loader = new DefaultResourceLoader({ cwd, agentDir });
+    await loader.reload();
+    this.logExtensions(loader.getExtensions());
+    return loader;
   }
 
   async createSession(options: CreateSessionOptions): Promise<AgentSession> {
@@ -143,11 +153,13 @@ export class PiService {
       (sessionManager as any)._rewriteFile();
     }
 
+    const sessionResourceLoader = await this.createSessionResourceLoader(cwd);
+
     const { session } = await createAgentSession({
       sessionManager,
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
-      resourceLoader: this.resourceLoader,
+      resourceLoader: sessionResourceLoader,
       cwd,
     });
 
