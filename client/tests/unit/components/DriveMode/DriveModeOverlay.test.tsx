@@ -90,10 +90,11 @@ vi.mock('../../../../src/components/DriveMode/DriveModeSessionPicker', () => ({
 }));
 
 vi.mock('../../../../src/components/DriveMode/DriveModeDictate', () => ({
-  DriveModeDictate: (props: { sessionId: string; modelName: string; onExit: () => void }) => (
+  DriveModeDictate: (props: { sessionId: string; modelName: string; sessionDisplayName: string; onExit: () => void }) => (
     <div data-testid="drive-mode-dictate">
       <span>{props.sessionId}</span>
       <span>{props.modelName}</span>
+      <span data-testid="session-display-name">{props.sessionDisplayName}</span>
       <button onClick={props.onExit}>Exit Dictate</button>
     </div>
   ),
@@ -121,9 +122,18 @@ describe('DriveModeOverlay', () => {
     };
 
     sessionStoreState = {
-      sessions: [{ id: 's1', path: '/path/1.jsonl', name: 'Test Session', model: 'claude-3-opus', firstMessage: 'Hello', messageCount: 1, cwd: '/' }],
+      sessions: [
+        { id: 's1', path: '/path/1.jsonl', name: 'Test Session', model: 'claude-3-opus', firstMessage: 'Hello', messageCount: 1, cwd: '/' },
+        { id: 's2', path: '/path/2.jsonl', name: 'Original Name', model: 'gpt-4', firstMessage: 'Hi there', messageCount: 1, cwd: '/' },
+      ],
       currentSessionId: 's1',
       currentModel: 'claude-3-opus',
+      getSessionDisplayName: (path: string) => {
+        const displayNames: Record<string, string> = {
+          '/path/2.jsonl': 'Renamed Session',
+        };
+        return displayNames[path];
+      },
     };
 
     mockDriveModeStoreState.phase = 'entry';
@@ -203,6 +213,20 @@ describe('DriveModeOverlay', () => {
     driveModeStoreState.phase = 'dictate';
     render(<DriveModeOverlay />);
     expect(screen.getByTestId('drive-mode-dictate')).toBeInTheDocument();
+  });
+
+  it('passes custom web UI display name to DriveModeDictate when available', () => {
+    driveModeStoreState.phase = 'dictate';
+    driveModeStoreState.activeSessionId = 's2';
+    render(<DriveModeOverlay />);
+    expect(screen.getByTestId('session-display-name').textContent).toBe('Renamed Session');
+  });
+
+  it('falls back to session.name when no custom display name is set', () => {
+    driveModeStoreState.phase = 'dictate';
+    driveModeStoreState.activeSessionId = 's1';
+    render(<DriveModeOverlay />);
+    expect(screen.getByTestId('session-display-name').textContent).toBe('Test Session');
   });
 
   it('escape key closes overlay', () => {

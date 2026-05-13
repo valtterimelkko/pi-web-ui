@@ -9,6 +9,7 @@ export function DriveModeSessionPicker({ onBack, onSelectSession }: DriveModeSes
   const sessions = useSessionStore((s) => s.sessions);
   const archivedSessionPaths = useSessionStore((s) => s.archivedSessionPaths);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const getSessionDisplayName = useSessionStore((s) => s.getSessionDisplayName);
 
   const activeSessions = sessions.filter(
     (session) => session.path && !archivedSessionPaths.includes(session.path)
@@ -28,7 +29,7 @@ export function DriveModeSessionPicker({ onBack, onSelectSession }: DriveModeSes
         <div className="w-full max-w-[90%] flex flex-col gap-2 max-h-[70vh] overflow-y-auto">
           {activeSessions.map((session) => {
             const isCurrent = session.id === currentSessionId;
-            const displayName = session.name || session.firstMessage?.slice(0, 50) || 'New session';
+            const displayName = getSessionDisplayName(session.path) || session.name || session.firstMessage?.slice(0, 50) || 'New session';
             return (
               <button
                 key={session.id}

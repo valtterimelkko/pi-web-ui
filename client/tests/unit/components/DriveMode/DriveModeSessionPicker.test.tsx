@@ -24,6 +24,7 @@ describe('DriveModeSessionPicker', () => {
         sessions: mockSessions,
         archivedSessionPaths: ['/path/3.jsonl'],
         currentSessionId: 's1',
+        getSessionDisplayName: () => undefined,
       };
       return selector ? selector(state) : state;
     });
@@ -44,6 +45,27 @@ describe('DriveModeSessionPicker', () => {
     render(<DriveModeSessionPicker onBack={mockOnBack} onSelectSession={mockOnSelectSession} />);
     expect(screen.getByText('Session One')).toBeInTheDocument();
     expect(screen.getByText('Session Two')).toBeInTheDocument();
+  });
+
+  it('prefers custom web UI display name over session.name', () => {
+    (useSessionStore as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: unknown) => unknown) => {
+      const state = {
+        sessions: mockSessions,
+        archivedSessionPaths: ['/path/3.jsonl'],
+        currentSessionId: 's1',
+        getSessionDisplayName: (path: string) => {
+          if (path === '/path/2.jsonl') return 'My Custom OpenCode Session';
+          return undefined;
+        },
+      };
+      return selector ? selector(state) : state;
+    });
+
+    render(<DriveModeSessionPicker onBack={mockOnBack} onSelectSession={mockOnSelectSession} />);
+    // s2 has a custom display name 'My Custom OpenCode Session'
+    expect(screen.getByText('My Custom OpenCode Session')).toBeInTheDocument();
+    // The original session.name 'Session Two' should NOT appear
+    expect(screen.queryByText('Session Two')).not.toBeInTheDocument();
   });
 
   it('shows model name per session', () => {

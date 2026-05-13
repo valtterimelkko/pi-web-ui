@@ -20,6 +20,7 @@ export function DriveModeOverlay() {
   const sessions = useSessionStore((s) => s.sessions);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const currentModel = useSessionStore((s) => s.currentModel);
+  const getSessionDisplayName = useSessionStore((s) => s.getSessionDisplayName);
   const prevSessionIdRef = useRef<string | null>(null);
 
   // Session creation flow: watch for new session after createNewSession
@@ -95,7 +96,7 @@ export function DriveModeOverlay() {
   if (!isOpen) return null;
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
-  const sessionDisplayName = activeSession?.name || activeSession?.firstMessage?.slice(0, 50) || 'New Session';
+  const sessionDisplayName = (activeSession && getSessionDisplayName(activeSession.path)) || activeSession?.name || activeSession?.firstMessage?.slice(0, 50) || 'New Session';
   const selectedModel = DRIVE_MODE_MODELS.find(m => m.id === selectedModelId);
   const modelName = selectedModel?.displayName || activeSession?.model || currentModel || 'Default model';
 
