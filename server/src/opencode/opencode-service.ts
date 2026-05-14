@@ -39,6 +39,7 @@ interface GoalState {
   lastErrorAt: number | null;
   compactionCount: number;
   lastCompactedAt: number | null;
+  showWidget?: boolean;  // toggled by /goal status; defaults to true
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -112,8 +113,10 @@ function goalEngineNormalizedEvents(gs: GoalState, sessionId: string): Normalize
     data: { status: { key: 'goal-engine', text: statusText } },
   });
 
-  // Widget event for status display above input
-  if (gs.status !== 'idle' && gs.objective) {
+  // Widget event for status display above input.
+  // showWidget defaults to true; set to false when user toggles off via /goal status.
+  const widgetVisible = gs.showWidget !== false;
+  if (gs.status !== 'idle' && gs.objective && widgetVisible) {
     events.push({
       type: 'widget_content',
       sessionId,
