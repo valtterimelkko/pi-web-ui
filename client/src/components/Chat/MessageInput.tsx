@@ -502,7 +502,9 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
           {isStreaming && !canSendWhileStreaming ? (
             <button
               onClick={() => {
-                if (pauseGoalOnStop) {
+                // Pi: send /goal pause-now slash command before abort so the extension
+                // cleanly pauses. OpenCode: server pauses goal state on abort automatically.
+                if (pauseGoalOnStop && currentSessionSdkType === 'pi') {
                   sendPrompt('/goal pause-now');
                 }
                 abortGeneration();

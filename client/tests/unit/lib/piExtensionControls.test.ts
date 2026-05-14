@@ -13,13 +13,19 @@ describe('Pi extension controls', () => {
     expect(isPiSlashCommandAllowedWhileStreaming('/goal pause', false, 'pi')).toBe(false);
   });
 
-  it('uses goal-aware pause stop only for running Pi goal sessions', () => {
+  it('returns true for pause-on-stop when Pi or OpenCode goal is running', () => {
+    // Pi: send /goal pause-now slash command
     expect(shouldPauseGoalOnStop('pi', 'running')).toBe(true);
     expect(shouldPauseGoalOnStop('pi', 'running: Build 200 plants')).toBe(true);
     expect(shouldPauseGoalOnStop('pi', 'wrapping-up')).toBe(true);
     expect(shouldPauseGoalOnStop('pi', 'paused')).toBe(false);
-    expect(shouldPauseGoalOnStop('claude', 'running')).toBe(false);
-    expect(shouldPauseGoalOnStop('opencode', 'running')).toBe(false);
     expect(shouldPauseGoalOnStop('pi', undefined)).toBe(false);
+    // OpenCode: server handles pause automatically on abort
+    expect(shouldPauseGoalOnStop('opencode', 'running')).toBe(true);
+    expect(shouldPauseGoalOnStop('opencode', 'wrapping-up')).toBe(true);
+    expect(shouldPauseGoalOnStop('opencode', 'paused')).toBe(false);
+    expect(shouldPauseGoalOnStop('opencode', undefined)).toBe(false);
+    // Claude: no goal engine support
+    expect(shouldPauseGoalOnStop('claude', 'running')).toBe(false);
   });
 });

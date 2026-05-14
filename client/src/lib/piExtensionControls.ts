@@ -12,7 +12,11 @@ export function shouldPauseGoalOnStop(
   sdkType: RuntimeSdkType,
   goalStatus: string | undefined,
 ): boolean {
-  if (sdkType !== 'pi' || !goalStatus) return false;
+  if (!goalStatus) return false;
   const normalized = goalStatus.trim().toLowerCase();
-  return normalized === 'wrapping-up' || normalized.startsWith('running');
+  const isActive = normalized === 'wrapping-up' || normalized.startsWith('running');
+  if (!isActive) return false;
+  // Pi: user triggers /goal pause-now slash command before abort.
+  // OpenCode: server pauses goal state automatically on abort (no extra client action needed).
+  return sdkType === 'pi' || sdkType === 'opencode';
 }

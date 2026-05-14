@@ -1300,10 +1300,21 @@ export class WebSocketConnectionManager {
 
     try {
       const events = await this.opencodeService.getReplayEvents(sessionId);
-      if (events.length === 0) return;
+      const goalEvents = await this.opencodeService.getGoalEngineEvents(sessionId);
+
+      if (events.length === 0 && goalEvents.length === 0) return;
 
       this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
       for (const evt of events) {
+        this.sendMessage(clientId, {
+          type: 'session_event',
+          sessionId,
+          event: evt,
+        } as unknown as ServerMessage);
+      }
+      // Append goal-engine widget/status events so the frontend displays
+      // the current goal state immediately on session load.
+      for (const evt of goalEvents) {
         this.sendMessage(clientId, {
           type: 'session_event',
           sessionId,

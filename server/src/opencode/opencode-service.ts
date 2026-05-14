@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { OpenCodeProcessManager } from './opencode-process-manager.js';
 import { OpenCodeClient } from './opencode-client.js';
@@ -8,6 +12,125 @@ import { OpenCodeSessionSubscribers } from './opencode-session-subscribers.js';
 import type { OpenCodeConfig, OpenCodeSSEEvent, OpenCodePermissionRule } from './opencode-types.js';
 import { getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
+
+// ── Goal Engine integration ────────────────────────────────────────────────
+// The opencode goal-engine plugin stores per-session state in
+// ~/.opencode/goal-engine/<ocSessionId>.goal.json.
+// After each agent_end the service reads this file and emits widget_content /
+// extension_status events so the frontend can display goal progress.
+
+const GOAL_ENGINE_DIR = path.join(os.homedir(), '.opencode', 'goal-engine');
+
+interface GoalState {
+  objective: string;
+  planItems: string[];
+  planDone: boolean[];
+  status: 'idle' | 'running' | 'wrapping-up' | 'paused';
+  turnCount: number;
+  startedAt: number;
+  completedAt: number | null;
+  verifyCommand: string | null;
+  maxTurns: number | null;
+  progressCurrent: number | null;
+  progressTotal: number | null;
+  progressLabel: string | null;
+  consecutiveErrors: number;
+  lastErrorMessage: string | null;
+  lastErrorAt: number | null;
+  compactionCount: number;
+  lastCompactedAt: number | null;
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  idle: 'Idle',
+  running: '▶ Running',
+  'wrapping-up': '⏸ Wrapping up…',
+  paused: '⏸ Paused',
+};
+
+function goalStatePath(ocSessionId: string): string {
+  return path.join(GOAL_ENGINE_DIR, `${ocSessionId}.goal.json`);
+}
+
+async function readGoalState(ocSessionId: string): Promise<GoalState | null> {
+  try {
+    const raw = await readFile(goalStatePath(ocSessionId), 'utf-8');
+    return JSON.parse(raw) as GoalState;
+  } catch {
+    return null;
+  }
+}
+
+async function writeGoalState(ocSessionId: string, gs: GoalState): Promise<void> {
+  try {
+    await mkdir(GOAL_ENGINE_DIR, { recursive: true });
+    await writeFile(goalStatePath(ocSessionId), JSON.stringify(gs, null, 2), 'utf-8');
+  } catch {
+    // Non-fatal
+  }
+}
+
+function buildGoalWidgetLines(gs: GoalState): string[] {
+  const lines: string[] = [];
+  lines.push(`🎯 Goal Status`);
+  lines.push(`Status: ${STATUS_LABELS[gs.status] || gs.status}`);
+  lines.push(`Objective: ${gs.objective}`);
+  lines.push(`Started: ${gs.startedAt ? new Date(gs.startedAt).toLocaleString() : 'n/a'}`);
+  lines.push(`Agent runs: ${gs.turnCount}`);
+  if (gs.maxTurns !== null) lines.push(`Max runs: ${gs.maxTurns}`);
+  if (gs.progressCurrent !== null && gs.progressTotal !== null) {
+    const label = gs.progressLabel ?? 'Progress';
+    lines.push(`${label}: ${gs.progressCurrent}/${gs.progressTotal}`);
+  }
+  if (gs.compactionCount > 0) lines.push(`Compactions: ${gs.compactionCount}`);
+  if (gs.consecutiveErrors > 0) lines.push(`Errors: ${gs.consecutiveErrors}`);
+  if (gs.planItems.length > 0) {
+    lines.push('');
+    lines.push('Plan:');
+    for (let i = 0; i < gs.planItems.length; i++) {
+      lines.push(`  ${gs.planDone[i] ? '✓' : '☐'} ${gs.planItems[i]}`);
+    }
+  }
+  if (gs.completedAt) lines.push(`Completed: ${new Date(gs.completedAt).toLocaleString()}`);
+  return lines;
+}
+
+function goalEngineNormalizedEvents(gs: GoalState, sessionId: string): NormalizedEvent[] {
+  const timestamp = Date.now();
+  const events: NormalizedEvent[] = [];
+
+  if (gs.status === 'idle' && !gs.objective) return events;
+
+  // Status event for footer/badge display
+  const statusText = gs.status !== 'idle'
+    ? `🎯 ${STATUS_LABELS[gs.status] || gs.status} — Run ${gs.turnCount}`
+    : undefined;
+  events.push({
+    type: 'extension_status',
+    sessionId,
+    timestamp,
+    data: { status: { key: 'goal-engine', text: statusText } },
+  });
+
+  // Widget event for status display above input
+  if (gs.status !== 'idle' && gs.objective) {
+    events.push({
+      type: 'widget_content',
+      sessionId,
+      timestamp,
+      data: { key: 'goal-engine-status', content: buildGoalWidgetLines(gs) },
+    });
+  } else {
+    events.push({
+      type: 'widget_cleared',
+      sessionId,
+      timestamp,
+      data: { key: 'goal-engine-status' },
+    });
+  }
+
+  return events;
+}
 
 interface ActiveSessionMeta {
   lastActivity: number;
@@ -466,8 +589,16 @@ export class OpenCodeService {
   abort(sessionId: string): void {
     void this.registry.get(sessionId).then((entry) => {
       if (!entry) return;
-      return this.getOpencodeSessionId(sessionId).then((ocSessionId) => {
+      return this.getOpencodeSessionId(sessionId).then(async (ocSessionId) => {
         if (!ocSessionId) return;
+        // Pause any active goal before sending abort so the plugin doesn't
+        // auto-continue when the session goes idle after the abort.
+        try {
+          const gs = await readGoalState(ocSessionId);
+          if (gs && (gs.status === 'running' || gs.status === 'wrapping-up')) {
+            await writeGoalState(ocSessionId, { ...gs, status: 'paused' });
+          }
+        } catch { /* non-fatal */ }
         return this.client.abort(ocSessionId, entry.cwd).catch((err) => {
           console.error('[OpenCodeService] Abort failed:', err);
         });
@@ -493,6 +624,22 @@ export class OpenCodeService {
       return opencodeMessagesToReplayEvents(messages, sessionId);
     } catch (err) {
       console.error('[OpenCodeService] Failed to get replay events:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Return normalized goal-engine events for a session, for injection into
+   * replay or initial subscription events.
+   */
+  async getGoalEngineEvents(sessionId: string): Promise<NormalizedEvent[]> {
+    const ocSessionId = await this.getOpencodeSessionId(sessionId);
+    if (!ocSessionId) return [];
+    try {
+      const gs = await readGoalState(ocSessionId);
+      if (!gs) return [];
+      return goalEngineNormalizedEvents(gs, sessionId);
+    } catch {
       return [];
     }
   }
@@ -720,7 +867,32 @@ export class OpenCodeService {
     for (const evt of normalized) {
       if (evt.type === 'agent_end') {
         this.completeSession(sessionId);
+
+        // Emit goal-engine widget/status events so the frontend reflects current goal state
+        void this.emitGoalEventsAfterAgentEnd(event, sessionId, callback);
       }
+    }
+  }
+
+  private async emitGoalEventsAfterAgentEnd(
+    event: OpenCodeSSEEvent,
+    sessionId: string,
+    callback: { onEvent: (event: NormalizedEvent) => void; onComplete: (error?: Error) => void } | undefined,
+  ): Promise<void> {
+    if (!callback) return;
+    const props = event.properties as Record<string, unknown> | undefined;
+    const ocSessionId = (props?.sessionID as string | undefined) ?? (props?.sessionId as string | undefined);
+    if (!ocSessionId) return;
+
+    try {
+      const gs = await readGoalState(ocSessionId);
+      if (!gs) return;
+
+      for (const evt of goalEngineNormalizedEvents(gs, sessionId)) {
+        try { callback.onEvent(evt); } catch { /* non-fatal */ }
+      }
+    } catch {
+      // Non-fatal
     }
   }
 
