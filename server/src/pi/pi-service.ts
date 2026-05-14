@@ -6,7 +6,7 @@ import {
   DefaultResourceLoader,
   type AgentSession,
   type AgentSessionEvent,
-} from '@mariozechner/pi-coding-agent';
+} from '@earendil-works/pi-coding-agent';
 import { config } from '../config.js';
 import type { SessionInfo } from '@pi-web-ui/shared';
 import { createWebUIContext, createCommandContextActions, type WebUIContext } from './extension-ui-adapter.js';

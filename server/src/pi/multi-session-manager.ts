@@ -1,5 +1,5 @@
 import type { PiService } from './pi-service.js';
-import type { AgentSession } from '@mariozechner/pi-coding-agent';
+import type { AgentSession } from '@earendil-works/pi-coding-agent';
 
 /**
  * WebUIContext for extension binding

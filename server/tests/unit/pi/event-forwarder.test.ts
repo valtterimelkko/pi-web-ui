@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventForwarder, type ForwardedEvent, type PiEvent } from '../../../src/pi/event-forwarder.js';
-import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { JSONRPCNotification } from '@pi-web-ui/shared';
 
 describe('EventForwarder', () => {

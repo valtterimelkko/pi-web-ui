@@ -3,8 +3,8 @@
  * These types are used by both server and client for communication.
  */
 
-import type { AgentMessage, ThinkingLevel } from '@mariozechner/pi-agent-core';
-import type { ImageContent, Model } from '@mariozechner/pi-ai';
+import type { AgentMessage, ThinkingLevel } from '@earendil-works/pi-agent-core';
+import type { ImageContent, Model } from '@earendil-works/pi-ai';
 
 /** Pi SDK worker lifecycle status. Used by worker pool and frontend worker indicators. */
 export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'terminated' | 'error';

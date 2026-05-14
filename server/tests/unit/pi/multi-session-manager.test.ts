@@ -43,7 +43,7 @@ interface MockPiService {
 }
 
 // Mock the pi-coding-agent module
-vi.mock('@mariozechner/pi-coding-agent', () => ({
+vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: vi.fn(),
   SessionManager: {
     create: vi.fn().mockReturnValue({}),

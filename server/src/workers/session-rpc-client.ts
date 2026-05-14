@@ -7,7 +7,7 @@ import { SessionWorker } from './session-worker.js';
 import { RPCProtocolBridge } from './rpc-protocol-bridge.js';
 import type { EventHandler, RPCEvent } from './types.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
-import type { ImageContent } from '@mariozechner/pi-ai';
+import type { ImageContent } from '@earendil-works/pi-ai';
 
 export interface CompactionResult {
   messageCount: number;

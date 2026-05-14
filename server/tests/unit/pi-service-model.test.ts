@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock the pi-coding-agent module
-vi.mock('@mariozechner/pi-coding-agent', () => {
+vi.mock('@earendil-works/pi-coding-agent', () => {
   const mockSetModel = vi.fn();
   const mockSession = {
     sessionId: 'test-session-id',
@@ -78,7 +78,7 @@ vi.mock('../../src/config.js', () => ({
 }));
 
 import { PiService } from '../../src/pi/pi-service.js';
-import * as mockModule from '@mariozechner/pi-coding-agent';
+import * as mockModule from '@earendil-works/pi-coding-agent';
 
 describe('PiService.setModel', () => {
   let service: PiService;
@@ -172,7 +172,7 @@ describe('PiService.setModel', () => {
 
     it('should handle model IDs with multiple slashes in name', async () => {
       // Update the mock registry to include a multi-slash model
-      const { ModelRegistry } = await import('@mariozechner/pi-coding-agent');
+      const { ModelRegistry } = await import('@earendil-works/pi-coding-agent');
       const mockCreate = vi.mocked(ModelRegistry.create);
       const mockRegistryInstance = mockCreate.mock.results[0]?.value;
       if (mockRegistryInstance) {

@@ -3,7 +3,7 @@ import type {
   ExtensionUIDialogOptions,
   ExtensionCommandContextActions,
   WorkingIndicatorOptions,
-} from '@mariozechner/pi-coding-agent';
+} from '@earendil-works/pi-coding-agent';
 import type { ExtensionUIRequest } from './extension-ui-handler.js';
 import { getExtensionUIHandler } from './extension-ui-handler.js';
 
@@ -300,7 +300,7 @@ export function createWebUIContext(webUI: WebUIContext): ExtensionUIContext {
       return {
         name: 'web-ui',
         colors: {},
-      } as unknown as import('@mariozechner/pi-coding-agent').Theme;
+      } as unknown as import('@earendil-works/pi-coding-agent').Theme;
     },
 
     // Get all available themes

@@ -17,7 +17,7 @@ import { SessionRPCClient } from '../workers/session-rpc-client.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { MultiSessionManager, SessionStatusInfo } from '../pi/multi-session-manager.js';
 import type { ServerMessage } from './protocol.js';
-import type { ImageContent } from '@mariozechner/pi-ai';
+import type { ImageContent } from '@earendil-works/pi-ai';
 
 // ============================================================================
 // New Worker-Based Architecture

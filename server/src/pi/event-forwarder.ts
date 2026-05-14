@@ -1,4 +1,4 @@
-import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { SessionPool } from './session-pool.js';
 import type { JSONRPCNotification } from '@pi-web-ui/shared';
 

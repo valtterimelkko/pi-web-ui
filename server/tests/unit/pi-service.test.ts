@@ -5,7 +5,7 @@ import { PiService, getPiService, initializePiService } from '../../src/pi/pi-se
 // Track DefaultResourceLoader constructor calls
 const resourceLoaderInstances: Array<{ cwd: string; agentDir: string }> = [];
 
-vi.mock('@mariozechner/pi-coding-agent', () => ({
+vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: vi.fn().mockResolvedValue({
     session: {
       sessionId: 'test-session-id',
@@ -318,7 +318,7 @@ describe('PiService', () => {
     });
 
     it('should pass per-session resourceLoader to createAgentSession', async () => {
-      const { createAgentSession } = await import('@mariozechner/pi-coding-agent');
+      const { createAgentSession } = await import('@earendil-works/pi-coding-agent');
 
       await service.createSession({ clientId: 'client-rl', cwd: '/root/my-project' });
 

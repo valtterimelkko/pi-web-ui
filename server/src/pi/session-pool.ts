@@ -1,4 +1,4 @@
-import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { PiService, CreateSessionOptions } from './pi-service.js';
 import type { WebUIContext } from './extension-ui-adapter.js';
 

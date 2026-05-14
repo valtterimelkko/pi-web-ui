@@ -2,8 +2,8 @@
  * Shared protocol types for process-per-session architecture.
  * These types are used by both server and client for communication.
  */
-import type { ThinkingLevel } from '@mariozechner/pi-agent-core';
-import type { ImageContent } from '@mariozechner/pi-ai';
+import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import type { ImageContent } from '@earendil-works/pi-ai';
 export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'terminated' | 'error';
 export interface WorkerOptions {
     sessionPath: string;
