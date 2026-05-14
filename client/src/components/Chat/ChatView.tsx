@@ -22,6 +22,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const isStreaming = useSessionStore((state) => state.isStreaming);
   const isLoading = useSessionStore((state) => state.isLoading);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
+  const extensionWidgets = useSessionStore((state) => state.extensionWidgets);
   const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
   const bottomNavCollapsed = useNavigationStore((state) => state.bottomNavCollapsed);
   const sessionInfoOpen = useUIStore((state) => state.sessionInfoOpen);
@@ -114,6 +115,17 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         {/* Message Input */}
         <div className={`bg-white pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[70px]' : ''}`}>
           <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
+            {Object.entries(extensionWidgets).length > 0 && (
+              <div className="mb-2 space-y-2" data-testid="extension-widgets">
+                {Object.entries(extensionWidgets).map(([key, lines]) => (
+                  <div key={key} className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-950 shadow-sm" data-testid={`extension-widget-${key}`}>
+                    {lines.map((line, index) => (
+                      <div key={index} className={line.trim() === '' ? 'h-2' : 'whitespace-pre-wrap'}>{line}</div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
             <MessageInput
               disabled={!currentSessionId || isLoading}
               onOpenSettings={onOpenSettings}

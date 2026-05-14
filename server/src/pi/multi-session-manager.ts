@@ -5,10 +5,12 @@ import type { AgentSession } from '@earendil-works/pi-coding-agent';
  * WebUIContext for extension binding
  */
 export interface WebUIContext {
-  /** Function to send events to the Web UI */
-  sendEvent: (event: any) => void;
-  /** Session path this context belongs to */
-  sessionPath: string;
+  /** Client associated with this extension UI bridge. */
+  clientId: string;
+  /** Function to send extension UI events to the Web UI. */
+  sendToClient: (message: unknown) => void;
+  /** Session path this context belongs to, once known. */
+  sessionPath?: string;
   /** Extension registry for accessing registered extensions */
   extensionRegistry?: any;
 }
@@ -469,9 +471,26 @@ export class MultiSessionManager {
       this.handleAgentEvent(sessionPath, event);
     });
 
+    let resolvedWebUIContext: WebUIContext | undefined;
+    const extensionWebUIContext: WebUIContext | undefined = webUIContext
+      ? {
+          ...webUIContext,
+          clientId,
+          sendToClient: (message: unknown) => {
+            if (sessionPath && this.sessions.has(sessionPath)) {
+              this.broadcastToSubscribers(sessionPath, message);
+            } else {
+              webUIContext.sendToClient(message);
+            }
+          },
+        }
+      : undefined;
+    resolvedWebUIContext = extensionWebUIContext;
+
     const agentSession = await this.piService.createSession({
       clientId: tempClientId,
       cwd,
+      webUIContext: resolvedWebUIContext as any,
     });
 
     const resolvedSessionPath = agentSession.sessionFile;
@@ -481,6 +500,9 @@ export class MultiSessionManager {
       throw new Error('Failed to create session file');
     }
     sessionPath = resolvedSessionPath;
+    if (resolvedWebUIContext) {
+      resolvedWebUIContext.sessionPath = sessionPath;
+    }
 
     // Create the active session entry
     const activeSession: ActiveSession = {
@@ -493,7 +515,7 @@ export class MultiSessionManager {
       lastEventTimestamp: Date.now(),
       messageCount: 0,
       currentStep: 0,
-      webUIContext,
+      webUIContext: resolvedWebUIContext,
       pinned: false,
       handlerKey: tempClientId,
     };
@@ -554,10 +576,26 @@ export class MultiSessionManager {
       }
       
       // Create/recreate the session
+      const extensionWebUIContext: WebUIContext | undefined = webUIContext
+        ? {
+            ...webUIContext,
+            clientId,
+            sessionPath,
+            sendToClient: (message: unknown) => {
+              if (this.sessions.has(sessionPath)) {
+                this.broadcastToSubscribers(sessionPath, message);
+              } else {
+                webUIContext.sendToClient(message);
+              }
+            },
+          }
+        : undefined;
+
       const agentSession = await this.piService.createSession({
         clientId: `multi-${sessionPath}`,
         sessionPath,
         cwd,
+        webUIContext: extensionWebUIContext as any,
       });
 
       // Set up event handler for this session
@@ -575,7 +613,7 @@ export class MultiSessionManager {
         lastEventTimestamp: Date.now(),
         messageCount: 0,
         currentStep: 0,
-        webUIContext,
+        webUIContext: extensionWebUIContext,
         pinned: false,
         handlerKey: `multi-${sessionPath}`,
       };

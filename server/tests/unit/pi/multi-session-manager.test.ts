@@ -327,17 +327,25 @@ describe('MultiSessionManager', () => {
       expect(subs.length).toBe(2);
     });
 
-    it('should allow webUIContext to be passed through', async () => {
+    it('should pass a Web UI extension context through to createSession', async () => {
       const mockSession = createMockAgentSession({
         sessionFile: '/path/to/ctx.jsonl',
       });
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
 
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
-      const webUIContext = { workingDirectory: '/work' } as any;
+      const webUIContext = { clientId: 'client-1', sendToClient: vi.fn() } as any;
       const result = await manager.createAndSubscribe('client-1', '/work', webUIContext);
 
       expect(result).toBeDefined();
+      expect(mockPiService.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          webUIContext: expect.objectContaining({
+            clientId: 'client-1',
+            sendToClient: expect.any(Function),
+          }),
+        })
+      );
     });
 
     it('should deliver events via the SDK dispatch path (handler key matches createSession clientId)', async () => {
@@ -486,6 +494,28 @@ describe('MultiSessionManager', () => {
       expect(result).toHaveProperty('status');
       expect(result).toHaveProperty('subscriberCount');
       expect(result.status).toBe('idle');
+    });
+
+    it('should pass Web UI extension context when rehydrating a subscribed session', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'rehydrated-session',
+        sessionPath: '/path/to/rehydrated.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      const webUIContext = { clientId: 'client-1', sendToClient: vi.fn() } as any;
+      await manager.subscribeClient('client-1', '/path/to/rehydrated.jsonl', '/work', webUIContext);
+
+      expect(mockPiService.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionPath: '/path/to/rehydrated.jsonl',
+          webUIContext: expect.objectContaining({
+            clientId: 'client-1',
+            sendToClient: expect.any(Function),
+          }),
+        })
+      );
     });
 
     it('should throw on invalid session path (empty)', async () => {

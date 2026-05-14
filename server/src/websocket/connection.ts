@@ -680,7 +680,7 @@ export class WebSocketConnectionManager {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       createPiSession: async (cwd: string) => {
-        const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd);
+        const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd, this.getWebUIContext(clientId));
         return { sessionId: status.sessionId, sessionPath: status.sessionPath };
       },
       sendPiPrompt: async (sessionPath: string, message: string) => {
@@ -1073,7 +1073,7 @@ export class WebSocketConnectionManager {
     }
 
     // Pi session creation
-    const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd);
+    const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd, this.getWebUIContext(clientId));
 
     const sessionPath = status.sessionPath;
 
@@ -1166,12 +1166,6 @@ export class WebSocketConnectionManager {
       console.log(`[handleSwitchSession] Client ${clientId} unsubscribed from ${oldSessionPath}`);
     }
 
-    // Subscribe to the new session via MultiSessionManager (creates if doesn't exist)
-    const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath);
-
-    // Track that this client is now viewing this session
-    this.clientViewingSession.set(clientId, sessionPath);
-
     // Look up the cwd for this session from the sessions list
     let cwd = this.clientCwd.get(clientId) || process.cwd();
     try {
@@ -1184,6 +1178,12 @@ export class WebSocketConnectionManager {
       // Fallback to existing cwd
     }
     this.clientCwd.set(clientId, cwd);
+
+    // Subscribe to the new session via MultiSessionManager (creates if doesn't exist)
+    const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath, cwd, this.getWebUIContext(clientId));
+
+    // Track that this client is now viewing this session
+    this.clientViewingSession.set(clientId, sessionPath);
 
     // Get the agent session for model/context info
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
@@ -1878,7 +1878,7 @@ export class WebSocketConnectionManager {
     }
 
     try {
-      const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath);
+      const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath, undefined, this.getWebUIContext(clientId));
 
       this.sendMessage(clientId, {
         type: 'session_subscribed',
@@ -2065,7 +2065,7 @@ export class WebSocketConnectionManager {
    * Get Web UI context for a session path (used by MultiSessionManager for extension binding).
    * This provides the WebUIContext that extensions need to communicate with the Web UI.
    */
-  private getWebUIContextForMultiSession(sessionPath: string): { sendEvent: (event: any) => void; sessionPath: string } | undefined {
+  private getWebUIContextForMultiSession(sessionPath: string): { clientId: string; sendToClient: (message: unknown) => void; sessionPath: string } | undefined {
     // Find a client that is subscribed to this session
     // We'll use the first subscriber as the context owner
     const activeSession = this.multiSessionManager.getActiveSession(sessionPath);
@@ -2079,10 +2079,11 @@ export class WebSocketConnectionManager {
     if (!client) return undefined;
 
     return {
+      clientId: firstSubscriber,
       sessionPath,
-      sendEvent: (event: any) => {
+      sendToClient: (message: unknown) => {
         // Broadcast to all subscribers of this session
-        this.multiSessionManager.broadcastToSubscribers(sessionPath, event);
+        this.multiSessionManager.broadcastToSubscribers(sessionPath, message);
       },
     };
   }

@@ -8,6 +8,7 @@ import { CompactModal } from './CompactModal';
 import { ContextRing } from '../Usage/ContextRing';
 import { SlashPalette } from './SlashPalette';
 import { uploadFile } from '../../lib/api';
+import { isPiSlashCommandAllowedWhileStreaming, shouldPauseGoalOnStop } from '../../lib/piExtensionControls';
 
 interface MessageInputProps {
   disabled?: boolean;
@@ -42,6 +43,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   const contextPercent = useSessionStore((state) => state.contextPercent);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
+  const goalEngineStatus = useSessionStore((state) => state.extensionStatuses['goal-engine']);
   const quotaInfo = useSessionStore((state) => {
     const sid = state.currentSessionId;
     return sid ? state.sessionData[sid]?.quotaInfo ?? null : null;
@@ -164,7 +166,8 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   const handleSend = useCallback(async () => {
     const message = currentDraft.trim();
     if (!message && uploadedFiles.length === 0) return;
-    if (disabled || isStreaming) return;
+    const allowStreamingSlash = isPiSlashCommandAllowedWhileStreaming(message, isStreaming, currentSessionSdkType);
+    if (disabled || (isStreaming && !allowStreamingSlash)) return;
     if (!message && uploadedFiles.length === 0) return;
 
     // Handle slash commands
@@ -201,7 +204,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
         textareaRef.current.style.height = 'auto';
       }
     }
-  }, [currentDraft, uploadedFiles, disabled, isStreaming, currentSessionId, sendDraft, setInputValue, clearFiles, setDraft]);
+  }, [currentDraft, uploadedFiles, disabled, isStreaming, currentSessionId, currentSessionSdkType, sendDraft, setInputValue, clearFiles, setDraft]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter') {
@@ -281,7 +284,9 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
 
   const hasUploads = uploadedFiles.some(f => f.serverPath && !f.uploading);
   const isAnyUploading = uploadedFiles.some(f => f.uploading);
-  const canSend = (currentDraft.trim().length > 0 || hasUploads) && !disabled && !isStreaming && !isAnyUploading;
+  const canSendWhileStreaming = isPiSlashCommandAllowedWhileStreaming(currentDraft, isStreaming, currentSessionSdkType);
+  const canSend = (currentDraft.trim().length > 0 || hasUploads) && !disabled && (!isStreaming || canSendWhileStreaming) && !isAnyUploading;
+  const pauseGoalOnStop = shouldPauseGoalOnStop(currentSessionSdkType, goalEngineStatus);
 
   return (
     <div className="relative">
@@ -494,12 +499,17 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
           )}
 
           {/* Send/Stop button */}
-          {isStreaming ? (
+          {isStreaming && !canSendWhileStreaming ? (
             <button
-              onClick={abortGeneration}
+              onClick={() => {
+                if (pauseGoalOnStop) {
+                  sendPrompt('/goal pause-now');
+                }
+                abortGeneration();
+              }}
               className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition-all"
               type="button"
-              title="Stop generation"
+              title={pauseGoalOnStop ? 'Pause goal and stop generation' : 'Stop generation'}
             >
               <Square className="w-4 h-4" />
             </button>

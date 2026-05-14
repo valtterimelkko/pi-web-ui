@@ -222,6 +222,8 @@ interface SessionState {
   switchingToSessionId: string | null;
   error: string | null;
   extensionUIRequest: ExtensionUIRequest | null;
+  extensionWidgets: Record<string, string[]>;
+  extensionStatuses: Record<string, string | undefined>;
   sessionInfo: SessionStats | null;
   // Context usage tracking
   contextPercent: number;
@@ -339,6 +341,8 @@ export const useSessionStore = create<SessionState>()(
       switchingToSessionId: null,
       error: null,
       extensionUIRequest: null,
+      extensionWidgets: {},
+      extensionStatuses: {},
       sessionInfo: null,
       contextPercent: 0,
       contextUsed: 0,
@@ -1394,6 +1398,47 @@ export const useSessionStore = create<SessionState>()(
 
           case 'extension_ui_request': {
             set({ extensionUIRequest: msg.request as ExtensionUIRequest });
+            break;
+          }
+
+          case 'widget_content': {
+            const widgetMsg = msg as unknown as { key?: string; content?: unknown };
+            const key = widgetMsg.key;
+            const content = widgetMsg.content;
+            if (key && Array.isArray(content)) {
+              set((state) => ({
+                extensionWidgets: {
+                  ...state.extensionWidgets,
+                  [key]: content.map(String),
+                },
+              }));
+            }
+            break;
+          }
+
+          case 'widget_cleared': {
+            const widgetMsg = msg as unknown as { key: string };
+            if (widgetMsg.key) {
+              set((state) => {
+                const nextWidgets = { ...state.extensionWidgets };
+                delete nextWidgets[widgetMsg.key];
+                return { extensionWidgets: nextWidgets };
+              });
+            }
+            break;
+          }
+
+          case 'extension_status': {
+            const statusMsg = msg as unknown as { status?: { key?: string; text?: string } };
+            const key = statusMsg.status?.key;
+            if (key) {
+              set((state) => ({
+                extensionStatuses: {
+                  ...state.extensionStatuses,
+                  [key]: statusMsg.status?.text,
+                },
+              }));
+            }
             break;
           }
 
