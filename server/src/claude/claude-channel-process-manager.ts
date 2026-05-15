@@ -19,7 +19,16 @@ export interface ClaudeChannelProcessManagerConfig {
   permissionMode?: string;
 }
 
-const DEFAULT_PERMISSION_MODE = 'acceptEdits';
+const DEFAULT_PERMISSION_MODE = 'dontAsk';
+const DEFAULT_ALLOWED_TOOLS = [
+  'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep',
+  'WebFetch', 'WebSearch', 'Task', 'NotebookEdit', 'Skill', 'TodoWrite',
+  'mcp__pi-claude-channel__reply',
+  'mcp__pi-claude-channel__status',
+  'mcp__pi-claude-channel__fetch_history',
+  'mcp__pi-claude-channel__request_permission',
+  'mcp__pi-claude-channel__send_event',
+];
 const READY_POLL_INTERVAL_MS = 500;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 10_000;
@@ -56,12 +65,7 @@ export class ClaudeChannelProcessManager {
     const args = [
       '--dangerously-load-development-channels', 'server:pi-claude-channel',
       '--permission-mode', permissionMode,
-      '--allowedTools', 'Bash', 'Edit', 'Read', 'Write', 'Glob', 'Grep', 'WebFetch',
-      'mcp__pi-claude-channel__reply',
-      'mcp__pi-claude-channel__status',
-      'mcp__pi-claude-channel__fetch_history',
-      'mcp__pi-claude-channel__request_permission',
-      'mcp__pi-claude-channel__send_event',
+      '--allowedTools', ...DEFAULT_ALLOWED_TOOLS,
     ];
 
     const env: Record<string, string> = {};
