@@ -97,7 +97,7 @@ export const config: ServerConfig = {
   ttsOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.TTS_OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',
   ttsModel: process.env.TTS_MODEL || 'tts-1',
   claudeChannelEnabled: process.env.CLAUDE_CHANNEL_ENABLED === 'true',
-  claudeChannelPluginDir: process.env.CLAUDE_CHANNEL_PLUGIN_DIR ?? path.join(process.cwd(), 'pi-claude-channel'),
+  claudeChannelPluginDir: process.env.CLAUDE_CHANNEL_PLUGIN_DIR ?? path.resolve(process.cwd(), '..', 'pi-claude-channel'),
   claudeChannelWsPort: parseInt(process.env.CLAUDE_CHANNEL_WS_PORT || '3100', 10),
   claudeChannelHookPort: parseInt(process.env.CLAUDE_CHANNEL_HOOK_PORT || '3101', 10),
 };

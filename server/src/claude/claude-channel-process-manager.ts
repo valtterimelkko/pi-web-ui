@@ -56,7 +56,7 @@ export class ClaudeChannelProcessManager {
       '--channels', 'plugin:pi-claude-channel',
       '--plugin-dir', this.cfg.pluginDir,
       '--permission-mode', permissionMode,
-      '--dangerously-load-development-channels',
+      '--dangerously-load-development-channels', 'plugin:pi-claude-channel@localhost',
     ];
 
     const env: NodeJS.ProcessEnv = { ...process.env };
