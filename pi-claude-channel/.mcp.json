@@ -2,7 +2,7 @@
   "mcpServers": {
     "pi-claude-channel": {
       "command": "bun",
-      "args": ["run", "server.ts"]
+      "args": ["run", "/root/pi-web-ui/pi-claude-channel/server.ts"]
     }
   }
 }

@@ -55,7 +55,6 @@ export class ClaudeChannelProcessManager {
 
     const args = [
       '--dangerously-load-development-channels', 'server:pi-claude-channel',
-      '--mcp-config', join(this.cfg.pluginDir, '.mcp.json'),
       '--permission-mode', permissionMode,
     ];
 
