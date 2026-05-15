@@ -123,13 +123,12 @@ describe('ClaudeChannelProcessManager', () => {
     await manager.start();
 
     expect(capturedCmd).toBe('claude');
-    expect(capturedArgs).toContain('--channels');
-    expect(capturedArgs).toContain('plugin:pi-claude-channel');
     expect(capturedArgs).toContain('--plugin-dir');
     expect(capturedArgs).toContain('/fake/plugin');
     expect(capturedArgs).toContain('--permission-mode');
     expect(capturedArgs).toContain('acceptEdits');
-    expect(capturedArgs).toContain('--dangerously-load-development-channels');
+    expect(capturedArgs).not.toContain('--channels');
+    expect(capturedArgs).not.toContain('--dangerously-load-development-channels');
   });
 
   it('should detect when WS port becomes connectable', async () => {

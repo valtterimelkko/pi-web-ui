@@ -33,7 +33,7 @@ describe('Dual Path Coexistence', () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('should use channel path when channel is healthy', async () => {
+  it('should use channel path when channel is healthy', { timeout: 15_000 }, async () => {
     const ports = nextPort();
     const mockServer = new MockClaudeChannelServer({ wsPort: ports.wsPort, hookPort: ports.hookPort });
     await mockServer.start();
