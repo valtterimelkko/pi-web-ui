@@ -33,15 +33,19 @@ function broadcast(
   addToHistory = true,
 ) {
   const data = JSON.stringify(event);
+  let sent = 0;
   const clients = sessionClients.get(sessionId);
   if (clients) {
     for (const client of clients) {
       client.send(data);
+      sent++;
     }
   }
   for (const client of globalClients) {
     client.send(data);
+    sent++;
   }
+  console.error(`[broadcast] type=${event.type} session=${sessionId} sent=${sent} (global=${globalClients.size} session=${clients?.size || 0})`);
   if (addToHistory) {
     const h = sessionHistory.get(sessionId) || [];
     h.push(event);
@@ -186,6 +190,13 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
         sessionId: chat_id,
         message: { id: msgId },
       });
+      broadcast(chat_id, {
+        type: "agent_end",
+        sessionId: chat_id,
+        result: "completed",
+        timestamp: Date.now(),
+      });
+      setStatus(chat_id, "idle");
       return { content: [{ type: "text", text: "Reply sent" }] };
     }
 
@@ -297,6 +308,7 @@ function handleWSMessage(
         content: string;
         cwd?: string;
       };
+      console.error(`[ws] prompt received: session=${sessionId} content="${content.slice(0, 50)}..."`);
       setStatus(sessionId, "streaming");
       broadcast(sessionId, {
         type: "agent_start",
@@ -370,6 +382,7 @@ const wsServer = Bun.serve<WSData>({
       const { sessionId } = ws.data;
       if (sessionId === "default" || sessionId === "") {
         globalClients.add(ws);
+        console.error(`[ws] global client connected (total: ${globalClients.size})`);
       } else {
         if (!sessionClients.has(sessionId))
           sessionClients.set(sessionId, new Set());
@@ -427,6 +440,7 @@ const hookServer = Bun.serve({
 
     switch (hook) {
       case "session-start": {
+        console.error(`[hook] session-start received`);
         const { session_id, model, cwd, tools, timestamp } = body as {
           session_id: string;
           model: string;
@@ -448,6 +462,7 @@ const hookServer = Bun.serve({
       }
 
       case "post-tool-use": {
+        console.error(`[hook] post-tool-use: ${body.tool_name || "unknown"}`);
         const {
           session_id,
           tool_name,
@@ -488,6 +503,7 @@ const hookServer = Bun.serve({
       }
 
       case "stop": {
+        console.error(`[hook] stop received for session ${body.session_id || "unknown"}`);
         const { session_id, usage, stop_reason, timestamp } = body as {
           session_id: string;
           usage: {
