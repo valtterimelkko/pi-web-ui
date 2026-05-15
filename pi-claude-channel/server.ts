@@ -13,6 +13,7 @@ interface WSData {
 }
 
 const sessionClients = new Map<string, Set<Bun.ServerWebSocket<WSData>>>();
+const globalClients = new Set<Bun.ServerWebSocket<WSData>>();
 const sessionHistory = new Map<string, Array<Record<string, unknown>>>();
 const sessionModels = new Map<string, string>();
 const sessionStatusMap = new Map<string, string>();
@@ -31,12 +32,15 @@ function broadcast(
   event: Record<string, unknown>,
   addToHistory = true,
 ) {
+  const data = JSON.stringify(event);
   const clients = sessionClients.get(sessionId);
   if (clients) {
-    const data = JSON.stringify(event);
     for (const client of clients) {
       client.send(data);
     }
+  }
+  for (const client of globalClients) {
+    client.send(data);
   }
   if (addToHistory) {
     const h = sessionHistory.get(sessionId) || [];
@@ -364,9 +368,13 @@ const wsServer = Bun.serve<WSData>({
   websocket: {
     open(ws) {
       const { sessionId } = ws.data;
-      if (!sessionClients.has(sessionId))
-        sessionClients.set(sessionId, new Set());
-      sessionClients.get(sessionId)!.add(ws);
+      if (sessionId === "default" || sessionId === "") {
+        globalClients.add(ws);
+      } else {
+        if (!sessionClients.has(sessionId))
+          sessionClients.set(sessionId, new Set());
+        sessionClients.get(sessionId)!.add(ws);
+      }
       sessionLastDisconnect.delete(sessionId);
       const status = sessionStatusMap.get(sessionId) || "idle";
       ws.send(
@@ -383,6 +391,7 @@ const wsServer = Bun.serve<WSData>({
     },
     close(ws) {
       const { sessionId } = ws.data;
+      globalClients.delete(ws);
       const clients = sessionClients.get(sessionId);
       if (clients) {
         clients.delete(ws);
