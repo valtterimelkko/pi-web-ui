@@ -1223,10 +1223,17 @@ export const useSessionStore = create<SessionState>()(
                   sizeBytes: estimateMessagesSize(state.messages),
                 };
               }
+              const newMessages = state.messages.map((m) => {
+                if (m.role === 'tool' && m.toolCall && !m.toolResult) {
+                  return { ...m, toolResult: { output: 'Tool completed', isError: false } };
+                }
+                return m;
+              });
               return { 
                 isStreaming: false,
                 streamingSessions: newStreamingSessions,
                 sessionCacheMeta: newSessionCacheMeta,
+                messages: newMessages,
               };
             });
             break;
@@ -1686,9 +1693,14 @@ export const useSessionStore = create<SessionState>()(
               case 'agent_end':
                 get().setSessionStatus(sessionId, 'idle');
                 currentMessageIdBySession.delete(sessionId);
-                // Also update current session if it matches
                 if (get().currentSessionId === sessionId) {
-                  set({ isStreaming: false });
+                  const newMessages = get().messages.map((m) => {
+                    if (m.role === 'tool' && m.toolCall && !m.toolResult) {
+                      return { ...m, toolResult: { output: 'Tool completed', isError: false } };
+                    }
+                    return m;
+                  });
+                  set({ isStreaming: false, messages: newMessages });
                 }
                 break;
                 

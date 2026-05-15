@@ -412,13 +412,17 @@ export class ClaudeChannelService {
     return cwd.split(sep).join('-').replace(/^-/, '');
   }
 
-  private async findClaudeSessionFile(cwd: string): Promise<string | null> {
+  private async findClaudeSessionFile(cwd: string, claudeSessionId?: string): Promise<string | null> {
     const encodedCwd = this.encodeCwdForClaude(cwd);
     const projectDir = join(this.claudeProjectsDir, `-${encodedCwd}`);
     try {
       const files = await readdir(projectDir);
       const jsonlFiles = files.filter(f => f.endsWith('.jsonl'));
       if (jsonlFiles.length === 0) return null;
+      if (claudeSessionId) {
+        const match = jsonlFiles.find(f => f === `${claudeSessionId}.jsonl`);
+        if (match) return join(projectDir, match);
+      }
       let latest: string | null = null;
       let latestMtime = 0;
       for (const f of jsonlFiles) {
@@ -434,8 +438,8 @@ export class ClaudeChannelService {
     }
   }
 
-  private async getClaudeSessionUsage(cwd: string, model: string): Promise<{ contextWindow: number; tokens: number; percent: number } | null> {
-    const sessionFile = await this.findClaudeSessionFile(cwd);
+  private async getClaudeSessionUsage(cwd: string, model: string, claudeSessionId?: string): Promise<{ contextWindow: number; tokens: number; percent: number } | null> {
+    const sessionFile = await this.findClaudeSessionFile(cwd, claudeSessionId);
     if (!sessionFile) return null;
 
     try {
@@ -476,7 +480,12 @@ export class ClaudeChannelService {
   async getContextUsage(sessionId: string): Promise<{ contextWindow: number; tokens: number; percent: number } | null> {
     const entry = await this.registry.get(sessionId).catch(() => null);
     if (!entry) return null;
-    return this.getClaudeSessionUsage(entry.cwd, entry.model ?? 'sonnet');
+    const cwd = entry.cwd || process.cwd();
+    let result = await this.getClaudeSessionUsage(cwd, entry.model ?? 'sonnet', entry.claudeSessionId);
+    if (!result && cwd !== process.cwd()) {
+      result = await this.getClaudeSessionUsage(process.cwd(), entry.model ?? 'sonnet', entry.claudeSessionId);
+    }
+    return result;
   }
 
   pinSession(sessionId: string): boolean {

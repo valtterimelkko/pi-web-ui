@@ -663,6 +663,7 @@ describe('ClaudeChannelService', () => {
     });
 
     it('should return null context usage when no session in registry', async () => {
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
       const ctx = await service.getContextUsage('sid');
       expect(ctx).toBeNull();
     });
