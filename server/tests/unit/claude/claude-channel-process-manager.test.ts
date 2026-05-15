@@ -1,29 +1,31 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { EventEmitter } from 'events';
-import { PassThrough } from 'stream';
 
-vi.mock('node:child_process', async () => {
-  const { EventEmitter } = await import('events');
-  const { PassThrough } = await import('stream');
+vi.mock('node-pty', () => {
+  const { EventEmitter } = require('events');
 
-  const createMockProcess = () => {
-    const proc = new EventEmitter() as unknown as import('node:child_process').ChildProcess;
-    (proc as unknown as Record<string, unknown>).stdout = new PassThrough();
-    (proc as unknown as Record<string, unknown>).stderr = new PassThrough();
-    (proc as unknown as Record<string, unknown>).stdin = new PassThrough();
-    (proc as unknown as Record<string, unknown>).pid = 99999;
-    (proc as unknown as Record<string, unknown>).kill = vi.fn((signal?: string) => {
-      setTimeout(() => proc.emit('exit', signal === 'SIGKILL' ? null : 0, signal ?? 'SIGTERM'), 0);
-      return true;
-    });
-    return proc;
+  const createMockPty = () => {
+    const emitter = new EventEmitter();
+    return {
+      pid: 99999,
+      kill: vi.fn((signal?: string) => {
+        const code = signal === 'SIGKILL' ? 137 : 0;
+        setTimeout(() => emitter.emit('exit', { exitCode: code, signal: signal ?? 'SIGTERM' }), 0);
+      }),
+      onData: vi.fn((cb: (data: string) => void) => {
+        emitter.on('data', cb);
+      }),
+      onExit: vi.fn((cb: (e: { exitCode: number | null; signal?: number | string }) => void) => {
+        emitter.on('exit', cb);
+      }),
+      _emitter: emitter,
+    };
   };
 
-  const spawnMock = vi.fn().mockImplementation(() => createMockProcess());
+  const spawnMock = vi.fn().mockImplementation(() => createMockPty());
 
   return {
-    spawn: spawnMock,
     default: { spawn: spawnMock },
+    spawn: spawnMock,
   };
 });
 
@@ -53,47 +55,56 @@ vi.mock('ws', async () => {
 });
 
 import { ClaudeChannelProcessManager } from '../../../src/claude/claude-channel-process-manager.js';
-import { spawn } from 'node:child_process';
+import pty from 'node-pty';
 import { existsSync } from 'node:fs';
 
-const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
+const spawnMock = pty.spawn as unknown as ReturnType<typeof vi.fn>;
 const existsSyncMock = existsSync as unknown as ReturnType<typeof vi.fn>;
 
 function makeDefaultConfig() {
   return {
     pluginDir: '/fake/plugin',
-    wsPort: 3100,
-    hookPort: 3101,
+    wsPort: 3110,
+    hookPort: 3111,
     cwd: '/tmp/project',
   };
 }
 
-function makeDeferredProcess() {
-  const proc = new EventEmitter() as unknown as import('node:child_process').ChildProcess;
-  (proc as unknown as Record<string, unknown>).stdout = new PassThrough();
-  (proc as unknown as Record<string, unknown>).stderr = new PassThrough();
-  (proc as unknown as Record<string, unknown>).stdin = new PassThrough();
-  (proc as unknown as Record<string, unknown>).pid = 54321;
-  (proc as unknown as Record<string, unknown>).kill = vi.fn((signal?: string) => {
-    setTimeout(() => proc.emit('exit', signal === 'SIGKILL' ? null : 0, signal ?? 'SIGTERM'), 0);
-    return true;
-  });
-  return proc;
+function makeDeferredPty() {
+  const { EventEmitter } = require('events');
+  const emitter = new EventEmitter();
+  return {
+    pid: 54321,
+    kill: vi.fn((signal?: string) => {
+      const code = signal === 'SIGKILL' ? 137 : 0;
+      setTimeout(() => emitter.emit('exit', { exitCode: code, signal: signal ?? 'SIGTERM' }), 0);
+    }),
+    onData: vi.fn((cb: (data: string) => void) => {
+      emitter.on('data', cb);
+    }),
+    onExit: vi.fn((cb: (e: { exitCode: number | null; signal?: number | string }) => void) => {
+      emitter.on('exit', cb);
+    }),
+    _emitter: emitter,
+  };
 }
 
-function makeStubbornProcess() {
-  const proc = new EventEmitter() as unknown as import('node:child_process').ChildProcess;
-  (proc as unknown as Record<string, unknown>).stdout = new PassThrough();
-  (proc as unknown as Record<string, unknown>).stderr = new PassThrough();
-  (proc as unknown as Record<string, unknown>).stdin = new PassThrough();
-  (proc as unknown as Record<string, unknown>).pid = 54322;
-  (proc as unknown as Record<string, unknown>).kill = vi.fn((signal?: string) => {
-    if (signal === 'SIGKILL') {
-      setTimeout(() => proc.emit('exit', null, 'SIGKILL'), 0);
-    }
-    return true;
-  });
-  return proc;
+function makeStubbornPty() {
+  const { EventEmitter } = require('events');
+  const emitter = new EventEmitter();
+  return {
+    pid: 54322,
+    kill: vi.fn((signal?: string) => {
+      if (signal === 'SIGKILL') {
+        setTimeout(() => emitter.emit('exit', { exitCode: 137, signal: 'SIGKILL' }), 0);
+      }
+    }),
+    onData: vi.fn(),
+    onExit: vi.fn((cb: (e: { exitCode: number | null; signal?: number | string }) => void) => {
+      emitter.on('exit', cb);
+    }),
+    _emitter: emitter,
+  };
 }
 
 describe('ClaudeChannelProcessManager', () => {
@@ -110,14 +121,14 @@ describe('ClaudeChannelProcessManager', () => {
     try { await manager.stop(); } catch { /* ignore */ }
   });
 
-  it('should start Claude with channel plugin flags', async () => {
+  it('should start Claude with channel plugin flags via PTY', async () => {
     let capturedCmd: string | undefined;
     let capturedArgs: string[] | undefined;
 
     spawnMock.mockImplementationOnce((cmd: string, args: string[]) => {
       capturedCmd = cmd;
       capturedArgs = args;
-      return makeDeferredProcess();
+      return makeDeferredPty();
     });
 
     await manager.start();
@@ -133,22 +144,22 @@ describe('ClaudeChannelProcessManager', () => {
 
   it('should detect when WS port becomes connectable', async () => {
     mockWsHealthResult = true;
-    spawnMock.mockImplementationOnce(() => makeDeferredProcess());
+    spawnMock.mockImplementationOnce(() => makeDeferredPty());
 
     await manager.start();
     expect(manager.isRunning()).toBe(true);
   });
 
   it('should gracefully stop on SIGTERM', async () => {
-    const proc = makeDeferredProcess();
+    const ptyProc = makeDeferredPty();
     const killCalls: string[] = [];
-    (proc.kill as ReturnType<typeof vi.fn>).mockImplementation((signal?: string) => {
+    (ptyProc.kill as ReturnType<typeof vi.fn>).mockImplementation((signal?: string) => {
       killCalls.push(signal ?? 'SIGTERM');
-      setTimeout(() => proc.emit('exit', 0, signal ?? 'SIGTERM'), 0);
-      return true;
+      const code = signal === 'SIGKILL' ? 137 : 0;
+      setTimeout(() => ptyProc._emitter.emit('exit', { exitCode: code, signal: signal ?? 'SIGTERM' }), 0);
     });
 
-    spawnMock.mockImplementationOnce(() => proc);
+    spawnMock.mockImplementationOnce(() => ptyProc);
     await manager.start();
     await manager.stop();
 
@@ -157,9 +168,9 @@ describe('ClaudeChannelProcessManager', () => {
   });
 
   it('should force kill after timeout', async () => {
-    const proc = makeStubbornProcess();
+    const ptyProc = makeStubbornPty();
 
-    spawnMock.mockImplementationOnce(() => proc);
+    spawnMock.mockImplementationOnce(() => ptyProc);
     await manager.start();
 
     vi.useFakeTimers();
@@ -169,30 +180,9 @@ describe('ClaudeChannelProcessManager', () => {
     await stopP;
     vi.useRealTimers();
 
-    const killCalls = (proc.kill as ReturnType<typeof vi.fn>).mock.calls.map((c: string[]) => c[0] ?? 'SIGTERM');
+    const killCalls = (ptyProc.kill as ReturnType<typeof vi.fn>).mock.calls.map((c: string[]) => c[0] ?? 'SIGTERM');
     expect(killCalls).toContain('SIGTERM');
     expect(killCalls).toContain('SIGKILL');
-  });
-
-  it('should report errors from stderr', async () => {
-    const proc = makeDeferredProcess();
-    spawnMock.mockImplementationOnce(() => proc);
-    mockWsHealthResult = false;
-
-    const startPromise = manager.start();
-
-    await new Promise((r) => setTimeout(r, 10));
-    (proc.stderr as PassThrough).write('Error: authentication failed\n');
-
-    try {
-      await startPromise;
-    } catch {
-      // expected
-    }
-
-    const state = manager.getState();
-    expect(state.status).toBe('error');
-    expect(state.error).toContain('authentication');
   });
 
   it('should handle missing plugin directory', async () => {
@@ -201,48 +191,30 @@ describe('ClaudeChannelProcessManager', () => {
     await expect(manager.start()).rejects.toThrow(/Plugin not found/);
   });
 
-  it('should handle Claude binary not found', async () => {
-    spawnMock.mockImplementationOnce(() => {
-      const proc = makeDeferredProcess();
-      setTimeout(() => {
-        proc.emit('error', new Error('spawn claude ENOENT'));
-        setTimeout(() => proc.emit('exit', 1, null), 0);
-      }, 0);
-      return proc;
-    });
-
-    mockWsHealthResult = false;
-
-    await expect(manager.start()).rejects.toThrow();
-    const state = manager.getState();
-    expect(state.status).toBe('error');
-    expect(state.error).toContain('ENOENT');
-  });
-
   it('should set environment variables for plugin ports', async () => {
-    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    let capturedEnv: Record<string, string> | undefined;
 
     spawnMock.mockImplementationOnce((_cmd: string, _args: string[], opts: Record<string, unknown>) => {
-      capturedEnv = opts.env as NodeJS.ProcessEnv;
-      return makeDeferredProcess();
+      capturedEnv = opts.env as Record<string, string>;
+      return makeDeferredPty();
     });
 
     await manager.start();
 
     expect(capturedEnv).toBeDefined();
-    expect(capturedEnv!.CLAUDE_CHANNEL_WS_PORT).toBe('3100');
-    expect(capturedEnv!.CLAUDE_CHANNEL_HOOK_PORT).toBe('3101');
+    expect(capturedEnv!.CLAUDE_CHANNEL_WS_PORT).toBe('3110');
+    expect(capturedEnv!.CLAUDE_CHANNEL_HOOK_PORT).toBe('3111');
   });
 
   it('should strip API keys from environment', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key';
     process.env.ANTHROPIC_AUTH_TOKEN = 'sk-ant-auth-token';
 
-    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    let capturedEnv: Record<string, string> | undefined;
 
     spawnMock.mockImplementationOnce((_cmd: string, _args: string[], opts: Record<string, unknown>) => {
-      capturedEnv = opts.env as NodeJS.ProcessEnv;
-      return makeDeferredProcess();
+      capturedEnv = opts.env as Record<string, string>;
+      return makeDeferredPty();
     });
 
     await manager.start();
@@ -253,5 +225,27 @@ describe('ClaudeChannelProcessManager', () => {
 
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_AUTH_TOKEN;
+  });
+
+  it('should report PTY process state', async () => {
+    spawnMock.mockImplementationOnce(() => makeDeferredPty());
+    await manager.start();
+
+    const state = manager.getState();
+    expect(state.status).toBe('running');
+    expect(state.pid).toBe(54321);
+    expect(state.startedAt).toBeGreaterThan(0);
+  });
+
+  it('should timeout when WS port never becomes connectable', { timeout: 35_000 }, async () => {
+    mockWsHealthResult = false;
+    spawnMock.mockImplementationOnce(() => makeDeferredPty());
+
+    const managerSlow = new ClaudeChannelProcessManager({
+      ...makeDefaultConfig(),
+    });
+
+    await expect(managerSlow.start()).rejects.toThrow(/did not become ready/);
+    try { await managerSlow.stop(); } catch { /* ignore */ }
   });
 });

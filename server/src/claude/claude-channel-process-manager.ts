@@ -1,10 +1,10 @@
-import { spawn, ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import WebSocket from 'ws';
+import pty from 'node-pty';
 
 export interface ChannelProcessState {
-  process: ChildProcess | null;
+  pid: number | null;
   status: 'stopped' | 'starting' | 'running' | 'error';
   startedAt: number | null;
   error?: string;
@@ -27,10 +27,11 @@ const STOP_TIMEOUT_MS = 10_000;
 export class ClaudeChannelProcessManager {
   private cfg: ClaudeChannelProcessManagerConfig;
   private state: ChannelProcessState = {
-    process: null,
+    pid: null,
     status: 'stopped',
     startedAt: null,
   };
+  private ptyProcess: pty.IPty | null = null;
 
   constructor(cfg: ClaudeChannelProcessManagerConfig) {
     this.cfg = cfg;
@@ -58,55 +59,45 @@ export class ClaudeChannelProcessManager {
       '--permission-mode', permissionMode,
     ];
 
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined) env[k] = v;
+    }
     env.CLAUDE_CHANNEL_WS_PORT = String(this.cfg.wsPort);
     env.CLAUDE_CHANNEL_HOOK_PORT = String(this.cfg.hookPort);
     delete env.ANTHROPIC_API_KEY;
     delete env.ANTHROPIC_AUTH_TOKEN;
 
-    const proc = spawn(claudePath, args, {
+    const proc = pty.spawn(claudePath, args, {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 40,
       cwd: this.cfg.cwd,
       env,
-      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    this.state.process = proc;
+    this.ptyProcess = proc;
+    this.state.pid = proc.pid;
 
-    proc.stdout?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString().trim();
+    proc.onData((data: string) => {
+      const text = data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
       if (text) {
-        console.log(`[ClaudeChannel] stdout: ${text}`);
+        console.log(`[ClaudeChannel] output: ${text.slice(0, 500)}`);
       }
     });
 
-    proc.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString().trim();
-      if (text) {
-        console.error(`[ClaudeChannel] stderr: ${text}`);
-      }
-      if (text.toLowerCase().includes('authentication') || text.toLowerCase().includes('permission denied') || text.toLowerCase().includes('unauthorized')) {
-        this.state.status = 'error';
-        this.state.error = text;
-      }
-    });
-
-    proc.on('error', (err: Error) => {
-      console.error(`[ClaudeChannel] process error: ${err.message}`);
-      this.state.status = 'error';
-      this.state.error = err.message;
-      this.state.process = null;
-    });
-
-    proc.on('exit', (code, signal) => {
+    proc.onExit(({ exitCode, signal }) => {
+      const code = exitCode ?? (signal ? -1 : 0);
       if (this.state.status !== 'error') {
-        if (code !== 0 && code !== null) {
+        if (code !== 0) {
           this.state.status = 'error';
           this.state.error = `Process exited with code=${code}, signal=${signal ?? 'null'}`;
         } else {
           this.state.status = 'stopped';
         }
       }
-      this.state.process = null;
+      this.ptyProcess = null;
+      this.state.pid = null;
       this.state.startedAt = null;
     });
 
@@ -117,16 +108,17 @@ export class ClaudeChannelProcessManager {
     } catch (err) {
       this.state.status = 'error';
       this.state.error = err instanceof Error ? err.message : String(err);
-      try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+      try { proc.kill(); } catch { /* ignore */ }
       throw err;
     }
   }
 
   async stop(): Promise<void> {
-    const proc = this.state.process;
+    const proc = this.ptyProcess;
     if (!proc || this.state.status === 'stopped') {
       this.state.status = 'stopped';
-      this.state.process = null;
+      this.ptyProcess = null;
+      this.state.pid = null;
       return;
     }
 
@@ -134,13 +126,14 @@ export class ClaudeChannelProcessManager {
       proc.kill('SIGTERM');
     } catch {
       this.state.status = 'stopped';
-      this.state.process = null;
+      this.ptyProcess = null;
+      this.state.pid = null;
       return;
     }
 
     const exited = await Promise.race([
       new Promise<boolean>((resolve) => {
-        proc.on('exit', () => resolve(true));
+        proc.onExit(() => resolve(true));
       }),
       new Promise<boolean>((resolve) => {
         setTimeout(() => resolve(false), STOP_TIMEOUT_MS);
@@ -152,13 +145,14 @@ export class ClaudeChannelProcessManager {
         proc.kill('SIGKILL');
       } catch { /* ignore */ }
       await new Promise<void>((resolve) => {
-        proc.on('exit', () => resolve());
+        proc.onExit(() => resolve());
         setTimeout(() => resolve(), 2000);
       });
     }
 
     this.state.status = 'stopped';
-    this.state.process = null;
+    this.ptyProcess = null;
+    this.state.pid = null;
     this.state.startedAt = null;
   }
 
