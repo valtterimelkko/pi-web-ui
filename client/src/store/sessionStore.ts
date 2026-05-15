@@ -1994,6 +1994,30 @@ export const useSessionStore = create<SessionState>()(
                 break;
               }
 
+              case 'permission_request': {
+                if (get().currentSessionId === sessionId) {
+                  const permData = event as unknown as {
+                    requestId: string;
+                    toolName: string;
+                    description: string;
+                    args: unknown;
+                  };
+                  set({
+                    extensionUIRequest: {
+                      id: permData.requestId || `perm-${Date.now()}`,
+                      type: 'confirm' as const,
+                      method: `permission.${permData.toolName || 'tool'}`,
+                      params: {
+                        message: permData.description || `Allow ${permData.toolName}?`,
+                        details: permData.args,
+                      },
+                      timeout: 120000,
+                    },
+                  });
+                }
+                break;
+              }
+
               case 'message': {
                 // Raw JSONL entry replayed during history replay.
                 // These arrive when the client reconnects and the server replays the session JSONL.
