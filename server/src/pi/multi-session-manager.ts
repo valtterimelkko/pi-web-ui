@@ -78,6 +78,22 @@ export type BroadcastFunction = (clientId: string, message: any) => void;
  */
 export type WebUIContextProvider = (sessionPath: string) => WebUIContext | undefined;
 
+function attachSessionIdToWebUiMessage(message: unknown, sessionId: string): unknown {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    return message;
+  }
+
+  const payload = message as Record<string, unknown>;
+  if (payload.sessionId !== undefined || payload.type === 'session_event') {
+    return message;
+  }
+
+  return {
+    ...payload,
+    sessionId,
+  };
+}
+
 /**
  * MultiSessionManager manages multiple sessions that can be shared across clients.
  * 
@@ -477,10 +493,11 @@ export class MultiSessionManager {
           ...webUIContext,
           clientId,
           sendToClient: (message: unknown) => {
+            const sessionScopedMessage = attachSessionIdToWebUiMessage(message, agentSession.sessionId);
             if (sessionPath && this.sessions.has(sessionPath)) {
-              this.broadcastToSubscribers(sessionPath, message);
+              this.broadcastToSubscribers(sessionPath, sessionScopedMessage);
             } else {
-              webUIContext.sendToClient(message);
+              webUIContext.sendToClient(sessionScopedMessage);
             }
           },
         }
@@ -582,10 +599,11 @@ export class MultiSessionManager {
             clientId,
             sessionPath,
             sendToClient: (message: unknown) => {
+              const sessionScopedMessage = attachSessionIdToWebUiMessage(message, agentSession.sessionId);
               if (this.sessions.has(sessionPath)) {
-                this.broadcastToSubscribers(sessionPath, message);
+                this.broadcastToSubscribers(sessionPath, sessionScopedMessage);
               } else {
-                webUIContext.sendToClient(message);
+                webUIContext.sendToClient(sessionScopedMessage);
               }
             },
           }

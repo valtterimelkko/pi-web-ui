@@ -2095,8 +2095,12 @@ export class WebSocketConnectionManager {
       clientId: firstSubscriber,
       sessionPath,
       sendToClient: (message: unknown) => {
+        const payload =
+          message && typeof message === 'object' && !Array.isArray(message) && !(message as { sessionId?: unknown }).sessionId
+            ? { ...(message as Record<string, unknown>), sessionId: activeSession.sessionId }
+            : message;
         // Broadcast to all subscribers of this session
-        this.multiSessionManager.broadcastToSubscribers(sessionPath, message);
+        this.multiSessionManager.broadcastToSubscribers(sessionPath, payload);
       },
     };
   }

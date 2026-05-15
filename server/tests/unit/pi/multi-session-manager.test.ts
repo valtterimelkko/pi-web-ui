@@ -348,6 +348,31 @@ describe('MultiSessionManager', () => {
       );
     });
 
+    it('should tag extension UI messages with the owning session during createAndSubscribe', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'goal-session',
+        sessionFile: '/path/to/goal-session.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      const webUIContext = { clientId: 'client-1', sendToClient: vi.fn() } as any;
+      await manager.createAndSubscribe('client-1', '/work', webUIContext);
+
+      const createArgs = mockPiService.createSession.mock.calls.at(-1)?.[0];
+      const sendToClient = createArgs?.webUIContext?.sendToClient as ((message: unknown) => void) | undefined;
+      expect(sendToClient).toBeTypeOf('function');
+
+      sendToClient?.({ type: 'widget_content', key: 'goal-engine-status', content: ['Goal Status'] });
+
+      expect(mockBroadcast).toHaveBeenCalledWith('client-1', {
+        type: 'widget_content',
+        sessionId: 'goal-session',
+        key: 'goal-engine-status',
+        content: ['Goal Status'],
+      });
+    });
+
     it('should deliver events via the SDK dispatch path (handler key matches createSession clientId)', async () => {
       const mockSession = createMockAgentSession({
         sessionId: 'sdk-dispatch-test',
@@ -516,6 +541,30 @@ describe('MultiSessionManager', () => {
           }),
         })
       );
+    });
+
+    it('should tag extension UI messages with the owning session during rehydration', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'rehydrated-session',
+        sessionPath: '/path/to/rehydrated.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      const webUIContext = { clientId: 'client-1', sendToClient: vi.fn() } as any;
+      await manager.subscribeClient('client-1', '/path/to/rehydrated.jsonl', '/work', webUIContext);
+
+      const createArgs = mockPiService.createSession.mock.calls.at(-1)?.[0];
+      const sendToClient = createArgs?.webUIContext?.sendToClient as ((message: unknown) => void) | undefined;
+      expect(sendToClient).toBeTypeOf('function');
+
+      sendToClient?.({ type: 'notification', notification: { message: 'Goal restored', type: 'info' } });
+
+      expect(mockBroadcast).toHaveBeenCalledWith('client-1', {
+        type: 'notification',
+        sessionId: 'rehydrated-session',
+        notification: { message: 'Goal restored', type: 'info' },
+      });
     });
 
     it('should throw on invalid session path (empty)', async () => {

@@ -225,6 +225,8 @@ interface SessionState {
   extensionUIRequest: ExtensionUIRequest | null;
   extensionWidgets: Record<string, string[]>;
   extensionStatuses: Record<string, string | undefined>;
+  sessionExtensionWidgets: Record<string, Record<string, string[]>>;
+  sessionExtensionStatuses: Record<string, Record<string, string | undefined>>;
   sessionInfo: SessionStats | null;
   // Context usage tracking
   contextPercent: number;
@@ -346,6 +348,8 @@ export const useSessionStore = create<SessionState>()(
       extensionUIRequest: null,
       extensionWidgets: {},
       extensionStatuses: {},
+      sessionExtensionWidgets: {},
+      sessionExtensionStatuses: {},
       sessionInfo: null,
       contextPercent: 0,
       contextUsed: 0,
@@ -1152,6 +1156,8 @@ export const useSessionStore = create<SessionState>()(
                 currentSessionId: switchMsg.sessionId,
                 currentSessionSdkType: switchMsg.sdkType ?? state.sessions.find((s) => s.id === switchMsg.sessionId)?.sdkType ?? null,
                 currentModel: switchMsg.model ?? null,
+                extensionWidgets: state.sessionExtensionWidgets[switchMsg.sessionId] ?? {},
+                extensionStatuses: state.sessionExtensionStatuses[switchMsg.sessionId] ?? {},
                 currentThinkingLevel: switchMsg.thinkingLevel ?? null,
                 messages: clientMessages,
                 contextPercent: switchMsg.contextPercent ?? 0,
@@ -1408,50 +1414,89 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'widget_content': {
-            const widgetMsg = msg as unknown as { key?: string; content?: unknown };
+            const widgetMsg = msg as unknown as { sessionId?: string; key?: string; content?: unknown };
             const key = widgetMsg.key;
             const content = widgetMsg.content;
-            if (key && Array.isArray(content)) {
-              set((state) => ({
-                extensionWidgets: {
-                  ...state.extensionWidgets,
-                  [key]: content.map(String),
-                },
-              }));
+            const targetSessionId = widgetMsg.sessionId ?? get().currentSessionId;
+            if (key && Array.isArray(content) && targetSessionId) {
+              const lines = content.map(String);
+              set((state) => {
+                const currentSessionWidgets = state.sessionExtensionWidgets[targetSessionId] ?? {};
+                const nextSessionWidgets = {
+                  ...state.sessionExtensionWidgets,
+                  [targetSessionId]: {
+                    ...currentSessionWidgets,
+                    [key]: lines,
+                  },
+                };
+                return {
+                  sessionExtensionWidgets: nextSessionWidgets,
+                  extensionWidgets: targetSessionId === state.currentSessionId
+                    ? nextSessionWidgets[targetSessionId]
+                    : state.extensionWidgets,
+                };
+              });
             }
             break;
           }
 
           case 'widget_cleared': {
-            const widgetMsg = msg as unknown as { key: string };
-            if (widgetMsg.key) {
+            const widgetMsg = msg as unknown as { sessionId?: string; key: string };
+            const targetSessionId = widgetMsg.sessionId ?? get().currentSessionId;
+            if (widgetMsg.key && targetSessionId) {
               set((state) => {
-                const nextWidgets = { ...state.extensionWidgets };
-                delete nextWidgets[widgetMsg.key];
-                return { extensionWidgets: nextWidgets };
+                const currentSessionWidgets = { ...(state.sessionExtensionWidgets[targetSessionId] ?? {}) };
+                delete currentSessionWidgets[widgetMsg.key];
+                const nextSessionWidgets = {
+                  ...state.sessionExtensionWidgets,
+                  [targetSessionId]: currentSessionWidgets,
+                };
+                return {
+                  sessionExtensionWidgets: nextSessionWidgets,
+                  extensionWidgets: targetSessionId === state.currentSessionId
+                    ? currentSessionWidgets
+                    : state.extensionWidgets,
+                };
               });
             }
             break;
           }
 
           case 'extension_status': {
-            const statusMsg = msg as unknown as { status?: { key?: string; text?: string } };
+            const statusMsg = msg as unknown as { sessionId?: string; status?: { key?: string; text?: string } };
             const key = statusMsg.status?.key;
-            if (key) {
-              set((state) => ({
-                extensionStatuses: {
-                  ...state.extensionStatuses,
-                  [key]: statusMsg.status?.text,
-                },
-              }));
+            const targetSessionId = statusMsg.sessionId ?? get().currentSessionId;
+            if (key && targetSessionId) {
+              set((state) => {
+                const currentSessionStatuses = { ...(state.sessionExtensionStatuses[targetSessionId] ?? {}) };
+                if (statusMsg.status?.text === undefined) {
+                  delete currentSessionStatuses[key];
+                } else {
+                  currentSessionStatuses[key] = statusMsg.status.text;
+                }
+                const nextSessionStatuses = {
+                  ...state.sessionExtensionStatuses,
+                  [targetSessionId]: currentSessionStatuses,
+                };
+                return {
+                  sessionExtensionStatuses: nextSessionStatuses,
+                  extensionStatuses: targetSessionId === state.currentSessionId
+                    ? currentSessionStatuses
+                    : state.extensionStatuses,
+                };
+              });
             }
             break;
           }
 
           case 'notification': {
-            const { notification } = msg as unknown as {
+            const { notification, sessionId } = msg as unknown as {
+              sessionId?: string;
               notification: { message: string; type: 'info' | 'warning' | 'error' };
             };
+            if (sessionId && sessionId !== get().currentSessionId) {
+              break;
+            }
             useUIStore.getState().addToast({
               type: notification.type,
               message: notification.message,
