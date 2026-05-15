@@ -8,26 +8,15 @@ describe('ClaudeChannelWsClient', () => {
   let client: ClaudeChannelWsClient;
   let clientUrl: string;
 
-  const getFreePort = async (): Promise<number> => {
-    return new Promise((resolve, reject) => {
+  beforeEach(async () => {
+    server = await new Promise<WebSocketServer>((resolve, reject) => {
       const srv = new WebSocketServer({ port: 0 });
-      srv.on('listening', () => {
-        const addr = srv.address();
-        if (typeof addr === 'object' && addr !== null) {
-          const port = addr.port;
-          srv.close(() => resolve(port));
-        } else {
-          srv.close(() => reject(new Error('Unexpected address format')));
-        }
-      });
+      srv.on('listening', () => resolve(srv));
       srv.on('error', reject);
     });
-  };
-
-  beforeEach(async () => {
-    serverPort = await getFreePort();
+    const addr = server.address() as { port: number };
+    serverPort = addr.port;
     clientUrl = `ws://127.0.0.1:${serverPort}`;
-    server = new WebSocketServer({ port: serverPort });
     client = new ClaudeChannelWsClient(clientUrl, {
       reconnectDelay: 50,
       maxReconnectDelay: 500,
