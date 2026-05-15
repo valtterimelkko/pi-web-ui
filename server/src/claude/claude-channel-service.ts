@@ -207,6 +207,8 @@ export class ClaudeChannelService {
     this.claudeToInternal.set(claudeSessionId, sessionId);
     this.internalToClaude.set(sessionId, claudeSessionId);
 
+    this.processManager.switchModel(model);
+
     return { sessionId, claudeSessionId };
   }
 

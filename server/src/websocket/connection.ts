@@ -1707,6 +1707,7 @@ export class WebSocketConnectionManager {
     // Handle Claude session model change
     if (this.claudeSessionIds.has(sessionPath)) {
       try {
+        console.log(`[handleSetModel] Claude session ${sessionPath}, model: ${message.modelId}`);
         const normalizedModel = await this.claudeService.setModel(sessionPath, message.modelId);
         this.sendMessage(clientId, { type: 'model_changed', modelId: normalizedModel });
       } catch (error) {
