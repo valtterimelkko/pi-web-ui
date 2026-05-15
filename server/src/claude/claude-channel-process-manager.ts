@@ -56,6 +56,12 @@ export class ClaudeChannelProcessManager {
     const args = [
       '--dangerously-load-development-channels', 'server:pi-claude-channel',
       '--permission-mode', permissionMode,
+      '--allowedTools', 'Bash', 'Edit', 'Read', 'Write', 'Glob', 'Grep', 'WebFetch',
+      'mcp__pi-claude-channel__reply',
+      'mcp__pi-claude-channel__status',
+      'mcp__pi-claude-channel__fetch_history',
+      'mcp__pi-claude-channel__request_permission',
+      'mcp__pi-claude-channel__send_event',
     ];
 
     const env: Record<string, string> = {};

@@ -138,6 +138,8 @@ describe('ClaudeChannelProcessManager', () => {
     expect(capturedArgs).toContain('server:pi-claude-channel');
     expect(capturedArgs).toContain('--permission-mode');
     expect(capturedArgs).toContain('acceptEdits');
+    expect(capturedArgs).toContain('--allowedTools');
+    expect(capturedArgs).toContain('mcp__pi-claude-channel__reply');
   });
 
   it('should detect when WS port becomes connectable', async () => {
