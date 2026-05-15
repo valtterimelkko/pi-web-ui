@@ -53,7 +53,7 @@ function setStatus(sessionId: string, status: string) {
 function pushNotification(params: Record<string, unknown>) {
   Promise.resolve(
     mcpServer.notification({
-      method: "notifications/message",
+      method: "notifications/claude/channel",
       params,
     }),
   ).catch(() => {});
@@ -63,7 +63,20 @@ function pushNotification(params: Record<string, unknown>) {
 
 const mcpServer = new Server(
   { name: "pi-claude-channel", version: "1.0.0" },
-  { capabilities: { tools: {} } },
+  {
+    capabilities: {
+      experimental: {
+        "claude/channel": {},
+        "claude/channel/permission": {},
+      },
+      tools: {},
+    },
+    instructions:
+      "Messages arrive as <channel source=\"pi-claude-channel\" chat_id=\"...\" session_id=\"...\">. " +
+      "Reply with the reply tool, passing the chat_id from the tag. " +
+      "Use the status tool to report activity. " +
+      "Permission prompts include a request_id; remote verdicts use yes/no with the ID.",
+  },
 );
 
 mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -286,9 +299,11 @@ function handleWSMessage(
         sessionId,
         timestamp: Date.now(),
       });
+      const meta: Record<string, string> = { chat_id: sessionId, session_id: sessionId };
+      if (cwd) meta.cwd = cwd;
       pushNotification({
-        level: "info",
-        data: { type: "prompt", content, sessionId, cwd },
+        content,
+        meta,
       });
       break;
     }
@@ -296,8 +311,8 @@ function handleWSMessage(
     case "abort": {
       const { sessionId } = msg as { sessionId: string };
       pushNotification({
-        level: "info",
-        data: { type: "abort", sessionId },
+        content: "abort",
+        meta: { chat_id: sessionId, session_id: sessionId, action: "abort" },
       });
       break;
     }

@@ -34,7 +34,7 @@ It combines:
 | Runtime | What it uses | Best described as | Primary persistence |
 |---|---|---|---|
 | **Pi SDK** | Pi SDK + Pi worker/session lifecycle | Pi-native path with extensions/tools | `~/.pi/agent/sessions/` |
-| **Claude Direct** | `claude -p` subprocesses (default) or Claude Code plugin via `--plugin-dir` (opt-in) | Claude CLI path with Pi-owned replay/persistence | `~/.pi-web-ui/claude-sessions/` |
+| **Claude Direct** | `claude -p` subprocesses (default) or `claude --dangerously-load-development-channels` (opt-in channel plugin) | Claude CLI path with Pi-owned replay/persistence | `~/.pi-web-ui/claude-sessions/` |
 | **OpenCode Direct** | `opencode serve` + HTTP/SSE | OpenCode-backed path for supported Z.AI GLM usage | OpenCode runtime + Pi registry metadata |
 
 Unified session metadata lives in:

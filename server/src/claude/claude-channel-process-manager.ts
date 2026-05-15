@@ -53,6 +53,7 @@ export class ClaudeChannelProcessManager {
     const permissionMode = this.cfg.permissionMode || DEFAULT_PERMISSION_MODE;
 
     const args = [
+      '--dangerously-load-development-channels', 'server:pi-claude-channel',
       '--plugin-dir', this.cfg.pluginDir,
       '--permission-mode', permissionMode,
     ];

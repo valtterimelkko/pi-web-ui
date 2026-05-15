@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "pi-claude-channel": {
+      "command": "bun",
+      "args": ["run", "server.ts"]
+    }
+  }
+}
