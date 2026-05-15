@@ -136,8 +136,8 @@ describe('ClaudeChannelProcessManager', () => {
     expect(capturedCmd).toBe('claude');
     expect(capturedArgs).toContain('--dangerously-load-development-channels');
     expect(capturedArgs).toContain('server:pi-claude-channel');
-    expect(capturedArgs).toContain('--plugin-dir');
-    expect(capturedArgs).toContain('/fake/plugin');
+    expect(capturedArgs).toContain('--mcp-config');
+    expect(capturedArgs).toContain('/fake/plugin/.mcp.json');
     expect(capturedArgs).toContain('--permission-mode');
     expect(capturedArgs).toContain('acceptEdits');
   });

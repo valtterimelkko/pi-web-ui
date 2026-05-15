@@ -55,7 +55,7 @@ export class ClaudeChannelProcessManager {
 
     const args = [
       '--dangerously-load-development-channels', 'server:pi-claude-channel',
-      '--plugin-dir', this.cfg.pluginDir,
+      '--mcp-config', join(this.cfg.pluginDir, '.mcp.json'),
       '--permission-mode', permissionMode,
     ];
 
@@ -79,10 +79,17 @@ export class ClaudeChannelProcessManager {
     this.ptyProcess = proc;
     this.state.pid = proc.pid;
 
+    let confirmed = false;
     proc.onData((data: string) => {
       const text = data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
       if (text) {
         console.log(`[ClaudeChannel] output: ${text.slice(0, 500)}`);
+      }
+      if (!confirmed && (text.includes('Entertoconfirm') || text.includes('Enter to confirm') || text.includes('local development'))) {
+        setTimeout(() => {
+          proc.write('\r');
+          confirmed = true;
+        }, 500);
       }
     });
 
