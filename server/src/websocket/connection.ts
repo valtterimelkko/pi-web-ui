@@ -179,6 +179,7 @@ export class WebSocketConnectionManager {
   private opencodeService: OpenCodeService;
   private opencodeSessionIds: Set<string> = new Set();
   private opencodeSubs = new OpenCodeSessionSubscribers();
+  private pendingClaudePermissions: Map<string, string> = new Map();
 
   constructor() {
     this.wss = new WebSocketServer({ noServer: true });
@@ -231,6 +232,12 @@ export class WebSocketConnectionManager {
 
     // Set up session status change broadcasting
     this.setupSessionStatusBroadcasting();
+
+    if (config.claudeChannelEnabled) {
+      this.claudeService.startChannel().catch((err) => {
+        console.error('[WebUI] Failed to start Claude channel:', err);
+      });
+    }
 
     this.setupServer();
   }
@@ -807,17 +814,43 @@ export class WebSocketConnectionManager {
         sessionId,
         prompt,
         (normalizedEvent) => {
-          // Convert NormalizedEvent to Pi-compatible format
+          if (normalizedEvent.type === 'permission_request') {
+            const data = normalizedEvent.data as Record<string, unknown>;
+            const uiRequest = {
+              type: 'extension_ui_request' as const,
+              request: {
+                id: data.requestId as string,
+                type: 'confirm' as const,
+                method: `claude.permission.${data.toolName || 'tool'}`,
+                params: {
+                  title: `Allow ${data.toolName}?`,
+                  description: data.description || `Claude wants to use ${data.toolName}`,
+                  toolName: data.toolName,
+                  args: data.args,
+                },
+                timeout: 120000,
+              },
+            };
+            const subscribers = this.claudeSubs.getSubscribers(sessionId);
+            if (subscribers && subscribers.size > 0) {
+              for (const subId of subscribers) {
+                this.sendMessage(subId, uiRequest);
+              }
+            } else {
+              this.sendMessage(clientId, uiRequest);
+            }
+            this.pendingClaudePermissions.set(data.requestId as string, sessionId);
+            return;
+          }
+
           const piEvent = normEventToPiFormat(normalizedEvent);
           const message = { type: 'session_event' as const, sessionId, event: piEvent };
-          // Broadcast to ALL clients currently viewing this Claude session
           const subscribers = this.claudeSubs.getSubscribers(sessionId);
           if (subscribers && subscribers.size > 0) {
             for (const subId of subscribers) {
               this.sendMessage(subId, message);
             }
           } else {
-            // Fall back: send only to the requesting client
             this.sendMessage(clientId, message);
           }
         },
@@ -1803,7 +1836,17 @@ export class WebSocketConnectionManager {
   ): Promise<void> {
     const { id, approved, cancelled } = message.response;
 
-    // Check if this is an OpenCode permission response
+    if (this.pendingClaudePermissions.has(id)) {
+      const sessionId = this.pendingClaudePermissions.get(id)!;
+      this.pendingClaudePermissions.delete(id);
+      this.claudeService.sendPermissionResponse(
+        sessionId,
+        id,
+        approved === true && cancelled !== true,
+      );
+      return;
+    }
+
     if (this.opencodeService.isPendingPermission(id)) {
       const isApproved = approved === true && cancelled !== true;
       try {
