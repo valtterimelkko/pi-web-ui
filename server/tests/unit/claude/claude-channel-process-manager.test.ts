@@ -129,6 +129,7 @@ describe('ClaudeChannelProcessManager', () => {
     expect(capturedArgs).toContain('/fake/plugin');
     expect(capturedArgs).toContain('--permission-mode');
     expect(capturedArgs).toContain('acceptEdits');
+    expect(capturedArgs).toContain('--dangerously-load-development-channels');
   });
 
   it('should detect when WS port becomes connectable', async () => {
