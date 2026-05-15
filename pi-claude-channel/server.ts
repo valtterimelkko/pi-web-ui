@@ -82,6 +82,12 @@ const mcpServer = new Server(
     instructions:
       "Messages arrive as <channel source=\"pi-claude-channel\" chat_id=\"...\" session_id=\"...\">. " +
       "Reply with the reply tool, passing the chat_id from the tag. " +
+      "Before using any tool (Bash, Read, Write, Edit, Glob, Grep, WebFetch, etc.), " +
+      "call send_event with the chat_id, event_type=\"tool_execution\", and event_data " +
+      "containing {\"tool_name\": \"...\", \"args\": {...}}. " +
+      "After the tool completes, call send_event again with event_type=\"tool_result\" " +
+      "and event_data containing {\"tool_name\": \"...\", \"result\": \"...\"}. " +
+      "This lets the UI show your work in real-time. " +
       "Use the status tool to report activity. " +
       "Permission prompts include a request_id; remote verdicts use yes/no with the ID.",
   },

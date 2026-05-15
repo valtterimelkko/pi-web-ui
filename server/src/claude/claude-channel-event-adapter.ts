@@ -159,6 +159,34 @@ export class ClaudeChannelEventAdapter {
           },
         ];
 
+      case 'tool_execution':
+        return [
+          {
+            type: 'tool_execution_start',
+            sessionId: event.sessionId,
+            timestamp: ts,
+            data: {
+              toolCallId: (event.toolCallId as string) ?? (event.tool_call_id as string),
+              toolName: event.toolName ?? event.tool_name,
+              args: event.args,
+            },
+          },
+        ];
+
+      case 'tool_result':
+        return [
+          {
+            type: 'tool_execution_end',
+            sessionId: event.sessionId,
+            timestamp: ts,
+            data: {
+              toolCallId: (event.toolCallId as string) ?? (event.tool_call_id as string),
+              result: event.result,
+              isError: (event.isError as boolean) ?? false,
+            },
+          },
+        ];
+
       case 'session_status':
         return [
           {
