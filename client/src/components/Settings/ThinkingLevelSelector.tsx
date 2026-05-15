@@ -1,6 +1,6 @@
 import { Lightbulb } from 'lucide-react';
 
-export type ThinkingLevel = 'none' | 'low' | 'medium' | 'high';
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 interface ThinkingLevelSelectorProps {
   value: ThinkingLevel;
@@ -8,10 +8,12 @@ interface ThinkingLevelSelectorProps {
 }
 
 const levels: { value: ThinkingLevel; label: string; description: string }[] = [
-  { value: 'none', label: 'No Thinking', description: 'Direct responses' },
+  { value: 'off', label: 'Off', description: 'No extended thinking' },
+  { value: 'minimal', label: 'Minimal', description: 'Brief reasoning' },
   { value: 'low', label: 'Low', description: 'Quick thinking' },
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning' },
   { value: 'high', label: 'High', description: 'Deep analysis' },
+  { value: 'xhigh', label: 'Extra High', description: 'Maximum reasoning' },
 ];
 
 export function ThinkingLevelSelector({ value, onChange }: ThinkingLevelSelectorProps) {

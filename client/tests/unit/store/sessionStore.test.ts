@@ -347,6 +347,41 @@ describe('sessionStore', () => {
       });
       expect(useSessionStore.getState().extensionUIRequest).toEqual(request);
     });
+
+    it('should handle thinking_level_changed message', () => {
+      const state = useSessionStore.getState();
+      expect(state.currentThinkingLevel).toBeNull();
+      state.handleServerMessage({ type: 'thinking_level_changed', level: 'high' });
+      expect(useSessionStore.getState().currentThinkingLevel).toBe('high');
+    });
+
+    it('should handle session_switched with thinkingLevel', () => {
+      const state = useSessionStore.getState();
+      state.setSessions([{ id: 's1', path: '/p1', firstMessage: 'Hi', messageCount: 1, cwd: '/' }]);
+      state.handleServerMessage({
+        type: 'session_switched',
+        sessionId: 's1',
+        sessionPath: '/p1',
+        model: 'anthropic/claude-sonnet-4',
+        thinkingLevel: 'xhigh',
+        messages: [],
+      });
+      expect(useSessionStore.getState().currentThinkingLevel).toBe('xhigh');
+      expect(useSessionStore.getState().currentModel).toBe('anthropic/claude-sonnet-4');
+    });
+
+    it('should reset thinkingLevel to null on session_switched without thinkingLevel', () => {
+      const state = useSessionStore.getState();
+      useSessionStore.setState({ currentThinkingLevel: 'high' });
+      state.setSessions([{ id: 's1', path: '/p1', firstMessage: 'Hi', messageCount: 1, cwd: '/' }]);
+      state.handleServerMessage({
+        type: 'session_switched',
+        sessionId: 's1',
+        sessionPath: '/p1',
+        messages: [],
+      });
+      expect(useSessionStore.getState().currentThinkingLevel).toBeNull();
+    });
   });
 
   describe('background session support', () => {

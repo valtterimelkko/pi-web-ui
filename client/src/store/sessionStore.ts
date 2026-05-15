@@ -214,6 +214,7 @@ interface SessionState {
   currentSessionId: string | null;
   currentSessionSdkType: 'pi' | 'claude' | 'opencode' | null;
   currentModel: string | null;
+  currentThinkingLevel: string | null;
   messages: Message[];
   isStreaming: boolean;
   isLoading: boolean;
@@ -270,6 +271,7 @@ interface SessionState {
   setCurrentSession: (sessionId: string | null) => void;
   switchSession: (newSessionId: string) => void;
   setCurrentModel: (modelId: string) => void;
+  setCurrentThinkingLevel: (level: string) => void;
   addMessage: (message: Message) => void;
   updateMessage: (id: string, updates: Partial<Message>) => void;
   setStreaming: (isStreaming: boolean) => void;
@@ -334,6 +336,7 @@ export const useSessionStore = create<SessionState>()(
       currentSessionId: null,
       currentSessionSdkType: null,
       currentModel: null,
+      currentThinkingLevel: null,
       messages: [],
       isStreaming: false,
       isLoading: false,
@@ -417,6 +420,7 @@ export const useSessionStore = create<SessionState>()(
       setExtensionUIRequest: (request) => set({ extensionUIRequest: request }),
       setSessionInfo: (info) => set({ sessionInfo: info }),
       setCurrentModel: (modelId) => set({ currentModel: modelId }),
+      setCurrentThinkingLevel: (level) => set({ currentThinkingLevel: level }),
 
       // LRU cache eviction: remove least recently used sessions when over limit
       evictIfNeeded: () => {
@@ -1066,6 +1070,7 @@ export const useSessionStore = create<SessionState>()(
               sessionId: string;
               sdkType?: 'pi' | 'claude' | 'opencode';
               model?: string;
+              thinkingLevel?: string;
               contextWindow?: number;
               contextUsed?: number;
               contextPercent?: number;
@@ -1147,6 +1152,7 @@ export const useSessionStore = create<SessionState>()(
                 currentSessionId: switchMsg.sessionId,
                 currentSessionSdkType: switchMsg.sdkType ?? state.sessions.find((s) => s.id === switchMsg.sessionId)?.sdkType ?? null,
                 currentModel: switchMsg.model ?? null,
+                currentThinkingLevel: switchMsg.thinkingLevel ?? null,
                 messages: clientMessages,
                 contextPercent: switchMsg.contextPercent ?? 0,
                 contextUsed: switchMsg.contextUsed ?? 0,
@@ -1457,10 +1463,19 @@ export const useSessionStore = create<SessionState>()(
             const modelId = msg.modelId as string;
             const modelName = modelId.split('/').pop()?.replace(/-/g, ' ') || modelId;
             set({ currentModel: modelId });
-            // Show success toast
             useUIStore.getState().addToast({
               type: 'success',
               message: `Model changed to ${modelName}`,
+            });
+            break;
+          }
+
+          case 'thinking_level_changed': {
+            const level = msg.level as string;
+            set({ currentThinkingLevel: level });
+            useUIStore.getState().addToast({
+              type: 'success',
+              message: `Thinking level set to ${level}`,
             });
             break;
           }

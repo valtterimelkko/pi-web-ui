@@ -131,6 +131,10 @@ export function useWebSocket() {
     return sendMessage({ type: 'set_model', modelId });
   }, [sendMessage]);
 
+  const setThinkingLevel = useCallback((level: string) => {
+    return sendMessage({ type: 'set_thinking_level', level });
+  }, [sendMessage]);
+
   const sendCompact = useCallback((customInstructions?: string) => {
     return sendMessage({ type: 'compact', customInstructions });
   }, [sendMessage]);
@@ -163,6 +167,7 @@ export function useWebSocket() {
     unsubscribeFromSession,
     getSessions,
     setModel,
+    setThinkingLevel,
     sendCompact,
     getSessionInfo,
     setSessionName,

@@ -1190,6 +1190,7 @@ export class WebSocketConnectionManager {
 
     // Get model and context usage from the session
     const model = agentSession?.model;
+    const thinkingLevel = agentSession?.thinkingLevel;
     const contextUsage = agentSession?.getContextUsage();
 
     // Load session messages from file
@@ -1203,6 +1204,7 @@ export class WebSocketConnectionManager {
       sessionId: status.sessionId,
       sessionPath: sessionPath,
       model: model ? `${model.provider}/${model.id}` : undefined,
+      thinkingLevel: thinkingLevel ?? undefined,
       contextWindow: contextUsage?.contextWindow ?? undefined,
       contextUsed: contextUsage?.tokens ?? undefined,
       contextPercent: contextUsage?.percent ?? undefined,

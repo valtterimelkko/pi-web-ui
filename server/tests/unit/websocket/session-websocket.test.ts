@@ -97,4 +97,28 @@ describe('SessionWebSocketHandler', () => {
       expect(handler.activeSessionCount).toBe(1);
     });
   });
+
+  describe('set_thinking_level', () => {
+    it('should handle set_thinking_level after subscribe', async () => {
+      const { SessionRPCClient } = await import('../../../src/workers/session-rpc-client.js');
+      await handler.handleMessage({ type: 'subscribe', sessionPath: '/tmp/test.jsonl' });
+      await handler.handleMessage({ type: 'set_thinking_level', sessionPath: '/tmp/test.jsonl', level: 'high' });
+      const client = SessionRPCClient as unknown as vi.Mock;
+      const instance = client.mock.results[0]?.value;
+      expect(instance?.setThinkingLevel).toHaveBeenCalledWith('high');
+    });
+
+    it('should silently ignore set_thinking_level without subscribe', async () => {
+      await handler.handleMessage({ type: 'set_thinking_level', sessionPath: '/tmp/test.jsonl', level: 'high' });
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('should silently ignore set_thinking_level without level', async () => {
+      await handler.handleMessage({ type: 'subscribe', sessionPath: '/tmp/test.jsonl' });
+      await handler.handleMessage({ type: 'set_thinking_level', sessionPath: '/tmp/test.jsonl' } as any);
+      expect(mockSend).not.toHaveBeenCalledWith('client-1', expect.objectContaining({
+        type: 'error',
+      }));
+    });
+  });
 });

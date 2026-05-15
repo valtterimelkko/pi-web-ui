@@ -35,8 +35,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [showThinking, setShowThinking] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const { setModel } = useWebSocket();
+  const { setModel, setThinkingLevel: sendThinkingLevel } = useWebSocket();
   const storeCurrentModel = useSessionStore((state) => state.currentModel);
+  const storeCurrentThinkingLevel = useSessionStore((state) => state.currentThinkingLevel);
   const errorMessage = useSessionStore((state) => state.error);
   const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   
@@ -100,8 +101,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   useEffect(() => {
     if (isOpen) {
       setError(null);
+      if (storeCurrentThinkingLevel) {
+        setThinkingLevel(storeCurrentThinkingLevel as ThinkingLevel);
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, storeCurrentThinkingLevel]);
 
   useEffect(() => {
     if (errorMessage && isOpen) {
@@ -117,6 +121,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       setIsSaving(true);
       setError(null);
       setModel(currentModel);
+      sendThinkingLevel(thinkingLevel);
 
       setTimeout(() => {
         setIsSaving(false);
