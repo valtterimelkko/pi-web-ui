@@ -223,6 +223,24 @@ describe('ClaudeChannelEventAdapter', () => {
       expect(events[0].data).toEqual(event);
     });
 
+    it('should convert usage event to usage_report', () => {
+      const event: ChannelEvent = {
+        type: 'usage',
+        sessionId: SESSION_ID,
+        input_tokens: 500,
+        output_tokens: 200,
+      };
+
+      const events = adapter.normalize(event);
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('usage_report');
+      expect(events[0].sessionId).toBe(SESSION_ID);
+      expect(events[0].data).toEqual({
+        inputTokens: 500,
+        outputTokens: 200,
+      });
+    });
+
     it('should use event timestamp when provided', () => {
       const eventTs = 1700000000000;
       const event: ChannelEvent = {

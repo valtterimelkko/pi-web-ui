@@ -187,6 +187,19 @@ export class ClaudeChannelEventAdapter {
           },
         ];
 
+      case 'usage':
+        return [
+          {
+            type: 'usage_report',
+            sessionId: event.sessionId,
+            timestamp: ts,
+            data: {
+              inputTokens: event.input_tokens ?? event.inputTokens,
+              outputTokens: event.output_tokens ?? event.outputTokens,
+            },
+          },
+        ];
+
       case 'session_status':
         return [
           {

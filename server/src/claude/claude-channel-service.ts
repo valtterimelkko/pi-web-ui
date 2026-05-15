@@ -1,5 +1,8 @@
 import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join, sep } from 'node:path';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { ClaudeChannelProcessManager } from './claude-channel-process-manager.js';
 import { ClaudeChannelWsClient } from './claude-channel-ws-client.js';
@@ -29,6 +32,18 @@ interface PendingPrompt {
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
 const MAX_PINNED_SESSIONS = 2;
 
+const CLAUDE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  sonnet: 200_000,
+  haiku: 200_000,
+  opus: 200_000,
+};
+
+interface SessionContextMeta {
+  inputTokens: number;
+  outputTokens: number;
+  model: string;
+}
+
 export class ClaudeChannelService {
   private processManager: ClaudeChannelProcessManager;
   private wsClient: ClaudeChannelWsClient;
@@ -43,6 +58,7 @@ export class ClaudeChannelService {
   private internalToClaude: Map<string, string> = new Map();
   private pinnedSessions: Set<string> = new Set();
   private sessionsWithHistory: Set<string> = new Set();
+  private sessionContextMeta: Map<string, SessionContextMeta> = new Map();
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private started = false;
 
@@ -138,16 +154,23 @@ export class ClaudeChannelService {
         });
 
         if (ne.type === 'agent_end' && internalSid) {
+          const usage = (ne.data as Record<string, unknown> | undefined)?.usage as
+            | { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+            | undefined;
+          if (usage) {
+            this.registry.get(internalSid).then((entry) => {
+              const existing = this.sessionContextMeta.get(internalSid);
+              this.sessionContextMeta.set(internalSid, {
+                inputTokens: (existing?.inputTokens ?? 0) + (usage.input_tokens ?? 0),
+                outputTokens: (existing?.outputTokens ?? 0) + (usage.output_tokens ?? 0),
+                model: entry?.model ?? existing?.model ?? 'sonnet',
+              });
+            }).catch(() => {});
+          }
           const p = this.pendingPrompts.get(internalSid);
           if (p) {
             this.pendingPrompts.delete(internalSid);
             this.registry.updateStatus(internalSid, 'idle').catch(() => {});
-            this.registry.upsert({
-              id: internalSid,
-              sdkType: 'claude',
-              cwd: '',
-              lastActivity: new Date().toISOString(),
-            }).catch(() => {});
             this.sessionsWithHistory.add(internalSid);
             p.onComplete();
           }
@@ -161,6 +184,20 @@ export class ClaudeChannelService {
             this.pendingPrompts.delete(internalSid);
             this.registry.updateStatus(internalSid, 'error').catch(() => {});
             p.onComplete(new Error(msg));
+          }
+        }
+
+        if (ne.type === 'usage_report' && internalSid) {
+          const data = ne.data as { inputTokens?: number; outputTokens?: number } | undefined;
+          if (data?.inputTokens || data?.outputTokens) {
+            this.registry.get(internalSid).then((entry) => {
+              const existing = this.sessionContextMeta.get(internalSid);
+              this.sessionContextMeta.set(internalSid, {
+                inputTokens: (existing?.inputTokens ?? 0) + (data.inputTokens ?? 0),
+                outputTokens: (existing?.outputTokens ?? 0) + (data.outputTokens ?? 0),
+                model: entry?.model ?? existing?.model ?? 'sonnet',
+              });
+            }).catch(() => {});
           }
         }
       }
@@ -311,6 +348,7 @@ export class ClaudeChannelService {
   async getSessionStats(sessionId: string): Promise<{
     sessionId: string;
     cwd: string;
+    sessionFile?: string;
     model: string | undefined;
     userMessages: number;
     assistantMessages: number;
@@ -355,6 +393,7 @@ export class ClaudeChannelService {
     return {
       sessionId,
       cwd: entry.cwd,
+      sessionFile: entry.path,
       model: entry.model,
       userMessages,
       assistantMessages,
@@ -365,6 +404,79 @@ export class ClaudeChannelService {
       cost: 0,
       pinned: this.pinnedSessions.has(sessionId),
     };
+  }
+
+  private claudeProjectsDir = join(homedir(), '.claude', 'projects');
+
+  private encodeCwdForClaude(cwd: string): string {
+    return cwd.split(sep).join('-').replace(/^-/, '');
+  }
+
+  private async findClaudeSessionFile(cwd: string): Promise<string | null> {
+    const encodedCwd = this.encodeCwdForClaude(cwd);
+    const projectDir = join(this.claudeProjectsDir, `-${encodedCwd}`);
+    try {
+      const files = await readdir(projectDir);
+      const jsonlFiles = files.filter(f => f.endsWith('.jsonl'));
+      if (jsonlFiles.length === 0) return null;
+      let latest: string | null = null;
+      let latestMtime = 0;
+      for (const f of jsonlFiles) {
+        const stat = await import('node:fs').then(fs => fs.promises.stat(join(projectDir, f)));
+        if (stat.mtimeMs > latestMtime) {
+          latestMtime = stat.mtimeMs;
+          latest = join(projectDir, f);
+        }
+      }
+      return latest;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getClaudeSessionUsage(cwd: string, model: string): Promise<{ contextWindow: number; tokens: number; percent: number } | null> {
+    const sessionFile = await this.findClaudeSessionFile(cwd);
+    if (!sessionFile) return null;
+
+    try {
+      const content = await readFile(sessionFile, 'utf-8');
+      const lines = content.trim().split('\n').filter(l => l.trim());
+      let totalInput = 0;
+      let totalOutput = 0;
+      let contextWindow = CLAUDE_MODEL_CONTEXT_WINDOWS[model] ?? 200_000;
+
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'assistant' && entry.message?.usage) {
+            const u = entry.message.usage;
+            totalInput += (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.input_tokens ?? 0);
+            totalOutput += u.output_tokens ?? 0;
+          }
+          if (entry.type === 'result' && entry.modelUsage) {
+            for (const [, mu] of Object.entries(entry.modelUsage)) {
+              const m = mu as { contextWindow?: number };
+              if (m.contextWindow && m.contextWindow > 0) {
+                contextWindow = m.contextWindow;
+              }
+            }
+          }
+        } catch { /* skip malformed lines */ }
+      }
+
+      if (totalInput === 0 && totalOutput === 0) return null;
+      const tokens = totalInput + totalOutput;
+      const percent = Math.min(Math.round((tokens / contextWindow) * 100), 100);
+      return { contextWindow, tokens, percent };
+    } catch {
+      return null;
+    }
+  }
+
+  async getContextUsage(sessionId: string): Promise<{ contextWindow: number; tokens: number; percent: number } | null> {
+    const entry = await this.registry.get(sessionId).catch(() => null);
+    if (!entry) return null;
+    return this.getClaudeSessionUsage(entry.cwd, entry.model ?? 'sonnet');
   }
 
   pinSession(sessionId: string): boolean {

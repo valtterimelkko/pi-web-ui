@@ -1581,10 +1581,11 @@ export class WebSocketConnectionManager {
           this.sendMessage(clientId, { type: 'error', message: 'Claude session not found', code: 'SESSION_NOT_FOUND' });
           return;
         }
+        const claudeContextUsage = await this.claudeService.getContextUsage(sessionPath);
         this.sendMessage(clientId, {
           type: 'session_info',
           stats: {
-            sessionFile: undefined,
+            sessionFile: claudeStats.sessionFile,
             sessionId: claudeStats.sessionId,
             cwd: claudeStats.cwd,
             userMessages: claudeStats.userMessages,
@@ -1595,9 +1596,9 @@ export class WebSocketConnectionManager {
             tokens: claudeStats.tokens,
             cost: claudeStats.cost,
             model: claudeStats.model,
-            contextWindow: undefined,
-            contextUsed: undefined,
-            contextPercent: undefined,
+            contextWindow: claudeContextUsage?.contextWindow ?? undefined,
+            contextUsed: claudeContextUsage?.tokens ?? undefined,
+            contextPercent: claudeContextUsage?.percent ?? undefined,
           },
         });
       } catch (error) {

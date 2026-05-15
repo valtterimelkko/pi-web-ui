@@ -402,6 +402,7 @@ export class ClaudeService {
   async getSessionStats(sessionId: string): Promise<{
     sessionId: string;
     cwd: string;
+    sessionFile?: string;
     model: string | undefined;
     userMessages: number;
     assistantMessages: number;
@@ -450,6 +451,7 @@ export class ClaudeService {
     return {
       sessionId,
       cwd: entry.cwd,
+      sessionFile: entry.path,
       model: entry.model,
       userMessages,
       assistantMessages,
@@ -460,6 +462,13 @@ export class ClaudeService {
       cost: 0,
       pinned: this.pinnedSessions.has(sessionId),
     };
+  }
+
+  async getContextUsage(sessionId: string): Promise<{ contextWindow: number; tokens: number; percent: number } | null> {
+    if (this.channelService) {
+      return this.channelService.getContextUsage(sessionId);
+    }
+    return null;
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────

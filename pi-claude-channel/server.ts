@@ -88,6 +88,9 @@ const mcpServer = new Server(
       "After the tool completes, call send_event again with event_type=\"tool_result\" " +
       "and event_data containing {\"tool_name\": \"...\", \"result\": \"...\"}. " +
       "This lets the UI show your work in real-time. " +
+      "After each reply, call send_event with event_type=\"usage\" and event_data " +
+      "containing {\"input_tokens\": <number>, \"output_tokens\": <number>} " +
+      "to report token usage for this turn. Estimate if exact numbers aren't available. " +
       "Use the status tool to report activity. " +
       "Permission prompts include a request_id; remote verdicts use yes/no with the ID.",
   },
@@ -173,7 +176,11 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 
 mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  const { name, arguments: args, _meta } = request.params;
+
+  if (_meta) {
+    console.error(`[mcp] tool=${name} _meta=${JSON.stringify(_meta).slice(0, 500)}`);
+  }
 
   switch (name) {
     case "reply": {

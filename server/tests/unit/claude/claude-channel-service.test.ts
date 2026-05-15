@@ -8,6 +8,8 @@ vi.mock('../../../src/claude/claude-channel-process-manager.js', () => {
     isRunning: vi.fn().mockReturnValue(true),
     healthCheck: vi.fn().mockResolvedValue(true),
     getState: vi.fn().mockReturnValue({ process: null, status: 'running', startedAt: Date.now() }),
+    switchModel: vi.fn(),
+    setThinkingLevel: vi.fn(),
   }));
   return { ClaudeChannelProcessManager };
 });
@@ -637,7 +639,7 @@ describe('ClaudeChannelService', () => {
 
     it('should return stats with token counts', async () => {
       (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
-        id: 'sid', sdkType: 'claude', cwd: '/tmp', model: 'sonnet',
+        id: 'sid', sdkType: 'claude', cwd: '/tmp', model: 'sonnet', path: '/tmp/sid.jsonl',
       });
       (storeInstance.loadHistory as ReturnType<typeof vi.fn>).mockResolvedValue([
         { type: 'user' },
@@ -656,7 +658,13 @@ describe('ClaudeChannelService', () => {
         expect(stats.tokens.input).toBe(100);
         expect(stats.tokens.output).toBe(50);
         expect(stats.tokens.total).toBe(150);
+        expect(stats.sessionFile).toBe('/tmp/sid.jsonl');
       }
+    });
+
+    it('should return null context usage when no session in registry', async () => {
+      const ctx = await service.getContextUsage('sid');
+      expect(ctx).toBeNull();
     });
   });
 });
