@@ -445,17 +445,14 @@ export class ClaudeChannelService {
     try {
       const content = await readFile(sessionFile, 'utf-8');
       const lines = content.trim().split('\n').filter(l => l.trim());
-      let totalInput = 0;
-      let totalOutput = 0;
+      let lastUsage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | null = null;
       let contextWindow = CLAUDE_MODEL_CONTEXT_WINDOWS[model] ?? 200_000;
 
       for (const line of lines) {
         try {
           const entry = JSON.parse(line);
           if (entry.type === 'assistant' && entry.message?.usage) {
-            const u = entry.message.usage;
-            totalInput += (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.input_tokens ?? 0);
-            totalOutput += u.output_tokens ?? 0;
+            lastUsage = entry.message.usage;
           }
           if (entry.type === 'result' && entry.modelUsage) {
             for (const [, mu] of Object.entries(entry.modelUsage)) {
@@ -468,8 +465,11 @@ export class ClaudeChannelService {
         } catch { /* skip malformed lines */ }
       }
 
-      if (totalInput === 0 && totalOutput === 0) return null;
-      const tokens = totalInput + totalOutput;
+      if (!lastUsage) return null;
+      const input = (lastUsage.input_tokens ?? 0) + (lastUsage.cache_read_input_tokens ?? 0) + (lastUsage.cache_creation_input_tokens ?? 0);
+      const output = lastUsage.output_tokens ?? 0;
+      if (input === 0 && output === 0) return null;
+      const tokens = input + output;
       const percent = Math.min(Math.round((tokens / contextWindow) * 100), 100);
       return { contextWindow, tokens, percent };
     } catch {

@@ -7,6 +7,8 @@ export interface ChannelEvent {
 }
 
 export class ClaudeChannelEventAdapter {
+  private pendingToolCalls = new Map<string, string[]>();
+
   normalize(event: ChannelEvent, timestamp?: number): NormalizedEvent[] {
     const ts = timestamp ?? (typeof event.timestamp === 'number' ? event.timestamp : Date.now());
 
@@ -173,20 +175,6 @@ export class ClaudeChannelEventAdapter {
           },
         ];
 
-      case 'tool_result':
-        return [
-          {
-            type: 'tool_execution_end',
-            sessionId: event.sessionId,
-            timestamp: ts,
-            data: {
-              toolCallId: (event.toolCallId as string) ?? (event.tool_call_id as string),
-              result: event.result,
-              isError: (event.isError as boolean) ?? false,
-            },
-          },
-        ];
-
       case 'usage':
         return [
           {
@@ -211,6 +199,76 @@ export class ClaudeChannelEventAdapter {
             },
           },
         ];
+
+      case 'tool': {
+        const toolName = (event.toolName ?? event.tool_name ?? '') as string;
+        const toolInput = event.toolInput ?? event.tool_input;
+        const toolCallId = (event.toolCallId ?? event.tool_call_id ?? `tc_${event.sessionId}_${ts}`) as string;
+        const sid = event.sessionId ?? '';
+        const pending = this.pendingToolCalls.get(sid);
+        if (pending) pending.push(toolCallId);
+        else this.pendingToolCalls.set(sid, [toolCallId]);
+        return [
+          {
+            type: 'tool_execution_start',
+            sessionId: sid,
+            timestamp: ts,
+            data: {
+              toolCallId,
+              toolName,
+              args: toolInput,
+            },
+          },
+        ];
+      }
+
+      case 'tool_result': {
+        const sid = event.sessionId ?? '';
+        const toolOutput = event.toolOutput ?? event.tool_output ?? event.result;
+        const isError = (event.isError ?? event.is_error ?? false) as boolean;
+        const explicitTcId = (event.toolCallId ?? event.tool_call_id) as string | undefined;
+        const pendingIds = this.pendingToolCalls.get(sid) ?? [];
+        this.pendingToolCalls.delete(sid);
+        const events: NormalizedEvent[] = [];
+        if (explicitTcId) {
+          events.push({
+            type: 'tool_execution_end',
+            sessionId: sid,
+            timestamp: ts,
+            data: {
+              toolCallId: explicitTcId,
+              result: toolOutput,
+              isError,
+            },
+          });
+        } else {
+          for (const tcId of pendingIds) {
+            events.push({
+              type: 'tool_execution_end',
+              sessionId: sid,
+              timestamp: ts,
+              data: {
+                toolCallId: tcId,
+                result: toolOutput,
+                isError,
+              },
+            });
+          }
+        }
+        if (events.length === 0) {
+          events.push({
+            type: 'tool_execution_end',
+            sessionId: sid,
+            timestamp: ts,
+            data: {
+              toolCallId: explicitTcId ?? `tc_${sid}_${ts}`,
+              result: toolOutput,
+              isError,
+            },
+          });
+        }
+        return events;
+      }
 
       case 'error':
         return [

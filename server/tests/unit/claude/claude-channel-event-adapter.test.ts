@@ -484,4 +484,68 @@ describe('ClaudeChannelEventAdapter', () => {
       });
     });
   });
+
+  describe('native channel tool events', () => {
+    it('should convert tool to tool_execution_start', () => {
+      const event: ChannelEvent = {
+        type: 'tool',
+        sessionId: SESSION_ID,
+        toolName: 'Write',
+        toolInput: { file_path: '/tmp/test.txt' },
+        timestamp: 1000,
+      };
+      const results = adapter.normalize(event);
+      expect(results).toHaveLength(1);
+      expect(results[0].type).toBe('tool_execution_start');
+      expect(results[0].data.toolName).toBe('Write');
+      expect(results[0].data.args).toEqual({ file_path: '/tmp/test.txt' });
+      expect(results[0].data.toolCallId).toBeTruthy();
+    });
+
+    it('should close pending tools on tool_result', () => {
+      const tool1: ChannelEvent = {
+        type: 'tool',
+        sessionId: SESSION_ID,
+        toolName: 'Write',
+        toolInput: { file_path: '/tmp/a.txt' },
+        timestamp: 1000,
+      };
+      const tool2: ChannelEvent = {
+        type: 'tool',
+        sessionId: SESSION_ID,
+        toolName: 'Bash',
+        toolInput: { command: 'ls' },
+        timestamp: 2000,
+      };
+      const result: ChannelEvent = {
+        type: 'tool_result',
+        sessionId: SESSION_ID,
+        toolOutput: 'done',
+        isError: false,
+        timestamp: 3000,
+      };
+      const start1 = adapter.normalize(tool1);
+      const start2 = adapter.normalize(tool2);
+      const ends = adapter.normalize(result);
+      expect(start1).toHaveLength(1);
+      expect(start2).toHaveLength(1);
+      expect(ends).toHaveLength(2);
+      expect(ends[0].type).toBe('tool_execution_end');
+      expect(ends[0].data.toolCallId).toBe(start1[0].data.toolCallId);
+      expect(ends[1].data.toolCallId).toBe(start2[0].data.toolCallId);
+    });
+
+    it('should emit single tool_execution_end when no pending tools', () => {
+      const result: ChannelEvent = {
+        type: 'tool_result',
+        sessionId: SESSION_ID,
+        toolOutput: 'done',
+        isError: false,
+        timestamp: 1000,
+      };
+      const ends = adapter.normalize(result);
+      expect(ends).toHaveLength(1);
+      expect(ends[0].type).toBe('tool_execution_end');
+    });
+  });
 });
