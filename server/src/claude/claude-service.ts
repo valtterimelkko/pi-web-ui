@@ -12,6 +12,7 @@ import { ClaudeProcessPool, resolveClaudeSessionPath } from './claude-process-po
 import { ClaudeSessionStore } from './claude-session-store.js';
 import { SessionRegistryManager, getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
+import { ClaudeChannelService } from './claude-channel-service.js';
 
 // ─── Public interfaces ────────────────────────────────────────────────────────
 
@@ -35,20 +36,46 @@ export class ClaudeService {
   private processPool: ClaudeProcessPool;
   private sessionStore: ClaudeSessionStore;
   private registry: SessionRegistryManager;
-  /** Track sessions that have completed at least one turn */
   private sessionsWithHistory: Set<string> = new Set();
-  /** In-memory pin tracking for Claude sessions */
   private pinnedSessions: Set<string> = new Set();
   private static readonly MAX_PINNED_SESSIONS = 2;
+  private channelService: ClaudeChannelService | null = null;
 
   constructor(cfg: {
     claudeSessionDir: string;
     registryPath: string;
     maxProcesses?: number;
+    useChannel?: boolean;
+    channelPluginDir?: string;
+    channelWsPort?: number;
+    channelHookPort?: number;
   }) {
     this.processPool = new ClaudeProcessPool(cfg.maxProcesses ?? 10);
     this.sessionStore = new ClaudeSessionStore(cfg.claudeSessionDir);
     this.registry = getSessionRegistry(cfg.registryPath);
+
+    if (cfg.useChannel && cfg.channelPluginDir) {
+      this.channelService = new ClaudeChannelService({
+        claudeSessionDir: cfg.claudeSessionDir,
+        registryPath: cfg.registryPath,
+        pluginDir: cfg.channelPluginDir,
+        wsPort: cfg.channelWsPort ?? 3100,
+        hookPort: cfg.channelHookPort ?? 3101,
+        cwd: process.cwd(),
+      });
+    }
+  }
+
+  async startChannel(): Promise<void> {
+    if (this.channelService) {
+      await this.channelService.start();
+    }
+  }
+
+  sendPermissionResponse(sessionId: string, requestId: string, allowed: boolean): void {
+    if (this.channelService) {
+      this.channelService.sendPermissionResponse(sessionId, requestId, allowed);
+    }
   }
 
   // ── Auth & availability ───────────────────────────────────────────────────
@@ -121,6 +148,10 @@ export class ClaudeService {
     cwd: string,
     model: string = 'sonnet',
   ): Promise<{ sessionId: string; claudeSessionId: string }> {
+    if (this.channelService && await this.channelService.isHealthy()) {
+      return this.channelService.createSession(cwd, model);
+    }
+
     const sessionId = randomUUID();
     const claudeSessionId = randomUUID();
 
@@ -156,6 +187,10 @@ export class ClaudeService {
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
   ): Promise<void> {
+    if (this.channelService && await this.channelService.isHealthy()) {
+      return this.channelService.sendPrompt(sessionId, prompt, onEvent, onComplete);
+    }
+
     const entry = await this.registry.get(sessionId);
     if (!entry) {
       throw new Error(`Claude session not found: ${sessionId}`);
@@ -252,20 +287,34 @@ export class ClaudeService {
 
   /** Abort the running prompt for a session. */
   abort(sessionId: string): void {
+    if (this.channelService) {
+      this.channelService.abort(sessionId);
+      return;
+    }
     this.processPool.abort(sessionId);
   }
 
   /** Return true if a prompt is currently running for the session. */
   isRunning(sessionId: string): boolean {
+    if (this.channelService) {
+      return this.channelService.isRunning(sessionId);
+    }
     return this.processPool.isActive(sessionId);
   }
 
   async loadSessionHistory(sessionId: string) {
+    if (this.channelService) {
+      return this.channelService.loadSessionHistory(sessionId);
+    }
     return this.sessionStore.loadHistory(sessionId);
   }
 
-  /** Update the model for a session (persisted in registry). */
   async setModel(sessionId: string, model: string): Promise<'opus' | 'sonnet' | 'haiku'> {
+    if (this.channelService) {
+      const result = await this.channelService.setModel(sessionId, model);
+      return normalizeClaudeModelAlias(result);
+    }
+
     const entry = await this.registry.get(sessionId);
     if (!entry) {
       throw new Error(`Claude session not found: ${sessionId}`);
@@ -283,16 +332,25 @@ export class ClaudeService {
   // ── Queries ───────────────────────────────────────────────────────────────
 
   async getSession(sessionId: string) {
+    if (this.channelService) {
+      return this.channelService.getSession(sessionId);
+    }
     return this.registry.get(sessionId);
   }
 
   async listSessions() {
+    if (this.channelService) {
+      return this.channelService.listSessions();
+    }
     return this.registry.listBySdkType('claude');
   }
 
   // ── Pinning ─────────────────────────────────────────────────────────────
 
   pinSession(sessionId: string): boolean {
+    if (this.channelService) {
+      return this.channelService.pinSession(sessionId);
+    }
     if (!this.hasSession(sessionId)) return false;
     if (this.pinnedSessions.has(sessionId)) return true;
     if (this.pinnedSessions.size >= ClaudeService.MAX_PINNED_SESSIONS) return false;
@@ -301,14 +359,23 @@ export class ClaudeService {
   }
 
   unpinSession(sessionId: string): boolean {
+    if (this.channelService) {
+      return this.channelService.unpinSession(sessionId);
+    }
     return this.pinnedSessions.delete(sessionId);
   }
 
   isSessionPinned(sessionId: string): boolean {
+    if (this.channelService) {
+      return this.channelService.isSessionPinned(sessionId);
+    }
     return this.pinnedSessions.has(sessionId);
   }
 
   hasSession(sessionId: string): boolean {
+    if (this.channelService) {
+      return this.channelService.hasSession(sessionId);
+    }
     return this.pinnedSessions.has(sessionId)
       || this.processPool.isActive(sessionId)
       || this.sessionsWithHistory.has(sessionId);
@@ -338,6 +405,10 @@ export class ClaudeService {
     cost: number;
     pinned: boolean;
   } | null> {
+    if (this.channelService) {
+      return this.channelService.getSessionStats(sessionId);
+    }
+
     const entry = await this.registry.get(sessionId);
     if (!entry || entry.sdkType !== 'claude') return null;
 
@@ -464,6 +535,10 @@ export function getClaudeService(): ClaudeService {
       claudeSessionDir: config.claudeSessionDir,
       registryPath: config.sessionRegistryPath,
       maxProcesses: config.maxClaudeProcesses,
+      useChannel: config.claudeChannelEnabled,
+      channelPluginDir: config.claudeChannelPluginDir,
+      channelWsPort: config.claudeChannelWsPort,
+      channelHookPort: config.claudeChannelHookPort,
     });
   }
   return claudeServiceInstance;

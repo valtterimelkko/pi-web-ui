@@ -6,3 +6,8 @@ export { ClaudeEventNormalizer } from './claude-event-normalizer.js';
 export { ClaudeSessionStore } from './claude-session-store.js';
 export type { ClaudeMessageEntry } from './claude-session-store.js';
 export { claudeEntryToEvent, historyToReplayEvents } from './claude-history-replay.js';
+export { ClaudeChannelService } from './claude-channel-service.js';
+export { ClaudeChannelProcessManager } from './claude-channel-process-manager.js';
+export { ClaudeChannelWsClient } from './claude-channel-ws-client.js';
+export { ClaudeChannelEventAdapter } from './claude-channel-event-adapter.js';
+export { ClaudeChannelHooksConfig } from './claude-channel-hooks-config.js';
