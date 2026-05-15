@@ -1,0 +1,10 @@
+{
+  "name": "pi-claude-channel",
+  "version": "1.0.0",
+  "description": "Pi Web UI bridge for Claude Code — receives prompts via WebSocket, pushes into Claude, forwards responses and tool events back",
+  "author": "Pi Web UI",
+  "channel": {
+    "entrypoint": "server.ts",
+    "runtime": "bun"
+  }
+}
