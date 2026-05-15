@@ -1785,6 +1785,15 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    if (this.claudeSessionIds.has(sessionPath)) {
+      this.claudeService.setThinkingLevel(sessionPath, message.level);
+      this.sendMessage(clientId, {
+        type: 'thinking_level_changed',
+        level: message.level,
+      });
+      return;
+    }
+
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
     if (!agentSession) {
       this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });

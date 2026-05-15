@@ -210,4 +210,17 @@ export class ClaudeChannelProcessManager {
       });
     });
   }
+
+  switchModel(model: string): void {
+    const proc = this.ptyProcess;
+    if (!proc) return;
+    proc.write(`/model ${model}\r`);
+  }
+
+  setThinkingLevel(level: string): void {
+    const proc = this.ptyProcess;
+    if (!proc) return;
+    const effort = level === 'high' ? 'high' : level === 'medium' ? 'medium' : 'low';
+    proc.write(`/effort ${effort}\r`);
+  }
 }

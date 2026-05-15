@@ -287,10 +287,15 @@ export class ClaudeChannelService {
       cwd: entry.cwd,
       model,
     });
+    this.processManager.switchModel(model);
     if (entry.claudeSessionId) {
       this.wsClient.send({ type: 'set_model', sessionId: entry.claudeSessionId, model });
     }
     return model;
+  }
+
+  setThinkingLevel(_sessionId: string, level: string): void {
+    this.processManager.setThinkingLevel(level);
   }
 
   async getSession(sessionId: string) {

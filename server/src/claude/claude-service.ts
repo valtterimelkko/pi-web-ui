@@ -329,6 +329,13 @@ export class ClaudeService {
     return normalizedModel;
   }
 
+  setThinkingLevel(sessionId: string, level: string): void {
+    if (this.channelService) {
+      this.channelService.setThinkingLevel(sessionId, level);
+      return;
+    }
+  }
+
   // ── Queries ───────────────────────────────────────────────────────────────
 
   async getSession(sessionId: string) {
