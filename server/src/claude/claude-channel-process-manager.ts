@@ -23,6 +23,7 @@ const DEFAULT_PERMISSION_MODE = 'dontAsk';
 const DEFAULT_ALLOWED_TOOLS = [
   'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep',
   'WebFetch', 'WebSearch', 'Task', 'NotebookEdit', 'Skill', 'TodoWrite',
+  'Computer', 'Playwright',
   'mcp__pi-claude-channel__reply',
   'mcp__pi-claude-channel__status',
   'mcp__pi-claude-channel__fetch_history',
@@ -89,6 +90,7 @@ export class ClaudeChannelProcessManager {
     this.state.pid = proc.pid;
 
     let confirmed = false;
+    let lastAutoApprove = 0;
     proc.onData((data: string) => {
       const text = data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
       if (text) {
@@ -99,6 +101,18 @@ export class ClaudeChannelProcessManager {
           proc.write('\r');
           confirmed = true;
         }, 500);
+      }
+
+      if (confirmed && Date.now() - lastAutoApprove > 2000) {
+        const isToolPermissionPrompt = /esctointerrupt|esc.*to.*interrupt/.test(text)
+          && (/\d+\s+\w+/.test(text) || text.includes('manage'));
+        if (isToolPermissionPrompt) {
+          lastAutoApprove = Date.now();
+          setTimeout(() => {
+            proc.write('\r');
+            console.log('[ClaudeChannel] Auto-approved tool permission prompt');
+          }, 300);
+        }
       }
     });
 
