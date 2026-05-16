@@ -217,6 +217,7 @@ interface SessionState {
   currentThinkingLevel: string | null;
   messages: Message[];
   isStreaming: boolean;
+  lastStreamEventAt: number | null;
   isLoading: boolean;
   // Loading state for session switching (rehydration)
   isSwitchingSession: boolean;
@@ -341,6 +342,7 @@ export const useSessionStore = create<SessionState>()(
       currentThinkingLevel: null,
       messages: [],
       isStreaming: false,
+      lastStreamEventAt: null,
       isLoading: false,
       isSwitchingSession: false,
       switchingToSessionId: null,
@@ -1200,6 +1202,7 @@ export const useSessionStore = create<SessionState>()(
               return { 
                 isStreaming: true, 
                 isLoading: false,
+                lastStreamEventAt: Date.now(),
                 streamingSessions: newStreamingSessions,
                 sessionCacheMeta: newSessionCacheMeta,
               };
@@ -1231,6 +1234,7 @@ export const useSessionStore = create<SessionState>()(
               });
               return { 
                 isStreaming: false,
+                lastStreamEventAt: null,
                 streamingSessions: newStreamingSessions,
                 sessionCacheMeta: newSessionCacheMeta,
                 messages: newMessages,
@@ -1251,6 +1255,7 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'message_update': {
+            set({ lastStreamEventAt: Date.now() });
             // Update streaming content
             const { message: msgData, assistantMessageEvent } = msg as {
               message?: { id: string; content?: Message['content'] };
@@ -1325,6 +1330,7 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'tool_execution_start': {
+            set({ lastStreamEventAt: Date.now() });
             const { toolCallId, toolName, args } = msg as unknown as {
               toolCallId: string;
               toolName: string;
@@ -1342,6 +1348,7 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'tool_execution_update': {
+            set({ lastStreamEventAt: Date.now() });
             const { toolCallId, partialResult } = msg as unknown as {
               toolCallId: string;
               partialResult?: { content: Array<{ type: string; text?: string }> };
@@ -1355,6 +1362,7 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'tool_execution_end': {
+            set({ lastStreamEventAt: Date.now() });
             const { toolCallId, result, isError } = msg as unknown as {
               toolCallId: string;
               result?: { content: Array<{ type: string; text?: string }> };
@@ -1684,9 +1692,8 @@ export const useSessionStore = create<SessionState>()(
             switch (event.type) {
               case 'agent_start':
                 get().setSessionStatus(sessionId, 'streaming');
-                // Also update current session if it matches
                 if (get().currentSessionId === sessionId) {
-                  set({ isStreaming: true, isLoading: false });
+                  set({ isStreaming: true, isLoading: false, lastStreamEventAt: Date.now() });
                 }
                 break;
                 
@@ -1700,7 +1707,7 @@ export const useSessionStore = create<SessionState>()(
                     }
                     return m;
                   });
-                  set({ isStreaming: false, messages: newMessages });
+                  set({ isStreaming: false, lastStreamEventAt: null, messages: newMessages });
                 }
                 break;
                 

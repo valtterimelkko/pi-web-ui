@@ -21,6 +21,7 @@ describe('sessionStore', () => {
       isStreaming: false,
       isLoading: false,
       error: null,
+      lastStreamEventAt: null,
       sessionCache: new Map(),
       sessionCacheMeta: {},
     });
@@ -32,6 +33,7 @@ describe('sessionStore', () => {
     expect(state.currentSessionId).toBeNull();
     expect(state.isStreaming).toBe(false);
     expect(state.isLoading).toBe(false);
+    expect(state.lastStreamEventAt).toBeNull();
     expect(state.error).toBeNull();
     expect(state.extensionUIRequest).toBeNull();
   });
@@ -155,6 +157,7 @@ describe('sessionStore', () => {
       state.handleServerMessage({ type: 'agent_start' });
       expect(useSessionStore.getState().isStreaming).toBe(true);
       expect(useSessionStore.getState().isLoading).toBe(false);
+      expect(useSessionStore.getState().lastStreamEventAt).toBeTypeOf('number');
     });
 
     it('should handle agent_end message', () => {
@@ -162,6 +165,7 @@ describe('sessionStore', () => {
       state.setStreaming(true);
       state.handleServerMessage({ type: 'agent_end' });
       expect(useSessionStore.getState().isStreaming).toBe(false);
+      expect(useSessionStore.getState().lastStreamEventAt).toBeNull();
     });
 
     it('should handle error message', () => {
@@ -330,6 +334,7 @@ describe('sessionStore', () => {
       });
       expect(useSessionStore.getState().messages).toHaveLength(1);
       expect(useSessionStore.getState().messages[0].role).toBe('tool');
+      expect(useSessionStore.getState().lastStreamEventAt).toBeTypeOf('number');
     });
 
     it('should handle extension_ui_request message', () => {
@@ -381,6 +386,72 @@ describe('sessionStore', () => {
         messages: [],
       });
       expect(useSessionStore.getState().currentThinkingLevel).toBeNull();
+    });
+  });
+
+  describe('lastStreamEventAt', () => {
+    it('starts as null', () => {
+      expect(useSessionStore.getState().lastStreamEventAt).toBeNull();
+    });
+
+    it('is set on agent_start', () => {
+      useSessionStore.getState().handleServerMessage({ type: 'agent_start' });
+      expect(useSessionStore.getState().lastStreamEventAt).toBeTypeOf('number');
+    });
+
+    it('is cleared on agent_end', () => {
+      useSessionStore.getState().handleServerMessage({ type: 'agent_start' });
+      expect(useSessionStore.getState().lastStreamEventAt).toBeTypeOf('number');
+      useSessionStore.getState().handleServerMessage({ type: 'agent_end' });
+      expect(useSessionStore.getState().lastStreamEventAt).toBeNull();
+    });
+
+    it('is updated on message_update', () => {
+      useSessionStore.setState({
+        isStreaming: true,
+        currentSessionId: 's1',
+        messages: [{ id: 'm1', role: 'assistant', content: [], timestamp: Date.now() }],
+      });
+      const before = Date.now();
+      useSessionStore.getState().handleServerMessage({
+        type: 'message_update',
+        message: { id: 'm1' },
+        assistantMessageEvent: { type: 'text_delta', delta: 'hi' },
+      });
+      const ts = useSessionStore.getState().lastStreamEventAt;
+      expect(ts).toBeGreaterThanOrEqual(before);
+    });
+
+    it('is updated on tool_execution_start', () => {
+      const before = Date.now();
+      useSessionStore.getState().handleServerMessage({
+        type: 'tool_execution_start',
+        toolCallId: 'tc1',
+        toolName: 'Bash',
+        args: {},
+      });
+      expect(useSessionStore.getState().lastStreamEventAt).toBeGreaterThanOrEqual(before);
+    });
+
+    it('is updated on tool_execution_end', () => {
+      const before = Date.now();
+      useSessionStore.getState().handleServerMessage({
+        type: 'tool_execution_end',
+        toolCallId: 'tc1',
+        result: { content: [{ type: 'text', text: 'ok' }] },
+        isError: false,
+      });
+      expect(useSessionStore.getState().lastStreamEventAt).toBeGreaterThanOrEqual(before);
+    });
+
+    it('is updated on tool_execution_update', () => {
+      const before = Date.now();
+      useSessionStore.getState().handleServerMessage({
+        type: 'tool_execution_update',
+        toolCallId: 'tc1',
+        partialResult: { content: [{ type: 'text', text: 'partial' }] },
+      });
+      expect(useSessionStore.getState().lastStreamEventAt).toBeGreaterThanOrEqual(before);
     });
   });
 

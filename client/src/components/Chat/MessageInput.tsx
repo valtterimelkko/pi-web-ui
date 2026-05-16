@@ -5,6 +5,7 @@ import { useChatStore, useSessionStore, useDraftStore } from '../../store';
 import { useUIStore } from '../../store/uiStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { CompactModal } from './CompactModal';
+import { ClaudeStreamHeartbeat } from './ClaudeStreamHeartbeat';
 import { ContextRing } from '../Usage/ContextRing';
 import { SlashPalette } from './SlashPalette';
 import { uploadFile } from '../../lib/api';
@@ -312,9 +313,13 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
           ) : (
             <>
               <span className={`w-1.5 h-1.5 rounded-full ${isStreaming ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
-              <span className="text-gray-500">
-                {isStreaming ? 'Thinking...' : 'Awaiting input'}
-              </span>
+              {isStreaming && isClaudeSession ? (
+                <ClaudeStreamHeartbeat />
+              ) : (
+                <span className="text-gray-500">
+                  {isStreaming ? 'Thinking...' : 'Awaiting input'}
+                </span>
+              )}
             </>
           )}
         </div>

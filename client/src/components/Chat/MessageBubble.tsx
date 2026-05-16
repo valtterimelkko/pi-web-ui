@@ -13,6 +13,7 @@ import { SubagentToolCard } from '../Tools/SubagentToolCard';
 import { TodoToolCard } from '../Tools/TodoToolCard';
 import { copyToClipboard } from '../../lib/clipboard';
 import { normalizeToolName } from '../../lib/messageAdapter';
+import { ClaudeStreamHeartbeat } from './ClaudeStreamHeartbeat';
 
 interface MessageBubbleProps {
   message: LiveMessage;
@@ -46,14 +47,19 @@ function ActivityIndicator({
     return truncated;
   }, [thinking, isStreaming]);
 
+  const sdkType = useSessionStore((s) => s.currentSessionSdkType);
+
   return (
     <div className="flex items-center gap-2 text-sm text-gray-500 py-1">
       <Bot className="w-4 h-4 text-gray-400 shrink-0" />
       <span className="truncate">{preview}</span>
-      {isStreaming && (
+      {isStreaming && sdkType !== 'claude' && (
         <span className="inline-flex items-center gap-1">
           <span className="animate-pulse">●</span>
         </span>
+      )}
+      {isStreaming && sdkType === 'claude' && (
+        <ClaudeStreamHeartbeat compact />
       )}
     </div>
   );
