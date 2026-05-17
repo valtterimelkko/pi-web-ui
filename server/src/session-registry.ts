@@ -29,6 +29,8 @@ const REGISTRY_VERSION = 1;
 export class SessionRegistryManager {
   private registryPath: string;
   private registry: SessionRegistry | null = null;
+  private saveQueue: Promise<void> = Promise.resolve();
+  private loadPromise: Promise<SessionRegistry> | null = null;
 
   constructor(registryPath: string) {
     this.registryPath = registryPath;
@@ -39,10 +41,26 @@ export class SessionRegistryManager {
       return this.registry;
     }
 
+    if (this.loadPromise) {
+      return this.loadPromise;
+    }
+
+    this.loadPromise = this._doLoad();
+    try {
+      return await this.loadPromise;
+    } finally {
+      this.loadPromise = null;
+    }
+  }
+
+  private async _doLoad(): Promise<SessionRegistry> {
+    if (this.registry !== null) {
+      return this.registry;
+    }
+
     try {
       const raw = await fs.readFile(this.registryPath, 'utf-8');
       const parsed = JSON.parse(raw) as SessionRegistry;
-      // Basic validation
       if (typeof parsed.version !== 'number' || !Array.isArray(parsed.entries)) {
         throw new Error('Invalid registry format');
       }
@@ -63,6 +81,12 @@ export class SessionRegistryManager {
   }
 
   async save(): Promise<void> {
+    const result = this.saveQueue.then(() => this._doSave());
+    this.saveQueue = result.then(undefined, () => {});
+    await result;
+  }
+
+  private async _doSave(): Promise<void> {
     if (this.registry === null) {
       return;
     }
@@ -77,7 +101,6 @@ export class SessionRegistryManager {
       await fs.writeFile(tmpPath, JSON.stringify(this.registry, null, 2), 'utf-8');
       await fs.rename(tmpPath, this.registryPath);
     } catch (err) {
-      // Clean up tmp file on failure
       try { await fs.unlink(tmpPath); } catch { /* ignore */ }
       throw err;
     }

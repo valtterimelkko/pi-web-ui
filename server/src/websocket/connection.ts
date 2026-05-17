@@ -772,17 +772,39 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    // Pi SDK session — check status guard before calling SDK
+    const sessionStatus = this.multiSessionManager.getSessionStatus(sessionPath);
+    if (sessionStatus && (sessionStatus.status === 'busy' || sessionStatus.status === 'streaming')) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'Session is busy processing. Wait for the current turn to finish or send with steer/followUp.',
+        code: 'SESSION_BUSY',
+      });
+      return;
+    }
+
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
     if (!agentSession) {
       this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
       return;
     }
 
-    // Extension commands are handled by the SDK automatically
-
-    await agentSession.prompt(message.message, {
-      images: message.images,
-    });
+    try {
+      await agentSession.prompt(message.message, {
+        images: message.images,
+      });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (errorMsg.includes('already processing') || errorMsg.includes('Agent is already processing')) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: 'Session stuck in processing state. Try switching away and back to force rehydration.',
+          code: 'SESSION_STUCK',
+        });
+        return;
+      }
+      throw error;
+    }
   }
 
   /**

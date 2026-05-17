@@ -66,6 +66,8 @@ export interface MultiSessionManagerOptions {
   enableMemoryMonitoring?: boolean;
   /** Maximum number of sessions that can be pinned (default: 2) */
   maxPinnedSessions?: number;
+  /** How long before a streaming session with no events is considered stale (default: 900000ms = 15 minutes) */
+  staleStreamingThresholdMs?: number;
 }
 
 /**
@@ -121,8 +123,8 @@ export class MultiSessionManager {
   private enableMemoryMonitoring: boolean;
   private maxPinnedSessions: number;
   
-  // Stale streaming detection threshold (15 minutes without events)
-  private readonly staleStreamingThresholdMs = 15 * 60 * 1000;
+  // Stale streaming detection threshold (default 15 minutes without events)
+  private staleStreamingThresholdMs: number;
 
   // Grace period after API error before synthetic agent_end (default 60s)
   private readonly apiErrorGracePeriodMs = 60 * 1000;
@@ -146,6 +148,7 @@ export class MultiSessionManager {
     this.maxSessions = options.maxSessions ?? 10;
     this.enableMemoryMonitoring = options.enableMemoryMonitoring ?? true;
     this.maxPinnedSessions = options.maxPinnedSessions ?? 2;
+    this.staleStreamingThresholdMs = options.staleStreamingThresholdMs ?? 15 * 60 * 1000;
     
     // Start cleanup timer
     this.startCleanupTimer();
@@ -283,7 +286,6 @@ export class MultiSessionManager {
             console.log(`[MultiSessionManager] Detected stale streaming PINNED session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), resetting to idle (keeping alive): ${sessionPath}`);
             activeSession.status = 'idle';
             activeSession.lastActivity = new Date();
-            // Notify subscribers that the session is now idle so the UI unblocks input
             this.broadcastToSubscribers(sessionPath, {
               type: 'session_event',
               sessionId: activeSession.sessionId,
@@ -294,9 +296,18 @@ export class MultiSessionManager {
               },
             });
           } else {
-            console.log(`[MultiSessionManager] Detected stale streaming session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), resetting to idle: ${sessionPath}`);
-            activeSession.status = 'idle';
-            activeSession.lastActivity = new Date();
+            console.log(`[MultiSessionManager] Detected stale streaming session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), disposing for fresh rehydration: ${sessionPath}`);
+            this.broadcastToSubscribers(sessionPath, {
+              type: 'session_event',
+              sessionId: activeSession.sessionId,
+              sessionPath: activeSession.sessionPath,
+              event: {
+                type: 'stale_stream_reset',
+                message: `Session was streaming with no activity for ${Math.round(timeSinceLastEvent / 1000)}s. Disposed and will rehydrate fresh on next access.`,
+              },
+            });
+            this.disposeSession(sessionPath);
+            cleanedCount++;
           }
         }
       }

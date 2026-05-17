@@ -168,4 +168,43 @@ describe('SessionRegistryManager', () => {
     const all = await manager.listAll();
     expect(all).toHaveLength(1);
   });
+
+  it('serializes concurrent saves (write queue)', async () => {
+    const manager = new SessionRegistryManager(registryPath);
+
+    const results = await Promise.all([
+      manager.upsert({ sdkType: 'pi', path: '/a', cwd: '/a', firstMessage: 'first', messageCount: 1 }),
+      manager.upsert({ sdkType: 'pi', path: '/b', cwd: '/b', firstMessage: 'second', messageCount: 2 }),
+      manager.upsert({ sdkType: 'claude', path: '/c', cwd: '/c', firstMessage: 'third', messageCount: 3 }),
+    ]);
+
+    expect(results).toHaveLength(3);
+
+    const all = await manager.listAll();
+    expect(all).toHaveLength(3);
+    expect(all.map(e => e.path).sort()).toEqual(['/a', '/b', '/c']);
+
+    const { existsSync, readFileSync } = await import('fs');
+    expect(existsSync(registryPath)).toBe(true);
+    expect(existsSync(registryPath + '.tmp')).toBe(false);
+    const onDisk = JSON.parse(readFileSync(registryPath, 'utf-8'));
+    expect(onDisk.entries).toHaveLength(3);
+  });
+
+  it('does not lose data when concurrent updateStatus calls race', async () => {
+    const manager = new SessionRegistryManager(registryPath);
+
+    const e1 = await manager.upsert({ sdkType: 'pi', path: '/x', cwd: '/x', firstMessage: 'x', messageCount: 1 });
+    const e2 = await manager.upsert({ sdkType: 'claude', path: '/y', cwd: '/y', firstMessage: 'y', messageCount: 2 });
+
+    await Promise.all([
+      manager.updateStatus(e1.id, 'running'),
+      manager.updateStatus(e2.id, 'error'),
+    ]);
+
+    const fetched1 = await manager.get(e1.id);
+    const fetched2 = await manager.get(e2.id);
+    expect(fetched1?.status).toBe('running');
+    expect(fetched2?.status).toBe('error');
+  });
 });

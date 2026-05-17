@@ -43,6 +43,7 @@ export interface ServerConfig {
   claudeChannelPluginDir: string;
   claudeChannelWsPort: number;
   claudeChannelHookPort: number;
+  piStaleStreamingMs: number;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -100,4 +101,5 @@ export const config: ServerConfig = {
   claudeChannelPluginDir: process.env.CLAUDE_CHANNEL_PLUGIN_DIR ?? path.resolve(process.cwd(), 'pi-claude-channel'),
   claudeChannelWsPort: parseInt(process.env.CLAUDE_CHANNEL_WS_PORT || '3100', 10),
   claudeChannelHookPort: parseInt(process.env.CLAUDE_CHANNEL_HOOK_PORT || '3101', 10),
+  piStaleStreamingMs: parseInt(process.env.PI_STALE_STREAMING_MS || '900000', 10),
 };

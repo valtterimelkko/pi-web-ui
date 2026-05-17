@@ -986,7 +986,7 @@ describe('MultiSessionManager', () => {
       expect(mockSession.dispose).not.toHaveBeenCalled();
     });
 
-    it('should reset stale streaming sessions to idle after 15 minutes without events', async () => {
+    it('should dispose stale streaming sessions after threshold without events', async () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
 
@@ -1001,17 +1001,17 @@ describe('MultiSessionManager', () => {
       expect(status?.status).toBe('streaming');
       
       // Simulate time passing (16 minutes = exceeds 15 minute threshold)
-      const originalDateNow = Date.now;
       const sixteenMinutesLater = Date.now() + 16 * 60 * 1000;
       vi.spyOn(Date, 'now').mockReturnValue(sixteenMinutesLater);
       
-      // Run cleanup - should detect stale streaming and reset to idle
+      // Run cleanup - should detect stale streaming and dispose the session
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       manager.cleanupInactiveSessions();
       
-      // Status should now be idle (reset from streaming)
+      // Session should have been disposed (removed from map entirely)
       status = manager.getSessionStatus('/path/to/session.jsonl');
-      expect(status?.status).toBe('idle');
+      expect(status).toBeUndefined();
+      expect(mockSession.dispose).toHaveBeenCalled();
       
       // Should have logged the stale detection
       expect(consoleSpy).toHaveBeenCalledWith(
@@ -1052,33 +1052,69 @@ describe('MultiSessionManager', () => {
       vi.restoreAllMocks();
     });
 
-    it('should update lastActivity when resetting stale streaming session', async () => {
+    it('should broadcast stale_stream_reset to subscribers when disposing stale session', async () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
 
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
-      manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
+      // Keep client-1 subscribed
       
-      // Set session to streaming
       manager.handleAgentEvent('/path/to/session.jsonl', { type: 'agent_start' });
+      expect(manager.getSessionStatus('/path/to/session.jsonl')?.status).toBe('streaming');
       
-      // Get initial lastActivity
-      const initialStatus = manager.getSessionStatus('/path/to/session.jsonl');
-      const initialLastActivity = initialStatus?.lastActivity.getTime();
+      const sixteenMinutesLater = Date.now() + 16 * 60 * 1000;
+      vi.spyOn(Date, 'now').mockReturnValue(sixteenMinutesLater);
       
-      // Wait 6 minutes
-      await new Promise(resolve => setTimeout(resolve, 10)); // Small delay to ensure time passes
-      const laterTime = Date.now() + 6 * 60 * 1000;
-      vi.spyOn(Date, 'now').mockReturnValue(laterTime);
-      
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       manager.cleanupInactiveSessions();
       
-      // lastActivity should be updated (to a time after the initial)
-      const status = manager.getSessionStatus('/path/to/session.jsonl');
-      expect(status?.lastActivity.getTime()).toBeGreaterThanOrEqual(initialLastActivity!);
+      const staleResetCalls = mockBroadcast.mock.calls.filter(
+        (call: any[]) => call[1]?.event?.type === 'stale_stream_reset'
+      );
+      expect(staleResetCalls.length).toBe(1);
+      expect(staleResetCalls[0][1].event.message).toContain('Disposed');
       
-      vi.restoreAllMocks();
+      consoleSpy.mockRestore();
+      if (typeof (Date.now as any).mockRestore === 'function') {
+        (Date.now as any).mockRestore();
+      } else {
+        vi.restoreAllMocks();
+      }
+    });
+
+    it('should use configurable staleStreamingThresholdMs from options', async () => {
+      const mockSession = createMockAgentSession();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast, {
+        staleStreamingThresholdMs: 5 * 60 * 1000, // 5 minutes instead of default 15
+      });
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+      manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
+      
+      manager.handleAgentEvent('/path/to/session.jsonl', { type: 'agent_start' });
+      
+      // 4 minutes — should NOT be stale yet (under 5 min threshold)
+      const fourMinutesLater = Date.now() + 4 * 60 * 1000;
+      vi.spyOn(Date, 'now').mockReturnValue(fourMinutesLater);
+      manager.cleanupInactiveSessions();
+      expect(manager.getSessionStatus('/path/to/session.jsonl')).toBeDefined();
+      
+      // 6 minutes — should be stale (over 5 min threshold)
+      const sixMinutesLater = Date.now() + 6 * 60 * 1000;
+      (Date.now as any).mockReturnValue(sixMinutesLater);
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      manager.cleanupInactiveSessions();
+      expect(manager.getSessionStatus('/path/to/session.jsonl')).toBeUndefined();
+      expect(mockSession.dispose).toHaveBeenCalled();
+      
+      consoleSpy.mockRestore();
+      if (typeof (Date.now as any).mockRestore === 'function') {
+        (Date.now as any).mockRestore();
+      } else {
+        vi.restoreAllMocks();
+      }
     });
 
     it('should remove sessions that are in error state with no subscribers', async () => {
