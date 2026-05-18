@@ -4,7 +4,7 @@
 >
 > Audience: maintainers working on the OpenCode Direct runtime path.
 >
-> This is the canonical architecture/rationale doc for the implemented OpenCode Direct path. The historical delivery plan remains in [`OPENCODE-IMPLEMENTATION-PLAN.md`](./OPENCODE-IMPLEMENTATION-PLAN.md).
+> This is the canonical architecture/rationale doc for the implemented OpenCode Direct path.
 
 ## Summary
 
@@ -193,4 +193,3 @@ Useful places to inspect:
 - [`./ARCHITECTURE.md`](./ARCHITECTURE.md)
 - [`./PROTOCOL.md`](./PROTOCOL.md)
 - [`./TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
-- [`./OPENCODE-IMPLEMENTATION-PLAN.md`](./OPENCODE-IMPLEMENTATION-PLAN.md)

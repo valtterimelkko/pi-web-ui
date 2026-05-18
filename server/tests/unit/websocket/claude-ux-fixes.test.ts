@@ -1,5 +1,5 @@
 /**
- * Tests for Claude Direct UX fixes (Fixes 1–3 from CLAUDE-DIRECT-UX-ISSUES.md).
+ * Tests for legacy Claude direct UX fixes (status broadcasting, abort notification, and multi-subscriber completion handling).
  *
  * Fix 1: Claude session status broadcasting in setupSessionStatusBroadcasting()
  * Fix 2: Broadcast agent_end and errors to ALL Claude subscribers in onComplete

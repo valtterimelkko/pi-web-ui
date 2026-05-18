@@ -1,6 +1,6 @@
 # Pi Web UI Test Guide
 
-This directory contains browser-level tests, benchmark scripts, and a few helper scripts for Pi Web UI.
+This directory contains browser-level tests and benchmark scripts for Pi Web UI.
 
 For server unit/integration tests, also see:
 - `server/tests/`
@@ -15,7 +15,7 @@ These cover user-visible behaviour such as:
 - auth and initial app load
 - session creation
 - session switching
-- runtime-specific flows for Claude Direct and OpenCode Direct
+- runtime-specific flows for the Claude runtime family and OpenCode Direct
 - mobile / protocol / persistence / cross-tab behaviour
 
 Notable files include:
@@ -29,10 +29,6 @@ Located in:
 - `tests/benchmarks/`
 
 These focus on UI performance and memory-related scenarios.
-
-### 3. Helper scripts
-This folder also contains a small number of shell/Python helpers used for specific verification workflows.
-Treat them as supplemental, not the main automated test surface.
 
 ## Running Tests
 
@@ -64,7 +60,7 @@ Server unit/integration coverage lives under:
 
 That includes coverage for:
 - Pi worker/session logic
-- Claude Direct replay and process handling
+- Claude runtime replay and process handling
 - OpenCode Direct client/service/event handling
 - WebSocket routing
 - route handlers and security helpers
@@ -87,7 +83,7 @@ npm run test:e2e
 ```
 
 ### Runtime-path change
-If you touched Pi SDK / Claude Direct / OpenCode Direct routing or replay logic, prefer:
+If you touched Pi SDK / the Claude runtime family / OpenCode Direct routing or replay logic, prefer:
 - unit tests for the affected runtime module(s)
 - relevant WebSocket tests
 - relevant E2E runtime tests

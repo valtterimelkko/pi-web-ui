@@ -18,7 +18,6 @@ Reading order for LLM coding agents working on Pi Web UI.
 - [`PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md) — Pi SDK worker architecture
 - [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md) — Claude legacy-direct vs channel-backed backend modes, logs, and failure modes
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md) — OpenCode Direct architecture
-- [`CLAUDE-DIRECT-UX-ISSUES.md`](./CLAUDE-DIRECT-UX-ISSUES.md) — historical pre-channel analysis of the older Claude direct path
 
 ## 5. Integration & extension
 - [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md) — Checklist for adding a new runtime
@@ -35,10 +34,3 @@ Reading order for LLM coding agents working on Pi Web UI.
 
 ## 8. Features
 - [`DRIVE-MODE.md`](./DRIVE-MODE.md) — current Drive Mode feature overview
-
-## 9. Historical records
-- [`historical/`](./historical/) — implemented design plans kept for reference only
-- [`DRIVE-MODE-PLAN.md`](./DRIVE-MODE-PLAN.md) — historical Drive Mode execution plan
-
-## 10. Future concepts (not active code)
-- [`agent-os/`](../agent-os/) — Pre-implementation intent for a future Agent OS layer

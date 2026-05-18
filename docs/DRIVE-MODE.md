@@ -1,6 +1,6 @@
 # Drive Mode
 
-> Drive Mode is a shipped frontend feature. `DRIVE-MODE-PLAN.md` is now historical reference material, not the canonical description of the current feature.
+> Drive Mode is a shipped frontend feature.
 
 ## What It Is
 
@@ -44,9 +44,3 @@ Drive Mode can look like a separate product flow, but it still relies on the sam
 - check the Drive Mode store and overlay first
 - then check the ordinary WebSocket/session creation flow
 - do **not** assume it has a separate backend path
-
-## Historical Plan
-
-If you need the original implementation breakdown, acceptance criteria, or planned module sequencing, read:
-
-- [`DRIVE-MODE-PLAN.md`](./DRIVE-MODE-PLAN.md)
