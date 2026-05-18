@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useSessionStore, type Message, type Session } from '../../../src/store/sessionStore';
+import { useUIStore } from '../../../src/store/uiStore';
 
 describe('sessionStore', () => {
   beforeEach(() => {
@@ -25,6 +26,7 @@ describe('sessionStore', () => {
       sessionCache: new Map(),
       sessionCacheMeta: {},
     });
+    useUIStore.setState({ toasts: [] });
   });
 
   it('should have initial state', () => {
@@ -174,6 +176,27 @@ describe('sessionStore', () => {
       state.setLoading(true);
       state.handleServerMessage({ type: 'error', message: 'Test error' });
       expect(useSessionStore.getState().error).toBe('Test error');
+      expect(useSessionStore.getState().isStreaming).toBe(false);
+      expect(useSessionStore.getState().isLoading).toBe(false);
+    });
+
+    it('should show a reauthentication toast for Claude auth expiry errors', () => {
+      const state = useSessionStore.getState();
+      state.setStreaming(true);
+      state.setLoading(true);
+
+      state.handleServerMessage({
+        type: 'error',
+        code: 'CLAUDE_AUTH_EXPIRED',
+        message: 'Claude Code authentication expired. Please run /login.',
+      });
+
+      const toasts = useUIStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0]).toMatchObject({
+        type: 'error',
+        message: expect.stringContaining('re-authenticate'),
+      });
       expect(useSessionStore.getState().isStreaming).toBe(false);
       expect(useSessionStore.getState().isLoading).toBe(false);
     });

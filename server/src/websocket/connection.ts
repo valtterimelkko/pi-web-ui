@@ -879,19 +879,35 @@ export class WebSocketConnectionManager {
         (error) => {
           // Broadcast errors to ALL subscribers, not just the requester
           const subscribers = this.claudeSubs.getSubscribers(sessionId);
+          const structuredError = error as (Error & { code?: string; sessionEventAlreadyEmitted?: boolean }) | undefined;
+          const sessionEventAlreadyEmitted = structuredError?.sessionEventAlreadyEmitted === true;
           if (error) {
-            for (const subId of subscribers) {
-              this.sendMessage(subId, { type: 'error', message: error.message, code: 'CLAUDE_ERROR' });
+            const isAuthExpired = /authentication expired|Please run \/login|Invalid authentication credentials|API Error:\s*401/i.test(error.message);
+            const wasAlreadyEmittedAsSessionEvent = sessionEventAlreadyEmitted
+              || structuredError?.code === 'CLAUDE_AUTH_EXPIRED'
+              || structuredError?.code === 'CLAUDE_PROMPT_TIMEOUT'
+              || isAuthExpired
+              || /prompt timed out/i.test(error.message);
+            if (!wasAlreadyEmittedAsSessionEvent) {
+              for (const subId of subscribers) {
+                this.sendMessage(subId, {
+                  type: 'error',
+                  message: error.message,
+                  code: 'CLAUDE_ERROR',
+                });
+              }
             }
           }
 
-          // Broadcast agent_end to all subscribers so they see the turn completed
-          for (const subId of subscribers) {
-            this.sendMessage(subId, {
-              type: 'session_event',
-              sessionId,
-              event: { type: 'agent_end', result: null, usage: {} },
-            } as unknown as ServerMessage);
+          if (!sessionEventAlreadyEmitted) {
+            // Broadcast agent_end to all subscribers so they see the turn completed
+            for (const subId of subscribers) {
+              this.sendMessage(subId, {
+                type: 'session_event',
+                sessionId,
+                event: { type: 'agent_end', result: null, usage: {} },
+              } as unknown as ServerMessage);
+            }
           }
         }
       );

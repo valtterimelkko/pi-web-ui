@@ -84,6 +84,24 @@ describe('claudeEntryToEvent', () => {
     expect(events).toHaveLength(0);
   });
 
+  it('error entry → error event', () => {
+    const entry = makeEntry({
+      type: 'error',
+      content: 'Claude Code authentication expired. Please run /login.',
+      code: 'CLAUDE_AUTH_EXPIRED',
+      reauthRequired: true,
+    });
+
+    const events = claudeEntryToEvent(entry);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'error',
+      message: 'Claude Code authentication expired. Please run /login.',
+      code: 'CLAUDE_AUTH_EXPIRED',
+      reauthRequired: true,
+    });
+  });
+
   // ─── tool entry ──────────────────────────────────────────────────────────
 
   it('tool entry → tool_execution_start + tool_execution_end events', () => {
@@ -269,6 +287,23 @@ describe('historyToReplayEvents', () => {
     expect(types).toEqual([
       'message_start', 'message_update', 'message_end',
       'tool_execution_start',
+      'message_start', 'message_update', 'message_end',
+    ]);
+  });
+
+  it('does not coalesce assistant replies across a persisted error entry', () => {
+    const entries: ClaudeMessageEntry[] = [
+      makeEntry({ type: 'assistant', content: 'Before error', timestamp: TS + 1 }),
+      makeEntry({ type: 'error', content: 'Timed out', code: 'CLAUDE_PROMPT_TIMEOUT', timestamp: TS + 2 }),
+      makeEntry({ type: 'assistant', content: 'Late answer', timestamp: TS + 3 }),
+    ];
+
+    const events = historyToReplayEvents(entries);
+    const types = events.map((e) => e.type);
+
+    expect(types).toEqual([
+      'message_start', 'message_update', 'message_end',
+      'error',
       'message_start', 'message_update', 'message_end',
     ]);
   });

@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
-vi.mock('../../../src/claude/claude-channel-process-manager.js', () => {
-  const { EventEmitter } = require('events');
+vi.mock('../../../src/claude/claude-channel-process-manager.js', async () => {
+  const { EventEmitter: MockEventEmitter } = await import('events');
   const ClaudeChannelProcessManager = vi.fn().mockImplementation(() => {
-    const emitter = new EventEmitter();
+    const emitter = new MockEventEmitter();
     return {
       start: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
@@ -175,6 +175,24 @@ describe('ClaudeChannelService', () => {
       (pmInstance.start as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Claude failed'));
       await expect(service.start()).rejects.toThrow('Claude failed');
     });
+
+    it('should reset orphaned running Claude registry sessions on startup', async () => {
+      const service = createService();
+      const registryFn = getSessionRegistry as ReturnType<typeof vi.fn>;
+      const registry = registryFn.mock.results[registryFn.mock.results.length - 1]?.value as {
+        listBySdkType: ReturnType<typeof vi.fn>;
+        updateStatus: ReturnType<typeof vi.fn>;
+      };
+      registry.listBySdkType.mockResolvedValue([
+        { id: 'running-1', sdkType: 'claude', status: 'running' },
+        { id: 'idle-1', sdkType: 'claude', status: 'idle' },
+      ]);
+
+      await service.start();
+
+      expect(registry.updateStatus).toHaveBeenCalledWith('running-1', 'idle');
+      expect(registry.updateStatus).not.toHaveBeenCalledWith('idle-1', 'idle');
+    });
   });
 
   describe('sendPrompt', () => {
@@ -295,6 +313,31 @@ describe('ClaudeChannelService', () => {
       });
     });
 
+    it('should persist string tool_result output from channel send_event', async () => {
+      const sessionId = 'test-sid-tool-result-string';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-tool-result-string', cwd: '/tmp', status: 'idle',
+      });
+
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      wsInstance.__emitter.emit('event', {
+        type: 'tool_result',
+        sessionId: 'cs-tool-result-string',
+        toolCallId: 'tc-string',
+        result: 'Read 3 files successfully',
+        timestamp: Date.now(),
+      });
+
+      await vi.waitFor(() => {
+        expect(storeInstance.appendEntry).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+          type: 'tool_result',
+          toolCallId: 'tc-string',
+          toolOutput: 'Read 3 files successfully',
+        }));
+      });
+    });
+
     it('should emit agent_end and call onComplete', async () => {
       const sessionId = 'test-sid-6';
       (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -354,6 +397,25 @@ describe('ClaudeChannelService', () => {
       await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
 
       expect(registry.updateStatus).toHaveBeenCalledWith(sessionId, 'running');
+    });
+
+    it('should ignore unknown native Claude session events instead of persisting orphan Web UI sessions', async () => {
+      const nativeEvent = {
+        type: 'tool_execution_end',
+        sessionId: 'native-claude-session-id',
+        toolCallId: 'native-tool',
+        result: 'done',
+        timestamp: Date.now(),
+      };
+
+      wsInstance.__emitter.emit('event', nativeEvent);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(storeInstance.appendEntry).not.toHaveBeenCalledWith(
+        'native-claude-session-id',
+        expect.anything(),
+      );
     });
 
     it('should throw if session not found', async () => {
@@ -624,6 +686,34 @@ describe('ClaudeChannelService', () => {
       expect(service.isRunning(sessionId)).toBe(false);
     });
 
+    it('should emit error and agent_end events when a prompt times out', async () => {
+      const sessionId = 'timeout-sid-events';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-timeout-events', cwd: '/tmp', status: 'idle',
+      });
+
+      const onEvent = vi.fn();
+      const onComplete = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', onEvent, onComplete);
+
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'error',
+        sessionId,
+        data: expect.objectContaining({ code: 'CLAUDE_PROMPT_TIMEOUT' }),
+      }));
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'agent_end',
+        sessionId,
+        data: expect.objectContaining({ reason: 'prompt_timeout' }),
+      }));
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
+        code: 'CLAUDE_PROMPT_TIMEOUT',
+        sessionEventAlreadyEmitted: true,
+      }));
+    });
+
     it('should update registry status to idle on timeout', async () => {
       const sessionId = 'timeout-sid-2';
       (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -635,6 +725,64 @@ describe('ClaudeChannelService', () => {
       await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
 
       expect(registry.updateStatus).toHaveBeenCalledWith(sessionId, 'idle');
+    });
+
+    it('should forward late replies that arrive after timeout', async () => {
+      const sessionId = 'timeout-sid-late';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-timeout-late', cwd: '/tmp', status: 'idle',
+      });
+
+      const onEvent = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', onEvent, vi.fn());
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+      onEvent.mockClear();
+
+      const channelEvent = {
+        type: 'message_update',
+        sessionId: 'cs-timeout-late',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Late answer' },
+        timestamp: Date.now(),
+      };
+      const wsInstance = findWsMock() as WsMock;
+      wsInstance.__emitter.emit('event', channelEvent);
+
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'message_update',
+        sessionId: 'cs-timeout-late',
+      }));
+    });
+
+    it('should clear stale late-listener state when a new prompt starts', async () => {
+      const sessionId = 'timeout-sid-clear-late';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-timeout-clear-late', cwd: '/tmp', status: 'idle',
+      });
+
+      const oldOnEvent = vi.fn();
+      await service.sendPrompt(sessionId, 'First prompt', oldOnEvent, vi.fn());
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+      oldOnEvent.mockClear();
+
+      const newOnEvent = vi.fn();
+      await service.sendPrompt(sessionId, 'Second prompt', newOnEvent, vi.fn());
+      const wsInstance = findWsMock() as WsMock;
+      wsInstance.__emitter.emit('event', {
+        type: 'agent_end',
+        sessionId: 'cs-timeout-clear-late',
+        timestamp: Date.now(),
+      });
+      newOnEvent.mockClear();
+
+      wsInstance.__emitter.emit('event', {
+        type: 'message_update',
+        sessionId: 'cs-timeout-clear-late',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Stale late answer' },
+        timestamp: Date.now(),
+      });
+
+      expect(oldOnEvent).not.toHaveBeenCalled();
+      expect(newOnEvent).not.toHaveBeenCalled();
     });
   });
 
@@ -690,6 +838,40 @@ describe('ClaudeChannelService', () => {
 
     it('should handle idle with no pending prompts', () => {
       expect(() => pmInstance.__emitter.emit('idle')).not.toThrow();
+    });
+
+    it('should surface Claude auth expiry from PTY as reauthentication error', async () => {
+      const sessionId = 'auth-expired-sid';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-auth-expired', cwd: '/tmp', status: 'idle',
+      });
+
+      const onEvent = vi.fn();
+      const onComplete = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', onEvent, onComplete);
+
+      pmInstance.__emitter.emit('auth_error', { message: 'Claude Code authentication expired. Please run /login.' });
+
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'error',
+        sessionId,
+        data: expect.objectContaining({
+          code: 'CLAUDE_AUTH_EXPIRED',
+          reauthRequired: true,
+        }),
+      }));
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'agent_end',
+        sessionId,
+        data: expect.objectContaining({ reason: 'auth_expired' }),
+      }));
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('authentication expired'),
+        code: 'CLAUDE_AUTH_EXPIRED',
+        sessionEventAlreadyEmitted: true,
+      }));
+      expect(service.isRunning(sessionId)).toBe(false);
+      expect(registry.updateStatus).toHaveBeenCalledWith(sessionId, 'error');
     });
   });
 

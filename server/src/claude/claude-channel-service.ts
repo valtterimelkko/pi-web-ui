@@ -31,10 +31,22 @@ interface PendingPrompt {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface LatePromptListener {
+  onEvent: (event: NormalizedEvent) => void;
+  expiresAt: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
 const MAX_PINNED_SESSIONS = 2;
 const PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
+const LATE_PROMPT_LISTENER_TTL_MS = 30 * 60 * 1000;
 const IDLE_DETECTION_GRACE_MS = 3_000;
+
+type PromptCompletionError = Error & {
+  code?: string;
+  sessionEventAlreadyEmitted?: boolean;
+};
 
 const CLAUDE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   sonnet: 200_000,
@@ -58,6 +70,7 @@ export class ClaudeChannelService {
   private cfg: ClaudeChannelServiceConfig;
 
   private pendingPrompts: Map<string, PendingPrompt> = new Map();
+  private latePromptListeners: Map<string, LatePromptListener> = new Map();
   private claudeToInternal: Map<string, string> = new Map();
   private internalToClaude: Map<string, string> = new Map();
   private pinnedSessions: Set<string> = new Set();
@@ -101,7 +114,13 @@ export class ClaudeChannelService {
       this.handlePtyIdle();
     });
 
+    this.processManager.on('auth_error', (payload: { message?: string } | undefined) => {
+      this.handlePtyAuthError(payload?.message);
+    });
+
     await this.wsClient.connect();
+
+    await this.reconcileOrphanedRunningSessions();
 
     this.started = true;
 
@@ -136,6 +155,10 @@ export class ClaudeChannelService {
       pending.onComplete(new Error('Service shutting down'));
     }
     this.pendingPrompts.clear();
+    for (const [, late] of this.latePromptListeners) {
+      clearTimeout(late.timer);
+    }
+    this.latePromptListeners.clear();
 
     this.started = false;
   }
@@ -151,11 +174,22 @@ export class ClaudeChannelService {
       const normalizedEvents = this.eventAdapter.normalize(channelEvent);
       for (const ne of normalizedEvents) {
         const claudeSid = ne.sessionId ?? '';
-        const internalSid = this.claudeToInternal.get(claudeSid) ?? claudeSid;
+        const mappedInternalSid = this.claudeToInternal.get(claudeSid);
+        const internalSid = mappedInternalSid ?? claudeSid;
         const pending = this.pendingPrompts.get(internalSid);
-        if (pending) {
+        const late = this.latePromptListeners.get(internalSid);
+
+        // Native Claude Code hooks report the interactive Claude session id, not
+        // the Web UI chat id. If the id is unknown to this bridge, do not create
+        // orphan Pi Web UI session files such as "419f...jsonl".
+        if (!mappedInternalSid && !pending && !late) {
+          continue;
+        }
+
+        const eventTarget = pending ?? late;
+        if (eventTarget) {
           try {
-            pending.onEvent(ne);
+            eventTarget.onEvent(ne);
           } catch { /* non-fatal */ }
         }
         this.persistEvent(internalSid, ne).catch((err) => {
@@ -176,13 +210,15 @@ export class ClaudeChannelService {
               });
             }).catch(() => {});
           }
+          this.registry.updateStatus(internalSid, 'idle').catch(() => {});
+          this.sessionsWithHistory.add(internalSid);
           const p = this.pendingPrompts.get(internalSid);
           if (p) {
             clearTimeout(p.timer);
             this.pendingPrompts.delete(internalSid);
-            this.registry.updateStatus(internalSid, 'idle').catch(() => {});
-            this.sessionsWithHistory.add(internalSid);
             p.onComplete();
+          } else if (late) {
+            this.clearLatePromptListener(internalSid);
           }
         }
 
@@ -230,6 +266,20 @@ export class ClaudeChannelService {
     await this.wsClient.connect();
   }
 
+  private async reconcileOrphanedRunningSessions(): Promise<void> {
+    try {
+      const sessions = await this.registry.listBySdkType('claude');
+      for (const session of sessions) {
+        if (session.status === 'running') {
+          await this.registry.updateStatus(session.id, 'idle');
+          this.sessionsWithHistory.add(session.id);
+        }
+      }
+    } catch (err) {
+      console.warn('[ClaudeChannelService] Failed to reconcile orphaned running sessions:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async createSession(
     cwd: string,
     model: string = 'sonnet',
@@ -273,6 +323,8 @@ export class ClaudeChannelService {
     if (!entry.claudeSessionId) {
       throw new Error(`Registry entry for ${sessionId} is missing claudeSessionId`);
     }
+
+    this.clearLatePromptListener(sessionId);
 
     await this.sessionStore.appendEntry(sessionId, {
       type: 'user',
@@ -627,10 +679,88 @@ export class ClaudeChannelService {
     if (!pending) return;
 
     console.warn(`[ClaudeChannelService] Prompt timeout for session ${sessionId} after ${PROMPT_TIMEOUT_MS / 1000}s`);
+    clearTimeout(pending.timer);
     this.pendingPrompts.delete(sessionId);
+    this.startLatePromptListener(sessionId, pending.onEvent);
     this.registry.updateStatus(sessionId, 'idle').catch(() => {});
     this.sessionsWithHistory.add(sessionId);
-    pending.onComplete(new Error(`Prompt timed out after ${PROMPT_TIMEOUT_MS / 1000}s`));
+
+    const errorMessage = `Claude Direct prompt timed out after ${PROMPT_TIMEOUT_MS / 1000}s. If Claude Code was waiting on re-authentication, run /login or \`claude auth login\` and the queued reply may still arrive.`;
+    this.emitPromptError(sessionId, pending, errorMessage, 'CLAUDE_PROMPT_TIMEOUT', 'prompt_timeout', false);
+    const error = new Error(errorMessage) as PromptCompletionError;
+    error.code = 'CLAUDE_PROMPT_TIMEOUT';
+    error.sessionEventAlreadyEmitted = true;
+    pending.onComplete(error);
+  }
+
+  private handlePtyAuthError(message?: string): void {
+    if (this.pendingPrompts.size === 0) return;
+
+    const errorMessage = message || 'Claude Code authentication expired. Please run /login or `claude auth login` on the server, then retry.';
+    console.warn(`[ClaudeChannelService] Claude auth expired while ${this.pendingPrompts.size} prompt(s) pending`);
+
+    for (const [sessionId, pending] of [...this.pendingPrompts.entries()]) {
+      clearTimeout(pending.timer);
+      this.pendingPrompts.delete(sessionId);
+      this.startLatePromptListener(sessionId, pending.onEvent);
+      this.registry.updateStatus(sessionId, 'error').catch(() => {});
+      this.sessionsWithHistory.add(sessionId);
+      this.emitPromptError(sessionId, pending, errorMessage, 'CLAUDE_AUTH_EXPIRED', 'auth_expired', true);
+      const error = new Error(errorMessage) as PromptCompletionError;
+      error.code = 'CLAUDE_AUTH_EXPIRED';
+      error.sessionEventAlreadyEmitted = true;
+      pending.onComplete(error);
+    }
+  }
+
+  private emitPromptError(
+    sessionId: string,
+    pending: Pick<PendingPrompt, 'onEvent'>,
+    message: string,
+    code: string,
+    endReason: string,
+    reauthRequired: boolean,
+  ): void {
+    const timestamp = Date.now();
+    const errorEvent: NormalizedEvent = {
+      type: 'error',
+      sessionId,
+      timestamp,
+      data: { message, code, reauthRequired },
+    };
+    const agentEndEvent: NormalizedEvent = {
+      type: 'agent_end',
+      sessionId,
+      timestamp,
+      data: { reason: endReason },
+    };
+
+    try {
+      pending.onEvent(errorEvent);
+      pending.onEvent(agentEndEvent);
+    } catch { /* non-fatal */ }
+    this.persistEvent(sessionId, errorEvent).catch(() => {});
+    this.persistEvent(sessionId, agentEndEvent).catch(() => {});
+  }
+
+  private startLatePromptListener(sessionId: string, onEvent: (event: NormalizedEvent) => void): void {
+    this.clearLatePromptListener(sessionId);
+    const timer = setTimeout(() => {
+      this.latePromptListeners.delete(sessionId);
+    }, LATE_PROMPT_LISTENER_TTL_MS);
+    this.latePromptListeners.set(sessionId, {
+      onEvent,
+      expiresAt: Date.now() + LATE_PROMPT_LISTENER_TTL_MS,
+      timer,
+    });
+  }
+
+  private clearLatePromptListener(sessionId: string): void {
+    const existing = this.latePromptListeners.get(sessionId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      this.latePromptListeners.delete(sessionId);
+    }
   }
 
   private async persistEvent(sessionId: string, event: NormalizedEvent): Promise<void> {
@@ -665,14 +795,18 @@ export class ClaudeChannelService {
       }
 
       case 'tool_execution_end': {
-        const resultContent = data?.result as
-          | { content?: Array<{ type?: string; text?: string }> }
-          | undefined;
-        const textContent = resultContent?.content
-          ? (resultContent.content as Array<{ type?: string; text?: string }>)
-              .map((c) => c.text ?? '')
-              .join('')
-          : '';
+        const rawResult = data?.result;
+        let textContent = '';
+        if (typeof rawResult === 'string') {
+          textContent = rawResult;
+        } else if (rawResult && typeof rawResult === 'object') {
+          const resultContent = rawResult as { content?: Array<{ type?: string; text?: string }> };
+          textContent = resultContent.content
+            ? resultContent.content
+                .map((c) => c.text ?? '')
+                .join('')
+            : JSON.stringify(rawResult);
+        }
         await this.sessionStore.appendEntry(sessionId, {
           type: 'tool_result',
           toolCallId: data?.toolCallId as string | undefined,
@@ -687,6 +821,17 @@ export class ClaudeChannelService {
         await this.sessionStore.appendEntry(sessionId, {
           type: 'meta',
           usage: data?.usage,
+          timestamp: event.timestamp,
+        });
+        break;
+      }
+
+      case 'error': {
+        await this.sessionStore.appendEntry(sessionId, {
+          type: 'error',
+          content: (data?.message as string | undefined) || 'Claude Direct error',
+          code: data?.code as string | undefined,
+          reauthRequired: data?.reauthRequired as boolean | undefined,
           timestamp: event.timestamp,
         });
         break;

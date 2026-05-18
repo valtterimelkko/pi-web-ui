@@ -151,15 +151,18 @@ export class ClaudeChannelWsClient extends EventEmitter {
     this.clearReconnectTimer();
 
     if (this.ws) {
+      const ws = this.ws;
+      this.ws = null;
       try {
-        this.ws.removeAllListeners();
-        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-          this.ws.close();
+        ws.removeAllListeners();
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        } else if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.CLOSING) {
+          ws.terminate();
         }
       } catch {
         // ignore
       }
-      this.ws = null;
     }
 
     if (this._connected) {

@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
@@ -47,12 +48,15 @@ describe('Channel Prompt Flow', () => {
     };
     service = new ClaudeChannelService(cfg);
 
-    vi.spyOn(service as unknown as { processManager: { start: () => Promise<void>; stop: () => Promise<void>; healthCheck: () => Promise<boolean>; isRunning: () => boolean } }, 'processManager', 'get').mockReturnValue({
+    const mockProcessManager = Object.assign(new EventEmitter(), {
       start: async () => {},
       stop: async () => {},
       healthCheck: async () => true,
       isRunning: () => true,
+      switchModel: () => {},
     });
+
+    vi.spyOn(service as unknown as { processManager: typeof mockProcessManager }, 'processManager', 'get').mockReturnValue(mockProcessManager);
 
     vi.spyOn(service as unknown as { hooksConfig: { writeHooksConfig: () => Promise<void>; removeHooksConfig: () => Promise<void> } }, 'hooksConfig', 'get').mockReturnValue({
       writeHooksConfig: async () => {},

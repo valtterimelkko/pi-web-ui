@@ -197,7 +197,6 @@ describe('Claude Direct UX Fixes', () => {
           sentMessages.push({ clientId: subId, msgType: 'error' });
         }
       }
-      // Always broadcast agent_end
       for (const subId of subscribers) {
         sentMessages.push({ clientId: subId, msgType: 'agent_end' });
       }
@@ -205,6 +204,29 @@ describe('Claude Direct UX Fixes', () => {
       expect(sentMessages).toHaveLength(2);
       expect(sentMessages[0].msgType).toBe('error');
       expect(sentMessages[1].msgType).toBe('agent_end');
+    });
+
+    it('should not duplicate agent_end when a structured session error already emitted it', () => {
+      const claudeSubs = new ClaudeSessionSubscribers();
+      const sessionId = 'session-fix2-no-duplicate';
+      const testError = Object.assign(new Error('Claude auth expired'), {
+        code: 'CLAUDE_AUTH_EXPIRED',
+        sessionEventAlreadyEmitted: true,
+      });
+
+      claudeSubs.subscribe('client-1', sessionId);
+
+      const sentMessages: Array<{ clientId: string; msgType: string }> = [];
+      const subscribers = claudeSubs.getSubscribers(sessionId);
+      const sessionEventAlreadyEmitted = testError.sessionEventAlreadyEmitted === true;
+
+      if (!sessionEventAlreadyEmitted) {
+        for (const subId of subscribers) {
+          sentMessages.push({ clientId: subId, msgType: 'agent_end' });
+        }
+      }
+
+      expect(sentMessages).toHaveLength(0);
     });
 
     it('should still work when no subscribers exist (graceful degradation)', () => {

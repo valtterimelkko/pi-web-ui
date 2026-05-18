@@ -1376,13 +1376,22 @@ export const useSessionStore = create<SessionState>()(
             break;
           }
 
-          case 'error':
+          case 'error': {
+            const errorMessage = (msg.message as string) || 'Unknown error';
+            const errorCode = (msg as { code?: string }).code;
             set({ 
-              error: (msg.message as string) || 'Unknown error',
+              error: errorMessage,
               isStreaming: false,
               isLoading: false,
             });
+            if (errorCode === 'CLAUDE_AUTH_EXPIRED') {
+              useUIStore.getState().addToast({
+                type: 'error',
+                message: 'Claude Direct needs you to re-authenticate. Run /login or `claude auth login` on the server, then retry.',
+              });
+            }
             break;
+          }
 
           case 'session_update': {
             // Skip session_update events during initial load to prevent duplicates
@@ -1932,6 +1941,7 @@ export const useSessionStore = create<SessionState>()(
 
               case 'error': {
                 const errorMessage = (event.message as string) || 'Unknown error';
+                const errorCode = (event as { code?: string }).code;
                 get().setSessionStatus(sessionId, 'error');
                 // Show toast and update global state if this is the current session
                 if (get().currentSessionId === sessionId) {
@@ -1942,7 +1952,9 @@ export const useSessionStore = create<SessionState>()(
                   });
                   useUIStore.getState().addToast({
                     type: 'error',
-                    message: errorMessage,
+                    message: errorCode === 'CLAUDE_AUTH_EXPIRED'
+                      ? 'Claude Direct needs you to re-authenticate. Run /login or `claude auth login` on the server, then retry.'
+                      : errorMessage,
                   });
                 }
                 break;

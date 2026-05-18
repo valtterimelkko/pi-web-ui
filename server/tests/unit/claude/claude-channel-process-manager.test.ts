@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 
-vi.mock('node-pty', () => {
-  const { EventEmitter } = require('events');
+vi.mock('node-pty', async () => {
+  const { EventEmitter: MockEventEmitter } = await import('events');
 
   const createMockPty = () => {
-    const emitter = new EventEmitter();
+    const emitter = new MockEventEmitter();
     return {
       pid: 99999,
       kill: vi.fn((signal?: string) => {
@@ -71,7 +72,6 @@ function makeDefaultConfig() {
 }
 
 function makeDeferredPty() {
-  const { EventEmitter } = require('events');
   const emitter = new EventEmitter();
   return {
     pid: 54321,
@@ -90,7 +90,6 @@ function makeDeferredPty() {
 }
 
 function makeStubbornPty() {
-  const { EventEmitter } = require('events');
   const emitter = new EventEmitter();
   return {
     pid: 54322,
@@ -298,6 +297,55 @@ describe('ClaudeChannelProcessManager', () => {
       await new Promise((r) => setTimeout(r, 2000));
 
       expect(idleSpy).not.toHaveBeenCalled();
+    });
+
+    it('should emit idle when Claude returns to a carriage-return prompt after an auth error', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      const idleSpy = vi.fn();
+      manager.on('idle', idleSpy);
+
+      ptyProc._emitter.emit('data', 'Please run /login · API Error: 401 Invalid authentication credentials\r✻Cogitated for 2s\r❯');
+
+      await new Promise((r) => setTimeout(r, 350));
+      await new Promise((r) => setTimeout(r, 1600));
+
+      expect(idleSpy).toHaveBeenCalled();
+    });
+
+    it('should emit idle when prompt output is wrapped in ANSI title/control sequences', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      const idleSpy = vi.fn();
+      manager.on('idle', idleSpy);
+
+      ptyProc._emitter.emit('data', '\u001b]0;✳ Claude Code\u0007\rBoth channel messages handled\r❯\u001b[?25h');
+
+      await new Promise((r) => setTimeout(r, 350));
+      await new Promise((r) => setTimeout(r, 1600));
+
+      expect(idleSpy).toHaveBeenCalled();
+    });
+
+    it('should emit auth_error when Claude reports expired credentials', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      const authErrorSpy = vi.fn();
+      manager.on('auth_error', authErrorSpy);
+
+      ptyProc._emitter.emit('data', 'Please run /login · API Error: 401 Invalid authentication credentials\r❯');
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(authErrorSpy).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('Claude Code authentication expired'),
+      }));
     });
   });
 

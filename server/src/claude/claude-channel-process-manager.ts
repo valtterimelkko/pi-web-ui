@@ -34,9 +34,10 @@ const DEFAULT_ALLOWED_TOOLS = [
 const READY_POLL_INTERVAL_MS = 500;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 10_000;
-const IDLE_PROMPT_PATTERN = /\n❯\s*$/;
 const SLASH_COMMAND_PATTERN = /^❯\s*\/(model|effort|clear|compact|cost|doctor|help|logout|memory|mcp|permissions|review|status|vim)\b/;
 const PROMPT_DEBOUNCE_MS = 1500;
+const AUTH_ERROR_COOLDOWN_MS = 5000;
+const AUTH_ERROR_PATTERN = /(?:Please run \/login|API Error:\s*401|Invalid authentication credentials)/i;
 
 export class ClaudeChannelProcessManager extends EventEmitter {
   private cfg: ClaudeChannelProcessManagerConfig;
@@ -51,6 +52,7 @@ export class ClaudeChannelProcessManager extends EventEmitter {
   private idleDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private accumulatingOutput: string = '';
   private accumulatingTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastAuthErrorAt = 0;
 
   constructor(cfg: ClaudeChannelProcessManagerConfig) {
     super();
@@ -102,10 +104,12 @@ export class ClaudeChannelProcessManager extends EventEmitter {
     let confirmed = false;
     let lastAutoApprove = 0;
     proc.onData((data: string) => {
-      const text = data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
-      if (text) {
-        console.log(`[ClaudeChannel] output: ${text.slice(0, 500)}`);
+      const text = this.sanitizePtyOutput(data);
+      const logText = text.trim();
+      if (logText) {
+        console.log(`[ClaudeChannel] output: ${logText.slice(0, 500)}`);
       }
+      this.detectAuthError(text);
       if (!confirmed && (text.includes('Entertoconfirm') || text.includes('Enter to confirm') || text.includes('local development'))) {
         setTimeout(() => {
           proc.write('\r');
@@ -268,10 +272,20 @@ export class ClaudeChannelProcessManager extends EventEmitter {
   }
 
   private checkForIdlePrompt(accumulated: string): void {
-    if (!IDLE_PROMPT_PATTERN.test(accumulated)) return;
-    const lines = accumulated.split('\n').map(l => l.trim()).filter(Boolean);
-    const lastLine = lines[lines.length - 1] || '';
-    if (SLASH_COMMAND_PATTERN.test(lastLine)) return;
+    const normalized = this.sanitizePtyOutput(accumulated);
+    const lastLfPrompt = normalized.lastIndexOf('\n❯');
+    const lastCrPrompt = normalized.lastIndexOf('\r❯');
+    const lastPromptIndex = Math.max(
+      lastLfPrompt >= 0 ? lastLfPrompt + 1 : -1,
+      lastCrPrompt >= 0 ? lastCrPrompt + 1 : -1,
+      normalized.startsWith('❯') ? 0 : -1,
+    );
+    if (lastPromptIndex < 0) return;
+
+    const afterPrompt = normalized.slice(lastPromptIndex).trim();
+    if (!afterPrompt.startsWith('❯')) return;
+    if (SLASH_COMMAND_PATTERN.test(afterPrompt)) return;
+    if (/esc\s+to\s+interrupt/i.test(afterPrompt)) return;
 
     if (this.idleDebounceTimer) {
       clearTimeout(this.idleDebounceTimer);
@@ -280,5 +294,31 @@ export class ClaudeChannelProcessManager extends EventEmitter {
       this.idleDebounceTimer = null;
       this.emit('idle');
     }, PROMPT_DEBOUNCE_MS);
+  }
+
+  private detectAuthError(text: string): void {
+    if (!AUTH_ERROR_PATTERN.test(text)) return;
+    const now = Date.now();
+    if (now - this.lastAuthErrorAt < AUTH_ERROR_COOLDOWN_MS) return;
+    this.lastAuthErrorAt = now;
+    this.emit('auth_error', {
+      message: 'Claude Code authentication expired. Please run /login or `claude auth login` on the server, then retry.',
+    });
+  }
+
+  private sanitizePtyOutput(text: string): string {
+    const esc = String.fromCharCode(27);
+    const bel = String.fromCharCode(7);
+    const oscPattern = new RegExp(`${esc}\\][^${bel}]*(?:${bel}|${esc}\\\\)`, 'g');
+    const csiPattern = new RegExp(`${esc}\\[[0-?]*[ -/]*[@-~]`, 'g');
+    const shortEscPattern = new RegExp(`${esc}[=>][0-9;]*`, 'g');
+
+    return text
+      // OSC/title-control sequences, e.g. ESC ] 0;... BEL
+      .replace(oscPattern, '')
+      // CSI control sequences, e.g. ESC [ ?25h / ESC [ 1m
+      .replace(csiPattern, '')
+      // Other short escape controls seen in Claude's TUI.
+      .replace(shortEscPattern, '');
   }
 }

@@ -79,6 +79,17 @@ export function claudeEntryToEvent(entry: ClaudeMessageEntry): Array<Record<stri
       });
       break;
     }
+
+    case 'error': {
+      events.push({
+        type: 'error',
+        message: entry.content || 'Claude Direct error',
+        code: entry.code,
+        reauthRequired: entry.reauthRequired,
+        timestamp: entry.timestamp,
+      });
+      break;
+    }
   }
 
   return events;
