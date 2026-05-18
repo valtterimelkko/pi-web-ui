@@ -25,6 +25,8 @@ export interface ClaudeChannelServiceConfig {
 }
 
 interface PendingPrompt {
+  /** Unique id for this turn — used to keep events/logs unambiguous across turns. */
+  promptId: string;
   onEvent: (event: NormalizedEvent) => void;
   onComplete: (error?: Error) => void;
   sentAt: number;
@@ -78,6 +80,8 @@ export class ClaudeChannelService {
   private sessionContextMeta: Map<string, SessionContextMeta> = new Map();
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private started = false;
+  /** Session whose turn was dispatched most recently — owns the shared PTY. */
+  private lastActiveSessionId: string | null = null;
 
   constructor(cfg: ClaudeChannelServiceConfig) {
     this.cfg = cfg;
@@ -112,6 +116,10 @@ export class ClaudeChannelService {
 
     this.processManager.on('idle', () => {
       this.handlePtyIdle();
+    });
+
+    this.processManager.on('activity', () => {
+      this.handlePtyActivity();
     });
 
     this.processManager.on('auth_error', (payload: { message?: string } | undefined) => {
@@ -216,6 +224,7 @@ export class ClaudeChannelService {
           if (p) {
             clearTimeout(p.timer);
             this.pendingPrompts.delete(internalSid);
+            this.processManager.markPromptComplete();
             p.onComplete();
           } else if (late) {
             this.clearLatePromptListener(internalSid);
@@ -324,7 +333,21 @@ export class ClaudeChannelService {
       throw new Error(`Registry entry for ${sessionId} is missing claudeSessionId`);
     }
 
+    // Enforce at most one in-flight prompt per session. The channel drives a
+    // single shared Claude process; allowing a second prompt while the first
+    // turn is still running let the first turn's agent_end complete the WRONG
+    // pending prompt (turn misattribution).
+    if (this.pendingPrompts.has(sessionId)) {
+      const busyErr = new Error(
+        `A prompt is already in progress for session ${sessionId}`,
+      ) as PromptCompletionError;
+      busyErr.code = 'SESSION_BUSY';
+      throw busyErr;
+    }
+
     this.clearLatePromptListener(sessionId);
+
+    const promptId = randomUUID();
 
     await this.sessionStore.appendEntry(sessionId, {
       type: 'user',
@@ -334,17 +357,21 @@ export class ClaudeChannelService {
 
     await this.registry.updateStatus(sessionId, 'running');
 
+    this.lastActiveSessionId = sessionId;
+    this.processManager.markPromptSent();
+
     const agentStartEvent: NormalizedEvent = {
       type: 'agent_start',
       sessionId,
       timestamp: Date.now(),
-      data: { sessionId, claudeSessionId: entry.claudeSessionId },
+      data: { sessionId, claudeSessionId: entry.claudeSessionId, promptId },
     };
     try {
       onEvent(agentStartEvent);
     } catch { /* non-fatal */ }
 
     this.pendingPrompts.set(sessionId, {
+      promptId,
       onEvent,
       onComplete,
       sentAt: Date.now(),
@@ -373,13 +400,24 @@ export class ClaudeChannelService {
     if (pending) {
       clearTimeout(pending.timer);
       this.pendingPrompts.delete(sessionId);
+      this.processManager.markPromptComplete();
       this.registry.updateStatus(sessionId, 'idle').catch(() => {});
       pending.onComplete(new Error('Aborted'));
     }
   }
 
+  /**
+   * Whether a turn is genuinely in flight for this session. Reflects the real
+   * PTY busy state, not just bookkeeping: a pending prompt always counts, and
+   * as a safety net the session that owns the most recent turn also counts
+   * while the PTY still shows Claude working (e.g. after a prompt timeout).
+   */
   isRunning(sessionId: string): boolean {
-    return this.pendingPrompts.has(sessionId);
+    if (this.pendingPrompts.has(sessionId)) return true;
+    if (this.lastActiveSessionId === sessionId && this.processManager.isBusy()) {
+      return true;
+    }
+    return false;
   }
 
   async loadSessionHistory(sessionId: string) {
@@ -647,6 +685,27 @@ export class ClaudeChannelService {
     this.wsClient.send({ type: 'permission_response', requestId, allowed });
   }
 
+  /**
+   * Forward a lightweight liveness ping to every in-flight turn. The Web UI
+   * heartbeat uses this to show genuine progress while Claude is mid-turn but
+   * not emitting send_event tool calls. Not persisted to the JSONL store.
+   */
+  private handlePtyActivity(): void {
+    if (this.pendingPrompts.size === 0) return;
+    const timestamp = Date.now();
+    for (const [sessionId, pending] of this.pendingPrompts) {
+      const activityEvent: NormalizedEvent = {
+        type: 'stream_activity',
+        sessionId,
+        timestamp,
+        data: { promptId: pending.promptId },
+      };
+      try {
+        pending.onEvent(activityEvent);
+      } catch { /* non-fatal */ }
+    }
+  }
+
   private handlePtyIdle(): void {
     if (this.pendingPrompts.size === 0) return;
 
@@ -654,7 +713,7 @@ export class ClaudeChannelService {
     for (const [sessionId, pending] of this.pendingPrompts) {
       if (now - pending.sentAt < IDLE_DETECTION_GRACE_MS) continue;
 
-      console.warn(`[ClaudeChannelService] PTY idle detected while session ${sessionId} is pending — force-completing`);
+      console.warn(`[ClaudeChannelService] PTY idle detected while session ${sessionId} (turn ${pending.promptId}) is pending — force-completing`);
       clearTimeout(pending.timer);
       this.pendingPrompts.delete(sessionId);
       this.registry.updateStatus(sessionId, 'idle').catch(() => {});

@@ -250,85 +250,141 @@ describe('ClaudeChannelProcessManager', () => {
     try { await managerSlow.stop(); } catch { /* ignore */ }
   });
 
-  describe('idle detection', () => {
-    it('should emit idle when PTY shows prompt character', { timeout: 15_000 }, async () => {
+  describe('busy-state tracking', () => {
+    const FAST = { idleQuietMs: 150, idleCheckIntervalMs: 30, activityThrottleMs: 20 };
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    function makeFastManager() {
+      return new ClaudeChannelProcessManager({ ...makeDefaultConfig(), ...FAST });
+    }
+
+    it('reports busy after a prompt is dispatched and emits idle once the PTY goes quiet', { timeout: 15_000 }, async () => {
       const ptyProc = makeDeferredPty();
       spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await manager.start();
+
+      const idleSpy = vi.fn();
+      manager.on('idle', idleSpy);
+
+      manager.markPromptSent();
+      expect(manager.isBusy()).toBe(true);
+
+      ptyProc._emitter.emit('data', '✻ Thinking… (2s · esc to interrupt)');
+      expect(manager.isBusy()).toBe(true);
+      expect(idleSpy).not.toHaveBeenCalled();
+
+      // No further PTY output - after the quiet window the turn is declared done.
+      await wait(300);
+      expect(idleSpy).toHaveBeenCalledTimes(1);
+      expect(manager.isBusy()).toBe(false);
+    });
+
+    it('does NOT emit idle while a busy indicator keeps arriving (regression: false turn-completion)', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await manager.start();
+
+      const idleSpy = vi.fn();
+      manager.on('idle', idleSpy);
+      manager.markPromptSent();
+
+      // Simulate a long turn: spinner frames keep arriving past the quiet window.
+      for (let i = 0; i < 8; i++) {
+        ptyProc._emitter.emit('data', `✶ Nesting… (${i}s · esc to interrupt)`);
+        await wait(60);
+      }
+
+      expect(idleSpy).not.toHaveBeenCalled();
+      expect(manager.isBusy()).toBe(true);
+    });
+
+    it('stays busy when the "esc to interrupt" footer is rendered ABOVE the prompt box', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await manager.start();
+
+      const idleSpy = vi.fn();
+      manager.on('idle', idleSpy);
+      manager.markPromptSent();
+
+      // The footer sits above the input box - the old detector only scanned
+      // text AFTER the prompt and so wrongly force-completed live turns.
+      for (let i = 0; i < 6; i++) {
+        ptyProc._emitter.emit('data', '✻ Working… (esc to interrupt)\n--------\n❯ \n--------');
+        await wait(60);
+      }
+
+      expect(idleSpy).not.toHaveBeenCalled();
+      expect(manager.isBusy()).toBe(true);
+    });
+
+    it('emits idle when Claude returns to a bare prompt after the turn ends', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await manager.start();
+
+      const idleSpy = vi.fn();
+      manager.on('idle', idleSpy);
+      manager.markPromptSent();
+
+      ptyProc._emitter.emit('data', '✻ Working… (esc to interrupt)');
+      await wait(40);
+      // Turn ends: a clean prompt frame with no busy indicator, then silence.
+      ptyProc._emitter.emit('data', '\rBoth channel messages handled\r❯');
+      await wait(300);
+
+      expect(idleSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not emit idle when no prompt was ever dispatched', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
       await manager.start();
 
       const idleSpy = vi.fn();
       manager.on('idle', idleSpy);
 
       ptyProc._emitter.emit('data', 'Some output\n❯ ');
-
-      await new Promise((r) => setTimeout(r, 350));
-      await new Promise((r) => setTimeout(r, 1600));
-
-      expect(idleSpy).toHaveBeenCalled();
-    });
-
-    it('should not emit idle for slash commands', { timeout: 15_000 }, async () => {
-      const ptyProc = makeDeferredPty();
-      spawnMock.mockImplementationOnce(() => ptyProc);
-      await manager.start();
-
-      const idleSpy = vi.fn();
-      manager.on('idle', idleSpy);
-
-      ptyProc._emitter.emit('data', '\n❯ /model opus');
-
-      await new Promise((r) => setTimeout(r, 350));
-      await new Promise((r) => setTimeout(r, 2000));
+      await wait(300);
 
       expect(idleSpy).not.toHaveBeenCalled();
+      expect(manager.isBusy()).toBe(false);
     });
 
-    it('should not emit idle for text without prompt', { timeout: 15_000 }, async () => {
+    it('markPromptComplete clears the busy state immediately', { timeout: 15_000 }, async () => {
       const ptyProc = makeDeferredPty();
       spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
       await manager.start();
 
-      const idleSpy = vi.fn();
-      manager.on('idle', idleSpy);
+      manager.markPromptSent();
+      expect(manager.isBusy()).toBe(true);
 
-      ptyProc._emitter.emit('data', 'Some regular output text');
-
-      await new Promise((r) => setTimeout(r, 350));
-      await new Promise((r) => setTimeout(r, 2000));
-
-      expect(idleSpy).not.toHaveBeenCalled();
+      manager.markPromptComplete();
+      expect(manager.isBusy()).toBe(false);
     });
 
-    it('should emit idle when Claude returns to a carriage-return prompt after an auth error', { timeout: 15_000 }, async () => {
+    it('emits throttled activity pings while a turn is in progress', { timeout: 15_000 }, async () => {
       const ptyProc = makeDeferredPty();
       spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
       await manager.start();
 
-      const idleSpy = vi.fn();
-      manager.on('idle', idleSpy);
+      const activitySpy = vi.fn();
+      manager.on('activity', activitySpy);
+      manager.markPromptSent();
 
-      ptyProc._emitter.emit('data', 'Please run /login · API Error: 401 Invalid authentication credentials\r✻Cogitated for 2s\r❯');
+      for (let i = 0; i < 5; i++) {
+        ptyProc._emitter.emit('data', `✻ Working… (${i}s · esc to interrupt)`);
+        await wait(30);
+      }
 
-      await new Promise((r) => setTimeout(r, 350));
-      await new Promise((r) => setTimeout(r, 1600));
-
-      expect(idleSpy).toHaveBeenCalled();
-    });
-
-    it('should emit idle when prompt output is wrapped in ANSI title/control sequences', { timeout: 15_000 }, async () => {
-      const ptyProc = makeDeferredPty();
-      spawnMock.mockImplementationOnce(() => ptyProc);
-      await manager.start();
-
-      const idleSpy = vi.fn();
-      manager.on('idle', idleSpy);
-
-      ptyProc._emitter.emit('data', '\u001b]0;✳ Claude Code\u0007\rBoth channel messages handled\r❯\u001b[?25h');
-
-      await new Promise((r) => setTimeout(r, 350));
-      await new Promise((r) => setTimeout(r, 1600));
-
-      expect(idleSpy).toHaveBeenCalled();
+      expect(activitySpy).toHaveBeenCalled();
     });
 
     it('should emit auth_error when Claude reports expired credentials', { timeout: 15_000 }, async () => {

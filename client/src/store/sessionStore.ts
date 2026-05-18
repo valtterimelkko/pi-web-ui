@@ -1705,7 +1705,15 @@ export const useSessionStore = create<SessionState>()(
                   set({ isStreaming: true, isLoading: false, lastStreamEventAt: Date.now() });
                 }
                 break;
-                
+
+              // Liveness ping from the Claude channel PTY: keeps the heartbeat
+              // fresh while Claude is working but not emitting other events.
+              case 'stream_activity':
+                if (get().currentSessionId === sessionId && get().isStreaming) {
+                  set({ lastStreamEventAt: Date.now() });
+                }
+                break;
+
               case 'agent_end':
                 get().setSessionStatus(sessionId, 'idle');
                 currentMessageIdBySession.delete(sessionId);

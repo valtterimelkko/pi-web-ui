@@ -18,6 +18,12 @@ export interface ClaudeChannelProcessManagerConfig {
   cwd: string;
   claudePath?: string;
   permissionMode?: string;
+  /** Quiet window (ms) with no PTY busy indicator before a turn is declared idle. */
+  idleQuietMs?: number;
+  /** How often (ms) to re-check the idle condition. */
+  idleCheckIntervalMs?: number;
+  /** Minimum gap (ms) between forwarded PTY activity pings. */
+  activityThrottleMs?: number;
 }
 
 const DEFAULT_PERMISSION_MODE = 'dontAsk';
@@ -34,10 +40,19 @@ const DEFAULT_ALLOWED_TOOLS = [
 const READY_POLL_INTERVAL_MS = 500;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 10_000;
-const SLASH_COMMAND_PATTERN = /^❯\s*\/(model|effort|clear|compact|cost|doctor|help|logout|memory|mcp|permissions|review|status|vim)\b/;
-const PROMPT_DEBOUNCE_MS = 1500;
 const AUTH_ERROR_COOLDOWN_MS = 5000;
 const AUTH_ERROR_PATTERN = /(?:Please run \/login|API Error:\s*401|Invalid authentication credentials)/i;
+
+// Busy-state tracking. Claude Code keeps an "esc to interrupt" footer and an
+// animated spinner glyph on screen for the entire duration of an active turn.
+// Either one means "Claude is working". A turn is only considered finished
+// once NO busy indicator has appeared for a sustained quiet window — scraping
+// for a single `❯` prompt frame is unreliable because Claude renders that
+// input box continuously, even mid-turn, which caused false turn-completions.
+const BUSY_INDICATOR_PATTERN = /esc\s*to\s*interrupt|[✻✽✶✢]/i;
+const DEFAULT_IDLE_QUIET_MS = 12_000;
+const DEFAULT_IDLE_CHECK_INTERVAL_MS = 3_000;
+const DEFAULT_ACTIVITY_THROTTLE_MS = 2_000;
 
 export class ClaudeChannelProcessManager extends EventEmitter {
   private cfg: ClaudeChannelProcessManagerConfig;
@@ -49,14 +64,21 @@ export class ClaudeChannelProcessManager extends EventEmitter {
   private ptyProcess: pty.IPty | null = null;
   private _currentModel: string | null = null;
   private _currentThinkingLevel: string | null = null;
-  private idleDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private accumulatingOutput: string = '';
-  private accumulatingTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAuthErrorAt = 0;
+  private isBusyState = false;
+  private lastBusyAt = 0;
+  private lastActivityEmitAt = 0;
+  private idleCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly idleQuietMs: number;
+  private readonly idleCheckIntervalMs: number;
+  private readonly activityThrottleMs: number;
 
   constructor(cfg: ClaudeChannelProcessManagerConfig) {
     super();
     this.cfg = cfg;
+    this.idleQuietMs = cfg.idleQuietMs ?? DEFAULT_IDLE_QUIET_MS;
+    this.idleCheckIntervalMs = cfg.idleCheckIntervalMs ?? DEFAULT_IDLE_CHECK_INTERVAL_MS;
+    this.activityThrottleMs = cfg.activityThrottleMs ?? DEFAULT_ACTIVITY_THROTTLE_MS;
   }
 
   async start(): Promise<void> {
@@ -129,10 +151,14 @@ export class ClaudeChannelProcessManager extends EventEmitter {
         }
       }
 
-      this.detectIdlePrompt(text);
+      this.trackBusyState(text);
     });
 
+    this.startIdleWatch();
+
     proc.onExit(({ exitCode, signal }) => {
+      this.stopIdleWatch();
+      this.isBusyState = false;
       const code = exitCode ?? (signal ? -1 : 0);
       if (this.state.status !== 'error') {
         if (code !== 0) {
@@ -160,6 +186,8 @@ export class ClaudeChannelProcessManager extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    this.stopIdleWatch();
+    this.isBusyState = false;
     const proc = this.ptyProcess;
     if (!proc || this.state.status === 'stopped') {
       this.state.status = 'stopped';
@@ -258,42 +286,74 @@ export class ClaudeChannelProcessManager extends EventEmitter {
     proc.write(`/effort ${effort}\r`);
   }
 
-  private detectIdlePrompt(text: string): void {
-    this.accumulatingOutput += text;
-
-    if (this.accumulatingTimer) {
-      clearTimeout(this.accumulatingTimer);
-    }
-    this.accumulatingTimer = setTimeout(() => {
-      this.checkForIdlePrompt(this.accumulatingOutput);
-      this.accumulatingOutput = '';
-      this.accumulatingTimer = null;
-    }, 300);
+  /**
+   * Tell the busy tracker that a prompt was just dispatched to Claude. This
+   * makes `isBusy()` true immediately, before any PTY output is rendered, and
+   * arms the idle watcher so the turn's completion can be detected.
+   */
+  markPromptSent(): void {
+    this.isBusyState = true;
+    this.lastBusyAt = Date.now();
+    this.lastActivityEmitAt = 0;
   }
 
-  private checkForIdlePrompt(accumulated: string): void {
-    const normalized = this.sanitizePtyOutput(accumulated);
-    const lastLfPrompt = normalized.lastIndexOf('\n❯');
-    const lastCrPrompt = normalized.lastIndexOf('\r❯');
-    const lastPromptIndex = Math.max(
-      lastLfPrompt >= 0 ? lastLfPrompt + 1 : -1,
-      lastCrPrompt >= 0 ? lastCrPrompt + 1 : -1,
-      normalized.startsWith('❯') ? 0 : -1,
-    );
-    if (lastPromptIndex < 0) return;
+  /**
+   * Tell the busy tracker that the current turn finished (e.g. Claude called
+   * the `reply` tool). Clears the busy state without waiting for the quiet
+   * window so `isBusy()` stops reporting a stale turn.
+   */
+  markPromptComplete(): void {
+    this.isBusyState = false;
+  }
 
-    const afterPrompt = normalized.slice(lastPromptIndex).trim();
-    if (!afterPrompt.startsWith('❯')) return;
-    if (SLASH_COMMAND_PATTERN.test(afterPrompt)) return;
-    if (/esc\s+to\s+interrupt/i.test(afterPrompt)) return;
+  /** Whether Claude appears to be actively working on a turn. */
+  isBusy(): boolean {
+    return this.isBusyState;
+  }
 
-    if (this.idleDebounceTimer) {
-      clearTimeout(this.idleDebounceTimer);
+  /**
+   * Scan a PTY frame for busy indicators. Unlike the old prompt-scraping
+   * detector, this looks at the WHOLE frame: Claude renders the
+   * "esc to interrupt" footer ABOVE the `❯` input box, so checking only the
+   * text after the prompt missed it and force-completed live turns.
+   */
+  private trackBusyState(text: string): void {
+    const now = Date.now();
+    if (BUSY_INDICATOR_PATTERN.test(text)) {
+      this.lastBusyAt = now;
+      if (!this.isBusyState) {
+        this.isBusyState = true;
+        this.emit('busy');
+      }
     }
-    this.idleDebounceTimer = setTimeout(() => {
-      this.idleDebounceTimer = null;
+    // While a turn is active, forward throttled activity pings so the Web UI
+    // heartbeat can show genuine liveness even when Claude never calls
+    // send_event for its intermediate tool use.
+    if (this.isBusyState && now - this.lastActivityEmitAt >= this.activityThrottleMs) {
+      this.lastActivityEmitAt = now;
+      this.emit('activity');
+    }
+  }
+
+  private startIdleWatch(): void {
+    this.stopIdleWatch();
+    this.idleCheckTimer = setInterval(() => {
+      if (!this.isBusyState) return;
+      if (Date.now() - this.lastBusyAt < this.idleQuietMs) return;
+      // No busy indicator for the full quiet window — the turn has ended.
+      this.isBusyState = false;
       this.emit('idle');
-    }, PROMPT_DEBOUNCE_MS);
+    }, this.idleCheckIntervalMs);
+    if (typeof this.idleCheckTimer.unref === 'function') {
+      this.idleCheckTimer.unref();
+    }
+  }
+
+  private stopIdleWatch(): void {
+    if (this.idleCheckTimer) {
+      clearInterval(this.idleCheckTimer);
+      this.idleCheckTimer = null;
+    }
   }
 
   private detectAuthError(text: string): void {

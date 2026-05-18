@@ -13,6 +13,9 @@ vi.mock('../../../src/claude/claude-channel-process-manager.js', async () => {
       getState: vi.fn().mockReturnValue({ process: null, status: 'running', startedAt: Date.now() }),
       switchModel: vi.fn(),
       setThinkingLevel: vi.fn(),
+      markPromptSent: vi.fn(),
+      markPromptComplete: vi.fn(),
+      isBusy: vi.fn().mockReturnValue(false),
       on: vi.fn((event: string, handler: () => void) => emitter.on(event, handler)),
       __emitter: emitter,
     };
@@ -428,6 +431,114 @@ describe('ClaudeChannelService', () => {
         id: 'x', sdkType: 'claude', cwd: '/tmp', status: 'idle',
       });
       await expect(service.sendPrompt('x', 'Hi', vi.fn(), vi.fn())).rejects.toThrow('missing claudeSessionId');
+    });
+  });
+
+  describe('turn correlation and busy state', () => {
+    let service: ClaudeChannelService;
+    let wsInstance: WsMock;
+    let pmInstance: { markPromptSent: ReturnType<typeof vi.fn>; markPromptComplete: ReturnType<typeof vi.fn>; isBusy: ReturnType<typeof vi.fn>; __emitter: EventEmitter };
+    let registry: { get: ReturnType<typeof vi.fn>; upsert: ReturnType<typeof vi.fn>; updateStatus: ReturnType<typeof vi.fn> };
+
+    beforeEach(async () => {
+      service = createService();
+      await service.start();
+      wsInstance = findWsMock() as WsMock;
+      pmInstance = (ClaudeChannelProcessManager as unknown as ReturnType<typeof vi.fn>).mock.results[0].value as typeof pmInstance;
+      const registryFn = getSessionRegistry as ReturnType<typeof vi.fn>;
+      registry = registryFn.mock.results[registryFn.mock.results.length - 1]?.value as typeof registry;
+    });
+
+    it('rejects a second prompt while one is already in flight', async () => {
+      const sessionId = 'tc-busy-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-tc-1', cwd: '/tmp', status: 'idle',
+      });
+
+      await service.sendPrompt(sessionId, 'first', vi.fn(), vi.fn());
+
+      await expect(
+        service.sendPrompt(sessionId, 'second', vi.fn(), vi.fn()),
+      ).rejects.toThrow(/already in progress/);
+    });
+
+    it('tells the process manager a prompt was dispatched', async () => {
+      const sessionId = 'tc-mark-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-tc-mark-1', cwd: '/tmp', status: 'idle',
+      });
+
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      expect(pmInstance.markPromptSent).toHaveBeenCalled();
+    });
+
+    it('tags agent_start with a promptId for turn correlation', async () => {
+      const sessionId = 'tc-pid-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-tc-pid-1', cwd: '/tmp', status: 'idle',
+      });
+
+      const onEvent = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', onEvent, vi.fn());
+
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'agent_start',
+        data: expect.objectContaining({ promptId: expect.any(String) }),
+      }));
+    });
+
+    it('isRunning is true while a turn is pending and false after agent_end', async () => {
+      const sessionId = 'tc-run-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-tc-run-1', cwd: '/tmp', status: 'idle',
+      });
+
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+      expect(service.isRunning(sessionId)).toBe(true);
+
+      wsInstance.__emitter.emit('event', {
+        type: 'agent_end', sessionId: 'cs-tc-run-1', result: 'ok', timestamp: Date.now(),
+      });
+
+      await vi.waitFor(() => {
+        expect(service.isRunning(sessionId)).toBe(false);
+      });
+      expect(pmInstance.markPromptComplete).toHaveBeenCalled();
+    });
+
+    it('isRunning reflects real PTY busy state even after the pending prompt clears', async () => {
+      const sessionId = 'tc-run-2';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-tc-run-2', cwd: '/tmp', status: 'idle',
+      });
+
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+      // Force-complete via timeout so the pending prompt is gone but the PTY
+      // may still show Claude working.
+      service.abort(sessionId);
+      expect(service.isRunning(sessionId)).toBe(false);
+
+      pmInstance.isBusy.mockReturnValue(true);
+      expect(service.isRunning(sessionId)).toBe(true);
+    });
+
+    it('forwards PTY activity as a stream_activity event to the in-flight turn', async () => {
+      const sessionId = 'tc-act-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-tc-act-1', cwd: '/tmp', status: 'idle',
+      });
+
+      const onEvent = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', onEvent, vi.fn());
+      onEvent.mockClear();
+
+      pmInstance.__emitter.emit('activity');
+
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'stream_activity',
+        sessionId,
+      }));
     });
   });
 
