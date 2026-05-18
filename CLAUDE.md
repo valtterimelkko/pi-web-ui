@@ -5,6 +5,7 @@
 ## Start Here
 
 - **Overview / runbook:** [`README.md`](./README.md)
+- **Troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
 - **Architecture:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 - **WebSocket protocol:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
 - **REST/API index:** [`API.md`](./API.md)
@@ -26,6 +27,7 @@
 | Add a REST route | `server/src/routes/*.ts` → add `cookieAuthMiddleware` |
 | Auth / CSRF / security | `server/src/security/*.ts`, `SECURITY.md` |
 | Config / env var | `server/src/config.ts`, `.env.example`, `DEPLOYMENT.md` |
+| Find logs / session files fast | `docs/TROUBLESHOOTING.md`, `npm run debug:where -- <session-id>` |
 | Add a new runtime | See [`docs/ADDING-A-RUNTIME.md`](./docs/ADDING-A-RUNTIME.md) |
 | Fix a frontend store issue | `client/src/store/sessionStore.ts` |
 | UI component / modal | `client/src/components/Session/NewSessionModal.tsx` |
@@ -63,9 +65,9 @@ Improve Pi Web UI safely with small, verified changes. Prefer targeted fixes ove
 - Frontend: **React + Zustand + Vite**
 - Backend: **Express + WebSocket**
 - Protocol: **JSON message protocol over `/ws`** with session-aware event routing
-- Three runtime paths:
+- Three runtime families:
   - **Pi SDK** — Pi-native sessions, extensions, worker lifecycle, `~/.pi/agent/sessions/`
-  - **Claude Direct** — `claude -p` subprocess path with Pi-owned JSONL persistence, `~/.pi-web-ui/claude-sessions/`
+  - **Claude runtime** — legacy `claude -p` subprocesses or the channel-backed Claude Code path; replay store in `~/.pi-web-ui/claude-sessions/`, native Claude state in `~/.claude/projects/`
   - **OpenCode Direct** — `opencode serve` backend for OpenCode/Z.AI GLM sessions, with Pi Web UI storing registry metadata only
 - Unified session registry: `~/.pi-web-ui/session-registry.json`
 
@@ -77,7 +79,7 @@ Improve Pi Web UI safely with small, verified changes. Prefer targeted fixes ove
 - `server/src/websocket/connection.ts` — main runtime router and event fanout
 - `server/src/websocket/protocol.ts` — shared WebSocket message types
 - `server/src/pi/multi-session-manager.ts` — Pi SDK lifecycle / cleanup / pinning
-- `server/src/claude/claude-service.ts` — Claude Direct lifecycle and replay
+- `server/src/claude/claude-service.ts` — Claude runtime lifecycle and backend selection
 - `server/src/opencode/opencode-service.ts` — OpenCode Direct lifecycle and replay
 - `server/src/session-registry.ts` — unified cross-runtime session index
 - `server/src/routes/models.ts` / `server/src/routes/health.ts` — runtime-aware REST endpoints
@@ -97,18 +99,18 @@ See [`SECURITY.md`](./SECURITY.md) for the canonical security model.
 - **WebSocket / routing:** `server/src/websocket/connection.ts`, `server/src/websocket/session-websocket.ts`
 - **Auth / CSRF:** `server/src/security/auth.ts`, `server/src/security/csrf.ts`, `server/src/middleware/auth.ts`
 - **Pi SDK path:** `server/src/pi/multi-session-manager.ts`, `server/src/workers/worker-pool.ts`
-- **Claude Direct:** `server/src/claude/claude-service.ts`, `server/src/claude/claude-process-pool.ts`
+- **Claude runtime:** `server/src/claude/claude-service.ts`, `server/src/claude/claude-process-pool.ts`, `server/src/claude/claude-channel-service.ts`, `server/src/claude/claude-channel-process-manager.ts`
 - **OpenCode Direct:** `server/src/opencode/opencode-service.ts`, `server/src/opencode/opencode-process-manager.ts`, `server/src/opencode/opencode-client.ts`
 - **Registry / persistence:** `server/src/session-registry.ts`
 - **Health / config:** `server/src/routes/health.ts`, `server/src/routes/config.ts`, `server/src/routes/models.ts`
 
-Use [`README.md`](./README.md) for practical debugging commands by problem type.
+Use [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md) for practical debugging commands, log locations, and session-file lookup.
 
 ## UI / Product Conventions
 
 - The app uses a **light theme**.
 - Keep runtime differences understandable, but avoid noisy raw tool chatter unless the feature explicitly needs it.
-- Keep the unified-session UX intact across Pi SDK, Claude Direct, and OpenCode Direct.
+- Keep the unified-session UX intact across Pi SDK, the Claude runtime family, and OpenCode Direct.
 - Do not rely on historical test counts in old docs; run the current checks.
 
 ## Handy Commands
@@ -121,6 +123,7 @@ npm run typecheck
 npm run build
 npm test
 npm run test:e2e
+npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 ```
 
 ## Final Rule

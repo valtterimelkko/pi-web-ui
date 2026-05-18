@@ -125,7 +125,7 @@ The server responds with either `session_transfer_completed` or `session_transfe
 ```typescript
 { type: 'sessions_list', sessions: SessionInfo[] }
 { type: 'session_created', sessionId: string, sessionPath: string }
-{ type: 'session_switched', sessionId: string, sessionPath: string, model?: string, contextWindow?: number, contextUsed?: number, contextPercent?: number, messages?: SessionMessage[], fileTimestamp?: number, isStreaming?: boolean }
+{ type: 'session_switched', sessionId: string, sessionPath: string, model?: string, thinkingLevel?: string, contextWindow?: number, contextUsed?: number, contextPercent?: number, messages?: SessionMessage[], fileTimestamp?: number, isStreaming?: boolean }
 { type: 'session_info', stats: SessionStats }
 { type: 'session_tree', tree: TreeNode[] }
 { type: 'session_name_changed', sessionId: string, name: string }
@@ -159,6 +159,7 @@ These are the normalized event shapes the frontend usually sees inside `session_
 { type: 'tool_execution_start', toolCallId: string, toolName: string, args: unknown }
 { type: 'tool_execution_update', toolCallId: string, toolName: string, args: unknown, partialResult: unknown }
 { type: 'tool_execution_end', toolCallId: string, toolName: string, result: unknown, isError: boolean }
+{ type: 'stream_activity', timestamp?: number, detail?: string }
 { type: 'auto_compaction_start', reason: string }
 { type: 'auto_compaction_end', result: unknown, aborted: boolean, willRetry: boolean }
 { type: 'auto_retry_start', attempt: number, maxAttempts: number, delayMs: number, errorMessage: string }
@@ -195,9 +196,13 @@ Transfer error codes:
 ### Pi SDK
 - Native Pi events are forwarded and wrapped for the frontend.
 
-### Claude Direct
+### Claude runtime — legacy direct backend
 - Claude output is normalized into the common event model.
 - History replay is reconstructed from Pi-owned Claude session storage.
+
+### Claude runtime — channel-backed backend
+- Claude Code PTY/channel events are adapted into the same common event model as the legacy direct path.
+- `stream_activity` is used as a heartbeat-like liveness signal during long turns.
 
 ### OpenCode Direct
 - OpenCode SSE and message APIs are adapted into the common event model.

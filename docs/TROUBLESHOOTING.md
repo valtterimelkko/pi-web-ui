@@ -1,0 +1,191 @@
+# Pi Web UI Troubleshooting and Runtime Logs
+
+> Start here when an agent needs logs, session-file locations, health commands, or the fastest path to a runtime-specific diagnosis.
+
+## Fastest Starting Points
+
+1. **Find the session entry quickly**
+   ```bash
+   npm run debug:where -- <session-id-or-runtime-session-id-or-path>
+   ```
+   This reads `~/.pi-web-ui/session-registry.json` and prints the most relevant files and log commands for that session.
+
+2. **Tail the main server log**
+   ```bash
+   sudo journalctl -u pi-web-ui -f
+   ```
+
+3. **Check runtime health**
+   ```bash
+   curl http://localhost:<server-port>/api/health/ready
+   curl http://localhost:<server-port>/api/config/validate
+   ```
+
+## Session Files and Log Sources
+
+| Runtime / subsystem | Primary session / state files | Main logs | Notes |
+|---|---|---|---|
+| **Pi SDK** | `~/.pi/agent/sessions/` | `journalctl -u pi-web-ui -f` | Worker processes are spawned by Pi Web UI. |
+| **Claude runtime (Pi-owned replay store)** | `~/.pi-web-ui/claude-sessions/<internal-session-id>.jsonl` | `journalctl -u pi-web-ui -f` | Used for replay and Web UI history regardless of Claude backend mode. |
+| **Claude native session state** | `~/.claude/projects/-<encoded-cwd>/<claudeSessionId>.jsonl` | `journalctl -u pi-web-ui -f` | Used by Claude Code itself for resume/follow-up state. |
+| **Claude channel hook config** | `~/.claude/settings.json` | `journalctl -u pi-web-ui -f \| grep ClaudeChannel` | Relevant only when channel-backed Claude mode is enabled. |
+| **OpenCode Direct** | Registry metadata in `~/.pi-web-ui/session-registry.json`; transcript storage is OpenCode-owned | `journalctl -u opencode-serve -f` if separate service, otherwise the main service log | Pi Web UI does not own the full OpenCode transcript. |
+| **Unified registry** | `~/.pi-web-ui/session-registry.json` | `journalctl -u pi-web-ui -f` | Cross-runtime source of truth for sidebar metadata. |
+| **Internal API** | `~/.pi-web-ui/internal-api.sock`, `~/.pi-web-ui/internal-api-token` | `journalctl -u pi-web-ui -f` | Useful when debugging local consumers of the backend API. |
+
+## General Commands
+
+### Systemd / process control
+
+```bash
+sudo systemctl status pi-web-ui
+sudo systemctl restart pi-web-ui
+sudo journalctl -u pi-web-ui -f
+```
+
+If OpenCode runs as its own service:
+
+```bash
+sudo systemctl status opencode-serve
+sudo journalctl -u opencode-serve -f
+```
+
+### Runtime health endpoints
+
+```bash
+curl http://localhost:<server-port>/api/health/live
+curl http://localhost:<server-port>/api/health/ready
+curl http://localhost:<server-port>/api/config/validate
+```
+
+### Session registry inspection
+
+```bash
+jq '.' ~/.pi-web-ui/session-registry.json
+```
+
+## Pi SDK Path
+
+### Check first
+
+- `server/src/pi/multi-session-manager.ts`
+- `server/src/pi/pi-service.ts`
+- `server/src/workers/worker-pool.ts`
+- `server/src/workers/session-worker.ts`
+
+### Useful commands
+
+```bash
+ps aux | grep "pi --mode rpc"
+curl http://localhost:<server-port>/api/health/ready | jq '.workerStats'
+curl http://localhost:<server-port>/api/health/workers
+```
+
+### Typical symptoms
+
+- **Session stuck streaming** → inspect stale-stream reset logic in `multi-session-manager.ts`
+- **Worker crash / dispose errors** → inspect `session-worker.ts` and crash logging
+- **Pinned session confusion** → check pin state plus stale-stream behaviour; pinning prevents cleanup, not status reset
+
+## Claude Runtime
+
+Claude sessions use the unified `sdkType='claude'` in the UI and registry, but the backend can run in two different modes:
+
+1. **Legacy direct mode** — `claude -p` subprocesses
+2. **Channel-backed mode** — Claude Code launched with the development channel plugin and PTY supervision
+
+Read [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md) for the architecture details.
+
+### Check first
+
+- `server/src/claude/claude-service.ts`
+- `server/src/claude/claude-process-pool.ts`
+- `server/src/claude/claude-history-replay.ts`
+- `server/src/claude/claude-channel-service.ts`
+- `server/src/claude/claude-channel-process-manager.ts`
+- `pi-claude-channel/server.ts`
+
+### Useful commands
+
+```bash
+which claude
+claude auth status --json
+sudo journalctl -u pi-web-ui -f
+sudo journalctl -u pi-web-ui -f | grep ClaudeChannel
+```
+
+### Session files to correlate
+
+- Pi-owned replay file: `~/.pi-web-ui/claude-sessions/<internal-session-id>.jsonl`
+- Claude native session file: `~/.claude/projects/-<encoded-cwd>/<claudeSessionId>.jsonl`
+- Channel hook config: `~/.claude/settings.json`
+
+### Typical symptoms
+
+- **Session lock / resume trouble** → inspect native Claude JSONL and `claude-process-pool.ts`
+- **Tools stuck as running** → inspect replay JSONL and history reconstruction
+- **Channel session appears idle too early or too late** → inspect PTY busy-state / idle detection in `claude-channel-process-manager.ts`
+- **Auth expired** → `claude auth status --json`, then inspect channel auth-expiry handling or legacy subprocess error propagation
+
+## OpenCode Direct
+
+### Check first
+
+- `server/src/opencode/opencode-service.ts`
+- `server/src/opencode/opencode-process-manager.ts`
+- `server/src/opencode/opencode-client.ts`
+- `server/src/opencode/opencode-event-adapter.ts`
+
+### Useful commands
+
+```bash
+which opencode
+curl http://localhost:<server-port>/api/health/ready | jq '.checks.opencode'
+curl "http://localhost:<server-port>/api/models?sdkType=opencode"
+```
+
+### Typical symptoms
+
+- **OpenCode unavailable** → verify service health and host/port alignment
+- **Duplicate tool cards** → inspect `opencode-event-adapter.ts` deduplication
+- **Context window shows 0** → inspect model metadata caching and startup timing
+- **Permissions auto-approve unexpectedly during transfer** → inspect transfer dispatch special cases
+
+## WebSocket / Frontend State
+
+### Check first
+
+- `server/src/websocket/connection.ts`
+- `server/src/websocket/session-websocket.ts`
+- `client/src/store/sessionStore.ts`
+- `client/src/hooks/useWebSocket.ts`
+
+### Useful checks
+
+- Browser DevTools → Network → WS
+- `session_info` modal in the UI for cwd, session file, model, and context usage
+- `stream_activity` events for long-running Claude channel turns
+
+## Auth / CSRF / Cookies
+
+### Check first
+
+- `server/src/security/auth.ts`
+- `server/src/security/csrf.ts`
+- `server/src/middleware/auth.ts`
+
+### Typical symptom
+
+- **Everything breaks after a server restart** → clients may need a refresh because CSRF tokens are memory-backed
+
+## Drive Mode
+
+Drive Mode is a shipped frontend feature, not just a historical plan. For the feature overview and key files, read [`DRIVE-MODE.md`](./DRIVE-MODE.md).
+
+## Related Docs
+
+- [`README.md`](../README.md)
+- [`DEPLOYMENT.md`](../DEPLOYMENT.md)
+- [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
+- [`SHARP-EDGES.md`](./SHARP-EDGES.md)
+- [`CODEBASE-MAP.md`](./CODEBASE-MAP.md)

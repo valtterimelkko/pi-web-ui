@@ -1,21 +1,24 @@
 # Pi Web UI
 
-A persistent browser UI for coding-agent sessions with real-time streaming, unified session management, and three backend runtime paths:
+A persistent browser UI for coding-agent sessions with real-time streaming, unified session management, and three runtime families:
 
 - **Pi SDK**
-- **Claude Direct**
+- **Claude runtime** (legacy direct `claude -p` or channel-backed Claude Code)
 - **OpenCode Direct**
 
 ## Documentation Map
 
 - **Quick agent/developer rules:** [`AGENTS.md`](./AGENTS.md)
+- **Troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
 - **Architecture:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
+- **Claude backend modes:** [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md)
 - **WebSocket protocol:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
 - **REST/API index:** [`API.md`](./API.md)
 - **Security:** [`SECURITY.md`](./SECURITY.md)
 - **Deployment / production runbook:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 - **Pi worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
 - **OpenCode Direct architecture:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
+- **Drive Mode feature:** [`docs/DRIVE-MODE.md`](./docs/DRIVE-MODE.md)
 - **Tests:** [`tests/README.md`](./tests/README.md)
 
 ## What It Is
@@ -26,28 +29,31 @@ It combines:
 - a **React + Vite** frontend
 - an **Express + WebSocket** backend
 - a **unified sidebar/session registry** across runtimes
-- **runtime-specific adapters** so Pi SDK, Claude Direct, and OpenCode Direct feel similar in the UI
+- **runtime-specific adapters** so Pi SDK, Claude, and OpenCode sessions feel similar in the UI
 - **persistent storage** so sessions survive reconnects and, depending on runtime, process restarts
 
-## Runtime Paths
+## Runtime Families
 
-| Runtime | What it uses | Best described as | Primary persistence |
+| Runtime family | Backend implementation | Best described as | Primary persistence |
 |---|---|---|---|
 | **Pi SDK** | Pi SDK + Pi worker/session lifecycle | Pi-native path with extensions/tools | `~/.pi/agent/sessions/` |
-| **Claude Direct** | `claude -p` subprocesses (default) or `claude --dangerously-load-development-channels` (opt-in channel plugin) | Claude CLI path with Pi-owned replay/persistence | `~/.pi-web-ui/claude-sessions/` |
+| **Claude runtime** | `claude -p` subprocesses **or** channel-backed Claude Code via PTY + plugin bridge | Claude Code path with Pi-owned replay and runtime-specific glue | `~/.pi-web-ui/claude-sessions/` + Claude native session JSONL |
 | **OpenCode Direct** | `opencode serve` + HTTP/SSE | OpenCode-backed path for supported Z.AI GLM usage | OpenCode runtime + Pi registry metadata |
 
 Unified session metadata lives in:
 - `~/.pi-web-ui/session-registry.json`
 
+For Claude-specific backend details, session files, and log locations, read [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md).
+
 ## Core Capabilities
 
 - Real-time streamed chat
 - Create, switch, pin, rename, and export sessions
-- Unified session list across all three runtimes
+- Unified session list across all runtime families
 - Tool execution rendering and history replay
 - Runtime availability reporting (`claude_available`, `opencode_available`)
 - OpenCode permission bridge via the existing extension approval UI
+- Drive Mode voice-first overlay
 - Security hardening: cookie auth, CSRF, origin validation, rate limiting, prompt-injection detection
 - Health/config/model endpoints for debugging and operations
 
@@ -60,7 +66,7 @@ Browser (React + Zustand + Vite)
             ├─ security + auth middleware
             ├─ runtime-aware WebSocket router
             ├─ Pi SDK session manager + worker pool
-            ├─ Claude Direct service + process pool
+            ├─ Claude service + (legacy process pool or channel-backed PTY/plugin path)
             ├─ OpenCode Direct service + process manager/client
             └─ unified session registry
 ```
@@ -72,7 +78,8 @@ Browser (React + Zustand + Vite)
 - Node.js 20+
 - npm
 - Pi CLI / Pi SDK environment available on the machine
-- For **Claude Direct**: `claude` installed and authenticated
+- For **Claude runtime**: `claude` installed and authenticated
+- For **channel-backed Claude mode**: Bun available for `pi-claude-channel/`
 - For **OpenCode Direct**: `opencode` installed and configured
 
 ### Install
@@ -94,6 +101,15 @@ JWT_SECRET=your-random-secret
 CSRF_SECRET=your-random-secret
 AUTH_PASSWORD=your-password-or-bcrypt-hash
 ALLOWED_ORIGINS=http://localhost:<frontend-port>
+```
+
+If using the Claude channel-backed path, also check:
+
+```bash
+CLAUDE_CHANNEL_ENABLED=false
+CLAUDE_CHANNEL_PLUGIN_DIR=./pi-claude-channel
+CLAUDE_CHANNEL_WS_PORT=3100
+CLAUDE_CHANNEL_HOOK_PORT=3101
 ```
 
 If using OpenCode Direct locally, also check:
@@ -130,6 +146,7 @@ npm run typecheck
 npm run build
 npm test
 npm run test:e2e
+npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 ```
 
 ## Repo Layout
@@ -139,9 +156,10 @@ client/       React frontend
 server/       Express server and runtime integrations
 shared/       shared protocol/types package
 docs/         architecture / protocol / design docs
-tests/        Playwright E2E + benchmarks
+tests/        Playwright E2E + benchmarks + utility tests
 server/tests/ server unit/integration tests
 extensions/   local extension code
+scripts/      local operational helpers
 ```
 
 ## Day-to-Day Development
@@ -166,6 +184,22 @@ See [`AGENTS.md`](./AGENTS.md) for the compact contributor workflow.
 
 ## Debugging by Problem Type
 
+### First stop for almost all troubleshooting
+
+Read:
+- [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
+- [`docs/SHARP-EDGES.md`](./docs/SHARP-EDGES.md)
+
+Useful commands:
+
+```bash
+sudo journalctl -u pi-web-ui -f
+curl http://localhost:<server-port>/api/health/live
+curl http://localhost:<server-port>/api/health/ready
+curl http://localhost:<server-port>/api/config/validate
+npm run debug:where -- <session-id-or-runtime-session-id-or-path>
+```
+
 ### WebSocket / streaming / session routing
 
 Check:
@@ -173,14 +207,6 @@ Check:
 - `server/src/websocket/connection.ts`
 - `server/src/websocket/session-websocket.ts`
 - `client/src/store/sessionStore.ts`
-
-Useful endpoints:
-
-```bash
-curl http://localhost:<server-port>/api/health/live
-curl http://localhost:<server-port>/api/health/ready
-curl http://localhost:<server-port>/api/config/validate
-```
 
 ### Pi SDK path
 
@@ -196,12 +222,14 @@ ps aux | grep "pi --mode rpc"
 curl http://localhost:<server-port>/api/health/ready | jq '.workerStats'
 ```
 
-### Claude Direct path
+### Claude runtime
 
 Check:
 - `server/src/claude/claude-service.ts`
 - `server/src/claude/claude-process-pool.ts`
-- `server/src/claude/claude-history-replay.ts`
+- `server/src/claude/claude-channel-service.ts`
+- `server/src/claude/claude-channel-process-manager.ts`
+- `pi-claude-channel/server.ts`
 
 Useful checks:
 
@@ -209,11 +237,12 @@ Useful checks:
 which claude
 claude auth status --json
 sudo journalctl -u pi-web-ui -f
+sudo journalctl -u pi-web-ui -f | grep ClaudeChannel
 ```
 
-See also [`docs/CLAUDE-DIRECT-UX-ISSUES.md`](./docs/CLAUDE-DIRECT-UX-ISSUES.md).
+See [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md).
 
-### OpenCode Direct path
+### OpenCode Direct
 
 Check:
 - `server/src/opencode/opencode-service.ts`

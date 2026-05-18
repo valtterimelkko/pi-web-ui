@@ -25,6 +25,13 @@
 - `components/Chat/MessageBubble.tsx` — Individual message bubble.
 - `components/Chat/MessageInput.tsx` — Chat input box.
 
+### Drive Mode
+- `components/DriveMode/DriveModeOverlay.tsx` — Voice-first overlay and phase routing.
+- `components/DriveMode/DriveModeDictate.tsx` — Dictation and read-aloud control surface.
+- `components/DriveMode/DriveModeSessionPicker.tsx` / `DriveModeModelPicker.tsx` / `DriveModeFolderPicker.tsx` — Drive Mode navigation.
+- `store/driveModeStore.ts` — Drive Mode state machine.
+- `hooks/useDriveModeDictation.ts` — Drive Mode prompt-send flow.
+
 ### Tools / Extensions
 - `components/Tools/ToolCallCard.tsx` — Tool execution card.
 - `components/Tools/CollapsibleToolCard.tsx` — Collapsible tool display.
@@ -55,13 +62,18 @@
 - `workers/event-normalizer.ts` — Normalizes Pi worker events.
 - `workers/session-worker.ts` — Individual Pi worker process script.
 
-### Claude Direct Path (`server/src/claude/`)
-- `claude/claude-service.ts` — Claude Direct lifecycle, session registry integration, prompt dispatch, stats.
-- `claude/claude-process-pool.ts` — `claude -p` subprocess management, spawn, abort, lock handling.
-- `claude/claude-event-normalizer.ts` — Converts Claude NDJSON stream into `NormalizedEvent`.
+### Claude Runtime Family (`server/src/claude/`)
+- `claude/claude-service.ts` — Claude runtime lifecycle, backend selection, session registry integration, prompt dispatch, stats.
+- `claude/claude-process-pool.ts` — Legacy `claude -p` subprocess management, spawn, abort, lock handling.
+- `claude/claude-event-normalizer.ts` — Converts legacy Claude NDJSON stream into `NormalizedEvent`.
 - `claude/claude-history-replay.ts` — Reconstructs session history from Pi-owned JSONL for UI replay.
 - `claude/claude-session-store.ts` — JSONL persistence (`~/.pi-web-ui/claude-sessions/`).
 - `claude/claude-session-subscribers.ts` — Multi-viewer fanout for Claude sessions.
+- `claude/claude-channel-service.ts` — Channel-backed Claude session orchestration and event fanout.
+- `claude/claude-channel-process-manager.ts` — PTY-managed Claude Code process, busy-state tracking, auth-expiry detection.
+- `claude/claude-channel-hooks-config.ts` — Managed Claude hook config writer for `~/.claude/settings.json`.
+- `claude/claude-channel-ws-client.ts` — WebSocket client receiving channel plugin events.
+- `claude/claude-channel-event-adapter.ts` — Converts channel plugin events into the normalized event model.
 
 ### OpenCode Direct Path (`server/src/opencode/`)
 - `opencode/opencode-service.ts` — OpenCode Direct lifecycle, prompt dispatch, context-window tracking, session cleanup, trusted permissions.
@@ -109,6 +121,10 @@
 - `config.ts` — Environment variable parsing and defaults.
 - `app.ts` — Express app setup.
 - `index.ts` — Server entry point.
+
+### Operational Helpers
+- `scripts/debug-where.mjs` — Fast session locator: maps a session id/runtime id/path to the relevant logs, registry entry, and runtime-owned files.
+- `pi-claude-channel/server.ts` — Local Claude channel/plugin bridge process.
 
 ## Shared Package (`shared/src/`)
 

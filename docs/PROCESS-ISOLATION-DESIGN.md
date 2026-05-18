@@ -1,13 +1,13 @@
 # Process Isolation Design
 
-> Design record for the **Pi SDK worker architecture** in Pi Web UI. This document is intentionally focused on the Pi worker/process model, not the Claude Direct or OpenCode Direct runtime paths.
+> Design record for the **Pi SDK worker architecture** in Pi Web UI. This document is intentionally focused on the Pi worker/process model, not the Claude runtime family or OpenCode Direct paths.
 
 ## Why This Doc Exists
 
-Pi Web UI supports three runtimes, but only one of them uses the repo's full **process-per-session worker architecture**:
+Pi Web UI supports three runtime families, but only one of them uses the repo's full **process-per-session worker architecture**:
 
 - **Pi SDK** → yes, this doc applies directly
-- **Claude Direct** → no, uses `claude -p` subprocesses per turn
+- **Claude runtime** → no, uses either `claude -p` subprocesses per turn or the channel-backed Claude Code path
 - **OpenCode Direct** → no, uses a long-lived `opencode serve` backend
 
 For the broader multi-runtime architecture, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
@@ -32,7 +32,7 @@ This document covers:
 - crash and stale-session recovery patterns for Pi-managed workers
 
 It does **not** cover:
-- Claude Direct JSONL persistence and replay details
+- Claude runtime replay/session-file details
 - OpenCode Direct HTTP/SSE integration details
 
 ## High-level Pi SDK Worker Model
@@ -118,11 +118,11 @@ Expected outcome:
 
 ## Relationship to Other Runtime Paths
 
-### Claude Direct
-Claude Direct has a separate design because it is built around `claude -p` subprocesses and Pi-owned replay storage.
+### Claude runtime
+The Claude runtime family has a separate design because it uses either legacy `claude -p` subprocesses or the newer channel-backed Claude Code path, plus Pi-owned replay storage.
 See:
 - `server/src/claude/`
-- [`docs/CLAUDE-DIRECT-UX-ISSUES.md`](./CLAUDE-DIRECT-UX-ISSUES.md)
+- [`docs/CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
 
 ### OpenCode Direct
 OpenCode Direct has a separate design because it is built around a long-lived OpenCode backend and HTTP/SSE integration.

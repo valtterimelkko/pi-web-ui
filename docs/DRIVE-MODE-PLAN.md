@@ -1,6 +1,6 @@
-# Drive Mode — Comprehensive Execution Plan
+# Drive Mode — Historical Execution Plan
 
-> **Status:** Ready for execution
+> **Status:** Implemented. This file is retained as historical planning/reference material; use [`DRIVE-MODE.md`](./DRIVE-MODE.md) for the current feature overview.
 > **Scope:** Frontend-only feature (zero backend changes)
 > **Branch strategy:** Single feature branch `feature/drive-mode` from current HEAD. All tasks commit to this branch. Agents work in parallel worktrees where noted, merged back via squash.
 

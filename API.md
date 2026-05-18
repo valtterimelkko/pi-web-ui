@@ -75,9 +75,10 @@ Use `ws://` locally and `wss://` in production.
 - Extensions and extension UI requests come directly from Pi SDK pathways
 - Session files live under `~/.pi/agent/sessions/`
 
-#### Claude Direct
-- Uses `claude -p`
-- Pi Web UI owns Claude JSONL persistence and replay
+#### Claude runtime
+- Uses either legacy `claude -p` or the channel-backed Claude Code path
+- Pi Web UI owns Claude replay JSONL persistence under `~/.pi-web-ui/claude-sessions/`
+- Claude Code also keeps native session JSONL under `~/.claude/projects/`
 - Availability is announced with `claude_available`
 
 #### OpenCode Direct

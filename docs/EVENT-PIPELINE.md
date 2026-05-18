@@ -1,6 +1,6 @@
 # Pi Web UI Event Pipeline
 
-> How three different backend runtimes produce a single frontend event stream.
+> How Pi, Claude, and OpenCode backend paths produce a single frontend event stream.
 
 ## High-level Flow
 
@@ -11,8 +11,8 @@
 └─────────────────┘     └─────────────────────────────┘     │                  │
                                                             │   connection.ts  │
 ┌─────────────────┐     ┌─────────────────────────────┐     │   (runtime       │────▶  session_event  ────▶  sessionStore
-│  Claude Direct  │────▶│  claude-event-normalizer.ts │────▶│    router +      │
-│  (NDJSON)       │     │  (NormalizedEvent)          │     │    normEventTo   │
+│ Claude runtime  │────▶│ claude-event-normalizer.ts  │────▶│    router +      │
+│ (direct/channel)│     │ or claude-channel-*.ts      │     │    normEventTo   │
 └─────────────────┘     └─────────────────────────────┘     │    PiFormat()    │
                                                             │                  │
 ┌─────────────────┐     ┌─────────────────────────────┐     │                  │
@@ -49,9 +49,9 @@ Pi worker emits: { type: 'tool_execution', toolCallId: '123', toolName: 'Bash', 
   → connection.ts wraps as: { type: 'session_event', sessionId: '...', event: { type: 'tool_execution_start', ... } }
 ```
 
-### Claude Direct
+### Claude runtime — legacy direct backend
 
-Claude Direct runs `claude -p` and parses NDJSON lines from stdout. `claude-event-normalizer.ts` converts these into `NormalizedEvent`.
+The legacy direct backend runs `claude -p` and parses NDJSON lines from stdout. `claude-event-normalizer.ts` converts these into `NormalizedEvent`.
 
 **Example: assistant message delta**
 ```
@@ -59,6 +59,28 @@ Claude NDJSON line: { type: 'content_block_delta', delta: { text: 'hello' } }
   → claude-event-normalizer.ts produces: { type: 'message_update', data: { assistantMessageEvent: { type: 'text_delta', delta: 'hello' } } }
   → connection.ts converts to: { type: 'session_event', event: { type: 'message_update', assistantMessageEvent: ... } }
 ```
+
+### Claude runtime — channel-backed backend
+
+The channel-backed backend launches Claude Code under PTY supervision, writes managed hooks into Claude settings, and receives plugin events back through the local channel bridge.
+
+Key modules:
+- `claude-channel-process-manager.ts`
+- `claude-channel-hooks-config.ts`
+- `claude-channel-ws-client.ts`
+- `claude-channel-event-adapter.ts`
+- `pi-claude-channel/server.ts`
+
+**Example: tool visibility**
+```
+Claude tool use
+  → pi-claude-channel/server.ts emits reply/status/send_event activity
+  → claude-channel-ws-client.ts receives the channel event
+  → claude-channel-event-adapter.ts produces NormalizedEvent
+  → connection.ts converts to: { type: 'session_event', event: { type: 'tool_execution_start' | 'tool_execution_end' | ... } }
+```
+
+The channel-backed path may also emit `stream_activity` so the frontend can show liveness during long-running turns.
 
 ### OpenCode Direct
 
@@ -90,3 +112,4 @@ If you add a fourth runtime, you must:
 2. Route through `connection.ts` so `normEventToPiFormat()` converts it.
 3. Guarantee `agent_end` is eventually emitted, or the frontend input will stay locked.
 4. Implement history replay so session switching works.
+5. Document where its runtime-owned logs and session files live in [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md).

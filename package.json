@@ -19,6 +19,7 @@
     "test:e2e": "playwright test",
     "benchmark": "vitest bench --config tests/benchmarks/vitest.bench.config.ts",
     "benchmark:quick": "tsx tests/benchmarks/index.ts",
+    "debug:where": "node scripts/debug-where.mjs",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared"
   },

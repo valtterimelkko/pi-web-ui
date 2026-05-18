@@ -2,6 +2,15 @@
 
 > Living list of architectural traps, brittle patterns, and known limitations. Read this before debugging or extending a runtime.
 
+Quick jump:
+- [Claude Direct](#claude-direct)
+- [Claude channel-backed mode](#claude-channel-backed-mode)
+- [OpenCode Direct](#opencode-direct)
+- [Pi SDK](#pi-sdk)
+- [Session Registry](#session-registry)
+- [WebSocket / Auth](#websocket--auth)
+- [Frontend](#frontend)
+
 ## Claude Direct
 
 ### No true mid-turn steer
@@ -20,6 +29,23 @@ If the file exists but the in-memory tracker was cleared (server restart), the f
 
 ### Subprocess locks
 Claude session files can hold stale locks after crashes. The process pool has lock-cleaning logic, but if you see "session locked" errors, check `claude-process-pool.ts` lock cleanup and file existence.
+
+## Claude channel-backed mode
+
+### PTY idle detection is heuristic
+The channel-backed path no longer trusts a single visible prompt frame as proof that a turn is finished. It relies on busy-state indicators plus a quiet window. If you change `claude-channel-process-manager.ts`, be careful: small PTY-output assumptions can create false `agent_end` or permanently-busy sessions.
+
+### `stream_activity` is advisory, not completion
+The channel-backed path emits `stream_activity` so the frontend can show long-turn liveness. It does **not** mean the turn is complete. Completion still depends on the channel service's end-of-turn handling.
+
+### Auth expiry can masquerade as a stuck session
+If Claude Code loses auth mid-turn, the session may appear to stall unless the auth-expiry path surfaces correctly. Always run `claude auth status --json` before assuming the PTY logic is wrong.
+
+### Hook config drift breaks event bridging
+The channel path depends on managed HTTP hook entries in `~/.claude/settings.json`. If those entries are removed, duplicated, or rewritten into an unexpected shape, stop/post-tool/session-start notifications can silently stop reaching Pi Web UI.
+
+### Tool visibility depends on plugin-side events
+The UI only shows Claude channel tool activity if the plugin bridge emits the expected events back through `pi-claude-channel/server.ts` and `claude-channel-event-adapter.ts`. Claude can still be working even when the UI looks quiet.
 
 ## OpenCode Direct
 

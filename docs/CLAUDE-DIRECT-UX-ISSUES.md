@@ -1,12 +1,15 @@
 # Claude Direct Path — UX Issues and Architecture Notes
 
-> Status: the documented fixes are implemented.
+> Status: historical reference for the older pre-channel Claude direct path.
 >
-> This file is a focused analysis of the **Claude Direct** path. It is not the general architecture doc for the whole app.
+> The canonical current Claude doc is [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md).
+>
+> This file is a focused analysis of the older **legacy Claude direct** path. It is not the general architecture doc for the whole app and it does not describe the newer channel-backed Claude backend.
 >
 > Start with:
 > - [`../README.md`](../README.md)
 > - [`./ARCHITECTURE.md`](./ARCHITECTURE.md)
+> - [`./CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
 > - [`./PROTOCOL.md`](./PROTOCOL.md)
 
 ## Why This Document Exists

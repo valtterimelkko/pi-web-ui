@@ -4,10 +4,10 @@
 
 ## Overview
 
-Pi Web UI is a single browser application that presents a unified chat/session UI over **three different backend runtimes**:
+Pi Web UI is a single browser application that presents a unified chat/session UI over **three runtime families**:
 
 1. **Pi SDK**
-2. **Claude Direct**
+2. **Claude runtime** (legacy direct or channel-backed backend)
 3. **OpenCode Direct**
 
 The architectural theme of the repo is:
@@ -30,7 +30,7 @@ Express server
   ├─ WebSocket connection router
   ├─ session registry
   ├─ Pi SDK service + worker/session lifecycle
-  ├─ Claude Direct service + subprocess integration
+  ├─ Claude service + (legacy subprocess or channel-backed PTY/plugin backend)
   └─ OpenCode Direct service + process manager/client/SSE adapter
 ```
 
@@ -88,27 +88,42 @@ Important files:
 - session lifecycle is actively managed by the app
 - worker isolation, idle cleanup, stale-stream handling, and pinning are important here
 
-### 2. Claude Direct path
+### 2. Claude runtime family
 
 **What it is**
-- a Claude CLI integration built around `claude -p`
-- Pi Web UI owns replay/persistence glue so the UX looks like the other runtimes
+- a Claude Code integration with **two backend implementations**
+- both backends share the same UI/runtime family and Pi-owned replay store
 
-**Main modules**
-- `server/src/claude/claude-service.ts`
-- `server/src/claude/claude-process-pool.ts`
-- `server/src/claude/claude-event-normalizer.ts`
-- `server/src/claude/claude-history-replay.ts`
-- `server/src/claude/claude-session-store.ts`
-- `server/src/claude/claude-session-subscribers.ts`
+**Backend A: legacy direct path**
+- built around `claude -p`
+- modules:
+  - `server/src/claude/claude-service.ts`
+  - `server/src/claude/claude-process-pool.ts`
+  - `server/src/claude/claude-event-normalizer.ts`
+  - `server/src/claude/claude-history-replay.ts`
+  - `server/src/claude/claude-session-store.ts`
+  - `server/src/claude/claude-session-subscribers.ts`
+
+**Backend B: channel-backed path**
+- built around Claude Code launched under PTY supervision with the local channel plugin bridge
+- modules:
+  - `server/src/claude/claude-service.ts`
+  - `server/src/claude/claude-channel-service.ts`
+  - `server/src/claude/claude-channel-process-manager.ts`
+  - `server/src/claude/claude-channel-hooks-config.ts`
+  - `server/src/claude/claude-channel-ws-client.ts`
+  - `server/src/claude/claude-channel-event-adapter.ts`
+  - `pi-claude-channel/server.ts`
 
 **Persistence**
-- Pi-owned Claude session store: `~/.pi-web-ui/claude-sessions/`
+- Pi-owned Claude replay store: `~/.pi-web-ui/claude-sessions/`
+- Claude native session state: `~/.claude/projects/`
 
 **Operational model**
-- subprocess-oriented
-- requires custom event normalization and replay
-- shares the same sidebar/session UX via registry integration
+- backend selection happens on the server, while the frontend remains runtime-family neutral
+- legacy direct mode is subprocess-per-turn and workaround-heavy
+- channel-backed mode is richer but depends on PTY supervision, channel hooks, and plugin event bridging
+- both share the same sidebar/session UX via registry integration
 
 ### 3. OpenCode Direct path
 
@@ -146,6 +161,8 @@ Registry entries let the UI treat sessions consistently while preserving runtime
 - created / last activity
 - Claude session IDs
 - OpenCode session IDs
+
+For Claude specifically, the registry still uses `sdkType: 'claude'` even though the backend may be legacy direct or channel-backed. That distinction is operational, not a separate frontend runtime family.
 
 ## WebSocket Routing Model
 
@@ -207,8 +224,9 @@ See [`../SECURITY.md`](../SECURITY.md) for the canonical security view.
 ### Pi SDK
 - replay comes from Pi session data and Pi-aware service logic
 
-### Claude Direct
+### Claude runtime
 - replay is reconstructed from Pi-owned Claude JSONL session data
+- the active backend may also consult Claude's native JSONL session files for resume/follow-up state and context usage
 
 ### OpenCode Direct
 - replay is reconstructed from OpenCode message APIs and adapted into the common event model
@@ -244,6 +262,8 @@ See [`../tests/README.md`](../tests/README.md).
 
 - [`../README.md`](../README.md)
 - [`./PROTOCOL.md`](./PROTOCOL.md)
+- [`./TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
+- [`./CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
 - [`./PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md)
 - [`./OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)
 - [`../SECURITY.md`](../SECURITY.md)

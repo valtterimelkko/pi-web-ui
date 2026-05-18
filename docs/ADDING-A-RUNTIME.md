@@ -1,6 +1,6 @@
 # Adding a New Runtime to Pi Web UI
 
-> Checklist for integrating a fourth backend runtime alongside Pi SDK, Claude Direct, and OpenCode Direct.
+> Checklist for integrating a fourth backend runtime alongside Pi SDK, the Claude runtime family, and OpenCode Direct.
 
 ## 1. Shared Types
 

@@ -16,10 +16,10 @@ This is especially important for supported OpenCode/Z.AI GLM workflows: Pi Web U
 
 ## Why This Path Exists
 
-Pi Web UI has three runtime paths:
+Pi Web UI has three runtime families:
 
 1. **Pi SDK** — Pi-native sessions and extensions
-2. **Claude Direct** — `claude -p` subprocess sessions
+2. **Claude runtime** — legacy `claude -p` or the channel-backed Claude Code path
 3. **OpenCode Direct** — `opencode serve` backend sessions
 
 OpenCode Direct exists because:
@@ -32,7 +32,7 @@ OpenCode Direct exists because:
 - **OpenCode is the runtime source of truth** for OpenCode-backed sessions.
 - **Pi Web UI remains the UI/control plane**.
 - **No spoofing** of OpenCode provider identity, user agent, or unsupported direct API usage.
-- **Keep the user-facing shape similar to Claude Direct** where that helps maintainability.
+- **Keep the user-facing shape similar to the Claude runtime family** where that helps maintainability.
 - **Reuse the app's common event/session abstractions** instead of exposing OpenCode-native details directly to the browser.
 
 ## Implemented Shape
@@ -99,14 +99,14 @@ Handles:
 ## Session and Persistence Model
 
 ### Unified registry
-OpenCode sessions still appear in the same session list as Pi SDK and Claude Direct sessions via:
+OpenCode sessions still appear in the same session list as Pi SDK and Claude runtime sessions via:
 - `server/src/session-registry.ts`
 - `~/.pi-web-ui/session-registry.json`
 
 Registry entries store runtime-neutral metadata plus OpenCode-specific linkage, such as `opencodeSessionId`.
 
 ### Source of truth
-Unlike Claude Direct, Pi Web UI does **not** own the full OpenCode transcript.
+Unlike the Claude runtime, Pi Web UI does **not** own the full OpenCode transcript.
 
 Instead:
 - OpenCode owns the primary session/message state
@@ -159,10 +159,11 @@ This keeps the browser experience aligned with the rest of the app instead of in
 - OpenCode Direct is less Pi-native
 - it uses an external backend runtime rather than Pi-managed session execution
 
-### Compared with Claude Direct
+### Compared with the Claude runtime
 - OpenCode Direct uses a long-lived backend and APIs/SSE
-- Claude Direct uses `claude -p` subprocesses and Pi-owned replay storage
-- OpenCode Direct therefore needs less of the workaround-heavy subprocess glue Claude Direct needs
+- the legacy Claude direct backend uses `claude -p` subprocesses and Pi-owned replay storage
+- the channel-backed Claude backend adds PTY/plugin glue instead
+- OpenCode Direct therefore needs less of the workaround-heavy subprocess glue the Claude runtime family needs
 
 ## Operational Notes
 
@@ -191,4 +192,5 @@ Useful places to inspect:
 - [`../README.md`](../README.md)
 - [`./ARCHITECTURE.md`](./ARCHITECTURE.md)
 - [`./PROTOCOL.md`](./PROTOCOL.md)
+- [`./TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
 - [`./OPENCODE-IMPLEMENTATION-PLAN.md`](./OPENCODE-IMPLEMENTATION-PLAN.md)
