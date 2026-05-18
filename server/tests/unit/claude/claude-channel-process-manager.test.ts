@@ -250,4 +250,117 @@ describe('ClaudeChannelProcessManager', () => {
     await expect(managerSlow.start()).rejects.toThrow(/did not become ready/);
     try { await managerSlow.stop(); } catch { /* ignore */ }
   });
+
+  describe('idle detection', () => {
+    it('should emit idle when PTY shows prompt character', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      const idleSpy = vi.fn();
+      manager.on('idle', idleSpy);
+
+      ptyProc._emitter.emit('data', 'Some output\n❯ ');
+
+      await new Promise((r) => setTimeout(r, 350));
+      await new Promise((r) => setTimeout(r, 1600));
+
+      expect(idleSpy).toHaveBeenCalled();
+    });
+
+    it('should not emit idle for slash commands', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      const idleSpy = vi.fn();
+      manager.on('idle', idleSpy);
+
+      ptyProc._emitter.emit('data', '\n❯ /model opus');
+
+      await new Promise((r) => setTimeout(r, 350));
+      await new Promise((r) => setTimeout(r, 2000));
+
+      expect(idleSpy).not.toHaveBeenCalled();
+    });
+
+    it('should not emit idle for text without prompt', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      const idleSpy = vi.fn();
+      manager.on('idle', idleSpy);
+
+      ptyProc._emitter.emit('data', 'Some regular output text');
+
+      await new Promise((r) => setTimeout(r, 350));
+      await new Promise((r) => setTimeout(r, 2000));
+
+      expect(idleSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('redundant write guard', () => {
+    it('should skip switchModel if model unchanged', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      manager.switchModel('opus');
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      expect(writeSpy).toHaveBeenCalledWith('/model opus\r');
+
+      manager.switchModel('opus');
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should allow switchModel when model changes', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      manager.switchModel('opus');
+      manager.switchModel('sonnet');
+
+      expect(writeSpy).toHaveBeenCalledTimes(2);
+      expect(writeSpy).toHaveBeenCalledWith('/model sonnet\r');
+    });
+
+    it('should skip setThinkingLevel if level unchanged', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      manager.setThinkingLevel('high');
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+
+      manager.setThinkingLevel('high');
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should allow setThinkingLevel when level changes', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      manager.setThinkingLevel('high');
+      manager.setThinkingLevel('low');
+
+      expect(writeSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should not write when no PTY process exists', async () => {
+      expect(() => manager.switchModel('opus')).not.toThrow();
+      expect(() => manager.setThinkingLevel('high')).not.toThrow();
+    });
+  });
 });

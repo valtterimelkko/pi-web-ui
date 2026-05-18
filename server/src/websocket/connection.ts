@@ -1292,6 +1292,7 @@ export class WebSocketConnectionManager {
       sessionPath: sessionId,
       sdkType: 'claude',
       model: entry.model ?? 'sonnet',
+      thinkingLevel: entry.thinkingLevel ?? undefined,
       messages: [],
       fileTimestamp: 0,
       isStreaming: this.claudeService.isRunning(sessionId),

@@ -6,11 +6,12 @@ import type { SdkType } from '@pi-web-ui/shared';
 export interface RegistryEntry {
   id: string;              // Internal UUID
   sdkType: SdkType;        // 'pi' | 'claude'
-  path: string;            // For Pi: session path; for Claude: our JSONL file path
+  path: string;            // For Pi: session path; For Claude: our JSONL file path
   claudeSessionId?: string; // For Claude: the --session-id
   opencodeSessionId?: string; // For OpenCode: the OpenCode server session ID
   cwd: string;
   model?: string;
+  thinkingLevel?: string;
   firstMessage: string;
   messageCount: number;
   createdAt: string;       // ISO string

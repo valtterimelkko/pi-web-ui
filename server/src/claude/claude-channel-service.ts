@@ -27,10 +27,14 @@ export interface ClaudeChannelServiceConfig {
 interface PendingPrompt {
   onEvent: (event: NormalizedEvent) => void;
   onComplete: (error?: Error) => void;
+  sentAt: number;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
 const MAX_PINNED_SESSIONS = 2;
+const PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
+const IDLE_DETECTION_GRACE_MS = 3_000;
 
 const CLAUDE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   sonnet: 200_000,
@@ -93,6 +97,10 @@ export class ClaudeChannelService {
 
     this.wireUpEventHandler();
 
+    this.processManager.on('idle', () => {
+      this.handlePtyIdle();
+    });
+
     await this.wsClient.connect();
 
     this.started = true;
@@ -124,6 +132,7 @@ export class ClaudeChannelService {
     } catch { /* non-fatal */ }
 
     for (const [, pending] of this.pendingPrompts) {
+      clearTimeout(pending.timer);
       pending.onComplete(new Error('Service shutting down'));
     }
     this.pendingPrompts.clear();
@@ -169,6 +178,7 @@ export class ClaudeChannelService {
           }
           const p = this.pendingPrompts.get(internalSid);
           if (p) {
+            clearTimeout(p.timer);
             this.pendingPrompts.delete(internalSid);
             this.registry.updateStatus(internalSid, 'idle').catch(() => {});
             this.sessionsWithHistory.add(internalSid);
@@ -181,6 +191,7 @@ export class ClaudeChannelService {
           const msg = (data?.message as string) || 'Unknown channel error';
           const p = this.pendingPrompts.get(internalSid);
           if (p) {
+            clearTimeout(p.timer);
             this.pendingPrompts.delete(internalSid);
             this.registry.updateStatus(internalSid, 'error').catch(() => {});
             p.onComplete(new Error(msg));
@@ -281,7 +292,14 @@ export class ClaudeChannelService {
       onEvent(agentStartEvent);
     } catch { /* non-fatal */ }
 
-    this.pendingPrompts.set(sessionId, { onEvent, onComplete });
+    this.pendingPrompts.set(sessionId, {
+      onEvent,
+      onComplete,
+      sentAt: Date.now(),
+      timer: setTimeout(() => {
+        this.handlePromptTimeout(sessionId);
+      }, PROMPT_TIMEOUT_MS),
+    });
     this.claudeToInternal.set(entry.claudeSessionId, sessionId);
     this.internalToClaude.set(sessionId, entry.claudeSessionId);
 
@@ -301,6 +319,7 @@ export class ClaudeChannelService {
     }
     const pending = this.pendingPrompts.get(sessionId);
     if (pending) {
+      clearTimeout(pending.timer);
       this.pendingPrompts.delete(sessionId);
       this.registry.updateStatus(sessionId, 'idle').catch(() => {});
       pending.onComplete(new Error('Aborted'));
@@ -325,6 +344,7 @@ export class ClaudeChannelService {
       sdkType: 'claude',
       cwd: entry.cwd,
       model,
+      thinkingLevel: entry.thinkingLevel,
     });
     this.processManager.switchModel(model);
     if (entry.claudeSessionId) {
@@ -333,8 +353,19 @@ export class ClaudeChannelService {
     return model;
   }
 
-  setThinkingLevel(_sessionId: string, level: string): void {
+  setThinkingLevel(sessionId: string, level: string): void {
     this.processManager.setThinkingLevel(level);
+    this.registry.get(sessionId).then((entry) => {
+      if (entry) {
+        this.registry.upsert({
+          id: sessionId,
+          sdkType: 'claude',
+          cwd: entry.cwd,
+          model: entry.model,
+          thinkingLevel: level,
+        }).catch(() => {});
+      }
+    }).catch(() => {});
   }
 
   async getSession(sessionId: string) {
@@ -562,6 +593,44 @@ export class ClaudeChannelService {
 
   sendPermissionResponse(sessionId: string, requestId: string, allowed: boolean): void {
     this.wsClient.send({ type: 'permission_response', requestId, allowed });
+  }
+
+  private handlePtyIdle(): void {
+    if (this.pendingPrompts.size === 0) return;
+
+    const now = Date.now();
+    for (const [sessionId, pending] of this.pendingPrompts) {
+      if (now - pending.sentAt < IDLE_DETECTION_GRACE_MS) continue;
+
+      console.warn(`[ClaudeChannelService] PTY idle detected while session ${sessionId} is pending — force-completing`);
+      clearTimeout(pending.timer);
+      this.pendingPrompts.delete(sessionId);
+      this.registry.updateStatus(sessionId, 'idle').catch(() => {});
+      this.sessionsWithHistory.add(sessionId);
+
+      const agentEndEvent: NormalizedEvent = {
+        type: 'agent_end',
+        sessionId,
+        timestamp: Date.now(),
+        data: { reason: 'pty_idle_detected' },
+      };
+      try {
+        pending.onEvent(agentEndEvent);
+      } catch { /* non-fatal */ }
+      this.persistEvent(sessionId, agentEndEvent).catch(() => {});
+      pending.onComplete();
+    }
+  }
+
+  private handlePromptTimeout(sessionId: string): void {
+    const pending = this.pendingPrompts.get(sessionId);
+    if (!pending) return;
+
+    console.warn(`[ClaudeChannelService] Prompt timeout for session ${sessionId} after ${PROMPT_TIMEOUT_MS / 1000}s`);
+    this.pendingPrompts.delete(sessionId);
+    this.registry.updateStatus(sessionId, 'idle').catch(() => {});
+    this.sessionsWithHistory.add(sessionId);
+    pending.onComplete(new Error(`Prompt timed out after ${PROMPT_TIMEOUT_MS / 1000}s`));
   }
 
   private async persistEvent(sessionId: string, event: NormalizedEvent): Promise<void> {

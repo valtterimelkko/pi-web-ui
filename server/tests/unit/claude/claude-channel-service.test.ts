@@ -2,15 +2,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
 vi.mock('../../../src/claude/claude-channel-process-manager.js', () => {
-  const ClaudeChannelProcessManager = vi.fn().mockImplementation(() => ({
-    start: vi.fn().mockResolvedValue(undefined),
-    stop: vi.fn().mockResolvedValue(undefined),
-    isRunning: vi.fn().mockReturnValue(true),
-    healthCheck: vi.fn().mockResolvedValue(true),
-    getState: vi.fn().mockReturnValue({ process: null, status: 'running', startedAt: Date.now() }),
-    switchModel: vi.fn(),
-    setThinkingLevel: vi.fn(),
-  }));
+  const { EventEmitter } = require('events');
+  const ClaudeChannelProcessManager = vi.fn().mockImplementation(() => {
+    const emitter = new EventEmitter();
+    return {
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      isRunning: vi.fn().mockReturnValue(true),
+      healthCheck: vi.fn().mockResolvedValue(true),
+      getState: vi.fn().mockReturnValue({ process: null, status: 'running', startedAt: Date.now() }),
+      switchModel: vi.fn(),
+      setThinkingLevel: vi.fn(),
+      on: vi.fn((event: string, handler: () => void) => emitter.on(event, handler)),
+      __emitter: emitter,
+    };
+  });
   return { ClaudeChannelProcessManager };
 });
 
@@ -587,6 +593,103 @@ describe('ClaudeChannelService', () => {
         requestId: 'req-1',
         allowed: true,
       });
+    });
+  });
+
+  describe('prompt timeout', () => {
+    let service: ClaudeChannelService;
+    let registry: { get: ReturnType<typeof vi.fn>; upsert: ReturnType<typeof vi.fn>; updateStatus: ReturnType<typeof vi.fn> };
+
+    beforeEach(async () => {
+      service = createService();
+      await service.start();
+      const registryFn = getSessionRegistry as ReturnType<typeof vi.fn>;
+      registry = registryFn.mock.results[registryFn.mock.results.length - 1]?.value as typeof registry;
+    });
+
+    it('should force-complete prompt after timeout', async () => {
+      const sessionId = 'timeout-sid-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-timeout-1', cwd: '/tmp', status: 'idle',
+      });
+
+      const onComplete = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), onComplete);
+
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('timed out'),
+      }));
+      expect(service.isRunning(sessionId)).toBe(false);
+    });
+
+    it('should update registry status to idle on timeout', async () => {
+      const sessionId = 'timeout-sid-2';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-timeout-2', cwd: '/tmp', status: 'idle',
+      });
+
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+
+      expect(registry.updateStatus).toHaveBeenCalledWith(sessionId, 'idle');
+    });
+  });
+
+  describe('PTY idle handler', () => {
+    let service: ClaudeChannelService;
+    let pmInstance: { __emitter: EventEmitter };
+    let registry: { get: ReturnType<typeof vi.fn>; upsert: ReturnType<typeof vi.fn>; updateStatus: ReturnType<typeof vi.fn> };
+
+    beforeEach(async () => {
+      service = createService();
+      await service.start();
+      pmInstance = (ClaudeChannelProcessManager as unknown as ReturnType<typeof vi.fn>).mock.results[0].value as typeof pmInstance;
+      const registryFn = getSessionRegistry as ReturnType<typeof vi.fn>;
+      registry = registryFn.mock.results[registryFn.mock.results.length - 1]?.value as typeof registry;
+    });
+
+    it('should force-complete pending prompt on PTY idle', async () => {
+      const sessionId = 'idle-sid-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-idle-1', cwd: '/tmp', status: 'idle',
+      });
+
+      const onEvent = vi.fn();
+      const onComplete = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', onEvent, onComplete);
+
+      vi.advanceTimersByTime(3_000);
+
+      pmInstance.__emitter.emit('idle');
+
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'agent_end',
+        sessionId,
+      }));
+      expect(onComplete).toHaveBeenCalledWith();
+      expect(service.isRunning(sessionId)).toBe(false);
+    });
+
+    it('should not force-complete prompt within grace period', async () => {
+      const sessionId = 'idle-sid-2';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-idle-2', cwd: '/tmp', status: 'idle',
+      });
+
+      const onComplete = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), onComplete);
+
+      pmInstance.__emitter.emit('idle');
+
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(service.isRunning(sessionId)).toBe(true);
+    });
+
+    it('should handle idle with no pending prompts', () => {
+      expect(() => pmInstance.__emitter.emit('idle')).not.toThrow();
     });
   });
 

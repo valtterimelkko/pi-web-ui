@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import pty from 'node-pty';
 
@@ -33,8 +34,11 @@ const DEFAULT_ALLOWED_TOOLS = [
 const READY_POLL_INTERVAL_MS = 500;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 10_000;
+const IDLE_PROMPT_PATTERN = /\n❯\s*$/;
+const SLASH_COMMAND_PATTERN = /^❯\s*\/(model|effort|clear|compact|cost|doctor|help|logout|memory|mcp|permissions|review|status|vim)\b/;
+const PROMPT_DEBOUNCE_MS = 1500;
 
-export class ClaudeChannelProcessManager {
+export class ClaudeChannelProcessManager extends EventEmitter {
   private cfg: ClaudeChannelProcessManagerConfig;
   private state: ChannelProcessState = {
     pid: null,
@@ -42,8 +46,14 @@ export class ClaudeChannelProcessManager {
     startedAt: null,
   };
   private ptyProcess: pty.IPty | null = null;
+  private _currentModel: string | null = null;
+  private _currentThinkingLevel: string | null = null;
+  private idleDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private accumulatingOutput: string = '';
+  private accumulatingTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(cfg: ClaudeChannelProcessManagerConfig) {
+    super();
     this.cfg = cfg;
   }
 
@@ -114,6 +124,8 @@ export class ClaudeChannelProcessManager {
           }, 300);
         }
       }
+
+      this.detectIdlePrompt(text);
     });
 
     proc.onExit(({ exitCode, signal }) => {
@@ -228,6 +240,8 @@ export class ClaudeChannelProcessManager {
   switchModel(model: string): void {
     const proc = this.ptyProcess;
     if (!proc) return;
+    if (this._currentModel === model) return;
+    this._currentModel = model;
     proc.write(`/model ${model}\r`);
   }
 
@@ -235,6 +249,36 @@ export class ClaudeChannelProcessManager {
     const proc = this.ptyProcess;
     if (!proc) return;
     const effort = level === 'high' ? 'high' : level === 'medium' ? 'medium' : 'low';
+    if (this._currentThinkingLevel === effort) return;
+    this._currentThinkingLevel = effort;
     proc.write(`/effort ${effort}\r`);
+  }
+
+  private detectIdlePrompt(text: string): void {
+    this.accumulatingOutput += text;
+
+    if (this.accumulatingTimer) {
+      clearTimeout(this.accumulatingTimer);
+    }
+    this.accumulatingTimer = setTimeout(() => {
+      this.checkForIdlePrompt(this.accumulatingOutput);
+      this.accumulatingOutput = '';
+      this.accumulatingTimer = null;
+    }, 300);
+  }
+
+  private checkForIdlePrompt(accumulated: string): void {
+    if (!IDLE_PROMPT_PATTERN.test(accumulated)) return;
+    const lines = accumulated.split('\n').map(l => l.trim()).filter(Boolean);
+    const lastLine = lines[lines.length - 1] || '';
+    if (SLASH_COMMAND_PATTERN.test(lastLine)) return;
+
+    if (this.idleDebounceTimer) {
+      clearTimeout(this.idleDebounceTimer);
+    }
+    this.idleDebounceTimer = setTimeout(() => {
+      this.idleDebounceTimer = null;
+      this.emit('idle');
+    }, PROMPT_DEBOUNCE_MS);
   }
 }
