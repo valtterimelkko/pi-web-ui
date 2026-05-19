@@ -3,14 +3,6 @@
 
 export * from './protocol.js';
 export { WebSocketConnectionManager, type WebSocketClient } from './connection.js';
-export { 
-  createMessageRouter, 
-  parseMessage, 
-  serializeMessage, 
-  validateMessage,
-  createErrorResponse,
-  type MessageHandler 
-} from './handlers.js';
 export {
   handleSessionWebSocket,
   replayHistory,
