@@ -82,6 +82,12 @@ export class ClaudeChannelService {
   private started = false;
   /** Session whose turn was dispatched most recently — owns the shared PTY. */
   private lastActiveSessionId: string | null = null;
+  /**
+   * Sessions whose turn was explicitly aborted by the user. Late events from
+   * Claude's ongoing (but now unwanted) response are silently dropped until the
+   * next intentional sendPrompt() clears the flag.
+   */
+  private abortedSessions: Set<string> = new Set();
 
   constructor(cfg: ClaudeChannelServiceConfig) {
     this.cfg = cfg;
@@ -192,6 +198,22 @@ export class ClaudeChannelService {
         // orphan Pi Web UI session files such as "419f...jsonl".
         if (!mappedInternalSid && !pending && !late) {
           continue;
+        }
+
+        // Suppress late events from a turn that the user explicitly aborted.
+        // Without this, Claude's ongoing (but unwanted) response events would
+        // keep arriving via latePromptListeners or the channel adapter, setting
+        // isStreaming back to true in the frontend and making the stop button
+        // vanish almost immediately after pressing it.
+        if (this.abortedSessions.has(internalSid)) {
+          // Allow agent_end through so the abort is cleanly finalized, but
+          // drop everything else (message updates, tool events, etc.).
+          if (ne.type === 'agent_end') {
+            this.abortedSessions.delete(internalSid);
+            // Fall through to the normal agent_end handler below.
+          } else {
+            continue;
+          }
         }
 
         const eventTarget = pending ?? late;
@@ -346,6 +368,9 @@ export class ClaudeChannelService {
     }
 
     this.clearLatePromptListener(sessionId);
+    // Clear any abort flag from a previous stop — the user is intentionally
+    // sending a new prompt, so events from this turn should flow normally.
+    this.abortedSessions.delete(sessionId);
 
     const promptId = randomUUID();
 
@@ -396,6 +421,18 @@ export class ClaudeChannelService {
     if (claudeSid) {
       this.wsClient.send({ type: 'abort', sessionId: claudeSid });
     }
+
+    // Send Escape to the PTY to interrupt Claude Code's current turn.
+    // This is the mechanism Claude Code interactive mode actually responds to.
+    this.processManager.sendInterrupt();
+
+    // Mark this session as aborted so late events from Claude's dying response
+    // are suppressed instead of reviving the streaming state in the frontend.
+    this.abortedSessions.add(sessionId);
+
+    // Clear any late listener that would forward stale events.
+    this.clearLatePromptListener(sessionId);
+
     const pending = this.pendingPrompts.get(sessionId);
     if (pending) {
       clearTimeout(pending.timer);

@@ -238,6 +238,24 @@ export class ClaudeChannelProcessManager extends EventEmitter {
     return { ...this.state };
   }
 
+  /**
+   * Send an Escape keypress to the PTY to interrupt Claude Code's current
+   * turn. Claude Code interactive mode shows "esc to interrupt" during active
+   * tool use — pressing Escape is the only reliable way to stop a running turn.
+   * A small delay + second press handles the case where Claude shows a
+   * confirmation prompt ("Are you sure?") after the first Escape.
+   */
+  sendInterrupt(): void {
+    const proc = this.ptyProcess;
+    if (!proc) return;
+    proc.write('\x1b');
+    setTimeout(() => {
+      if (this.ptyProcess) {
+        this.ptyProcess.write('\x1b');
+      }
+    }, 300);
+  }
+
   async waitForReady(timeoutMs: number = DEFAULT_READY_TIMEOUT_MS): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {

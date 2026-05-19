@@ -16,6 +16,7 @@ vi.mock('../../../src/claude/claude-channel-process-manager.js', async () => {
       markPromptSent: vi.fn(),
       markPromptComplete: vi.fn(),
       isBusy: vi.fn().mockReturnValue(false),
+      sendInterrupt: vi.fn(),
       on: vi.fn((event: string, handler: () => void) => emitter.on(event, handler)),
       __emitter: emitter,
     };
@@ -545,12 +546,16 @@ describe('ClaudeChannelService', () => {
   describe('abort', () => {
     let service: ClaudeChannelService;
     let wsInstance: WsMock;
+    let pmInstance: Record<string, ReturnType<typeof vi.fn>> & { __emitter: EventEmitter };
+    let wsEmitter: EventEmitter;
     let registry: { get: ReturnType<typeof vi.fn>; upsert: ReturnType<typeof vi.fn>; updateStatus: ReturnType<typeof vi.fn> };
 
     beforeEach(async () => {
       service = createService();
       await service.start();
       wsInstance = findWsMock() as WsMock;
+      wsEmitter = wsInstance.__emitter;
+      pmInstance = (ClaudeChannelProcessManager as unknown as ReturnType<typeof vi.fn>).mock.results[0].value as typeof pmInstance;
 
       const registryFn = getSessionRegistry as ReturnType<typeof vi.fn>;
       registry = registryFn.mock.results[registryFn.mock.results.length - 1]?.value as typeof registry;
@@ -573,6 +578,20 @@ describe('ClaudeChannelService', () => {
       }));
     });
 
+    it('should send Escape to PTY on abort', async () => {
+      const sessionId = 'abort-sid-escape';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-abort-escape', cwd: '/tmp', status: 'running',
+      });
+
+      const onComplete = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), onComplete);
+
+      service.abort(sessionId);
+
+      expect(pmInstance.sendInterrupt).toHaveBeenCalled();
+    });
+
     it('should resolve pending prompt with abort error', async () => {
       const sessionId = 'abort-sid-2';
       (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -588,6 +607,61 @@ describe('ClaudeChannelService', () => {
         message: 'Aborted',
       }));
       expect(service.isRunning(sessionId)).toBe(false);
+    });
+
+    it('should mark session as aborted to suppress late events', async () => {
+      const sessionId = 'abort-sid-3';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-abort-3', cwd: '/tmp', status: 'running',
+      });
+
+      const onEvent = vi.fn();
+      const onComplete = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', onEvent, onComplete);
+
+      service.abort(sessionId);
+
+      // Simulate a late message_update from Claude's dying response.
+      // This should be suppressed (not forwarded to the client).
+      const lateEvent = {
+        type: 'message_update',
+        sessionId: 'cs-abort-3',
+        message: { id: 'msg-1' },
+        assistantMessageEvent: { type: 'text_delta', delta: 'Still working...' },
+      };
+      wsEmitter.emit('event', lateEvent);
+
+      expect(onEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'message_update' }),
+      );
+    });
+
+    it('should clear abort flag when new prompt is sent', async () => {
+      const sessionId = 'abort-sid-4';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-abort-4', cwd: '/tmp', status: 'running',
+      });
+
+      const onEvent1 = vi.fn();
+      const onComplete1 = vi.fn();
+      await service.sendPrompt(sessionId, 'Hello', onEvent1, onComplete1);
+      service.abort(sessionId);
+
+      const onEvent2 = vi.fn();
+      const onComplete2 = vi.fn();
+      await service.sendPrompt(sessionId, 'New prompt', onEvent2, onComplete2);
+
+      // After new prompt, events should flow again.
+      const normalEvent = {
+        type: 'message_start',
+        sessionId: 'cs-abort-4',
+        message: { id: 'msg-2', role: 'assistant' },
+      };
+      wsEmitter.emit('event', normalEvent);
+
+      expect(onEvent2).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'message_start' }),
+      );
     });
   });
 
