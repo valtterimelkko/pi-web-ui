@@ -126,6 +126,21 @@ npm run test:e2e
 npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 ```
 
+### Claude Channel Live Validation
+
+After making changes to Claude channel code (server-side or plugin), run the
+WebSocket-level integration test before pushing:
+
+```bash
+npx tsx scripts/test-claude-channel.ts --password '<web-ui-password>' --verbose
+```
+
+This creates a real Claude session through the WebSocket API, sends prompts,
+and verifies streaming events, tool visibility, heartbeats, session info
+reporters, and follow-up turns — all without opening a browser. See
+[`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md) for a breakdown of what
+each test covers.
+
 ## Final Rule
 
 If a topic is already documented deeply elsewhere, **link to the canonical doc instead of duplicating it here**.

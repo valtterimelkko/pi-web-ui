@@ -8,7 +8,7 @@ export interface STTResult {
   usedFallback: boolean;
 }
 
-export async function streamTranscribe(audioChunks: Buffer[]): Promise<STTResult> {
+export async function streamTranscribe(audioChunks: Buffer[], prompt?: string): Promise<STTResult> {
   const client = getSharedOpenAIClient();
   const audioBuffer = Buffer.concat(audioChunks);
   const file = new File([audioBuffer], 'audio.webm', { type: 'audio/webm' });
@@ -17,6 +17,7 @@ export async function streamTranscribe(audioChunks: Buffer[]): Promise<STTResult
     model: STT_MODEL,
     file: file,
     response_format: 'text',
+    ...(prompt ? { prompt } : {}),
   });
 
   return {
@@ -26,7 +27,7 @@ export async function streamTranscribe(audioChunks: Buffer[]): Promise<STTResult
   };
 }
 
-export async function batchTranscribe(audioBuffer: Buffer): Promise<STTResult> {
+export async function batchTranscribe(audioBuffer: Buffer, prompt?: string): Promise<STTResult> {
   const client = getSharedOpenAIClient();
   const file = new File([audioBuffer], 'audio.webm', { type: 'audio/webm' });
 
@@ -34,6 +35,7 @@ export async function batchTranscribe(audioBuffer: Buffer): Promise<STTResult> {
     model: STT_MODEL,
     file: file,
     response_format: 'text',
+    ...(prompt ? { prompt } : {}),
   });
 
   return {
@@ -43,13 +45,13 @@ export async function batchTranscribe(audioBuffer: Buffer): Promise<STTResult> {
   };
 }
 
-export async function transcribeWithFallback(audioChunks: Buffer[]): Promise<STTResult> {
+export async function transcribeWithFallback(audioChunks: Buffer[], prompt?: string): Promise<STTResult> {
   try {
-    return await streamTranscribe(audioChunks);
+    return await streamTranscribe(audioChunks, prompt);
   } catch (primaryError) {
     console.error('primary STT failed, attempting batch fallback:', primaryError);
     const audioBuffer = Buffer.concat(audioChunks);
-    return await batchTranscribe(audioBuffer);
+    return await batchTranscribe(audioBuffer, prompt);
   }
 }
 
@@ -59,10 +61,10 @@ export interface SpeculativeResult {
   startedAt: number;
 }
 
-export function startSpeculativeTranscription(chunks: Buffer[]): SpeculativeResult {
+export function startSpeculativeTranscription(chunks: Buffer[], prompt?: string): SpeculativeResult {
   const chunksCopy = chunks.map(c => Buffer.from(c));
   return {
-    promise: transcribeWithFallback(chunksCopy),
+    promise: transcribeWithFallback(chunksCopy, prompt),
     chunkCount: chunks.length,
     startedAt: Date.now(),
   };

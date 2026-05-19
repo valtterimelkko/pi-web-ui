@@ -112,6 +112,9 @@ which claude
 claude auth status --json
 sudo journalctl -u pi-web-ui -f
 sudo journalctl -u pi-web-ui -f | grep ClaudeChannel
+
+# Live integration test for Claude channel (no browser required)
+npx tsx scripts/test-claude-channel.ts --password '<web-ui-password>' --verbose
 ```
 
 ### Session files to correlate

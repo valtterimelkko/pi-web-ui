@@ -200,6 +200,38 @@ These were active recent troubleshooting themes and are now important doc-level 
 
 If a future regression appears in one of those areas, search recent commits in `server/src/claude/` first.
 
+## Live Validation Script
+
+When you make changes to the Claude channel backend or plugin, run the
+WebSocket-level integration test before pushing:
+
+```bash
+npx tsx scripts/test-claude-channel.ts --password '<web-ui-password>' --verbose
+```
+
+The script connects via HTTP cookie auth, creates a real Claude channel
+session, sends prompts, and verifies:
+
+- **Auth + session creation:** WebSocket handshake and `new_session` → `session_created`
+- **Streaming events:** `agent_start`, `agent_end`, `message_update` arrive for each prompt
+- **Tool visibility:** `tool_execution_start` / `tool_execution_end` events are emitted
+- **Heartbeat:** `stream_activity` pings arrive from the PTY busy-state tracker
+- **Enriched heartbeat:** `currentToolName` is carried in `stream_activity` when a tool is running
+- **Session info:** `get_session_info` returns stats including `lastActivityAt`
+- **Follow-up turns:** A second prompt after a settle delay sends correctly
+- **Prompt delivery:** `prompt_ack` events appear in the server journal
+
+All tests run against the live server without touching the browser. A full run
+takes ~90 seconds. If any test fails, the exit code is non-zero.
+
+Options:
+```bash
+--password <pw>   # Web UI password (required)
+--port <port>      # Server port (default 3456)
+--origin <url>     # Allowed origin (default https://pi.letsautomate.work)
+--verbose          # Show per-assertion PASS/FAIL details
+```
+
 ## How to Decide Which Code Path to Read
 
 - If the issue mentions **`claude -p`**, **resume**, **session locks**, or **NDJSON** → start with legacy direct files.
