@@ -27,11 +27,13 @@
     "@playwright/test": "^1.58.2",
     "@types/compression": "^1.8.1",
     "@types/node": "^20.10.0",
+    "@types/supertest": "^6.0.0",
     "@typescript-eslint/eslint-plugin": "^8.57.0",
     "@typescript-eslint/parser": "^8.57.0",
     "concurrently": "^8.2.2",
     "eslint": "^8.56.0",
     "playwright": "^1.58.2",
+    "supertest": "^6.3.4",
     "typescript": "^5.3.3"
   },
   "engines": {
@@ -41,6 +43,7 @@
     "@earendil-works/pi-coding-agent": "^0.74.0",
     "@types/multer": "^2.1.0",
     "compression": "^1.8.1",
-    "multer": "^2.1.1"
+    "multer": "^2.1.1",
+    "uuid": "^14.0.0"
   }
 }

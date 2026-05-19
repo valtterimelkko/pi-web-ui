@@ -39,6 +39,30 @@ describe('STT Service', () => {
       });
     });
 
+    it('should pass prompt when provided', async () => {
+      const client = mockClient('Hello Claude');
+      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
+
+      await streamTranscribe([Buffer.from('audio')], 'Claude, Anthropic');
+
+      expect(client.audio.transcriptions.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'gpt-4o-mini-transcribe',
+          prompt: 'Claude, Anthropic',
+        })
+      );
+    });
+
+    it('should not include prompt key when undefined', async () => {
+      const client = mockClient('Hello world');
+      vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
+
+      await streamTranscribe([Buffer.from('audio')]);
+
+      const callArgs = client.audio.transcriptions.create.mock.calls[0][0] as Record<string, unknown>;
+      expect(callArgs).not.toHaveProperty('prompt');
+    });
+
     it('should concatenate multiple chunks', async () => {
       const client = mockClient('full transcript');
       vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);

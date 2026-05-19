@@ -88,4 +88,24 @@ describe('Cleanup Service', () => {
 
     expect(result.cleanedText).toBe('raw text here');
   });
+
+  it('should append vocabulary to system prompt when provided', async () => {
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn().mockResolvedValue({
+            choices: [{ message: { content: 'cleaned with vocab' } }],
+          }),
+        },
+      },
+    };
+    vi.mocked(getSharedOpenAIClient).mockReturnValue(client as never);
+
+    await cleanupTranscript('raw text', 'Claude\nAnthropic');
+
+    const callArgs = client.chat.completions.create.mock.calls[0][0] as { messages: Array<{ role: string; content: string }> };
+    const systemMsg = callArgs.messages.find(m => m.role === 'system');
+    expect(systemMsg?.content).toContain('Claude');
+    expect(systemMsg?.content).toContain('Anthropic');
+  });
 });

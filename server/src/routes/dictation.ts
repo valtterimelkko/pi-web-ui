@@ -4,6 +4,7 @@ import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { transcribeWithFallback, startSpeculativeTranscription, shouldUseSpeculative, type SpeculativeResult } from '../dictation/stt.js';
 import { cleanupTranscript } from '../dictation/cleanup.js';
 import { warmupConnections } from '../dictation/connectionPool.js';
+import { getVocabulary } from '../dictation/vocabulary.js';
 
 interface ActiveRecording {
   chunks: Buffer[];
@@ -33,10 +34,11 @@ router.post('/start', (_req: Request, res: Response) => {
   };
   activeRecordings.set(id, recording);
 
+  const vocabulary = getVocabulary();
   const specTimer = setTimeout(() => {
     const rec = activeRecordings.get(id);
     if (rec && rec.chunks.length > 0 && !rec.speculative) {
-      rec.speculative = startSpeculativeTranscription(rec.chunks);
+      rec.speculative = startSpeculativeTranscription(rec.chunks, vocabulary);
     }
   }, SPECULATIVE_DELAY_MS);
   specTimer.unref();
@@ -72,6 +74,8 @@ router.post('/:id/finish', async (req: Request, res: Response) => {
 
   let rawText = '';
 
+  const vocabulary = getVocabulary();
+
   try {
     const hasSpeculative =
       recording.speculative !== null &&
@@ -81,7 +85,7 @@ router.post('/:id/finish', async (req: Request, res: Response) => {
     if (hasSpeculative && recording.speculative) {
       sttResult = await recording.speculative.promise;
     } else {
-      sttResult = await transcribeWithFallback(recording.chunks);
+      sttResult = await transcribeWithFallback(recording.chunks, vocabulary);
     }
     rawText = sttResult.text;
   } catch {
@@ -91,7 +95,7 @@ router.post('/:id/finish', async (req: Request, res: Response) => {
   let cleanedText = rawText;
   if (rawText) {
     try {
-      const cleanupResult = await cleanupTranscript(rawText);
+      const cleanupResult = await cleanupTranscript(rawText, vocabulary);
       cleanedText = cleanupResult.cleanedText;
     } catch {
       cleanedText = rawText;

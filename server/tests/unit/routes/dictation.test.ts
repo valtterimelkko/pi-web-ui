@@ -25,10 +25,16 @@ vi.mock('../../../src/dictation/connectionPool.js', () => ({
   warmupConnections: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../../../src/dictation/vocabulary.js', () => ({
+  getVocabulary: vi.fn().mockReturnValue(''),
+  clearVocabularyCache: vi.fn(),
+}));
+
 import dictationRoutes, { getActiveRecordingCount } from '../../../src/routes/dictation.js';
 import { transcribeWithFallback, shouldUseSpeculative } from '../../../src/dictation/stt.js';
 import { cleanupTranscript } from '../../../src/dictation/cleanup.js';
 import { warmupConnections } from '../../../src/dictation/connectionPool.js';
+import { getVocabulary } from '../../../src/dictation/vocabulary.js';
 import request from 'supertest';
 
 describe('Dictation Routes', () => {
@@ -126,7 +132,7 @@ describe('Dictation Routes', () => {
       expect(typeof finishRes.body.duration_ms).toBe('number');
 
       expect(transcribeWithFallback).toHaveBeenCalledOnce();
-      expect(cleanupTranscript).toHaveBeenCalledWith('Hello world this is a test');
+      expect(cleanupTranscript).toHaveBeenCalledWith('Hello world this is a test', '');
     });
 
     it('should remove recording from active set after finish', async () => {
@@ -176,6 +182,31 @@ describe('Dictation Routes', () => {
 
       expect(finishRes.status).toBe(200);
       expect(finishRes.body).toHaveProperty('text', '');
+    });
+
+    it('should pass vocabulary to STT and cleanup', async () => {
+      vi.mocked(getVocabulary).mockReturnValue('Claude\nAnthropic');
+
+      const startRes = await request(app).post('/api/dictation/start');
+      const id = startRes.body.id;
+
+      await request(app)
+        .post(`/api/dictation/${id}/stream`)
+        .set('Content-Type', 'application/octet-stream')
+        .send(Buffer.from('fake-audio'));
+
+      const finishRes = await request(app).post(`/api/dictation/${id}/finish`);
+
+      expect(finishRes.status).toBe(200);
+      expect(transcribeWithFallback).toHaveBeenCalledOnce();
+      expect(transcribeWithFallback).toHaveBeenCalledWith(
+        expect.any(Array),
+        'Claude\nAnthropic'
+      );
+      expect(cleanupTranscript).toHaveBeenCalledWith(
+        'Hello world this is a test',
+        'Claude\nAnthropic'
+      );
     });
   });
 
