@@ -18,6 +18,7 @@ const sessionHistory = new Map<string, Array<Record<string, unknown>>>();
 const sessionModels = new Map<string, string>();
 const sessionStatusMap = new Map<string, string>();
 const sessionLastDisconnect = new Map<string, number>();
+const sessionLastToolName = new Map<string, string>();
 const pendingPermissions = new Map<
   string,
   {
@@ -58,13 +59,32 @@ function setStatus(sessionId: string, status: string) {
   broadcast(sessionId, { type: "session_status", sessionId, status }, false);
 }
 
+let lastNotifErrorAt = 0;
+const NOTIF_ERROR_COOLDOWN_MS = 10_000;
+
 function pushNotification(params: Record<string, unknown>) {
+  const sid = (params?.meta as Record<string, unknown> | undefined)?.chat_id as string | undefined;
   Promise.resolve(
     mcpServer.notification({
       method: "notifications/claude/channel",
       params,
     }),
-  ).catch(() => {});
+  ).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[pi-claude-channel] MCP notification failed: ${msg}`);
+    const now = Date.now();
+    if (now - lastNotifErrorAt >= NOTIF_ERROR_COOLDOWN_MS) {
+      lastNotifErrorAt = now;
+      if (sid) {
+        broadcast(sid, {
+          type: "error",
+          sessionId: sid,
+          message: `Failed to deliver prompt to Claude: ${msg}`,
+          code: "CHANNEL_NOTIFICATION_FAILED",
+        }, false);
+      }
+    }
+  });
 }
 
 // ── MCP Server (stdio) ──────────────────────────────────────────────────────
@@ -293,6 +313,10 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
         event_type: string;
         event_data: Record<string, unknown>;
       };
+      // Track the last tool name so stream_activity can carry it
+      if (event_type === "tool_execution" && event_data?.tool_name) {
+        sessionLastToolName.set(chat_id, event_data.tool_name as string);
+      }
       broadcast(chat_id, {
         type: event_type,
         sessionId: chat_id,
@@ -322,12 +346,15 @@ function handleWSMessage(
         cwd?: string;
       };
       console.error(`[ws] prompt received: session=${sessionId} content="${content.slice(0, 50)}..."`);
+      const now = Date.now();
       setStatus(sessionId, "streaming");
       broadcast(sessionId, {
         type: "agent_start",
         sessionId,
-        timestamp: Date.now(),
+        timestamp: now,
       });
+      // Explicit ack so the server knows the plugin received and processed the prompt
+      ws.send(JSON.stringify({ type: "prompt_ack", sessionId, timestamp: now }));
       const meta: Record<string, string> = { chat_id: sessionId, session_id: sessionId };
       if (cwd) meta.cwd = cwd;
       pushNotification({
@@ -494,6 +521,7 @@ const hookServer = Bun.serve({
           timestamp: number;
         };
         const tcId = tool_call_id || crypto.randomUUID();
+        if (tool_name) sessionLastToolName.set(session_id, tool_name);
         if (tool_output !== undefined && !tool_error) {
           broadcast(session_id, {
             type: "tool_execution_start",

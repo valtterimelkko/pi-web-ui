@@ -177,6 +177,11 @@ export class ClaudeChannelProcessManager extends EventEmitter {
       await this.waitForReady(DEFAULT_READY_TIMEOUT_MS);
       this.state.startedAt = Date.now();
       this.state.status = 'running';
+
+      // Port conflict diagnostic: log who's listening on our WS port.
+      // A stale process from a previous run can silently occupy the port,
+      // causing our WS client to talk to the wrong plugin.
+      this.logPortDiagnostic(this.cfg.wsPort).catch(() => {});
     } catch (err) {
       this.state.status = 'error';
       this.state.error = err instanceof Error ? err.message : String(err);
@@ -329,6 +334,11 @@ export class ClaudeChannelProcessManager extends EventEmitter {
     return this.isBusyState;
   }
 
+  /** Timestamp (ms) of the most recent PTY busy indicator, or null if never set. */
+  getLastBusyAt(): number | null {
+    return this.lastBusyAt > 0 ? this.lastBusyAt : null;
+  }
+
   /**
    * Scan a PTY frame for busy indicators. Unlike the old prompt-scraping
    * detector, this looks at the WHOLE frame: Claude renders the
@@ -398,5 +408,26 @@ export class ClaudeChannelProcessManager extends EventEmitter {
       .replace(csiPattern, '')
       // Other short escape controls seen in Claude's TUI.
       .replace(shortEscPattern, '');
+  }
+
+  /**
+   * Log which process(es) are listening on the configured WS port.
+   * Helps diagnose port conflicts with stale processes from previous runs.
+   */
+  private async logPortDiagnostic(port: number): Promise<void> {
+    try {
+      const { execSync } = await import('node:child_process');
+      const output = execSync(
+        `ss -tlnp 'sport = :${port}' 2>/dev/null || netstat -tlnp 2>/dev/null | grep ':${port}'`,
+        { encoding: 'utf-8', timeout: 3000 },
+      ).trim();
+      if (output) {
+        console.log(`[ClaudeChannel] Port ${port} diagnostic: ${output.replace(/\n/g, ' | ')}`);
+      } else {
+        console.log(`[ClaudeChannel] Port ${port} diagnostic: no listener found`);
+      }
+    } catch {
+      // Diagnostic only — never fail startup.
+    }
   }
 }

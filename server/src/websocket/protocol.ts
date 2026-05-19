@@ -166,6 +166,7 @@ export interface SessionStats {
   contextWindow?: number;
   contextUsed?: number;
   contextPercent?: number;
+  lastActivityAt?: number;
 }
 
 // Tree node for session history navigation

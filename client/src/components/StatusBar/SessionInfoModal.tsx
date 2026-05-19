@@ -63,6 +63,17 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
   const formatNumber = (num: number) => num.toLocaleString();
   const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
 
+  const formatTimeAgo = (timestampMs: number): string => {
+    const diff = Date.now() - timestampMs;
+    if (diff < 0) return 'just now';
+    const sec = Math.floor(diff / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hours = Math.floor(min / 60);
+    return `${hours}h ${min % 60}m ago`;
+  };
+
   return (
     <div
       className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 animate-in fade-in"
@@ -180,6 +191,21 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                   )}
                 </div>
               </div>
+
+              {/* Last Activity (Claude sessions) */}
+              {isClaudeSession && sessionInfo.lastActivityAt != null && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                    <Activity className="w-4 h-4" />
+                    <span>Last Activity</span>
+                  </div>
+                  <p className="text-sm text-gray-900 pl-6">
+                    {sessionInfo.lastActivityAt > 0
+                      ? formatTimeAgo(sessionInfo.lastActivityAt)
+                      : 'No PTY activity yet'}
+                  </p>
+                </div>
+              )}
 
               {/* Model */}
               {sessionInfo.model && (

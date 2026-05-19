@@ -14,7 +14,8 @@ export type ChannelEventType =
   | 'rate_limit'
   | 'session_status'
   | 'error'
-  | 'history';
+  | 'history'
+  | 'prompt_ack';
 
 export interface ChannelEvent {
   type: ChannelEventType;

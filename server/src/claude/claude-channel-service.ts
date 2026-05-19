@@ -111,6 +111,9 @@ export class ClaudeChannelService {
     this.hooksConfig = new ClaudeChannelHooksConfig({ hookPort: cfg.hookPort });
   }
 
+  /** Tracks the most recent tool name for enriched stream_activity pings. */
+  private lastKnownToolName: string | null = null;
+
   async start(): Promise<void> {
     if (this.started) return;
 
@@ -185,6 +188,14 @@ export class ClaudeChannelService {
 
   private wireUpEventHandler(): void {
     this.wsClient.onEvent((channelEvent: ChannelEvent) => {
+      // Handle prompt_ack — a lightweight acknowledgment from the plugin
+      // that it received and processed our prompt before forwarding to Claude.
+      if (channelEvent.type === 'prompt_ack') {
+        const ackSid = channelEvent.sessionId as string;
+        console.log(`[ClaudeChannelService] Prompt ack received for session ${ackSid}`);
+        return;
+      }
+
       const normalizedEvents = this.eventAdapter.normalize(channelEvent);
       for (const ne of normalizedEvents) {
         const claudeSid = ne.sessionId ?? '';
@@ -222,6 +233,13 @@ export class ClaudeChannelService {
             eventTarget.onEvent(ne);
           } catch { /* non-fatal */ }
         }
+
+        // Track the most recent tool name so stream_activity pings can carry it.
+        if (ne.type === 'tool_execution_start' && ne.data) {
+          const toolName = (ne.data as Record<string, unknown>).toolName as string | undefined;
+          if (toolName) this.lastKnownToolName = toolName;
+        }
+
         this.persistEvent(internalSid, ne).catch((err) => {
           console.warn('[ClaudeChannelService] Failed to persist event:', err);
         });
@@ -516,6 +534,7 @@ export class ClaudeChannelService {
     tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
     cost: number;
     pinned: boolean;
+    lastActivityAt: number | null;
   } | null> {
     const entry = await this.registry.get(sessionId);
     if (!entry || entry.sdkType !== 'claude') return null;
@@ -561,6 +580,7 @@ export class ClaudeChannelService {
       tokens: totalTokens,
       cost: 0,
       pinned: this.pinnedSessions.has(sessionId),
+      lastActivityAt: this.processManager.getLastBusyAt(),
     };
   }
 
@@ -662,6 +682,11 @@ export class ClaudeChannelService {
     return this.pinnedSessions.has(sessionId);
   }
 
+  /** Expose the PTY last-busy timestamp for session info display. */
+  getLastActivityAt(): number | null {
+    return this.processManager.getLastBusyAt();
+  }
+
   hasSession(sessionId: string): boolean {
     return this.pinnedSessions.has(sessionId)
       || this.pendingPrompts.has(sessionId)
@@ -731,11 +756,15 @@ export class ClaudeChannelService {
     if (this.pendingPrompts.size === 0) return;
     const timestamp = Date.now();
     for (const [sessionId, pending] of this.pendingPrompts) {
+      const activityData: Record<string, unknown> = { promptId: pending.promptId };
+      if (this.lastKnownToolName) {
+        activityData.currentToolName = this.lastKnownToolName;
+      }
       const activityEvent: NormalizedEvent = {
         type: 'stream_activity',
         sessionId,
         timestamp,
-        data: { promptId: pending.promptId },
+        data: activityData,
       };
       try {
         pending.onEvent(activityEvent);
@@ -753,6 +782,10 @@ export class ClaudeChannelService {
       console.warn(`[ClaudeChannelService] PTY idle detected while session ${sessionId} (turn ${pending.promptId}) is pending — force-completing`);
       clearTimeout(pending.timer);
       this.pendingPrompts.delete(sessionId);
+      // Register a late listener so any events from Claude's still-running
+      // turn are forwarded to the UI instead of being silently dropped.
+      // This mirrors handlePromptTimeout() behavior.
+      this.startLatePromptListener(sessionId, pending.onEvent);
       this.registry.updateStatus(sessionId, 'idle').catch(() => {});
       this.sessionsWithHistory.add(sessionId);
 

@@ -205,6 +205,7 @@ export interface SessionStats {
   contextWindow?: number;
   contextUsed?: number;
   contextPercent?: number;
+  lastActivityAt?: number;
 }
 
 export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'error' | 'disconnected' | 'terminated';
@@ -218,6 +219,10 @@ interface SessionState {
   messages: Message[];
   isStreaming: boolean;
   lastStreamEventAt: number | null;
+  /** Current tool name (or null) — updated from tool_execution_start and stream_activity. */
+  currentToolName: string | null;
+  /** When the most recent agent_start was received (for slow-prompt detection). */
+  promptStartedAt: number | null;
   isLoading: boolean;
   // Loading state for session switching (rehydration)
   isSwitchingSession: boolean;
@@ -343,6 +348,8 @@ export const useSessionStore = create<SessionState>()(
       messages: [],
       isStreaming: false,
       lastStreamEventAt: null,
+      currentToolName: null,
+      promptStartedAt: null,
       isLoading: false,
       isSwitchingSession: false,
       switchingToSessionId: null,
@@ -1336,6 +1343,9 @@ export const useSessionStore = create<SessionState>()(
               toolName: string;
               args: unknown;
             };
+            if (toolName) {
+              set({ currentToolName: toolName });
+            }
             const toolMessage: Message = {
               id: toolCallId,
               role: 'tool',
@@ -1702,7 +1712,7 @@ export const useSessionStore = create<SessionState>()(
               case 'agent_start':
                 get().setSessionStatus(sessionId, 'streaming');
                 if (get().currentSessionId === sessionId) {
-                  set({ isStreaming: true, isLoading: false, lastStreamEventAt: Date.now() });
+                  set({ isStreaming: true, isLoading: false, lastStreamEventAt: Date.now(), promptStartedAt: Date.now(), currentToolName: null });
                 }
                 break;
 
@@ -1710,7 +1720,8 @@ export const useSessionStore = create<SessionState>()(
               // fresh while Claude is working but not emitting other events.
               case 'stream_activity':
                 if (get().currentSessionId === sessionId && get().isStreaming) {
-                  set({ lastStreamEventAt: Date.now() });
+                  const toolName = (event as Record<string, unknown>).currentToolName as string | undefined;
+                  set({ lastStreamEventAt: Date.now(), currentToolName: toolName || get().currentToolName });
                 }
                 break;
 
@@ -1724,7 +1735,7 @@ export const useSessionStore = create<SessionState>()(
                     }
                     return m;
                   });
-                  set({ isStreaming: false, lastStreamEventAt: null, messages: newMessages });
+                  set({ isStreaming: false, lastStreamEventAt: null, promptStartedAt: null, currentToolName: null, messages: newMessages });
                 }
                 break;
                 

@@ -478,6 +478,92 @@ describe('sessionStore', () => {
     });
   });
 
+  describe('currentToolName', () => {
+    it('starts as null', () => {
+      useSessionStore.setState({ currentToolName: null });
+      expect(useSessionStore.getState().currentToolName).toBeNull();
+    });
+
+    it('is set on tool_execution_start', () => {
+      useSessionStore.getState().handleServerMessage({
+        type: 'tool_execution_start',
+        toolCallId: 'tc1',
+        toolName: 'Bash',
+        args: {},
+      });
+      expect(useSessionStore.getState().currentToolName).toBe('Bash');
+    });
+
+    it('is carried forward by stream_activity', () => {
+      useSessionStore.setState({
+        isStreaming: true,
+        currentSessionId: 's1',
+        currentToolName: 'Bash',
+      });
+      useSessionStore.getState().handleServerMessage({
+        type: 'session_event',
+        sessionId: 's1',
+        event: { type: 'stream_activity', currentToolName: 'Read' },
+      });
+      expect(useSessionStore.getState().currentToolName).toBe('Read');
+    });
+
+    it('is cleared on agent_end', () => {
+      useSessionStore.setState({
+        isStreaming: true,
+        currentSessionId: 's1',
+        currentToolName: 'Bash',
+        messages: [{ id: 'm1', role: 'assistant', content: '', timestamp: Date.now() }],
+      });
+      useSessionStore.getState().handleServerMessage({
+        type: 'session_event',
+        sessionId: 's1',
+        event: { type: 'agent_end' },
+      });
+      expect(useSessionStore.getState().currentToolName).toBeNull();
+    });
+
+    it('is nulled on agent_start for fresh turns', () => {
+      useSessionStore.setState({
+        currentToolName: 'Bash',
+        currentSessionId: 's1',
+      });
+      useSessionStore.getState().handleServerMessage({
+        type: 'session_event',
+        sessionId: 's1',
+        event: { type: 'agent_start' },
+      });
+      expect(useSessionStore.getState().currentToolName).toBeNull();
+    });
+  });
+
+  describe('promptStartedAt', () => {
+    it('is set on agent_start', () => {
+      useSessionStore.setState({ currentSessionId: 's1' });
+      useSessionStore.getState().handleServerMessage({
+        type: 'session_event',
+        sessionId: 's1',
+        event: { type: 'agent_start' },
+      });
+      expect(useSessionStore.getState().promptStartedAt).toBeTypeOf('number');
+    });
+
+    it('is cleared on agent_end', () => {
+      useSessionStore.setState({ currentSessionId: 's1' });
+      useSessionStore.getState().handleServerMessage({
+        type: 'session_event',
+        sessionId: 's1',
+        event: { type: 'agent_start' },
+      });
+      useSessionStore.getState().handleServerMessage({
+        type: 'session_event',
+        sessionId: 's1',
+        event: { type: 'agent_end' },
+      });
+      expect(useSessionStore.getState().promptStartedAt).toBeNull();
+    });
+  });
+
   describe('background session support', () => {
     it('should have sessionMessages and streamingSessions in initial state', () => {
       const state = useSessionStore.getState();

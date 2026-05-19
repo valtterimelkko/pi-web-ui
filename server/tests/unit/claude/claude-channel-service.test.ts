@@ -16,6 +16,7 @@ vi.mock('../../../src/claude/claude-channel-process-manager.js', async () => {
       markPromptSent: vi.fn(),
       markPromptComplete: vi.fn(),
       isBusy: vi.fn().mockReturnValue(false),
+      getLastBusyAt: vi.fn().mockReturnValue(null),
       sendInterrupt: vi.fn(),
       on: vi.fn((event: string, handler: () => void) => emitter.on(event, handler)),
       __emitter: emitter,

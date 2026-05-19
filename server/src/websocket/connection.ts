@@ -1638,6 +1638,7 @@ export class WebSocketConnectionManager {
             contextWindow: claudeContextUsage?.contextWindow ?? undefined,
             contextUsed: claudeContextUsage?.tokens ?? undefined,
             contextPercent: claudeContextUsage?.percent ?? undefined,
+            lastActivityAt: claudeStats.lastActivityAt ?? undefined,
           },
         });
       } catch (error) {

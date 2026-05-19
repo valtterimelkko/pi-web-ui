@@ -412,6 +412,7 @@ export class ClaudeService {
     tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
     cost: number;
     pinned: boolean;
+    lastActivityAt: number | null;
   } | null> {
     if (this.channelService) {
       return this.channelService.getSessionStats(sessionId);
@@ -461,6 +462,7 @@ export class ClaudeService {
       tokens: totalTokens,
       cost: 0,
       pinned: this.pinnedSessions.has(sessionId),
+      lastActivityAt: (this.channelService as ClaudeChannelService | null)?.getLastActivityAt?.() ?? null,
     };
   }
 
