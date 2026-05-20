@@ -112,6 +112,18 @@ function estimateMessagesSize(messages: Message[]): number {
   return messages.reduce((total, msg) => total + estimateMessageSize(msg), 0);
 }
 
+function extractToolResultText(result: unknown): string {
+  if (typeof result === 'string') return result;
+  if (result && typeof result === 'object') {
+    const maybeContent = (result as { content?: Array<{ text?: string }> }).content;
+    if (Array.isArray(maybeContent)) {
+      return maybeContent.map((part) => part.text ?? '').join('');
+    }
+    return JSON.stringify(result);
+  }
+  return '';
+}
+
 export interface Session {
   id: string;
   path: string;
@@ -1375,10 +1387,10 @@ export const useSessionStore = create<SessionState>()(
             set({ lastStreamEventAt: Date.now() });
             const { toolCallId, result, isError } = msg as unknown as {
               toolCallId: string;
-              result?: { content: Array<{ type: string; text?: string }> };
+              result?: unknown;
               isError: boolean;
             };
-            const content = result?.content?.[0]?.text || '';
+            const content = extractToolResultText(result);
             get().updateMessage(toolCallId, {
               content,
               toolResult: { output: content, isError },
@@ -1862,10 +1874,10 @@ export const useSessionStore = create<SessionState>()(
               case 'tool_execution_end': {
                 const { toolCallId, result, isError } = event as unknown as {
                   toolCallId: string;
-                  result?: { content: Array<{ type: string; text?: string }> };
+                  result?: unknown;
                   isError: boolean;
                 };
-                const content = result?.content?.[0]?.text || '';
+                const content = extractToolResultText(result);
                 get().updateMessageInSession(sessionId, toolCallId, {
                   content,
                   toolResult: { output: content, isError },

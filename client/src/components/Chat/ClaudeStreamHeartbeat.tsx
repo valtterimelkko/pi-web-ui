@@ -15,38 +15,41 @@ export function ClaudeStreamHeartbeat({ compact = false }: ClaudeStreamHeartbeat
   const sdkType = useSessionStore((s) => s.currentSessionSdkType);
   const currentToolName = useSessionStore((s) => s.currentToolName);
   const promptStartedAt = useSessionStore((s) => s.promptStartedAt);
+  const lastStreamEventAt = useSessionStore((s) => s.lastStreamEventAt);
   const [stale, setStale] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [warnedSlow, setWarnedSlow] = useState(false);
 
-  // Slow-prompt warning: if 60s pass after agent_start with no events, show a toast
+  // Slow-prompt warning: warn only when the turn is old AND no stream
+  // activity has arrived for the warning window. Long Claude channel turns can
+  // be healthy while emitting only stream_activity pings, so elapsed turn time
+  // alone is not a stuck signal.
   useEffect(() => {
     if (!isStreaming || sdkType !== 'claude' || !promptStartedAt) {
       setWarnedSlow(false);
       return;
     }
-    const remaining = SLOW_PROMPT_WARNING_MS - (Date.now() - promptStartedAt);
-    if (remaining <= 0) {
-      if (!warnedSlow) {
-        setWarnedSlow(true);
-        useUIStore.getState().addToast({
-          type: 'warning',
-          message: 'Claude hasn\'t responded yet — may still be processing or the prompt could be stuck.',
-        });
+
+    const maybeWarn = () => {
+      if (warnedSlow) return;
+      const now = Date.now();
+      const promptAge = now - promptStartedAt;
+      const lastEvent = useSessionStore.getState().lastStreamEventAt ?? promptStartedAt;
+      const eventAge = now - lastEvent;
+      if (promptAge < SLOW_PROMPT_WARNING_MS || eventAge < SLOW_PROMPT_WARNING_MS) {
+        return;
       }
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (!warnedSlow) {
-        setWarnedSlow(true);
-        useUIStore.getState().addToast({
-          type: 'warning',
-          message: 'Claude hasn\'t responded yet — may still be processing or the prompt could be stuck.',
-        });
-      }
-    }, remaining);
-    return () => clearTimeout(timer);
-  }, [isStreaming, sdkType, promptStartedAt, warnedSlow]);
+      setWarnedSlow(true);
+      useUIStore.getState().addToast({
+        type: 'warning',
+        message: 'Claude hasn\'t responded with activity for a while — may still be processing or the prompt could be stuck.',
+      });
+    };
+
+    maybeWarn();
+    const timer = setInterval(maybeWarn, TICK_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [isStreaming, sdkType, promptStartedAt, lastStreamEventAt, warnedSlow]);
 
   useEffect(() => {
     if (!isStreaming || sdkType !== 'claude') {

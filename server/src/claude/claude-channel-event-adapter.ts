@@ -161,19 +161,27 @@ export class ClaudeChannelEventAdapter {
           },
         ];
 
-      case 'tool_execution':
+      case 'tool_execution': {
+        const sid = event.sessionId ?? '';
+        const toolCallId = ((event.toolCallId as string | undefined)
+          ?? (event.tool_call_id as string | undefined)
+          ?? `tc_${sid}_${ts}`) as string;
+        const pending = this.pendingToolCalls.get(sid);
+        if (pending) pending.push(toolCallId);
+        else this.pendingToolCalls.set(sid, [toolCallId]);
         return [
           {
             type: 'tool_execution_start',
-            sessionId: event.sessionId,
+            sessionId: sid,
             timestamp: ts,
             data: {
-              toolCallId: (event.toolCallId as string) ?? (event.tool_call_id as string),
+              toolCallId,
               toolName: event.toolName ?? event.tool_name,
               args: event.args,
             },
           },
         ];
+      }
 
       case 'usage':
         return [
@@ -241,7 +249,11 @@ export class ClaudeChannelEventAdapter {
               isError,
             },
           });
+          const remaining = pendingIds.filter((tcId) => tcId !== explicitTcId);
+          if (remaining.length > 0) this.pendingToolCalls.set(sid, remaining);
+          else this.pendingToolCalls.delete(sid);
         } else {
+          this.pendingToolCalls.delete(sid);
           for (const tcId of pendingIds) {
             events.push({
               type: 'tool_execution_end',

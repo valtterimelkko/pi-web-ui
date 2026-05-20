@@ -2,13 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import fs from 'fs';
 
-const { mockDbPath } = vi.hoisted(() => {
-  const { tmpdir } = require('os');
-  const { join } = require('path');
-  return {
-    mockDbPath: join(tmpdir(), `pi-web-ui-vocab-test-${Date.now()}.db`),
-  };
-});
+const { mockDbPath } = vi.hoisted(() => ({
+  mockDbPath: `/tmp/pi-web-ui-vocab-test-${Date.now()}.db`,
+}));
 
 vi.mock('../../../src/config.js', () => ({
   config: {

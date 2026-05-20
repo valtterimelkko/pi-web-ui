@@ -102,13 +102,44 @@ export function claudeEntryToEvent(entry: ClaudeMessageEntry): Array<Record<stri
  */
 export function historyToReplayEvents(entries: ClaudeMessageEntry[]): Array<Record<string, unknown>> {
   const allEvents: Array<Record<string, unknown>> = [];
+  let pendingTools: Array<{ toolCallId: string }> = [];
+
+  const toolResultEvent = (
+    toolCallId: string,
+    text: string,
+    isError: boolean,
+    timestamp?: number,
+  ): Record<string, unknown> => ({
+    type: 'tool_execution_end',
+    toolCallId,
+    result: { content: [{ type: 'text', text }] },
+    isError,
+    ...(timestamp !== undefined ? { timestamp } : {}),
+  });
+
+  const closePendingTools = (text: string, isError = false, timestamp?: number) => {
+    if (pendingTools.length === 0) return;
+    for (const pending of pendingTools) {
+      allEvents.push(toolResultEvent(pending.toolCallId, text, isError, timestamp));
+    }
+    pendingTools = [];
+  };
+
+  const isGeneratedFallbackToolCallId = (toolCallId: string | undefined): boolean => (
+    !!toolCallId && /^tc_[^_]+_\d+$/.test(toolCallId)
+  );
 
   let i = 0;
   while (i < entries.length) {
     const entry = entries[i];
 
-    // Coalesce consecutive assistant entries into a single message
+    // Coalesce consecutive assistant entries into a single message. If a tool
+    // is still open here, the turn has clearly moved past it, so close it with
+    // an explicit replay-only placeholder instead of leaving a stale Running
+    // card forever.
     if (entry.type === 'assistant') {
+      closePendingTools('No result captured for this tool call. It may have been interrupted or the result was not persisted.', false, entry.timestamp);
+
       const coalescedText: string[] = [];
       const firstTimestamp = entry.timestamp;
 
@@ -137,7 +168,40 @@ export function historyToReplayEvents(entries: ClaudeMessageEntry[]): Array<Reco
       continue;
     }
 
-    // Non-assistant entries are handled individually
+    if (entry.type === 'tool') {
+      const toolEvents = claudeEntryToEvent(entry);
+      allEvents.push(...toolEvents);
+      const toolCallId = entry.toolCallId || `tool_${entry.timestamp}`;
+      if (entry.toolOutput === undefined) {
+        pendingTools.push({ toolCallId });
+      }
+      i++;
+      continue;
+    }
+
+    if (entry.type === 'tool_result') {
+      const explicitToolCallId = entry.toolCallId;
+      const matchingPendingIndex = explicitToolCallId
+        ? pendingTools.findIndex((pending) => pending.toolCallId === explicitToolCallId)
+        : -1;
+
+      if (matchingPendingIndex >= 0 && explicitToolCallId) {
+        allEvents.push(toolResultEvent(explicitToolCallId, entry.toolOutput || '', entry.isError ?? false, entry.timestamp));
+        pendingTools.splice(matchingPendingIndex, 1);
+      } else if (pendingTools.length > 0 && (!explicitToolCallId || isGeneratedFallbackToolCallId(explicitToolCallId))) {
+        closePendingTools(entry.toolOutput || '', entry.isError ?? false, entry.timestamp);
+      } else {
+        allEvents.push(...claudeEntryToEvent(entry));
+      }
+      i++;
+      continue;
+    }
+
+    if (entry.type === 'meta' && !entry.createdAt) {
+      closePendingTools('No result captured for this tool call. It may have been interrupted or the result was not persisted.', false, entry.timestamp);
+    }
+
+    // Other non-assistant entries are handled individually
     allEvents.push(...claudeEntryToEvent(entry));
     i++;
   }

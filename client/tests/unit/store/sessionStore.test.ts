@@ -467,6 +467,26 @@ describe('sessionStore', () => {
       expect(useSessionStore.getState().lastStreamEventAt).toBeGreaterThanOrEqual(before);
     });
 
+    it('applies string tool_execution_end results to visible tool output', () => {
+      useSessionStore.getState().handleServerMessage({
+        type: 'tool_execution_start',
+        toolCallId: 'tc-string',
+        toolName: 'Bash',
+        args: { command: 'echo ok' },
+      });
+
+      useSessionStore.getState().handleServerMessage({
+        type: 'tool_execution_end',
+        toolCallId: 'tc-string',
+        result: 'ok',
+        isError: false,
+      });
+
+      const tool = useSessionStore.getState().messages.find((m) => m.id === 'tc-string');
+      expect(tool?.content).toBe('ok');
+      expect(tool?.toolResult).toEqual({ output: 'ok', isError: false });
+    });
+
     it('is updated on tool_execution_update', () => {
       const before = Date.now();
       useSessionStore.getState().handleServerMessage({

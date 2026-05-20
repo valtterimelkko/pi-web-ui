@@ -185,6 +185,21 @@ describe('ClaudeStreamHeartbeat', () => {
       );
     });
 
+    it('does not warn when prompt is old but stream activity is fresh', () => {
+      mockAddToast.mockClear();
+      useSessionStore.setState({
+        isStreaming: true,
+        currentSessionSdkType: 'claude',
+        promptStartedAt: Date.now() - 61000,
+        lastStreamEventAt: Date.now(),
+      });
+
+      render(<ClaudeStreamHeartbeat />);
+      act(() => { vi.advanceTimersByTime(1000); });
+
+      expect(mockAddToast).not.toHaveBeenCalled();
+    });
+
     it('does not warn when prompt is recent', () => {
       mockAddToast.mockClear();
       useSessionStore.setState({

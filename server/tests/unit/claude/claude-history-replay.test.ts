@@ -282,11 +282,11 @@ describe('historyToReplayEvents', () => {
     const types = events.map((e) => e.type);
 
     // First assistant: start + update + end
-    // Tool: start
+    // Tool: start + replay-only end before the next assistant
     // Second assistant: start + update + end
     expect(types).toEqual([
       'message_start', 'message_update', 'message_end',
-      'tool_execution_start',
+      'tool_execution_start', 'tool_execution_end',
       'message_start', 'message_update', 'message_end',
     ]);
   });
@@ -336,8 +336,7 @@ describe('historyToReplayEvents', () => {
     expect((events[1] as Record<string, unknown>).toolCallId).toBe('toolu_xyz');
   });
 
-  it('tool without matching tool_result → only tool_execution_start (pending)', () => {
-    // Legacy behavior: tools without results show as "Running"
+  it('tool without matching tool_result and no later turn boundary remains pending', () => {
     const entries: ClaudeMessageEntry[] = [
       makeEntry({
         type: 'tool',
@@ -351,6 +350,62 @@ describe('historyToReplayEvents', () => {
     const events = historyToReplayEvents(entries);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('tool_execution_start');
+  });
+
+  it('tool without matching tool_result is closed when a later assistant reply proves the turn moved on', () => {
+    const entries: ClaudeMessageEntry[] = [
+      makeEntry({
+        type: 'tool',
+        toolName: 'Bash',
+        toolCallId: 'toolu_orphaned',
+        toolInput: { command: 'long-running command' },
+        timestamp: TS + 1,
+      }),
+      makeEntry({
+        type: 'assistant',
+        content: 'I moved on after that tool.',
+        timestamp: TS + 2,
+      }),
+    ];
+
+    const events = historyToReplayEvents(entries);
+    expect(events.map((e) => e.type)).toEqual([
+      'tool_execution_start',
+      'tool_execution_end',
+      'message_start',
+      'message_update',
+      'message_end',
+    ]);
+    expect((events[1] as Record<string, unknown>).toolCallId).toBe('toolu_orphaned');
+    expect(JSON.stringify((events[1] as Record<string, unknown>).result)).toContain('No result captured');
+  });
+
+  it('unmatched generated tool_result IDs close preceding pending tools during replay', () => {
+    const entries: ClaudeMessageEntry[] = [
+      makeEntry({
+        type: 'tool',
+        sessionId: 'sid-1',
+        toolName: 'Bash',
+        toolCallId: 'toolu_pending',
+        toolInput: { command: 'npm test' },
+        timestamp: TS + 1,
+      }),
+      makeEntry({
+        type: 'tool_result',
+        sessionId: 'sid-1',
+        toolCallId: `tc_sid-1_${TS + 2}`,
+        toolOutput: 'tests passed',
+        isError: false,
+        timestamp: TS + 2,
+      }),
+    ];
+
+    const events = historyToReplayEvents(entries);
+    expect(events).toHaveLength(2);
+    expect(events[0].type).toBe('tool_execution_start');
+    expect(events[1].type).toBe('tool_execution_end');
+    expect((events[1] as Record<string, unknown>).toolCallId).toBe('toolu_pending');
+    expect(JSON.stringify((events[1] as Record<string, unknown>).result)).toContain('tests passed');
   });
 
   it('handles mixed assistant deltas and tool calls correctly', () => {

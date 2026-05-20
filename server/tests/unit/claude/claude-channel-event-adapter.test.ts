@@ -502,6 +502,33 @@ describe('ClaudeChannelEventAdapter', () => {
       expect(results[0].data.toolCallId).toBeTruthy();
     });
 
+    it('should generate IDs for send_event tool_execution and close them on tool_result', () => {
+      const start = adapter.normalize({
+        type: 'tool_execution',
+        sessionId: SESSION_ID,
+        tool_name: 'Bash',
+        args: { command: 'npm test' },
+        timestamp: 1000,
+      });
+
+      const end = adapter.normalize({
+        type: 'tool_result',
+        sessionId: SESSION_ID,
+        toolOutput: 'tests passed',
+        isError: false,
+        timestamp: 2000,
+      });
+
+      expect(start).toHaveLength(1);
+      expect(start[0].type).toBe('tool_execution_start');
+      expect(start[0].data.toolCallId).toBeTruthy();
+      expect(start[0].data.toolName).toBe('Bash');
+      expect(end).toHaveLength(1);
+      expect(end[0].type).toBe('tool_execution_end');
+      expect(end[0].data.toolCallId).toBe(start[0].data.toolCallId);
+      expect(end[0].data.result).toBe('tests passed');
+    });
+
     it('should close pending tools on tool_result', () => {
       const tool1: ChannelEvent = {
         type: 'tool',
