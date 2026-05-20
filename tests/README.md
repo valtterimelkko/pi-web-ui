@@ -24,7 +24,27 @@ Notable files include:
 - `tests/e2e/opencode-session-chat.spec.ts`
 - `tests/e2e/opencode-session-switch.spec.ts`
 
-### 2. Benchmarks
+### 2. Live validation
+
+Browserless runtime validation is exposed through the Internal API and the
+repo-owned CLI runner:
+
+```bash
+npm run validate:live -- --runtime claude --scenario smoke
+```
+
+Use it when you need to confirm live server/runtime behaviour without opening
+ the web UI. Canonical guide:
+- `docs/LIVE-VALIDATION.md`
+
+Typical uses:
+- runtime routing changes
+- event normalization or replay fixes
+- Claude channel regressions
+- OpenCode permission / streaming regressions
+- internal API contract changes
+
+### 3. Benchmarks
 Located in:
 - `tests/benchmarks/`
 
@@ -40,6 +60,11 @@ npm test
 ### E2E tests
 ```bash
 npm run test:e2e
+```
+
+### Live validation
+```bash
+npm run validate:live -- --runtime claude --scenario smoke
 ```
 
 ### Benchmarks
@@ -86,6 +111,7 @@ npm run test:e2e
 If you touched Pi SDK / the Claude runtime family / OpenCode Direct routing or replay logic, prefer:
 - unit tests for the affected runtime module(s)
 - relevant WebSocket tests
+- `npm run validate:live -- --runtime <pi|claude|opencode> --scenario <id>`
 - relevant E2E runtime tests
 
 ## Notes

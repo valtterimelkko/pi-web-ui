@@ -72,6 +72,8 @@ web UI uses.
 - **Unified sessions:** Sessions appear in both the API and the web UI. You
   can create a session via the API, then open it in the web UI.
 - **Auth:** A shared API key stored at `~/.pi-web-ui/internal-api-token`.
+- **Live validation:** The repo-owned `npm run validate:live` runner uses this
+  API as its browserless runtime-testing surface.
 
 ## Connection
 
@@ -322,7 +324,11 @@ GET /api/v1/sessions
 
 ```
 GET /api/v1/sessions/:sessionId
+GET /api/v1/sessions/:sessionId/info
 ```
+
+`/info` is the preferred endpoint for live validation and local automation.
+Both endpoints now return enriched runtime metadata where available.
 
 **Response (200):**
 ```json
@@ -330,6 +336,9 @@ GET /api/v1/sessions/:sessionId
   "sessionId": "a1b2c3d4-...",
   "sessionPath": "a1b2c3d4-...",
   "runtime": "claude",
+  "backendMode": "channel",
+  "nativeSessionId": "claude-native-id",
+  "sessionFile": "/root/.pi-web-ui/claude-sessions/a1b2c3d4-....jsonl",
   "cwd": "/home/user/myproject",
   "model": "sonnet",
   "status": "idle",
@@ -339,7 +348,16 @@ GET /api/v1/sessions/:sessionId
   "lastActivity": "2026-04-28T12:05:00.000Z",
   "pinned": false,
   "tokens": { "input": 500, "output": 200, "total": 700 },
-  "cost": 0.003
+  "cost": 0.003,
+  "context": { "contextWindow": 200000, "used": 3200, "percent": 2 },
+  "stats": {
+    "userMessages": 8,
+    "assistantMessages": 6,
+    "toolCalls": 4,
+    "toolResults": 4,
+    "totalMessages": 22
+  },
+  "lastActivityAt": 1747744075000
 }
 ```
 
@@ -361,7 +379,8 @@ how much detail you receive.
 ```json
 {
   "message": "Refactor this function to use async/await",
-  "verbosity": "tasks"
+  "verbosity": "tasks",
+  "mode": "prompt"
 }
 ```
 
@@ -369,8 +388,13 @@ how much detail you receive.
 |---|---|---|---|---|
 | `message` | string | **Yes** | — | The prompt to send |
 | `verbosity` | string | No | `answers` | `answers`, `tasks`, or `full` |
+| `mode` | string | No | `prompt` | `prompt`, `follow_up`, or `steer` |
 
 You can also set verbosity via header: `X-Verbosity: tasks`
+
+Notes:
+- `follow_up` is supported on runtimes that report `supportsFollowUp=true`
+- `steer` is currently Pi-only and returns `UNSUPPORTED_OPERATION` elsewhere
 
 ---
 
@@ -501,6 +525,106 @@ Best for: custom frontends that want full rendering control, debugging.
 - `404` — Session not found
 - `409` — Session is currently busy (already streaming)
 - `500` — Runtime error during execution
+
+---
+
+### Capabilities
+
+```
+GET /api/v1/capabilities
+```
+
+Use this first if you are building tools or running live validation.
+It reports runtime availability, Claude backend mode, and feature flags.
+
+**Response (200):**
+```json
+{
+  "status": "ok",
+  "runtimes": {
+    "pi": {
+      "available": true,
+      "backendMode": "native",
+      "supportsFollowUp": true,
+      "supportsSteer": true,
+      "supportsModelSwitch": true,
+      "supportsThinkingLevel": true,
+      "supportsPinning": true,
+      "supportsReplayHistory": false,
+      "supportsApprovals": false,
+      "supportsHeartbeat": false
+    },
+    "claude": {
+      "available": true,
+      "backendMode": "channel",
+      "supportsFollowUp": true,
+      "supportsSteer": false,
+      "supportsModelSwitch": true,
+      "supportsThinkingLevel": true,
+      "supportsPinning": true,
+      "supportsReplayHistory": true,
+      "supportsApprovals": true,
+      "supportsHeartbeat": true
+    },
+    "opencode": {
+      "available": true,
+      "backendMode": "server",
+      "supportsFollowUp": true,
+      "supportsSteer": false,
+      "supportsModelSwitch": true,
+      "supportsThinkingLevel": false,
+      "supportsPinning": true,
+      "supportsReplayHistory": true,
+      "supportsApprovals": true,
+      "supportsHeartbeat": false
+    }
+  }
+}
+```
+
+---
+
+### Session Control
+
+```
+POST /api/v1/sessions/:sessionId/control
+```
+
+Examples:
+
+```json
+{ "action": "set_model", "modelId": "opus" }
+{ "action": "set_thinking_level", "level": "high" }
+{ "action": "pin" }
+{ "action": "unpin" }
+```
+
+---
+
+### Session History
+
+```
+GET /api/v1/sessions/:sessionId/history
+```
+
+Returns normalized replay events where the runtime supports replay-history
+fetching. Use `GET /api/v1/capabilities` first to discover support.
+
+---
+
+### Approval Responses
+
+```
+POST /api/v1/sessions/:sessionId/approvals/:requestId/respond
+```
+
+**Request:**
+```json
+{ "approved": true }
+```
+
+This is currently useful for Claude channel-backed permission requests and
+OpenCode permission flows.
 
 ---
 

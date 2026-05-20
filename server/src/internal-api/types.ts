@@ -28,9 +28,12 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
  */
 export type Verbosity = 'answers' | 'tasks' | 'full';
 
+export type PromptMode = 'prompt' | 'follow_up' | 'steer';
+
 // ─── Session runtime ─────────────────────────────────────────────────────────
 
 export type SessionRuntime = 'pi' | 'claude' | 'opencode';
+export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server';
 
 // ─── Request types ───────────────────────────────────────────────────────────
 
@@ -38,11 +41,25 @@ export interface CreateSessionRequest {
   runtime: SessionRuntime;
   cwd?: string;
   model?: string;
+  source?: string;
+  scenarioId?: string;
+  ephemeral?: boolean;
 }
 
 export interface SendPromptRequest {
   message: string;
   verbosity?: Verbosity;
+  mode?: PromptMode;
+}
+
+export interface SessionControlRequest {
+  action: 'set_model' | 'set_thinking_level' | 'pin' | 'unpin';
+  modelId?: string;
+  level?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+}
+
+export interface ApprovalResponseRequest {
+  approved: boolean;
 }
 
 // ─── Response types ──────────────────────────────────────────────────────────
@@ -71,12 +88,47 @@ export interface SessionInfo {
 }
 
 export interface SessionDetail extends SessionInfo {
+  backendMode?: RuntimeBackendMode;
+  nativeSessionId?: string;
+  sessionFile?: string;
   tokens?: {
     input: number;
     output: number;
     total: number;
   };
   cost?: number;
+  context?: {
+    contextWindow?: number;
+    used?: number;
+    percent?: number;
+  };
+  stats?: {
+    userMessages: number;
+    assistantMessages: number;
+    toolCalls: number;
+    toolResults: number;
+    totalMessages: number;
+  };
+  lastActivityAt?: number | null;
+}
+
+export interface SessionHistoryResponse {
+  sessionId: string;
+  runtime: SessionRuntime;
+  events: Array<Record<string, unknown>>;
+}
+
+export interface SessionControlResponse {
+  success: boolean;
+  action: SessionControlRequest['action'];
+  modelId?: string;
+  level?: string;
+  pinned?: boolean;
+}
+
+export interface ApprovalResponseResult {
+  success: boolean;
+  approved: boolean;
 }
 
 export interface ListSessionsResponse {
@@ -109,6 +161,28 @@ export interface ModelsResponse {
     pi: ModelInfo[];
     claude: ModelInfo[];
     opencode: ModelInfo[];
+  };
+}
+
+export interface RuntimeCapabilities {
+  available: boolean;
+  backendMode: RuntimeBackendMode;
+  supportsFollowUp: boolean;
+  supportsSteer: boolean;
+  supportsModelSwitch: boolean;
+  supportsThinkingLevel: boolean;
+  supportsPinning: boolean;
+  supportsReplayHistory: boolean;
+  supportsApprovals: boolean;
+  supportsHeartbeat: boolean;
+}
+
+export interface CapabilitiesResponse {
+  status: 'ok' | 'degraded';
+  runtimes: {
+    pi: RuntimeCapabilities;
+    claude: RuntimeCapabilities;
+    opencode: RuntimeCapabilities;
   };
 }
 

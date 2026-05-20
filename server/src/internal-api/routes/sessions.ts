@@ -1,7 +1,8 @@
 /**
  * Internal API: Session Routes
  *
- * Handles session CRUD, prompt execution, and abort for all three runtimes.
+ * Handles session CRUD, prompt execution, control operations, replay access,
+ * and approval responses for all three runtimes.
  */
 
 import type { IncomingMessage, ServerResponse } from 'http';
@@ -11,16 +12,23 @@ import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
+import type { PiService } from '../../pi/pi-service.js';
 import type {
   CreateSessionRequest,
   SendPromptRequest,
   CreateSessionResponse,
   SessionInfo,
   SessionDetail,
+  SessionHistoryResponse,
+  SessionControlResponse,
+  ApprovalResponseResult,
   ListSessionsResponse,
   PromptResponse,
   Verbosity,
+  PromptMode,
   SessionRuntime,
+  SessionControlRequest,
+  ApprovalResponseRequest,
 } from '../types.js';
 import {
   createEventCollector,
@@ -35,6 +43,7 @@ export interface SessionRoutesDeps {
   opencodeService: OpenCodeService;
   multiSessionManager: MultiSessionManager;
   sessionRegistry: SessionRegistryManager;
+  piService: PiService;
   /** Internal API client ID prefix for Pi SDK sessions */
   internalClientId: string;
   /** Callback to notify WebSocket clients of new sessions */
@@ -47,6 +56,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     opencodeService,
     multiSessionManager,
     sessionRegistry,
+    piService,
     internalClientId,
     onSessionCreated,
   } = deps;
@@ -90,7 +100,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             return;
           }
           const { sessionId } = await opencodeService.createSession(cwd);
-          // Set model if specified
           if (body.model) {
             await opencodeService.setModel?.(sessionId, body.model).catch(() => { /* non-fatal */ });
           }
@@ -109,8 +118,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         case 'pi':
         default: {
           const status = await multiSessionManager.createAndSubscribe(internalClientId, cwd);
-          // Register Pi session in the unified registry so it appears in
-          // session lists, web UI sidebar, and cross-runtime lookups.
           await sessionRegistry.upsert({
             id: status.sessionId,
             sdkType: 'pi',
@@ -120,6 +127,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             messageCount: 0,
             status: 'idle',
           });
+          if (body.model) {
+            await piService.setModel(status.sessionId, body.model).catch(() => { /* non-fatal */ });
+          }
           sendJson(res, 201, {
             sessionId: status.sessionId,
             sessionPath: status.sessionPath,
@@ -146,9 +156,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res: ServerResponse,
   ): Promise<void> {
     try {
-      const registry = sessionRegistry;
-      const all = await registry.listAll();
-
+      const all = await sessionRegistry.listAll();
       const sessions: SessionInfo[] = all.map((entry) => ({
         sessionId: entry.id,
         sessionPath: entry.path,
@@ -169,65 +177,125 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  async function buildSessionDetail(sessionId: string): Promise<SessionDetail | null> {
+    const entry = await sessionRegistry.get(sessionId);
+    if (!entry) return null;
+
+    const detail: SessionDetail = {
+      sessionId: entry.id,
+      sessionPath: entry.path,
+      runtime: entry.sdkType as SessionRuntime,
+      cwd: entry.cwd,
+      model: entry.model,
+      status: entry.status === 'error' ? 'error' : 'idle',
+      messageCount: entry.messageCount,
+      firstMessage: entry.firstMessage,
+      createdAt: entry.createdAt,
+      lastActivity: entry.lastActivity,
+    };
+
+    if (entry.sdkType === 'claude') {
+      const [stats, context, backendMode] = await Promise.all([
+        claudeService.getSessionStats(sessionId),
+        claudeService.getContextUsage(sessionId),
+        claudeService.getBackendMode(),
+      ]);
+
+      detail.backendMode = backendMode;
+      detail.pinned = claudeService.isSessionPinned(sessionId);
+      detail.status = claudeService.isRunning(sessionId) ? 'running' : detail.status;
+      if (stats) {
+        detail.nativeSessionId = stats.sessionId;
+        detail.sessionFile = stats.sessionFile;
+        detail.model = stats.model ?? detail.model;
+        detail.tokens = { input: stats.tokens.input, output: stats.tokens.output, total: stats.tokens.total };
+        detail.cost = stats.cost;
+        detail.stats = {
+          userMessages: stats.userMessages,
+          assistantMessages: stats.assistantMessages,
+          toolCalls: stats.toolCalls,
+          toolResults: stats.toolResults,
+          totalMessages: stats.totalMessages,
+        };
+        detail.lastActivityAt = stats.lastActivityAt ?? undefined;
+      }
+      detail.context = {
+        contextWindow: context?.contextWindow,
+        used: context?.tokens,
+        percent: context?.percent,
+      };
+      return detail;
+    }
+
+    if (entry.sdkType === 'opencode') {
+      const stats = await opencodeService.getSessionStats(sessionId);
+      const context = opencodeService.getContextUsage(sessionId);
+      detail.backendMode = 'server';
+      detail.pinned = opencodeService.isSessionPinned(sessionId);
+      detail.status = opencodeService.isRunning(sessionId) ? 'running' : detail.status;
+      if (stats) {
+        detail.nativeSessionId = stats.sessionId;
+        detail.model = stats.model ?? detail.model;
+        detail.tokens = { input: stats.tokens.input, output: stats.tokens.output, total: stats.tokens.total };
+        detail.cost = stats.cost;
+        detail.stats = {
+          userMessages: stats.userMessages,
+          assistantMessages: stats.assistantMessages,
+          toolCalls: stats.toolCalls,
+          toolResults: stats.toolResults,
+          totalMessages: stats.totalMessages,
+        };
+      }
+      detail.context = {
+        contextWindow: context?.contextWindow,
+        used: context?.tokens,
+        percent: context?.percent,
+      };
+      return detail;
+    }
+
+    const agentSession = multiSessionManager.getAgentSession(entry.path);
+    detail.backendMode = 'native';
+    detail.pinned = multiSessionManager.isSessionPinned(entry.path);
+    if (agentSession) {
+      const stats = agentSession.getSessionStats();
+      const context = agentSession.getContextUsage();
+      detail.nativeSessionId = agentSession.sessionId;
+      detail.sessionFile = agentSession.sessionFile;
+      detail.model = agentSession.model ? `${agentSession.model.provider}/${agentSession.model.id}` : detail.model;
+      detail.tokens = {
+        input: stats.tokens?.input ?? 0,
+        output: stats.tokens?.output ?? 0,
+        total: stats.tokens?.total ?? ((stats.tokens?.input ?? 0) + (stats.tokens?.output ?? 0)),
+      };
+      detail.cost = stats.cost ?? 0;
+      detail.stats = {
+        userMessages: stats.userMessages ?? 0,
+        assistantMessages: stats.assistantMessages ?? 0,
+        toolCalls: stats.toolCalls ?? 0,
+        toolResults: stats.toolResults ?? 0,
+        totalMessages: stats.totalMessages ?? 0,
+      };
+      detail.context = {
+        contextWindow: context?.contextWindow,
+        used: context?.tokens ?? undefined,
+        percent: context?.percent ?? undefined,
+      };
+    }
+    return detail;
+  }
+
   async function handleGetSession(
-    req: IncomingMessage,
+    _req: IncomingMessage,
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
     try {
-      const entry = await sessionRegistry.get(sessionId);
-      if (!entry) {
+      const detail = await buildSessionDetail(sessionId);
+      if (!detail) {
         sendJson(res, 404, { error: 'Session not found', code: 'SESSION_NOT_FOUND' });
         return;
       }
-
-      // Try to get richer stats from the runtime
-      let tokens: SessionDetail['tokens'] | undefined;
-      let cost: number | undefined;
-
-      if (entry.sdkType === 'claude') {
-        const stats = await claudeService.getSessionStats(sessionId);
-        if (stats) {
-          tokens = {
-            input: stats.tokens.input,
-            output: stats.tokens.output,
-            total: stats.tokens.total,
-          };
-          cost = stats.cost;
-        }
-      } else if (entry.sdkType === 'opencode') {
-        const ctxUsage = opencodeService.getContextUsage(sessionId);
-        if (ctxUsage) {
-          tokens = { input: 0, output: ctxUsage.tokens, total: ctxUsage.tokens };
-        }
-      }
-
-      const isRunning =
-        entry.sdkType === 'claude' ? claudeService.isRunning(sessionId) :
-        entry.sdkType === 'opencode' ? opencodeService.isRunning(sessionId) :
-        false;
-
-      const isPinned =
-        entry.sdkType === 'claude' ? claudeService.isSessionPinned(sessionId) :
-        entry.sdkType === 'opencode' ? opencodeService.isSessionPinned(sessionId) :
-        false;
-
-      const detail: SessionDetail = {
-        sessionId: entry.id,
-        sessionPath: entry.path,
-        runtime: entry.sdkType as SessionRuntime,
-        cwd: entry.cwd,
-        model: entry.model,
-        status: isRunning ? 'running' : (entry.status === 'error' ? 'error' : 'idle'),
-        messageCount: entry.messageCount,
-        firstMessage: entry.firstMessage,
-        createdAt: entry.createdAt,
-        lastActivity: entry.lastActivity,
-        pinned: isPinned,
-        tokens,
-        cost,
-      };
-
       sendJson(res, 200, detail);
     } catch (err) {
       console.error('[InternalAPI] Failed to get session:', err);
@@ -235,8 +303,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
-  async function handleDeleteSession(
-    req: IncomingMessage,
+  async function handleGetSessionInfo(
+    _req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      const detail = await buildSessionDetail(sessionId);
+      if (!detail) {
+        sendJson(res, 404, { error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+        return;
+      }
+      sendJson(res, 200, detail);
+    } catch (err) {
+      console.error('[InternalAPI] Failed to get session info:', err);
+      sendJson(res, 500, { error: 'Failed to get session info', code: 'INTERNAL_ERROR' });
+    }
+  }
+
+  async function handleGetSessionHistory(
+    _req: IncomingMessage,
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
@@ -247,22 +333,51 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
-      // Abort if running
+      let events: Array<Record<string, unknown>> = [];
+      if (entry.sdkType === 'claude') {
+        events = await claudeService.getReplayEvents(sessionId);
+      } else if (entry.sdkType === 'opencode') {
+        events = await opencodeService.getReplayEvents(sessionId);
+      } else {
+        sendJson(res, 501, { error: 'Replay history not yet supported for Pi sessions', code: 'NOT_IMPLEMENTED' });
+        return;
+      }
+
+      sendJson(res, 200, {
+        sessionId,
+        runtime: entry.sdkType,
+        events,
+      } satisfies SessionHistoryResponse);
+    } catch (err) {
+      console.error('[InternalAPI] Failed to get session history:', err);
+      sendJson(res, 500, { error: 'Failed to get session history', code: 'INTERNAL_ERROR' });
+    }
+  }
+
+  async function handleDeleteSession(
+    _req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      const entry = await sessionRegistry.get(sessionId);
+      if (!entry) {
+        sendJson(res, 404, { error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+        return;
+      }
+
       if (entry.sdkType === 'claude') {
         claudeService.abort(sessionId);
       } else if (entry.sdkType === 'opencode') {
         opencodeService.abort(sessionId);
       } else {
-        // Pi SDK: abort via MultiSessionManager
         const agentSession = multiSessionManager.getAgentSession(entry.path);
         if (agentSession) {
           await agentSession.abort().catch(() => { /* non-fatal */ });
         }
       }
 
-      // Remove from registry
       await sessionRegistry.delete(sessionId);
-
       sendJson(res, 200, { success: true });
     } catch (err) {
       console.error('[InternalAPI] Failed to delete session:', err);
@@ -281,7 +396,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    // Prompt injection check
     const injectionCheck = detectPromptInjection(body.message);
     if (injectionCheck.recommendation === 'block') {
       sendJson(res, 400, {
@@ -291,10 +405,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    // Determine verbosity from header or body
-    const verbosity: Verbosity = body.verbosity ||
-      parseVerbosityHeader(req.headers['x-verbosity'] as string | undefined) ||
-      'answers';
+    const verbosity: Verbosity = body.verbosity || parseVerbosityHeader(req.headers['x-verbosity'] as string | undefined) || 'answers';
+    const mode: PromptMode = body.mode ?? 'prompt';
 
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
@@ -302,31 +414,32 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
+    if (mode === 'steer' && entry.sdkType !== 'pi') {
+      sendJson(res, 400, { error: `Prompt mode '${mode}' is not supported for ${entry.sdkType}`, code: 'UNSUPPORTED_OPERATION' });
+      return;
+    }
+
     const runtime = entry.sdkType;
+    const isBusy = runtime === 'claude'
+      ? claudeService.isRunning(sessionId)
+      : runtime === 'opencode'
+        ? opencodeService.isRunning(sessionId)
+        : false;
 
-    // Check if session is busy
-    const isBusy =
-      runtime === 'claude' ? claudeService.isRunning(sessionId) :
-      runtime === 'opencode' ? opencodeService.isRunning(sessionId) :
-      false; // Pi: we'll let it queue
-
-    if (isBusy) {
+    if (isBusy && mode === 'prompt') {
       sendJson(res, 409, { error: 'Session is currently busy', code: 'SESSION_BUSY' });
       return;
     }
 
     try {
       if (verbosity === 'full' || verbosity === 'tasks') {
-        // Streaming mode — use SSE
-        handleStreamingPrompt(req, res, sessionId, runtime, body.message, verbosity);
+        await handleStreamingPrompt(req, res, sessionId, runtime, body.message, verbosity, mode);
         return;
       }
 
-      // Non-streaming mode (verbosity=answers) — collect and return
-      await handleAnswersPrompt(res, sessionId, runtime, body.message);
+      await handleAnswersPrompt(res, sessionId, runtime, body.message, mode);
     } catch (err) {
       console.error('[InternalAPI] Prompt failed:', err);
-      // If headers not yet sent, send error response
       if (!res.headersSent) {
         sendJson(res, 500, {
           error: err instanceof Error ? err.message : 'Prompt execution failed',
@@ -339,8 +452,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   async function handleAnswersPrompt(
     res: ServerResponse,
     sessionId: string,
-    runtime: string,
+    runtime: SessionRuntime,
     message: string,
+    mode: PromptMode,
   ): Promise<void> {
     const collector = createEventCollector();
 
@@ -348,6 +462,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sessionId,
       runtime,
       message,
+      mode,
       (event) => {
         collectAnswerEvent(collector, event);
       },
@@ -367,11 +482,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    const content = collector.textParts.join('');
     sendJson(res, 200, {
       sessionId,
       messageId: collector.lastMessageId,
-      content,
+      content: collector.textParts.join(''),
       tokens: collector.usage,
       turnComplete: true,
     } satisfies PromptResponse);
@@ -381,13 +495,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     req: IncomingMessage,
     res: ServerResponse,
     sessionId: string,
-    runtime: string,
+    runtime: SessionRuntime,
     message: string,
     verbosity: Verbosity,
+    mode: PromptMode,
   ): Promise<void> {
     const sse = createSSEStream(res);
 
-    // Set up abort on client disconnect
     req.on('close', () => {
       if (runtime === 'claude') claudeService.abort(sessionId);
       else if (runtime === 'opencode') opencodeService.abort(sessionId);
@@ -397,6 +511,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sessionId,
       runtime,
       message,
+      mode,
       (event) => {
         if (verbosity === 'full') {
           writeFullEvent(sse.write, event);
@@ -444,21 +559,149 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
-  /**
-   * Execute a prompt on the appropriate runtime, streaming events.
-   * Returns a promise that resolves when the turn completes.
-   */
+  async function handleSessionControl(
+    req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    const body = await readJsonBody<SessionControlRequest>(req);
+    if (!body?.action) {
+      sendJson(res, 400, { error: 'action is required', code: 'INVALID_REQUEST' });
+      return;
+    }
+
+    const entry = await sessionRegistry.get(sessionId);
+    if (!entry) {
+      sendJson(res, 404, { error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    try {
+      let response: SessionControlResponse;
+      switch (body.action) {
+        case 'set_model': {
+          if (!body.modelId) {
+            sendJson(res, 400, { error: 'modelId is required for set_model', code: 'INVALID_REQUEST' });
+            return;
+          }
+
+          if (entry.sdkType === 'claude') {
+            const normalizedModel = await claudeService.setModel(sessionId, body.modelId);
+            response = { success: true, action: 'set_model', modelId: normalizedModel };
+          } else if (entry.sdkType === 'opencode') {
+            const normalizedModel = await opencodeService.setModel(sessionId, body.modelId);
+            response = { success: true, action: 'set_model', modelId: normalizedModel };
+          } else {
+            await piService.setModel(sessionId, body.modelId);
+            response = { success: true, action: 'set_model', modelId: body.modelId };
+          }
+          break;
+        }
+
+        case 'set_thinking_level': {
+          if (!body.level) {
+            sendJson(res, 400, { error: 'level is required for set_thinking_level', code: 'INVALID_REQUEST' });
+            return;
+          }
+
+          if (entry.sdkType === 'claude') {
+            claudeService.setThinkingLevel(sessionId, body.level);
+          } else if (entry.sdkType === 'pi') {
+            const agentSession = multiSessionManager.getAgentSession(entry.path);
+            if (!agentSession) {
+              sendJson(res, 404, { error: 'Pi session not loaded', code: 'SESSION_NOT_FOUND' });
+              return;
+            }
+            agentSession.setThinkingLevel(body.level);
+          } else {
+            sendJson(res, 400, { error: 'Thinking level is not supported for OpenCode', code: 'UNSUPPORTED_OPERATION' });
+            return;
+          }
+
+          response = { success: true, action: 'set_thinking_level', level: body.level };
+          break;
+        }
+
+        case 'pin': {
+          const pinned = entry.sdkType === 'claude'
+            ? claudeService.pinSession(sessionId)
+            : entry.sdkType === 'opencode'
+              ? await opencodeService.pinSession(sessionId)
+              : multiSessionManager.pinSession(entry.path);
+          response = { success: pinned, action: 'pin', pinned };
+          break;
+        }
+
+        case 'unpin': {
+          const unpinned = entry.sdkType === 'claude'
+            ? claudeService.unpinSession(sessionId)
+            : entry.sdkType === 'opencode'
+              ? opencodeService.unpinSession(sessionId)
+              : multiSessionManager.unpinSession(entry.path);
+          response = { success: unpinned, action: 'unpin', pinned: false };
+          break;
+        }
+
+        default:
+          sendJson(res, 400, { error: `Unsupported action '${(body as { action?: string }).action}'`, code: 'INVALID_REQUEST' });
+          return;
+      }
+
+      sendJson(res, 200, response);
+    } catch (err) {
+      console.error('[InternalAPI] Session control failed:', err);
+      sendJson(res, 500, { error: err instanceof Error ? err.message : 'Session control failed', code: 'INTERNAL_ERROR' });
+    }
+  }
+
+  async function handleRespondApproval(
+    req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+    requestId: string,
+  ): Promise<void> {
+    const body = await readJsonBody<ApprovalResponseRequest>(req);
+    if (!body || typeof body.approved !== 'boolean') {
+      sendJson(res, 400, { error: 'approved is required', code: 'INVALID_REQUEST' });
+      return;
+    }
+
+    const entry = await sessionRegistry.get(sessionId);
+    if (!entry) {
+      sendJson(res, 404, { error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    try {
+      if (entry.sdkType === 'claude') {
+        claudeService.sendPermissionResponse(sessionId, requestId, body.approved);
+      } else if (entry.sdkType === 'opencode') {
+        await opencodeService.replyPermission(sessionId, requestId, body.approved);
+      } else {
+        sendJson(res, 400, { error: 'Approval responses are not supported for Pi sessions', code: 'UNSUPPORTED_OPERATION' });
+        return;
+      }
+
+      sendJson(res, 200, {
+        success: true,
+        approved: body.approved,
+      } satisfies ApprovalResponseResult);
+    } catch (err) {
+      console.error('[InternalAPI] Approval response failed:', err);
+      sendJson(res, 500, { error: 'Approval response failed', code: 'INTERNAL_ERROR' });
+    }
+  }
+
   async function executePrompt(
     sessionId: string,
-    runtime: string,
+    runtime: SessionRuntime,
     message: string,
+    mode: PromptMode,
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
   ): Promise<void> {
     switch (runtime) {
       case 'claude': {
-        // Claude sendPrompt resolves when process spawns, not when it finishes.
-        // We need to wrap it to wait for onComplete.
         return new Promise<void>((resolve) => {
           const wrappedComplete = (error?: Error) => {
             onComplete(error);
@@ -486,26 +729,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       case 'pi':
       default: {
-        // For Pi SDK, look up the file path from the registry entry
         const entry = await sessionRegistry.get(sessionId);
         if (!entry) {
           throw new Error(`Pi session not found: ${sessionId}`);
         }
         const sessionPath = entry.path;
-        // Ensure the session is loaded and subscribed
         await multiSessionManager.subscribeClient(internalClientId, sessionPath);
         const agentSession = multiSessionManager.getAgentSession(sessionPath);
         if (!agentSession) {
           throw new Error(`Pi session not loaded: ${sessionId}`);
         }
 
-        // Set up event observation for this specific session
         const eventObserver = (event: unknown) => {
           try { onEvent(event as NormalizedEvent); } catch { /* non-fatal */ }
         };
         multiSessionManager.addApiObserver(sessionPath, eventObserver);
 
-        // Detect end of turn
         let ended = false;
         const endObserver = (event: unknown) => {
           const normalized = event as NormalizedEvent;
@@ -518,9 +757,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         };
         multiSessionManager.addApiObserver(sessionPath, endObserver);
 
-        // Send the prompt
         try {
-          await agentSession.prompt(message);
+          if (mode === 'follow_up') {
+            await agentSession.followUp(message);
+          } else if (mode === 'steer') {
+            await agentSession.steer(message);
+          } else {
+            await agentSession.prompt(message);
+          }
         } catch (err) {
           multiSessionManager.removeApiObserver(sessionPath, endObserver);
           multiSessionManager.removeApiObserver(sessionPath, eventObserver);
@@ -537,13 +781,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     handleCreateSession,
     handleListSessions,
     handleGetSession,
+    handleGetSessionInfo,
+    handleGetSessionHistory,
     handleDeleteSession,
     handleSendPrompt,
     handleAbort,
+    handleSessionControl,
+    handleRespondApproval,
   };
 }
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function parseVerbosityHeader(header: string | undefined): Verbosity | undefined {
   if (!header) return undefined;

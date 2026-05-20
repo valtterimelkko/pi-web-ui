@@ -28,6 +28,7 @@
 | Auth / CSRF / security | `server/src/security/*.ts`, `SECURITY.md` |
 | Config / env var | `server/src/config.ts`, `.env.example`, `DEPLOYMENT.md` |
 | Find logs / session files fast | `docs/TROUBLESHOOTING.md`, `npm run debug:where -- <session-id>` |
+| Run browserless live validation | `docs/LIVE-VALIDATION.md`, `npm run validate:live -- --runtime <pi|claude|opencode> --scenario <id>` |
 | Add a new runtime | See [`docs/ADDING-A-RUNTIME.md`](./docs/ADDING-A-RUNTIME.md) |
 | Fix a frontend store issue | `client/src/store/sessionStore.ts` |
 | UI component / modal | `client/src/components/Session/NewSessionModal.tsx` |
@@ -126,20 +127,29 @@ npm run test:e2e
 npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 ```
 
-### Claude Channel Live Validation
+### Live Validation
 
-After making changes to Claude channel code (server-side or plugin), run the
-WebSocket-level integration test before pushing:
+After making runtime-related changes, run the browserless live-validation
+runner before pushing:
 
 ```bash
-npx tsx scripts/test-claude-channel.ts --password '<web-ui-password>' --verbose
+npm run validate:live -- --runtime claude --scenario smoke
 ```
 
-This creates a real Claude session through the WebSocket API, sends prompts,
-and verifies streaming events, tool visibility, heartbeats, session info
-reporters, and follow-up turns — all without opening a browser. See
-[`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md) for a breakdown of what
-each test covers.
+For Claude channel-specific work, also run:
+
+```bash
+npm run validate:live -- --runtime claude --scenario channel-heartbeat
+npm run validate:live -- --runtime claude --scenario tool-visibility
+npm run validate:live -- --runtime claude --scenario session-info
+npm run validate:live -- --runtime claude --scenario follow-up
+```
+
+The runner uses the Internal API over the local Unix socket, auto-loads the
+internal API token, creates ephemeral sessions, streams normalized events, and
+cleans up afterwards — no browser login required. See
+[`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) and
+[`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md).
 
 ## Final Rule
 

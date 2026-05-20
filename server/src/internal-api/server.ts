@@ -14,13 +14,14 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import { randomBytes } from 'crypto';
-import { writeFile, readFile, mkdir, unlink, access } from 'fs/promises';
+import { writeFile, readFile, mkdir, unlink } from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createModelsRoutes, type ModelsRoutesDeps } from './routes/models.js';
 import { createHealthRoutes, type HealthRoutesDeps } from './routes/health.js';
+import { createCapabilitiesRoutes, type CapabilitiesRoutesDeps } from './routes/capabilities.js';
 import type { ClaudeService } from '../claude/claude-service.js';
 import type { OpenCodeService } from '../opencode/opencode-service.js';
 import type { MultiSessionManager } from '../pi/multi-session-manager.js';
@@ -102,6 +103,7 @@ export class InternalApiServer {
       opencodeService: this.opencodeService,
       multiSessionManager: this.multiSessionManager,
       sessionRegistry: this.sessionRegistry,
+      piService: this.piService,
       internalClientId: this.internalClientId,
       onSessionCreated: this.config.onSessionCreated,
     });
@@ -119,6 +121,12 @@ export class InternalApiServer {
       startTime: this.startTime,
     };
     const healthRoutes = createHealthRoutes(healthDeps);
+
+    const capabilitiesDeps: CapabilitiesRoutesDeps = {
+      claudeService: this.claudeService,
+      opencodeService: this.opencodeService,
+    };
+    const capabilitiesRoutes = createCapabilitiesRoutes(capabilitiesDeps);
 
     const authMiddleware = createAuthMiddleware(this.apiKey);
 
@@ -144,6 +152,7 @@ export class InternalApiServer {
           sessionRoutes,
           modelsRoutes,
           healthRoutes,
+          capabilitiesRoutes,
         });
       });
     });
@@ -152,7 +161,7 @@ export class InternalApiServer {
     await this.bindToSocket(socketPath);
 
     console.log(`[InternalAPI] Listening on Unix socket: ${socketPath}`);
-    console.log(`[InternalAPI] API key: ${this.apiKey.slice(0, 8)}... (token file: ${tokenPath})`);
+    console.log(`[InternalAPI] API token ready at: ${tokenPath}`);
   }
 
   /**
@@ -184,11 +193,12 @@ export class InternalApiServer {
       sessionRoutes: ReturnType<typeof createSessionRoutes>;
       modelsRoutes: ReturnType<typeof createModelsRoutes>;
       healthRoutes: ReturnType<typeof createHealthRoutes>;
+      capabilitiesRoutes: ReturnType<typeof createCapabilitiesRoutes>;
     },
   ): Promise<void> {
     // Skip 'api' prefix if present: /api/v1/health → ['api', 'v1', 'health']
     const segments = parsed.path[0] === 'api' ? parsed.path.slice(1) : parsed.path;
-    const [version, resource, id, action] = segments;
+    const [version, resource, id, action, subId, subAction] = segments;
 
     if (version !== 'v1') {
       sendJson(res, 404, { error: 'API version not found', code: 'NOT_FOUND' });
@@ -212,7 +222,6 @@ export class InternalApiServer {
         const sessionId = decodeURIComponent(id);
 
         if (action === 'prompt') {
-          // POST /api/v1/sessions/:id/prompt
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleSendPrompt(req, res, sessionId);
           } else {
@@ -222,9 +231,44 @@ export class InternalApiServer {
         }
 
         if (action === 'abort') {
-          // POST /api/v1/sessions/:id/abort
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleAbort(req, res, sessionId);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+
+        if (action === 'info') {
+          if (req.method === 'GET') {
+            await deps.sessionRoutes.handleGetSessionInfo(req, res, sessionId);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+
+        if (action === 'history') {
+          if (req.method === 'GET') {
+            await deps.sessionRoutes.handleGetSessionHistory(req, res, sessionId);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+
+        if (action === 'control') {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleSessionControl(req, res, sessionId);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+
+        if (action === 'approvals' && subId && subAction === 'respond') {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleRespondApproval(req, res, sessionId, decodeURIComponent(subId));
           } else {
             sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
           }
@@ -253,6 +297,15 @@ export class InternalApiServer {
 
       case 'health': {
         await deps.healthRoutes.handleHealth(req, res);
+        return;
+      }
+
+      case 'capabilities': {
+        if (req.method === 'GET') {
+          await deps.capabilitiesRoutes.handleGetCapabilities(req, res);
+        } else {
+          sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+        }
         return;
       }
 

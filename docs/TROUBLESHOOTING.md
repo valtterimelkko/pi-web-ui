@@ -113,8 +113,9 @@ claude auth status --json
 sudo journalctl -u pi-web-ui -f
 sudo journalctl -u pi-web-ui -f | grep ClaudeChannel
 
-# Live integration test for Claude channel (no browser required)
-npx tsx scripts/test-claude-channel.ts --password '<web-ui-password>' --verbose
+# Live validation via the Internal API (no browser required)
+npm run validate:live -- --runtime claude --scenario smoke
+npm run validate:live -- --runtime claude --scenario channel-heartbeat
 ```
 
 ### Session files to correlate
@@ -129,6 +130,7 @@ npx tsx scripts/test-claude-channel.ts --password '<web-ui-password>' --verbose
 - **Tools stuck as running** → inspect replay JSONL and history reconstruction
 - **Channel session appears idle too early or too late** → inspect PTY busy-state / idle detection in `claude-channel-process-manager.ts`
 - **Auth expired** → `claude auth status --json`, then inspect channel auth-expiry handling or legacy subprocess error propagation
+- **Live validation cannot connect** → check `~/.pi-web-ui/internal-api.sock`, `~/.pi-web-ui/internal-api-token`, and `docs/INTERNAL-API.md`
 
 ## OpenCode Direct
 

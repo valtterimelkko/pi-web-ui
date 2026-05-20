@@ -19,6 +19,8 @@ A persistent browser UI for coding-agent sessions with real-time streaming, unif
 - **Pi worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
 - **OpenCode Direct architecture:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
 - **Drive Mode feature:** [`docs/DRIVE-MODE.md`](./docs/DRIVE-MODE.md)
+- **Internal API:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
+- **Live validation:** [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md)
 - **Tests:** [`tests/README.md`](./tests/README.md)
 
 ## What It Is
@@ -146,6 +148,7 @@ npm run typecheck
 npm run build
 npm test
 npm run test:e2e
+npm run validate:live -- --runtime claude --scenario smoke
 npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 ```
 
@@ -178,7 +181,8 @@ Recommended verification flow:
    npm test
    ```
 4. For localhost UI verification, use `webapp-testing`.
-5. For live external sites, use `playwright-cli`.
+5. For live runtime validation without opening the browser, use `npm run validate:live -- --runtime <pi|claude|opencode> --scenario <id>`.
+6. For live external sites, use `playwright-cli`.
 
 See [`AGENTS.md`](./AGENTS.md) for the compact contributor workflow.
 

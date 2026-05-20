@@ -4,10 +4,11 @@
 
 ## API Surfaces
 
-Pi Web UI exposes two main surfaces:
+Pi Web UI exposes three main surfaces:
 
 1. **WebSocket** for session control, streaming, replay, and runtime events
-2. **REST** for auth, health, config, models, files, sessions, and extensions
+2. **REST** for browser auth, health, config, models, files, sessions, and extensions
+3. **Internal API** for local automation and browserless live validation over a Unix socket
 
 ## WebSocket
 
@@ -88,6 +89,27 @@ Use `ws://` locally and `wss://` in production.
 - Full transcript storage remains OpenCode-owned; Pi Web UI stores registry metadata and replay adapters
 
 For complete message shapes and event semantics, see [`docs/PROTOCOL.md`](./docs/PROTOCOL.md).
+
+## Internal API
+
+The Internal API is documented in [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md).
+It is the preferred automation surface for local tools and the live-validation
+runner. It uses:
+
+- Unix socket transport: `~/.pi-web-ui/internal-api.sock`
+- bearer token auth: `~/.pi-web-ui/internal-api-token`
+- SSE for streaming prompt responses
+
+Important endpoints include:
+- `GET /api/v1/capabilities`
+- `POST /api/v1/sessions`
+- `POST /api/v1/sessions/:id/prompt`
+- `GET /api/v1/sessions/:id/info`
+- `GET /api/v1/sessions/:id/history`
+- `POST /api/v1/sessions/:id/control`
+- `POST /api/v1/sessions/:id/approvals/:requestId/respond`
+
+For the runtime validation workflow, read [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md).
 
 ## REST API
 

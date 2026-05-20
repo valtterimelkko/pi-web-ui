@@ -47,7 +47,16 @@ The important consequence is: **changes to auth, WebSocket routing, file access,
 - Never trust client-supplied paths.
 - Validate against allowed roots and use resolved/real paths where relevant.
 
-### 6. Rate limiting
+### 6. Internal API token auth
+
+- The Internal API is exposed over a Unix domain socket, not the public network.
+- It still requires a bearer token from `~/.pi-web-ui/internal-api-token`.
+- This is the preferred local automation boundary for agents and live validation.
+- Relevant code:
+  - `server/src/internal-api/server.ts`
+  - `server/src/internal-api/middleware/auth.ts`
+
+### 7. Rate limiting
 
 - HTTP and WebSocket surfaces are rate-limited.
 - Relevant code:
@@ -132,11 +141,13 @@ Do not:
 - forward user text directly to runtimes without prompt-injection checks
 - trust client file paths without validation
 - weaken origin validation to “make local testing easier” without a narrowly scoped reason
+- remove Internal API bearer-token checks just because the socket is local-only
 
 Do:
 - validate request bodies with Zod or equivalent
 - preserve auth/origin/CSRF checks during refactors
 - keep runtime-specific permission bridges server-side
+- use the Internal API for local automation/live validation instead of weakening browser auth
 - update this doc when the security model materially changes
 
 ## Files Worth Reading Before Security-sensitive Changes

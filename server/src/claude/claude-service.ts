@@ -309,6 +309,19 @@ export class ClaudeService {
     return this.sessionStore.loadHistory(sessionId);
   }
 
+  async getBackendMode(): Promise<'direct' | 'channel'> {
+    if (this.channelService && await this.channelService.isHealthy()) {
+      return 'channel';
+    }
+    return 'direct';
+  }
+
+  async getReplayEvents(sessionId: string): Promise<Array<Record<string, unknown>>> {
+    const { historyToReplayEvents } = await import('./claude-history-replay.js');
+    const history = await this.loadSessionHistory(sessionId);
+    return historyToReplayEvents(history);
+  }
+
   async setModel(sessionId: string, model: string): Promise<'opus' | 'sonnet' | 'haiku'> {
     if (this.channelService) {
       const result = await this.channelService.setModel(sessionId, model);

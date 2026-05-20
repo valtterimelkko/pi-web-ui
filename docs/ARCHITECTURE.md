@@ -27,6 +27,7 @@ React + Zustand frontend
 Express server
   ├─ auth / CSRF / rate limiting / prompt-injection checks
   ├─ REST routes
+  ├─ Internal API (Unix socket + token-auth local automation boundary)
   ├─ WebSocket connection router
   ├─ session registry
   ├─ Pi SDK service + worker/session lifecycle
@@ -63,6 +64,7 @@ Key backend responsibilities:
 Important files:
 - `server/src/websocket/connection.ts`
 - `server/src/websocket/protocol.ts`
+- `server/src/internal-api/*`
 - `server/src/session-registry.ts`
 - `server/src/routes/*`
 
@@ -208,6 +210,19 @@ Runtime-specific complexity stays on the server because the UI should not have t
 - Claude NDJSON normalization
 - OpenCode SSE adaptation
 
+## Internal API and Live Validation
+
+In addition to browser-facing REST + WebSocket surfaces, Pi Web UI also exposes
+an Internal API over a Unix domain socket for local automation. That API:
+
+- reuses the same runtime services as the browser app
+- is authenticated with a bearer token stored on disk
+- powers browserless live validation via `scripts/live-validate.ts`
+
+Canonical docs:
+- [`./INTERNAL-API.md`](./INTERNAL-API.md)
+- [`./LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+
 ## Security Architecture
 
 Important server-side protections sit in front of all runtime routing:
@@ -216,6 +231,7 @@ Important server-side protections sit in front of all runtime routing:
 - origin validation
 - rate limiting
 - prompt-injection detection
+- token-authenticated Internal API over a local Unix socket
 
 See [`../SECURITY.md`](../SECURITY.md) for the canonical security view.
 
@@ -249,6 +265,7 @@ Important test layers:
 - `server/tests/unit/` — server modules and runtime adapters
 - `server/tests/integration/` — cross-module server integration
 - `tests/e2e/` — browser-level behaviour across runtimes
+- `docs/LIVE-VALIDATION.md` / `scripts/live-validate.ts` — browserless runtime validation over the Internal API
 
 Notable coverage areas include:
 - Claude event normalization and replay

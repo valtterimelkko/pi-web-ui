@@ -200,37 +200,37 @@ These were active recent troubleshooting themes and are now important doc-level 
 
 If a future regression appears in one of those areas, search recent commits in `server/src/claude/` first.
 
-## Live Validation Script
+## Live Validation
 
-When you make changes to the Claude channel backend or plugin, run the
-WebSocket-level integration test before pushing:
+When you make changes to Claude runtime code, use the generic Internal-API
+live-validation runner instead of the old browser-auth WebSocket script:
 
 ```bash
-npx tsx scripts/test-claude-channel.ts --password '<web-ui-password>' --verbose
+npm run validate:live -- --runtime claude --scenario smoke
+npm run validate:live -- --runtime claude --scenario tool-visibility
+npm run validate:live -- --runtime claude --scenario session-info
+npm run validate:live -- --runtime claude --scenario follow-up
 ```
 
-The script connects via HTTP cookie auth, creates a real Claude channel
-session, sends prompts, and verifies:
+If Claude is running in channel-backed mode, also run:
 
-- **Auth + session creation:** WebSocket handshake and `new_session` → `session_created`
-- **Streaming events:** `agent_start`, `agent_end`, `message_update` arrive for each prompt
-- **Tool visibility:** `tool_execution_start` / `tool_execution_end` events are emitted
-- **Heartbeat:** `stream_activity` pings arrive from the PTY busy-state tracker
-- **Enriched heartbeat:** `currentToolName` is carried in `stream_activity` when a tool is running
-- **Session info:** `get_session_info` returns stats including `lastActivityAt`
-- **Follow-up turns:** A second prompt after a settle delay sends correctly
-- **Prompt delivery:** `prompt_ack` events appear in the server journal
-
-All tests run against the live server without touching the browser. A full run
-takes ~90 seconds. If any test fails, the exit code is non-zero.
-
-Options:
 ```bash
---password <pw>   # Web UI password (required)
---port <port>      # Server port (default 3456)
---origin <url>     # Allowed origin (default https://pi.letsautomate.work)
---verbose          # Show per-assertion PASS/FAIL details
+npm run validate:live -- --runtime claude --scenario channel-heartbeat
 ```
+
+What this validates:
+
+- **Session creation:** a real Claude session is created through the Internal API
+- **Streaming events:** `agent_start`, `agent_end`, and assistant text reach the runner
+- **Tool visibility:** tool execution is surfaced in the full normalized event stream
+- **Session info:** the enriched internal-API session info returns live runtime metadata
+- **Follow-up turns:** a second turn succeeds when the runtime reports follow-up support
+- **Channel liveness:** `stream_activity` is emitted when Claude is using the channel-backed path
+
+The runner auto-discovers the Internal API socket and token, creates an
+ephemeral session, streams normalized events, and cleans up afterwards — no
+browser login required. See [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) for
+runner usage and [`INTERNAL-API.md`](./INTERNAL-API.md) for the underlying API.
 
 ## How to Decide Which Code Path to Read
 

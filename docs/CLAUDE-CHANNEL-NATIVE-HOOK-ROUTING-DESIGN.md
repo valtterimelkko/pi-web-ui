@@ -478,8 +478,8 @@ Likely files to change:
   - stop presenting native hook `session_id` as a Web UI `sessionId`
 - `server/tests/unit/claude/*`
   - router, adapter, service, replay tests
-- `scripts/test-claude-channel.ts`
-  - optional validation for native hook visibility after rollout
+- `scripts/live-validate.ts`
+  - optional validation for native hook visibility after rollout via the Internal API runner
 
 ## Acceptance criteria
 
