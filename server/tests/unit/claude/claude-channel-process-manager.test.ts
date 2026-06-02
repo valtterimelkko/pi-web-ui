@@ -467,4 +467,22 @@ describe('ClaudeChannelProcessManager', () => {
       expect(() => manager.setThinkingLevel('high')).not.toThrow();
     });
   });
+
+  describe('clearContext', () => {
+    it('should write /clear to the PTY', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      await manager.clearContext();
+
+      expect(writeSpy).toHaveBeenCalledWith('/clear\r');
+    });
+
+    it('should not throw when no PTY process exists', async () => {
+      await expect(manager.clearContext()).resolves.toBeUndefined();
+    });
+  });
 });

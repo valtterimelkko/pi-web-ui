@@ -57,6 +57,7 @@ describe('Channel Prompt Flow', () => {
       markPromptSent: () => {},
       markPromptComplete: () => {},
       isBusy: () => false,
+      clearContext: async () => {},
     });
 
     vi.spyOn(service as unknown as { processManager: typeof mockProcessManager }, 'processManager', 'get').mockReturnValue(mockProcessManager);

@@ -18,6 +18,7 @@ vi.mock('../../../src/claude/claude-channel-process-manager.js', async () => {
       isBusy: vi.fn().mockReturnValue(false),
       getLastBusyAt: vi.fn().mockReturnValue(null),
       sendInterrupt: vi.fn(),
+      clearContext: vi.fn().mockResolvedValue(undefined),
       on: vi.fn((event: string, handler: () => void) => emitter.on(event, handler)),
       __emitter: emitter,
     };
@@ -1137,6 +1138,111 @@ describe('ClaudeChannelService', () => {
       (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
       const ctx = await service.getContextUsage('sid');
       expect(ctx).toBeNull();
+    });
+  });
+
+  describe('context isolation (session clearing)', () => {
+    let service: ClaudeChannelService;
+    let pmInstance: { clearContext: ReturnType<typeof vi.fn>; markPromptSent: ReturnType<typeof vi.fn>; markPromptComplete: ReturnType<typeof vi.fn>; isBusy: ReturnType<typeof vi.fn>; __emitter: EventEmitter };
+    let registry: { get: ReturnType<typeof vi.fn>; upsert: ReturnType<typeof vi.fn>; updateStatus: ReturnType<typeof vi.fn> };
+
+    beforeEach(async () => {
+      service = createService();
+      await service.start();
+      pmInstance = (ClaudeChannelProcessManager as unknown as ReturnType<typeof vi.fn>).mock.results[0].value as typeof pmInstance;
+      const registryFn = getSessionRegistry as ReturnType<typeof vi.fn>;
+      registry = registryFn.mock.results[registryFn.mock.results.length - 1]?.value as typeof registry;
+    });
+
+    it('should clear context on first prompt of a new session', async () => {
+      const sessionId = 'iso-new-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-iso-1', cwd: '/tmp', status: 'idle',
+      });
+
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      expect(pmInstance.clearContext).toHaveBeenCalledTimes(1);
+    });
+
+    it('should NOT clear context on follow-up prompts in the same session', async () => {
+      const sessionId = 'iso-follow-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-iso-follow-1', cwd: '/tmp', status: 'idle',
+      });
+
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      // Complete the turn so sessionsWithHistory is populated
+      const wsInstance = findWsMock() as WsMock;
+      wsInstance.__emitter.emit('event', {
+        type: 'agent_end', sessionId: 'cs-iso-follow-1', result: 'ok', timestamp: Date.now(),
+      });
+      await vi.waitFor(() => {
+        expect(service.isRunning(sessionId)).toBe(false);
+      });
+
+      pmInstance.clearContext.mockClear();
+
+      await service.sendPrompt(sessionId, 'Follow-up', vi.fn(), vi.fn());
+
+      expect(pmInstance.clearContext).not.toHaveBeenCalled();
+    });
+
+    it('should clear context when switching to a different session', async () => {
+      const sessionA = 'iso-switch-a';
+      const sessionB = 'iso-switch-b';
+      (registry.get as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => {
+        if (id === sessionA) return { id: sessionA, sdkType: 'claude', claudeSessionId: 'cs-switch-a', cwd: '/tmp', status: 'idle' };
+        if (id === sessionB) return { id: sessionB, sdkType: 'claude', claudeSessionId: 'cs-switch-b', cwd: '/tmp', status: 'idle' };
+        return null;
+      });
+
+      await service.sendPrompt(sessionA, 'Hello A', vi.fn(), vi.fn());
+
+      expect(pmInstance.clearContext).toHaveBeenCalledTimes(1);
+
+      // Complete the turn
+      const wsInstance = findWsMock() as WsMock;
+      wsInstance.__emitter.emit('event', {
+        type: 'agent_end', sessionId: 'cs-switch-a', result: 'ok', timestamp: Date.now(),
+      });
+      await vi.waitFor(() => {
+        expect(service.isRunning(sessionA)).toBe(false);
+      });
+
+      pmInstance.clearContext.mockClear();
+
+      // Now send first prompt from session B — should clear again
+      await service.sendPrompt(sessionB, 'Hello B', vi.fn(), vi.fn());
+
+      expect(pmInstance.clearContext).toHaveBeenCalledTimes(1);
+    });
+
+    it('should NOT clear when the same session re-sends after context was already established', async () => {
+      const sessionId = 'iso-reentrant-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-reentrant-1', cwd: '/tmp', status: 'idle',
+      });
+
+      // First prompt clears
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      // Complete the turn
+      const wsInstance = findWsMock() as WsMock;
+      wsInstance.__emitter.emit('event', {
+        type: 'agent_end', sessionId: 'cs-reentrant-1', result: 'ok', timestamp: Date.now(),
+      });
+      await vi.waitFor(() => {
+        expect(service.isRunning(sessionId)).toBe(false);
+      });
+
+      pmInstance.clearContext.mockClear();
+
+      // Second prompt in same session — should NOT clear
+      await service.sendPrompt(sessionId, 'Follow-up', vi.fn(), vi.fn());
+
+      expect(pmInstance.clearContext).not.toHaveBeenCalled();
     });
   });
 });

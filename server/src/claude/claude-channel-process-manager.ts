@@ -310,6 +310,22 @@ export class ClaudeChannelProcessManager extends EventEmitter {
   }
 
   /**
+   * Send `/clear` to the PTY to wipe Claude's conversation context.
+   * This is used when a new Pi Web UI session sends its first prompt,
+   * ensuring Claude starts with a clean slate and no context bleeding
+   * from prior sessions.
+   *
+   * Returns after a brief delay to allow Claude Code to process the command.
+   */
+  async clearContext(): Promise<void> {
+    const proc = this.ptyProcess;
+    if (!proc) return;
+    proc.write('/clear\r');
+    console.log('[ClaudeChannel] Sent /clear to PTY for context isolation');
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+
+  /**
    * Tell the busy tracker that a prompt was just dispatched to Claude. This
    * makes `isBusy()` true immediately, before any PTY output is rendered, and
    * arms the idle watcher so the turn's completion can be detected.

@@ -114,6 +114,13 @@ export class ClaudeChannelService {
   /** Tracks the most recent tool name for enriched stream_activity pings. */
   private lastKnownToolName: string | null = null;
 
+  /**
+   * The internal session ID that currently "owns" Claude's context.
+   * When a different session sends its first prompt, we `/clear` first
+   * to prevent context bleeding between sessions.
+   */
+  private contextOwnerSessionId: string | null = null;
+
   async start(): Promise<void> {
     if (this.started) return;
 
@@ -389,6 +396,24 @@ export class ClaudeChannelService {
     // Clear any abort flag from a previous stop — the user is intentionally
     // sending a new prompt, so events from this turn should flow normally.
     this.abortedSessions.delete(sessionId);
+
+    // ── Context isolation: clear Claude's context when switching sessions ──
+    // The channel architecture shares a single Claude Code process. Without
+    // this gate, a new session would inherit context from a prior session.
+    // We clear only when the session differs from the current context owner
+    // AND the new session hasn't had a turn yet (first prompt = fresh start).
+    const needsClear = this.contextOwnerSessionId !== sessionId
+      && !this.sessionsWithHistory.has(sessionId);
+    if (needsClear) {
+      console.log(
+        `[ClaudeChannelService] Context isolation: clearing Claude context for new session ${sessionId}` +
+        (this.contextOwnerSessionId ? ` (was owned by ${this.contextOwnerSessionId})` : ' (first session)'),
+      );
+      await this.processManager.clearContext();
+      this.contextOwnerSessionId = sessionId;
+    } else if (!this.contextOwnerSessionId) {
+      this.contextOwnerSessionId = sessionId;
+    }
 
     const promptId = randomUUID();
 
