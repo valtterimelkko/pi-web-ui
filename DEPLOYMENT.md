@@ -107,45 +107,16 @@ Operational concerns are mostly:
 
 ### OpenCode Direct
 
-OpenCode Direct adds a long-lived `opencode serve` process when enabled and used. Ensure:
-- the binary exists on the host
-- the chosen port is free
+OpenCode Direct uses a long-lived `opencode serve` backend when enabled and used. By default, **Pi Web UI manages that backend itself** through `server/src/opencode/opencode-process-manager.ts`.
+
+Ensure:
+- the `opencode` binary exists on the host and is on `PATH`
+- the configured port is free for Pi Web UI to manage
 - any password/basic-auth settings are aligned with Pi Web UI config
-- consider managing `opencode serve` with its own systemd unit so it survives Pi Web UI restarts and server reboots
+
+Do **not** add a separate `opencode-serve.service` dependency to `pi-web-ui.service` unless you have deliberately implemented an external-only OpenCode lifecycle. A standalone `opencode-serve.service` with `Restart=always` on the same port can enter a restart loop if Pi Web UI already owns the port. Recent OpenCode/Bun builds may leave `/tmp/.fb*.so` native shared-object files on failed startup, so such a loop can fill the root disk.
 
 ## systemd Example
-
-### OpenCode serve service (recommended)
-
-If you use OpenCode Direct, run `opencode serve` under its own systemd unit so it stays up independently of Pi Web UI restarts and server reboots.
-
-Example `/etc/systemd/system/opencode-serve.service`:
-
-```ini
-[Unit]
-Description=OpenCode Server - Headless API backend for Pi Web UI
-After=network.target
-Wants=network.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/opt/pi-web-ui
-Environment=PATH=/home/pi/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
-ExecStart=/home/pi/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4097
-Restart=always
-RestartSec=10
-TimeoutStopSec=30
-KillSignal=SIGTERM
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=opencode-serve
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Adjust the `User`, `WorkingDirectory`, `ExecStart`, and `Environment=PATH` values to match your host.
 
 ### Pi Web UI service
 
@@ -154,8 +125,8 @@ Example `/etc/systemd/system/pi-web-ui.service`:
 ```ini
 [Unit]
 Description=Pi Web UI
-After=network.target opencode-serve.service
-Wants=network.target opencode-serve.service
+After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
@@ -183,8 +154,6 @@ Then:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable opencode-serve
-sudo systemctl start opencode-serve
 sudo systemctl enable pi-web-ui
 sudo systemctl start pi-web-ui
 sudo systemctl status pi-web-ui

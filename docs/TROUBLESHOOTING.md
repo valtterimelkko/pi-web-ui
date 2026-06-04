@@ -50,6 +50,16 @@ sudo systemctl status opencode-serve
 sudo journalctl -u opencode-serve -f
 ```
 
+Do not configure `pi-web-ui.service` with `Wants=opencode-serve.service` or `After=opencode-serve.service` unless Pi Web UI is explicitly changed to attach-only mode. Pi Web UI normally manages `opencode serve` itself. A separate `opencode-serve.service` on the same port can restart-loop with `ServeError: Failed to start server. Is port 4097 in use?` and may fill `/tmp` with OpenCode/Bun `.fb*.so` files.
+
+Quick check for this failure mode:
+
+```bash
+systemctl show opencode-serve.service -p LoadState -p ActiveState -p UnitFileState -p NRestarts
+systemctl show pi-web-ui.service -p Wants -p After
+find /tmp -maxdepth 1 -name '.fb*.so' | wc -l
+```
+
 ### Runtime health endpoints
 
 ```bash
