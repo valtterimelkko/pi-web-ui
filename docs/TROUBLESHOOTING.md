@@ -30,6 +30,8 @@
 | **Claude native session state** | `~/.claude/projects/-<encoded-cwd>/<claudeSessionId>.jsonl` | `journalctl -u pi-web-ui -f` | Used by Claude Code itself for resume/follow-up state. |
 | **Claude channel hook config** | `~/.claude/settings.json` | `journalctl -u pi-web-ui -f \| grep ClaudeChannel` | Relevant only when channel-backed Claude mode is enabled. |
 | **OpenCode Direct** | Registry metadata in `~/.pi-web-ui/session-registry.json`; transcript storage is OpenCode-owned | `journalctl -u opencode-serve -f` if separate service, otherwise the main service log | Pi Web UI does not own the full OpenCode transcript. |
+| **Antigravity (agy)** | `~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl` (Pi-owned JSONL turn log) | `journalctl -u pi-web-ui -f \| grep -i antigravity` | Each turn is one JSON line: prompt, response, model, conversationId, rawStdoutLength. |
+| **Antigravity conversation state** | `~/.gemini/antigravity-cli/conversations/<uuid>.db` (SQLite, agy-owned) | `agy --version`, `agy models` | The conversation UUID in the JSONL must match a `.db` file here for continuity to work. |
 | **Unified registry** | `~/.pi-web-ui/session-registry.json` | `journalctl -u pi-web-ui -f` | Cross-runtime source of truth for sidebar metadata. |
 | **Internal API** | `~/.pi-web-ui/internal-api.sock`, `~/.pi-web-ui/internal-api-token` | `journalctl -u pi-web-ui -f` | Useful when debugging local consumers of the backend API. |
 
@@ -165,6 +167,56 @@ curl "http://localhost:<server-port>/api/models?sdkType=opencode"
 - **Duplicate tool cards** → inspect `opencode-event-adapter.ts` deduplication
 - **Context window shows 0** → inspect model metadata caching and startup timing
 - **Permissions auto-approve unexpectedly during transfer** → inspect transfer dispatch special cases
+
+## Antigravity (agy)
+
+### Check first
+
+- `server/src/antigravity/antigravity-service.ts`
+- `server/src/antigravity/antigravity-session-store.ts`
+- `server/src/antigravity/antigravity-history-replay.ts`
+
+### Session files
+
+```bash
+# Pi-owned turn log (one JSON line per turn: prompt, response, model, conversationId, rawStdoutLength)
+ls -la ~/.pi-web-ui/antigravity-sessions/
+cat ~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl | python3 -m json.tool
+
+# agy-owned conversation SQLite DBs (one per agy conversation UUID)
+ls -la ~/.gemini/antigravity-cli/conversations/
+
+# agy CLI logs
+ls -lt ~/.gemini/antigravity-cli/log/cli-*.log | head
+tail -n 50 $(ls -t ~/.gemini/antigravity-cli/log/cli-*.log | head -1)
+```
+
+### Useful commands
+
+```bash
+# Check agy binary and auth
+agy --version
+agy models
+agy -p "Reply OK"
+
+# Check runtime availability via Internal API
+TOKEN=$(cat ~/.pi-web-ui/internal-api-token)
+curl -s --unix-socket ~/.pi-web-ui/internal-api.sock \
+  -H "Authorization: Bearer $TOKEN" \
+  http://localhost/api/v1/capabilities | python3 -m json.tool
+
+# Check models list
+curl "http://localhost:<server-port>/api/models?sdkType=antigravity"
+```
+
+### Typical symptoms
+
+- **agy not available** → `agy --version` fails; check `AGY_BINARY` env var (default: `/root/.local/bin/agy`)
+- **Reply starts mid-sentence** → `rawStdoutLength` missing or wrong in the session JSONL; this tracks the exact byte offset in agy's resumed stdout where the new reply begins. Fix: inspect the JSONL, confirm `rawStdoutLength` is present and growing each turn.
+- **Model forgets earlier turns** → conversation ID mismatch; confirm all JSONL entries share the same `conversationId` and that UUID exists in `~/.gemini/antigravity-cli/conversations/`. If `conversationId` is `null` for the first turn, the next turn started a fresh conversation.
+- **Conversation ID is null after first turn** → the `.db` snapshot diff failed to detect the new file; check the conversations directory for a file newer than the turn's timestamp.
+- **agy hangs / timeout** → inspect `--print-timeout` setting (default 10m); check the latest agy log file in `~/.gemini/antigravity-cli/log/`
+- **Auth expired** → `agy -p "Reply OK"` will prompt to re-login; complete auth via `agy` interactively
 
 ## WebSocket / Frontend State
 

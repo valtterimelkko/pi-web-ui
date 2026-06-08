@@ -9,6 +9,7 @@ export interface AntigravityTurn {
   model: string;
   conversationId: string | null;
   timestamp: number;
+  rawStdoutLength?: number; // cumulative raw stdout length after this turn (for reply extraction)
 }
 
 export class AntigravitySessionStore {
@@ -59,8 +60,17 @@ export class AntigravitySessionStore {
     }
   }
 
-  /** Total accumulated response text length for output extraction on resumed calls. */
-  accumulatedLength(turns: AntigravityTurn[]): number {
+  /**
+   * Returns the raw stdout length from the last turn.
+   * agy --conversation replays ALL prior replies in stdout, so this is the
+   * exact byte offset at which the new reply begins in the next call's stdout.
+   * Falls back to sum of response lengths for turns created before rawStdoutLength was added.
+   */
+  priorStdoutLength(turns: AntigravityTurn[]): number {
+    if (turns.length === 0) return 0;
+    const last = turns[turns.length - 1];
+    if (last.rawStdoutLength !== undefined) return last.rawStdoutLength;
+    // Legacy fallback: sum response lengths (imprecise but better than 0)
     return turns.reduce((acc, t) => acc + t.response.length, 0);
   }
 }

@@ -420,11 +420,19 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
               </span>
             )}
             {session.sdkType === 'opencode' && (
-              <span 
+              <span
                 className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/15 text-emerald-600 border border-emerald-500/20 cursor-help"
                 title="OpenCode Direct - uses OpenCode runtime with Z.AI GLM"
               >
                 OC
+              </span>
+            )}
+            {session.sdkType === 'antigravity' && (
+              <span
+                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-600 border border-violet-500/20 cursor-help"
+                title="Antigravity - uses Google Gemini via agy CLI"
+              >
+                AG
               </span>
             )}
 

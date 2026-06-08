@@ -71,17 +71,26 @@ describe('AntigravitySessionStore', () => {
     });
   });
 
-  describe('accumulatedLength', () => {
+  describe('priorStdoutLength', () => {
     it('returns 0 for empty history', () => {
-      expect(store.accumulatedLength([])).toBe(0);
+      expect(store.priorStdoutLength([])).toBe(0);
     });
 
-    it('sums response lengths', async () => {
-      const sessionId = 'acc-test';
+    it('returns rawStdoutLength of the last turn when present', async () => {
+      const sessionId = 'raw-stdout-test';
+      await store.appendTurn(sessionId, { prompt: 'p1', response: 'abc', model: 'm', conversationId: null, timestamp: 1, rawStdoutLength: 30 });
+      await store.appendTurn(sessionId, { prompt: 'p2', response: 'defgh', model: 'm', conversationId: null, timestamp: 2, rawStdoutLength: 50 });
+      const history = await store.loadHistory(sessionId);
+      // Should return the last turn's rawStdoutLength (cumulative)
+      expect(store.priorStdoutLength(history)).toBe(50);
+    });
+
+    it('falls back to sum of response lengths for legacy turns without rawStdoutLength', async () => {
+      const sessionId = 'legacy-test';
       await store.appendTurn(sessionId, { prompt: 'p1', response: 'abc', model: 'm', conversationId: null, timestamp: 1 });
       await store.appendTurn(sessionId, { prompt: 'p2', response: 'defgh', model: 'm', conversationId: null, timestamp: 2 });
       const history = await store.loadHistory(sessionId);
-      expect(store.accumulatedLength(history)).toBe(8); // 'abc'.length + 'defgh'.length
+      expect(store.priorStdoutLength(history)).toBe(8); // 'abc'.length + 'defgh'.length
     });
   });
 

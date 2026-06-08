@@ -57,17 +57,14 @@ function runAgy(args: string[], cwd: string, timeoutMs: number): Promise<{ stdou
 /**
  * Extract only the newest reply from stdout.
  *
- * When --conversation <id> is used, agy may prepend prior assistant replies
- * before the newest one. We track accumulated prior output lengths and strip them.
+ * When --conversation <id> is used, agy prepends ALL prior assistant replies
+ * before the newest one. We store the raw stdout length after each turn so
+ * the next call can slice exactly at that offset.
  */
-function extractNewReply(stdout: string, priorAccumulatedLength: number): string {
+function extractNewReply(stdout: string, priorStdoutLength: number): string {
   const trimmed = stdout.trimEnd();
-  if (priorAccumulatedLength === 0) return trimmed;
-
-  // Heuristic: strip the prior accumulated output from the start.
-  // agy separates turns with a blank line, so the boundary may not be exact.
-  // We tolerate up to 20 chars of whitespace/separator drift.
-  const slice = trimmed.slice(Math.max(0, priorAccumulatedLength - 20)).trimStart();
+  if (priorStdoutLength === 0) return trimmed;
+  const slice = trimmed.slice(priorStdoutLength).trimStart();
   return slice || trimmed;
 }
 
@@ -229,7 +226,7 @@ export class AntigravityService {
 
     try {
       const history = await this.store.loadHistory(sessionId);
-      const priorLen = this.store.accumulatedLength(history);
+      const priorLen = this.store.priorStdoutLength(history);
 
       // Detect conversation ID from registry or prior history
       let conversationId: string | null = entry.antigravityConversationId ?? null;
@@ -277,9 +274,9 @@ export class AntigravityService {
       });
       emit({ type: 'message_end', sessionId, timestamp: turnTs, data: { id: assistantId } });
 
-      // Persist to store
+      // Persist to store; rawStdoutLength is the cumulative offset for the next turn's extraction
       const isFirstMessage = history.length === 0;
-      await this.store.appendTurn(sessionId, { prompt, response, model, conversationId, timestamp: turnTs });
+      await this.store.appendTurn(sessionId, { prompt, response, model, conversationId, timestamp: turnTs, rawStdoutLength: stdout.trimEnd().length });
 
       // Update registry
       await this.registry.upsert({
