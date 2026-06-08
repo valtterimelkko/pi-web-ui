@@ -5,8 +5,8 @@ export interface Model {
   id: string;
   name: string;
   provider: string;
-  contextWindow: number;
-  maxTokens: number;
+  contextWindow?: number;
+  maxTokens?: number;
   description?: string;
 }
 
@@ -274,8 +274,7 @@ export function ModelSelector({ models, currentModel, onSelect, qualifyWithProvi
                       </p>
                       <p className="text-xs text-gray-500">
                         <HighlightedText text={model.provider} query={search} />
-                        {' · '}
-                        {model.contextWindow.toLocaleString()} context
+                        {model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} context` : ''}
                         {model.description && ` · ${model.description}`}
                       </p>
                     </div>
@@ -308,8 +307,8 @@ export function ModelSelector({ models, currentModel, onSelect, qualifyWithProvi
                         <div className="flex-1 text-left">
                           <p className="text-sm text-gray-900">{model.name}</p>
                           <p className="text-xs text-gray-500">
-                            {model.contextWindow.toLocaleString()} context
-                            {model.description && ` · ${model.description}`}
+                            {model.contextWindow ? `${model.contextWindow.toLocaleString()} context` : ''}
+                            {model.description && `${model.contextWindow ? ' · ' : ''}${model.description}`}
                           </p>
                         </div>
                         {(qualifyWithProvider ? currentModel === `${provider}/${model.id}` : currentModel === model.id) && (
