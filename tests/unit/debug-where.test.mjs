@@ -67,3 +67,44 @@ test('findSessionEntry resolves by internal id, runtime session id, or path', ()
   assert.equal(findSessionEntry(entries, '/tmp/claude-1.jsonl')?.id, 'claude-1');
   assert.equal(findSessionEntry(entries, 'missing'), null);
 });
+
+test('findSessionEntry resolves Antigravity conversation ids', () => {
+  const entries = [
+    {
+      id: 'ag-1',
+      sdkType: 'antigravity',
+      path: 'ag-1',
+      antigravityConversationId: 'conversation-uuid-123',
+      cwd: '/root/tasks',
+      firstMessage: '',
+      messageCount: 2,
+      createdAt: '2026-05-18T00:00:00.000Z',
+      lastActivity: '2026-05-18T00:00:00.000Z',
+      status: 'idle',
+    },
+  ];
+
+  assert.equal(findSessionEntry(entries, 'conversation-uuid-123')?.id, 'ag-1');
+});
+
+test('buildSessionDebugReport includes Antigravity session, conversation, and log hints', () => {
+  const report = buildSessionDebugReport({
+    id: 'ag-1',
+    sdkType: 'antigravity',
+    path: 'ag-1',
+    antigravityConversationId: 'conversation-uuid-123',
+    cwd: '/root/tasks',
+    firstMessage: '',
+    messageCount: 2,
+    createdAt: '2026-05-18T00:00:00.000Z',
+    lastActivity: '2026-05-18T01:00:00.000Z',
+    status: 'idle',
+  }, { homeDir: '/home/test' });
+
+  assert.match(report, /Runtime:\s+antigravity/i);
+  assert.match(report, /Conversation ID:\s+conversation-uuid-123/i);
+  assert.match(report, /antigravity-sessions\/ag-1\.jsonl/i);
+  assert.match(report, /\.gemini\/antigravity-cli\/conversations\/conversation-uuid-123\.db/i);
+  assert.match(report, /journalctl -u pi-web-ui -f \| grep -i antigravity/i);
+  assert.match(report, /Session registry:/i);
+});

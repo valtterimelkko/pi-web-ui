@@ -4,18 +4,25 @@
 
 ## Fastest Starting Points
 
+Follow this order unless you already know the exact failing subsystem:
+
 1. **Find the session entry quickly**
    ```bash
    npm run debug:where -- <session-id-or-runtime-session-id-or-path>
    ```
    This reads `~/.pi-web-ui/session-registry.json` and prints the most relevant files and log commands for that session.
 
-2. **Tail the main server log**
+2. **Inspect the unified registry directly**
+   ```bash
+   jq '.' ~/.pi-web-ui/session-registry.json
+   ```
+
+3. **Tail the main server log**
    ```bash
    sudo journalctl -u pi-web-ui -f
    ```
 
-3. **Check runtime health**
+4. **Check runtime health**
    ```bash
    curl http://localhost:<server-port>/api/health/ready
    curl http://localhost:<server-port>/api/config/validate
@@ -179,9 +186,10 @@ curl "http://localhost:<server-port>/api/models?sdkType=opencode"
 ### Session files
 
 ```bash
-# Pi-owned turn log (one JSON line per turn: prompt, response, model, conversationId, rawStdoutLength)
+# Pi-owned turn log (JSONL: one JSON object per line)
 ls -la ~/.pi-web-ui/antigravity-sessions/
-cat ~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl | python3 -m json.tool
+sed -n '1,5p' ~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl
+jq -c '.' ~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl
 
 # agy-owned conversation SQLite DBs (one per agy conversation UUID)
 ls -la ~/.gemini/antigravity-cli/conversations/
@@ -212,7 +220,7 @@ curl "http://localhost:<server-port>/api/models?sdkType=antigravity"
 ### Typical symptoms
 
 - **agy not available** → `agy --version` fails; check `AGY_BINARY` env var (default: `/root/.local/bin/agy`)
-- **Reply starts mid-sentence** → `rawStdoutLength` missing or wrong in the session JSONL; this tracks the exact byte offset in agy's resumed stdout where the new reply begins. Fix: inspect the JSONL, confirm `rawStdoutLength` is present and growing each turn.
+- **Reply starts mid-sentence** → `rawStdoutLength` missing or wrong in the session JSONL; this tracks the trimmed cumulative stdout length the next resumed `agy` call should slice from. Fix: inspect the JSONL, confirm `rawStdoutLength` is present and growing each turn.
 - **Model forgets earlier turns** → conversation ID mismatch; confirm all JSONL entries share the same `conversationId` and that UUID exists in `~/.gemini/antigravity-cli/conversations/`. If `conversationId` is `null` for the first turn, the next turn started a fresh conversation.
 - **Conversation ID is null after first turn** → the `.db` snapshot diff failed to detect the new file; check the conversations directory for a file newer than the turn's timestamp.
 - **agy hangs / timeout** → inspect `--print-timeout` setting (default 10m); check the latest agy log file in `~/.gemini/antigravity-cli/log/`

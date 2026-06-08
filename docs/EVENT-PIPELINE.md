@@ -1,6 +1,6 @@
 # Pi Web UI Event Pipeline
 
-> How Pi, Claude, and OpenCode backend paths produce a single frontend event stream.
+> How Pi, Claude, OpenCode, and Antigravity backend paths produce a single frontend event stream.
 
 ## High-level Flow
 
@@ -102,12 +102,12 @@ All paths converge in `client/src/store/sessionStore.ts` via `handleServerMessag
 
 - `session_event` → routed to the correct session, updates `sessionData`, `messages`, `streamingSessions`
 - `session_status` → updates session status (idle/busy/streaming/error)
-- `claude_available` / `opencode_available` → sets runtime availability flags
+- `claude_available` / `opencode_available` / `antigravity_available` → sets runtime availability flags
 - `extension_ui_request` → surfaced as approval dialog (used by both Pi extensions and OpenCode permissions)
 
 ## Key Rule for New Runtimes
 
-If you add a fourth runtime, you must:
+If you add another runtime, you must:
 1. Produce `NormalizedEvent` from your native event format.
 2. Route through `connection.ts` so `normEventToPiFormat()` converts it.
 3. Guarantee `agent_end` is eventually emitted, or the frontend input will stay locked.

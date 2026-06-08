@@ -10,6 +10,7 @@ It does **not** document:
 - internal Pi worker RPC details
 - Claude NDJSON internals
 - OpenCode HTTP/SSE internals
+- Antigravity `agy` subprocess internals
 
 Those are runtime implementation details behind the server boundary.
 
@@ -42,6 +43,7 @@ The app uses JSON messages with a `type` field rather than strict JSON-RPC frami
 6. Server may then emit runtime availability information such as:
    - `claude_available`
    - `opencode_available`
+   - `antigravity_available`
 
 ## Client → Server Messages
 
@@ -57,7 +59,7 @@ The app uses JSON messages with a `type` field rather than strict JSON-RPC frami
 ### Session lifecycle
 
 ```typescript
-{ type: 'new_session', cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' }
+{ type: 'new_session', cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' }
 { type: 'switch_session', sessionPath: string }
 { type: 'subscribe_session', sessionPath: string }
 { type: 'unsubscribe_session', sessionPath: string }
@@ -99,7 +101,7 @@ Transfer the visible transcript of one session into another (including across ru
   sourceSessionId: string;
   targetSessionId?: string;       // required when not creating new
   createNew?: boolean;
-  targetSdkType?: 'pi' | 'claude' | 'opencode';  // required when createNew
+  targetSdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity';  // required when createNew
   targetCwd?: string;             // required when createNew
   scope: 'visible_recent' | 'visible_full';
   sourceDisplayName?: string;     // optional: sidebar name override
@@ -117,6 +119,7 @@ The server responds with either `session_transfer_completed` or `session_transfe
 { type: 'connection_status', status: string }
 { type: 'claude_available', available: boolean, error: string | null }
 { type: 'opencode_available', available: boolean, error: string | null }
+{ type: 'antigravity_available', available: boolean, error: string | null }
 { type: 'error', message: string, code?: string }
 ```
 
@@ -208,6 +211,12 @@ Transfer error codes:
 - OpenCode SSE and message APIs are adapted into the common event model.
 - Permission requests are transformed into `extension_ui_request` so the browser can approve or reject them.
 
+### Antigravity
+- Antigravity runs `agy -p` in subprocess-per-turn mode.
+- The server emits standard message lifecycle events even though `agy` itself returns batch output.
+- Availability is announced with `antigravity_available`.
+- Replay is rebuilt from Pi-owned Antigravity JSONL turn logs rather than a native streaming event source.
+
 This is important: the protocol is intentionally **more stable than any one runtime’s native event stream**.
 
 ## History Replay
@@ -216,6 +225,12 @@ When switching sessions, the server may send:
 - `session_switched`
 - then replay-related `session_event` messages
 - and surrounding markers such as `history_start` / `history_end` in runtime-specific flows handled by the client
+
+The current runtime-specific replay sources are:
+- Pi SDK → Pi session state / Pi-aware service logic
+- Claude runtime → Pi-owned Claude replay JSONL plus native Claude session state where needed
+- OpenCode Direct → OpenCode message APIs adapted into replay events
+- Antigravity → Pi-owned Antigravity JSONL turn logs plus registry conversation metadata
 
 The backing source differs by runtime, but the frontend contract is kept consistent.
 

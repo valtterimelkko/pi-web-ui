@@ -9,29 +9,30 @@
 
 ## What is Pi Web UI?
 
-Pi Web UI is a custom-built browser interface around **three AI
-coding-agent runtime families**. It provides persistent chat sessions with real-time
+Pi Web UI is a custom-built browser interface around **four AI
+coding-agent runtime paths**. It provides persistent chat sessions with real-time
 streaming, tool-execution rendering, session history, and runtime management —
 all behind a single unified sidebar.
 
 Under the hood, each runtime slot exists for a different reason:
 
-### The Three Runtime Families
+### The Runtime Paths
 
 | Runtime family | What it uses | Why it exists |
 |---|---|---|
 | **Pi SDK** | [Pi Coding Agent](https://github.com/mariozechner/pi-coding-agent) via its SDK | The native path. When models are available through the Pi model registry and you want extensions, custom tools, and the full Pi experience. |
 | **Claude runtime** | legacy `claude -p` subprocesses **or** the channel-backed Claude Code path | Claude's monthly subscription does not allow external coding-agent harnesses to use Claude via the Anthropic API — Claude Code must be the agent environment. Pi Web UI therefore runs Claude Code directly, normalizes either its legacy NDJSON output or channel/plugin events into the common event model, and owns the replay/persistence layer so sessions survive restarts. |
 | **OpenCode Direct** | `opencode serve` HTTP/SSE backend | Z.AI's GLM models (via the coding-plan provider) currently recognise OpenCode as a valid coding-agent harness but not Pi. Rather than bypass this, Pi Web UI integrates with the OpenCode server backend, adapting OpenCode SSE events into the same common event model. The OpenCode backend owns transcript storage; Pi Web UI stores registry metadata and replay transforms. |
+| **Antigravity** | `agy -p` subprocess-per-turn backend | Google Gemini via Antigravity CLI. Pi Web UI runs `agy` directly, stores Pi-owned turn logs for replay, and correlates them with agy-owned conversation SQLite DBs for follow-up continuity. |
 
-All three runtime families are surfaced through a **unified session list** so the
+All runtime paths are surfaced through a **unified session list** so the
 runtime difference is transparent at the UI level — you create sessions,
 switch between them, and see tool cards and message history the same way
 regardless of backend.
 
 ### What the Web UI Offers
 
-- **Create sessions** on any of the three runtime families with model selection
+- **Create sessions** on any of the runtime paths with model selection
 - **Real-time streaming chat** with message deltas, tool execution cards,
   thinking blocks, and agent state indicators
 - **Session persistence** — sessions survive browser refresh, reconnect,
@@ -50,7 +51,7 @@ The Internal API takes all of the above backend functionality and exposes it
 as a **local-only HTTP API** over a Unix domain socket. Other applications
 running on the same machine can:
 
-- **Create, list, and manage sessions** across all three runtime families
+- **Create, list, and manage sessions** across all runtime paths
 - **Send prompts** and receive answers (final text or full streaming events)
 - **Discover available models** — always live, no restart needed
 - **Share sessions with the web UI** — sessions created via the API appear in
@@ -58,8 +59,8 @@ running on the same machine can:
   the API
 
 It does NOT duplicate the backend. It wraps the existing `ClaudeService`,
-`OpenCodeService`, and `MultiSessionManager` objects — the same ones the
-web UI uses.
+`OpenCodeService`, `AntigravityService`, and `MultiSessionManager` objects —
+the same ones the web UI uses.
 
 ## Overview
 
@@ -209,7 +210,8 @@ No authentication required.
   "runtimes": {
     "pi": "available",
     "claude": "available",
-    "opencode": "available"
+    "opencode": "available",
+    "antigravity": "available"
   },
   "uptime": 3600
 }
@@ -222,6 +224,7 @@ No authentication required.
 ```
 GET /api/v1/models
 GET /api/v1/models?runtime=claude
+GET /api/v1/models?runtime=antigravity
 ```
 
 Models are always queried live — new models appear immediately.
@@ -230,7 +233,7 @@ Models are always queried live — new models appear immediately.
 
 | Param | Values | Default |
 |---|---|---|
-| `runtime` | `pi`, `claude`, `opencode` | all |
+| `runtime` | `pi`, `claude`, `opencode`, `antigravity` | all |
 
 **Response:**
 ```json
@@ -246,6 +249,9 @@ Models are always queried live — new models appear immediately.
     ],
     "opencode": [
       { "id": "glm-4-plus", "displayName": "GLM-4 Plus", "provider": "zai", "contextWindow": 128000 }
+    ],
+    "antigravity": [
+      { "id": "Gemini 3.5 Flash (Medium)", "displayName": "Gemini 3.5 Flash (Medium)", "provider": "antigravity" }
     ]
   }
 }
@@ -270,7 +276,7 @@ POST /api/v1/sessions
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `runtime` | string | **Yes** | — | `pi`, `claude`, or `opencode` |
+| `runtime` | string | **Yes** | — | `pi`, `claude`, `opencode`, or `antigravity` |
 | `cwd` | string | No | `process.cwd()` | Working directory |
 | `model` | string | No | runtime default | Model ID (from `/models`) |
 
@@ -822,8 +828,9 @@ that can read this file can use the API.
 GET /api/v1/health
 
 # Models
-GET /api/v1/models                    # all runtimes
-GET /api/v1/models?runtime=claude     # Claude only
+GET /api/v1/models                        # all runtimes
+GET /api/v1/models?runtime=claude         # Claude only
+GET /api/v1/models?runtime=antigravity    # Antigravity only
 
 # Sessions
 POST   /api/v1/sessions               # create

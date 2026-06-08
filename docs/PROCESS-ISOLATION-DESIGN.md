@@ -4,11 +4,12 @@
 
 ## Why This Doc Exists
 
-Pi Web UI supports three runtime families, but only one of them uses the repo's full **process-per-session worker architecture**:
+Pi Web UI supports four runtime paths, but only one of them uses the repo's full **process-per-session worker architecture**:
 
 - **Pi SDK** → yes, this doc applies directly
 - **Claude runtime** → no, uses either `claude -p` subprocesses per turn or the channel-backed Claude Code path
 - **OpenCode Direct** → no, uses a long-lived `opencode serve` backend
+- **Antigravity** → no, uses `agy -p` subprocesses per turn plus Pi-owned JSONL turn logs
 
 For the broader multi-runtime architecture, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
@@ -95,7 +96,7 @@ Even with worker isolation, the main server remains responsible for:
 - WebSocket routing
 - session registry updates
 - fanout to multiple browser subscribers
-- runtime selection between Pi / Claude / OpenCode
+- runtime selection between Pi / Claude / OpenCode / Antigravity
 
 ## Failure Handling Philosophy
 

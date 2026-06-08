@@ -1,6 +1,8 @@
 # Antigravity Integration
 
-Pi Web UI integrates Google's Antigravity agent (Gemini Flash 3.5 and others) as a fourth runtime path, alongside Pi SDK, Claude Direct, and OpenCode Direct.
+> Read this when working on the Antigravity / `agy` runtime path. For first-stop debugging, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>`.
+
+Pi Web UI integrates Google's Antigravity agent (Gemini Flash 3.5 and others) as a fourth runtime path, alongside Pi SDK, the Claude runtime family, and OpenCode Direct.
 
 ## Architecture
 
@@ -49,7 +51,7 @@ Antigravity conversations are tracked via the conversation UUID stored in:
 
 **Subsequent turns**: pass `--conversation <uuid>` to resume.
 
-**Output extraction quirk**: resumed calls include prior assistant replies before the newest reply in stdout. `extractNewReply()` strips the accumulated prior output length (with 20-char whitespace tolerance) to isolate the new response.
+**Output extraction quirk**: resumed calls include prior assistant replies before the newest reply in stdout. `extractNewReply()` strips the accumulated prior trimmed stdout length to isolate the new response.
 
 ## Event Format
 
@@ -80,14 +82,14 @@ All config lives in `server/src/config.ts`:
 
 | Variable | Default | Env override |
 |---|---|---|
-| `antigravityEnabled` | `true` | — |
+| `antigravityEnabled` | `true` | `ANTIGRAVITY_ENABLED` |
 | `antigravitySessionDir` | `~/.pi-web-ui/antigravity-sessions` | `ANTIGRAVITY_SESSION_DIR` |
 | `antigravityDefaultModel` | `'Gemini 3.5 Flash (Medium)'` | `ANTIGRAVITY_DEFAULT_MODEL` |
-| `antigravityPromptTimeoutMs` | `600000` (10m) | — |
-| `antigravityIdleTimeoutMs` | `1800000` (30m) | — |
-| `antigravityMaxSessions` | `4` | — |
-| `antigravityMaxPinnedSessions` | `2` | — |
-| `antigravityCleanupIntervalMs` | `60000` (1m) | — |
+| `antigravityPromptTimeoutMs` | `600000` (10m) | `ANTIGRAVITY_PROMPT_TIMEOUT_MS` |
+| `antigravityIdleTimeoutMs` | `1800000` (30m) | `ANTIGRAVITY_IDLE_TIMEOUT_MS` |
+| `antigravityMaxSessions` | `4` | `ANTIGRAVITY_MAX_SESSIONS` |
+| `antigravityMaxPinnedSessions` | `2` | `ANTIGRAVITY_MAX_PINNED_SESSIONS` |
+| `antigravityCleanupIntervalMs` | `60000` (1m) | `ANTIGRAVITY_CLEANUP_INTERVAL_MS` |
 
 ## Capabilities
 
@@ -140,7 +142,7 @@ All generic scenarios (`smoke`, `follow-up`, `session-info`) work unchanged beca
 - **No streaming**: `agy -p` returns batch output. The entire response is emitted as a single `message_update` after the subprocess completes.
 - **No tool visibility**: agy tool calls are not surfaced as individual events.
 - **No approvals**: agy runs with `--dangerously-skip-permissions`.
-- **Resumed output accumulation**: The output extraction heuristic (20-char tolerance) may occasionally include a few separator chars from prior turns. This is cosmetically minor.
+- **Resumed output accumulation**: if `rawStdoutLength` is missing or corrupted in the JSONL turn log, resumed output slicing can include old text or start mid-sentence.
 
 ## Authentication
 
@@ -148,7 +150,11 @@ All generic scenarios (`smoke`, `follow-up`, `session-info`) work unchanged beca
 
 ## Troubleshooting
 
+Start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and:
+
 ```bash
+npm run debug:where -- <session-id-or-runtime-session-id-or-path>
+
 # Check binary
 agy --version
 
@@ -164,3 +170,8 @@ curl -s --unix-socket ~/.pi-web-ui/internal-api.sock \
 # Check session logs
 journalctl -u pi-web-ui -f | grep -i antigravity
 ```
+
+Related docs:
+- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+- [`CODEBASE-MAP.md`](./CODEBASE-MAP.md)

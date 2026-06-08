@@ -23,6 +23,7 @@ export function findSessionEntry(entries, query) {
     || entry.path === query
     || entry.claudeSessionId === query
     || entry.opencodeSessionId === query
+    || entry.antigravityConversationId === query
   )) ?? null;
 }
 
@@ -33,7 +34,8 @@ export function buildSessionDebugReport(entry, opts = {}) {
     `Runtime:              ${entry.sdkType}`,
     `Status:               ${entry.status}`,
     `Working directory:    ${entry.cwd || 'N/A'}`,
-    `Registry path field:  ${entry.path || 'N/A'}`,
+    `Registry entry path:  ${entry.path || 'N/A'}`,
+    `Session registry:     ${path.join(homeDir, '.pi-web-ui', 'session-registry.json')}`,
     `Messages tracked:     ${entry.messageCount ?? 'N/A'}`,
     `Created at:           ${entry.createdAt || 'N/A'}`,
     `Last activity:        ${entry.lastActivity || 'N/A'}`,
@@ -97,6 +99,26 @@ export function buildSessionDebugReport(entry, opts = {}) {
     return lines.join('\n');
   }
 
+  if (entry.sdkType === 'antigravity') {
+    const conversationId = entry.antigravityConversationId || 'N/A';
+    lines.push(
+      '  - Antigravity log lines:      sudo journalctl -u pi-web-ui -f | grep -i antigravity',
+      '',
+      'Session files and state:',
+      `  - Antigravity session JSONL: ${path.join(homeDir, '.pi-web-ui', 'antigravity-sessions', `${entry.id}.jsonl`)}`,
+      `  - Conversation ID:           ${conversationId}`,
+      `  - Conversation DB:           ${entry.antigravityConversationId ? path.join(homeDir, '.gemini', 'antigravity-cli', 'conversations', `${entry.antigravityConversationId}.db`) : 'Unavailable (missing antigravityConversationId)'}`,
+      `  - agy CLI logs:              ${path.join(homeDir, '.gemini', 'antigravity-cli', 'log', 'cli-*.log')}`,
+      '',
+      'Useful checks:',
+      '  - agy binary:                 agy --version',
+      '  - agy models:                 agy models',
+      '  - agy auth / quick prompt:    agy -p "Reply OK"',
+      '  - REST models:                curl "http://localhost:<server-port>/api/models?sdkType=antigravity"',
+    );
+    return lines.join('\n');
+  }
+
   lines.push('', 'No runtime-specific hints available for this entry.');
   return lines.join('\n');
 }
@@ -137,7 +159,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage:\n  npm run debug:where -- <session-id|runtime-session-id|path> [--registry /path/to/session-registry.json]\n\nExamples:\n  npm run debug:where -- 123e4567-e89b-12d3-a456-426614174000\n  npm run debug:where -- abc123-claude-session-id\n  npm run debug:where -- /root/.pi-web-ui/claude-sessions/123.jsonl`);
+  console.log(`Usage:\n  npm run debug:where -- <session-id|runtime-session-id|path|antigravity-conversation-id> [--registry /path/to/session-registry.json]\n\nExamples:\n  npm run debug:where -- 123e4567-e89b-12d3-a456-426614174000\n  npm run debug:where -- abc123-claude-session-id\n  npm run debug:where -- /root/.pi-web-ui/claude-sessions/123.jsonl\n  npm run debug:where -- 4f1d3d93-7f2d-4a58-a7b0-123456789abc`);
 }
 
 export async function runCli(argv = process.argv.slice(2)) {
@@ -151,7 +173,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   const entry = findSessionEntry(registry.entries, query);
   if (!entry) {
     console.error(`No session entry matched '${query}' in ${registryPath}`);
-    console.error('Tip: try the internal session id, runtime-native session id, or the registry path field.');
+    console.error('Tip: try the internal session id, runtime-native session id, Antigravity conversation id, or the registry path field.');
     return 1;
   }
 

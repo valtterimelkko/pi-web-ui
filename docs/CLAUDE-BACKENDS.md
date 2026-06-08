@@ -3,6 +3,8 @@
 > Canonical reference for the Claude runtime family in Pi Web UI.
 >
 > Important: the UI and registry treat Claude sessions as one runtime family (`sdkType: 'claude'`), but the server can drive Claude through two different backend implementations with different failure modes.
+>
+> For first-stop debugging, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>`.
 
 ## Why This Doc Exists
 

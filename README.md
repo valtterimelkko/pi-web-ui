@@ -1,25 +1,28 @@
 # Pi Web UI
 
-A persistent browser UI for coding-agent sessions with real-time streaming, unified session management, and three runtime families:
+A persistent browser UI for coding-agent sessions with real-time streaming, unified session management, and four runtime paths:
 
 - **Pi SDK**
 - **Claude runtime** (legacy direct `claude -p` or channel-backed Claude Code)
 - **OpenCode Direct**
+- **Antigravity** (`agy` / Google Gemini)
 
 ## Documentation Map
 
 - **Quick agent/developer rules:** [`AGENTS.md`](./AGENTS.md)
-- **Troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
+- **First-stop troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
+- **Docs index / recommended reading order:** [`docs/README.md`](./docs/README.md)
 - **Architecture:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 - **Claude backend modes:** [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md)
+- **OpenCode Direct architecture:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
+- **Antigravity architecture:** [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md)
 - **WebSocket protocol:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
 - **REST/API index:** [`API.md`](./API.md)
+- **Internal API:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
 - **Security:** [`SECURITY.md`](./SECURITY.md)
 - **Deployment / production runbook:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 - **Pi worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
-- **OpenCode Direct architecture:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
 - **Drive Mode feature:** [`docs/DRIVE-MODE.md`](./docs/DRIVE-MODE.md)
-- **Internal API:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
 - **Live validation:** [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md)
 - **Tests:** [`tests/README.md`](./tests/README.md)
 
@@ -31,29 +34,30 @@ It combines:
 - a **React + Vite** frontend
 - an **Express + WebSocket** backend
 - a **unified sidebar/session registry** across runtimes
-- **runtime-specific adapters** so Pi SDK, Claude, and OpenCode sessions feel similar in the UI
+- **runtime-specific adapters** so Pi SDK, Claude, OpenCode, and Antigravity sessions feel similar in the UI
 - **persistent storage** so sessions survive reconnects and, depending on runtime, process restarts
 
-## Runtime Families
+## Runtime Paths
 
 | Runtime family | Backend implementation | Best described as | Primary persistence |
 |---|---|---|---|
 | **Pi SDK** | Pi SDK + Pi worker/session lifecycle | Pi-native path with extensions/tools | `~/.pi/agent/sessions/` |
 | **Claude runtime** | `claude -p` subprocesses **or** channel-backed Claude Code via PTY + plugin bridge | Claude Code path with Pi-owned replay and runtime-specific glue | `~/.pi-web-ui/claude-sessions/` + Claude native session JSONL |
 | **OpenCode Direct** | `opencode serve` + HTTP/SSE | OpenCode-backed path for supported Z.AI GLM usage | OpenCode runtime + Pi registry metadata |
+| **Antigravity** | `agy -p` subprocess-per-turn execution | Google Gemini path with Pi-owned turn logs plus agy-owned conversation DBs | `~/.pi-web-ui/antigravity-sessions/` + `~/.gemini/antigravity-cli/conversations/` |
 
 Unified session metadata lives in:
 - `~/.pi-web-ui/session-registry.json`
 
-For Claude-specific backend details, session files, and log locations, read [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md).
+For Claude-specific backend details, session files, and log locations, read [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md). For Antigravity, read [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md).
 
 ## Core Capabilities
 
 - Real-time streamed chat
 - Create, switch, pin, rename, and export sessions
-- Unified session list across all runtime families
+- Unified session list across all runtime paths
 - Tool execution rendering and history replay
-- Runtime availability reporting (`claude_available`, `opencode_available`)
+- Runtime availability reporting (`claude_available`, `opencode_available`, `antigravity_available`)
 - OpenCode permission bridge via the existing extension approval UI
 - Drive Mode voice-first overlay
 - Security hardening: cookie auth, CSRF, origin validation, rate limiting, prompt-injection detection
@@ -70,6 +74,7 @@ Browser (React + Zustand + Vite)
             ├─ Pi SDK session manager + worker pool
             ├─ Claude service + (legacy process pool or channel-backed PTY/plugin path)
             ├─ OpenCode Direct service + process manager/client
+            ├─ Antigravity service + subprocess-per-turn adapter
             └─ unified session registry
 ```
 
@@ -83,6 +88,7 @@ Browser (React + Zustand + Vite)
 - For **Claude runtime**: `claude` installed and authenticated
 - For **channel-backed Claude mode**: Bun available for `pi-claude-channel/`
 - For **OpenCode Direct**: `opencode` installed and configured
+- For **Antigravity**: `agy` installed and authenticated for the same OS user
 
 ### Install
 
@@ -149,6 +155,7 @@ npm run build
 npm test
 npm run test:e2e
 npm run validate:live -- --runtime claude --scenario smoke
+npm run validate:live -- --runtime antigravity --scenario smoke
 npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 ```
 
@@ -181,7 +188,7 @@ Recommended verification flow:
    npm test
    ```
 4. For localhost UI verification, use `webapp-testing`.
-5. For live runtime validation without opening the browser, use `npm run validate:live -- --runtime <pi|claude|opencode> --scenario <id>`.
+5. For live runtime validation without opening the browser, use `npm run validate:live -- --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`.
 6. For live external sites, use `playwright-cli`.
 
 See [`AGENTS.md`](./AGENTS.md) for the compact contributor workflow.
@@ -197,11 +204,11 @@ Read:
 Useful commands:
 
 ```bash
+npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 sudo journalctl -u pi-web-ui -f
 curl http://localhost:<server-port>/api/health/live
 curl http://localhost:<server-port>/api/health/ready
 curl http://localhost:<server-port>/api/config/validate
-npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 ```
 
 ### WebSocket / streaming / session routing
@@ -263,6 +270,24 @@ curl "http://localhost:<server-port>/api/models?sdkType=opencode"
 ```
 
 See [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md).
+
+### Antigravity
+
+Check:
+- `server/src/antigravity/antigravity-service.ts`
+- `server/src/antigravity/antigravity-session-store.ts`
+- `server/src/antigravity/antigravity-history-replay.ts`
+
+Useful checks:
+
+```bash
+agy --version
+agy models
+agy -p "Reply OK"
+curl "http://localhost:<server-port>/api/models?sdkType=antigravity"
+```
+
+See [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md).
 
 ### Auth / CSRF / 401 issues
 

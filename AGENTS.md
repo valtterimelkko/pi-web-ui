@@ -13,6 +13,7 @@
 - **Deployment / ops:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 - **Pi worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
 - **OpenCode Direct design:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
+- **Antigravity design:** [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md)
 - **Code map:** [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md)
 - **Event pipeline:** [`docs/EVENT-PIPELINE.md`](./docs/EVENT-PIPELINE.md)
 - **Known sharp edges:** [`docs/SHARP-EDGES.md`](./docs/SHARP-EDGES.md)
@@ -27,8 +28,8 @@
 | Add a REST route | `server/src/routes/*.ts` → add `cookieAuthMiddleware` |
 | Auth / CSRF / security | `server/src/security/*.ts`, `SECURITY.md` |
 | Config / env var | `server/src/config.ts`, `.env.example`, `DEPLOYMENT.md` |
-| Find logs / session files fast | `docs/TROUBLESHOOTING.md`, `npm run debug:where -- <session-id>` |
-| Run browserless live validation | `docs/LIVE-VALIDATION.md`, `npm run validate:live -- --runtime <pi|claude|opencode> --scenario <id>` |
+| Find logs / session files fast | `docs/TROUBLESHOOTING.md`, `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` |
+| Run browserless live validation | `docs/LIVE-VALIDATION.md`, `npm run validate:live -- --runtime <pi|claude|opencode|antigravity|all> --scenario <id>` |
 | Add a new runtime | See [`docs/ADDING-A-RUNTIME.md`](./docs/ADDING-A-RUNTIME.md) |
 | Fix a frontend store issue | `client/src/store/sessionStore.ts` |
 | UI component / modal | `client/src/components/Session/NewSessionModal.tsx` |
@@ -66,10 +67,11 @@ Improve Pi Web UI safely with small, verified changes. Prefer targeted fixes ove
 - Frontend: **React + Zustand + Vite**
 - Backend: **Express + WebSocket**
 - Protocol: **JSON message protocol over `/ws`** with session-aware event routing
-- Three runtime families:
+- Four runtime paths:
   - **Pi SDK** — Pi-native sessions, extensions, worker lifecycle, `~/.pi/agent/sessions/`
   - **Claude runtime** — legacy `claude -p` subprocesses or the channel-backed Claude Code path; replay store in `~/.pi-web-ui/claude-sessions/`, native Claude state in `~/.claude/projects/`
   - **OpenCode Direct** — `opencode serve` backend for OpenCode/Z.AI GLM sessions, with Pi Web UI storing registry metadata only
+  - **Antigravity** — `agy -p` subprocess-per-turn Gemini path with Pi-owned turn logs in `~/.pi-web-ui/antigravity-sessions/` and agy-owned conversation DBs in `~/.gemini/antigravity-cli/conversations/`
 - Unified session registry: `~/.pi-web-ui/session-registry.json`
 
 ## Key Files
@@ -82,6 +84,7 @@ Improve Pi Web UI safely with small, verified changes. Prefer targeted fixes ove
 - `server/src/pi/multi-session-manager.ts` — Pi SDK lifecycle / cleanup / pinning
 - `server/src/claude/claude-service.ts` — Claude runtime lifecycle and backend selection
 - `server/src/opencode/opencode-service.ts` — OpenCode Direct lifecycle and replay
+- `server/src/antigravity/antigravity-service.ts` — Antigravity lifecycle, prompt dispatch, and replay
 - `server/src/session-registry.ts` — unified cross-runtime session index
 - `server/src/routes/models.ts` / `server/src/routes/health.ts` — runtime-aware REST endpoints
 
@@ -102,6 +105,7 @@ See [`SECURITY.md`](./SECURITY.md) for the canonical security model.
 - **Pi SDK path:** `server/src/pi/multi-session-manager.ts`, `server/src/workers/worker-pool.ts`
 - **Claude runtime:** `server/src/claude/claude-service.ts`, `server/src/claude/claude-process-pool.ts`, `server/src/claude/claude-channel-service.ts`, `server/src/claude/claude-channel-process-manager.ts`
 - **OpenCode Direct:** `server/src/opencode/opencode-service.ts`, `server/src/opencode/opencode-process-manager.ts`, `server/src/opencode/opencode-client.ts`
+- **Antigravity:** `server/src/antigravity/antigravity-service.ts`, `server/src/antigravity/antigravity-session-store.ts`, `server/src/antigravity/antigravity-history-replay.ts`
 - **Registry / persistence:** `server/src/session-registry.ts`
 - **Health / config:** `server/src/routes/health.ts`, `server/src/routes/config.ts`, `server/src/routes/models.ts`
 
@@ -147,9 +151,12 @@ npm run validate:live -- --runtime claude --scenario follow-up
 
 The runner uses the Internal API over the local Unix socket, auto-loads the
 internal API token, creates ephemeral sessions, streams normalized events, and
-cleans up afterwards — no browser login required. See
-[`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) and
-[`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md).
+cleans up afterwards — no browser login required. For runtime debugging, start
+with `npm run debug:where -- <session-id-or-runtime-session-id-or-path>`, then
+read [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md). See also
+[`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md),
+[`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md), and
+[`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md).
 
 ## Final Rule
 

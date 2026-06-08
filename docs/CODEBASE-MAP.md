@@ -16,7 +16,7 @@
 - `lib/session-websocket.ts` — Session-specific WebSocket client.
 
 ### Session / Chat UI
-- `components/Session/NewSessionModal.tsx` — Runtime picker (Pi / Claude / OpenCode).
+- `components/Session/NewSessionModal.tsx` — Runtime picker (Pi / Claude / OpenCode / Antigravity).
 - `components/Sidebar/SessionItem.tsx` — Sidebar session row (drag source, pin, archive, rename).
 - `components/Sidebar/SessionList.tsx` — Sidebar container.
 - `components/Sidebar/TransferConfirmationModal.tsx` — Context transfer confirmation UX.
@@ -84,6 +84,12 @@
 - `opencode/opencode-session-subscribers.ts` — Multi-viewer fanout for OpenCode sessions.
 - `opencode/opencode-types.ts` — OpenCode-specific type definitions.
 
+### Antigravity Path (`server/src/antigravity/`)
+- `antigravity/antigravity-service.ts` — Antigravity lifecycle, `agy -p` subprocess dispatch, conversation-id tracking, session cleanup, model listing.
+- `antigravity/antigravity-session-store.ts` — JSONL turn persistence at `~/.pi-web-ui/antigravity-sessions/`.
+- `antigravity/antigravity-history-replay.ts` — Converts stored Antigravity turns into replay events.
+- `antigravity/antigravity-session-subscribers.ts` — Multi-viewer fanout for Antigravity sessions.
+
 ### Session Transfer (`server/src/session-transfer/`)
 - `session-transfer/transfer-service.ts` — Orchestrates cross-runtime context transfer.
 - `session-transfer/visible-transcript.ts` — Builds canonical visible transcript from replay events.
@@ -107,7 +113,7 @@
 
 ### REST Routes (`server/src/routes/`)
 - `routes/health.ts` — Health/readiness probes, runtime availability.
-- `routes/models.ts` — Model listing (Pi and OpenCode).
+- `routes/models.ts` — Model listing (Pi, OpenCode, and Antigravity).
 - `routes/auth.ts` — Login/logout.
 - `routes/sessions.ts` — Session CRUD, export.
 - `routes/files.ts` — File browsing and reading (with path validation).
@@ -123,7 +129,7 @@
 - `index.ts` — Server entry point.
 
 ### Operational Helpers
-- `scripts/debug-where.mjs` — Fast session locator: maps a session id/runtime id/path to the relevant logs, registry entry, and runtime-owned files.
+- `scripts/debug-where.mjs` — Fast session locator: maps a session id, runtime-native id, path, or Antigravity conversation id to the relevant logs, registry entry, and runtime-owned files.
 - `pi-claude-channel/server.ts` — Local Claude channel/plugin bridge process.
 
 ## Shared Package (`shared/src/`)
@@ -136,5 +142,5 @@
 ## Tests
 
 - `tests/e2e/` — Playwright E2E tests (auth, session creation, switching, runtime-specific flows).
-- `server/tests/unit/` — Server unit tests (runtime adapters, WebSocket routing, security).
+- `server/tests/unit/` — Server unit tests (runtime adapters, WebSocket routing, security), including `server/tests/unit/antigravity/*` for Antigravity replay/store/subscriber coverage.
 - `server/tests/integration/` — Cross-module integration tests.

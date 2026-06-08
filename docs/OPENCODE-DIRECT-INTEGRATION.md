@@ -8,7 +8,7 @@
 
 ## Summary
 
-OpenCode Direct is the third runtime path in Pi Web UI.
+OpenCode Direct is one of the four runtime paths in Pi Web UI.
 
 Its job is to let Pi Web UI remain the browser interface while a **real OpenCode runtime** handles the backend session execution.
 
@@ -16,11 +16,12 @@ This is especially important for supported OpenCode/Z.AI GLM workflows: Pi Web U
 
 ## Why This Path Exists
 
-Pi Web UI has three runtime families:
+Pi Web UI has four runtime paths:
 
 1. **Pi SDK** — Pi-native sessions and extensions
 2. **Claude runtime** — legacy `claude -p` or the channel-backed Claude Code path
 3. **OpenCode Direct** — `opencode serve` backend sessions
+4. **Antigravity** — `agy -p` Gemini sessions
 
 OpenCode Direct exists because:
 - OpenCode is the supported backend tool for the relevant OpenCode/Z.AI workflows

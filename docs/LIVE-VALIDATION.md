@@ -20,6 +20,7 @@ security model.
 
 ```bash
 npm run validate:live -- --runtime claude --scenario smoke
+npm run validate:live -- --runtime antigravity --scenario smoke
 ```
 
 List available scenarios:
@@ -73,6 +74,7 @@ Examples:
 
 - `channel-heartbeat` is skipped when Claude is in direct mode
 - `follow-up` is skipped only if the runtime reports it unsupported
+- Antigravity runs `smoke`, `follow-up`, and `session-info`, but should skip tool-visibility/heartbeat-style scenarios because it does not report those capabilities
 - replay/history assertions should only run when `supportsReplayHistory=true`
 
 ## When to use it
@@ -83,6 +85,7 @@ Use live validation when you change:
 - event normalization or replay
 - Claude channel-backed behaviour
 - OpenCode Direct streaming/permissions
+- Antigravity prompt/replay/model-listing behaviour
 - Internal API behaviour used by local tools or agents
 
 Prefer it when you want a **real-runtime confirmation** without opening the web UI.

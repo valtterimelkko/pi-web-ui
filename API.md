@@ -40,7 +40,7 @@ Use `ws://` locally and `wss://` in production.
 ```typescript
 { type: 'auth', csrfToken: string }
 { type: 'get_sessions', cwd?: string }
-{ type: 'new_session', cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' }
+{ type: 'new_session', cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' }
 { type: 'switch_session', sessionPath: string }
 { type: 'prompt', sessionId: string, message: string, images?: ImageContent[] }
 { type: 'follow_up', message: string }
@@ -65,6 +65,7 @@ Use `ws://` locally and `wss://` in production.
 { type: 'session_event', sessionId: string, event: unknown }
 { type: 'claude_available', available: boolean, error: string | null }
 { type: 'opencode_available', available: boolean, error: string | null }
+{ type: 'antigravity_available', available: boolean, error: string | null }
 { type: 'extension_ui_request', request: ExtensionUIRequest }
 { type: 'error', message: string, code?: string }
 ```
@@ -87,6 +88,12 @@ Use `ws://` locally and `wss://` in production.
 - Availability is announced with `opencode_available`
 - OpenCode permission requests are bridged into existing `extension_ui_request` UI flows
 - Full transcript storage remains OpenCode-owned; Pi Web UI stores registry metadata and replay adapters
+
+#### Antigravity
+- Uses `agy -p` via server-side subprocess-per-turn execution
+- Availability is announced with `antigravity_available`
+- Pi Web UI stores Antigravity turn logs under `~/.pi-web-ui/antigravity-sessions/`
+- agy owns the resumed-conversation SQLite DBs under `~/.gemini/antigravity-cli/conversations/`
 
 For complete message shapes and event semantics, see [`docs/PROTOCOL.md`](./docs/PROTOCOL.md).
 
@@ -161,6 +168,9 @@ Returns models for the default Pi SDK path.
 
 #### `GET /api/models?sdkType=opencode`
 Returns models exposed through OpenCode Direct.
+
+#### `GET /api/models?sdkType=antigravity`
+Returns models exposed through the Antigravity / `agy` runtime.
 
 #### `PUT /api/models/current`
 Validates a model selection payload. Actual model switching is session-scoped and typically happens over WebSocket.

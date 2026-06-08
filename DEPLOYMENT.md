@@ -4,11 +4,12 @@
 
 ## What You Are Deploying
 
-Pi Web UI is a single web application that fronts three runtime families:
+Pi Web UI is a single web application that fronts four runtime paths:
 
 - **Pi SDK** — worker-managed Pi sessions
 - **Claude runtime** — legacy `claude -p` subprocesses or the channel-backed Claude Code path
 - **OpenCode Direct** — `opencode serve`-backed sessions
+- **Antigravity** — `agy -p` Gemini sessions with Pi-owned turn logs plus agy-owned conversation DBs
 
 Operationally, this means deployment must consider:
 - the Node/Express server itself
@@ -16,6 +17,7 @@ Operationally, this means deployment must consider:
 - availability of `claude` if the Claude runtime is needed
 - availability of Bun if the channel-backed Claude path is enabled
 - availability of `opencode` if OpenCode Direct is needed
+- availability of `agy` if Antigravity is needed
 
 ## Production Checklist
 
@@ -28,6 +30,7 @@ Operationally, this means deployment must consider:
 - [ ] Confirm `claude` availability if using the Claude runtime
 - [ ] Confirm Bun availability if using the channel-backed Claude path
 - [ ] Confirm `opencode` availability if using OpenCode Direct
+- [ ] Confirm `agy` availability if using Antigravity
 - [ ] Configure logging / monitoring
 - [ ] Verify `npm run build` succeeds before restart
 
@@ -81,6 +84,19 @@ Prerequisites:
 | `OPENCODE_MAX_PINNED_SESSIONS` | `2` | max pinned OpenCode sessions |
 | `OPENCODE_CLEANUP_INTERVAL_MS` | `60000` | cleanup loop interval |
 
+### Antigravity
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `ANTIGRAVITY_ENABLED` | `true` | enable/disable the Antigravity runtime |
+| `ANTIGRAVITY_SESSION_DIR` | `~/.pi-web-ui/antigravity-sessions` | Pi-owned Antigravity JSONL turn log directory |
+| `ANTIGRAVITY_DEFAULT_MODEL` | `Gemini 3.5 Flash (Medium)` | default `agy` model |
+| `ANTIGRAVITY_PROMPT_TIMEOUT_MS` | `600000` | max prompt duration before timeout |
+| `ANTIGRAVITY_IDLE_TIMEOUT_MS` | `1800000` | idle timeout for unpinned inactive sessions |
+| `ANTIGRAVITY_MAX_SESSIONS` | `4` | max in-memory Antigravity sessions tracked |
+| `ANTIGRAVITY_MAX_PINNED_SESSIONS` | `2` | max pinned Antigravity sessions |
+| `ANTIGRAVITY_CLEANUP_INTERVAL_MS` | `60000` | cleanup loop interval |
+
 ## Runtime Capacity Notes
 
 ### Pi SDK worker path
@@ -115,6 +131,14 @@ Ensure:
 - any password/basic-auth settings are aligned with Pi Web UI config
 
 Do **not** add a separate `opencode-serve.service` dependency to `pi-web-ui.service` unless you have deliberately implemented an external-only OpenCode lifecycle. A standalone `opencode-serve.service` with `Restart=always` on the same port can enter a restart loop if Pi Web UI already owns the port. Recent OpenCode/Bun builds may leave `/tmp/.fb*.so` native shared-object files on failed startup, so such a loop can fill the root disk.
+
+### Antigravity
+
+Antigravity uses `agy -p` in subprocess-per-turn mode rather than a long-lived server. Ensure:
+- the `agy` binary exists on the host and is on `PATH` (or set `AGY_BINARY`)
+- the service user has already authenticated with Antigravity / Gemini CLI
+- the service user can read and write `~/.gemini/antigravity-cli/`
+- disk space is available for both `~/.pi-web-ui/antigravity-sessions/` and agy's own log/conversation directories
 
 ## systemd Example
 
@@ -223,6 +247,17 @@ npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 which opencode
 curl http://localhost:<port>/api/health/ready | jq '.checks.opencode'
 curl "http://localhost:<port>/api/models?sdkType=opencode"
+```
+
+### Antigravity
+
+```bash
+which agy
+agy --version
+agy models
+agy -p "Reply OK"
+curl "http://localhost:<port>/api/models?sdkType=antigravity"
+npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 ```
 
 ## Troubleshooting

@@ -15,7 +15,7 @@ These cover user-visible behaviour such as:
 - auth and initial app load
 - session creation
 - session switching
-- runtime-specific flows for the Claude runtime family and OpenCode Direct
+- runtime-specific flows for the Claude runtime family, OpenCode Direct, and any surfaced Antigravity session UX
 - mobile / protocol / persistence / cross-tab behaviour
 
 Notable files include:
@@ -31,6 +31,7 @@ repo-owned CLI runner:
 
 ```bash
 npm run validate:live -- --runtime claude --scenario smoke
+npm run validate:live -- --runtime antigravity --scenario smoke
 ```
 
 Use it when you need to confirm live server/runtime behaviour without opening
@@ -42,6 +43,7 @@ Typical uses:
 - event normalization or replay fixes
 - Claude channel regressions
 - OpenCode permission / streaming regressions
+- Antigravity prompt / replay / model-listing regressions
 - internal API contract changes
 
 ### 3. Benchmarks
@@ -65,6 +67,7 @@ npm run test:e2e
 ### Live validation
 ```bash
 npm run validate:live -- --runtime claude --scenario smoke
+npm run validate:live -- --runtime antigravity --scenario smoke
 ```
 
 ### Benchmarks
@@ -87,6 +90,7 @@ That includes coverage for:
 - Pi worker/session logic
 - Claude runtime replay and process handling
 - OpenCode Direct client/service/event handling
+- Antigravity replay/store/subscriber handling (`server/tests/unit/antigravity/*`)
 - WebSocket routing
 - route handlers and security helpers
 
@@ -108,14 +112,15 @@ npm run test:e2e
 ```
 
 ### Runtime-path change
-If you touched Pi SDK / the Claude runtime family / OpenCode Direct routing or replay logic, prefer:
+If you touched Pi SDK / the Claude runtime family / OpenCode Direct / Antigravity routing or replay logic, prefer:
 - unit tests for the affected runtime module(s)
 - relevant WebSocket tests
-- `npm run validate:live -- --runtime <pi|claude|opencode> --scenario <id>`
+- `npm run validate:live -- --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`
 - relevant E2E runtime tests
 
 ## Notes
 
 - Some runtime-specific tests may depend on optional tools being installed locally.
 - OpenCode Direct tests are especially sensitive to `opencode` availability in fully live scenarios.
+- Antigravity live validation depends on `agy` being installed and authenticated for the same OS user running Pi Web UI.
 - Prefer the canonical app commands from the root `package.json` unless you are targeting one workspace deliberately.
