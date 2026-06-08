@@ -44,6 +44,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   // Runtime-specific model handling
   const isClaudeSession = useMemo(() => currentSessionSdkType === 'claude', [currentSessionSdkType]);
   const isOpenCodeSession = useMemo(() => currentSessionSdkType === 'opencode', [currentSessionSdkType]);
+  const isAntigravitySession = useMemo(() => currentSessionSdkType === 'antigravity', [currentSessionSdkType]);
 
   // Fetch models on mount (or use Claude models for Claude sessions)
   useEffect(() => {
@@ -70,9 +71,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         const timeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => reject(new Error('Request timeout')), 10000);
         });
-        
+
+        const sdkTypeParam = isOpenCodeSession ? 'opencode' : isAntigravitySession ? 'antigravity' : 'pi';
         const response = await Promise.race([
-          api.get(`/api/models?sdkType=${isOpenCodeSession ? 'opencode' : 'pi'}`) as Promise<{ models: Model[] }>,
+          api.get(`/api/models?sdkType=${sdkTypeParam}`) as Promise<{ models: Model[] }>,
           timeoutPromise
         ]);
         
@@ -89,7 +91,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     };
 
     fetchModels();
-  }, [isOpen, isClaudeSession, isOpenCodeSession, storeCurrentModel]); // Depend on runtime and current model
+  }, [isOpen, isClaudeSession, isOpenCodeSession, isAntigravitySession, storeCurrentModel]); // Depend on runtime and current model
 
   // Update current model when storeCurrentModel changes (separate from fetch)
   useEffect(() => {
@@ -189,6 +191,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   OpenCode Direct
                 </span>
               )}
+              {isAntigravitySession && (
+                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-100 text-violet-700 border border-violet-200">
+                  Antigravity
+                </span>
+              )}
             </h3>
             {isClaudeSession && (
               <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
@@ -200,6 +207,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
                 <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
                 <span>OpenCode Direct sessions use OpenCode-backed Z.AI Coding Plan models.</span>
+              </div>
+            )}
+            {isAntigravitySession && (
+              <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
+                <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>Antigravity sessions use Google Gemini models via the agy CLI.</span>
               </div>
             )}
             {isLoading ? (
@@ -224,8 +237,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             const timeoutPromise = new Promise<never>((_, reject) => {
                               setTimeout(() => reject(new Error('Request timeout')), 10000);
                             });
+                            const sdkTypeParam = isOpenCodeSession ? 'opencode' : isAntigravitySession ? 'antigravity' : 'pi';
                             const response = await Promise.race([
-                              api.get(`/api/models?sdkType=${isOpenCodeSession ? 'opencode' : 'pi'}`) as Promise<{ models: Model[] }>,
+                              api.get(`/api/models?sdkType=${sdkTypeParam}`) as Promise<{ models: Model[] }>,
                               timeoutPromise
                             ]);
                             const modelList = response.models || [];

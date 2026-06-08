@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { getPiService } from '../pi/index.js';
 import { getOpenCodeService } from '../opencode/index.js';
+import { getAntigravityService } from '../antigravity/index.js';
 import { apiLimiter } from '../security/rate-limit.js';
 
 const router = Router();
@@ -17,6 +18,13 @@ router.get('/', async (req: Request, res: Response) => {
     if (sdkType === 'opencode') {
       const opencodeService = getOpenCodeService();
       const models = await opencodeService.getAvailableModels();
+      res.json({ models });
+      return;
+    }
+
+    if (sdkType === 'antigravity') {
+      const antigravityService = getAntigravityService();
+      const models = await antigravityService.getAvailableModels();
       res.json({ models });
       return;
     }
