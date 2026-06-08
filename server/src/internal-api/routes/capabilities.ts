@@ -9,23 +9,26 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { CapabilitiesResponse } from '../types.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
+import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 
 export interface CapabilitiesRoutesDeps {
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
+  antigravityService: AntigravityService;
 }
 
 export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
-  const { claudeService, opencodeService } = deps;
+  const { claudeService, opencodeService, antigravityService } = deps;
 
   async function handleGetCapabilities(
     _req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const [claudeAvailable, claudeBackendMode, opencodeAvailable] = await Promise.all([
+    const [claudeAvailable, claudeBackendMode, opencodeAvailable, antigravityAvailable] = await Promise.all([
       claudeService.isAvailable().catch(() => false),
       claudeService.getBackendMode().catch(() => 'direct' as const),
       opencodeService.isAvailable().catch(() => false),
+      antigravityService.isAvailable().catch(() => false),
     ]);
 
     const body: CapabilitiesResponse = {
@@ -65,6 +68,18 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsPinning: true,
           supportsReplayHistory: true,
           supportsApprovals: true,
+          supportsHeartbeat: false,
+        },
+        antigravity: {
+          available: antigravityAvailable,
+          backendMode: 'subprocess',
+          supportsFollowUp: true,
+          supportsSteer: false,
+          supportsModelSwitch: true,
+          supportsThinkingLevel: false,
+          supportsPinning: true,
+          supportsReplayHistory: true,
+          supportsApprovals: false,
           supportsHeartbeat: false,
         },
       },

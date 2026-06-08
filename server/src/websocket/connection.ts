@@ -21,6 +21,8 @@ import { getClaudeService, type ClaudeService } from '../claude/index.js';
 import { ClaudeSessionSubscribers } from '../claude/claude-session-subscribers.js';
 import { getOpenCodeService, type OpenCodeService } from '../opencode/index.js';
 import { OpenCodeSessionSubscribers } from '../opencode/opencode-session-subscribers.js';
+import { getAntigravityService, type AntigravityService } from '../antigravity/index.js';
+import { AntigravitySessionSubscribers } from '../antigravity/antigravity-session-subscribers.js';
 import { getSessionRegistry } from '../session-registry.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 
@@ -98,12 +100,14 @@ export interface WebSocketClient {
 
 type ClaudeAvailabilityService = Pick<ClaudeService, 'isAvailable' | 'validateAuth'>;
 type OpenCodeAvailabilityService = Pick<OpenCodeService, 'isAvailable' | 'validateSetup'>;
+type AntigravityAvailabilityService = Pick<AntigravityService, 'isAvailable' | 'validateSetup'>;
 
 export async function sendRuntimeAvailabilityStatus(
   clientId: string,
   claudeService: ClaudeAvailabilityService,
   opencodeService: OpenCodeAvailabilityService,
   sendMessage: (clientId: string, message: ServerMessage) => void,
+  antigravityService?: AntigravityAvailabilityService,
 ): Promise<void> {
   await Promise.all([
     (async () => {
@@ -156,6 +160,32 @@ export async function sendRuntimeAvailabilityStatus(
         } as ServerMessage);
       }
     })(),
+    (async () => {
+      if (!antigravityService) return;
+      try {
+        const available = await antigravityService.isAvailable();
+        if (available) {
+          const setup = await antigravityService.validateSetup();
+          sendMessage(clientId, {
+            type: 'antigravity_available',
+            available: setup.ok,
+            error: setup.ok ? null : (setup.error ?? null),
+          } as ServerMessage);
+        } else {
+          sendMessage(clientId, {
+            type: 'antigravity_available',
+            available: false,
+            error: 'agy not installed',
+          } as ServerMessage);
+        }
+      } catch {
+        sendMessage(clientId, {
+          type: 'antigravity_available',
+          available: false,
+          error: 'Antigravity availability check failed',
+        } as ServerMessage);
+      }
+    })(),
   ]);
 }
 
@@ -179,6 +209,9 @@ export class WebSocketConnectionManager {
   private opencodeService: OpenCodeService;
   private opencodeSessionIds: Set<string> = new Set();
   private opencodeSubs = new OpenCodeSessionSubscribers();
+  private antigravityService: AntigravityService;
+  private antigravitySessionIds: Set<string> = new Set();
+  private antigravitySubs = new AntigravitySessionSubscribers();
   private pendingClaudePermissions: Map<string, string> = new Map();
 
   constructor() {
@@ -188,6 +221,7 @@ export class WebSocketConnectionManager {
     this.eventForwarder = new EventForwarder(this.sendToClient.bind(this));
     this.claudeService = getClaudeService();
     this.opencodeService = getOpenCodeService();
+    this.antigravityService = getAntigravityService();
 
     // Log Claude availability on startup
     this.claudeService.isAvailable().then(async (available) => {
@@ -202,6 +236,7 @@ export class WebSocketConnectionManager {
     // Restore Claude session IDs from registry on startup
     void this.restoreClaudeSessionIds();
     void this.restoreOpencodeSessionIds();
+    void this.restoreAntigravitySessionIds();
 
     // Create MultiSessionManager with broadcast function
     // Configure aggressive cleanup for lazy session management
@@ -275,6 +310,21 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private async restoreAntigravitySessionIds(): Promise<void> {
+    try {
+      const registry = getSessionRegistry();
+      const sessions = await registry.listBySdkType('antigravity');
+      for (const entry of sessions) {
+        this.antigravitySessionIds.add(entry.id);
+      }
+      if (sessions.length > 0) {
+        console.log(`[WebUI] Restored ${sessions.length} Antigravity session ID(s) from registry`);
+      }
+    } catch (err) {
+      console.warn('[WebUI] Failed to restore Antigravity session IDs from registry:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   /**
    * Set up broadcasting of session status changes to all clients.
    * Covers both Pi SDK sessions (via MultiSessionManager) and
@@ -327,6 +377,22 @@ export class WebSocketConnectionManager {
           });
         }
       }
+
+      for (const sessionId of this.antigravitySessionIds) {
+        const subscribers = this.antigravitySubs.getSubscribers(sessionId);
+        if (subscribers.size > 0) {
+          const isRunning = this.antigravityService.isRunning(sessionId);
+          const isPinned = this.antigravityService.isSessionPinned(sessionId);
+          this.broadcast({
+            type: 'session_status',
+            sessionId,
+            sessionPath: sessionId,
+            status: isRunning ? 'streaming' : 'idle',
+            lastActivity: new Date().toISOString(),
+            pinned: isPinned,
+          });
+        }
+      }
     }, 1000);
   }
 
@@ -357,6 +423,7 @@ export class WebSocketConnectionManager {
         this.claudeService,
         this.opencodeService,
         this.sendMessage.bind(this),
+        this.antigravityService,
       );
 
       // Set up event forwarding for this client
@@ -761,7 +828,12 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    // Check if this is a Claude session — dispatch to Claude handler
+    // Dispatch to appropriate runtime handler
+    if (this.antigravitySessionIds.has(sessionPath)) {
+      await this.handleAntigravityPrompt(clientId, sessionPath, message.message);
+      return;
+    }
+
     if (this.opencodeSessionIds.has(sessionPath)) {
       await this.handleOpencodePrompt(clientId, sessionPath, message.message, message.images, message.agent);
       return;
@@ -1010,6 +1082,50 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private async handleAntigravityPrompt(
+    clientId: string,
+    sessionId: string,
+    prompt: string,
+  ): Promise<void> {
+    try {
+      await this.antigravityService.sendPrompt(
+        sessionId,
+        prompt,
+        (normalizedEvent) => {
+          const piEvent = normEventToPiFormat(normalizedEvent);
+          const msg = { type: 'session_event' as const, sessionId, event: piEvent };
+          const subscribers = this.antigravitySubs.getSubscribers(sessionId);
+          const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
+          for (const subId of targets) {
+            this.sendMessage(subId, msg);
+          }
+        },
+        (error) => {
+          const subscribers = this.antigravitySubs.getSubscribers(sessionId);
+          const targets = [...subscribers].length > 0 ? [...subscribers] : [clientId];
+          if (error) {
+            for (const subId of targets) {
+              this.sendMessage(subId, { type: 'error', message: error.message, code: 'ANTIGRAVITY_ERROR' });
+            }
+          }
+          for (const subId of targets) {
+            this.sendMessage(subId, {
+              type: 'session_event',
+              sessionId,
+              event: { type: 'agent_end', result: null, usage: {} },
+            } as unknown as ServerMessage);
+          }
+        },
+      );
+    } catch (error) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Antigravity prompt failed',
+        code: 'ANTIGRAVITY_ERROR',
+      });
+    }
+  }
+
   private async handleSteer(clientId: string, message: { type: 'steer'; message: string }): Promise<void> {
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
@@ -1045,6 +1161,19 @@ export class WebSocketConnectionManager {
   private async handleAbort(clientId: string): Promise<void> {
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) return;
+
+    if (this.antigravitySessionIds.has(sessionPath)) {
+      this.antigravityService.abort(sessionPath);
+      const subscribers = this.antigravitySubs.getSubscribers(sessionPath);
+      for (const subId of subscribers) {
+        this.sendMessage(subId, {
+          type: 'session_event',
+          sessionId: sessionPath,
+          event: { type: 'agent_end', result: null, usage: {} },
+        } as unknown as ServerMessage);
+      }
+      return;
+    }
 
     // Claude session abort — broadcast state change to all subscribers
     if (this.claudeSessionIds.has(sessionPath)) {
@@ -1082,12 +1211,36 @@ export class WebSocketConnectionManager {
 
   private async handleNewSession(
     clientId: string,
-    message: { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' | 'opencode' }
+    message: { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' }
   ): Promise<void> {
     console.log(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}, sdkType=${message.sdkType || 'pi'}`);
 
     const cwd = message.cwd || process.cwd();
     const sdkType = message.sdkType || 'pi';
+
+    if (sdkType === 'antigravity') {
+      try {
+        const { sessionId } = await this.antigravityService.createSession(cwd);
+        this.antigravitySessionIds.add(sessionId);
+        this.clientViewingSession.set(clientId, sessionId);
+        this.antigravitySubs.subscribe(clientId, sessionId);
+        this.clientCwd.set(clientId, cwd);
+
+        this.sendMessage(clientId, {
+          type: 'session_created',
+          sessionId,
+          sessionPath: sessionId,
+          sdkType: 'antigravity',
+        } as unknown as ServerMessage);
+      } catch (error) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to create Antigravity session',
+          code: 'SESSION_CREATE_FAILED',
+        });
+      }
+      return;
+    }
 
     if (sdkType === 'opencode') {
       try {
@@ -1225,6 +1378,35 @@ export class WebSocketConnectionManager {
       await this.opencodeService.touchSession(sessionPath);
       await this.replayOpencodeHistory(clientId, sessionPath);
       console.log(`[handleSwitchSession] Client ${clientId} switched to OpenCode session ${sessionPath}`);
+      return;
+    }
+
+    let isAntigravitySession = this.antigravitySessionIds.has(sessionPath);
+    if (!isAntigravitySession) {
+      try {
+        const registry = getSessionRegistry();
+        const entry = await registry.get(sessionPath);
+        if (entry?.sdkType === 'antigravity') {
+          isAntigravitySession = true;
+          this.antigravitySessionIds.add(sessionPath);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (isAntigravitySession) {
+      if (oldSessionPath && oldSessionPath !== sessionPath) {
+        this.antigravitySubs.unsubscribe(clientId, oldSessionPath);
+        this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
+        this.claudeSubs.unsubscribe(clientId, oldSessionPath);
+        this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
+      }
+      this.clientViewingSession.set(clientId, sessionPath);
+      this.antigravitySubs.subscribe(clientId, sessionPath);
+      await this.antigravityService.touchSession(sessionPath);
+      await this.replayAntigravityHistory(clientId, sessionPath);
+      console.log(`[handleSwitchSession] Client ${clientId} switched to Antigravity session ${sessionPath}`);
       return;
     }
 
@@ -1401,6 +1583,39 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private async replayAntigravityHistory(clientId: string, sessionId: string): Promise<void> {
+    const registry = getSessionRegistry();
+    const entry = await registry.get(sessionId);
+    if (!entry) {
+      this.sendMessage(clientId, { type: 'error', message: 'Antigravity session not found', code: 'SESSION_NOT_FOUND' } as unknown as ServerMessage);
+      return;
+    }
+
+    this.sendMessage(clientId, {
+      type: 'session_switched',
+      sessionId,
+      sessionPath: sessionId,
+      sdkType: 'antigravity',
+      model: entry.model ?? config.antigravityDefaultModel,
+      messages: [],
+      fileTimestamp: 0,
+      isStreaming: this.antigravityService.isRunning(sessionId),
+    } as unknown as ServerMessage);
+
+    try {
+      const events = await this.antigravityService.getReplayEvents(sessionId);
+      if (events.length === 0) return;
+
+      this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
+      for (const evt of events) {
+        this.sendMessage(clientId, { type: 'session_event', sessionId, event: evt } as unknown as ServerMessage);
+      }
+      this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
+    } catch (error) {
+      console.error('[replayAntigravityHistory] Error:', error);
+    }
+  }
+
   /**
    * Load messages from a session file (JSONL format)
    * Returns messages and file modification timestamp for cache invalidation
@@ -1534,7 +1749,7 @@ export class WebSocketConnectionManager {
     const piSessions = await this.piService.listAllSessions();
 
     const formattedPiSessions: Array<{
-      id: string; path: string;       sdkType: 'pi' | 'claude' | 'opencode';
+      id: string; path: string; sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity';
       firstMessage: string; messageCount: number; cwd: string;
       name?: string; createdAt: string; lastActivity: string;
     }> = piSessions.map(s => ({
@@ -1585,6 +1800,24 @@ export class WebSocketConnectionManager {
       allSessions = [...allSessions, ...formattedOpencodeSessions];
     } catch (e) {
       console.warn('[handleGetSessions] Failed to load OpenCode sessions:', e instanceof Error ? e.message : String(e));
+    }
+
+    try {
+      const antigravityEntries = await this.antigravityService.listSessions();
+      const formattedAntigravitySessions = antigravityEntries.map(entry => ({
+        id: entry.id,
+        path: entry.id,
+        sdkType: 'antigravity' as const,
+        firstMessage: entry.firstMessage || '',
+        messageCount: entry.messageCount || 0,
+        cwd: entry.cwd || '',
+        name: undefined,
+        createdAt: entry.createdAt || new Date().toISOString(),
+        lastActivity: entry.lastActivity || new Date().toISOString(),
+      }));
+      allSessions = [...allSessions, ...formattedAntigravitySessions];
+    } catch (e) {
+      console.warn('[handleGetSessions] Failed to load Antigravity sessions:', e instanceof Error ? e.message : String(e));
     }
 
     this.sendMessage(clientId, {
@@ -1681,6 +1914,36 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    // Antigravity session info
+    if (this.antigravitySessionIds.has(sessionPath)) {
+      try {
+        const agStats = await this.antigravityService.getSessionStats(sessionPath);
+        if (!agStats) {
+          this.sendMessage(clientId, { type: 'error', message: 'Antigravity session not found', code: 'SESSION_NOT_FOUND' });
+          return;
+        }
+        this.sendMessage(clientId, {
+          type: 'session_info',
+          stats: {
+            sessionFile: undefined,
+            sessionId: agStats.sessionId,
+            cwd: agStats.cwd,
+            userMessages: agStats.userMessages,
+            assistantMessages: agStats.assistantMessages,
+            toolCalls: agStats.toolCalls,
+            toolResults: agStats.toolResults,
+            totalMessages: agStats.totalMessages,
+            tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            cost: 0,
+            model: agStats.model,
+          },
+        });
+      } catch (error) {
+        this.sendMessage(clientId, { type: 'error', message: error instanceof Error ? error.message : 'Failed to get Antigravity session info', code: 'INTERNAL_ERROR' });
+      }
+      return;
+    }
+
     // Pi SDK session info (original path)
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
     if (!agentSession) {
@@ -1742,6 +2005,21 @@ export class WebSocketConnectionManager {
     if (!sessionPath) {
       console.error(`[handleSetModel] No active session for client ${clientId}`);
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    // Handle Antigravity session model change
+    if (this.antigravitySessionIds.has(sessionPath)) {
+      try {
+        const normalizedModel = await this.antigravityService.setModel(sessionPath, message.modelId);
+        this.sendMessage(clientId, { type: 'model_changed', modelId: normalizedModel });
+      } catch (error) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to change model',
+          code: 'MODEL_CHANGE_FAILED',
+        });
+      }
       return;
     }
 
@@ -1984,6 +2262,26 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    // Antigravity session subscribe
+    let isAntigravitySub = this.antigravitySessionIds.has(sessionPath);
+    if (!isAntigravitySub) {
+      try {
+        const registry = getSessionRegistry();
+        const entry = await registry.get(sessionPath).catch(() => undefined);
+        if (entry?.sdkType === 'antigravity') {
+          isAntigravitySub = true;
+          this.antigravitySessionIds.add(sessionPath);
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (isAntigravitySub) {
+      this.clientViewingSession.set(clientId, sessionPath);
+      this.antigravitySubs.subscribe(clientId, sessionPath);
+      await this.replayAntigravityHistory(clientId, sessionPath);
+      return;
+    }
+
     try {
       const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath, undefined, this.getWebUIContext(clientId));
 
@@ -2031,6 +2329,21 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'pin_session'; sessionPath: string }
   ): Promise<void> {
+    if (this.antigravitySessionIds.has(message.sessionPath)) {
+      const success = await this.antigravityService.pinSession(message.sessionPath);
+      if (success) {
+        this.sendMessage(clientId, { type: 'session_pinned', sessionPath: message.sessionPath, pinned: true });
+      } else {
+        const hasSession = this.antigravityService.hasSession(message.sessionPath);
+        this.sendMessage(clientId, {
+          type: 'session_pin_error',
+          sessionPath: message.sessionPath,
+          error: hasSession ? 'Maximum pinned sessions limit reached' : 'Session not found',
+        });
+      }
+      return;
+    }
+
     if (this.opencodeSessionIds.has(message.sessionPath)) {
       const success = await this.opencodeService.pinSession(message.sessionPath);
       if (success) {
@@ -2090,6 +2403,12 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'unpin_session'; sessionPath: string }
   ): void {
+    if (this.antigravitySessionIds.has(message.sessionPath)) {
+      this.antigravityService.unpinSession(message.sessionPath);
+      this.sendMessage(clientId, { type: 'session_pinned', sessionPath: message.sessionPath, pinned: false });
+      return;
+    }
+
     if (this.opencodeSessionIds.has(message.sessionPath)) {
       this.opencodeService.unpinSession(message.sessionPath);
       this.sendMessage(clientId, {
@@ -2133,6 +2452,7 @@ export class WebSocketConnectionManager {
       // Unsubscribe client from all Claude sessions
       this.claudeSubs.unsubscribeAll(clientId);
       this.opencodeSubs.unsubscribeAll(clientId);
+      this.antigravitySubs.unsubscribeAll(clientId);
 
       // Clean up client tracking data
       this.clientCwd.delete(clientId);
@@ -2241,6 +2561,10 @@ export class WebSocketConnectionManager {
 
   getOpenCodeService(): OpenCodeService {
     return this.opencodeService;
+  }
+
+  getAntigravityService(): AntigravityService {
+    return this.antigravityService;
   }
 
   /**

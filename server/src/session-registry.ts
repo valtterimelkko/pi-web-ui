@@ -5,10 +5,11 @@ import type { SdkType } from '@pi-web-ui/shared';
 
 export interface RegistryEntry {
   id: string;              // Internal UUID
-  sdkType: SdkType;        // 'pi' | 'claude'
+  sdkType: SdkType;        // 'pi' | 'claude' | 'opencode' | 'antigravity'
   path: string;            // For Pi: session path; For Claude: our JSONL file path
   claudeSessionId?: string; // For Claude: the --session-id
   opencodeSessionId?: string; // For OpenCode: the OpenCode server session ID
+  antigravityConversationId?: string; // For Antigravity: the agy --conversation UUID
   cwd: string;
   model?: string;
   thinkingLevel?: string;

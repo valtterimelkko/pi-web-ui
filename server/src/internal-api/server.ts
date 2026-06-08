@@ -24,6 +24,7 @@ import { createHealthRoutes, type HealthRoutesDeps } from './routes/health.js';
 import { createCapabilitiesRoutes, type CapabilitiesRoutesDeps } from './routes/capabilities.js';
 import type { ClaudeService } from '../claude/claude-service.js';
 import type { OpenCodeService } from '../opencode/opencode-service.js';
+import type { AntigravityService } from '../antigravity/antigravity-service.js';
 import type { MultiSessionManager } from '../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../session-registry.js';
 import type { PiService } from '../pi/pi-service.js';
@@ -59,6 +60,7 @@ export class InternalApiServer {
   // Service dependencies
   private claudeService: ClaudeService;
   private opencodeService: OpenCodeService;
+  private antigravityService: AntigravityService;
   private multiSessionManager: MultiSessionManager;
   private sessionRegistry: SessionRegistryManager;
   private piService: PiService;
@@ -70,6 +72,7 @@ export class InternalApiServer {
     config: InternalApiConfig;
     claudeService: ClaudeService;
     opencodeService: OpenCodeService;
+    antigravityService: AntigravityService;
     multiSessionManager: MultiSessionManager;
     sessionRegistry: SessionRegistryManager;
     piService: PiService;
@@ -78,6 +81,7 @@ export class InternalApiServer {
     this.apiKey = deps.config.apiKey || '';
     this.claudeService = deps.claudeService;
     this.opencodeService = deps.opencodeService;
+    this.antigravityService = deps.antigravityService;
     this.multiSessionManager = deps.multiSessionManager;
     this.sessionRegistry = deps.sessionRegistry;
     this.piService = deps.piService;
@@ -101,6 +105,7 @@ export class InternalApiServer {
     const sessionRoutes = createSessionRoutes({
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
+      antigravityService: this.antigravityService,
       multiSessionManager: this.multiSessionManager,
       sessionRegistry: this.sessionRegistry,
       piService: this.piService,
@@ -112,12 +117,14 @@ export class InternalApiServer {
       piService: this.piService,
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
+      antigravityService: this.antigravityService,
     };
     const modelsRoutes = createModelsRoutes(modelsDeps);
 
     const healthDeps: HealthRoutesDeps = {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
+      antigravityService: this.antigravityService,
       startTime: this.startTime,
     };
     const healthRoutes = createHealthRoutes(healthDeps);
@@ -125,6 +132,7 @@ export class InternalApiServer {
     const capabilitiesDeps: CapabilitiesRoutesDeps = {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
+      antigravityService: this.antigravityService,
     };
     const capabilitiesRoutes = createCapabilitiesRoutes(capabilitiesDeps);
 

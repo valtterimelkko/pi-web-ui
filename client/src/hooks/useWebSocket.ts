@@ -105,7 +105,7 @@ export function useWebSocket() {
     return sendMessage({ type: 'abort' });
   }, [sendMessage]);
 
-  const createNewSession = useCallback((cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode') => {
+  const createNewSession = useCallback((cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity') => {
     return sendMessage({ type: 'new_session', cwd, sdkType: sdkType || 'pi' });
   }, [sendMessage]);
 

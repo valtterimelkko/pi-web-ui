@@ -58,7 +58,7 @@ export function Sidebar() {
   // Get unique CWDs for filter dropdown
   const uniqueCwds = Array.from(new Set(activeSessions.map(s => s.cwd)));
 
-  const handleCreateSession = (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode') => {
+  const handleCreateSession = (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity') => {
     createNewSession(cwd, sdkType);
   };
 

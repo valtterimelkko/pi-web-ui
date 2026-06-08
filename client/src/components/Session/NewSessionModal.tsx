@@ -7,7 +7,7 @@ import { useSessionStore } from '../../store';
 interface NewSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreateSession: (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode') => void;
+  onCreateSession: (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity') => void;
   onOpenDriveMode?: () => void;
 }
 
@@ -25,7 +25,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const [error, setError] = useState<string | null>(null);
   const [showRecentFolders, setShowRecentFolders] = useState(true);
   const [pathInput, setPathInput] = useState('/root');
-  const [sdkType, setSdkType] = useState<'pi' | 'claude' | 'opencode'>('pi');
+  const [sdkType, setSdkType] = useState<'pi' | 'claude' | 'opencode' | 'antigravity'>('pi');
   const recentDropdownRef = useRef<HTMLDivElement>(null);
 
   const { recentFolders, addRecentFolder, getRecentFolders } = useUIStore();
@@ -33,6 +33,8 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const claudeAuthError = useSessionStore(s => s.claudeAuthError);
   const opencodeAvailable = useSessionStore(s => s.opencodeAvailable);
   const opencodeAuthError = useSessionStore(s => s.opencodeAuthError);
+  const antigravityAvailable = useSessionStore(s => s.antigravityAvailable);
+  const antigravityAuthError = useSessionStore(s => s.antigravityAuthError);
   const topRecentFolders = getRecentFolders(8);
 
   const fetchDirectories = async (path: string) => {
@@ -165,7 +167,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
         {/* SDK Type Selector */}
         <div className="px-3 sm:px-4 pt-2 pb-2 border-b border-gray-200 flex-shrink-0">
           <p className="text-xs font-medium text-gray-500 mb-1.5">Session Type</p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {/* Pi SDK option */}
             <button
               onClick={() => setSdkType('pi')}
@@ -221,6 +223,28 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
               </span>
               <span className="text-xs text-gray-500 mt-0.5 sm:hidden">
                 {opencodeAvailable ? 'Z.AI GLM' : (opencodeAuthError || 'Not available')}
+              </span>
+            </button>
+
+            {/* Antigravity option */}
+            <button
+              onClick={() => antigravityAvailable && setSdkType('antigravity')}
+              disabled={!antigravityAvailable}
+              title={antigravityAuthError || undefined}
+              className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
+                !antigravityAvailable
+                  ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                  : sdkType === 'antigravity'
+                  ? 'border-violet-500 bg-violet-50 text-gray-900'
+                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+              }`}
+            >
+              <span className="text-sm font-medium">Antigravity</span>
+              <span className="text-xs text-gray-500 mt-0.5 hidden sm:inline">
+                {antigravityAvailable ? 'Gemini Flash • Google' : (antigravityAuthError || 'Not available')}
+              </span>
+              <span className="text-xs text-gray-500 mt-0.5 sm:hidden">
+                {antigravityAvailable ? 'Gemini Flash' : (antigravityAuthError || 'Not available')}
               </span>
             </button>
           </div>

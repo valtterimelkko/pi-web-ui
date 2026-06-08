@@ -153,6 +153,7 @@ async function initialize(): Promise<void> {
           },
           claudeService: wsManager.getClaudeService(),
           opencodeService: wsManager.getOpenCodeService(),
+          antigravityService: wsManager.getAntigravityService(),
           multiSessionManager: wsManager.getMultiSessionManager(),
           sessionRegistry: getSessionRegistry(config.sessionRegistryPath),
           piService: getPiService(),

@@ -9,16 +9,18 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { ModelsResponse, ModelInfo, SessionRuntime } from '../types.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
+import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import type { PiService } from '../../pi/pi-service.js';
 
 export interface ModelsRoutesDeps {
   piService: PiService;
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
+  antigravityService: AntigravityService;
 }
 
 export function createModelsRoutes(deps: ModelsRoutesDeps) {
-  const { piService, claudeService, opencodeService } = deps;
+  const { piService, claudeService, opencodeService, antigravityService } = deps;
 
   async function handleListModels(
     req: IncomingMessage,
@@ -28,10 +30,11 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
       const url = new URL(req.url || '/', 'http://localhost');
       const runtimeFilter = url.searchParams.get('runtime') as SessionRuntime | null;
 
-      const result: ModelsResponse['models'] = {
+      const result: ModelsResponse['models'] & { antigravity: ModelInfo[] } = {
         pi: [],
         claude: [],
         opencode: [],
+        antigravity: [],
       };
 
       // Pi SDK models
@@ -76,7 +79,23 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
         }
       }
 
-      sendJson(res, 200, { models: result } satisfies ModelsResponse);
+      // Antigravity models
+      if (!runtimeFilter || runtimeFilter === 'antigravity') {
+        if (await antigravityService.isAvailable()) {
+          try {
+            const agModels = await antigravityService.getAvailableModels();
+            result.antigravity = agModels.map((m) => ({
+              id: m.id,
+              displayName: m.name || m.id,
+              provider: m.provider,
+            }));
+          } catch {
+            // agy models may not respond — return empty
+          }
+        }
+      }
+
+      sendJson(res, 200, { models: result });
     } catch (err) {
       console.error('[InternalAPI] Failed to list models:', err);
       sendJson(res, 500, { error: 'Failed to list models', code: 'INTERNAL_ERROR' });

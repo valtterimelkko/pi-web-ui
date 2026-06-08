@@ -8,29 +8,33 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { HealthResponse } from '../types.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
+import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 
 export interface HealthRoutesDeps {
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
+  antigravityService: AntigravityService;
   startTime: number;
 }
 
 export function createHealthRoutes(deps: HealthRoutesDeps) {
-  const { claudeService, opencodeService, startTime } = deps;
+  const { claudeService, opencodeService, antigravityService, startTime } = deps;
 
   async function handleHealth(
     _req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const [claudeAvailable, opencodeAvailable] = await Promise.all([
+    const [claudeAvailable, opencodeAvailable, antigravityAvailable] = await Promise.all([
       claudeService.isAvailable().catch(() => false),
       opencodeService.isAvailable().catch(() => false),
+      antigravityService.isAvailable().catch(() => false),
     ]);
 
     const runtimes = {
-      pi: 'available' as const, // Pi SDK is always available (core)
+      pi: 'available' as const,
       claude: claudeAvailable ? 'available' as const : 'unavailable' as const,
       opencode: opencodeAvailable ? 'available' as const : 'unavailable' as const,
+      antigravity: antigravityAvailable ? 'available' as const : 'unavailable' as const,
     };
 
     const overallStatus: HealthResponse['status'] =

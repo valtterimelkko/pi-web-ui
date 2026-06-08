@@ -46,6 +46,9 @@ describe('createCapabilitiesRoutes', () => {
       opencodeService: {
         isAvailable: vi.fn().mockResolvedValue(false),
       } as any,
+      antigravityService: {
+        isAvailable: vi.fn().mockResolvedValue(false),
+      } as any,
     });
 
     const req = createMockReq();
@@ -87,6 +90,9 @@ describe('createCapabilitiesRoutes', () => {
         getBackendMode: vi.fn().mockResolvedValue('direct'),
       } as any,
       opencodeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+      } as any,
+      antigravityService: {
         isAvailable: vi.fn().mockResolvedValue(true),
       } as any,
     });

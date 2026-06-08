@@ -10,6 +10,7 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { detectPromptInjection } from '../../security/prompt-injection.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
+import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
@@ -41,6 +42,7 @@ import { createSSEStream } from '../sse-stream.js';
 export interface SessionRoutesDeps {
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
+  antigravityService: AntigravityService;
   multiSessionManager: MultiSessionManager;
   sessionRegistry: SessionRegistryManager;
   piService: PiService;
@@ -54,6 +56,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   const {
     claudeService,
     opencodeService,
+    antigravityService,
     multiSessionManager,
     sessionRegistry,
     piService,
@@ -112,6 +115,24 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             createdAt: new Date().toISOString(),
           } satisfies CreateSessionResponse);
           onSessionCreated?.(sessionId, sessionId, 'opencode');
+          return;
+        }
+
+        case 'antigravity': {
+          if (!(await antigravityService.isAvailable())) {
+            sendJson(res, 503, { error: 'Antigravity runtime is not available', code: 'RUNTIME_UNAVAILABLE' });
+            return;
+          }
+          const { sessionId } = await antigravityService.createSession(cwd, body.model);
+          sendJson(res, 201, {
+            sessionId,
+            sessionPath: sessionId,
+            runtime: 'antigravity',
+            model: body.model,
+            cwd,
+            createdAt: new Date().toISOString(),
+          } satisfies CreateSessionResponse);
+          onSessionCreated?.(sessionId, sessionId, 'antigravity');
           return;
         }
 
@@ -251,6 +272,24 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         used: context?.tokens,
         percent: context?.percent,
       };
+      return detail;
+    }
+
+    if (entry.sdkType === 'antigravity') {
+      const stats = await antigravityService.getSessionStats(sessionId);
+      detail.backendMode = 'subprocess';
+      detail.pinned = antigravityService.isSessionPinned(sessionId);
+      detail.status = antigravityService.isRunning(sessionId) ? 'running' : detail.status;
+      if (stats) {
+        detail.model = stats.model ?? detail.model;
+        detail.stats = {
+          userMessages: stats.userMessages,
+          assistantMessages: stats.assistantMessages,
+          toolCalls: 0,
+          toolResults: 0,
+          totalMessages: stats.totalMessages,
+        };
+      }
       return detail;
     }
 
@@ -545,6 +584,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         claudeService.abort(sessionId);
       } else if (entry.sdkType === 'opencode') {
         opencodeService.abort(sessionId);
+      } else if (entry.sdkType === 'antigravity') {
+        antigravityService.abort(sessionId);
       } else {
         const agentSession = multiSessionManager.getAgentSession(entry.path);
         if (agentSession) {
@@ -591,6 +632,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           } else if (entry.sdkType === 'opencode') {
             const normalizedModel = await opencodeService.setModel(sessionId, body.modelId);
             response = { success: true, action: 'set_model', modelId: normalizedModel };
+          } else if (entry.sdkType === 'antigravity') {
+            const normalizedModel = await antigravityService.setModel(sessionId, body.modelId);
+            response = { success: true, action: 'set_model', modelId: normalizedModel };
           } else {
             await piService.setModel(sessionId, body.modelId);
             response = { success: true, action: 'set_model', modelId: body.modelId };
@@ -623,21 +667,31 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
 
         case 'pin': {
-          const pinned = entry.sdkType === 'claude'
-            ? claudeService.pinSession(sessionId)
-            : entry.sdkType === 'opencode'
-              ? await opencodeService.pinSession(sessionId)
-              : multiSessionManager.pinSession(entry.path);
+          let pinned: boolean;
+          if (entry.sdkType === 'claude') {
+            pinned = claudeService.pinSession(sessionId);
+          } else if (entry.sdkType === 'opencode') {
+            pinned = await opencodeService.pinSession(sessionId);
+          } else if (entry.sdkType === 'antigravity') {
+            pinned = await antigravityService.pinSession(sessionId);
+          } else {
+            pinned = multiSessionManager.pinSession(entry.path);
+          }
           response = { success: pinned, action: 'pin', pinned };
           break;
         }
 
         case 'unpin': {
-          const unpinned = entry.sdkType === 'claude'
-            ? claudeService.unpinSession(sessionId)
-            : entry.sdkType === 'opencode'
-              ? opencodeService.unpinSession(sessionId)
-              : multiSessionManager.unpinSession(entry.path);
+          let unpinned: boolean;
+          if (entry.sdkType === 'claude') {
+            unpinned = claudeService.unpinSession(sessionId);
+          } else if (entry.sdkType === 'opencode') {
+            unpinned = opencodeService.unpinSession(sessionId);
+          } else if (entry.sdkType === 'antigravity') {
+            unpinned = antigravityService.unpinSession(sessionId);
+          } else {
+            unpinned = multiSessionManager.unpinSession(entry.path);
+          }
           response = { success: unpinned, action: 'unpin', pinned: false };
           break;
         }
@@ -721,6 +775,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             resolve();
           };
           opencodeService.sendPrompt(sessionId, message, onEvent, wrappedComplete).catch((err) => {
+            onComplete(err instanceof Error ? err : new Error(String(err)));
+            resolve();
+          });
+        });
+      }
+
+      case 'antigravity': {
+        return new Promise<void>((resolve) => {
+          const wrappedComplete = (error?: Error) => {
+            onComplete(error);
+            resolve();
+          };
+          antigravityService.sendPrompt(sessionId, message, onEvent, wrappedComplete).catch((err) => {
             onComplete(err instanceof Error ? err : new Error(String(err)));
             resolve();
           });

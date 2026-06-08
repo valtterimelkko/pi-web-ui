@@ -45,6 +45,14 @@ export interface ServerConfig {
   claudeChannelWsPort: number;
   claudeChannelHookPort: number;
   piStaleStreamingMs: number;
+  antigravityEnabled: boolean;
+  antigravitySessionDir: string;
+  antigravityDefaultModel: string;
+  antigravityPromptTimeoutMs: number;
+  antigravityIdleTimeoutMs: number;
+  antigravityMaxSessions: number;
+  antigravityMaxPinnedSessions: number;
+  antigravityCleanupIntervalMs: number;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -104,4 +112,12 @@ export const config: ServerConfig = {
   claudeChannelWsPort: parseInt(process.env.CLAUDE_CHANNEL_WS_PORT || '3100', 10),
   claudeChannelHookPort: parseInt(process.env.CLAUDE_CHANNEL_HOOK_PORT || '3101', 10),
   piStaleStreamingMs: parseInt(process.env.PI_STALE_STREAMING_MS || '900000', 10),
+  antigravityEnabled: process.env.ANTIGRAVITY_ENABLED !== 'false',
+  antigravitySessionDir: process.env.ANTIGRAVITY_SESSION_DIR || path.join(os.homedir(), '.pi-web-ui', 'antigravity-sessions'),
+  antigravityDefaultModel: process.env.ANTIGRAVITY_DEFAULT_MODEL || 'Gemini 3.5 Flash (Medium)',
+  antigravityPromptTimeoutMs: parseInt(process.env.ANTIGRAVITY_PROMPT_TIMEOUT_MS || '600000', 10),
+  antigravityIdleTimeoutMs: parseInt(process.env.ANTIGRAVITY_IDLE_TIMEOUT_MS || '1800000', 10),
+  antigravityMaxSessions: parseInt(process.env.ANTIGRAVITY_MAX_SESSIONS || '4', 10),
+  antigravityMaxPinnedSessions: parseInt(process.env.ANTIGRAVITY_MAX_PINNED_SESSIONS || '2', 10),
+  antigravityCleanupIntervalMs: parseInt(process.env.ANTIGRAVITY_CLEANUP_INTERVAL_MS || '60000', 10),
 };

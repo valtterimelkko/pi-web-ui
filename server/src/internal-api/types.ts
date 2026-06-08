@@ -32,8 +32,8 @@ export type PromptMode = 'prompt' | 'follow_up' | 'steer';
 
 // ─── Session runtime ─────────────────────────────────────────────────────────
 
-export type SessionRuntime = 'pi' | 'claude' | 'opencode';
-export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server';
+export type SessionRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity';
+export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 'subprocess';
 
 // ─── Request types ───────────────────────────────────────────────────────────
 
@@ -183,6 +183,7 @@ export interface CapabilitiesResponse {
     pi: RuntimeCapabilities;
     claude: RuntimeCapabilities;
     opencode: RuntimeCapabilities;
+    antigravity: RuntimeCapabilities;
   };
 }
 
@@ -192,6 +193,7 @@ export interface HealthResponse {
     pi: 'available' | 'unavailable';
     claude: 'available' | 'unavailable';
     opencode: 'available' | 'unavailable';
+    antigravity: 'available' | 'unavailable';
   };
   uptime: number;
   version?: string;
