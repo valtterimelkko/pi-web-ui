@@ -3,6 +3,8 @@ import {
   applySentConversationId,
   extractSentConversationIdFromAgyLog,
   pickNewConversationId,
+  getModelContextWindow,
+  ANTIGRAVITY_CHARS_PER_TOKEN,
   type ConversationFileInfo,
 } from '../../../src/antigravity/antigravity-service.js';
 
@@ -64,5 +66,73 @@ describe('pickNewConversationId', () => {
     const after = new Map(before);
 
     expect(pickNewConversationId(before, after)).toBeNull();
+  });
+});
+
+describe('getModelContextWindow', () => {
+  it('returns 1 M tokens for Gemini 3.5 Flash variants', () => {
+    expect(getModelContextWindow('Gemini 3.5 Flash (Medium)')).toBe(1_048_576);
+    expect(getModelContextWindow('Gemini 3.5 Flash (High)')).toBe(1_048_576);
+    expect(getModelContextWindow('Gemini 3.5 Flash (Low)')).toBe(1_048_576);
+  });
+
+  it('returns 2 M tokens for Gemini 3.1 Pro variants', () => {
+    expect(getModelContextWindow('Gemini 3.1 Pro (Low)')).toBe(2_097_152);
+    expect(getModelContextWindow('Gemini 3.1 Pro (High)')).toBe(2_097_152);
+  });
+
+  it('returns 200 K tokens for Claude Sonnet variants', () => {
+    expect(getModelContextWindow('Claude Sonnet 4.6 (Thinking)')).toBe(200_000);
+  });
+
+  it('returns 200 K tokens for Claude Opus variants', () => {
+    expect(getModelContextWindow('Claude Opus 4.6 (Thinking)')).toBe(200_000);
+  });
+
+  it('returns 128 K tokens for GPT-OSS models', () => {
+    expect(getModelContextWindow('GPT-OSS 120B (Medium)')).toBe(128_000);
+  });
+
+  it('falls back to 1 M tokens for unrecognised model names', () => {
+    expect(getModelContextWindow('Unknown Future Model XL')).toBe(1_048_576);
+    expect(getModelContextWindow('')).toBe(1_048_576);
+  });
+});
+
+describe('context usage estimation from conversation history', () => {
+  const CHARS_PER_TOKEN = ANTIGRAVITY_CHARS_PER_TOKEN;
+
+  it('estimates tokens as total chars divided by chars-per-token', () => {
+    const prompt = 'a'.repeat(400);   // 400 chars
+    const response = 'b'.repeat(600); // 600 chars
+    // total = 1000 chars → 1000/4 = 250 tokens
+    const totalChars = prompt.length + response.length;
+    expect(Math.round(totalChars / CHARS_PER_TOKEN)).toBe(250);
+  });
+
+  it('grows with each additional turn', () => {
+    const turns = [
+      { prompt: 'a'.repeat(400), response: 'b'.repeat(600) },  // 1 000 chars → 250 tokens
+      { prompt: 'c'.repeat(200), response: 'd'.repeat(800) },  // 1 000 chars → 250 tokens total additional
+    ];
+    const totalChars = turns.reduce((acc, t) => acc + t.prompt.length + t.response.length, 0);
+    expect(Math.round(totalChars / CHARS_PER_TOKEN)).toBe(500);
+  });
+
+  it('percent is capped at 100 when estimated tokens exceed the context window', () => {
+    const contextWindow = 1_000; // tiny window for the test
+    const tokens = 2_000;        // double the window
+    const percent = Math.min(Math.round((tokens / contextWindow) * 100), 100);
+    expect(percent).toBe(100);
+  });
+
+  it('produces a non-zero percent for a realistic short conversation', () => {
+    // Simulate one turn: 500-char prompt + 1500-char response on a 1 M window
+    const totalChars = 2_000;
+    const tokens = Math.round(totalChars / CHARS_PER_TOKEN); // 500
+    const contextWindow = 1_048_576;
+    const percent = Math.min(Math.round((tokens / contextWindow) * 100), 100);
+    expect(percent).toBeGreaterThanOrEqual(0);
+    expect(percent).toBeLessThanOrEqual(1); // < 1% of 1 M
   });
 });

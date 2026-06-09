@@ -13,6 +13,33 @@ import { config } from '../config.js';
 const AGY_CONVERSATION_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations');
 const AGY_BINARY = process.env.AGY_BINARY || '/root/.local/bin/agy';
 
+// Rough character-to-token ratio. Gemini tokenisation is broadly similar to
+// other LLMs for mixed English + code content (~4 chars per token on average).
+export const ANTIGRAVITY_CHARS_PER_TOKEN = 4;
+
+// Maps agy model-name prefixes to their known context window sizes (in tokens).
+// agy uses its own internal naming scheme; these are best-effort mappings.
+export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: ReadonlyArray<readonly [prefix: string, tokens: number]> = [
+  ['Gemini 3.5 Flash', 1_048_576],   // Gemini 2.5 Flash series → 1 M
+  ['Gemini 3.1 Pro',   2_097_152],   // Gemini 1.5 Pro series  → 2 M
+  ['Claude Sonnet',      200_000],
+  ['Claude Opus',        200_000],
+  ['GPT-OSS',            128_000],
+];
+
+const DEFAULT_CONTEXT_WINDOW = 1_048_576; // Flash is the default model
+
+/**
+ * Returns the context window size (tokens) for the given agy model name.
+ * Falls back to the Flash context window when the name is unrecognised.
+ */
+export function getModelContextWindow(model: string): number {
+  for (const [prefix, size] of ANTIGRAVITY_MODEL_CONTEXT_WINDOWS) {
+    if (model.startsWith(prefix)) return size;
+  }
+  return DEFAULT_CONTEXT_WINDOW;
+}
+
 export interface ConversationFileInfo {
   id: string;
   size: number;
@@ -483,6 +510,26 @@ export class AntigravityService {
       totalMessages: history.length * 2,
       pinned: this.sessionMeta.get(sessionId)?.pinned ?? false,
     };
+  }
+
+  async getContextUsage(sessionId: string): Promise<{ contextWindow: number; tokens: number; percent: number } | null> {
+    try {
+      const entry = await this.registry.get(sessionId).catch(() => null);
+      if (!entry || entry.sdkType !== 'antigravity') return null;
+      const history = await this.store.loadHistory(sessionId);
+      if (history.length === 0) return null;
+
+      const totalChars = history.reduce(
+        (acc, turn) => acc + turn.prompt.length + turn.response.length,
+        0,
+      );
+      const tokens = Math.round(totalChars / ANTIGRAVITY_CHARS_PER_TOKEN);
+      const contextWindow = getModelContextWindow(entry.model ?? config.antigravityDefaultModel);
+      const percent = Math.min(Math.round((tokens / contextWindow) * 100), 100);
+      return { contextWindow, tokens, percent };
+    } catch {
+      return null;
+    }
   }
 
   async getAvailableModels(): Promise<Array<{ id: string; name: string; provider: string }>> {

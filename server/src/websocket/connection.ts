@@ -1107,6 +1107,21 @@ export class WebSocketConnectionManager {
             for (const subId of targets) {
               this.sendMessage(subId, { type: 'error', message: error.message, code: 'ANTIGRAVITY_ERROR' });
             }
+          } else {
+            void this.antigravityService.getContextUsage(sessionId).then((ctxUsage) => {
+              if (ctxUsage) {
+                const ctxMsg = {
+                  type: 'context_update' as const,
+                  sessionId,
+                  contextWindow: ctxUsage.contextWindow,
+                  contextUsed: ctxUsage.tokens,
+                  contextPercent: ctxUsage.percent,
+                };
+                for (const subId of targets) {
+                  this.sendMessage(subId, ctxMsg as unknown as ServerMessage);
+                }
+              }
+            });
           }
           for (const subId of targets) {
             this.sendMessage(subId, {
@@ -1918,7 +1933,10 @@ export class WebSocketConnectionManager {
     // Antigravity session info
     if (this.antigravitySessionIds.has(sessionPath)) {
       try {
-        const agStats = await this.antigravityService.getSessionStats(sessionPath);
+        const [agStats, agContextUsage] = await Promise.all([
+          this.antigravityService.getSessionStats(sessionPath),
+          this.antigravityService.getContextUsage(sessionPath),
+        ]);
         if (!agStats) {
           this.sendMessage(clientId, { type: 'error', message: 'Antigravity session not found', code: 'SESSION_NOT_FOUND' });
           return;
@@ -1937,6 +1955,9 @@ export class WebSocketConnectionManager {
             tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
             cost: 0,
             model: agStats.model,
+            contextWindow: agContextUsage?.contextWindow ?? undefined,
+            contextUsed: agContextUsage?.tokens ?? undefined,
+            contextPercent: agContextUsage?.percent ?? undefined,
           },
         });
       } catch (error) {
