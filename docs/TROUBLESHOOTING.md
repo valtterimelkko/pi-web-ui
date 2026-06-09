@@ -37,7 +37,7 @@ Follow this order unless you already know the exact failing subsystem:
 | **Claude native session state** | `~/.claude/projects/-<encoded-cwd>/<claudeSessionId>.jsonl` | `journalctl -u pi-web-ui -f` | Used by Claude Code itself for resume/follow-up state. |
 | **Claude channel hook config** | `~/.claude/settings.json` | `journalctl -u pi-web-ui -f \| grep ClaudeChannel` | Relevant only when channel-backed Claude mode is enabled. |
 | **OpenCode Direct** | Registry metadata in `~/.pi-web-ui/session-registry.json`; transcript storage is OpenCode-owned | `journalctl -u opencode-serve -f` if separate service, otherwise the main service log | Pi Web UI does not own the full OpenCode transcript. |
-| **Antigravity (agy)** | `~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl` (Pi-owned JSONL turn log) | `journalctl -u pi-web-ui -f \| grep -i antigravity` | Each turn is one JSON line: prompt, response, model, conversationId, rawStdoutLength. |
+| **Antigravity (agy)** | `~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl` (Pi-owned JSONL turn log) plus per-turn logs under `~/.pi-web-ui/antigravity-sessions/agy-logs/` | `journalctl -u pi-web-ui -f \| grep -i antigravity` | Each turn is one JSON line: prompt, response, model, conversationId, rawStdoutLength. The per-turn agy log records the actual `Print mode: conversation=<uuid>` target. |
 | **Antigravity conversation state** | `~/.gemini/antigravity-cli/conversations/<uuid>.db` (SQLite, agy-owned) | `agy --version`, `agy models` | The conversation UUID in the JSONL must match a `.db` file here for continuity to work. |
 | **Unified registry** | `~/.pi-web-ui/session-registry.json` | `journalctl -u pi-web-ui -f` | Cross-runtime source of truth for sidebar metadata. |
 | **Internal API** | `~/.pi-web-ui/internal-api.sock`, `~/.pi-web-ui/internal-api-token` | `journalctl -u pi-web-ui -f` | Useful when debugging local consumers of the backend API. |
@@ -194,6 +194,9 @@ jq -c '.' ~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl
 # agy-owned conversation SQLite DBs (one per agy conversation UUID)
 ls -la ~/.gemini/antigravity-cli/conversations/
 
+# Pi-owned per-turn agy logs (best for conversation-id diagnosis)
+ls -lt ~/.pi-web-ui/antigravity-sessions/agy-logs/ | head
+
 # agy CLI logs
 ls -lt ~/.gemini/antigravity-cli/log/cli-*.log | head
 tail -n 50 $(ls -t ~/.gemini/antigravity-cli/log/cli-*.log | head -1)
@@ -221,8 +224,8 @@ curl "http://localhost:<server-port>/api/models?sdkType=antigravity"
 
 - **agy not available** → `agy --version` fails; check `AGY_BINARY` env var (default: `/root/.local/bin/agy`)
 - **Reply starts mid-sentence** → `rawStdoutLength` missing or wrong in the session JSONL; this tracks the trimmed cumulative stdout length the next resumed `agy` call should slice from. Fix: inspect the JSONL, confirm `rawStdoutLength` is present and growing each turn.
-- **Model forgets earlier turns** → conversation ID mismatch; confirm all JSONL entries share the same `conversationId` and that UUID exists in `~/.gemini/antigravity-cli/conversations/`. If `conversationId` is `null` for the first turn, the next turn started a fresh conversation.
-- **Conversation ID is null after first turn** → the `.db` snapshot diff failed to detect the new file; check the conversations directory for a file newer than the turn's timestamp.
+- **Model forgets earlier turns** → conversation ID mismatch; confirm all JSONL entries share the same `conversationId`, that UUID exists in `~/.gemini/antigravity-cli/conversations/`, and that the first turn's per-run log contains the same `Print mode: conversation=<uuid>, sending message` line. If the log shows a different UUID than the JSONL, the session was bound to the wrong agy conversation.
+- **Conversation ID is null after first turn** → the per-run log did not contain a sent-conversation line and the `.db` fallback failed to detect the new file; check the conversations directory for a file newer than the turn's timestamp.
 - **agy hangs / timeout** → inspect `--print-timeout` setting (default 10m); check the latest agy log file in `~/.gemini/antigravity-cli/log/`
 - **Auth expired** → `agy -p "Reply OK"` will prompt to re-login; complete auth via `agy` interactively
 

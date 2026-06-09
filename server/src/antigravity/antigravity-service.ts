@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { spawn } from 'node:child_process';
@@ -13,13 +13,77 @@ import { config } from '../config.js';
 const AGY_CONVERSATION_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations');
 const AGY_BINARY = process.env.AGY_BINARY || '/root/.local/bin/agy';
 
-async function listConversationIds(): Promise<Set<string>> {
+export interface ConversationFileInfo {
+  id: string;
+  size: number;
+  mtimeMs: number;
+}
+
+async function listConversationFiles(): Promise<Map<string, ConversationFileInfo>> {
+  const conversations = new Map<string, ConversationFileInfo>();
   try {
     const files = await readdir(AGY_CONVERSATION_DIR);
-    return new Set(files.filter((f) => f.endsWith('.db')).map((f) => f.slice(0, -3)));
+    for (const file of files) {
+      if (!file.endsWith('.db')) continue;
+      const id = file.slice(0, -3);
+      try {
+        const fileStat = await stat(path.join(AGY_CONVERSATION_DIR, file));
+        conversations.set(id, { id, size: fileStat.size, mtimeMs: fileStat.mtimeMs });
+      } catch {
+        // Conversation files can disappear while agy is updating them; ignore unstable entries.
+      }
+    }
   } catch {
-    return new Set();
+    return conversations;
   }
+  return conversations;
+}
+
+export function pickNewConversationId(
+  before: Map<string, ConversationFileInfo>,
+  after: Map<string, ConversationFileInfo>,
+): string | null {
+  const candidates = [...after.values()].filter((info) => !before.has(info.id));
+  if (candidates.length === 0) return null;
+
+  // agy can create small transient DBs before the print-mode conversation that
+  // actually receives the user message. Prefer the DB that grew the most, then
+  // the most recently modified one, instead of relying on readdir() order.
+  candidates.sort((a, b) =>
+    b.size - a.size ||
+    b.mtimeMs - a.mtimeMs ||
+    a.id.localeCompare(b.id),
+  );
+  return candidates[0].id;
+}
+
+export function extractSentConversationIdFromAgyLog(logText: string): string | null {
+  const re = /Print mode: conversation=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}), sending message/g;
+  let id: string | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(logText)) !== null) {
+    id = match[1];
+  }
+  return id;
+}
+
+export function applySentConversationId(
+  requestedConversationId: string | null,
+  sentConversationId: string | null,
+): string | null {
+  if (!sentConversationId) return requestedConversationId;
+  if (requestedConversationId && requestedConversationId !== sentConversationId) {
+    throw new Error(`agy sent prompt to conversation ${sentConversationId} instead of requested ${requestedConversationId}; refusing to rebind this session implicitly`);
+  }
+  return sentConversationId;
+}
+
+async function createAgyRunLogPath(sessionId: string): Promise<string> {
+  const logDir = path.join(config.antigravitySessionDir, 'agy-logs');
+  await mkdir(logDir, { recursive: true, mode: 0o700 });
+  await chmod(logDir, 0o700).catch(() => undefined);
+  const safeSessionId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return path.join(logDir, `${safeSessionId}-${Date.now()}-${randomUUID()}.log`);
 }
 
 function runAgy(args: string[], cwd: string, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
@@ -234,10 +298,14 @@ export class AntigravityService {
         conversationId = history[history.length - 1].conversationId;
       }
 
+      // Snapshot conversation dir before call (fallback for detecting new conv ID on first turn)
+      const beforeConversations = conversationId ? new Map<string, ConversationFileInfo>() : await listConversationFiles();
+      const agyLogFile = await createAgyRunLogPath(sessionId);
+
       // Build agy args
       const model = entry.model || config.antigravityDefaultModel;
       const printTimeout = Math.ceil(this.promptTimeoutMs / 60000) + 'm';
-      const args = ['--dangerously-skip-permissions', '--print-timeout', printTimeout];
+      const args = ['--log-file', agyLogFile, '--dangerously-skip-permissions', '--print-timeout', printTimeout];
 
       if (model) args.push('--model', model);
       if (conversationId) {
@@ -245,20 +313,17 @@ export class AntigravityService {
       }
       args.push('-p', prompt);
 
-      // Snapshot conversation dir before call (to detect new conv ID on first turn)
-      const beforeIds = conversationId ? new Set<string>() : await listConversationIds();
+      const { stdout, stderr } = await runAgy(args, entry.cwd, this.promptTimeoutMs);
 
-      const { stdout } = await runAgy(args, entry.cwd, this.promptTimeoutMs);
-
-      // Detect new conversation ID on first turn
+      // agy may create transient conversations before the one that actually
+      // receives the message. Its per-run log exposes the true target.
+      await chmod(agyLogFile, 0o600).catch(() => undefined);
+      const agyLog = await readFile(agyLogFile, 'utf-8').catch(() => '');
+      const sentConversationId = extractSentConversationIdFromAgyLog(`${agyLog}\n${stderr}`);
+      conversationId = applySentConversationId(conversationId, sentConversationId);
       if (!conversationId) {
-        const afterIds = await listConversationIds();
-        for (const id of afterIds) {
-          if (!beforeIds.has(id)) {
-            conversationId = id;
-            break;
-          }
-        }
+        const afterConversations = await listConversationFiles();
+        conversationId = pickNewConversationId(beforeConversations, afterConversations);
       }
 
       const response = extractNewReply(stdout, priorLen);

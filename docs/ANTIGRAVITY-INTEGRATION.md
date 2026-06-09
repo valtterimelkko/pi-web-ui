@@ -47,9 +47,9 @@ Antigravity conversations are tracked via the conversation UUID stored in:
 - `RegistryEntry.antigravityConversationId` (session registry)
 - `AntigravityTurn.conversationId` (JSONL history)
 
-**First turn**: snapshot `~/.gemini/antigravity-cli/conversations/*.db` before and after the `agy -p` call to detect the newly-created conversation UUID.
+**First turn**: pass a per-run `--log-file`, then parse the `Print mode: conversation=<uuid>, sending message` line to capture the conversation that actually received the prompt. A filesystem snapshot of `~/.gemini/antigravity-cli/conversations/*.db` is only a fallback, because `agy` can create small transient conversation DBs before switching to the real print-mode conversation.
 
-**Subsequent turns**: pass `--conversation <uuid>` to resume.
+**Subsequent turns**: pass `--conversation <uuid>` to resume, and keep parsing the per-run log as a sanity check for the actual conversation used.
 
 **Output extraction quirk**: resumed calls include prior assistant replies before the newest reply in stdout. `extractNewReply()` strips the accumulated prior trimmed stdout length to isolate the new response.
 
@@ -143,6 +143,7 @@ All generic scenarios (`smoke`, `follow-up`, `session-info`) work unchanged beca
 - **No tool visibility**: agy tool calls are not surfaced as individual events.
 - **No approvals**: agy runs with `--dangerously-skip-permissions`.
 - **Resumed output accumulation**: if `rawStdoutLength` is missing or corrupted in the JSONL turn log, resumed output slicing can include old text or start mid-sentence.
+- **Conversation DB ambiguity**: `agy` may create transient `.db` files during a first turn. Pi Web UI should trust the per-run log's `Print mode: conversation=...` line before falling back to filesystem detection.
 
 ## Authentication
 
