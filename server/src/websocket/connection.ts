@@ -1546,6 +1546,7 @@ export class WebSocketConnectionManager {
       sessionPath: sessionId,
       sdkType: 'opencode',
       model: entry.model ?? '',
+      thinkingLevel: entry.thinkingLevel ?? undefined,
       messages: [],
       fileTimestamp: 0,
       isStreaming: this.opencodeService.isRunning(sessionId),
@@ -2111,6 +2112,23 @@ export class WebSocketConnectionManager {
         type: 'thinking_level_changed',
         level: message.level,
       });
+      return;
+    }
+
+    if (this.opencodeSessionIds.has(sessionPath)) {
+      try {
+        await this.opencodeService.setThinkingLevel(sessionPath, message.level);
+        this.sendMessage(clientId, {
+          type: 'thinking_level_changed',
+          level: message.level,
+        });
+      } catch (err) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: err instanceof Error ? err.message : 'Failed to set thinking level',
+          code: 'THINKING_LEVEL_ERROR',
+        });
+      }
       return;
     }
 

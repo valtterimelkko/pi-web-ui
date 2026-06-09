@@ -650,6 +650,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
           if (entry.sdkType === 'claude') {
             claudeService.setThinkingLevel(sessionId, body.level);
+          } else if (entry.sdkType === 'opencode') {
+            await opencodeService.setThinkingLevel(sessionId, body.level);
           } else if (entry.sdkType === 'pi') {
             const agentSession = multiSessionManager.getAgentSession(entry.path);
             if (!agentSession) {
@@ -658,7 +660,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             }
             agentSession.setThinkingLevel(body.level);
           } else {
-            sendJson(res, 400, { error: 'Thinking level is not supported for OpenCode', code: 'UNSUPPORTED_OPERATION' });
+            sendJson(res, 400, { error: 'Thinking level not supported for this runtime', code: 'UNSUPPORTED_OPERATION' });
             return;
           }
 

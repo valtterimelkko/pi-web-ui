@@ -10,6 +10,7 @@ import { OpenCodeEventAdapter } from './opencode-event-adapter.js';
 import { opencodeMessagesToReplayEvents } from './opencode-history-replay.js';
 import { OpenCodeSessionSubscribers } from './opencode-session-subscribers.js';
 import type { OpenCodeConfig, OpenCodeSSEEvent, OpenCodePermissionRule } from './opencode-types.js';
+import { applyThinkingBudget, type ThinkingLevel } from './opencode-config-manager.js';
 import { getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
 
@@ -796,6 +797,57 @@ export class OpenCodeService {
       opencodeSessionId: entry.opencodeSessionId,
     });
     return modelId;
+  }
+
+  /**
+   * Apply a thinking level for the current session's model.
+   *
+   * Writes the corresponding thinkingBudget to ~/.config/opencode/opencode.json
+   * and recycles the OpenCode server so the new config takes effect.
+   * The caller is responsible for ensuring no prompts are in-flight.
+   */
+  async setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void> {
+    const entry = await this.registry.get(sessionId);
+    if (!entry) throw new Error(`OpenCode session not found: ${sessionId}`);
+
+    let modelString = entry.model ?? '';
+    if (!modelString) {
+      throw new Error('Cannot set thinking level: session has no model selected');
+    }
+
+    // If the stored model ID has no provider prefix, resolve it via the providers API.
+    // getAvailableModels() only returns zai-coding-plan models and includes the provider field.
+    if (!modelString.includes('/')) {
+      try {
+        const available = await this.getAvailableModels();
+        const found = available.find((m) => m.id === modelString);
+        if (found?.provider) {
+          modelString = `${found.provider}/${modelString}`;
+        }
+      } catch {
+        // Non-fatal; applyThinkingBudget will be a no-op if provider is still missing.
+      }
+    }
+
+    await applyThinkingBudget(modelString, level);
+
+    await this.registry.upsert({
+      ...entry,
+      id: entry.id,
+      sdkType: 'opencode',
+      cwd: entry.cwd,
+      thinkingLevel: level,
+      opencodeSessionId: entry.opencodeSessionId,
+    });
+
+    // Tear down SSE subscription before recycling so it can re-attach cleanly
+    if (this.sseUnsubscribe) {
+      this.sseUnsubscribe();
+      this.sseUnsubscribe = null;
+      this.sseStarted = false;
+    }
+
+    await this.processManager.recycle(`thinking level changed to ${level}`);
   }
 
   private async ensureServer(): Promise<void> {

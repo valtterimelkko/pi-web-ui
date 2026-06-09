@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import type {
   ValidationAssertion,
   ValidationCapabilities,
@@ -7,6 +10,23 @@ import type {
   ValidationScenarioResult,
 } from './types.js';
 import { collectValidationSummary } from './event-recorder.js';
+
+interface OpenCodeJsonConfig {
+  provider?: Record<string, {
+    models?: Record<string, { options?: Record<string, unknown> }>;
+  }>;
+  [key: string]: unknown;
+}
+
+function findThinkingBudget(cfg: OpenCodeJsonConfig): number | null {
+  for (const prov of Object.values(cfg.provider ?? {})) {
+    for (const model of Object.values(prov.models ?? {})) {
+      const budget = model.options?.['thinkingBudget'];
+      if (typeof budget === 'number') return budget;
+    }
+  }
+  return null;
+}
 
 function requireCapability(
   capabilities: ValidationCapabilities,
@@ -160,6 +180,128 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
           scenarioId: 'session-info',
           runtime: context.runtime,
           passed: assertions.every((assertion) => assertion.passed),
+          assertions,
+        };
+      });
+    },
+  },
+  'thinking-level': {
+    id: 'thinking-level',
+    description: 'Verify thinking level changes write the correct thinkingBudget to opencode.json and clean up on off.',
+    async run(context) {
+      const unsupportedReason = requireCapability(context.capabilities, context.runtime, 'supportsThinkingLevel');
+      if (unsupportedReason) {
+        return {
+          scenarioId: 'thinking-level',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: unsupportedReason,
+          assertions: [],
+        };
+      }
+
+      if (context.runtime !== 'opencode') {
+        return {
+          scenarioId: 'thinking-level',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: 'thinking-level config-file validation only applies to the opencode runtime',
+          assertions: [],
+        };
+      }
+
+      const configPath = path.join(os.homedir(), '.config', 'opencode', 'opencode.json');
+
+      function readConfig(): OpenCodeJsonConfig {
+        try {
+          return JSON.parse(readFileSync(configPath, 'utf-8')) as OpenCodeJsonConfig;
+        } catch {
+          return {};
+        }
+      }
+
+      return withEphemeralSession(context, async (sessionId) => {
+        const assertions: ValidationAssertion[] = [];
+
+        // Capability check
+        const caps = context.capabilities.runtimes.opencode;
+        assertions.push({
+          name: 'capability_supportsThinkingLevel',
+          passed: caps.supportsThinkingLevel === true,
+          details: `supportsThinkingLevel=${String(caps.supportsThinkingLevel)}`,
+        });
+
+        // setThinkingLevel requires a model to be set in the registry (needed to
+        // know which provider/model key to write in opencode.json).
+        let modelOk = false;
+        try {
+          await context.client.controlSession(sessionId, { action: 'set_model', modelId: 'glm-5.1' });
+          modelOk = true;
+          assertions.push({ name: 'set_model', passed: true, details: 'model set to glm-5.1' });
+        } catch (err) {
+          assertions.push({ name: 'set_model', passed: false, details: String(err) });
+        }
+
+        if (!modelOk) {
+          return {
+            scenarioId: 'thinking-level',
+            runtime: context.runtime,
+            passed: false,
+            assertions,
+          };
+        }
+
+        // Set thinking level to high
+        let controlOk = false;
+        try {
+          const result = await context.client.controlSession(sessionId, { action: 'set_thinking_level', level: 'high' });
+          controlOk = true;
+          assertions.push({
+            name: 'set_thinking_level_high',
+            passed: true,
+            details: JSON.stringify(result),
+          });
+        } catch (err) {
+          assertions.push({
+            name: 'set_thinking_level_high',
+            passed: false,
+            details: String(err),
+          });
+        }
+
+        if (controlOk) {
+          // Verify opencode.json was written with the correct budget (high = 25600)
+          const cfgHigh = readConfig();
+          const highBudget = findThinkingBudget(cfgHigh);
+          assertions.push({
+            name: 'config_written_high',
+            passed: highBudget === 25_600,
+            details: `thinkingBudget=${highBudget} (expected 25600)`,
+          });
+
+          // Reset to off — should clean up the config entry
+          try {
+            await context.client.controlSession(sessionId, { action: 'set_thinking_level', level: 'off' });
+            assertions.push({ name: 'set_thinking_level_off', passed: true, details: 'off accepted' });
+          } catch (err) {
+            assertions.push({ name: 'set_thinking_level_off', passed: false, details: String(err) });
+          }
+
+          const cfgOff = readConfig();
+          const offBudget = findThinkingBudget(cfgOff);
+          assertions.push({
+            name: 'config_cleaned_off',
+            passed: offBudget === null,
+            details: `thinkingBudget after off=${offBudget} (expected null/removed)`,
+          });
+        }
+
+        return {
+          scenarioId: 'thinking-level',
+          runtime: context.runtime,
+          passed: assertions.every((a) => a.passed),
           assertions,
         };
       });

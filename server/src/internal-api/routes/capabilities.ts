@@ -64,7 +64,7 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsFollowUp: true,
           supportsSteer: false,
           supportsModelSwitch: true,
-          supportsThinkingLevel: false,
+          supportsThinkingLevel: true,
           supportsPinning: true,
           supportsReplayHistory: true,
           supportsApprovals: true,
