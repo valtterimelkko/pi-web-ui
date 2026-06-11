@@ -51,6 +51,36 @@ Improve Pi Web UI safely with small, verified changes. Prefer targeted fixes ove
    - use `webapp-testing` for localhost/dev-server verification
    - use `playwright-cli` only for live/external site verification
 5. **Before commit/push:** review `git status --short` and `git diff --stat`.
+6. **Before commit/push:** explicitly verify that no secrets, local env files, tokens, auth dumps, session files, cookies, or machine-specific private artifacts are being added.
+
+## Repository Hygiene / Secret-Safety Rules
+
+Treat this repo as permanently public.
+
+### Never commit
+- `.env`, `.env.local`, `.env.production`, `.env.production.bak`, `server/.env`, or any other live env file
+- API keys, bearer tokens, OAuth refresh tokens, cookies, auth.json files, or copied credential snippets
+- real session logs, transcript dumps, local socket tokens, browser storage dumps, or exported request captures containing private data
+- private machine notes under folders that are intentionally kept local-only (for example `agent-os/`)
+
+### Always use placeholders in tracked examples
+- Keep `.env.example` limited to dummy/example values only
+- Use obvious fake values in tests and docs
+- Never replace placeholders in tracked files with working credentials “just temporarily”
+
+### Respect `.gitignore`
+- If a file is meant to stay local-only, make sure it is gitignored before generating or editing it
+- If you create a new class of sensitive local artifact, update `.gitignore` in the same change
+- Do not use `git add -f` on ignored secret-bearing files
+
+### Check before committing
+Run at least:
+```bash
+git status --short
+git diff --stat
+git diff --cached --stat
+```
+If anything looks like an env file, credential file, session artifact, local runbook dump, or unexpected generated output, stop and inspect before committing.
 
 ## Repo Map
 
