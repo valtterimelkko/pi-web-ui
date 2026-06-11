@@ -2,6 +2,8 @@
 
 Reading order for LLM coding agents working on Pi Web UI.
 
+Many docs below intentionally contain concrete paths, socket locations, service names, and maintainer runbook commands because this repository doubles as a live operational manual. For public adopters, read those as worked examples and adapt them to your own environment.
+
 If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` before reading deeper architecture docs.
 
 ## 1. Agent quick start
@@ -22,6 +24,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 
 ## 5. Runtime deep-dives
 - [`PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md) — Pi SDK worker architecture
+- [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md) — Which behaviours are core vs enhanced by companion Pi extensions / OpenCode plugins
 - [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md) — Claude legacy-direct vs channel-backed backend modes, logs, and failure modes
 - [`CLAUDE-CHANNEL-NATIVE-HOOK-ROUTING-DESIGN.md`](./CLAUDE-CHANNEL-NATIVE-HOOK-ROUTING-DESIGN.md) — Proposed safer design for routing richer native Claude hook events into the Web UI
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md) — OpenCode Direct architecture

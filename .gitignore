@@ -45,6 +45,7 @@ playwright-report/
 test-results/
 tests/screenshots/
 cookies.txt
+agent-os/
 
 # Python
 __pycache__/
