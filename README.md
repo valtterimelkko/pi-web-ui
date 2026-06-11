@@ -33,6 +33,26 @@ It is designed for workflows where you may want to:
 
 For a longer account of why it was created, how the runtime mix evolved, and how it is used in day-to-day practice, see [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md).
 
+## Make it your own
+
+This repo works well for its original maintainer, but it is also meant to be a strong starting point for other people to adapt.
+
+You do **not** need to use all four runtime paths the same way. For example:
+- you might use it mainly as a **Pi** web UI
+- you might use it mainly as an **OpenCode** web UI
+- you might ignore voice features entirely
+- you might swap dictation/TTS providers
+- you might fork it and tune the runtime mix around your own subscriptions, models, or hosting preferences
+
+A concrete example from the maintainer's own setup: the **OpenCode** path is used with Z.AI / GLM coding plans because that provider/runtime combination was practical there even when the same route was not available through Pi. Another user might make a very different choice and still find the same browser shell useful.
+
+The intention is not that every future commit will be universally right for every user. Some people may prefer to:
+- follow upstream changes from this repo selectively
+- run only a subset of the runtime paths
+- fork the repo and evolve it in their own direction
+
+That is an expected and healthy way to use this project.
+
 ## What it does
 
 Pi Web UI combines:
@@ -75,6 +95,19 @@ That does not make them unusable, but it does mean adopters should treat those i
 - Voice dictation and Drive Mode read-aloud/dictation flow
 - Security hardening: cookie auth, CSRF, origin validation, rate limiting, prompt-injection detection
 - Health/config/model endpoints for debugging and operations
+
+## Runtime/provider flexibility
+
+The repo is intentionally opinionated enough to be useful, but not so rigid that adopters must use the same providers or services.
+
+Examples of components you may reasonably replace or reconfigure:
+- the OpenCode-backed model/provider mix
+- the voice dictation provider
+- the text-to-speech path
+- companion extensions/plugins
+- runtime paths you do not personally need
+
+The maintained version currently uses fast OpenAI-backed dictation/read-aloud flows because they work well in practice, but there is nothing sacred about that choice. If you prefer local Whisper, a different hosted STT provider, or a different TTS path, this repo is intended to be modifiable.
 
 ## Companion extensions and plugins
 

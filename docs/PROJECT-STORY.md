@@ -53,6 +53,8 @@ Typical personal usage patterns include:
 - using voice dictation and Drive Mode when typing is inconvenient or impossible
 - combining the browser UI with companion Pi extensions and OpenCode plugins to get richer planning, memory, goal-tracking, and orchestration behaviour
 
+A concrete example: the OpenCode path has been useful with Z.AI / GLM coding plans because that provider/runtime combination was practical there even when the same route was not available through Pi. That kind of pragmatic provider choice is part of the reason the project evolved into a multi-runtime surface rather than staying loyal to a single harness.
+
 ## Why the repo feels the way it does
 
 Some aspects of the architecture and docs only make sense when viewed through that personal working context.
@@ -71,3 +73,5 @@ The public version of this repo is meant to be both:
 - an honest record of a real, evolving personal agent workspace
 
 It is not trying to pretend that all runtimes are equally clean, equally official, or equally extensible. The project is strongest when understood as a practical multi-runtime interface shaped by real usage constraints, changing upstream policies, and a preference for owning more of the interface layer personally.
+
+It should also be understood as a platform people may reasonably fork and adapt. Some adopters may simply track the upstream repo and selectively pull changes. Others may use it as a starting point, keep the pieces they like, and evolve it around their own providers, models, runtime preferences, or operational constraints. That is a feature of the project, not a misuse of it.
