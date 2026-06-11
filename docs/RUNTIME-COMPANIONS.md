@@ -58,9 +58,19 @@ If you only want a browser shell around a single runtime, start with the runtime
 
 If you want the fuller experience that motivated this project, install the relevant companion extension/plugin packs for the runtime(s) you care about.
 
+## Companion repositories
+
+The public companion repositories are:
+
+- **Pi extensions:** [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
+- **OpenCode plugins:** [valtterimelkko/opencode-plugins](https://github.com/valtterimelkko/opencode-plugins)
+
+These repos contain the extension/plugin layers referenced in this document.
+
 ## Related docs
 
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+- [`PROJECT-STORY.md`](./PROJECT-STORY.md)
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)
 - [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)

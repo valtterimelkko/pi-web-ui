@@ -31,6 +31,8 @@ It is designed for workflows where you may want to:
 - access coding agents from mobile devices or while away from your main machine
 - extend the Pi-based path with custom extensions and the OpenCode path with custom plugins
 
+For a longer account of why it was created, how the runtime mix evolved, and how it is used in day-to-day practice, see [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md).
+
 ## What it does
 
 Pi Web UI combines:
@@ -102,6 +104,7 @@ See [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md).
 - **Pi worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
 - **Drive Mode feature:** [`docs/DRIVE-MODE.md`](./docs/DRIVE-MODE.md)
 - **Companion runtime notes:** [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md)
+- **Project story / evolution:** [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md)
 
 ### Claude-specific note
 If you want to use Claude the same way this project does, read [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md) carefully. The richer Claude path is not just `claude -p`; it depends on the local `pi-claude-channel/` bridge, managed hook configuration, and the channel-backed event flow that feeds tool/permission/session events back into the Web UI.
