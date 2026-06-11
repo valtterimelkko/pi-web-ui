@@ -15,7 +15,7 @@ The result is a persistent web UI with real-time streaming, mobile-friendly sess
 
 This project builds on top of other agent ecosystems rather than replacing them.
 
-- **Pi Coding Agent** is the original foundation and inspiration for the first runtime path. See the upstream project at [github.com/mariozechner/pi-coding-agent](https://github.com/mariozechner/pi-coding-agent).
+- **Pi Coding Agent** is the original foundation and inspiration for the first runtime path. See the upstream website at [shittycodingagent.ai](https://shittycodingagent.ai/) and the current codebase at [github.com/earendil-works/pi-mono/tree/main/packages/coding-agent](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent).
 - **Claude Code**, **OpenCode**, and **Antigravity** each provide their own runtime capabilities; Pi Web UI adds a browser layer, persistence layer, replay layer, and cross-runtime UX around them.
 
 If you use Pi Web UI, you are also depending on the capabilities, constraints, and policies of those upstream runtimes.
