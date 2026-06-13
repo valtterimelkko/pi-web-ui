@@ -162,13 +162,31 @@ This section stays at the “where would it plug in?” level, not detailed impl
 **Why it is promising:**
 Pi is the most internally controllable path.
 
-**Feasibility assessment:** **Most feasible of all four runtimes.** Pi Web UI owns the session lifecycle, event forwarding, and worker orchestration for this path.
+**Feasibility assessment:** **Most feasible of all four runtimes, and the solution is simpler than it looks.**
 
-**Concrete interception point:** `server/src/pi/pi-service.ts:198` — the `session.bindExtensions()` call. Pi Web UI already registers extensions here via the `@earendil-works/pi-coding-agent` extension API. A compression extension using the `pi.registerTool()` wrapper pattern can intercept tool execution and compress results before they are returned to the model's context.
+**The concept:** build a standard Pi coding agent extension. No Pi Web UI-specific adapter code needed — Pi Web UI loads extensions via the same `@earendil-works/pi-coding-agent` extension system as the Pi CLI. An extension written once and placed in `~/.pi/agent/extensions/` (global) or `.pi/extensions/` (project-local) is automatically active in both the Pi CLI and in Pi Web UI sessions. Nothing in Pi Web UI's server layer needs to change.
 
-Important: `server/src/pi/event-forwarder.ts` also sees `tool_execution_end` events (line 274, `result: event.result`), but this is **post-hoc** — it translates events for the browser UI after the Pi SDK has already consumed the result. Compressing there would only affect what the UI displays, not the model's context. The correct place is the extension layer at `bindExtensions()`.
+Use the **`pi-extension` skill** to build this (skill name: `pi-extension`).
 
-**What to implement:** a Pi Web UI-registered compression extension that wraps each tool's execute function: runs the original tool, inspects the output size, compresses if above a threshold, stores the original by hash in a local artefact store, and returns the compressed form to the Pi session. Custom-build (not Headroom library) is the right choice here — the Pi runtime path is internal enough that the compression logic can be written directly without coupling to Headroom's architecture.
+**Concrete interception point:** `pi.on("tool_result", handler)` in the extension. This hook fires after tool execution and **before the result enters the model's context**. Handlers chain as middleware — returning `{ content: [...] }` from the handler replaces what the model sees:
+
+```typescript
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+  pi.on("tool_result", async (event, _ctx) => {
+    const raw = event.content.map(c => "text" in c ? c.text : "").join("");
+    if (raw.length < COMPRESSION_THRESHOLD) return; // pass through unchanged
+    const compressed = compress(raw); // custom compression logic
+    storeOriginal(event.toolCallId, raw); // reversible artefact store
+    return { content: [{ type: "text", text: compressed }] };
+  });
+}
+```
+
+**Important:** `server/src/pi/event-forwarder.ts` also sees `tool_execution_end` events (line 274), but that is post-hoc — it translates events for the browser UI after the model has already consumed the result. That is the wrong place.
+
+**Custom-build is right here** (not the Headroom library): the Pi runtime path is internal enough that compression logic can be written directly. The compression algorithm itself can be benchmarked against Headroom's published results without depending on Headroom's architecture.
 
 ### 2. Claude runtime
 **Nature of runtime:** legacy `claude -p` subprocesses or the channel-backed Claude Code path.
@@ -275,7 +293,7 @@ A local store that:
 
 ### 3. Runtime adapters
 A separate adapter per runtime family:
-- **Pi adapter** — compression extension registered via `bindExtensions()` in `server/src/pi/pi-service.ts:198`; custom-build
+- **Pi adapter** — a Pi coding agent extension (`pi-extension` skill) using `pi.on("tool_result", ...)` to intercept and compress results before they reach the model; auto-applies to both Pi CLI and Pi Web UI sessions; no Pi Web UI server code changes required
 - **Claude adapter** — `PostToolUse` hook in the channel-backed path (`server/src/claude/claude-channel-hooks-config.ts`); calls `compress()` from `headroom-ai`; channel-backed only (legacy direct path has no hook surface)
 - **OpenCode adapter** — observability and system-prompt shaping only until upstream issue #13574/#3384 is fixed
 - **Antigravity adapter** — post-hoc metrics only; no live interception possible
