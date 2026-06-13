@@ -11,11 +11,12 @@ vi.mock('../../../src/claude/claude-channel-process-manager.js', async () => {
       isRunning: vi.fn().mockReturnValue(true),
       healthCheck: vi.fn().mockResolvedValue(true),
       getState: vi.fn().mockReturnValue({ process: null, status: 'running', startedAt: Date.now() }),
-      switchModel: vi.fn(),
-      setThinkingLevel: vi.fn(),
+      switchModel: vi.fn().mockReturnValue(false),
+      setThinkingLevel: vi.fn().mockReturnValue(false),
       markPromptSent: vi.fn(),
       markPromptComplete: vi.fn(),
       isBusy: vi.fn().mockReturnValue(false),
+      waitForIdle: vi.fn().mockResolvedValue(true),
       getLastBusyAt: vi.fn().mockReturnValue(null),
       sendInterrupt: vi.fn(),
       clearContext: vi.fn().mockResolvedValue(undefined),
@@ -998,7 +999,9 @@ describe('ClaudeChannelService', () => {
       const onComplete = vi.fn();
       await service.sendPrompt(sessionId, 'Hello', onEvent, onComplete);
 
-      vi.advanceTimersByTime(3_000);
+      // Advance past the IDLE_EVENT_SILENCE_MS (60s) so the idle handler
+      // treats the prompt as truly silent (no channel events for 60+ seconds).
+      vi.advanceTimersByTime(61_000);
 
       pmInstance.__emitter.emit('idle');
 
@@ -1208,6 +1211,10 @@ describe('ClaudeChannelService', () => {
         expect(service.isRunning(sessionId)).toBe(false);
       });
 
+      // Advance past the post-turn settle window so the next sendPrompt
+      // doesn't wait for it.
+      await vi.advanceTimersByTimeAsync(5_000);
+
       pmInstance.clearContext.mockClear();
 
       await service.sendPrompt(sessionId, 'Follow-up', vi.fn(), vi.fn());
@@ -1237,6 +1244,9 @@ describe('ClaudeChannelService', () => {
         expect(service.isRunning(sessionA)).toBe(false);
       });
 
+      // Advance past the post-turn settle window
+      await vi.advanceTimersByTimeAsync(5_000);
+
       pmInstance.clearContext.mockClear();
 
       // Now send first prompt from session B — should clear again
@@ -1262,6 +1272,9 @@ describe('ClaudeChannelService', () => {
       await vi.waitFor(() => {
         expect(service.isRunning(sessionId)).toBe(false);
       });
+
+      // Advance past the post-turn settle window
+      await vi.advanceTimersByTimeAsync(5_000);
 
       pmInstance.clearContext.mockClear();
 
@@ -1328,6 +1341,9 @@ describe('ClaudeChannelService', () => {
         expect(service.isRunning(sessionA)).toBe(false);
       });
 
+      // Advance past the post-turn settle window
+      await vi.advanceTimersByTimeAsync(5_000);
+
       pmInstance.switchModel.mockClear();
       pmInstance.setThinkingLevel.mockClear();
 
@@ -1348,6 +1364,82 @@ describe('ClaudeChannelService', () => {
 
       expect(pmInstance.switchModel).toHaveBeenCalledWith('sonnet');
       expect(pmInstance.setThinkingLevel).toHaveBeenCalledWith('medium');
+    });
+
+    it('should delay before dispatching when the model actually changed', async () => {
+      const sessionId = 'restore-delay';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-delay',
+        cwd: '/tmp', status: 'idle', model: 'opus', thinkingLevel: 'high',
+      });
+
+      // switchModel returns true → model changed → delay should fire
+      pmInstance.switchModel.mockReturnValue(true);
+      pmInstance.setThinkingLevel.mockReturnValue(false);
+
+      const wsInstance = findWsMock() as WsMock;
+      const sendPromise = service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      // The prompt should NOT have been sent yet (delay is in progress)
+      await vi.advanceTimersByTimeAsync(500);
+      expect(wsInstance.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'prompt' }));
+
+      // After the full delay, the prompt should be dispatched
+      await vi.advanceTimersByTimeAsync(500);
+      await sendPromise;
+
+      expect(wsInstance.send).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'prompt',
+        sessionId: 'cs-delay',
+      }));
+    });
+
+    it('should wait for PTY settle after a recent agent_end before slash commands', async () => {
+      const sessionId = 'settle-test';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-settle',
+        cwd: '/tmp', status: 'idle', model: 'opus', thinkingLevel: 'high',
+      });
+
+      pmInstance.switchModel.mockReturnValue(false);
+      pmInstance.setThinkingLevel.mockReturnValue(false);
+
+      const wsInstance = findWsMock() as WsMock;
+
+      // First prompt — establishes the session
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      // Complete the turn — this sets lastAgentEndAt
+      wsInstance.__emitter.emit('event', {
+        type: 'agent_end', sessionId: 'cs-settle', result: 'ok', timestamp: Date.now(),
+      });
+      await vi.waitFor(() => {
+        expect(service.isRunning(sessionId)).toBe(false);
+      });
+
+      // For the second prompt, switchModel returns true → model changed + delay
+      pmInstance.switchModel.mockReturnValue(true);
+      pmInstance.setThinkingLevel.mockReturnValue(false);
+      pmInstance.switchModel.mockClear();
+
+      const sendPromise = service.sendPrompt(sessionId, 'Follow-up', vi.fn(), vi.fn());
+
+      // After 2s: settle still in progress (3s window), model NOT switched yet
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pmInstance.switchModel).not.toHaveBeenCalled();
+
+      // After 1s more (3s total): settle done, model switch fires, 1s delay starts
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(pmInstance.switchModel).toHaveBeenCalledWith('opus');
+
+      // After 1s more (4s total): delay done, prompt dispatched
+      await vi.advanceTimersByTimeAsync(1_000);
+      await sendPromise;
+
+      expect(wsInstance.send).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'prompt',
+        content: 'Follow-up',
+      }));
     });
   });
 });

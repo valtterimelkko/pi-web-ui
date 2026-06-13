@@ -53,8 +53,8 @@ describe('Channel Prompt Flow', () => {
       stop: async () => {},
       healthCheck: async () => true,
       isRunning: () => true,
-      switchModel: () => {},
-      setThinkingLevel: () => {},
+      switchModel: () => false,
+      setThinkingLevel: () => false,
       markPromptSent: () => {},
       markPromptComplete: () => {},
       isBusy: () => false,
@@ -205,25 +205,28 @@ describe('Channel Prompt Flow', () => {
     expect(entry?.status).toBe('idle');
   });
 
-  it('should handle multiple prompts in sequence', async () => {
+  it('should handle multiple prompts in sequence', { timeout: 30_000 }, async () => {
     const { sessionId, claudeSessionId } = await service.createSession(tmpDir);
 
     for (let i = 0; i < 3; i++) {
-      const completionPromise = new Promise<void>((resolve, reject) => {
-        service.sendPrompt(
-          sessionId,
-          `Prompt ${i}`,
-          () => {},
-          (error) => { if (error) reject(error); else resolve(); },
-        );
-      });
+        const completionPromise = new Promise<void>((resolve, reject) => {
+          service.sendPrompt(
+            sessionId,
+            `Prompt ${i}`,
+            () => {},
+            (error) => { if (error) reject(error); else resolve(); },
+          );
+        });
 
-      await new Promise(r => setTimeout(r, 100));
-      mockServer.simulateReply(claudeSessionId, `Response ${i}`);
-      await new Promise(r => setTimeout(r, 50));
-      mockServer.simulateAgentEnd(claudeSessionId);
-      await completionPromise;
-    }
+        // First iteration has no settle wait (lastAgentEndAt === 0).
+        // Later iterations need to wait for the 3s post-turn settle window.
+        const preDispatchDelay = i === 0 ? 200 : 3500;
+        await new Promise(r => setTimeout(r, preDispatchDelay));
+        mockServer.simulateReply(claudeSessionId, `Response ${i}`);
+        await new Promise(r => setTimeout(r, 50));
+        mockServer.simulateAgentEnd(claudeSessionId);
+        await completionPromise;
+      }
 
     const store = new ClaudeSessionStore(sessionDir);
     const history = await store.loadHistory(sessionId);

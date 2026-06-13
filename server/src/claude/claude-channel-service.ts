@@ -31,6 +31,8 @@ interface PendingPrompt {
   onComplete: (error?: Error) => void;
   sentAt: number;
   timer: ReturnType<typeof setTimeout>;
+  /** Timestamp of the most recent channel event forwarded to this prompt. */
+  lastEventAt: number;
 }
 
 interface LatePromptListener {
@@ -44,6 +46,22 @@ const MAX_PINNED_SESSIONS = 2;
 const PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
 const LATE_PROMPT_LISTENER_TTL_MS = 30 * 60 * 1000;
 const IDLE_DETECTION_GRACE_MS = 3_000;
+/**
+ * How recently a channel event must have arrived for the PTY idle handler
+ * to leave the turn alone. Channel/MCP prompts may not produce PTY busy
+ * indicators at all, and Claude's thinking phase can last 10-30 seconds
+ * with zero events.  Only force-complete if the channel has been truly
+ * silent for this long.
+ */
+const IDLE_EVENT_SILENCE_MS = 60_000;
+/**
+ * Minimum time to wait after an agent_end before writing PTY slash commands
+ * (/model, /effort). Claude Code's agent_end can fire before the PTY has
+ * finished rendering the response, and slash commands written during
+ * rendering are silently lost. This settle window ensures commands are
+ * processed correctly.
+ */
+const POST_TURN_SETTLE_MS = 3_000;
 
 type PromptCompletionError = Error & {
   code?: string;
@@ -80,6 +98,8 @@ export class ClaudeChannelService {
   private sessionContextMeta: Map<string, SessionContextMeta> = new Map();
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private started = false;
+  /** Timestamp of the most recent agent_end event. */
+  private lastAgentEndAt = 0;
   /** Session whose turn was dispatched most recently — owns the shared PTY. */
   private lastActiveSessionId: string | null = null;
   /**
@@ -236,6 +256,12 @@ export class ClaudeChannelService {
 
         const eventTarget = pending ?? late;
         if (eventTarget) {
+          // Track when the last channel event arrived so handlePtyIdle
+          // can avoid force-completing turns where events are still flowing
+          // (PTY busy indicators may not appear for channel/MCP prompts).
+          if (pending) {
+            pending.lastEventAt = Date.now();
+          }
           try {
             eventTarget.onEvent(ne);
           } catch { /* non-fatal */ }
@@ -252,6 +278,7 @@ export class ClaudeChannelService {
         });
 
         if (ne.type === 'agent_end' && internalSid) {
+          this.lastAgentEndAt = Date.now();
           const usage = (ne.data as Record<string, unknown> | undefined)?.usage as
             | { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
             | undefined;
@@ -397,6 +424,13 @@ export class ClaudeChannelService {
     // sending a new prompt, so events from this turn should flow normally.
     this.abortedSessions.delete(sessionId);
 
+    // ── Wait for PTY to settle after the previous turn ──
+    // Claude Code's agent_end can fire before the PTY has finished rendering
+    // the response. PTY slash commands (/model, /effort) written during
+    // rendering are silently lost. We wait for both the busy indicator to
+    // clear AND a minimum settle window after the last agent_end.
+    await this.waitForPtySettle();
+
     // ── Restore session model & thinking level on the shared PTY ──
     // The channel architecture shares a single Claude Code process across
     // all sessions.  Another session's createSession() or setModel() may
@@ -405,8 +439,19 @@ export class ClaudeChannelService {
     // always uses the correct settings.
     const registeredModel = entry.model ?? 'sonnet';
     const registeredThinking = entry.thinkingLevel ?? 'medium';
-    this.processManager.switchModel(registeredModel);
-    this.processManager.setThinkingLevel(registeredThinking);
+    const modelChanged = this.processManager.switchModel(registeredModel);
+    const thinkingChanged = this.processManager.setThinkingLevel(registeredThinking);
+
+    // When the model or thinking level actually changed, Claude Code needs
+    // time to process the /model and /effort PTY commands before the
+    // WebSocket prompt arrives via MCP.  Without this delay, Claude may
+    // process the prompt using the old model.
+    if (modelChanged || thinkingChanged) {
+      console.log(
+        `[ClaudeChannelService] Model/thinking switch: model=${registeredModel}${modelChanged ? ' (changed)' : ''} thinking=${registeredThinking}${thinkingChanged ? ' (changed)' : ''}`,
+      );
+      await new Promise(r => setTimeout(r, 1000));
+    }
 
     // ── Context isolation: clear Claude's context when switching sessions ──
     // The channel architecture shares a single Claude Code process. Without
@@ -454,6 +499,7 @@ export class ClaudeChannelService {
       onEvent,
       onComplete,
       sentAt: Date.now(),
+      lastEventAt: Date.now(),
       timer: setTimeout(() => {
         this.handlePromptTimeout(sessionId);
       }, PROMPT_TIMEOUT_MS),
@@ -774,6 +820,31 @@ export class ClaudeChannelService {
   }
 
   /**
+   * Wait until it is safe to write PTY slash commands (/model, /effort, /clear).
+   * Two conditions must be met:
+   * 1. The PTY busy indicator must be clear (Claude is not actively generating).
+   * 2. At least POST_TURN_SETTLE_MS must have elapsed since the last agent_end,
+   *    because agent_end can fire before the PTY finishes rendering.
+   */
+  private async waitForPtySettle(): Promise<void> {
+    // 1. If the PTY shows a busy indicator, wait for it to clear (max 30s).
+    if (this.processManager.isBusy()) {
+      const idle = await this.processManager.waitForIdle(30_000);
+      if (!idle) {
+        console.warn('[ClaudeChannelService] Timed out waiting for PTY idle before slash commands');
+      }
+    }
+    // 2. Ensure the minimum settle window after the last agent_end.
+    //    Skip if no turn has completed yet (lastAgentEndAt === 0).
+    if (this.lastAgentEndAt > 0) {
+      const settleRemaining = (this.lastAgentEndAt + POST_TURN_SETTLE_MS) - Date.now();
+      if (settleRemaining > 0) {
+        await new Promise(r => setTimeout(r, settleRemaining));
+      }
+    }
+  }
+
+  /**
    * Forward a lightweight liveness ping to every in-flight turn. The Web UI
    * heartbeat uses this to show genuine progress while Claude is mid-turn but
    * not emitting send_event tool calls. Not persisted to the JSONL store.
@@ -793,6 +864,7 @@ export class ClaudeChannelService {
         data: activityData,
       };
       try {
+        pending.lastEventAt = Date.now();
         pending.onEvent(activityEvent);
       } catch { /* non-fatal */ }
     }
@@ -803,9 +875,16 @@ export class ClaudeChannelService {
 
     const now = Date.now();
     for (const [sessionId, pending] of this.pendingPrompts) {
-      if (now - pending.sentAt < IDLE_DETECTION_GRACE_MS) continue;
+      // Only force-complete if NO channel events have arrived recently.
+      // Channel/MCP prompts may never produce PTY busy indicators, and
+      // Claude's thinking phase can last 10-30 seconds with zero events.
+      // If events were flowing recently, the turn is alive — let it
+      // complete normally via agent_end or the 15-minute prompt timeout.
+      const sinceLastEvent = now - pending.lastEventAt;
+      if (sinceLastEvent < IDLE_EVENT_SILENCE_MS) continue;
 
-      console.warn(`[ClaudeChannelService] PTY idle detected while session ${sessionId} (turn ${pending.promptId}) is pending — force-completing`);
+      const elapsed = now - pending.sentAt;
+      console.warn(`[ClaudeChannelService] PTY idle detected while session ${sessionId} (turn ${pending.promptId}) is pending — force-completing (elapsed=${elapsed}ms, sinceLastEvent=${sinceLastEvent}ms)`);
       clearTimeout(pending.timer);
       this.pendingPrompts.delete(sessionId);
       // Register a late listener so any events from Claude's still-running

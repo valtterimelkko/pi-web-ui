@@ -149,6 +149,19 @@ export class ClaudeChannelProcessManager extends EventEmitter {
             console.log('[ClaudeChannel] Auto-approved tool permission prompt');
           }, 300);
         }
+
+        // Auto-confirm model switch dialog ("Switch model? ... 1. Yes ... 2. No")
+        // This appears when switching from a cached model (e.g. haiku→opus) and
+        // blocks the PTY until the user picks an option.
+        const isModelSwitchPrompt = /Switch\s*model\s*\?/i.test(text)
+          || /Yesswitchto/i.test(text);
+        if (isModelSwitchPrompt) {
+          lastAutoApprove = Date.now();
+          setTimeout(() => {
+            proc.write('1\r');
+            console.log('[ClaudeChannel] Auto-confirmed model switch dialog');
+          }, 300);
+        }
       }
 
       this.trackBusyState(text);
@@ -292,17 +305,18 @@ export class ClaudeChannelProcessManager extends EventEmitter {
     });
   }
 
-  switchModel(model: string): void {
+  switchModel(model: string): boolean {
     const proc = this.ptyProcess;
-    if (!proc) return;
-    if (this._currentModel === model) return;
+    if (!proc) return false;
+    if (this._currentModel === model) return false;
     this._currentModel = model;
     proc.write(`/model ${model}\r`);
+    return true;
   }
 
-  setThinkingLevel(level: string): void {
+  setThinkingLevel(level: string): boolean {
     const proc = this.ptyProcess;
-    if (!proc) return;
+    if (!proc) return false;
     // Map the Web UI thinking levels to Claude Code /effort values.
     // Claude Code supports: low, medium, high.
     // Web UI levels: off, minimal, low, medium, high, xhigh
@@ -315,9 +329,10 @@ export class ClaudeChannelProcessManager extends EventEmitter {
       xhigh: 'high',
     };
     const effort = effortMap[level] ?? 'medium';
-    if (this._currentThinkingLevel === effort) return;
+    if (this._currentThinkingLevel === effort) return false;
     this._currentThinkingLevel = effort;
     proc.write(`/effort ${effort}\r`);
+    return true;
   }
 
   /**
@@ -359,6 +374,18 @@ export class ClaudeChannelProcessManager extends EventEmitter {
   /** Whether Claude appears to be actively working on a turn. */
   isBusy(): boolean {
     return this.isBusyState;
+  }
+
+  /**
+   * Poll `isBusy()` until it returns false or the timeout expires.
+   * Returns true if idle was reached, false on timeout.
+   */
+  async waitForIdle(timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.isBusyState && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return !this.isBusyState;
   }
 
   /** Timestamp (ms) of the most recent PTY busy indicator, or null if never set. */

@@ -369,6 +369,34 @@ describe('ClaudeChannelProcessManager', () => {
       expect(manager.isBusy()).toBe(false);
     });
 
+    it('waitForIdle resolves immediately when not busy', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await manager.start();
+
+      expect(manager.isBusy()).toBe(false);
+      const result = await manager.waitForIdle(1000);
+      expect(result).toBe(true);
+    });
+
+    it('waitForIdle resolves when busy state clears', { timeout: 15_000 }, async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await manager.start();
+
+      manager.markPromptSent();
+      expect(manager.isBusy()).toBe(true);
+
+      // Clear busy after a short delay
+      setTimeout(() => manager.markPromptComplete(), 50);
+
+      const result = await manager.waitForIdle(5000);
+      expect(result).toBe(true);
+      expect(manager.isBusy()).toBe(false);
+    });
+
     it('emits throttled activity pings while a turn is in progress', { timeout: 15_000 }, async () => {
       const ptyProc = makeDeferredPty();
       spawnMock.mockImplementationOnce(() => ptyProc);
@@ -413,11 +441,13 @@ describe('ClaudeChannelProcessManager', () => {
       spawnMock.mockImplementationOnce(() => ptyProc);
       await manager.start();
 
-      manager.switchModel('opus');
+      const changed1 = manager.switchModel('opus');
+      expect(changed1).toBe(true);
       expect(writeSpy).toHaveBeenCalledTimes(1);
       expect(writeSpy).toHaveBeenCalledWith('/model opus\r');
 
-      manager.switchModel('opus');
+      const changed2 = manager.switchModel('opus');
+      expect(changed2).toBe(false);
       expect(writeSpy).toHaveBeenCalledTimes(1);
     });
 
