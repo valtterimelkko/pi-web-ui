@@ -294,6 +294,61 @@ At the concept stage, we should not assume:
 - that Antigravity will be as rich or observable as Pi/Claude/OpenCode
 - that compression, memory, planning, and learning all need to ship together
 
+## Headroom out-of-the-box vs custom-build: a decision point for Claude
+
+> This section was added after inspecting the upstream Headroom project (v0.25.0, June 2026, Apache 2.0, ~24.8k stars, actively maintained). See the repo at <https://github.com/chopratejas/headroom> and docs at <https://headroom-docs.vercel.app/docs>.
+
+### What Headroom actually offers (as of June 2026)
+
+Headroom is a real, maintained project. It is not vaporware. It ships:
+- Content-type-aware compression: JSON (70–90%), logs (80–95%), code/AST (40–70%), text (40–60%)
+- CCR (Compressed Content Retrieval): originals stored locally, LLM can fetch via `headroom_retrieve` MCP tool
+- Multiple integration paths: proxy (`headroom proxy --port 8787`), library (`compress()`), MCP server, SDK wrappers, `headroom wrap claude`
+- Explicit Claude Code support via `headroom wrap claude --memory --code-graph`
+
+The hardest part of the custom-build proposal — content-type-aware compression with a reversible CCR store — is already done here.
+
+### Why `headroom wrap claude` does not fit Pi Web UI's channel-backed path
+
+`headroom wrap claude` works by:
+1. Starting Headroom's local proxy on a port
+2. Relaunching Claude Code with modified launch args and `ANTHROPIC_BASE_URL` pointed at the proxy
+
+Pi Web UI's channel-backed Claude path already owns Claude Code's launch process via `claude-channel-process-manager.ts` and PTY supervision. Pi Web UI IS the wrapper. Attempting to also apply `headroom wrap claude` would mean two competing wrappers trying to control the same Claude Code process, which would break PTY supervision, channel hooks, and the plugin bridge.
+
+Headroom's proxy model also carries the risk flagged in the original design doc: Claude Code may behave differently when pointed at a non-native base URL, and channel communication patterns may not survive API-level proxy interception cleanly.
+
+**Verdict: `headroom wrap claude` / proxy mode is not compatible with the channel-backed path as-is.**
+
+### The better fit: Headroom as a library inside Pi Web UI's PostToolUse hook
+
+The right integration is narrower and does not use the proxy at all:
+
+1. **Install Headroom's TypeScript/Node library** as a Pi Web UI server dependency
+2. **Call `compress(toolOutput)`** inside the channel-backed Claude path's `PostToolUse` hook — this is the real interception point already identified for this runtime
+3. **Store the compressed form + original** using Headroom's CCR store (or a Pi Web UI-owned equivalent)
+4. **Inject `headroom_retrieve`** as an MCP tool available to Claude, so it can fetch originals when needed
+
+This approach:
+- uses Headroom's proven compression algorithms without delegating process control
+- preserves Pi Web UI's ownership of Claude Code launch, PTY, and channel hooks
+- avoids the proxy/base-URL conflict entirely
+- gives Claude a retrieval surface via MCP (which is how Headroom's CCR is designed to work anyway)
+
+### Pi SDK: custom-build makes more sense
+
+For Pi SDK, the case for using Headroom out-of-the-box is weaker. Pi SDK is the runtime Pi Web UI controls most deeply, and the interception points are inside the Pi runtime path — not at the Anthropic API call level. Headroom's proxy won't fit there either. A custom artefact compression layer that calls into the same Pi extension/tool-wrapping surface is more natural, and can be benchmarked against Headroom's algorithms on the same content types without being coupled to Headroom's architecture.
+
+### Summary
+
+| Approach | Pi SDK | Claude (channel-backed) |
+|---|---|---|
+| `headroom wrap claude` / proxy | ❌ Wrong fit — Pi Web UI owns the runtime | ❌ Conflicts with PTY supervision and channel hooks |
+| Headroom library (`compress()`) in hook | Could be used for algorithm parity | ✅ Best fit — call in PostToolUse hook, inject `headroom_retrieve` via MCP |
+| Full custom-build | ✅ Best fit — natural control point, benchmarkable | Could be done, but why rewrite Headroom's compression algorithms? |
+
+The pragmatic path: **custom-build for Pi SDK; use Headroom's library (not its proxy) as the compression engine inside Pi Web UI's PostToolUse hook for Claude.**
+
 ## Related internal docs
 
 For the runtime shapes this idea would need to respect, read:
