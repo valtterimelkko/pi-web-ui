@@ -13,6 +13,20 @@ Before implementing anything here, agents should inspect the original Headroom p
 
 Do not assume the README alone is enough. Inspect the current repo shape, integration docs, open issues, and any runtime-specific caveats before making design decisions.
 
+## The core problem
+
+In a long coding session, tool outputs accumulate in the context window. A single directory listing can return thousands of lines. A `cat` of a large file fills thousands of tokens. A bash build output or search result can be enormous. These artefacts are useful once — when the model first reads them — but become noise in every subsequent turn. They sit in the context window doing nothing except taking up space.
+
+As the context window fills with this noise, two things happen:
+
+1. **Auto-compaction triggers early.** Claude Code (and other runtimes) detect that the context is near its limit and run a compaction step. Compaction summarises earlier content to make room. But compaction is coarse: it cannot reliably distinguish between a file read that happened to be in the same turn as a key decision, and a redundant log dump. Task-relevant history can be lost alongside the noise.
+
+2. **The model's effective attention degrades before compaction.** Even before the limit is hit, a context packed with noisy artefacts leaves less room for the parts of the conversation that actually matter: the user's goal, earlier decisions, the current task state. The model still *has* that content, but it is buried.
+
+The result: long, tool-heavy sessions become less reliable not because of any fundamental model limitation, but because the context is carrying artefacts that should never have been there at full size.
+
+**Token billing is a side effect, not the goal.** A session that fits in fewer tokens is cheaper, but that is incidental. The goal is sessions that stay accurate and coherent for longer, because the context window is used for task-relevant content rather than noisy artefacts.
+
 ## Why this document exists
 
 Pi Web UI already unifies four very different runtime paths behind one browser UI:
