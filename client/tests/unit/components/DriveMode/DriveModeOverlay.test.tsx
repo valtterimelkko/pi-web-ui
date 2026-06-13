@@ -34,7 +34,7 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
   }),
   DRIVE_MODE_MODELS: [
     { id: 'kimi-coding/kimi-for-coding', displayName: 'Kimi for Coding', sdkType: 'pi' },
-    { id: 'zai-coding-plan/glm-5.1', displayName: 'GLM-5.1', sdkType: 'opencode' },
+    { id: 'zai-coding-plan/glm-5.2', displayName: 'GLM-5.2', sdkType: 'opencode' },
   ],
 }));
 

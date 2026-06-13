@@ -1,7 +1,7 @@
 /**
  * OpenCode config-file bridge for thinking budget control.
  *
- * GLM-5.1 (and other Z.AI models) support a `thinking_budget` API parameter
+ * GLM-5.x (including GLM-5.2 and other Z.AI models) support a `thinking_budget` API parameter
  * via OpenCode's `provider[id].models[id].options.thinkingBudget` config key.
  * This module reads/writes ~/.config/opencode/opencode.json to apply the
  * requested thinking level before the OpenCode server is recycled.
@@ -12,7 +12,7 @@
  *   low      →  4 096 tokens  (OpenAI o3-low / Claude light thinking range)
  *   medium   → 10 240 tokens  (near Anthropic's 10k default recommendation)
  *   high     → 25 600 tokens  (OpenAI o3-high / Claude 16–32k range)
- *   xhigh    → 51 200 tokens  (deep reasoning, ~half of GLM-5.1 output limit)
+ *   xhigh    → 51 200 tokens  (deep reasoning, ~half of the GLM-5.x output limit)
  */
 
 import { readFile, writeFile } from 'node:fs/promises';

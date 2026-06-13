@@ -237,9 +237,9 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
         // know which provider/model key to write in opencode.json).
         let modelOk = false;
         try {
-          await context.client.controlSession(sessionId, { action: 'set_model', modelId: 'glm-5.1' });
+          await context.client.controlSession(sessionId, { action: 'set_model', modelId: 'glm-5.2' });
           modelOk = true;
-          assertions.push({ name: 'set_model', passed: true, details: 'model set to glm-5.1' });
+          assertions.push({ name: 'set_model', passed: true, details: 'model set to glm-5.2' });
         } catch (err) {
           assertions.push({ name: 'set_model', passed: false, details: String(err) });
         }

@@ -171,4 +171,41 @@ describe('runScenario', () => {
     expect(result.passed).toBe(true);
     expect(result.attempt).toBe(2);
   });
+
+  it('uses GLM-5.2 when exercising the OpenCode thinking-level scenario', async () => {
+    const client: InternalApiClientLike = {
+      createSession: vi.fn().mockResolvedValue({
+        sessionId: 'oc-sess-1',
+        sessionPath: 'oc-sess-1',
+        runtime: 'opencode',
+        cwd: '/root/pi-web-ui',
+        createdAt: '2026-06-13T00:00:00.000Z',
+      }),
+      promptStream: vi.fn(),
+      getSessionInfo: vi.fn(),
+      getCapabilities: vi.fn(),
+      controlSession: vi.fn().mockResolvedValue({ ok: true }),
+      getSessionHistory: vi.fn(),
+      respondToApproval: vi.fn(),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await runScenario({
+      client,
+      runtime: 'opencode',
+      scenario: scenarioRegistry['thinking-level'],
+      capabilities: makeCapabilities({
+        opencode: {
+          ...makeCapabilities().runtimes.opencode,
+          supportsThinkingLevel: true,
+        },
+      }),
+      cwd: '/root/pi-web-ui',
+    });
+
+    expect(client.controlSession).toHaveBeenCalledWith('oc-sess-1', {
+      action: 'set_model',
+      modelId: 'glm-5.2',
+    });
+  });
 });

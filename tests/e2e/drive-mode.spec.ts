@@ -36,7 +36,7 @@ test.describe('Drive Mode', () => {
     await page.getByRole('button', { name: 'Start a new session' }).click();
     await expect(page.locator('text=Choose a Model')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('text=Kimi for Coding')).toBeVisible();
-    await expect(page.locator('text=GLM-5.1')).toBeVisible();
+    await expect(page.locator('text=GLM-5.2')).toBeVisible();
     await expect(page.locator('text=Codex / GPT-5.4')).toBeVisible();
     await expect(page.locator('text=Codex / GPT-5.5')).toBeVisible();
   });

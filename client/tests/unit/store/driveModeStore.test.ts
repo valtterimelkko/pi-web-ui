@@ -81,6 +81,16 @@ describe('driveModeStore', () => {
     });
   });
 
+  it('includes GLM-5.2 as the OpenCode Drive Mode option', () => {
+    expect(DRIVE_MODE_MODELS).toContainEqual(
+      expect.objectContaining({
+        id: 'zai-coding-plan/glm-5.2',
+        displayName: 'GLM-5.2',
+        sdkType: 'opencode',
+      })
+    );
+  });
+
   it('DRIVE_MODE_MODELS have no duplicate IDs', () => {
     const ids = DRIVE_MODE_MODELS.map((m) => m.id);
     expect(new Set(ids).size).toBe(ids.length);
