@@ -146,6 +146,8 @@ This section stays at the “where would it plug in?” level, not detailed impl
 **Why it is promising:**
 Pi is the most internally controllable path.
 
+**Feasibility assessment:** **Most feasible of all four runtimes.** Pi Web UI owns the session lifecycle, event forwarding, and worker orchestration for this path. Tool/context artefact interception can happen at the Pi extension and runtime layers, where Pi Web UI already has natural control points. This is the primary candidate for a genuine compression implementation — the exact hook locations still need to be specified concretely before implementation begins.
+
 ### 2. Claude runtime
 **Nature of runtime:** legacy `claude -p` subprocesses or the channel-backed Claude Code path.
 
@@ -156,6 +158,26 @@ Pi is the most internally controllable path.
 
 **Why it is promising:**
 This is likely the strongest non-Pi candidate because Pi Web UI already owns significant orchestration around Claude.
+
+**Feasibility assessment (updated):**
+
+Claude Code (the channel-backed path) supports a `PostToolUse` hook that fires **after each tool execution and before the result is returned to the model**. This is a genuine, supported interception point for tool output compression.
+
+Pi Web UI's channel-backed Claude path already uses hooks (`claude-channel-hooks-config.ts`). A `PostToolUse` hook could:
+- inspect tool output size
+- compress or truncate large results (bash output, file reads, search dumps) before they land in Claude's context
+- store the original under a hash key for retrieval if needed
+
+This is a real, working interception point — unlike OpenCode's `tool.execute.after`, which is read-only due to an upstream bug.
+
+**What is feasible:**
+- `PostToolUse` hook: compress tool output before it enters Claude's context — **yes, this works**
+- System prompt injection: inject context summaries or retrieval tool descriptions — **yes**
+- Custom MCP tools: register a `retrieve_original` tool so Claude can fetch full artefacts — **yes**
+
+**What is not feasible:**
+- Intercepting tool output on the legacy `claude -p` (direct) path — no hook surface there; only the channel-backed path has hooks
+- Modifying Claude's own internal compaction or summarisation behaviour
 
 ### 3. OpenCode Direct
 **Nature of runtime:** long-lived `opencode serve` backend with HTTP/SSE integration.
@@ -168,6 +190,28 @@ This is likely the strongest non-Pi candidate because Pi Web UI already owns sig
 **Why it is promising:**
 OpenCode is structured enough to support good integration, but its adapter should remain specific to OpenCode rather than being forced into a generic proxy mould.
 
+**Feasibility assessment (updated after plugin API research):**
+
+OpenCode has a plugin system (`@opencode-ai/plugin`) with hooks that look relevant at first glance:
+- `tool.execute.before` — can modify tool *args* before execution
+- `tool.execute.after` — fires after tool execution; exposes `output.output`
+- `experimental.chat.system.transform` — can inject strings into the system prompt each turn
+- `experimental.session.compacting` — can push context strings to preserve across compaction
+
+**However:** `tool.execute.after` **cannot compress or replace tool output** that goes back to the model. Mutations to `output.output` in this hook are silently ignored — OpenCode reads from `result.content` (an array of content parts) internally, not from the `output.output` string the hook exposes. This is a known, open limitation tracked in [issue #13574](https://github.com/anomalyco/opencode/issues/13574) and [issue #3384](https://github.com/anomalyco/opencode/issues/3384).
+
+**What is actually feasible via OpenCode plugins:**
+- **System prompt injection** (`experimental.chat.system.transform`): can inject compression instructions, retrieval tool descriptions, or working-context summaries into the system prompt — genuinely useful, but indirect
+- **Compaction hooks** (`experimental.session.compacting`): can preserve key context strings across OpenCode's own compaction cycle — useful for session continuity, not artefact compression
+- **Custom tools**: can register a `retrieve_original` tool for the model to call — a retrieval surface, but the model must choose to use it
+- **Observability** (`tool.execute.after`, `event`): can log/measure tool output sizes, compute compression ratios, and feed metrics to Pi Web UI — real value for benchmarking
+
+**What is not feasible via the current plugin API:**
+- Intercepting and replacing tool output before it reaches the model's context — blocked by the `output.output` mutation bug
+- Transparent artefact-level compression of file reads, bash output, or search results
+
+**Verdict:** OpenCode's plugin API supports **observability and system-prompt shaping**, not true pre-model tool output compression. Until the `tool.execute.after` output mutation path is fixed upstream, OpenCode belongs in the same category as Antigravity for this design: a benchmarking and metrics target, not a compression target. Watch upstream issues #13574 and #3384 for progress.
+
 ### 4. Antigravity
 **Nature of runtime:** `agy -p` subprocess-per-turn path with weaker live observability.
 
@@ -178,6 +222,8 @@ OpenCode is structured enough to support good integration, but its adapter shoul
 
 **Why it is still worth considering:**
 Even if transparent live compression is weaker here, Antigravity logs and replay are still useful for benchmarking, policy tuning, and regression testing.
+
+**Feasibility assessment:** **Compression not feasible; observability only.** Each turn is a `agy -p` subprocess. Pi Web UI shapes the prompt string and parses stdout — there is no plugin, hook, or interception surface between the prompt and Gemini's context window. Pi-owned turn logs (`~/.pi-web-ui/antigravity-sessions/`) are available for post-hoc size measurement and benchmarking, but no live compression is possible without changes to `agy` itself.
 
 ## High-level architecture
 
