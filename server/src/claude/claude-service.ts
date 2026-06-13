@@ -333,12 +333,7 @@ export class ClaudeService {
       throw new Error(`Claude session not found: ${sessionId}`);
     }
     const normalizedModel = normalizeClaudeModelAlias(model);
-    await this.registry.upsert({
-      id: sessionId,
-      sdkType: 'claude',
-      cwd: entry.cwd,
-      model: normalizedModel,
-    });
+    await this.registry.patchSessionMeta(sessionId, { model: normalizedModel });
     return normalizedModel;
   }
 

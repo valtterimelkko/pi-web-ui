@@ -1226,9 +1226,9 @@ export class WebSocketConnectionManager {
 
   private async handleNewSession(
     clientId: string,
-    message: { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' }
+    message: { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity'; model?: string; thinkingLevel?: string }
   ): Promise<void> {
-    console.log(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}, sdkType=${message.sdkType || 'pi'}`);
+    console.log(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}, sdkType=${message.sdkType || 'pi'}, model=${message.model || 'default'}, thinkingLevel=${message.thinkingLevel || 'default'}`);
 
     const cwd = message.cwd || process.cwd();
     const sdkType = message.sdkType || 'pi';
@@ -1283,7 +1283,13 @@ export class WebSocketConnectionManager {
 
     if (sdkType === 'claude') {
       try {
-        const { sessionId } = await this.claudeService.createSession(cwd);
+        const createModel = message.model || 'sonnet';
+        const { sessionId } = await this.claudeService.createSession(cwd, createModel);
+
+        // Persist thinking level if provided
+        if (message.thinkingLevel) {
+          this.claudeService.setThinkingLevel(sessionId, message.thinkingLevel);
+        }
 
         // Track this as a Claude session
         this.claudeSessionIds.add(sessionId);
@@ -1293,13 +1299,15 @@ export class WebSocketConnectionManager {
         this.claudeSubs.subscribe(clientId, sessionId);
         this.clientCwd.set(clientId, cwd);
 
-        console.log(`[handleNewSession] Claude session created: ${sessionId}`);
+        console.log(`[handleNewSession] Claude session created: ${sessionId} (model: ${createModel})`);
 
         this.sendMessage(clientId, {
           type: 'session_created',
           sessionId,
           sessionPath: sessionId,  // For Claude sessions, sessionId IS the path
           sdkType: 'claude',
+          model: createModel,
+          thinkingLevel: message.thinkingLevel,
         } as unknown as ServerMessage);
       } catch (error) {
         this.sendMessage(clientId, {

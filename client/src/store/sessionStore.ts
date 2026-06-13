@@ -1050,10 +1050,15 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'session_created': {
-            const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' };
+            const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity'; model?: string; thinkingLevel?: string };
             set({ 
               currentSessionId: createdMsg.sessionId,
               currentSessionSdkType: createdMsg.sdkType ?? null,
+              // Reset model/thinkingLevel to the server-provided values (or null)
+              // so stale state from a previous session doesn't carry over and
+              // give a false impression of the active model.
+              currentModel: createdMsg.model ?? null,
+              currentThinkingLevel: createdMsg.thinkingLevel ?? null,
               messages: [], // Clear messages for new session
               contextPercent: 0,
               contextUsed: 0,

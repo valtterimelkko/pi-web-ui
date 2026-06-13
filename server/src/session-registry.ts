@@ -171,6 +171,7 @@ export class SessionRegistryManager {
         opencodeSessionId: entry.opencodeSessionId,
         cwd: entry.cwd,
         model: entry.model,
+        thinkingLevel: entry.thinkingLevel,
         firstMessage: entry.firstMessage ?? '',
         messageCount: entry.messageCount ?? 0,
         createdAt: entry.createdAt ?? now,
@@ -181,6 +182,25 @@ export class SessionRegistryManager {
       await this.save();
       return newEntry;
     }
+  }
+
+  /**
+   * Atomically patch only the model and/or thinkingLevel fields of a session.
+   * Unlike upsert(), this NEVER touches the other field, eliminating race
+   * conditions when setModel and setThinkingLevel run concurrently.
+   */
+  async patchSessionMeta(
+    id: string,
+    patch: { model?: string; thinkingLevel?: string },
+  ): Promise<RegistryEntry | undefined> {
+    const registry = await this.load();
+    const entry = registry.entries.find(e => e.id === id);
+    if (!entry) return undefined;
+    if (patch.model !== undefined) entry.model = patch.model;
+    if (patch.thinkingLevel !== undefined) entry.thinkingLevel = patch.thinkingLevel;
+    entry.lastActivity = new Date().toISOString();
+    await this.save();
+    return entry;
   }
 
   async updateStatus(id: string, status: RegistryEntry['status']): Promise<void> {

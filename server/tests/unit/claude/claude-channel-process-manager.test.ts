@@ -468,6 +468,81 @@ describe('ClaudeChannelProcessManager', () => {
     });
   });
 
+  describe('thinking-level effort mapping', () => {
+    it('should map xhigh to high (not low)', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      manager.setThinkingLevel('xhigh');
+
+      expect(writeSpy).toHaveBeenCalledWith('/effort high\r');
+    });
+
+    it('should map off and minimal to low', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      manager.setThinkingLevel('off');
+      expect(writeSpy).toHaveBeenCalledWith('/effort low\r');
+    });
+
+    it('should map minimal to low on a fresh manager', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      const freshManager = new ClaudeChannelProcessManager(makeDefaultConfig());
+      await freshManager.start();
+
+      freshManager.setThinkingLevel('minimal');
+      expect(writeSpy).toHaveBeenCalledWith('/effort low\r');
+
+      await freshManager.stop();
+    });
+
+    it('should map medium to medium', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      manager.setThinkingLevel('medium');
+
+      expect(writeSpy).toHaveBeenCalledWith('/effort medium\r');
+    });
+
+    it('should map high to high', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      manager.setThinkingLevel('high');
+
+      expect(writeSpy).toHaveBeenCalledWith('/effort high\r');
+    });
+
+    it('should default unknown levels to medium', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      manager.setThinkingLevel('bogus');
+
+      expect(writeSpy).toHaveBeenCalledWith('/effort medium\r');
+    });
+  });
+
   describe('clearContext', () => {
     it('should write /clear to the PTY', async () => {
       const ptyProc = makeDeferredPty();

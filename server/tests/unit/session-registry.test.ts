@@ -207,4 +207,95 @@ describe('SessionRegistryManager', () => {
     expect(fetched1?.status).toBe('running');
     expect(fetched2?.status).toBe('error');
   });
+
+  describe('patchSessionMeta', () => {
+    it('patches only model without touching thinkingLevel', async () => {
+      const manager = new SessionRegistryManager(registryPath);
+
+      const entry = await manager.upsert({
+        sdkType: 'claude',
+        path: '/patch-test',
+        cwd: '/cwd',
+        firstMessage: 'hi',
+        messageCount: 1,
+        model: 'sonnet',
+        thinkingLevel: 'high',
+      });
+
+      await manager.patchSessionMeta(entry.id, { model: 'opus' });
+
+      const fetched = await manager.get(entry.id);
+      expect(fetched?.model).toBe('opus');
+      expect(fetched?.thinkingLevel).toBe('high');
+    });
+
+    it('patches only thinkingLevel without touching model', async () => {
+      const manager = new SessionRegistryManager(registryPath);
+
+      const entry = await manager.upsert({
+        sdkType: 'claude',
+        path: '/patch-tl',
+        cwd: '/cwd',
+        firstMessage: 'hi',
+        messageCount: 1,
+        model: 'opus',
+        thinkingLevel: 'medium',
+      });
+
+      await manager.patchSessionMeta(entry.id, { thinkingLevel: 'xhigh' });
+
+      const fetched = await manager.get(entry.id);
+      expect(fetched?.model).toBe('opus');
+      expect(fetched?.thinkingLevel).toBe('xhigh');
+    });
+
+    it('patches both model and thinkingLevel simultaneously', async () => {
+      const manager = new SessionRegistryManager(registryPath);
+
+      const entry = await manager.upsert({
+        sdkType: 'claude',
+        path: '/patch-both',
+        cwd: '/cwd',
+        firstMessage: 'hi',
+        messageCount: 1,
+        model: 'sonnet',
+        thinkingLevel: 'low',
+      });
+
+      await manager.patchSessionMeta(entry.id, { model: 'haiku', thinkingLevel: 'high' });
+
+      const fetched = await manager.get(entry.id);
+      expect(fetched?.model).toBe('haiku');
+      expect(fetched?.thinkingLevel).toBe('high');
+    });
+
+    it('does not overwrite model when concurrent patchSessionMeta calls race', async () => {
+      const manager = new SessionRegistryManager(registryPath);
+
+      const entry = await manager.upsert({
+        sdkType: 'claude',
+        path: '/race',
+        cwd: '/cwd',
+        firstMessage: 'hi',
+        messageCount: 1,
+        model: 'sonnet',
+        thinkingLevel: 'medium',
+      });
+
+      await Promise.all([
+        manager.patchSessionMeta(entry.id, { model: 'opus' }),
+        manager.patchSessionMeta(entry.id, { thinkingLevel: 'high' }),
+      ]);
+
+      const fetched = await manager.get(entry.id);
+      expect(fetched?.model).toBe('opus');
+      expect(fetched?.thinkingLevel).toBe('high');
+    });
+
+    it('returns undefined for non-existent session', async () => {
+      const manager = new SessionRegistryManager(registryPath);
+      const result = await manager.patchSessionMeta('nonexistent', { model: 'opus' });
+      expect(result).toBeUndefined();
+    });
+  });
 });

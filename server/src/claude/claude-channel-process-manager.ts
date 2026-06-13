@@ -303,7 +303,18 @@ export class ClaudeChannelProcessManager extends EventEmitter {
   setThinkingLevel(level: string): void {
     const proc = this.ptyProcess;
     if (!proc) return;
-    const effort = level === 'high' ? 'high' : level === 'medium' ? 'medium' : 'low';
+    // Map the Web UI thinking levels to Claude Code /effort values.
+    // Claude Code supports: low, medium, high.
+    // Web UI levels: off, minimal, low, medium, high, xhigh
+    const effortMap: Record<string, string> = {
+      off: 'low',
+      minimal: 'low',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: 'high',
+    };
+    const effort = effortMap[level] ?? 'medium';
     if (this._currentThinkingLevel === effort) return;
     this._currentThinkingLevel = effort;
     proc.write(`/effort ${effort}\r`);

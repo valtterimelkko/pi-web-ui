@@ -69,12 +69,14 @@ vi.mock('../../../src/session-registry.js', () => ({
     upsert: vi.fn().mockResolvedValue(undefined),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     listBySdkType: vi.fn().mockResolvedValue([]),
+    patchSessionMeta: vi.fn().mockResolvedValue(undefined),
   })),
   getSessionRegistry: vi.fn().mockReturnValue({
     get: vi.fn().mockResolvedValue(null),
     upsert: vi.fn().mockResolvedValue(undefined),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     listBySdkType: vi.fn().mockResolvedValue([]),
+    patchSessionMeta: vi.fn().mockResolvedValue(undefined),
   }),
 }));
 
@@ -1065,7 +1067,7 @@ describe('ClaudeChannelService', () => {
   describe('history and info', () => {
     let service: ClaudeChannelService;
     let storeInstance: { loadHistory: ReturnType<typeof vi.fn> };
-    let registry: { get: ReturnType<typeof vi.fn>; listBySdkType: ReturnType<typeof vi.fn>; upsert: ReturnType<typeof vi.fn> };
+    let registry: { get: ReturnType<typeof vi.fn>; listBySdkType: ReturnType<typeof vi.fn>; upsert: ReturnType<typeof vi.fn>; patchSessionMeta: ReturnType<typeof vi.fn> };
 
     beforeEach(async () => {
       service = createService();
@@ -1089,6 +1091,30 @@ describe('ClaudeChannelService', () => {
       });
       const result = await service.setModel('sid', 'opus');
       expect(result).toBe('opus');
+    });
+
+    it('should persist model via patchSessionMeta (not upsert)', async () => {
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'sid', sdkType: 'claude', claudeSessionId: 'cs-1', cwd: '/tmp', status: 'idle',
+      });
+      await service.setModel('sid', 'opus');
+
+      expect(registry.patchSessionMeta).toHaveBeenCalledWith('sid', { model: 'opus' });
+      expect(registry.upsert).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'sid', model: 'opus' }),
+      );
+    });
+
+    it('setThinkingLevel should persist via patchSessionMeta (not upsert)', async () => {
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'sid', sdkType: 'claude', claudeSessionId: 'cs-1', cwd: '/tmp', status: 'idle',
+      });
+      service.setThinkingLevel('sid', 'xhigh');
+
+      expect(registry.patchSessionMeta).toHaveBeenCalledWith('sid', { thinkingLevel: 'xhigh' });
+      expect(registry.upsert).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'sid', thinkingLevel: 'xhigh' }),
+      );
     });
 
     it('should get session', async () => {
@@ -1243,6 +1269,85 @@ describe('ClaudeChannelService', () => {
       await service.sendPrompt(sessionId, 'Follow-up', vi.fn(), vi.fn());
 
       expect(pmInstance.clearContext).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('model and thinking-level restoration on sendPrompt', () => {
+    let service: ClaudeChannelService;
+    let pmInstance: { switchModel: ReturnType<typeof vi.fn>; setThinkingLevel: ReturnType<typeof vi.fn>; clearContext: ReturnType<typeof vi.fn>; markPromptSent: ReturnType<typeof vi.fn>; markPromptComplete: ReturnType<typeof vi.fn>; isBusy: ReturnType<typeof vi.fn>; __emitter: EventEmitter };
+    let registry: { get: ReturnType<typeof vi.fn>; upsert: ReturnType<typeof vi.fn>; updateStatus: ReturnType<typeof vi.fn>; patchSessionMeta: ReturnType<typeof vi.fn> };
+
+    beforeEach(async () => {
+      service = createService();
+      await service.start();
+      pmInstance = (ClaudeChannelProcessManager as unknown as ReturnType<typeof vi.fn>).mock.results[0].value as typeof pmInstance;
+      const registryFn = getSessionRegistry as ReturnType<typeof vi.fn>;
+      registry = registryFn.mock.results[registryFn.mock.results.length - 1]?.value as typeof registry;
+    });
+
+    it('should restore the session model on the shared PTY before dispatching', async () => {
+      const sessionId = 'restore-model-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-restore-model-1',
+        cwd: '/tmp', status: 'idle', model: 'opus', thinkingLevel: 'high',
+      });
+
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      expect(pmInstance.switchModel).toHaveBeenCalledWith('opus');
+    });
+
+    it('should restore the session thinking level on the shared PTY before dispatching', async () => {
+      const sessionId = 'restore-tl-1';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-restore-tl-1',
+        cwd: '/tmp', status: 'idle', model: 'sonnet', thinkingLevel: 'xhigh',
+      });
+
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      expect(pmInstance.setThinkingLevel).toHaveBeenCalledWith('xhigh');
+    });
+
+    it('should restore model and thinking level when another session changed them', async () => {
+      const sessionA = 'restore-a';
+      const sessionB = 'restore-b';
+      (registry.get as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => {
+        if (id === sessionA) return { id: sessionA, sdkType: 'claude', claudeSessionId: 'cs-a', cwd: '/tmp', status: 'idle', model: 'opus', thinkingLevel: 'high' };
+        if (id === sessionB) return { id: sessionB, sdkType: 'claude', claudeSessionId: 'cs-b', cwd: '/tmp', status: 'idle', model: 'haiku', thinkingLevel: 'low' };
+        return null;
+      });
+
+      await service.sendPrompt(sessionA, 'Hello A', vi.fn(), vi.fn());
+
+      const wsInstance = findWsMock() as WsMock;
+      wsInstance.__emitter.emit('event', {
+        type: 'agent_end', sessionId: 'cs-a', result: 'ok', timestamp: Date.now(),
+      });
+      await vi.waitFor(() => {
+        expect(service.isRunning(sessionA)).toBe(false);
+      });
+
+      pmInstance.switchModel.mockClear();
+      pmInstance.setThinkingLevel.mockClear();
+
+      await service.sendPrompt(sessionB, 'Hello B', vi.fn(), vi.fn());
+
+      expect(pmInstance.switchModel).toHaveBeenCalledWith('haiku');
+      expect(pmInstance.setThinkingLevel).toHaveBeenCalledWith('low');
+    });
+
+    it('should default to sonnet and medium when model/thinkingLevel are unset', async () => {
+      const sessionId = 'restore-defaults';
+      (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: sessionId, sdkType: 'claude', claudeSessionId: 'cs-defaults',
+        cwd: '/tmp', status: 'idle',
+      });
+
+      await service.sendPrompt(sessionId, 'Hello', vi.fn(), vi.fn());
+
+      expect(pmInstance.switchModel).toHaveBeenCalledWith('sonnet');
+      expect(pmInstance.setThinkingLevel).toHaveBeenCalledWith('medium');
     });
   });
 });

@@ -397,6 +397,17 @@ export class ClaudeChannelService {
     // sending a new prompt, so events from this turn should flow normally.
     this.abortedSessions.delete(sessionId);
 
+    // ── Restore session model & thinking level on the shared PTY ──
+    // The channel architecture shares a single Claude Code process across
+    // all sessions.  Another session's createSession() or setModel() may
+    // have changed the PTY model.  Before dispatching this prompt we restore
+    // the model and thinking level registered for THIS session so Claude
+    // always uses the correct settings.
+    const registeredModel = entry.model ?? 'sonnet';
+    const registeredThinking = entry.thinkingLevel ?? 'medium';
+    this.processManager.switchModel(registeredModel);
+    this.processManager.setThinkingLevel(registeredThinking);
+
     // ── Context isolation: clear Claude's context when switching sessions ──
     // The channel architecture shares a single Claude Code process. Without
     // this gate, a new session would inherit context from a prior session.
@@ -509,13 +520,10 @@ export class ClaudeChannelService {
     if (!entry) {
       throw new Error(`Claude session not found: ${sessionId}`);
     }
-    await this.registry.upsert({
-      id: sessionId,
-      sdkType: 'claude',
-      cwd: entry.cwd,
-      model,
-      thinkingLevel: entry.thinkingLevel,
-    });
+    // Use patchSessionMeta to update ONLY the model field — this eliminates the
+    // race condition where a concurrent setThinkingLevel upsert could overwrite
+    // the model back to its stale value.
+    await this.registry.patchSessionMeta(sessionId, { model });
     this.processManager.switchModel(model);
     if (entry.claudeSessionId) {
       this.wsClient.send({ type: 'set_model', sessionId: entry.claudeSessionId, model });
@@ -525,17 +533,10 @@ export class ClaudeChannelService {
 
   setThinkingLevel(sessionId: string, level: string): void {
     this.processManager.setThinkingLevel(level);
-    this.registry.get(sessionId).then((entry) => {
-      if (entry) {
-        this.registry.upsert({
-          id: sessionId,
-          sdkType: 'claude',
-          cwd: entry.cwd,
-          model: entry.model,
-          thinkingLevel: level,
-        }).catch(() => {});
-      }
-    }).catch(() => {});
+    // Use patchSessionMeta to update ONLY the thinkingLevel field — this
+    // eliminates the race condition where this method's async upsert could
+    // overwrite the model back to its stale value.
+    this.registry.patchSessionMeta(sessionId, { thinkingLevel: level }).catch(() => {});
   }
 
   async getSession(sessionId: string) {

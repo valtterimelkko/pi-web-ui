@@ -53,10 +53,12 @@ describe('Channel Permission Flow', () => {
       healthCheck: async () => true,
       isRunning: () => true,
       switchModel: () => {},
+      setThinkingLevel: () => {},
       markPromptSent: () => {},
       markPromptComplete: () => {},
       isBusy: () => false,
       clearContext: async () => {},
+      sendInterrupt: () => {},
     });
 
     vi.spyOn(service as unknown as { processManager: typeof mockProcessManager }, 'processManager', 'get').mockReturnValue(mockProcessManager);

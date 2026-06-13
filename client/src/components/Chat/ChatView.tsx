@@ -82,8 +82,8 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
     }
   }, [isStreaming, isAtBottom, messages.length]);
 
-  const handleCreateSession = (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity') => {
-    createNewSession(cwd, sdkType);
+  const handleCreateSession = (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity', model?: string, thinkingLevel?: string) => {
+    createNewSession(cwd, sdkType, model, thinkingLevel);
   };
 
   return (

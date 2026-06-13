@@ -7,7 +7,7 @@ import { useSessionStore } from '../../store';
 interface NewSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreateSession: (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity') => void;
+  onCreateSession: (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity', model?: string, thinkingLevel?: string) => void;
   onOpenDriveMode?: () => void;
 }
 
