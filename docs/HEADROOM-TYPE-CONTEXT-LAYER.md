@@ -1,8 +1,8 @@
 # Headroom-Type Context Layer for Pi Web UI
 
-> Status: exploratory design note
+> Status: design note — feasibility researched, Phase 1 defined, ready for build planning
 >
-> Purpose: capture what we may want to borrow from Headroom-style context compression work without committing to Headroom itself as a dependency or architecture.
+> Purpose: capture what we may want to borrow from Headroom-style context compression work, with concrete per-runtime feasibility assessments and a Phase 1 scope. The doc has been updated beyond its original exploratory state — see the "Phase 1 scope" and "Headroom out-of-the-box vs custom-build" sections for the actionable conclusions.
 
 ## Start with the upstream reference
 
@@ -146,7 +146,13 @@ This section stays at the “where would it plug in?” level, not detailed impl
 **Why it is promising:**
 Pi is the most internally controllable path.
 
-**Feasibility assessment:** **Most feasible of all four runtimes.** Pi Web UI owns the session lifecycle, event forwarding, and worker orchestration for this path. Tool/context artefact interception can happen at the Pi extension and runtime layers, where Pi Web UI already has natural control points. This is the primary candidate for a genuine compression implementation — the exact hook locations still need to be specified concretely before implementation begins.
+**Feasibility assessment:** **Most feasible of all four runtimes.** Pi Web UI owns the session lifecycle, event forwarding, and worker orchestration for this path.
+
+**Concrete interception point:** `server/src/pi/pi-service.ts:198` — the `session.bindExtensions()` call. Pi Web UI already registers extensions here via the `@earendil-works/pi-coding-agent` extension API. A compression extension using the `pi.registerTool()` wrapper pattern can intercept tool execution and compress results before they are returned to the model's context.
+
+Important: `server/src/pi/event-forwarder.ts` also sees `tool_execution_end` events (line 274, `result: event.result`), but this is **post-hoc** — it translates events for the browser UI after the Pi SDK has already consumed the result. Compressing there would only affect what the UI displays, not the model's context. The correct place is the extension layer at `bindExtensions()`.
+
+**What to implement:** a Pi Web UI-registered compression extension that wraps each tool's execute function: runs the original tool, inspects the output size, compresses if above a threshold, stores the original by hash in a local artefact store, and returns the compressed form to the Pi session. Custom-build (not Headroom library) is the right choice here — the Pi runtime path is internal enough that the compression logic can be written directly without coupling to Headroom's architecture.
 
 ### 2. Claude runtime
 **Nature of runtime:** legacy `claude -p` subprocesses or the channel-backed Claude Code path.
@@ -229,6 +235,8 @@ Even if transparent live compression is weaker here, Antigravity logs and replay
 
 The likely shape is **not** “just a proxy”.
 
+> **Reconciliation note:** This section describes the logical components needed. For the two buildable runtimes, these components map to concrete implementations differently — see the “Headroom out-of-the-box vs custom-build” section below for the full breakdown. Short version: the Pi SDK adapter is a full custom-build of all four components; the Claude adapter uses Headroom’s compression library for components 1 and 2 and builds a thin Pi Web UI adapter for components 3 and 4.
+
 A better fit for Pi Web UI would be a layered design:
 
 ### 1. Core context engine
@@ -238,6 +246,8 @@ A local engine that:
 - compresses or reshapes content
 - applies heuristics for relevance and retention
 
+*For Claude (channel-backed): provided by `headroom-ai` library (`npm install headroom-ai`; `compress()` runs fully locally, no proxy required). For Pi SDK: custom-build using the same content-type heuristics.*
+
 ### 2. Reversible artefact store
 A local store that:
 - keeps original artefacts
@@ -245,12 +255,14 @@ A local store that:
 - tracks metadata and retrieval keys
 - supports later expansion or filtered retrieval
 
+*For Claude (channel-backed): Headroom’s CCR store; note that the `headroom_retrieve` MCP tool (so the model can fetch originals) requires the Headroom local proxy to be running as a sidecar — this is optional but needed for full CCR. For Pi SDK: custom local artefact store (simple hash → original file on disk is enough to start).*
+
 ### 3. Runtime adapters
 A separate adapter per runtime family:
-- Pi adapter
-- Claude adapter
-- OpenCode adapter
-- Antigravity adapter
+- **Pi adapter** — compression extension registered via `bindExtensions()` in `server/src/pi/pi-service.ts:198`; custom-build
+- **Claude adapter** — `PostToolUse` hook in the channel-backed path (`server/src/claude/claude-channel-hooks-config.ts`); calls `compress()` from `headroom-ai`; channel-backed only (legacy direct path has no hook surface)
+- **OpenCode adapter** — observability and system-prompt shaping only until upstream issue #13574/#3384 is fixed
+- **Antigravity adapter** — post-hoc metrics only; no live interception possible
 
 Each adapter integrates at the runtime’s natural control point.
 
@@ -284,6 +296,31 @@ This work would be worth pursuing if it can eventually show that, across one or 
 - usefulness of replay/history
 - ability to recover full originals when needed
 - clarity of runtime-level metrics in Pi Web UI
+
+## Phase 1 scope
+
+Before building anything, verify: does `headroom-ai`'s `compress()` actually work as a standalone Node call with no proxy? Run `npm install headroom-ai` in a scratch project and confirm. If it requires a proxy, Phase 1 must include a sidecar or fall back to a lightweight custom compressor (e.g. truncate + summarise large outputs with a regex heuristic as a baseline).
+
+Assuming the library works standalone, Phase 1 is:
+
+**Target runtime:** Claude channel-backed path only.
+
+**Target content type:** Large bash output and file reads (anything over ~2000 tokens). These are the noisiest artefacts in a typical coding session and the lowest risk to compress.
+
+**Mechanism:**
+1. Add a `PostToolUse` hook in `server/src/claude/claude-channel-hooks-config.ts`
+2. When tool output exceeds the threshold, call `headroom-ai`'s `compress()` locally
+3. Replace the tool result with the compressed form before it reaches Claude's context
+4. Log: original token estimate, compressed token estimate, tool name, session ID — to a local file for now
+
+**Exit criterion for Phase 1:** In at least one real coding session with large file reads or bash output, context usage measurably decreases (estimated token count before vs. after compression), and the session does not regress (Claude continues the task correctly).
+
+**What is explicitly out of scope for Phase 1:**
+- Pi SDK adapter
+- CCR / `headroom_retrieve` MCP tool
+- Observability UI in Pi Web UI
+- OpenCode or Antigravity
+- Any compression of short conversational turns or code under 4 recent messages
 
 ## Non-goals for the first iteration
 
@@ -322,18 +359,20 @@ Headroom's proxy model also carries the risk flagged in the original design doc:
 
 ### The better fit: Headroom as a library inside Pi Web UI's PostToolUse hook
 
-The right integration is narrower and does not use the proxy at all:
+**Library availability confirmed:** `headroom-ai` is published on npm. `compress()` runs fully locally — no proxy process required for the compression step itself. The proxy is only needed if you want `headroom_retrieve` MCP tool support (so the model can fetch originals on demand). Node 18+ required.
 
-1. **Install Headroom's TypeScript/Node library** as a Pi Web UI server dependency
-2. **Call `compress(toolOutput)`** inside the channel-backed Claude path's `PostToolUse` hook — this is the real interception point already identified for this runtime
-3. **Store the compressed form + original** using Headroom's CCR store (or a Pi Web UI-owned equivalent)
-4. **Inject `headroom_retrieve`** as an MCP tool available to Claude, so it can fetch originals when needed
+The right integration is narrower and does not use the proxy at all for the core compression step:
+
+1. **`npm install headroom-ai`** as a Pi Web UI server dependency (Node 18+, no proxy needed for `compress()`)
+2. **Call `compress(toolOutput)`** inside the channel-backed Claude path's `PostToolUse` hook (`server/src/claude/claude-channel-hooks-config.ts`) — the hook fires after each tool execution and before the result enters Claude's context
+3. **Store the compressed form + original** using Headroom's CCR store locally
+4. **(Optional) Run Headroom proxy as a sidecar** if you want to inject `headroom_retrieve` as an MCP tool so Claude can fetch full originals — not required for Phase 1
 
 This approach:
 - uses Headroom's proven compression algorithms without delegating process control
 - preserves Pi Web UI's ownership of Claude Code launch, PTY, and channel hooks
 - avoids the proxy/base-URL conflict entirely
-- gives Claude a retrieval surface via MCP (which is how Headroom's CCR is designed to work anyway)
+- `compress()` is a pure local call — no network dependency for the critical path
 
 ### Pi SDK: custom-build makes more sense
 
