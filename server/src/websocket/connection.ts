@@ -1538,6 +1538,20 @@ export class WebSocketConnectionManager {
 
       // Send each event as a session_event
       const events = historyToReplayEvents(history);
+
+      // Override the model in session_init events with the current registry
+      // model.  The JSONL meta entry stores the model from session creation
+      // time, which may be stale if the user later switched models.  Without
+      // this fix, the replayed session_init would overwrite the correct model
+      // that was just sent in the session_switched message above.
+      if (entry?.model) {
+        for (const evt of events) {
+          if (evt.type === 'session_init') {
+            evt.model = entry.model;
+          }
+        }
+      }
+
       for (const evt of events) {
         this.sendMessage(clientId, {
           type: 'session_event',
