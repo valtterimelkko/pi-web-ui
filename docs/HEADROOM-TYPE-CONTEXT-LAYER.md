@@ -26,12 +26,12 @@ That makes Pi Web UI a strong place to build a **runtime-aware context mediation
 
 ## Intent
 
-We are exploring whether to build a **custom, local-first context layer** that:
+The intent is to build a **custom, local-first context layer** that:
 
 - reduces noisy context before it reaches the model
 - preserves the important parts of tool outputs, logs, file reads, search results, and history
 - keeps the original content retrievable when needed
-- works across all four runtime paths in a way that respects how each runtime actually operates
+- integrates with each runtime at its natural control point, rather than forcing every path through the same mechanism
 - exposes common metrics, replay, and benchmark surfaces through Pi Web UI
 
 The goal is not “compression for its own sake”. The goal is to make long-running, tool-heavy coding sessions more effective by:
@@ -42,16 +42,18 @@ The goal is not “compression for its own sake”. The goal is to make long-run
 - making cross-runtime evaluation possible
 - giving the Web UI a common surface for measuring quality vs savings
 
+**Where this has landed after feasibility work:** The answer is yes, this is worth building. Live artefact-level compression is achievable for two of the four runtimes (Pi SDK and Claude channel-backed). The other two (OpenCode Direct and Antigravity) are observability and benchmarking targets only until their respective upstream limitations are resolved. The cross-runtime benchmarking vision remains intact; Phase 1 starts with Claude channel-backed as the fastest path to a real signal.
+
 ## Real benefit we are after
 
 If built well, this could give Pi Web UI:
 
-- **more usable context window** for real work, not just lower billed tokens
-- **better handling of noisy artefacts** such as logs, large search results, directory listings, diagnostics, and long files
-- **reversible retrieval** of originals when the agent really needs them
-- **common observability** across Pi, Claude, OpenCode, and Antigravity
-- **benchmarkable policies** instead of anecdotal prompt tweaking
-- **runtime-specific integrations** without forcing every harness through the same brittle proxy assumptions
+- **more usable context window** for real work, not just lower billed tokens — directly achievable for Pi SDK and Claude channel-backed
+- **better handling of noisy artefacts** such as logs, large search results, directory listings, diagnostics, and long files — the primary Phase 1 target
+- **reversible retrieval** of originals when the agent really needs them — via CCR/`headroom_retrieve` (optional in Phase 1, core to the long-term design)
+- **common observability** across all four runtimes — measurable even where live compression is not possible (OpenCode, Antigravity)
+- **benchmarkable policies** instead of anecdotal prompt tweaking — the cross-runtime comparison surface is what makes Pi Web UI a uniquely good home for this
+- **runtime-specific integrations** without forcing every harness through the same brittle proxy assumptions — the feasibility work confirms this is the right frame: different runtimes need different integration approaches
 
 ## What we would borrow from Headroom
 
