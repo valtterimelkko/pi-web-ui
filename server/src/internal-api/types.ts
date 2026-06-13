@@ -41,6 +41,7 @@ export interface CreateSessionRequest {
   runtime: SessionRuntime;
   cwd?: string;
   model?: string;
+  thinkingLevel?: string;
   source?: string;
   scenarioId?: string;
   ephemeral?: boolean;

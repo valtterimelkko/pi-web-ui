@@ -84,7 +84,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sendJson(res, 503, { error: 'Claude runtime is not available', code: 'RUNTIME_UNAVAILABLE' });
             return;
           }
-          const { sessionId } = await claudeService.createSession(cwd, body.model || 'sonnet');
+          const { sessionId } = await claudeService.createSession(cwd, body.model || 'sonnet', body.thinkingLevel);
           sendJson(res, 201, {
             sessionId,
             sessionPath: sessionId,

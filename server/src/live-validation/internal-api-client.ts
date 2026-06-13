@@ -92,7 +92,7 @@ export class InternalApiClient implements InternalApiClientLike {
     });
   }
 
-  async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; source?: string; scenarioId?: string; ephemeral?: boolean }): Promise<CreateSessionResponse> {
+  async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: string; source?: string; scenarioId?: string; ephemeral?: boolean }): Promise<CreateSessionResponse> {
     return this.request<CreateSessionResponse>('POST', '/api/v1/sessions', input);
   }
 

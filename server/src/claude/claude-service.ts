@@ -147,9 +147,10 @@ export class ClaudeService {
   async createSession(
     cwd: string,
     model: string = 'sonnet',
+    thinkingLevel?: string,
   ): Promise<{ sessionId: string; claudeSessionId: string }> {
     if (this.channelService && await this.channelService.isHealthy()) {
-      return this.channelService.createSession(cwd, model);
+      return this.channelService.createSession(cwd, model, thinkingLevel);
     }
 
     const sessionId = randomUUID();
@@ -167,6 +168,7 @@ export class ClaudeService {
       claudeSessionId,
       cwd,
       model,
+      thinkingLevel,
       firstMessage: '',
       messageCount: 0,
       status: 'idle',

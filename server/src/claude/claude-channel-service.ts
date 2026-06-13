@@ -366,6 +366,7 @@ export class ClaudeChannelService {
   async createSession(
     cwd: string,
     model: string = 'sonnet',
+    thinkingLevel?: string,
   ): Promise<{ sessionId: string; claudeSessionId: string }> {
     const sessionId = randomUUID();
     const claudeSessionId = randomUUID();
@@ -380,6 +381,7 @@ export class ClaudeChannelService {
       claudeSessionId,
       cwd,
       model,
+      thinkingLevel,
       firstMessage: '',
       messageCount: 0,
       status: 'idle',
@@ -431,12 +433,36 @@ export class ClaudeChannelService {
     // clear AND a minimum settle window after the last agent_end.
     await this.waitForPtySettle();
 
+    // ── Context isolation: clear Claude's context when switching sessions ──
+    // The channel architecture shares a single Claude Code process. Without
+    // this gate, a new session would inherit context from a prior session.
+    // We clear only when the session differs from the current context owner
+    // AND the new session hasn't had a turn yet (first prompt = fresh start).
+    //
+    // IMPORTANT: /clear must happen BEFORE model/thinking switch because
+    // Claude Code resets the thinking level to default (medium) on /clear.
+    const needsClear = this.contextOwnerSessionId !== sessionId
+      && !this.sessionsWithHistory.has(sessionId);
+    if (needsClear) {
+      console.log(
+        `[ClaudeChannelService] Context isolation: clearing Claude context for new session ${sessionId}` +
+        (this.contextOwnerSessionId ? ` (was owned by ${this.contextOwnerSessionId})` : ' (first session)'),
+      );
+      await this.processManager.clearContext();
+      this.contextOwnerSessionId = sessionId;
+    } else if (!this.contextOwnerSessionId) {
+      this.contextOwnerSessionId = sessionId;
+    }
+
     // ── Restore session model & thinking level on the shared PTY ──
     // The channel architecture shares a single Claude Code process across
     // all sessions.  Another session's createSession() or setModel() may
     // have changed the PTY model.  Before dispatching this prompt we restore
     // the model and thinking level registered for THIS session so Claude
     // always uses the correct settings.
+    //
+    // This runs AFTER /clear because /clear resets the thinking level to
+    // medium. Setting it after ensures the correct level persists.
     const registeredModel = entry.model ?? 'sonnet';
     const registeredThinking = entry.thinkingLevel ?? 'medium';
     const modelChanged = this.processManager.switchModel(registeredModel);
@@ -451,24 +477,6 @@ export class ClaudeChannelService {
         `[ClaudeChannelService] Model/thinking switch: model=${registeredModel}${modelChanged ? ' (changed)' : ''} thinking=${registeredThinking}${thinkingChanged ? ' (changed)' : ''}`,
       );
       await new Promise(r => setTimeout(r, 1000));
-    }
-
-    // ── Context isolation: clear Claude's context when switching sessions ──
-    // The channel architecture shares a single Claude Code process. Without
-    // this gate, a new session would inherit context from a prior session.
-    // We clear only when the session differs from the current context owner
-    // AND the new session hasn't had a turn yet (first prompt = fresh start).
-    const needsClear = this.contextOwnerSessionId !== sessionId
-      && !this.sessionsWithHistory.has(sessionId);
-    if (needsClear) {
-      console.log(
-        `[ClaudeChannelService] Context isolation: clearing Claude context for new session ${sessionId}` +
-        (this.contextOwnerSessionId ? ` (was owned by ${this.contextOwnerSessionId})` : ' (first session)'),
-      );
-      await this.processManager.clearContext();
-      this.contextOwnerSessionId = sessionId;
-    } else if (!this.contextOwnerSessionId) {
-      this.contextOwnerSessionId = sessionId;
     }
 
     const promptId = randomUUID();
