@@ -294,9 +294,9 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
           const cfgOff = readConfig();
           const offThinking = findThinkingOption(cfgOff);
           assertions.push({
-            name: 'config_cleaned_off',
-            passed: offThinking === null,
-            details: `thinking after off=${JSON.stringify(offThinking)} (expected null/removed)`,
+            name: 'config_written_off',
+            passed: offThinking?.type === 'disabled',
+            details: `thinking after off=${JSON.stringify(offThinking)} (expected type=disabled)`,
           });
         }
 

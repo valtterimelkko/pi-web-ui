@@ -90,9 +90,9 @@ function thinkingLevelToOption(level: ThinkingLevel): ThinkingOption {
  * Writes `provider[providerId].models[modelId].options.thinking` with
  * `{type:"enabled"}` or `{type:"disabled"}`.
  *
- * For 'off' the thinking option is removed so the config stays tidy (the
- * model defaults to thinking enabled, so removing the key is equivalent to
- * re-enabling default behaviour after it was previously disabled).
+ * The Z.AI API defaults to thinking-enabled, so 'off' must EXPLICITLY
+ * write `{type:"disabled"}` — removing the key would silently revert
+ * to the enabled default.
  *
  * If providerId cannot be determined, the function is a no-op.
  */
@@ -117,29 +117,9 @@ export async function applyThinkingBudget(
 
   const options = models[modelId].options!;
 
-  // 'off' historically meant "remove the override". Since the Z.AI default
-  // is thinking-enabled, removing the key restores the default behaviour.
-  if (level === 'off') {
-    delete options['thinking'];
-    // Clean up empty objects so the config stays tidy
-    if (Object.keys(options).length === 0) {
-      delete models[modelId].options;
-    }
-    if (Object.keys(models[modelId]).length === 0) {
-      delete models[modelId];
-    }
-    if (Object.keys(models).length === 0) {
-      delete cfg.provider[providerId].models;
-    }
-    if (Object.keys(cfg.provider[providerId]).length === 0) {
-      delete cfg.provider[providerId];
-    }
-    if (Object.keys(cfg.provider).length === 0) {
-      delete cfg.provider;
-    }
-  } else {
-    options['thinking'] = thinkingLevelToOption(level);
-  }
+  // Z.AI defaults to thinking-enabled, so 'off' must explicitly disable it.
+  // Both branches write the thinking object; the only difference is the type.
+  options['thinking'] = thinkingLevelToOption(level);
 
   await writeOpenCodeConfig(cfg);
 }

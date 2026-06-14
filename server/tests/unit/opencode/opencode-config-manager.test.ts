@@ -109,7 +109,17 @@ describe('applyThinkingBudget', () => {
     }
   });
 
-  it('removes thinking option on level=off, cleaning up empty objects', async () => {
+  it('writes thinking:{type:"disabled"} for level=off', async () => {
+    mockConfigFile({});
+    await applyThinkingBudget('zai-coding-plan/glm-5.2', 'off');
+    expect(fs.writeFile).toHaveBeenCalledTimes(1);
+    const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
+    expect(written.provider['zai-coding-plan'].models['glm-5.2'].options.thinking).toEqual({
+      type: 'disabled',
+    });
+  });
+
+  it('overwrites enabled with disabled when switching to off', async () => {
     const existing = {
       provider: {
         'zai-coding-plan': {
@@ -120,7 +130,9 @@ describe('applyThinkingBudget', () => {
     mockConfigFile(existing);
     await applyThinkingBudget('zai-coding-plan/glm-5.2', 'off');
     const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
-    expect(written.provider).toBeUndefined();
+    expect(written.provider['zai-coding-plan'].models['glm-5.2'].options.thinking).toEqual({
+      type: 'disabled',
+    });
   });
 
   it('preserves existing config keys when writing', async () => {
@@ -135,20 +147,19 @@ describe('applyThinkingBudget', () => {
     });
   });
 
-  it('off cleans up empty provider objects but preserves schema', async () => {
+  it('off preserves schema and other config keys', async () => {
     const existing = {
       $schema: 'https://opencode.ai/config.json',
-      provider: {
-        'zai-coding-plan': {
-          models: { 'glm-5.2': { options: { thinking: { type: 'disabled' } } } },
-        },
-      },
+      mcp: { 'zai-vision': { type: 'local' } },
     };
     mockConfigFile(existing);
     await applyThinkingBudget('zai-coding-plan/glm-5.2', 'off');
     const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
-    expect(written.provider).toBeUndefined();
     expect(written.$schema).toBe('https://opencode.ai/config.json');
+    expect(written.mcp).toEqual({ 'zai-vision': { type: 'local' } });
+    expect(written.provider['zai-coding-plan'].models['glm-5.2'].options.thinking).toEqual({
+      type: 'disabled',
+    });
   });
 
   it('off leaves other model options intact', async () => {
@@ -165,7 +176,9 @@ describe('applyThinkingBudget', () => {
     mockConfigFile(existing);
     await applyThinkingBudget('zai-coding-plan/glm-5.2', 'off');
     const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
-    expect(written.provider?.['zai-coding-plan']?.models?.['glm-5.2']).toBeUndefined();
+    expect(written.provider?.['zai-coding-plan']?.models?.['glm-5.2']?.options?.thinking).toEqual({
+      type: 'disabled',
+    });
     expect(written.provider?.['zai-coding-plan']?.models?.['glm-4.5']?.options?.thinking).toEqual({
       type: 'enabled',
     });
