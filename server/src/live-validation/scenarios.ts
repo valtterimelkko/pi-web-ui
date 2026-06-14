@@ -18,11 +18,13 @@ interface OpenCodeJsonConfig {
   [key: string]: unknown;
 }
 
-function findThinkingBudget(cfg: OpenCodeJsonConfig): number | null {
+function findThinkingOption(cfg: OpenCodeJsonConfig): { type: string } | null {
   for (const prov of Object.values(cfg.provider ?? {})) {
     for (const model of Object.values(prov.models ?? {})) {
-      const budget = model.options?.['thinkingBudget'];
-      if (typeof budget === 'number') return budget;
+      const thinking = model.options?.['thinking'];
+      if (thinking && typeof thinking === 'object' && 'type' in thinking) {
+        return thinking as { type: string };
+      }
     }
   }
   return null;
@@ -272,13 +274,13 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
         }
 
         if (controlOk) {
-          // Verify opencode.json was written with the correct budget (high = 25600)
+          // Verify opencode.json was written with thinking:{type:"enabled"}
           const cfgHigh = readConfig();
-          const highBudget = findThinkingBudget(cfgHigh);
+          const highThinking = findThinkingOption(cfgHigh);
           assertions.push({
-            name: 'config_written_high',
-            passed: highBudget === 25_600,
-            details: `thinkingBudget=${highBudget} (expected 25600)`,
+            name: 'config_written_enabled',
+            passed: highThinking?.type === 'enabled',
+            details: `thinking=${JSON.stringify(highThinking)} (expected type=enabled)`,
           });
 
           // Reset to off — should clean up the config entry
@@ -290,11 +292,11 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
           }
 
           const cfgOff = readConfig();
-          const offBudget = findThinkingBudget(cfgOff);
+          const offThinking = findThinkingOption(cfgOff);
           assertions.push({
             name: 'config_cleaned_off',
-            passed: offBudget === null,
-            details: `thinkingBudget after off=${offBudget} (expected null/removed)`,
+            passed: offThinking === null,
+            details: `thinking after off=${JSON.stringify(offThinking)} (expected null/removed)`,
           });
         }
 

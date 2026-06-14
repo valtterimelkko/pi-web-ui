@@ -1,18 +1,19 @@
 /**
- * OpenCode config-file bridge for thinking budget control.
+ * OpenCode config-file bridge for thinking control.
  *
- * GLM-5.x (including GLM-5.2 and other Z.AI models) support a `thinking_budget` API parameter
- * via OpenCode's `provider[id].models[id].options.thinkingBudget` config key.
- * This module reads/writes ~/.config/opencode/opencode.json to apply the
- * requested thinking level before the OpenCode server is recycled.
+ * GLM-5.x (including GLM-5.2 and other Z.AI models) support a `thinking` API
+ * parameter via OpenCode's `provider[id].models[id].options.thinking` config
+ * key. The Z.AI API accepts:
+ *   { "type": "enabled" }  — model automatically reasons (default)
+ *   { "type": "disabled" } — skip chain-of-thought entirely
  *
- * Budget levels are derived from common industry ranges:
- *   off      →  remove option (model decides, typically very low)
- *   minimal  →  1 024 tokens  (constrained, quick reasoning)
- *   low      →  4 096 tokens  (OpenAI o3-low / Claude light thinking range)
- *   medium   → 10 240 tokens  (near Anthropic's 10k default recommendation)
- *   high     → 25 600 tokens  (OpenAI o3-high / Claude 16–32k range)
- *   xhigh    → 51 200 tokens  (deep reasoning, ~half of the GLM-5.x output limit)
+ * The API does NOT support a numeric thinking budget; reasoning depth is
+ * decided by the model based on task complexity. We therefore map:
+ *   off  → thinking disabled
+ *   any other level (minimal/low/medium/high/xhigh) → thinking enabled
+ *
+ * The non-off levels are preserved in the registry so the UI can show the
+ * user's selection, but the API-level control is binary.
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -22,15 +23,11 @@ import * as os from 'node:os';
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
-export const THINKING_BUDGET_MAP: Record<Exclude<ThinkingLevel, 'off'>, number> = {
-  minimal: 1_024,
-  low: 4_096,
-  medium: 10_240,
-  high: 25_600,
-  xhigh: 51_200,
-};
-
 const OPENCODE_CONFIG_PATH = path.join(os.homedir(), '.config', 'opencode', 'opencode.json');
+
+interface ThinkingOption {
+  type: 'enabled' | 'disabled';
+}
 
 interface OpenCodeJsonConfig {
   $schema?: string;
@@ -79,11 +76,23 @@ export async function writeOpenCodeConfig(cfg: OpenCodeJsonConfig): Promise<void
 }
 
 /**
+ * Map a ThinkingLevel to the Z.AI thinking option object.
+ *
+ * 'off' disables reasoning; every other level enables it.
+ */
+function thinkingLevelToOption(level: ThinkingLevel): ThinkingOption {
+  return { type: level === 'off' ? 'disabled' : 'enabled' };
+}
+
+/**
  * Apply a thinking level for the given model in opencode.json.
  *
- * - For 'off': removes the thinkingBudget option for this model.
- * - For all other levels: writes thinkingBudget integer to
- *   provider[providerId].models[modelId].options.thinkingBudget.
+ * Writes `provider[providerId].models[modelId].options.thinking` with
+ * `{type:"enabled"}` or `{type:"disabled"}`.
+ *
+ * For 'off' the thinking option is removed so the config stays tidy (the
+ * model defaults to thinking enabled, so removing the key is equivalent to
+ * re-enabling default behaviour after it was previously disabled).
  *
  * If providerId cannot be determined, the function is a no-op.
  */
@@ -108,8 +117,10 @@ export async function applyThinkingBudget(
 
   const options = models[modelId].options!;
 
+  // 'off' historically meant "remove the override". Since the Z.AI default
+  // is thinking-enabled, removing the key restores the default behaviour.
   if (level === 'off') {
-    delete options['thinkingBudget'];
+    delete options['thinking'];
     // Clean up empty objects so the config stays tidy
     if (Object.keys(options).length === 0) {
       delete models[modelId].options;
@@ -127,7 +138,7 @@ export async function applyThinkingBudget(
       delete cfg.provider;
     }
   } else {
-    options['thinkingBudget'] = THINKING_BUDGET_MAP[level];
+    options['thinking'] = thinkingLevelToOption(level);
   }
 
   await writeOpenCodeConfig(cfg);
