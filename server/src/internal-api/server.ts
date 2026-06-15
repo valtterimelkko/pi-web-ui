@@ -141,7 +141,7 @@ export class InternalApiServer {
     this.server = createServer((req: IncomingMessage, res: ServerResponse) => {
       // CORS for local development (permissive because local-only)
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, PATCH, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Verbosity');
 
       if (req.method === 'OPTIONS') {
@@ -227,6 +227,32 @@ export class InternalApiServer {
           return;
         }
 
+        // /api/v1/sessions/batch and /api/v1/sessions/usage are reserved words
+        if (id === 'batch' && !action) {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleBatchCreate(req, res);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+        if (id === 'batch' && action === 'prompt') {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleBatchPrompt(req, res);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+        if (id === 'usage') {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleAggregateUsage(req, res);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+
         const sessionId = decodeURIComponent(id);
 
         if (action === 'prompt') {
@@ -265,6 +291,42 @@ export class InternalApiServer {
           return;
         }
 
+        if (action === 'transcript') {
+          if (req.method === 'GET') {
+            await deps.sessionRoutes.handleSessionTranscript(req, res, sessionId, parsed.query);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+
+        if (action === 'events') {
+          if (req.method === 'GET') {
+            await deps.sessionRoutes.handleSessionEvents(req, res, sessionId);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+
+        if (action === 'wait') {
+          if (req.method === 'GET') {
+            await deps.sessionRoutes.handleSessionWait(req, res, sessionId, parsed.query);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+
+        if (action === 'transfer') {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleSessionTransfer(req, res, sessionId);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+
         if (action === 'control') {
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleSessionControl(req, res, sessionId);
@@ -274,12 +336,26 @@ export class InternalApiServer {
           return;
         }
 
-        if (action === 'approvals' && subId && subAction === 'respond') {
-          if (req.method === 'POST') {
-            await deps.sessionRoutes.handleRespondApproval(req, res, sessionId, decodeURIComponent(subId));
-          } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+        if (action === 'approvals') {
+          // /api/v1/sessions/:id/approvals/pending
+          if (subId === 'pending' && !subAction) {
+            if (req.method === 'GET') {
+              await deps.sessionRoutes.handleListPendingApprovals(req, res, sessionId);
+            } else {
+              sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            }
+            return;
           }
+          // /api/v1/sessions/:id/approvals/:requestId/respond
+          if (subId && subAction === 'respond') {
+            if (req.method === 'POST') {
+              await deps.sessionRoutes.handleRespondApproval(req, res, sessionId, decodeURIComponent(subId));
+            } else {
+              sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            }
+            return;
+          }
+          sendJson(res, 404, { error: 'Unknown approvals endpoint', code: 'NOT_FOUND' });
           return;
         }
 

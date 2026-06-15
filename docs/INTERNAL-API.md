@@ -613,8 +613,19 @@ Examples:
 GET /api/v1/sessions/:sessionId/history
 ```
 
-Returns normalized replay events where the runtime supports replay-history
-fetching. Use `GET /api/v1/capabilities` first to discover support.
+Returns normalized replay events. All four runtimes are supported:
+- **Claude** and **OpenCode** return native normalized replay events.
+- **Antigravity** returns replay events reduced from Pi-owned turn logs.
+- **Pi** returns a synthesized event list derived from the Pi session
+  JSONL file (each user/assistant/tool line becomes a `message_end` or
+  `tool_execution_end` event). This is a best-effort path because the
+  Pi SDK does not persist normalized events natively.
+
+Use `GET /api/v1/capabilities` first to discover per-runtime replay
+support (`supportsReplayHistory`).
+
+For a runtime-agnostic, easier-to-consume view, prefer
+`GET /api/v1/sessions/:sessionId/transcript`.
 
 ---
 
@@ -633,6 +644,319 @@ This is currently useful for Claude channel-backed permission requests and
 OpenCode permission flows.
 
 ---
+
+## Orchestration Endpoints
+
+The endpoints below turn the Internal API into a first-class surface for
+**multi-agent orchestration** — e.g. a parent agent that spawns parallel
+child sessions on different runtimes, monitors them, collects results,
+and transfers context between them. They are additive and do not change
+any existing endpoint.
+
+### Persistent Event Stream
+
+```
+GET /api/v1/sessions/:sessionId/events
+```
+
+Opens a long-lived SSE subscription that receives every normalized agent
+event for the session — including events emitted by other clients
+(WebSocket, the runtime SDK, or another Internal API caller). This is
+the recommended way to monitor a child session without holding the
+prompt request open.
+
+**Response:** `Content-Type: text/event-stream`
+
+```
+event: agent_start
+data: {"type":"agent_start","sessionId":"...","timestamp":...,"data":{}}
+
+event: message_update
+data: {"type":"message_update",...}
+
+event: agent_end
+data: {"type":"agent_end",...}
+```
+
+Each SSE event is one normalized event with `event:` set to the event
+type and `data:` set to the full event JSON. The connection stays open
+across multiple prompts. Up to 100 recent events are buffered per
+session and replayed to late subscribers on connect (so you can open
+the stream after dispatching a prompt and still see the start of the
+turn). Send `Connection: close` or simply disconnect to unsubscribe.
+
+**Errors:**
+- `404` — Session not found
+
+---
+
+### Wait For Status
+
+```
+GET /api/v1/sessions/:sessionId/wait?status=idle&timeout=60000
+```
+
+Blocks until the session reaches the target status or the timeout
+expires. Useful for polling-free orchestration: dispatch an async-style
+prompt (or several), then call `/wait` on each.
+
+**Query parameters:**
+
+| Param | Values | Default | Notes |
+|---|---|---|---|
+| `status` | `idle`, `running` | `idle` | Target status to wait for |
+| `timeout` | milliseconds (0–300000) | `60000` | Caps at 5 minutes |
+
+**Response (200):**
+```json
+{
+  "sessionId": "...",
+  "status": "idle",
+  "waitedMs": 1234
+}
+```
+
+`status` is `timeout` if the target was never reached within `timeout`.
+
+---
+
+### Universal Transcript
+
+```
+GET /api/v1/sessions/:sessionId/transcript?scope=visible_recent
+```
+
+Returns a runtime-agnostic transcript for any of the four runtimes,
+suitable for an orchestrator that needs to read child-session results
+without parsing runtime-specific files.
+
+**Query parameters:**
+
+| Param | Values | Default |
+|---|---|---|
+| `scope` | `visible_recent`, `visible_full` | `visible_recent` |
+
+`visible_recent` returns the most recent 20 visible items; `visible_full`
+returns the entire visible transcript.
+
+**Response (200):**
+```json
+{
+  "sessionId": "...",
+  "runtime": "claude",
+  "scope": "visible_recent",
+  "itemCount": 4,
+  "truncated": false,
+  "items": [
+    { "kind": "user", "text": "Refactor this", "timestamp": 1747744000000 },
+    { "kind": "tool", "text": "...", "timestamp": 1747744001000, "toolName": "Read", "toolPrimaryArg": "/path/file" },
+    { "kind": "assistant", "text": "Done.", "timestamp": 1747744002000 }
+  ],
+  "source": {
+    "sessionId": "...",
+    "displayName": "Refactor this",
+    "sdkType": "claude",
+    "cwd": "/root/proj",
+    "createdAt": "...",
+    "lastActivity": "..."
+  }
+}
+```
+
+`kind` is `user`, `assistant`, or `tool`. Tool items include the
+human-readable result text (truncated to 200 chars), the tool name, and
+the primary argument (file path, command, pattern, etc.).
+
+**Errors:**
+- `404` — Session not found, or no visible transcript (empty session)
+
+---
+
+### Cross-Session Context Transfer
+
+```
+POST /api/v1/sessions/:sessionId/transfer
+```
+
+Transfers the visible transcript of the session into another session
+(or a freshly created one), across runtimes. Mirrors the WebSocket
+`transfer_session_context` message and reuses the same `TransferService`.
+
+**Request — into an existing session:**
+```json
+{
+  "targetSessionId": "target-uuid",
+  "scope": "visible_recent"
+}
+```
+
+**Request — into a new session:**
+```json
+{
+  "createNew": true,
+  "targetRuntime": "claude",
+  "targetCwd": "/root/new-project",
+  "scope": "visible_full"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `targetSessionId` | string | one of targetSessionId/createNew | Existing target session |
+| `createNew` | boolean | one of targetSessionId/createNew | Create a fresh target |
+| `targetRuntime` | string | when `createNew` | `pi`, `claude`, `opencode` |
+| `targetCwd` | string | no | CWD for new session (defaults to source CWD) |
+| `scope` | string | no | `visible_recent` (default) or `visible_full` |
+| `sourceDisplayName` | string | no | Label for the source in the handoff header |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "sourceSessionId": "...",
+  "targetSessionId": "new-uuid",
+  "createdNewSession": true,
+  "targetSessionPath": "...",
+  "targetRuntime": "claude"
+}
+```
+
+On failure the response is HTTP 400 with `success: false` and an `error`
+object containing a transfer error code (e.g.
+`TRANSFER_TARGET_BUSY`, `TRANSFER_EMPTY_SOURCE`).
+
+---
+
+### Batch Session Creation
+
+```
+POST /api/v1/sessions/batch
+```
+
+Creates multiple sessions in one call. All entries are dispatched in
+parallel.
+
+**Request:**
+```json
+{
+  "sessions": [
+    { "runtime": "claude", "cwd": "/root/a", "model": "sonnet" },
+    { "runtime": "opencode", "cwd": "/root/b" },
+    { "runtime": "antigravity", "model": "Gemini 3.5 Flash (Medium)" }
+  ]
+}
+```
+
+**Response (200):**
+```json
+{
+  "created": [
+    { "index": 0, "success": true, "sessionId": "...", "sessionPath": "...", "runtime": "claude", "model": "sonnet", "cwd": "/root/a" },
+    { "index": 1, "success": false, "runtime": "opencode", "error": { "code": "SESSION_CREATE_FAILED", "message": "..." } }
+  ],
+  "createdCount": 1,
+  "failedCount": 1
+}
+```
+
+---
+
+### Batch Prompt Dispatch
+
+```
+POST /api/v1/sessions/batch/prompt
+```
+
+Sends a prompt to each of several sessions in one call. Each entry
+runs in `answers` mode (final text only). By default all prompts run
+in parallel; set `parallel: false` to run them sequentially.
+
+**Request:**
+```json
+{
+  "prompts": [
+    { "sessionId": "child-1", "message": "Summarise this file" },
+    { "sessionId": "child-2", "message": "Write a unit test" }
+  ],
+  "parallel": true
+}
+```
+
+**Response (200):**
+```json
+{
+  "results": [
+    { "index": 0, "sessionId": "child-1", "success": true, "content": "...", "tokens": { "input": 10, "output": 20, "total": 30 } },
+    { "index": 1, "sessionId": "child-2", "success": false, "error": { "code": "RUNTIME_ERROR", "message": "..." } }
+  ],
+  "successCount": 1,
+  "failedCount": 1
+}
+```
+
+Each entry is independently prompt-injection-checked. Missing sessions
+and runtime failures are reported per-item without aborting the batch.
+
+---
+
+### Aggregate Usage
+
+```
+POST /api/v1/sessions/usage
+```
+
+Sums token usage and cost across a set of sessions.
+
+**Request:**
+```json
+{ "sessionIds": ["child-1", "child-2", "child-3"] }
+```
+
+**Response (200):**
+```json
+{
+  "sessionIds": ["child-1", "child-2", "child-3"],
+  "counted": ["child-1", "child-2"],
+  "missing": ["child-3"],
+  "totals": { "input": 27, "output": 35, "total": 62, "cost": 0.0085 },
+  "perSession": [
+    { "sessionId": "child-1", "runtime": "claude", "input": 20, "output": 30, "total": 50, "cost": 0.0065 },
+    { "sessionId": "child-2", "runtime": "opencode", "input": 7, "output": 5, "total": 12, "cost": 0.0020 }
+  ]
+}
+```
+
+Sessions that cannot be found are listed under `missing` and excluded
+from the totals.
+
+---
+
+### List Pending Approvals
+
+```
+GET /api/v1/sessions/:sessionId/approvals/pending
+```
+
+Returns the current pending-approval state for a session. Note: the
+runtime services do not yet expose a synchronous pending list, so the
+`approvals` array is currently always empty. To observe approvals as
+they arise, subscribe to `GET /sessions/:id/events` and watch for
+`permission_request` events.
+
+**Response (200):**
+```json
+{
+  "sessionId": "...",
+  "runtime": "claude",
+  "status": "idle",
+  "approvals": [],
+  "note": "Pending approvals must be observed via GET /sessions/:id/events. ..."
+}
+```
+
+---
+
+
 
 ### Abort Session
 
@@ -836,13 +1160,24 @@ GET /api/v1/models?runtime=antigravity    # Antigravity only
 POST   /api/v1/sessions               # create
 GET    /api/v1/sessions               # list all
 GET    /api/v1/sessions/:id           # get one
+GET    /api/v1/sessions/:id/info      # get one (rich)
 DELETE /api/v1/sessions/:id           # delete
 
 # Conversation
 POST /api/v1/sessions/:id/prompt      # send prompt
 POST /api/v1/sessions/:id/abort       # abort running
 
-# Verbosity levels
+# Orchestration
+GET  /api/v1/sessions/:id/events      # persistent SSE event stream
+GET  /api/v1/sessions/:id/wait        # wait for status (idle/running)
+GET  /api/v1/sessions/:id/transcript  # runtime-agnostic transcript
+POST /api/v1/sessions/:id/transfer    # cross-session context transfer
+POST /api/v1/sessions/batch           # batch-create child sessions
+POST /api/v1/sessions/batch/prompt    # batch-dispatch prompts
+POST /api/v1/sessions/usage           # aggregate token usage / cost
+GET  /api/v1/sessions/:id/approvals/pending   # pending-approval state
+
+# Verbosity levels (for /prompt)
 answers  — final text only (non-streaming, default)
 tasks    — status headlines + answer (streaming)
 full     — every event (streaming, like web UI)

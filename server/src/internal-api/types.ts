@@ -53,6 +53,163 @@ export interface SendPromptRequest {
   mode?: PromptMode;
 }
 
+// ─── Async / orchestration request types ─────────────────────────────────────
+
+/**
+ * Request body for POST /sessions/:id/transfer.
+ *
+ * Mirrors the WebSocket transfer_session_context message so the same
+ * TransferService implementation can be reused.
+ */
+export interface TransferSessionRequest {
+  /** Existing target session to receive the transcript. Mutually exclusive with createNew. */
+  targetSessionId?: string;
+  /** Create a fresh target session and transfer into it. */
+  createNew?: boolean;
+  /** Runtime for the new target session. Required when createNew is true. */
+  targetRuntime?: SessionRuntime;
+  /** CWD for the new target session. Defaults to source CWD when createNew. */
+  targetCwd?: string;
+  /** Transcript scope: recent items only, or full visible transcript. */
+  scope?: 'visible_recent' | 'visible_full';
+  /** Optional human-readable label for the source session in the handoff. */
+  sourceDisplayName?: string;
+}
+
+export interface TransferSessionResponse {
+  success: boolean;
+  sourceSessionId: string;
+  targetSessionId?: string;
+  createdNewSession: boolean;
+  targetSessionPath?: string;
+  targetRuntime?: SessionRuntime;
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+export interface BatchCreateEntry {
+  runtime: SessionRuntime;
+  cwd?: string;
+  model?: string;
+  thinkingLevel?: string;
+}
+
+export interface BatchCreateRequest {
+  sessions: BatchCreateEntry[];
+}
+
+export interface BatchCreateResultItem {
+  index: number;
+  success: boolean;
+  sessionId?: string;
+  sessionPath?: string;
+  runtime: SessionRuntime;
+  model?: string;
+  cwd?: string;
+  error?: { code: string; message: string };
+}
+
+export interface BatchCreateResponse {
+  created: BatchCreateResultItem[];
+  createdCount: number;
+  failedCount: number;
+}
+
+export interface BatchPromptEntry {
+  sessionId: string;
+  message: string;
+}
+
+export interface BatchPromptRequest {
+  prompts: BatchPromptEntry[];
+  /** When true (default), dispatch all prompts in parallel. */
+  parallel?: boolean;
+}
+
+export interface BatchPromptResultItem {
+  index: number;
+  sessionId: string;
+  success: boolean;
+  content?: string;
+  tokens?: { input: number; output: number; total: number };
+  error?: { code: string; message: string };
+}
+
+export interface BatchPromptResponse {
+  results: BatchPromptResultItem[];
+  successCount: number;
+  failedCount: number;
+}
+
+export interface AggregateUsageRequest {
+  sessionIds: string[];
+}
+
+export interface AggregateUsageResponse {
+  sessionIds: string[];
+  counted: string[];
+  missing: string[];
+  totals: {
+    input: number;
+    output: number;
+    total: number;
+    cost: number;
+  };
+  perSession: Array<{
+    sessionId: string;
+    runtime: SessionRuntime;
+    input: number;
+    output: number;
+    total: number;
+    cost: number;
+  }>;
+}
+
+export interface PendingApprovalsResponse {
+  sessionId: string;
+  runtime: SessionRuntime;
+  status: 'idle' | 'running';
+  approvals: Array<{
+    requestId: string;
+    toolName?: string;
+    description?: string;
+    args?: unknown;
+    receivedAt?: number;
+  }>;
+  note?: string;
+}
+
+export interface WaitResponse {
+  sessionId: string;
+  status: 'idle' | 'running' | 'error' | 'timeout';
+  waitedMs: number;
+}
+
+export interface TranscriptResponse {
+  sessionId: string;
+  runtime: SessionRuntime;
+  scope: 'visible_recent' | 'visible_full';
+  itemCount: number;
+  truncated: boolean;
+  items: Array<{
+    kind: 'user' | 'assistant' | 'tool';
+    text: string;
+    timestamp?: number;
+    toolName?: string;
+    toolPrimaryArg?: string;
+  }>;
+  source: {
+    sessionId: string;
+    displayName: string;
+    sdkType: SessionRuntime;
+    cwd: string;
+    createdAt?: string;
+    lastActivity?: string;
+  };
+}
+
 export interface SessionControlRequest {
   action: 'set_model' | 'set_thinking_level' | 'pin' | 'unpin';
   modelId?: string;

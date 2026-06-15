@@ -31,5 +31,22 @@ export type {
   HealthResponse,
   ApiError,
   SSETaskStatusEvent,
+  TransferSessionRequest,
+  TransferSessionResponse,
+  BatchCreateEntry,
+  BatchCreateRequest,
+  BatchCreateResultItem,
+  BatchCreateResponse,
+  BatchPromptEntry,
+  BatchPromptRequest,
+  BatchPromptResultItem,
+  BatchPromptResponse,
+  AggregateUsageRequest,
+  AggregateUsageResponse,
+  PendingApprovalsResponse,
+  WaitResponse,
+  TranscriptResponse,
 } from './types.js';
 export { SSE_EVENT_TYPES } from './types.js';
+export { InternalApiEventBroker } from './event-broker.js';
+export type { EventBrokerSubscriber, EventBrokerOptions } from './event-broker.js';
