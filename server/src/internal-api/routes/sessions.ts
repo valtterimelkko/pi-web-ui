@@ -961,8 +961,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sse.write(event.type, event);
     });
 
-    req.on('close', () => {
-      unsub();
+    // Keep this handler alive until the client disconnects. Without this,
+    // Node may consider the GET request "complete" (it has no body) and
+    // garbage-collect the response, closing the SSE stream prematurely.
+    // Awaiting the close promise guarantees the response object survives
+    // for the lifetime of the subscription.
+    await new Promise<void>((resolve) => {
+      const cleanup = () => {
+        unsub();
+        resolve();
+      };
+      sse.res.on('close', cleanup);
+      sse.res.on('error', cleanup);
+      req.on('aborted', cleanup);
+      req.on('error', cleanup);
     });
   }
 
