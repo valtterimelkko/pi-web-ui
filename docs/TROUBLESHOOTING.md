@@ -83,6 +83,62 @@ curl http://localhost:<server-port>/api/config/validate
 jq '.' ~/.pi-web-ui/session-registry.json
 ```
 
+## Internal API orchestration debugging
+
+Use this section when you are driving Pi Web UI programmatically over the Unix
+socket rather than through the browser.
+
+### Check the socket and token first
+
+```bash
+ls -l ~/.pi-web-ui/internal-api.sock
+ls -l ~/.pi-web-ui/internal-api-token
+TOKEN=$(cat ~/.pi-web-ui/internal-api-token)
+```
+
+### Check runtime capabilities before dispatch
+
+```bash
+curl -s --unix-socket ~/.pi-web-ui/internal-api.sock \
+  -H "Authorization: Bearer $TOKEN" \
+  http://localhost/api/v1/capabilities | python3 -m json.tool
+```
+
+### Recommended orchestration-debug flow
+
+1. `GET /api/v1/capabilities` — confirm runtime availability and feature flags
+2. `POST /api/v1/sessions` or `/sessions/batch` — create child sessions
+3. `POST /api/v1/sessions/:id/prompt` — dispatch work
+4. `GET /api/v1/sessions/:id/events` — monitor progress when the runtime supports stable SSE monitoring
+5. `GET /api/v1/sessions/:id/wait` — wait for completion without polling loops in your own code
+6. `GET /api/v1/sessions/:id/transcript` — extract child results in a runtime-agnostic form
+7. `POST /api/v1/sessions/:id/transfer` — hand child context back into another session
+
+### Important Claude caveat
+
+For **Claude channel-backed sessions**, `GET /api/v1/sessions/:id/events` can
+be less reliable for parallel fan-out monitoring than it is for Pi, OpenCode,
+and Antigravity. In practice this means:
+- do not assume multiple Claude child sessions can all be watched over `/events` with the same reliability as OpenCode
+- prefer `GET /sessions/:id/wait` + `GET /sessions/:id/transcript` as the safe fallback for Claude orchestration
+- use `GET /sessions/:id/info` and `GET /sessions/:id/history` when you need additional diagnosis
+
+### ID confusion to watch for
+
+When correlating failures, distinguish between:
+- **Internal session id** — Pi Web UI's `sessionId`
+- **Runtime-native id** — e.g. Claude native session id or OpenCode `opencodeSessionId`
+- **Registry path/file references** — stored in `~/.pi-web-ui/session-registry.json`
+
+`npm run debug:where -- <id>` understands some, but not all, native ids. For
+OpenCode-native session ids you may need to inspect the runtime's own logs and
+Pi registry metadata separately.
+
+See also:
+- [`INTERNAL-API.md`](./INTERNAL-API.md)
+- [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
+- [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+
 ## Pi SDK Path
 
 ### Check first

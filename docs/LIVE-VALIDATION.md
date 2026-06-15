@@ -4,6 +4,16 @@
 
 ## Why this exists
 
+Live validation is **one consumer** of the Internal API, not the reason the API
+exists.
+
+The Internal API is a broader local-only surface for:
+- local automation
+- agent-to-agent orchestration
+- browserless runtime validation
+
+This document is only about the third use case.
+
 Unit tests and E2E tests are necessary, but they do not answer one important
 question quickly enough for agent-led work:
 
@@ -15,6 +25,10 @@ It uses the **Internal API** over the local Unix socket instead of browser auth,
 WebSocket cookie login, or manual UI clicking. That makes it suitable for
 future agents, automation, and local debugging while preserving the main app's
 security model.
+
+If you are building agentic orchestration rather than test scenarios, read:
+- [`INTERNAL-API.md`](./INTERNAL-API.md)
+- [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
 
 ## Canonical entrypoint
 
@@ -90,6 +104,10 @@ Use live validation when you change:
 
 Prefer it when you want a **real-runtime confirmation** without opening the web UI.
 
+Use it alongside orchestrator development when you need confidence that the
+runtime itself still behaves correctly, but do not confuse live validation with
+an orchestration guide or a general-purpose control plane.
+
 ## When not to use it
 
 Do **not** treat live validation as a replacement for:
@@ -120,6 +138,7 @@ Keep scenarios:
 ## Related docs
 
 - [`INTERNAL-API.md`](./INTERNAL-API.md)
+- [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
 - [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
 - [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
 - [`../tests/README.md`](../tests/README.md)

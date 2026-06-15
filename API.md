@@ -8,7 +8,7 @@ Pi Web UI exposes three main surfaces:
 
 1. **WebSocket** for session control, streaming, replay, and runtime events
 2. **REST** for browser auth, health, config, models, files, sessions, and extensions
-3. **Internal API** for local automation and browserless live validation over a Unix socket
+3. **Internal API** for local automation, multi-agent orchestration, and browserless live validation over a Unix socket
 
 ## WebSocket
 
@@ -100,12 +100,17 @@ For complete message shapes and event semantics, see [`docs/PROTOCOL.md`](./docs
 ## Internal API
 
 The Internal API is documented in [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md).
-It is the preferred automation surface for local tools and the live-validation
-runner. It uses:
+It is the preferred automation surface for local tools, agent-to-agent
+orchestration, and the live-validation runner. It uses:
 
 - Unix socket transport: `~/.pi-web-ui/internal-api.sock`
 - bearer token auth: `~/.pi-web-ui/internal-api-token`
-- SSE for streaming prompt responses
+- SSE for streaming prompt responses and persistent session event monitoring
+
+Reference docs:
+- [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md) — endpoint reference and known limitations
+- [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
+- [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
 
 Important endpoints include:
 - `GET /api/v1/capabilities`
@@ -113,10 +118,21 @@ Important endpoints include:
 - `POST /api/v1/sessions/:id/prompt`
 - `GET /api/v1/sessions/:id/info`
 - `GET /api/v1/sessions/:id/history`
+- `GET /api/v1/sessions/:id/events`
+- `GET /api/v1/sessions/:id/wait`
+- `GET /api/v1/sessions/:id/transcript`
+- `POST /api/v1/sessions/:id/transfer`
+- `POST /api/v1/sessions/batch`
+- `POST /api/v1/sessions/batch/prompt`
+- `POST /api/v1/sessions/usage`
+- `GET /api/v1/sessions/:id/approvals/pending`
 - `POST /api/v1/sessions/:id/control`
 - `POST /api/v1/sessions/:id/approvals/:requestId/respond`
 
-For the runtime validation workflow, read [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md).
+Known caveat: for Claude channel-backed sessions, `GET /sessions/:id/events`
+can be less reliable for multi-child parallel monitoring than it is for the
+other runtimes. When building orchestrators, prefer `/wait` + `/transcript`
+as the safe fallback for Claude fan-out scenarios.
 
 ## REST API
 

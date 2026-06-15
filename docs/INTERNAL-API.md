@@ -73,8 +73,56 @@ the same ones the web UI uses.
 - **Unified sessions:** Sessions appear in both the API and the web UI. You
   can create a session via the API, then open it in the web UI.
 - **Auth:** A shared API key stored at `~/.pi-web-ui/internal-api-token`.
-- **Live validation:** The repo-owned `npm run validate:live` runner uses this
-  API as its browserless runtime-testing surface.
+- **Broader than live validation:** the repo-owned `npm run validate:live`
+  runner is one consumer of this API, but the same surface also exists for
+  local automation and multi-agent orchestration.
+
+### Primary use cases
+
+- **Local app integration** — voice chat, custom frontends, daemon processes,
+  and other local tools that want to create sessions and send prompts.
+- **Multi-agent orchestration** — parent agents spawning child sessions across
+  Pi, Claude, OpenCode, and Antigravity, then monitoring, collecting, and
+  transferring results.
+- **Browserless live validation** — repo-owned runtime checks that confirm the
+  real server/runtime path still works without opening the web UI.
+
+### What this API is now good for
+
+The current surface is strong enough for the full Tier-1 orchestration loop:
+- discover runtimes and models
+- create child sessions on different runtime paths
+- dispatch prompts
+- monitor progress
+- wait for completion
+- read back child transcripts/results
+- transfer context into another session
+- aggregate usage and cost
+- tear child sessions down
+
+### Recommended docs by task
+
+- Need endpoint reference → [`INTERNAL-API.md`](./INTERNAL-API.md)
+- Need orchestration workflow patterns → [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
+- Need browserless runtime validation → [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+
+### Known limitations and caveats
+
+- **Claude channel `/events` caveat:** for parallel Claude-child monitoring on
+  the same host, `GET /sessions/:id/events` can be less reliable than it is
+  for Pi, OpenCode, and Antigravity. For Claude fan-out workflows, prefer
+  `/wait` + `/transcript` as the safe fallback.
+- **No parent/child metadata model yet:** the API does not yet expose
+  `parentSessionId`, `orchestrationId`, or `GET /sessions?parent=...`.
+  Orchestrators must track their own child-session relationships.
+- **No async job registry yet:** prompt dispatch is still session-oriented,
+  not job-oriented. There is no job id or queue API.
+- **Pending approvals endpoint is informational:**
+  `GET /sessions/:id/approvals/pending` currently reports state and guidance,
+  not a true runtime-backed pending list.
+- **`/history` and `/transcript` serve different needs:** `/history` is closer
+  to replay/event reconstruction; `/transcript` is the easier runtime-agnostic
+  result-reading surface for agents.
 
 ## Connection
 
@@ -653,6 +701,22 @@ child sessions on different runtimes, monitors them, collects results,
 and transfers context between them. They are additive and do not change
 any existing endpoint.
 
+### Which endpoint should an orchestrator use?
+
+| Need | Preferred endpoint | Notes |
+|---|---|---|
+| Discover runtime support before planning | `GET /capabilities`, `GET /models` | Ask what exists before choosing runtimes/models |
+| Create one child | `POST /sessions` | Use for explicit one-off session creation |
+| Create many children | `POST /sessions/batch` | Parallel provisioning helper |
+| Dispatch a prompt and only care about the final answer | `POST /sessions/:id/prompt` with `verbosity=answers` | Simplest request/response path |
+| Watch progress live | `GET /sessions/:id/events` | Best for Pi / OpenCode / Antigravity, and for single-session Claude monitoring |
+| Wait for a child to finish safely | `GET /sessions/:id/wait` | Recommended fallback for Claude fan-out cases |
+| Read child output in a runtime-agnostic form | `GET /sessions/:id/transcript` | Best default for orchestrators |
+| Reconstruct UI-style event replay | `GET /sessions/:id/history` | Lower-level replay/event shape |
+| Hand child context into another session | `POST /sessions/:id/transfer` | Reuses the same transfer machinery as the web UI |
+| Sum usage/cost across children | `POST /sessions/usage` | Aggregate report |
+| Inspect approval state | `GET /sessions/:id/approvals/pending` | Currently informational only; use `/events` to observe approval requests live |
+
 ### Persistent Event Stream
 
 ```
@@ -660,10 +724,14 @@ GET /api/v1/sessions/:sessionId/events
 ```
 
 Opens a long-lived SSE subscription that receives every normalized agent
-event for the session — including events emitted by other clients
+ event for the session — including events emitted by other clients
 (WebSocket, the runtime SDK, or another Internal API caller). This is
 the recommended way to monitor a child session without holding the
 prompt request open.
+
+For **Claude channel-backed** parallel fan-out on the same host, treat this
+endpoint as best-effort rather than perfect. If a Claude child matters more
+than live progress rendering, use `/wait` + `/transcript` as the robust path.
 
 **Response:** `Content-Type: text/event-stream`
 
@@ -1147,6 +1215,21 @@ that can read this file can use the API.
 
 ## Quick Reference Card
 
+If you are building an orchestrator rather than a chat client, the usual
+control flow is:
+
+```text
+capabilities/models
+  -> create session(s)
+  -> prompt
+  -> events OR wait
+  -> transcript
+  -> transfer (optional)
+  -> usage
+  -> delete
+```
+
+
 ```text
 # Health (no auth)
 GET /api/v1/health
@@ -1206,3 +1289,18 @@ current state.
 **Q: Can I have two APIs sending prompts to the same session?**
 A: No. A session can only process one prompt at a time. The second caller
 will get a `409 SESSION_BUSY` error.
+
+**Q: Should an orchestrator use `/history` or `/transcript`?**
+A: Usually `/transcript`. It is the runtime-agnostic, easier-to-consume
+surface for reading child results. Use `/history` when you specifically want
+replay/event-like output closer to what the UI reconstructs.
+
+**Q: Is `/events` equally reliable on all runtimes?**
+A: No. It is the best live-monitoring path overall, but for **Claude
+channel-backed** parallel child monitoring on the same host it can be less
+reliable than on Pi, OpenCode, and Antigravity. In those cases prefer
+`/wait` + `/transcript`.
+
+**Q: Can the API tell me which child sessions belong to a parent session?**
+A: Not yet. There is no parent/child metadata or `GET /sessions?parent=...`
+filter today. Orchestrators must track those relationships themselves.

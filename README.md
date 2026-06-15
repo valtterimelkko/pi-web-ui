@@ -58,6 +58,7 @@ That is an expected and healthy way to use this project.
 Pi Web UI combines:
 - a **React + Vite** frontend
 - an **Express + WebSocket** backend
+- a **local Internal API** over a Unix socket for automation, orchestration, and live validation
 - a **unified sidebar/session registry** across runtimes
 - **runtime-specific adapters** so Pi SDK, Claude, OpenCode, and Antigravity sessions feel similar in the UI
 - **persistent storage** so sessions survive reconnects and, depending on runtime, process restarts
@@ -90,6 +91,7 @@ That does not make them unusable, but it does mean adopters should treat those i
 - Create, switch, pin, rename, and export sessions
 - Unified session list across all runtime paths
 - Tool execution rendering and history replay
+- Local Internal API for agent orchestration, transcript extraction, cross-runtime context transfer, and browserless validation
 - Runtime availability reporting (`claude_available`, `opencode_available`, `antigravity_available`)
 - OpenCode permission bridge via the existing extension approval UI
 - Voice dictation and Drive Mode read-aloud/dictation flow
@@ -146,7 +148,8 @@ If you want to use Claude the same way this project does, read [`docs/CLAUDE-BAC
 - **First-stop troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
 - **WebSocket protocol:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
 - **REST/API index:** [`API.md`](./API.md)
-- **Internal API:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
+- **Internal API reference:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
+- **Internal API orchestration guide:** [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md)
 - **Live validation:** [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md)
 - **Tests:** [`tests/README.md`](./tests/README.md)
 

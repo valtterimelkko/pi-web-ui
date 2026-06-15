@@ -30,18 +30,23 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md) — OpenCode Direct architecture
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md) — Antigravity / `agy` architecture, logs, and failure modes
 
-## 6. Integration & extension
+## 6. Internal API and orchestration
+- [`INTERNAL-API.md`](./INTERNAL-API.md) — Canonical Internal API reference for local automation, agent orchestration, and live validation
+- [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — Task-oriented guide for spawning, monitoring, and collecting child sessions across runtimes
+- [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — Browserless runtime validation runner built on top of the Internal API
+
+## 7. Integration & extension
 - [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md) — Checklist for adding a new runtime
 - [`SHARP-EDGES.md`](./SHARP-EDGES.md) — Known traps and brittle patterns
 
-## 7. Operations
+## 8. Operations
 - [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) — Fastest path to logs, session files, and runtime-specific diagnosis
 - [`DEPLOYMENT.md`](../DEPLOYMENT.md) — Production runbook, systemd, nginx
 - [`SECURITY.md`](../SECURITY.md) — Security model, threat mitigations, rules
-- [`API.md`](../API.md) — REST API surface index
+- [`API.md`](../API.md) — WebSocket / REST / Internal API surface index
 
-## 8. Tests
+## 9. Tests
 - [`tests/README.md`](../tests/README.md) — Test layers, running commands
 
-## 9. Features
+## 10. Features
 - [`DRIVE-MODE.md`](./DRIVE-MODE.md) — current Drive Mode feature overview
