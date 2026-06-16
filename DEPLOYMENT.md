@@ -1,6 +1,6 @@
 # Deployment Guide
 
-> Production runbook for Pi Web UI. See [`README.md`](./README.md) for the concise overview, [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for system structure, and [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md) for the Pi worker-isolation rationale.
+> Production runbook for Pi Web UI. See [`README.md`](./README.md) for the public overview, [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md) for Linux/macOS adoption posture, [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for system structure, and [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md) for the Pi worker-isolation rationale.
 
 ## What You Are Deploying
 
@@ -18,6 +18,39 @@ Operationally, this means deployment must consider:
 - availability of Bun if the channel-backed Claude path is enabled
 - availability of `opencode` if OpenCode Direct is needed
 - availability of `agy` if Antigravity is needed
+
+## Recommended deployment shapes
+
+### 1. Linux VPS or home server
+This is the clearest serious long-running setup.
+
+Best for:
+- 24/7 availability
+- mobile access
+- multiple devices
+- longer-running coding workflows
+
+### 2. Always-on macOS machine
+A Mac mini or similar machine can work well for personal/internal-network use.
+
+Best for:
+- technically comfortable users
+- local-network access
+- always-on personal workflows
+
+### 3. Local laptop/workstation only
+Fine for development and occasional personal use, but less ideal if you want the UI and runtimes available all the time.
+
+## Reverse proxy recommendation
+
+The maintainer's preferred shape uses **Caddy** in front of Pi Web UI.
+
+Why Caddy is a good fit:
+- simple HTTPS setup
+- strong defaults
+- pleasant for self-hosted personal services
+
+Nginx is also perfectly viable, and an example is included below.
 
 ## Production Checklist
 
@@ -182,6 +215,30 @@ sudo systemctl enable pi-web-ui
 sudo systemctl start pi-web-ui
 sudo systemctl status pi-web-ui
 ```
+
+## Caddy Example
+
+```caddy
+pi.example.com {
+    encode zstd gzip
+
+    handle /ws* {
+        reverse_proxy 127.0.0.1:3456
+    }
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:3456
+    }
+
+    handle {
+        root * /opt/pi-web-ui/client/dist
+        try_files {path} /index.html
+        file_server
+    }
+}
+```
+
+Adjust the domain, backend port, and static-file path to your own environment.
 
 ## Nginx Example
 

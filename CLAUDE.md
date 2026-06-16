@@ -4,7 +4,8 @@
 
 ## Start Here
 
-- **Overview / runbook:** [`README.md`](./README.md)
+- **Maintainer docs / runbook:** [`docs/MAINTAINER-INDEX.md`](./docs/MAINTAINER-INDEX.md)
+- **Public project overview:** [`README.md`](./README.md)
 - **Troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
 - **Architecture:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 - **WebSocket protocol:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)

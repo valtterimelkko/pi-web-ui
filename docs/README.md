@@ -1,52 +1,58 @@
-# Docs Index
+# Pi Web UI Docs
 
-Reading order for LLM coding agents working on Pi Web UI.
+This folder supports **two different reading paths**:
 
-Many docs below intentionally contain concrete paths, socket locations, service names, and maintainer runbook commands because this repository doubles as a live operational manual. For public adopters, read those as worked examples and adapt them to your own environment.
+1. **Public/adopter docs** — for people deciding whether to use, self-host, extend, or fork Pi Web UI
+2. **Maintainer/agent docs** — for contributors and LLM coding agents fixing bugs, tracing architecture, and troubleshooting runtime behaviour
 
-If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` before reading deeper architecture docs.
+If you arrived here from the public GitHub repo, start with the **public/adopter path** below.
 
-## 1. Agent quick start
-- [`AGENTS.md`](../AGENTS.md) — Kimi / PAI agent entry point
-- [`CLAUDE.md`](../CLAUDE.md) — Claude Code agent entry point (same content as `AGENTS.md`)
+---
 
-## 2. First-stop debugging
-- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) — Fastest path to logs, session files, registry inspection, and runtime-specific diagnosis
-- `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` — quickest session-to-log/session-file locator
+## Public / adopter path
 
-## 3. System structure
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — High-level architecture, runtime paths, responsibilities
-- [`CODEBASE-MAP.md`](./CODEBASE-MAP.md) — Granular file-to-purpose index
-- [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md) — How native events from Pi, Claude, OpenCode, and Antigravity converge into one frontend stream
+### Start here
+- [`../README.md`](../README.md) — public landing page
+- [`GETTING-STARTED.md`](./GETTING-STARTED.md) — clone → configure → first working session
+- [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md) — choose a runtime path and understand the trade-offs
+- [`PLATFORM-SUPPORT.md`](./PLATFORM-SUPPORT.md) — Linux vs macOS support tiers, 24/7 hosting expectations, VPS guidance
 
-## 4. WebSocket contract
-- [`PROTOCOL.md`](./PROTOCOL.md) — Message types, connection lifecycle, error codes
+### Understand the project
+- [`PROJECT-STORY.md`](./PROJECT-STORY.md) — why this exists and how the runtime mix evolved
+- [`VISION.md`](./VISION.md) — where the platform could go, especially around local automation and cross-runtime orchestration
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — high-level system structure and runtime boundaries
+- [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md) — how Pi extensions and OpenCode plugins fit into the fuller workflow
 
-## 5. Runtime deep-dives
-- [`PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md) — Pi SDK worker architecture
-- [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md) — Which behaviours are core vs enhanced by companion Pi extensions / OpenCode plugins
-- [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md) — Claude legacy-direct vs channel-backed backend modes, logs, and failure modes
-- [`CLAUDE-CHANNEL-NATIVE-HOOK-ROUTING-DESIGN.md`](./CLAUDE-CHANNEL-NATIVE-HOOK-ROUTING-DESIGN.md) — Proposed safer design for routing richer native Claude hook events into the Web UI
-- [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md) — OpenCode Direct architecture
-- [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md) — Antigravity / `agy` architecture, logs, and failure modes
+### Automation and integration
+- [`../API.md`](../API.md) — REST / WebSocket / automation API index
+- [`INTERNAL-API.md`](./INTERNAL-API.md) — local automation API for live validation, integration, and orchestration experiments
+- [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — patterns for spawning and collecting child sessions across runtimes
 
-## 6. Internal API and orchestration
-- [`INTERNAL-API.md`](./INTERNAL-API.md) — Canonical Internal API reference for local automation, agent orchestration, and live validation
-- [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — Task-oriented guide for spawning, monitoring, and collecting child sessions across runtimes
-- [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — Browserless runtime validation runner built on top of the Internal API
+### Deployment and trust
+- [`../DEPLOYMENT.md`](../DEPLOYMENT.md) — self-hosting, reverse proxy, always-on deployment, Caddy/Nginx examples
+- [`../SECURITY.md`](../SECURITY.md) — security posture and important operator caveats
 
-## 7. Integration & extension
-- [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md) — Checklist for adding a new runtime
-- [`SHARP-EDGES.md`](./SHARP-EDGES.md) — Known traps and brittle patterns
+### Runtime-specific deep dives
+These are deeper technical reads once you already know you care about a given runtime path:
+- [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
+- [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)
+- [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
 
-## 8. Operations
-- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) — Fastest path to logs, session files, and runtime-specific diagnosis
-- [`DEPLOYMENT.md`](../DEPLOYMENT.md) — Production runbook, systemd, nginx
-- [`SECURITY.md`](../SECURITY.md) — Security model, threat mitigations, rules
-- [`API.md`](../API.md) — WebSocket / REST / Internal API surface index
+Maintainer-only deeper internals such as Pi worker isolation live in the maintainer path.
 
-## 9. Tests
-- [`tests/README.md`](../tests/README.md) — Test layers, running commands
+---
 
-## 10. Features
-- [`DRIVE-MODE.md`](./DRIVE-MODE.md) — current Drive Mode feature overview
+## Maintainer / contributor / LLM-agent path
+
+If you are changing code, debugging a runtime, or operating this repo as a live runbook, start here instead:
+
+- [`MAINTAINER-INDEX.md`](./MAINTAINER-INDEX.md)
+- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
+- [`CODEBASE-MAP.md`](./CODEBASE-MAP.md)
+- [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
+- [`PROTOCOL.md`](./PROTOCOL.md)
+- [`SHARP-EDGES.md`](./SHARP-EDGES.md)
+
+LLM coding agents should also read:
+- [`../AGENTS.md`](../AGENTS.md)
+- [`../CLAUDE.md`](../CLAUDE.md)

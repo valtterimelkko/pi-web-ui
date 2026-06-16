@@ -1,74 +1,121 @@
 # Runtime Companions
 
-Pi Web UI can run on its own, but some of its richer workflow surfaces were designed alongside companion Pi extensions and OpenCode plugins.
+Pi Web UI works on its own, but some of the richer workflow surfaces in this repo were designed alongside **companion Pi extensions** and **companion OpenCode plugins**.
+
+This doc explains what those companion layers add, who should care, and how to think about installing them.
+
+## Short version
+
+- **You do not need companion repos for core session/chat usage.**
+- **You may want them if you want the fuller workflow style that shaped this project.**
+
+Core Pi Web UI features still work without them:
+- session creation and switching
+- chat streaming
+- history replay
+- runtime availability checks
+- mobile-friendly session access
+
+What becomes richer with companions:
+- planning flows
+- memory helpers
+- autonomous goal execution
+- orchestration helpers
+- some status widgets and workflow-specific UI surfaces
 
 ## Why this matters
 
-The browser UI aims to keep multiple runtimes feeling consistent, but each runtime has different extension/plugin capabilities.
+Each runtime has different extension/plugin capabilities.
 
 - **Pi SDK path** can expose custom tools, slash commands, widgets, status lines, and extension UI requests.
 - **OpenCode Direct** can expose plugin-driven state and runtime events that Pi Web UI normalizes into the common frontend model.
 - **Claude** and **Antigravity** are integrated more as runtime wrappers than extension ecosystems.
 
-That means the UI can degrade gracefully in some cases, but certain workflow niceties only appear when the companion layer exists.
-
-## Pi runtime companions
-
-The Pi runtime is the richest path for custom augmentation.
-
-Typical companion capabilities include:
-- planning and approval flows
-- subagent discovery and evaluation
-- persistent memory helpers
-- goal execution/status widgets
-- web search/fetch tools
-- todo/task management
-- parallel orchestration helpers
-
-If those extensions are missing, the Pi runtime still works as a chat/tool environment, but some command lists, status widgets, or workflow-specific affordances will be reduced.
-
-## OpenCode runtime companions
-
-The OpenCode runtime can be enhanced with plugins for:
-- goal execution
-- memory
-- parallel orchestration
-
-Pi Web UI includes status and replay logic that can surface plugin-emitted state where available. Without those plugins, the OpenCode path still works, but it behaves more like a plain runtime connection and less like a tailored workflow environment.
-
-## What is definitely core vs optional
-
-### Core
-- session creation and switching
-- chat streaming
-- history replay
-- runtime availability checks
-- auth/security layers
-- mobile-friendly session access
-
-### Optional / richer with companion packs
-- goal-engine-specific status widgets
-- extension/plugin-specific UI statuses
-- some slash-command-oriented workflow patterns
-- some approval/status surfaces originally designed for Pi extensions and reused elsewhere
-
-## Recommendation for adopters
-
-If you only want a browser shell around a single runtime, start with the runtime itself and Pi Web UI.
-
-If you want the fuller experience that motivated this project, install the relevant companion extension/plugin packs for the runtime(s) you care about.
+So Pi Web UI can feel reasonably consistent across runtimes, but some of its most workflow-rich behaviour was shaped around Pi extensions and OpenCode plugins.
 
 ## Companion repositories
 
-The public companion repositories are:
+### Pi extensions
+- Repo: [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
+- Best for: Pi-first users who want planning, memory, orchestration, subagents, and goal execution
 
-- **Pi extensions:** [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
-- **OpenCode plugins:** [valtterimelkko/opencode-plugins](https://github.com/valtterimelkko/opencode-plugins)
+Highlights in that repo include:
+- enhanced planning flows
+- safer subagent delegation
+- persistent memory
+- goal execution
+- web helpers
+- todo/task helpers
+- orchestration tools
 
-These repos contain the extension/plugin layers referenced in this document.
+### OpenCode plugins
+- Repo: [valtterimelkko/opencode-plugins](https://github.com/valtterimelkko/opencode-plugins)
+- Best for: OpenCode users who want memory, orchestration, and goal-driven session behaviour
+
+Highlights in that repo include:
+- goal execution
+- memory helpers
+- parallel orchestration helpers
+
+## Who should install them?
+
+### Probably yes
+Install the companions if you want Pi Web UI to feel closer to the maintainer's own richer workflow environment.
+
+### Probably not yet
+Skip them initially if you are just trying to:
+- verify the repo works
+- adopt a single runtime first
+- keep your first setup simple
+
+A good path is:
+1. get Pi Web UI working with one runtime
+2. confirm the core UI/session flow is good for you
+3. add companion layers once you know you want the richer workflow style
+
+## Core vs optional
+
+### Definitely core
+- session creation and switching
+- chat streaming
+- history replay
+- auth/security layers
+- runtime availability checks
+- basic cross-runtime UI
+
+### Optional / richer with companion packs
+- goal-engine-specific status widgets
+- extension/plugin-specific workflow UI
+- some slash-command-oriented flows
+- some status and approval surfaces originally designed around Pi extensions and then reused elsewhere
+
+## Install shape
+
+### Pi extensions
+Pi discovers extensions from `~/.pi/agent/extensions/`.
+
+See the companion repo for the exact folders and current install details:
+- [pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
+
+### OpenCode plugins
+OpenCode plugins are distributed as small ESM packages.
+
+See the plugin directories and current installation instructions in:
+- [opencode-plugins](https://github.com/valtterimelkko/opencode-plugins)
+
+## Practical recommendation
+
+### If you want the simplest adoption
+Start without companions.
+
+### If you want the fuller Pi Web UI philosophy
+Add:
+- Pi companion extensions for Pi-first workflows
+- OpenCode companion plugins for OpenCode-first workflows
 
 ## Related docs
 
+- [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md)
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md)
 - [`PROJECT-STORY.md`](./PROJECT-STORY.md)
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)

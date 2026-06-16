@@ -6,6 +6,16 @@
 >
 > This is the canonical architecture/rationale doc for the implemented OpenCode Direct path.
 
+## Adopter quick take
+
+Read this doc if you want OpenCode to be one of your main runtime paths in Pi Web UI.
+
+Recommended public framing:
+- **Who this path is for:** people who already use OpenCode or specifically want an OpenCode-backed workflow in the browser
+- **Setup difficulty:** medium
+- **Why many adopters like it:** it uses a cleaner local server/API integration shape than the more wrapper-heavy runtime paths
+- **Main caveat:** OpenCode remains the runtime source of truth, so some behaviour and persistence are intentionally OpenCode-owned rather than Pi-Web-UI-owned
+
 ## Summary
 
 OpenCode Direct is one of the four runtime paths in Pi Web UI.

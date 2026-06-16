@@ -4,6 +4,16 @@
 
 Pi Web UI integrates Google's Antigravity agent (Gemini Flash 3.5 and others) as a fourth runtime path, alongside Pi SDK, the Claude runtime family, and OpenCode Direct.
 
+## Adopter quick take
+
+Read this doc if Gemini/Antigravity access is one of the reasons you want Pi Web UI.
+
+Recommended public framing:
+- **Who this path is for:** users who specifically want Antigravity/Gemini available in the same browser shell as the other runtimes
+- **Setup difficulty:** medium
+- **Current shape:** subprocess-per-turn wrapper integration
+- **Main caveats:** no true streaming today, no approval UI path, and the runtime currently runs with a higher-trust permission posture than Pi or richer Claude/OpenCode paths
+
 ## Architecture
 
 ```

@@ -8,13 +8,25 @@ Pi Web UI protects both a normal web application surface and a high-privilege ag
 
 The important consequence is: **changes to auth, WebSocket routing, file access, or runtime forwarding can become security-sensitive very quickly.**
 
+## Practical deployment posture
+
+Pi Web UI is best understood first as a **self-hosted, operator-controlled tool**.
+
+The safest default assumption is:
+- one trusted operator or a very small trusted context
+- careful control of which runtimes are enabled
+- a reverse proxy and HTTPS if exposed beyond localhost
+- awareness that some runtime paths are more wrapper-oriented or permission-sensitive than others
+
+This repo is not documented as a turnkey multi-tenant SaaS product.
+
 ## Main Defences
 
 ### 1. Cookie-based authentication
 
 - Auth is handled with session tokens (JWT) stored in httpOnly cookies.
 - A single long-lived session token is issued on login (default 30 days).
-- Session expiration is primarily managed upstream by Authelia SSO/MFA.
+- A long-lived session token is issued on login (default 30 days), with exact deployment posture controlled by the operator.
 - Protected REST routes use `cookieAuthMiddleware`.
 - Token generation and verification live under:
   - `server/src/security/auth.ts`
@@ -114,6 +126,11 @@ Mitigation:
 - Uses a local `opencode serve` backend.
 - If enabled, OpenCode availability and permission approval must stay server-mediated.
 - Do not expose OpenCode backend credentials or control surfaces directly to the browser.
+- `OPENCODE_TRUSTED_PERMISSIONS=true` is intentionally a higher-trust operating mode. It can be useful for trusted autonomous maintenance/deployment sessions, but operators should understand the trust implications before enabling it.
+
+### Antigravity
+- Uses `agy -p` server-side and currently runs with `--dangerously-skip-permissions` in this integration path.
+- Treat this as an operator-trust decision, not a casual default. If you enable the Antigravity runtime, understand that it is not following the same approval model as Pi or richer Claude/OpenCode flows.
 
 ## Headers and Browser Protections
 

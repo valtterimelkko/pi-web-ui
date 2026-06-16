@@ -2,6 +2,15 @@
 
 > Canonical architecture reference for Pi Web UI. Read [`README.md`](../README.md) first for the quick overview; use this document for structure, boundaries, and runtime-specific responsibilities.
 
+## Reader note
+
+This doc is intentionally technical. It is public-facing, but it is most useful once you already know what Pi Web UI is and why the repo has multiple runtime paths.
+
+If you are still deciding whether to adopt the project, read these first:
+- [`../README.md`](../README.md)
+- [`./RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md)
+- [`./PROJECT-STORY.md`](./PROJECT-STORY.md)
+
 ## Overview
 
 Pi Web UI is a single browser application that presents a unified chat/session UI over **four runtime paths**:

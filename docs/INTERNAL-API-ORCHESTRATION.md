@@ -1,12 +1,10 @@
 # Internal API Orchestration Guide
 
-> Task-oriented guide for using Pi Web UI's Internal API as a local
-> multi-agent orchestration surface.
+> Task-oriented guide for using Pi Web UI's Internal API as a local multi-agent orchestration surface.
 >
-> Read [`INTERNAL-API.md`](./INTERNAL-API.md) for the canonical endpoint
-> reference. Read this guide when you want to spawn child sessions across
-> runtimes, monitor them, collect their results, and hand context between
-> them.
+> Read [`INTERNAL-API.md`](./INTERNAL-API.md) for the canonical endpoint reference. Read this guide when you want to spawn child sessions across runtimes, monitor them, collect their results, and hand context between them.
+>
+> Important framing: the Internal API began first as a **live-validation API** for exercising real runtime sessions during development and troubleshooting. The orchestration role described here is real and growing, but parts of the broader cross-runtime vision are still early and evolving.
 
 ## What this guide is for
 

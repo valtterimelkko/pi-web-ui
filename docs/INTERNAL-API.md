@@ -1,11 +1,43 @@
 # Pi Web UI — Internal Backend API
 
-> **Purpose:** Programmatic access to the Pi Web UI backend for other local
-> applications (voice chat, agent OS, custom frontends, automation scripts).
+> **Purpose today:** a local-only automation API for **live validation**, local integrations, and early cross-runtime orchestration work.
 >
-> **Audience:** Agents and developers building on top of Pi Web UI.
-> Do NOT read the rest of the Pi Web UI documentation unless you need to
-> understand the internal implementation.
+> **Audience:** agents and developers building on top of Pi Web UI, especially when they need to validate behaviour against **real runtimes** rather than only against tests or browser mocks.
+
+## Why this API exists
+
+The Internal API started first as a practical development tool.
+
+Its original purpose was to let coding agents and developers verify Pi Web UI changes **end-to-end against real runtime sessions** while building or troubleshooting the project.
+
+That matters because many issues in a project like this only appear when a real runtime is actually involved:
+- session creation that fails only against a live backend
+- replay/history issues that only appear with genuine runtime event sequences
+- tool rendering, follow-up, or approval behaviour that passes tests but breaks in real use
+
+So the first value of this API was **live validation**.
+
+That is still true today.
+
+## What this API is also becoming
+
+The same local API is now increasingly useful for two broader purposes:
+
+1. **Local backend integration** — other trusted local applications can use Pi Web UI's backend as their backend
+2. **Cross-runtime orchestration experiments** — one parent workflow can start recruiting child sessions from different runtime families through one integrated surface
+
+Examples of the first category include:
+- voice interfaces
+- custom frontends
+- agent OS style tooling
+- observer/monitoring layers
+- local automation scripts
+
+Examples of the second category are still emerging rather than fully productized. The long-term idea is that a parent workflow could coordinate multiple child sessions across different runtime/provider paths — for example a Pi-backed path, an OpenCode/GLM path, an Antigravity/Gemini path, and a Claude Code path — through one local API.
+
+Important caveat: **that orchestration vision is real, but still work in progress.**
+
+If you want the broader story behind that direction, read [`VISION.md`](./VISION.md).
 
 ## What is Pi Web UI?
 
@@ -79,13 +111,9 @@ the same ones the web UI uses.
 
 ### Primary use cases
 
-- **Local app integration** — voice chat, custom frontends, daemon processes,
-  and other local tools that want to create sessions and send prompts.
-- **Multi-agent orchestration** — parent agents spawning child sessions across
-  Pi, Claude, OpenCode, and Antigravity, then monitoring, collecting, and
-  transferring results.
-- **Browserless live validation** — repo-owned runtime checks that confirm the
-  real server/runtime path still works without opening the web UI.
+- **Browserless live validation** — repo-owned runtime checks that confirm the real server/runtime path still works without opening the web UI. This was the original reason the API was built.
+- **Local app integration** — voice chat, custom frontends, daemon processes, and other local tools that want to create sessions and send prompts.
+- **Multi-agent orchestration** — parent agents spawning child sessions across Pi, Claude, OpenCode, and Antigravity, then monitoring, collecting, and transferring results.
 
 ### What this API is now good for
 
@@ -176,7 +204,7 @@ def api(method, path, body=None):
     headers += "\r\n"
     headers += body_str
 
-    # For SSX streaming responses, use a proper HTTP client like httpx
+    # For SSE streaming responses, use a proper HTTP client like httpx
     # This simple example works for non-streaming endpoints
     sock.sendall(headers.encode())
     response = b""
@@ -631,6 +659,18 @@ It reports runtime availability, Claude backend mode, and feature flags.
       "supportsReplayHistory": true,
       "supportsApprovals": true,
       "supportsHeartbeat": false
+    },
+    "antigravity": {
+      "available": true,
+      "backendMode": "subprocess",
+      "supportsFollowUp": true,
+      "supportsSteer": false,
+      "supportsModelSwitch": true,
+      "supportsThinkingLevel": false,
+      "supportsPinning": true,
+      "supportsReplayHistory": true,
+      "supportsApprovals": false,
+      "supportsHeartbeat": false
     }
   }
 }
@@ -872,7 +912,7 @@ Transfers the visible transcript of the session into another session
 |---|---|---|---|
 | `targetSessionId` | string | one of targetSessionId/createNew | Existing target session |
 | `createNew` | boolean | one of targetSessionId/createNew | Create a fresh target |
-| `targetRuntime` | string | when `createNew` | `pi`, `claude`, `opencode` |
+| `targetRuntime` | string | when `createNew` | `pi`, `claude`, `opencode` (creating a new Antigravity transfer target is not supported yet) |
 | `targetCwd` | string | no | CWD for new session (defaults to source CWD) |
 | `scope` | string | no | `visible_recent` (default) or `visible_full` |
 | `sourceDisplayName` | string | no | Label for the source in the handoff header |

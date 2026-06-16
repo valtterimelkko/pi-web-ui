@@ -1,157 +1,131 @@
 # Pi Web UI
 
-A self-hosted browser interface for working with multiple coding-agent runtimes from one place.
+A self-hosted, multi-runtime web UI for coding agents.
 
-Pi Web UI started as a personal response to a practical problem: one agent runtime and one subscription was not enough. I wanted a setup where I could combine different coding harnesses, different model providers, and different subscription economics behind a single interface that I could use from a desk, from a phone, or while moving between places.
-
-The result is a persistent web UI with real-time streaming, mobile-friendly session management, voice features, and runtime adapters for four different agent paths:
+Pi Web UI gives you one browser interface for working with multiple coding-agent runtime paths from the same machine or server:
 
 - **Pi SDK**
 - **Claude runtime** (legacy direct `claude -p` or channel-backed Claude Code)
 - **OpenCode Direct**
-- **Antigravity** (`agy -p` / Google Gemini)
+- **Antigravity** (`agy -p` / Gemini)
 
-## Credits and upstream projects
-
-This project builds on top of other agent ecosystems rather than replacing them.
-
-- **Pi Coding Agent** is the original foundation and inspiration for the first runtime path. See the upstream website at [shittycodingagent.ai](https://shittycodingagent.ai/) and the current codebase at [github.com/earendil-works/pi-mono/tree/main/packages/coding-agent](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent).
-- **Claude Code**, **OpenCode**, and **Antigravity** each provide their own runtime capabilities; Pi Web UI adds a browser layer, persistence layer, replay layer, and cross-runtime UX around them.
-
-If you use Pi Web UI, you are also depending on the capabilities, constraints, and policies of those upstream runtimes.
+It is built for people who want more than one vendor-owned coding surface: different runtime strengths, different provider access, different subscription economics, and one persistent session UI across them.
 
 ## Why this exists
 
-Pi Web UI is for people who want more than a single vendor-owned coding surface.
+Pi Web UI started as a practical response to a simple problem: one coding harness and one subscription was not enough.
 
-It is designed for workflows where you may want to:
-- keep using a favourite high-end agent for the hardest work
-- route lighter or cheaper tasks through other runtimes
-- preserve chat history and tool traces in one place
-- access coding agents from mobile devices or while away from your main machine
-- extend the Pi-based path with custom extensions and the OpenCode path with custom plugins
+Some tasks deserved the strongest available runtime. Others only needed a cheaper or higher-quota path. I also wanted:
 
-For a longer account of why it was created, how the runtime mix evolved, and how it is used in day-to-day practice, see [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md).
+- one persistent browser UI instead of several terminals
+- session continuity across desktop and mobile
+- a place to extend Pi with custom extensions and OpenCode with custom plugins
+- a local automation surface for live validation and cross-runtime orchestration experiments
 
-## Make it your own
+For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md).
 
-This repo works well for its original maintainer, but it is also meant to be a strong starting point for other people to adapt.
+## What makes it different
 
-You do **not** need to use all four runtime paths the same way. For example:
-- you might use it mainly as a **Pi** web UI
-- you might use it mainly as an **OpenCode** web UI
-- you might ignore voice features entirely
-- you might swap dictation/TTS providers
-- you might fork it and tune the runtime mix around your own subscriptions, models, or hosting preferences
+- **Four runtime families behind one UI**
+- **Unified session list and replay model** across runtimes with very different backends
+- **Local automation API** for live validation, integrations, and orchestration experiments
+- **Companion extension/plugin ecosystem** for Pi and OpenCode workflows
+- **Honest documentation** about what is native, what is wrapper-like, and what is still evolving
 
-A concrete example from the maintainer's own setup: the **OpenCode** path is used with Z.AI / GLM coding plans because that provider/runtime combination was practical there even when the same route was not available through Pi. Another user might make a very different choice and still find the same browser shell useful.
+## Runtime overview
 
-The intention is not that every future commit will be universally right for every user. Some people may prefer to:
-- follow upstream changes from this repo selectively
-- run only a subset of the runtime paths
-- fork the repo and evolve it in their own direction
-
-That is an expected and healthy way to use this project.
-
-## What it does
-
-Pi Web UI combines:
-- a **React + Vite** frontend
-- an **Express + WebSocket** backend
-- a **local Internal API** over a Unix socket for automation, orchestration, and live validation
-- a **unified sidebar/session registry** across runtimes
-- **runtime-specific adapters** so Pi SDK, Claude, OpenCode, and Antigravity sessions feel similar in the UI
-- **persistent storage** so sessions survive reconnects and, depending on runtime, process restarts
-- **mobile-aware UX**, including voice dictation and a Drive Mode overlay with dictation + read-aloud support
-
-## Runtime paths and integration style
-
-| Runtime family | Backend implementation | Integration style | Primary persistence |
+| Runtime family | Integration style | Best for | Caveat level |
 |---|---|---|---|
-| **Pi SDK** | Pi SDK + Pi worker/session lifecycle | Native SDK integration with extensions/tools | `~/.pi/agent/sessions/` |
-| **Claude runtime** | `claude -p` subprocesses **or** channel-backed Claude Code via PTY + plugin bridge | Process-wrapper integration with Pi-owned replay and runtime-specific glue | `~/.pi-web-ui/claude-sessions/` + Claude native session JSONL |
-| **OpenCode Direct** | `opencode serve` + HTTP/SSE | Native local server/API integration | OpenCode runtime + Pi registry metadata |
-| **Antigravity** | `agy -p` subprocess-per-turn execution | Process-wrapper integration with Pi-owned turn logs | `~/.pi-web-ui/antigravity-sessions/` + `~/.gemini/antigravity-cli/conversations/` |
+| **Pi SDK** | Native Pi SDK/session integration | Pi-native agent workflows, extensions, custom tools | Lowest |
+| **Claude runtime** | `claude -p` wrapper or channel-backed Claude Code | Harder coding work on Claude Code | Higher |
+| **OpenCode Direct** | `opencode serve` + HTTP/SSE | OpenCode-backed workflows, especially OpenCode/Z.AI setups | Low–medium |
+| **Antigravity** | `agy -p` subprocess-per-turn | Gemini/Antigravity workflows in the same UI | Higher |
 
-Unified session metadata lives in:
-- `~/.pi-web-ui/session-registry.json`
+The important truth is that these paths are **not equally official in the eyes of their upstreams**:
 
-### Important caveat
+- **Pi SDK** and **OpenCode Direct** use supported integration surfaces.
+- **Claude** and **Antigravity** are more wrapper-oriented and may need maintenance when upstream CLI behaviour, auth, or policy changes.
 
-Not all runtime paths are equally "official" in the eyes of their upstream providers.
+That honesty is part of the project, not an embarrassment to hide.
 
-- The **Pi SDK** and **OpenCode Direct** paths use supported integration surfaces.
-- The **Claude** and **Antigravity** paths are more wrapper-oriented and may need maintenance when upstream CLI behaviour, authentication flows, or policies change.
+For a fuller chooser, read [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md).
 
-That does not make them unusable, but it does mean adopters should treat those integrations as more operationally sensitive.
+## Who this is for
 
-## Core capabilities
+Pi Web UI is aimed at **medium-to-power users**, not absolute beginners to agentic tooling.
 
-- Real-time streamed chat
-- Create, switch, pin, rename, and export sessions
-- Unified session list across all runtime paths
-- Tool execution rendering and history replay
-- Local Internal API for agent orchestration, transcript extraction, cross-runtime context transfer, and browserless validation
-- Runtime availability reporting (`claude_available`, `opencode_available`, `antigravity_available`)
-- OpenCode permission bridge via the existing extension approval UI
-- Voice dictation and Drive Mode read-aloud/dictation flow
-- Security hardening: cookie auth, CSRF, origin validation, rate limiting, prompt-injection detection
-- Health/config/model endpoints for debugging and operations
+Typical good fits:
 
-## Runtime/provider flexibility
+- you already use Pi, Claude Code, OpenCode, or Antigravity and want one browser surface around them
+- you want to self-host a personal coding-agent workspace
+- you want to fork a real multi-runtime UI and adapt it to your own harness/provider mix
+- you want a local automation/orchestration API that can talk to real agent runtimes
 
-The repo is intentionally opinionated enough to be useful, but not so rigid that adopters must use the same providers or services.
+## Support tiers
 
-Examples of components you may reasonably replace or reconfigure:
-- the OpenCode-backed model/provider mix
-- the voice dictation provider
-- the text-to-speech path
-- companion extensions/plugins
-- runtime paths you do not personally need
+Pi Web UI is not pretending every operating system is equally supported.
 
-The maintained version currently uses fast OpenAI-backed dictation/read-aloud flows because they work well in practice, but there is nothing sacred about that choice. If you prefer local Whisper, a different hosted STT provider, or a different TTS path, this repo is intended to be modifiable.
+- **Tier 1: Linux** — first-class target for local servers, VPS deployments, and always-on use
+- **Tier 2: macOS** — viable for technically comfortable users, especially local development and personal always-on machines such as Mac minis
+- **Windows** — not a primary target today; use a Linux host or treat WSL as experimental
 
-## Companion extensions and plugins
+Read [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md) before planning a deployment.
 
-Pi Web UI is most powerful when used alongside companion extension/plugin packs.
+## Quick start paths
 
-- The **Pi runtime** benefits from companion Pi extensions for planning, subagents, memory, goal execution, web tools, orchestration, and richer task/status flows.
-- The **OpenCode runtime** benefits from companion plugins for goal execution, memory, and parallel orchestration.
-- Some UI affordances in this repo were designed around those companion layers. Core chat/session flows still work without them, but some widgets, status surfaces, or workflow niceties may be absent.
+Do **not** try to adopt everything at once unless you already know you need it.
 
-See [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md).
+### Option A — Start with one runtime
+Best for most adopters.
 
-## Documentation map
+Choose one of:
+- **Pi-only setup**
+- **OpenCode-only setup**
+- **Claude-backed setup**
+- **Antigravity-backed setup**
 
-> Some deeper docs include concrete Linux paths, systemd commands, socket locations, and maintainer deployment examples because this project is also used as a live operational runbook. For public adopters, treat those values as examples to adapt to your own machine rather than fixed requirements.
+Then add more runtimes later.
 
-### Start here
-- **Quick agent/developer rules:** [`AGENTS.md`](./AGENTS.md)
-- **Docs index / recommended reading order:** [`docs/README.md`](./docs/README.md)
-- **Architecture:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
-- **Security:** [`SECURITY.md`](./SECURITY.md)
-- **Deployment / production runbook:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
+### Option B — Full multi-runtime setup
+Best if you already use several of these tools and want Pi Web UI to become your main browser shell.
 
-### Runtime-specific docs
-- **Claude backend modes:** [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md)
-- **OpenCode Direct architecture:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
-- **Antigravity architecture:** [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md)
-- **Pi worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
-- **Drive Mode feature:** [`docs/DRIVE-MODE.md`](./docs/DRIVE-MODE.md)
-- **Companion runtime notes:** [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md)
-- **Project story / evolution:** [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md)
+## Fastest path to first success
 
-### Claude-specific note
-If you want to use Claude the same way this project does, read [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md) carefully. The richer Claude path is not just `claude -p`; it depends on the local `pi-claude-channel/` bridge, managed hook configuration, and the channel-backed event flow that feeds tool/permission/session events back into the Web UI.
+1. Read [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md)
+2. Choose one runtime from [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md)
+3. Copy `.env.example` to `.env`
+4. Set your login password and other minimum config
+5. Run `npm install` and `npm run dev`
+6. Open the local UI and create your first session
 
-### Operations and interfaces
-- **First-stop troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
-- **WebSocket protocol:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
-- **REST/API index:** [`API.md`](./API.md)
-- **Internal API reference:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
-- **Internal API orchestration guide:** [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md)
-- **Live validation:** [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md)
-- **Tests:** [`tests/README.md`](./tests/README.md)
+## Companion ecosystem
+
+Pi Web UI is stronger when paired with the public companion repositories:
+
+- **Pi extensions:** [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
+- **OpenCode plugins:** [valtterimelkko/opencode-plugins](https://github.com/valtterimelkko/opencode-plugins)
+
+These are not mandatory for core chat/session flows, but they add a lot of the richer planning, memory, goal, orchestration, and status behaviour that shaped the project in practice.
+
+Read [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md).
+
+## Local automation API
+
+Despite the current filename, the **Internal API** is one of the most important power-user features in this repo.
+
+It began as a way for coding agents to do **live end-to-end validation** against real runtimes while building or troubleshooting Pi Web UI — not just by running a test suite, but by initiating real sessions against real agent backends.
+
+It is now also becoming:
+
+- a **local backend API** for other tools or applications on the same machine
+- a **growing orchestration surface** for cross-runtime workflows
+
+Current docs:
+- [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
+- [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md)
+
+Longer-term direction:
+- [`docs/VISION.md`](./docs/VISION.md)
 
 ## Architecture at a glance
 
@@ -159,278 +133,70 @@ If you want to use Claude the same way this project does, read [`docs/CLAUDE-BAC
 Browser (React + Zustand + Vite)
   └─ WebSocket /ws + REST /api/*
        └─ Express server
-            ├─ security + auth middleware
-            ├─ runtime-aware WebSocket router
-            ├─ Pi SDK session manager + worker pool
-            ├─ Claude service + (legacy process pool or channel-backed PTY/plugin path)
-            ├─ OpenCode Direct service + process manager/client
-            ├─ Antigravity service + subprocess-per-turn adapter
-            └─ unified session registry
+            ├─ auth / CSRF / security layers
+            ├─ unified session registry
+            ├─ Pi SDK runtime path
+            ├─ Claude runtime family
+            ├─ OpenCode Direct runtime path
+            ├─ Antigravity runtime path
+            └─ local automation API over a Unix socket
 ```
 
-## Quick Start
+Canonical architecture doc:
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 
-### Requirements
+## Installation and adoption docs
 
-- Node.js 20+
-- npm
-- Pi CLI / Pi SDK environment available on the machine
-- For **Claude runtime**: `claude` installed and authenticated
-- For **channel-backed Claude mode**: Bun available for `pi-claude-channel/`
-- For **OpenCode Direct**: `opencode` installed and configured
-- For **Antigravity**: `agy` installed and authenticated for the same OS user
+### Public/adopter path
+- **Getting started:** [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md)
+- **Runtime chooser:** [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md)
+- **Platform support:** [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md)
+- **Project story:** [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md)
+- **Vision / direction of travel:** [`docs/VISION.md`](./docs/VISION.md)
+- **Companion repos:** [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md)
+- **Automation API:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
+- **Deployment:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
+- **Security:** [`SECURITY.md`](./SECURITY.md)
+- **API index:** [`API.md`](./API.md)
+- **Docs hub:** [`docs/README.md`](./docs/README.md)
 
-### Install
+### Maintainer / contributor / LLM-agent path
+- **Agent instructions:** [`AGENTS.md`](./AGENTS.md)
+- **Maintainer docs index:** [`docs/MAINTAINER-INDEX.md`](./docs/MAINTAINER-INDEX.md)
+- **Troubleshooting:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
+- **Codebase map:** [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md)
+- **Event pipeline:** [`docs/EVENT-PIPELINE.md`](./docs/EVENT-PIPELINE.md)
+- **Add a runtime:** [`docs/ADDING-A-RUNTIME.md`](./docs/ADDING-A-RUNTIME.md)
 
-```bash
-npm install
-```
-
-### Configure
-
-```bash
-cp .env.example .env
-```
-
-At minimum, set strong values for:
-
-```bash
-JWT_SECRET=your-random-secret
-CSRF_SECRET=your-random-secret
-AUTH_PASSWORD=your-password-or-bcrypt-hash
-ALLOWED_ORIGINS=http://localhost:<frontend-port>
-```
-
-If using the Claude channel-backed path, also check:
-
-```bash
-CLAUDE_CHANNEL_ENABLED=false
-CLAUDE_CHANNEL_PLUGIN_DIR=./pi-claude-channel
-CLAUDE_CHANNEL_WS_PORT=3100
-CLAUDE_CHANNEL_HOOK_PORT=3101
-```
-
-If using OpenCode Direct locally, also check:
-
-```bash
-OPENCODE_ENABLED=true
-OPENCODE_SERVER_HOST=127.0.0.1
-OPENCODE_SERVER_PORT=4096
-OPENCODE_WORKING_DIR=/path/to/workspace-or-default-root
-
-# Optional: reduce approval prompts for trusted, unattended OpenCode Direct work.
-OPENCODE_TRUSTED_PERMISSIONS=false
-OPENCODE_PERMISSION_APPROVE_MODE=always
-
-# Optional: recycle the OpenCode backend after 24h, but only while idle.
-OPENCODE_SERVER_MAX_UPTIME_MS=86400000
-```
-
-If you want voice dictation / read-aloud features, set an OpenAI key as well:
-
-```bash
-OPENAI_API_KEY=your-openai-key
-```
-
-`OPENCODE_TRUSTED_PERMISSIONS=true` creates new OpenCode Direct sessions with permissive session-level rules for long-running autonomous work while still denying catastrophic disk/system shell patterns. `OPENCODE_SERVER_MAX_UPTIME_MS` is idle-aware: Pi Web UI defers recycling while an OpenCode session is actively running.
-
-See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for production values and service guidance.
-
-### Run Locally
-
-```bash
-npm run dev
-```
-
-Useful commands:
-
-```bash
-npm run lint
-npm run typecheck
-npm run build
-npm test
-npm run test:e2e
-npm run validate:live -- --runtime claude --scenario smoke
-npm run validate:live -- --runtime antigravity --scenario smoke
-npm run debug:where -- <session-id-or-runtime-session-id-or-path>
-```
-
-## Repo Layout
+## Repo layout
 
 ```text
 client/       React frontend
 server/       Express server and runtime integrations
 shared/       shared protocol/types package
-docs/         architecture / protocol / design docs
+docs/         public docs + maintainer docs
 tests/        Playwright E2E + benchmarks + utility tests
 server/tests/ server unit/integration tests
 extensions/   local extension code
-scripts/      local operational helpers
+scripts/      operational helpers and validation tools
 ```
 
-## Day-to-Day Development
+## Security and deployment posture
 
-Recommended verification flow:
+Pi Web UI is best understood first as a **self-hosted, operator-controlled, single-user or small-trusted-context tool**, not as a turnkey multi-tenant SaaS product.
 
-1. Make the smallest change that solves the problem.
-2. Run:
-   ```bash
-   npm run lint
-   npm run typecheck
-   npm run build
-   ```
-3. Run relevant tests:
-   ```bash
-   npm test
-   ```
-4. For localhost UI verification, use `webapp-testing`.
-5. For live runtime validation without opening the browser, use `npm run validate:live -- --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`.
-6. For live external sites, use `playwright-cli`.
+That does not mean it must stay private to localhost, but it does mean you should read the deployment and security docs carefully before exposing it more broadly.
 
-See [`AGENTS.md`](./AGENTS.md) for the compact contributor workflow.
+- [`DEPLOYMENT.md`](./DEPLOYMENT.md)
+- [`SECURITY.md`](./SECURITY.md)
 
-## Debugging by Problem Type
+## Credits and upstreams
 
-### First stop for almost all troubleshooting
+This project builds on top of other agent ecosystems rather than replacing them.
 
-Read:
-- [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
-- [`docs/SHARP-EDGES.md`](./docs/SHARP-EDGES.md)
+- **Pi Coding Agent** is the original foundation and inspiration for the first runtime path. See [shittycodingagent.ai](https://shittycodingagent.ai/) and [the upstream codebase](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent).
+- **Claude Code**, **OpenCode**, and **Antigravity** each provide their own runtime capabilities; Pi Web UI adds a browser layer, persistence layer, replay layer, and cross-runtime UX around them.
 
-Useful commands:
+## License
 
-```bash
-npm run debug:where -- <session-id-or-runtime-session-id-or-path>
-sudo journalctl -u pi-web-ui -f
-curl http://localhost:<server-port>/api/health/live
-curl http://localhost:<server-port>/api/health/ready
-curl http://localhost:<server-port>/api/config/validate
-```
-
-### WebSocket / streaming / session routing
-
-Check:
-- browser DevTools → Network → WS
-- `server/src/websocket/connection.ts`
-- `server/src/websocket/session-websocket.ts`
-- `client/src/store/sessionStore.ts`
-
-### Pi SDK path
-
-Check:
-- `server/src/pi/multi-session-manager.ts`
-- `server/src/workers/worker-pool.ts`
-- `server/src/pi/pi-service.ts`
-
-Useful checks:
-
-```bash
-ps aux | grep "pi --mode rpc"
-curl http://localhost:<server-port>/api/health/ready | jq '.workerStats'
-```
-
-### Claude runtime
-
-Check:
-- `server/src/claude/claude-service.ts`
-- `server/src/claude/claude-process-pool.ts`
-- `server/src/claude/claude-channel-service.ts`
-- `server/src/claude/claude-channel-process-manager.ts`
-- `pi-claude-channel/server.ts`
-
-Useful checks:
-
-```bash
-which claude
-claude auth status --json
-sudo journalctl -u pi-web-ui -f
-sudo journalctl -u pi-web-ui -f | grep ClaudeChannel
-```
-
-See [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md).
-
-### OpenCode Direct
-
-Check:
-- `server/src/opencode/opencode-service.ts`
-- `server/src/opencode/opencode-process-manager.ts`
-- `server/src/opencode/opencode-client.ts`
-- `server/src/opencode/opencode-event-adapter.ts`
-
-Useful checks:
-
-```bash
-which opencode
-curl http://localhost:<server-port>/api/health/ready | jq '.checks.opencode'
-curl "http://localhost:<server-port>/api/models?sdkType=opencode"
-```
-
-See [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md).
-
-### Antigravity
-
-Check:
-- `server/src/antigravity/antigravity-service.ts`
-- `server/src/antigravity/antigravity-session-store.ts`
-- `server/src/antigravity/antigravity-history-replay.ts`
-
-Useful checks:
-
-```bash
-agy --version
-agy models
-agy -p "Reply OK"
-curl "http://localhost:<server-port>/api/models?sdkType=antigravity"
-```
-
-See [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md).
-
-### Auth / CSRF / 401 issues
-
-Check:
-- `server/src/security/auth.ts`
-- `server/src/security/csrf.ts`
-- `server/src/middleware/auth.ts`
-- browser cookies / JWT / CSRF flow
-
-### Build / type / test issues
-
-Run in order:
-
-```bash
-npm run lint
-npm run typecheck
-npm run build
-npm test
-```
-
-## Production Operations
-
-```bash
-sudo systemctl start pi-web-ui
-sudo systemctl stop pi-web-ui
-sudo systemctl restart pi-web-ui
-sudo systemctl status pi-web-ui
-sudo journalctl -u pi-web-ui -f
-```
-
-For full deployment, reverse proxy, service env, and runtime-specific configuration, see [`DEPLOYMENT.md`](./DEPLOYMENT.md).
-
-## Updating Dependencies
-
-The repo uses workspace packages. For runtime-sensitive upgrades, inspect:
-- `server/src/pi/`
-- `server/src/claude/`
-- `server/src/opencode/`
-- `shared/src/`
-
-Typical breakage after upgrades:
-- changed event payload shapes
-- changed session/runtime APIs
-- changed model metadata or provider lists
-
-## Contributor Notes
-
-- Keep overview docs short and signpost to canonical deep docs.
-- Prefer updating the canonical doc instead of duplicating information.
-- `AGENTS.md` and `CLAUDE.md` should stay identical.
+MIT

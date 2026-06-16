@@ -1,6 +1,6 @@
 # API Documentation
 
-> API surface index for Pi Web UI. Start with [`README.md`](./README.md) for the system overview and [`docs/PROTOCOL.md`](./docs/PROTOCOL.md) for the detailed WebSocket message contract.
+> API surface index for Pi Web UI. Start with [`README.md`](./README.md) for the public overview and [`docs/PROTOCOL.md`](./docs/PROTOCOL.md) for the detailed WebSocket message contract.
 
 ## API Surfaces
 
@@ -8,7 +8,7 @@ Pi Web UI exposes three main surfaces:
 
 1. **WebSocket** for session control, streaming, replay, and runtime events
 2. **REST** for browser auth, health, config, models, files, sessions, and extensions
-3. **Internal API** for local automation, multi-agent orchestration, and browserless live validation over a Unix socket
+3. **Internal API** (a local automation API) for browserless live validation, local integrations, and multi-agent orchestration over a Unix socket
 
 ## WebSocket
 
@@ -100,8 +100,7 @@ For complete message shapes and event semantics, see [`docs/PROTOCOL.md`](./docs
 ## Internal API
 
 The Internal API is documented in [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md).
-It is the preferred automation surface for local tools, agent-to-agent
-orchestration, and the live-validation runner. It uses:
+It began as the preferred surface for **live end-to-end validation against real runtimes** and is now also the preferred local automation surface for integrations, agent-to-agent orchestration, and the live-validation runner. It uses:
 
 - Unix socket transport: `~/.pi-web-ui/internal-api.sock`
 - bearer token auth: `~/.pi-web-ui/internal-api-token`
