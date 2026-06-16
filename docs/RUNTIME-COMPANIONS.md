@@ -1,6 +1,6 @@
 # Runtime Companions
 
-Pi Web UI works on its own, but some of the richer workflow surfaces in this repo were designed alongside **companion Pi extensions** and **companion OpenCode plugins**.
+Pi Web UI works on its own, but some of the richer workflow surfaces in this repo were designed alongside **companion Pi Coding Agent extensions** and **companion OpenCode plugins**.
 
 This doc explains what those companion layers add, who should care, and how to think about installing them.
 
@@ -27,17 +27,17 @@ What becomes richer with companions:
 
 Each runtime has different extension/plugin capabilities.
 
-- **Pi SDK path** can expose custom tools, slash commands, widgets, status lines, and extension UI requests.
+- **Pi Coding Agent path** can expose custom tools, slash commands, widgets, status lines, and extension UI requests.
 - **OpenCode Direct** can expose plugin-driven state and runtime events that Pi Web UI normalizes into the common frontend model.
 - **Claude** and **Antigravity** are integrated more as runtime wrappers than extension ecosystems.
 
-So Pi Web UI can feel reasonably consistent across runtimes, but some of its most workflow-rich behaviour was shaped around Pi extensions and OpenCode plugins.
+So Pi Web UI can feel reasonably consistent across runtimes, but some of its most workflow-rich behaviour was shaped around Pi Coding Agent extensions and OpenCode plugins.
 
 ## Companion repositories
 
-### Pi extensions
+### Pi Coding Agent extensions
 - Repo: [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
-- Best for: Pi-first users who want planning, memory, orchestration, subagents, and goal execution
+- Best for: Pi Coding Agent-first users who want planning, memory, orchestration, subagents, and goal execution
 
 Highlights in that repo include:
 - enhanced planning flows
@@ -87,12 +87,12 @@ A good path is:
 - goal-engine-specific status widgets
 - extension/plugin-specific workflow UI
 - some slash-command-oriented flows
-- some status and approval surfaces originally designed around Pi extensions and then reused elsewhere
+- some status and approval surfaces originally designed around Pi Coding Agent extensions and then reused elsewhere
 
 ## Install shape
 
-### Pi extensions
-Pi discovers extensions from `~/.pi/agent/extensions/`.
+### Pi Coding Agent extensions
+Pi Coding Agent discovers extensions from `~/.pi/agent/extensions/`.
 
 See the companion repo for the exact folders and current install details:
 - [pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
@@ -110,7 +110,7 @@ Start without companions.
 
 ### If you want the fuller Pi Web UI philosophy
 Add:
-- Pi companion extensions for Pi-first workflows
+- Pi Coding Agent companion extensions for Pi Coding Agent-first workflows
 - OpenCode companion plugins for OpenCode-first workflows
 
 ## Related docs

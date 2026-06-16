@@ -14,7 +14,7 @@ Recommended public framing:
 - **Who this path is for:** people who specifically want Claude Code inside the same browser shell as other runtimes
 - **Setup difficulty:** medium to high
 - **Recommended starting mode:** start simple, understand the legacy-vs-channel distinction, and only enable the channel-backed path when you want the richer behaviour and accept the extra moving parts
-- **Main caveat:** this runtime family is more wrapper-oriented and operationally sensitive than the Pi SDK and OpenCode Direct paths
+- **Main caveat:** this runtime family is more wrapper-oriented and operationally sensitive than the Pi Coding Agent and OpenCode Direct paths
 
 ## Why This Doc Exists
 

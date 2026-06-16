@@ -15,8 +15,8 @@ If you are still deciding whether to adopt the project, read these first:
 
 Pi Web UI is a single browser application that presents a unified chat/session UI over **four runtime paths**:
 
-1. **Pi SDK**
-2. **Claude runtime** (legacy direct or channel-backed backend)
+1. **Pi Coding Agent** (via the SDK path)
+2. **Claude Code** (legacy direct or channel-backed backend)
 3. **OpenCode Direct**
 4. **Antigravity** (`agy` / Google Gemini)
 
@@ -40,7 +40,7 @@ Express server
   ├─ Internal API (Unix socket + token-auth local automation boundary)
   ├─ WebSocket connection router
   ├─ session registry
-  ├─ Pi SDK service + worker/session lifecycle
+  ├─ Pi Coding Agent service + worker/session lifecycle
   ├─ Claude service + (legacy subprocess or channel-backed PTY/plugin backend)
   ├─ OpenCode Direct service + process manager/client/SSE adapter
   └─ Antigravity service + subprocess-per-turn `agy` adapter
@@ -81,10 +81,10 @@ Important files:
 
 ## Runtime Paths
 
-### 1. Pi SDK path
+### 1. Pi Coding Agent path
 
 **What it is**
-- the Pi-native path
+- the native Pi Coding Agent path
 - supports Pi extensions, Pi session semantics, and worker lifecycle management
 
 **Main modules**
@@ -101,7 +101,7 @@ Important files:
 - session lifecycle is actively managed by the app
 - worker isolation, idle cleanup, stale-stream handling, and pinning are important here
 
-### 2. Claude runtime family
+### 2. Claude Code path
 
 **What it is**
 - a Claude Code integration with **two backend implementations**
@@ -240,7 +240,7 @@ It handles:
 
 ### Why this matters
 Runtime-specific complexity stays on the server because the UI should not have to know whether a tool card came from:
-- Pi SDK event forwarding
+- Pi Coding Agent event forwarding
 - Claude NDJSON normalization
 - OpenCode SSE adaptation
 
@@ -271,10 +271,10 @@ See [`../SECURITY.md`](../SECURITY.md) for the canonical security view.
 
 ## Session Switching and Replay
 
-### Pi SDK
+### Pi Coding Agent
 - replay comes from Pi session data and Pi-aware service logic
 
-### Claude runtime
+### Claude Code
 - replay is reconstructed from Pi-owned Claude JSONL session data
 - the active backend may also consult Claude's native JSONL session files for resume/follow-up state and context usage
 

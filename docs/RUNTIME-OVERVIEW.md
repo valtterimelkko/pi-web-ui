@@ -19,8 +19,8 @@ Then add more runtimes only if they solve a real problem for you:
 
 | Runtime family | Uses | Integration style | Setup difficulty | Streaming/tool visibility | Best for | Caveat level |
 |---|---|---|---|---|---|---|
-| **Pi SDK** | Pi Coding Agent | Native SDK/session integration | Medium | Richest Pi-native behaviour | Pi extensions, custom tools, Pi-first workflows | Low |
-| **Claude runtime** | `claude -p` or channel-backed Claude Code | Wrapper/process integration | Medium-high | Depends on backend mode; channel mode is richer | Claude Code-centric workflows | Higher |
+| **Pi Coding Agent** | Pi Coding Agent | Native SDK/session integration | Medium | Richest Pi Coding Agent behaviour | Pi Coding Agent extensions, custom tools, Pi Coding Agent-first workflows | Low |
+| **Claude Code** | `claude -p` or channel-backed Claude Code | Wrapper/process integration | Medium-high | Depends on backend mode; channel mode is richer | Claude Code-centric workflows | Higher |
 | **OpenCode Direct** | `opencode serve` | Local server/API integration | Medium | Strong normalized streaming via SSE adaptation | OpenCode-backed workflows and OpenCode/Z.AI setups | Low-medium |
 | **Antigravity** | `agy -p` | Subprocess-per-turn wrapper | Medium | No true live streaming today; replay/log driven | Gemini/Antigravity access in the same UI | Higher |
 
@@ -29,22 +29,22 @@ Then add more runtimes only if they solve a real problem for you:
 These runtime paths are **not equally native**.
 
 ### More native / supported integration surfaces
-- **Pi SDK**
+- **Pi Coding Agent**
 - **OpenCode Direct**
 
 ### More wrapper-oriented paths
-- **Claude runtime**
+- **Claude Code**
 - **Antigravity**
 
 That does not make Claude or Antigravity useless. It just means adopters should expect those paths to be more operationally sensitive when upstream CLIs change.
 
 ## Which runtime should I start with?
 
-### Start with Pi SDK if...
-- you already use Pi
+### Start with Pi Coding Agent if...
+- you already use Pi Coding Agent
 - you want the deepest extension path
-- you want companion Pi extensions to matter
-- you want the most Pi-native workflow behaviour
+- you want companion Pi Coding Agent extensions to matter
+- you want the most native Pi Coding Agent workflow behaviour
 
 Read next:
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md)
@@ -60,7 +60,7 @@ Read next:
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)
 - [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md)
 
-### Start with Claude runtime if...
+### Start with Claude Code if...
 - Claude Code is the reason you want a browser UI
 - you accept that this path has more wrapper glue and operational nuance
 - you specifically want channel-backed Claude visibility/features later
@@ -78,7 +78,7 @@ Read next:
 
 ## Capability summary
 
-| Capability | Pi SDK | Claude runtime | OpenCode Direct | Antigravity |
+| Capability | Pi Coding Agent | Claude Code | OpenCode Direct | Antigravity |
 |---|---|---|---|---|
 | Unified sidebar session | Yes | Yes | Yes | Yes |
 | History replay | Yes | Yes | Yes | Yes |
@@ -91,17 +91,17 @@ Read next:
 
 ### For the simplest serious adoption
 Choose:
-- **Pi-only**, or
+- **Pi Coding Agent-only**, or
 - **OpenCode-only**
 
 ### For a stronger mixed setup
 Choose:
-- **Pi + Claude**, or
-- **Pi + OpenCode**
+- **Pi Coding Agent + Claude Code**, or
+- **Pi Coding Agent + OpenCode**
 
 ### For the fullest multi-runtime philosophy
 Choose:
-- **Pi + Claude + OpenCode + Antigravity**
+- **Pi Coding Agent + Claude Code + OpenCode + Antigravity**
 
 But only if you already know why each one belongs.
 
@@ -109,8 +109,8 @@ But only if you already know why each one belongs.
 
 | Runtime family | Primary persistence |
 |---|---|
-| **Pi SDK** | `~/.pi/agent/sessions/` |
-| **Claude runtime** | `~/.pi-web-ui/claude-sessions/` + Claude native session JSONL |
+| **Pi Coding Agent** | `~/.pi/agent/sessions/` |
+| **Claude Code** | `~/.pi-web-ui/claude-sessions/` + Claude native session JSONL |
 | **OpenCode Direct** | OpenCode runtime owns transcript storage; Pi Web UI stores registry metadata and replay transforms |
 | **Antigravity** | `~/.pi-web-ui/antigravity-sessions/` + agy-owned conversation DBs |
 
@@ -118,7 +118,7 @@ But only if you already know why each one belongs.
 
 These can make a major difference to the richness of Pi and OpenCode workflows:
 
-- **Pi extensions:** [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
+- **Pi Coding Agent extensions:** [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
 - **OpenCode plugins:** [valtterimelkko/opencode-plugins](https://github.com/valtterimelkko/opencode-plugins)
 
 See [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md).

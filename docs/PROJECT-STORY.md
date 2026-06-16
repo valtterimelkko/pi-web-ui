@@ -15,7 +15,7 @@ At the time, the workflow depended heavily on vibe coding and increasingly frequ
 
 The goal was to assemble a practical working set rather than stay loyal to one runtime surface.
 
-## Why Pi came first
+## Why Pi Coding Agent came first
 
 Pi Coding Agent was the first serious foundation because it was minimal, hackable, and teachable.
 
@@ -23,23 +23,23 @@ That mattered for two reasons:
 1. it was affordable and flexible enough to experiment with
 2. it made it easier to learn how coding-agent harnesses actually work
 
-Pi Web UI therefore started first as a browser-accessible interface for the Pi runtime. That solved a second major problem as well: the need to use agent workflows from different places and devices, not just from a single terminal session on one machine.
+Pi Web UI therefore started first as a browser-accessible interface for the Pi Coding Agent path. That solved a second major problem as well: the need to use agent workflows from different places and devices, not just from a single terminal session on one machine.
 
 ## Why the runtime mix expanded
 
 The repo then evolved as upstream model/platform policies changed.
 
-### Pi runtime
-The Pi SDK path remained the most native and extensible route. It is the path where custom extensions, richer tools, and workflow-specific interaction patterns were most deeply developed.
+### Pi Coding Agent path
+The Pi Coding Agent path remained the most native and extensible route. It is the path where custom extensions, richer tools, and workflow-specific interaction patterns were most deeply developed.
 
-### Claude runtime
+### Claude Code
 Claude was added because it remained valuable for harder, more complex coding work, but direct usage patterns and policy constraints around subscription-backed harness integration changed over time. That forced the project to evolve a more wrapper-oriented Claude path rather than treating Claude as a normal external API-backed coding surface.
 
 ### OpenCode runtime
-OpenCode was added because some providers and plans were friendlier to it than to Pi, especially in the Z.AI / GLM context. Even when Pi was preferred as a harness, OpenCode became strategically useful because it unlocked access that was not always available through Pi.
+OpenCode was added because some providers and plans were friendlier to it than to Pi Coding Agent, especially in the Z.AI / GLM context. Even when Pi Coding Agent was preferred as a harness, OpenCode became strategically useful because it unlocked access that was not always available through Pi Coding Agent.
 
 ### Antigravity runtime
-Antigravity was added as another way to bring subscription-backed Gemini-style agent use into the same browser surface. Like Claude, it is not the same kind of first-class extension ecosystem as Pi. The integration is therefore more wrapper-like and operationally sensitive.
+Antigravity was added as another way to bring subscription-backed Gemini-style agent use into the same browser surface. Like Claude, it is not the same kind of first-class extension ecosystem as Pi Coding Agent. The integration is therefore more wrapper-like and operationally sensitive.
 
 ## How it is used in practice
 
@@ -51,9 +51,9 @@ Typical personal usage patterns include:
 - switching between runtimes without switching browser surface
 - continuing work from mobile devices or while away from a desk
 - using voice dictation and Drive Mode when typing is inconvenient or impossible
-- combining the browser UI with companion Pi extensions and OpenCode plugins to get richer planning, memory, goal-tracking, and orchestration behaviour
+- combining the browser UI with companion Pi Coding Agent extensions and OpenCode plugins to get richer planning, memory, goal-tracking, and orchestration behaviour
 
-A concrete example: the OpenCode path has been useful with Z.AI / GLM coding plans because that provider/runtime combination was practical there even when the same route was not available through Pi. That kind of pragmatic provider choice is part of the reason the project evolved into a multi-runtime surface rather than staying loyal to a single harness.
+A concrete example: the OpenCode path has been useful with Z.AI / GLM coding plans because that provider/runtime combination was practical there even when the same route was not available through Pi Coding Agent. That kind of pragmatic provider choice is part of the reason the project evolved into a multi-runtime surface rather than staying loyal to a single harness.
 
 ## Why the repo feels the way it does
 
@@ -62,7 +62,7 @@ Some aspects of the architecture and docs only make sense when viewed through th
 For example:
 - the repo keeps a strong operational/runbook flavour because it is actually used live
 - multiple runtime paths coexist because no single harness/provider combination was sufficient
-- the Pi path is richer in extensions because that was the most modifiable foundation
+- the Pi Coding Agent path is richer in extensions because that was the most modifiable foundation
 - Claude and Antigravity are documented with more caveats because they rely more on wrapper-style integration
 - mobile, dictation, and read-aloud features exist because the workflow is intentionally not desk-bound
 

@@ -6,7 +6,7 @@
 
 ```
 ┌─────────────────┐     ┌─────────────────────────────┐     ┌──────────────────┐
-│   Pi SDK        │────▶│  event-forwarder.ts         │────▶│                  │
+│   Pi Coding Agent        │────▶│  event-forwarder.ts         │────▶│                  │
 │  (worker RPC)   │     │  (raw Pi events)            │     │                  │
 └─────────────────┘     └─────────────────────────────┘     │                  │
                                                             │   connection.ts  │
@@ -38,9 +38,9 @@ interface NormalizedEvent {
 
 ## Runtime-Specific Origins
 
-### Pi SDK
+### Pi Coding Agent
 
-Pi workers emit native Pi SDK events. `event-forwarder.ts` wraps them and sends them through the WebSocket connection manager.
+Pi workers emit native Pi Coding Agent events. `event-forwarder.ts` wraps them and sends them through the WebSocket connection manager.
 
 **Example: tool execution**
 ```

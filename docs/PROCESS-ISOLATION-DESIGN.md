@@ -1,12 +1,12 @@
 # Process Isolation Design
 
-> Design record for the **Pi SDK worker architecture** in Pi Web UI. This document is intentionally focused on the Pi worker/process model, not the Claude runtime family or OpenCode Direct paths.
+> Design record for the **Pi Coding Agent worker architecture** in Pi Web UI. This document is intentionally focused on the Pi worker/process model, not the Claude runtime family or OpenCode Direct paths.
 
 ## Why This Doc Exists
 
 Pi Web UI supports four runtime paths, but only one of them uses the repo's full **process-per-session worker architecture**:
 
-- **Pi SDK** → yes, this doc applies directly
+- **Pi Coding Agent** → yes, this doc applies directly
 - **Claude runtime** → no, uses either `claude -p` subprocesses per turn or the channel-backed Claude Code path
 - **OpenCode Direct** → no, uses a long-lived `opencode serve` backend
 - **Antigravity** → no, uses `agy -p` subprocesses per turn plus Pi-owned JSONL turn logs
@@ -15,13 +15,13 @@ For the broader multi-runtime architecture, see [`ARCHITECTURE.md`](./ARCHITECTU
 
 ## Problem the Design Solves
 
-The Pi SDK path originally faced classic single-process problems:
+The Pi Coding Agent path originally faced classic single-process problems:
 - memory accumulation during heavy streaming/tool use
 - whole-server instability when one session misbehaved
 - weak isolation between sessions
 - unpredictable pauses under pressure
 
-The solution was to isolate Pi SDK session work behind worker/session lifecycle management instead of letting all session work pile up in one shared process context.
+The solution was to isolate Pi Coding Agent session work behind worker/session lifecycle management instead of letting all session work pile up in one shared process context.
 
 ## Scope of This Design
 
@@ -29,14 +29,14 @@ This document covers:
 - Pi worker lifecycle
 - worker memory limits
 - worker pool behaviour
-- session isolation on the Pi SDK path
+- session isolation on the Pi Coding Agent path
 - crash and stale-session recovery patterns for Pi-managed workers
 
 It does **not** cover:
 - Claude runtime replay/session-file details
 - OpenCode Direct HTTP/SSE integration details
 
-## High-level Pi SDK Worker Model
+## High-level Pi Coding Agent Worker Model
 
 ```text
 Browser
@@ -63,14 +63,14 @@ Key files:
 
 ## Core Decisions
 
-### 1. Pi SDK work is lifecycle-managed separately from the main server
+### 1. Pi Coding Agent work is lifecycle-managed separately from the main server
 
 The main server should remain the control plane.
 The Pi worker/session layer does the heavy runtime work.
 
 ### 2. Session state survives worker churn
 
-The durable source of truth for Pi SDK sessions remains:
+The durable source of truth for Pi Coding Agent sessions remains:
 - `~/.pi/agent/sessions/`
 
 This allows worker cleanup/restart without losing the underlying session transcript/state.

@@ -196,7 +196,7 @@ Transfer error codes:
 
 ## Runtime-specific Behaviour Behind the Same Protocol
 
-### Pi SDK
+### Pi Coding Agent
 - Native Pi events are forwarded and wrapped for the frontend.
 
 ### Claude runtime — legacy direct backend
@@ -227,7 +227,7 @@ When switching sessions, the server may send:
 - and surrounding markers such as `history_start` / `history_end` in runtime-specific flows handled by the client
 
 The current runtime-specific replay sources are:
-- Pi SDK → Pi session state / Pi-aware service logic
+- Pi Coding Agent → Pi session state / Pi-aware service logic
 - Claude runtime → Pi-owned Claude replay JSONL plus native Claude session state where needed
 - OpenCode Direct → OpenCode message APIs adapted into replay events
 - Antigravity → Pi-owned Antigravity JSONL turn logs plus registry conversation metadata

@@ -28,7 +28,7 @@ This is especially important for supported OpenCode/Z.AI GLM workflows: Pi Web U
 
 Pi Web UI has four runtime paths:
 
-1. **Pi SDK** — Pi-native sessions and extensions
+1. **Pi Coding Agent** — Pi-native sessions and extensions
 2. **Claude runtime** — legacy `claude -p` or the channel-backed Claude Code path
 3. **OpenCode Direct** — `opencode serve` backend sessions
 4. **Antigravity** — `agy -p` Gemini sessions
@@ -110,7 +110,7 @@ Handles:
 ## Session and Persistence Model
 
 ### Unified registry
-OpenCode sessions still appear in the same session list as Pi SDK and Claude runtime sessions via:
+OpenCode sessions still appear in the same session list as Pi Coding Agent and Claude runtime sessions via:
 - `server/src/session-registry.ts`
 - `~/.pi-web-ui/session-registry.json`
 
@@ -166,7 +166,7 @@ This keeps the browser experience aligned with the rest of the app instead of in
 
 ## Comparison with Other Runtime Paths
 
-### Compared with Pi SDK
+### Compared with Pi Coding Agent
 - OpenCode Direct is less Pi-native
 - it uses an external backend runtime rather than Pi-managed session execution
 

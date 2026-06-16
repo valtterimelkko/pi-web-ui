@@ -17,7 +17,7 @@ Use this guide when a **parent agent** or local automation process wants to:
 - sum usage/cost across the children
 
 Typical example:
-- a Pi SDK parent agent receives a large coding task
+- a Pi Coding Agent parent agent receives a large coding task
 - it decides planning is best on Claude, code generation is best on OpenCode,
   and a comparative check is best on Antigravity
 - it creates one child session on each runtime
@@ -229,7 +229,7 @@ A practical orchestration pattern is:
 
 ## Example design advice for your use case
 
-If your parent agent lives in the Pi SDK runtime and wants to call three child
+If your parent agent lives in the Pi Coding Agent runtime and wants to call three child
 agents on other runtimes:
 
 - **OpenCode child** — good fit for `/events` live monitoring

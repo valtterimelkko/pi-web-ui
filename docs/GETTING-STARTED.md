@@ -34,9 +34,9 @@ Most adopters should start with **one runtime**, not all four.
 
 Good first choices:
 
-- **Pi SDK** if you already use Pi and want the richest extension path
+- **Pi Coding Agent** if you already use Pi Coding Agent and want the richest extension path
 - **OpenCode Direct** if OpenCode is already part of your workflow
-- **Claude runtime** if Claude Code is your main coding runtime and you accept a more wrapper-oriented integration
+- **Claude Code** if Claude Code is your main coding runtime and you accept a more wrapper-oriented integration
 - **Antigravity** if Gemini/Antigravity is specifically why you want this UI
 
 ## 4. Install base prerequisites
@@ -58,10 +58,10 @@ git --version
 
 Install only the runtime(s) you plan to use first.
 
-### Pi SDK path
-- Pi CLI / Pi SDK environment available on the machine
+### Pi Coding Agent path
+- Pi Coding Agent CLI / SDK environment available on the machine
 
-### Claude runtime
+### Claude Code
 - `claude` installed
 - authenticated as the same OS user that will run Pi Web UI
 
@@ -111,10 +111,10 @@ If you are only enabling some runtimes, leave the others disabled or simply do n
 
 ## 8. Runtime-specific env examples
 
-### Pi-focused first run
-Usually just the base config is enough if your Pi environment is already available to the same OS user.
+### Pi Coding Agent-focused first run
+Usually just the base config is enough if your Pi Coding Agent environment is already available to the same OS user.
 
-### Claude-focused first run
+### Claude Code-focused first run
 Check these as well:
 
 ```bash

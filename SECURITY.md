@@ -48,7 +48,7 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
 
 ### 4. Prompt-injection detection
 
-- User prompts are screened before being forwarded to Pi SDK, Claude Direct, or OpenCode Direct.
+- User prompts are screened before being forwarded to Pi Coding Agent, Claude Direct, or OpenCode Direct.
 - Detection currently uses pattern-based checks in:
   - `server/src/security/prompt-injection.ts`
 - Do not bypass this stage when adding new runtime paths or prompt-like entry points.
@@ -114,7 +114,7 @@ Mitigation:
 
 ## Runtime-specific Security Notes
 
-### Pi SDK
+### Pi Coding Agent
 - Pi sessions and tools can access local resources via approved tool calls.
 - Preserve extension approval and session lifecycle protections.
 

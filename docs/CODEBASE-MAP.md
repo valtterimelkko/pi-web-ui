@@ -42,13 +42,13 @@
 ### WebSocket / Routing
 - `websocket/connection.ts` — **Main runtime router.** All Pi/Claude/OpenCode prompts, aborts, switches, and events flow through here. Contains `normEventToPiFormat()` and subscriber fanout.
 - `websocket/protocol.ts` — Shared WebSocket message type definitions and guards.
-- `websocket/session-websocket.ts` — JSON-RPC endpoint for Pi SDK worker communication (`/ws/sessions/:sessionId`).
+- `websocket/session-websocket.ts` — JSON-RPC endpoint for Pi Coding Agent worker communication (`/ws/sessions/:sessionId`).
 - `websocket/handlers.ts` — Legacy WebSocket message handlers.
 
-### Pi SDK Path (`server/src/pi/`)
+### Pi Coding Agent Path (`server/src/pi/`)
 - `pi/multi-session-manager.ts` — **Pi session lifecycle, idle cleanup, pinning, stale-stream reset (15min threshold), API-error grace timer (60s), memory monitoring, skill-content transformation.**
-- `pi/pi-service.ts` — Pi SDK service facade.
-- `pi/event-forwarder.ts` — Bridges Pi SDK events into WebSocket broadcasts.
+- `pi/pi-service.ts` — Pi Coding Agent service facade.
+- `pi/event-forwarder.ts` — Bridges Pi Coding Agent events into WebSocket broadcasts.
 - `pi/session-pool.ts` — Session object pool.
 - `pi/parallel/session-orchestrator.ts` — Parallel agent session orchestration (worktrees).
 - `pi/parallel/worktree-manager.ts` — Git worktree management for parallel sessions.

@@ -52,8 +52,8 @@ Under the hood, each runtime slot exists for a different reason:
 
 | Runtime family | What it uses | Why it exists |
 |---|---|---|
-| **Pi SDK** | [Pi Coding Agent](https://github.com/mariozechner/pi-coding-agent) via its SDK | The native path. When models are available through the Pi model registry and you want extensions, custom tools, and the full Pi experience. |
-| **Claude runtime** | legacy `claude -p` subprocesses **or** the channel-backed Claude Code path | Claude's monthly subscription does not allow external coding-agent harnesses to use Claude via the Anthropic API — Claude Code must be the agent environment. Pi Web UI therefore runs Claude Code directly, normalizes either its legacy NDJSON output or channel/plugin events into the common event model, and owns the replay/persistence layer so sessions survive restarts. |
+| **Pi Coding Agent** | [Pi Coding Agent](https://shittycodingagent.ai/) via its SDK path | The native path. When models are available through the Pi model registry and you want extensions, custom tools, and the full Pi experience. |
+| **Claude Code** | legacy `claude -p` subprocesses **or** the channel-backed Claude Code path | Claude's monthly subscription does not allow external coding-agent harnesses to use Claude via the Anthropic API — Claude Code must be the agent environment. Pi Web UI therefore runs Claude Code directly, normalizes either its legacy NDJSON output or channel/plugin events into the common event model, and owns the replay/persistence layer so sessions survive restarts. |
 | **OpenCode Direct** | `opencode serve` HTTP/SSE backend | Z.AI's GLM models (via the coding-plan provider) currently recognise OpenCode as a valid coding-agent harness but not Pi. Rather than bypass this, Pi Web UI integrates with the OpenCode server backend, adapting OpenCode SSE events into the same common event model. The OpenCode backend owns transcript storage; Pi Web UI stores registry metadata and replay transforms. |
 | **Antigravity** | `agy -p` subprocess-per-turn backend | Google Gemini via Antigravity CLI. Pi Web UI runs `agy` directly, stores Pi-owned turn logs for replay, and correlates them with agy-owned conversation SQLite DBs for follow-up continuity. |
 
@@ -476,7 +476,7 @@ You can also set verbosity via header: `X-Verbosity: tasks`
 
 Notes:
 - `follow_up` is supported on runtimes that report `supportsFollowUp=true`
-- `steer` is currently Pi-only and returns `UNSUPPORTED_OPERATION` elsewhere
+- `steer` is currently Pi Coding Agent-only and returns `UNSUPPORTED_OPERATION` elsewhere
 
 ---
 
@@ -707,7 +707,7 @@ Returns normalized replay events. All four runtimes are supported:
 - **Pi** returns a synthesized event list derived from the Pi session
   JSONL file (each user/assistant/tool line becomes a `message_end` or
   `tool_execution_end` event). This is a best-effort path because the
-  Pi SDK does not persist normalized events natively.
+  Pi Coding Agent does not persist normalized events natively.
 
 Use `GET /api/v1/capabilities` first to discover per-runtime replay
 support (`supportsReplayHistory`).

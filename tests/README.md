@@ -112,7 +112,7 @@ npm run test:e2e
 ```
 
 ### Runtime-path change
-If you touched Pi SDK / the Claude runtime family / OpenCode Direct / Antigravity routing or replay logic, prefer:
+If you touched Pi Coding Agent / the Claude runtime family / OpenCode Direct / Antigravity routing or replay logic, prefer:
 - unit tests for the affected runtime module(s)
 - relevant WebSocket tests
 - `npm run validate:live -- --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`

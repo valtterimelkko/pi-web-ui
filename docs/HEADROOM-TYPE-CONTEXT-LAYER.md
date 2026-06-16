@@ -29,7 +29,7 @@ As the context window fills with this noise, two things happen:
 
 Pi Web UI already unifies four very different runtime paths behind one browser UI:
 
-1. **Pi SDK**
+1. **Pi Coding Agent**
 2. **Claude runtime**
 3. **OpenCode Direct**
 4. **Antigravity**
@@ -54,7 +54,7 @@ The goal is not "compression for its own sake". The goal is to make long-running
 
 If built well, this could give Pi Web UI:
 
-- **more usable context window** for real work, not just lower billed tokens — directly achievable for Pi SDK and Claude channel-backed
+- **more usable context window** for real work, not just lower billed tokens — directly achievable for Pi Coding Agent and Claude channel-backed
 - **better handling of noisy artefacts** such as logs, large search results, directory listings, diagnostics, and long files
 - **reversible retrieval** of originals when the agent really needs them — via CCR/`headroom_retrieve`
 - **common observability** across all four runtimes — measurable even where live compression is not possible (OpenCode, Antigravity)
@@ -217,11 +217,11 @@ If a file changes after a compressed `Read`, a `retrieve_original` call returns 
 
 ### 9. Pi extension global scope
 
-A Pi SDK extension installed in `~/.pi/agent/extensions/` is active across all Pi sessions globally — including unrelated projects and sessions where the user has not opted into compression. The compression extension should be project-local by default (`.pi/extensions/`) or require explicit opt-in, not be globally installed.
+A Pi Coding Agent extension installed in `~/.pi/agent/extensions/` is active across all Pi sessions globally — including unrelated projects and sessions where the user has not opted into compression. The compression extension should be project-local by default (`.pi/extensions/`) or require explicit opt-in, not be globally installed.
 
 ## The four runtime paths and integration strategy
 
-### 1. Pi SDK runtime
+### 1. Pi Coding Agent runtime
 
 **Feasibility:** Most feasible. Build a standard Pi coding agent extension using the `pi-extension` skill. Extensions are auto-loaded in both Pi CLI and Pi Web UI without Pi Web UI server code changes.
 
@@ -262,13 +262,13 @@ A Pi SDK extension installed in `~/.pi/agent/extensions/` is active across all P
 
 A local engine that classifies artefact types, estimates size/cost, compresses or reshapes content, and applies heuristics for relevance and retention.
 
-*For Claude (channel-backed): provided by `headroom-ai` library (`compress()` runs fully locally, no proxy required — but verify Gate 2). For Pi SDK: custom-build using the same content-type heuristics.*
+*For Claude (channel-backed): provided by `headroom-ai` library (`compress()` runs fully locally, no proxy required — but verify Gate 2). For Pi Coding Agent: custom-build using the same content-type heuristics.*
 
 ### 2. Reversible artefact store
 
 A local store that keeps original artefacts, records compressed forms, tracks metadata (path, mtime, session ID, turn index, tool call ID), and supports later expansion or filtered retrieval.
 
-*For Claude (channel-backed): Headroom's CCR store; `headroom_retrieve` MCP tool requires the Headroom local proxy as a sidecar (optional — Phase 2). For Pi SDK: custom local artefact store (hash → original file on disk).*
+*For Claude (channel-backed): Headroom's CCR store; `headroom_retrieve` MCP tool requires the Headroom local proxy as a sidecar (optional — Phase 2). For Pi Coding Agent: custom local artefact store (hash → original file on disk).*
 
 *Security requirements for the store: see "Risks and failure modes" section above.*
 
@@ -361,7 +361,7 @@ In at least 5 real coding sessions with large bash output or test output (not co
 ### What is explicitly out of scope for Phase 1
 
 - Code file read compression
-- Pi SDK adapter
+- Pi Coding Agent adapter
 - CCR / `headroom_retrieve` MCP tool (but originals must be stored — see above)
 - Observability UI in Pi Web UI
 - OpenCode or Antigravity
@@ -400,19 +400,19 @@ Integration:
 3. Store compressed form + original using a session-scoped local store
 4. Optionally run Headroom proxy as a sidecar in Phase 2 to enable `headroom_retrieve`
 
-### Pi SDK: custom-build
+### Pi Coding Agent: custom-build
 
-For Pi SDK, the interception point is inside the Pi runtime path, not at the Anthropic API call level. Headroom's proxy doesn't fit. A custom artefact compression layer using the Pi extension tool-wrapping surface is more natural and can be benchmarked against Headroom's ratios without coupling to Headroom's architecture.
+For Pi Coding Agent, the interception point is inside the Pi runtime path, not at the Anthropic API call level. Headroom's proxy doesn't fit. A custom artefact compression layer using the Pi extension tool-wrapping surface is more natural and can be benchmarked against Headroom's ratios without coupling to Headroom's architecture.
 
 ### Summary
 
-| Approach | Pi SDK | Claude (channel-backed) |
+| Approach | Pi Coding Agent | Claude (channel-backed) |
 |---|---|---|
 | `headroom wrap claude` / proxy | ❌ Wrong fit — Pi Web UI owns the runtime | ❌ Conflicts with PTY supervision and channel hooks |
 | Headroom library (`compress()`) in hook | Could be used for algorithm parity | ✅ Best fit after Gate 1/2 pass |
 | Full custom-build | ✅ Best fit — natural control point | Could be done, but no need to rewrite Headroom's compression algorithms |
 
-**Pragmatic path: custom-build for Pi SDK; Headroom library (not proxy) inside Pi Web UI's PostToolUse hook for Claude.**
+**Pragmatic path: custom-build for Pi Coding Agent; Headroom library (not proxy) inside Pi Web UI's PostToolUse hook for Claude.**
 
 ## Related internal docs
 

@@ -14,7 +14,7 @@ This page explains that direction without pretending the whole vision is finishe
 Today, Pi Web UI is already useful as:
 - a browser UI for multiple coding-agent runtimes
 - a persistent session shell across desktop and mobile
-- a place where Pi extensions and OpenCode plugins can surface richer workflows
+- a place where Pi Coding Agent extensions and OpenCode plugins can surface richer workflows
 - a local automation surface for real end-to-end testing against those runtimes
 
 ## Where the local automation API came from
@@ -56,7 +56,7 @@ The idea is this:
 Instead of a parent coding agent spawning subagents only through its own native harness, Pi Web UI's local automation API could become a place where a parent agent can call **different runtime/provider paths through one integrated surface**.
 
 In other words, a future workflow could look more like:
-- one child session on a Pi-backed model path
+- one child session on a Pi Coding Agent-backed model path
 - one child session on an OpenCode/GLM path
 - one child session on an Antigravity/Gemini path
 - one child session on a Claude Code path
@@ -82,7 +82,7 @@ Important parts of it are still:
 - incomplete
 - evolving
 - operationally uneven across runtimes
-- limited by the different native capabilities of Pi, Claude, OpenCode, and Antigravity
+- limited by the different native capabilities of Pi Coding Agent, Claude Code, OpenCode, and Antigravity
 
 So the right current public framing is:
 
@@ -95,7 +95,7 @@ So the right current public framing is:
 You do not need to buy into the whole vision to use the repo.
 
 You can still adopt Pi Web UI simply as:
-- a Pi web UI
+- a Pi Coding Agent web UI
 - an OpenCode web UI
 - a Claude-facing browser shell
 - a Gemini/Antigravity browser shell

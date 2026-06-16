@@ -6,15 +6,15 @@
 
 Pi Web UI is a single web application that fronts four runtime paths:
 
-- **Pi SDK** — worker-managed Pi sessions
-- **Claude runtime** — legacy `claude -p` subprocesses or the channel-backed Claude Code path
+- **Pi Coding Agent** — worker-managed Pi sessions
+- **Claude Code** — legacy `claude -p` subprocesses or the channel-backed Claude Code path
 - **OpenCode Direct** — `opencode serve`-backed sessions
 - **Antigravity** — `agy -p` Gemini sessions with Pi-owned turn logs plus agy-owned conversation DBs
 
 Operationally, this means deployment must consider:
 - the Node/Express server itself
 - Pi worker capacity and memory
-- availability of `claude` if the Claude runtime is needed
+- availability of `claude` if the Claude Code path is needed
 - availability of Bun if the channel-backed Claude path is enabled
 - availability of `opencode` if OpenCode Direct is needed
 - availability of `agy` if Antigravity is needed
@@ -60,7 +60,7 @@ Nginx is also perfectly viable, and an example is included below.
 - [ ] Enable HTTPS / WSS
 - [ ] Configure systemd or equivalent restart policy
 - [ ] Confirm Pi CLI / SDK availability
-- [ ] Confirm `claude` availability if using the Claude runtime
+- [ ] Confirm `claude` availability if using the Claude Code path
 - [ ] Confirm Bun availability if using the channel-backed Claude path
 - [ ] Confirm `opencode` availability if using OpenCode Direct
 - [ ] Confirm `agy` availability if using Antigravity
@@ -132,7 +132,7 @@ Prerequisites:
 
 ## Runtime Capacity Notes
 
-### Pi SDK worker path
+### Pi Coding Agent worker path
 
 This is the main memory-sensitive runtime because it uses worker processes.
 
@@ -141,9 +141,9 @@ Typical rough sizing:
 - each Pi worker: roughly hundreds of MB depending on task/tool load
 - leave headroom for builds, subprocesses, and runtime bursts
 
-### Claude runtime
+### Claude Code
 
-The Claude runtime uses either:
+The Claude Code path uses either:
 - legacy `claude -p` subprocesses, or
 - the channel-backed Claude Code path under PTY supervision.
 
@@ -282,14 +282,14 @@ curl http://localhost:<port>/api/health/live
 curl http://localhost:<port>/api/health/ready
 ```
 
-### Pi SDK path
+### Pi Coding Agent path
 
 ```bash
 curl http://localhost:<port>/api/health/ready | jq '.workerStats'
 ps aux | grep "pi --mode rpc"
 ```
 
-### Claude runtime
+### Claude Code
 
 ```bash
 which claude
@@ -334,7 +334,7 @@ npm run build
 - increase host RAM / swap if appropriate
 - inspect `journalctl` and OOM logs
 
-### Claude runtime unavailable
+### Claude Code unavailable
 
 - verify `claude` is on PATH for the service user
 - verify auth state for the same user running the service

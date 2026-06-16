@@ -1,15 +1,19 @@
 # Pi Web UI
 
-A self-hosted, multi-runtime web UI for coding agents.
+Built for a simple reality: **one agent runtime and one subscription is often not enough.**
 
-Pi Web UI gives you one browser interface for working with multiple coding-agent runtime paths from the same machine or server:
+Pi Web UI is a self-hosted browser interface for running multiple coding-agent runtimes from one place. It works across mobile, desktop, and laptop browsers, so you can keep the same agent workspace available at a desk or on the go.
 
-- **Pi SDK**
-- **Claude runtime** (legacy direct `claude -p` or channel-backed Claude Code)
-- **OpenCode Direct**
-- **Antigravity** (`agy -p` / Gemini)
+Built around [Pi Coding Agent](https://shittycodingagent.ai/) (via its SDK mode), Pi Web UI lets you use **Pi Coding Agent**, **Claude Code**, **OpenCode Direct**, and **Antigravity** through a single persistent UI with unified sessions, replay, and a local automation API.
 
 It is built for people who want more than one vendor-owned coding surface: different runtime strengths, different provider access, different subscription economics, and one persistent session UI across them.
+
+Currently supported runtime paths:
+
+- **Pi Coding Agent**
+- **Claude Code** (legacy direct `claude -p` or channel-backed Claude Code)
+- **OpenCode Direct**
+- **Antigravity** (`agy -p` / Gemini)
 
 ## Why this exists
 
@@ -19,7 +23,7 @@ Some tasks deserved the strongest available runtime. Others only needed a cheape
 
 - one persistent browser UI instead of several terminals
 - session continuity across desktop and mobile
-- a place to extend Pi with custom extensions and OpenCode with custom plugins
+- a place to extend Pi Coding Agent with custom extensions and OpenCode with custom plugins
 - a local automation surface for live validation and cross-runtime orchestration experiments
 
 For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md).
@@ -29,21 +33,21 @@ For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY
 - **Four runtime families behind one UI**
 - **Unified session list and replay model** across runtimes with very different backends
 - **Local automation API** for live validation, integrations, and orchestration experiments
-- **Companion extension/plugin ecosystem** for Pi and OpenCode workflows
+- **Companion extension/plugin ecosystem** for Pi Coding Agent and OpenCode workflows
 - **Honest documentation** about what is native, what is wrapper-like, and what is still evolving
 
 ## Runtime overview
 
 | Runtime family | Integration style | Best for | Caveat level |
 |---|---|---|---|
-| **Pi SDK** | Native Pi SDK/session integration | Pi-native agent workflows, extensions, custom tools | Lowest |
-| **Claude runtime** | `claude -p` wrapper or channel-backed Claude Code | Harder coding work on Claude Code | Higher |
+| **Pi Coding Agent** | Native Pi Coding Agent integration via its SDK path | Pi Coding Agent workflows, extensions, custom tools | Lowest |
+| **Claude Code** | `claude -p` wrapper or channel-backed Claude Code | Harder coding work on Claude Code | Higher |
 | **OpenCode Direct** | `opencode serve` + HTTP/SSE | OpenCode-backed workflows, especially OpenCode/Z.AI setups | Low–medium |
 | **Antigravity** | `agy -p` subprocess-per-turn | Gemini/Antigravity workflows in the same UI | Higher |
 
 The important truth is that these paths are **not equally official in the eyes of their upstreams**:
 
-- **Pi SDK** and **OpenCode Direct** use supported integration surfaces.
+- **Pi Coding Agent** and **OpenCode Direct** use supported integration surfaces.
 - **Claude** and **Antigravity** are more wrapper-oriented and may need maintenance when upstream CLI behaviour, auth, or policy changes.
 
 That honesty is part of the project, not an embarrassment to hide.
@@ -56,7 +60,7 @@ Pi Web UI is aimed at **medium-to-power users**, not absolute beginners to agent
 
 Typical good fits:
 
-- you already use Pi, Claude Code, OpenCode, or Antigravity and want one browser surface around them
+- you already use Pi Coding Agent, Claude Code, OpenCode, or Antigravity and want one browser surface around them
 - you want to self-host a personal coding-agent workspace
 - you want to fork a real multi-runtime UI and adapt it to your own harness/provider mix
 - you want a local automation/orchestration API that can talk to real agent runtimes
@@ -79,10 +83,10 @@ Do **not** try to adopt everything at once unless you already know you need it.
 Best for most adopters.
 
 Choose one of:
-- **Pi-only setup**
-- **OpenCode-only setup**
-- **Claude-backed setup**
-- **Antigravity-backed setup**
+- **Pi Coding Agent-focused setup**
+- **OpenCode-focused setup**
+- **Claude Code-focused setup**
+- **Antigravity-focused setup**
 
 Then add more runtimes later.
 
@@ -102,7 +106,7 @@ Best if you already use several of these tools and want Pi Web UI to become your
 
 Pi Web UI is stronger when paired with the public companion repositories:
 
-- **Pi extensions:** [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
+- **Pi Coding Agent extensions:** [valtterimelkko/pi-extensions-public](https://github.com/valtterimelkko/pi-extensions-public)
 - **OpenCode plugins:** [valtterimelkko/opencode-plugins](https://github.com/valtterimelkko/opencode-plugins)
 
 These are not mandatory for core chat/session flows, but they add a lot of the richer planning, memory, goal, orchestration, and status behaviour that shaped the project in practice.
@@ -135,8 +139,8 @@ Browser (React + Zustand + Vite)
        └─ Express server
             ├─ auth / CSRF / security layers
             ├─ unified session registry
-            ├─ Pi SDK runtime path
-            ├─ Claude runtime family
+            ├─ Pi Coding Agent path
+            ├─ Claude Code path
             ├─ OpenCode Direct runtime path
             ├─ Antigravity runtime path
             └─ local automation API over a Unix socket

@@ -6,7 +6,7 @@ Quick jump:
 - [Claude Direct](#claude-direct)
 - [Claude channel-backed mode](#claude-channel-backed-mode)
 - [OpenCode Direct](#opencode-direct)
-- [Pi SDK](#pi-sdk)
+- [Pi Coding Agent](#pi-sdk)
 - [Session Registry](#session-registry)
 - [WebSocket / Auth](#websocket--auth)
 - [Frontend](#frontend)
@@ -14,7 +14,7 @@ Quick jump:
 ## Claude Direct
 
 ### No true mid-turn steer
-`claude -p` is turn-oriented. The UI can send follow-up prompts, but there is no interactive mid-turn control channel. Do not attempt to implement Pi SDK-style `steer` for Claude Direct — it is an architectural limitation of the subprocess model.
+`claude -p` is turn-oriented. The UI can send follow-up prompts, but there is no interactive mid-turn control channel. Do not attempt to implement Pi Coding Agent-style `steer` for Claude Direct — it is an architectural limitation of the subprocess model.
 
 ### Follow-up detection is file-existence based
 Whether a new prompt uses `--resume` vs `--session-id` is determined by:
@@ -64,13 +64,13 @@ Transfer dispatch into OpenCode auto-approves permission requests for the handof
 ### Trusted permissions still block catastrophic patterns
 Even with `OPENCODE_TRUSTED_PERMISSIONS=true`, shell patterns like `rm -rf /`, `mkfs *`, `dd *`, `shutdown *`, `reboot *` are denied. Do not remove these deny rules.
 
-## Pi SDK
+## Pi Coding Agent
 
 ### `agentSession.dispose()` must be try/catch guarded
 Disposing a worker session can throw if the worker crashed. `multi-session-manager.ts` wraps every `dispose()` in try/catch. If you add new dispose paths, do the same.
 
 ### API-error grace timers must be cancelled on new events
-When a Pi SDK message has `stopReason === 'error'`, a 60s grace timer starts. If no event arrives in 60s, a synthetic `agent_end` is emitted. Any new event must cancel this timer via `cancelApiErrorGraceTimer()`. Forgetting this causes premature session idle states.
+When a Pi Coding Agent message has `stopReason === 'error'`, a 60s grace timer starts. If no event arrives in 60s, a synthetic `agent_end` is emitted. Any new event must cancel this timer via `cancelApiErrorGraceTimer()`. Forgetting this causes premature session idle states.
 
 ### Memory monitoring aggressive cleanup at 2.5GB
 If heap usage exceeds 2500MB, `multi-session-manager.ts` triggers aggressive cleanup: all idle non-pinned sessions are disposed, oldest first, then `global.gc()` is called if available. This is a last-ditch defense against OOM — do not raise the threshold without adjusting systemd `MemoryHigh`/`MemoryMax`.

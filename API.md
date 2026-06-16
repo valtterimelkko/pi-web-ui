@@ -72,9 +72,9 @@ Use `ws://` locally and `wss://` in production.
 
 ### Runtime-specific Notes
 
-#### Pi SDK
+#### Pi Coding Agent
 - Native Pi session lifecycle
-- Extensions and extension UI requests come directly from Pi SDK pathways
+- Extensions and extension UI requests come directly from Pi Coding Agent pathways
 - Session files live under `~/.pi/agent/sessions/`
 
 #### Claude runtime
@@ -179,7 +179,7 @@ Validate config and environment assumptions.
 ### Models
 
 #### `GET /api/models`
-Returns models for the default Pi SDK path.
+Returns models for the default Pi Coding Agent path.
 
 #### `GET /api/models?sdkType=opencode`
 Returns models exposed through OpenCode Direct.

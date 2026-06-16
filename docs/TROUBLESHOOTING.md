@@ -32,7 +32,7 @@ Follow this order unless you already know the exact failing subsystem:
 
 | Runtime / subsystem | Primary session / state files | Main logs | Notes |
 |---|---|---|---|
-| **Pi SDK** | `~/.pi/agent/sessions/` | `journalctl -u pi-web-ui -f` | Worker processes are spawned by Pi Web UI. |
+| **Pi Coding Agent** | `~/.pi/agent/sessions/` | `journalctl -u pi-web-ui -f` | Worker processes are spawned by Pi Web UI. |
 | **Claude runtime (Pi-owned replay store)** | `~/.pi-web-ui/claude-sessions/<internal-session-id>.jsonl` | `journalctl -u pi-web-ui -f` | Used for replay and Web UI history regardless of Claude backend mode. |
 | **Claude native session state** | `~/.claude/projects/-<encoded-cwd>/<claudeSessionId>.jsonl` | `journalctl -u pi-web-ui -f` | Used by Claude Code itself for resume/follow-up state. |
 | **Claude channel hook config** | `~/.claude/settings.json` | `journalctl -u pi-web-ui -f \| grep ClaudeChannel` | Relevant only when channel-backed Claude mode is enabled. |
@@ -139,7 +139,7 @@ See also:
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
 
-## Pi SDK Path
+## Pi Coding Agent Path
 
 ### Check first
 
