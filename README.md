@@ -4,7 +4,7 @@ Built for a simple reality: **one agent runtime and one subscription is often no
 
 Pi Web UI is a self-hosted browser interface for running multiple coding-agent runtimes from one place. It works across mobile, desktop, and laptop browsers, so you can keep the same agent workspace available at a desk or on the go.
 
-Built around [Pi Coding Agent](https://shittycodingagent.ai/) (via its SDK mode), Pi Web UI lets you use **Pi Coding Agent**, **Claude Code**, **OpenCode Direct**, and **Antigravity** through a single persistent UI with unified sessions, replay, and a local automation API.
+Built around [Pi Coding Agent](https://shittycodingagent.ai/) (via its SDK mode), Pi Web UI lets you use **Pi Coding Agent**, **Claude Code**, **OpenCode**, and **Antigravity** through a single persistent UI with unified sessions, replay, and a local automation API.
 
 It is built for people who want more than one vendor-owned coding surface: different runtime strengths, different provider access, different subscription economics, and one persistent session UI across them.
 
@@ -12,7 +12,7 @@ Currently supported runtime paths:
 
 - **Pi Coding Agent**
 - **Claude Code** (legacy direct `claude -p` or channel-backed Claude Code)
-- **OpenCode Direct**
+- **OpenCode**
 - **Antigravity** (`agy -p` / Gemini)
 
 ## Why this exists
@@ -42,12 +42,12 @@ For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY
 |---|---|---|---|
 | **Pi Coding Agent** | Native Pi Coding Agent integration via its SDK path | Pi Coding Agent workflows, extensions, custom tools | Lowest |
 | **Claude Code** | `claude -p` wrapper or channel-backed Claude Code | Harder coding work on Claude Code | Higher |
-| **OpenCode Direct** | `opencode serve` + HTTP/SSE | OpenCode-backed workflows, especially OpenCode/Z.AI setups | Low–medium |
+| **OpenCode** | `opencode serve` + HTTP/SSE | OpenCode-backed workflows, especially OpenCode/Z.AI setups | Low–medium |
 | **Antigravity** | `agy -p` subprocess-per-turn | Gemini/Antigravity workflows in the same UI | Higher |
 
 The important truth is that these paths are **not equally official in the eyes of their upstreams**:
 
-- **Pi Coding Agent** and **OpenCode Direct** use supported integration surfaces.
+- **Pi Coding Agent** and **OpenCode** use supported integration surfaces.
 - **Claude** and **Antigravity** are more wrapper-oriented and may need maintenance when upstream CLI behaviour, auth, or policy changes.
 
 That honesty is part of the project, not an embarrassment to hide.
@@ -141,7 +141,7 @@ Browser (React + Zustand + Vite)
             ├─ unified session registry
             ├─ Pi Coding Agent path
             ├─ Claude Code path
-            ├─ OpenCode Direct runtime path
+            ├─ OpenCode runtime path
             ├─ Antigravity runtime path
             └─ local automation API over a Unix socket
 ```

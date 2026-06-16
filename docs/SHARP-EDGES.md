@@ -5,7 +5,7 @@
 Quick jump:
 - [Claude Direct](#claude-direct)
 - [Claude channel-backed mode](#claude-channel-backed-mode)
-- [OpenCode Direct](#opencode-direct)
+- [OpenCode](#opencode-direct)
 - [Pi Coding Agent](#pi-sdk)
 - [Session Registry](#session-registry)
 - [WebSocket / Auth](#websocket--auth)
@@ -47,7 +47,7 @@ The channel path depends on managed HTTP hook entries in `~/.claude/settings.jso
 ### Tool visibility depends on plugin-side events
 The UI only shows Claude channel tool activity if the plugin bridge emits the expected events back through `pi-claude-channel/server.ts` and `claude-channel-event-adapter.ts`. Claude can still be working even when the UI looks quiet.
 
-## OpenCode Direct
+## OpenCode
 
 ### SSE duplicate tool events
 OpenCode SSE can deliver the same tool event multiple times. `opencode-event-adapter.ts` has deduplication logic, but it is brittle. If you see repeated tool cards in the UI, check the deduplication keys.

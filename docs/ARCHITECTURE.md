@@ -17,7 +17,7 @@ Pi Web UI is a single browser application that presents a unified chat/session U
 
 1. **Pi Coding Agent** (via the SDK path)
 2. **Claude Code** (legacy direct or channel-backed backend)
-3. **OpenCode Direct**
+3. **OpenCode**
 4. **Antigravity** (`agy` / Google Gemini)
 
 The architectural theme of the repo is:
@@ -42,7 +42,7 @@ Express server
   ├─ session registry
   ├─ Pi Coding Agent service + worker/session lifecycle
   ├─ Claude service + (legacy subprocess or channel-backed PTY/plugin backend)
-  ├─ OpenCode Direct service + process manager/client/SSE adapter
+  ├─ OpenCode service + process manager/client/SSE adapter
   └─ Antigravity service + subprocess-per-turn `agy` adapter
 ```
 
@@ -138,7 +138,7 @@ Important files:
 - channel-backed mode is richer but depends on PTY supervision, channel hooks, and plugin event bridging
 - both share the same sidebar/session UX via registry integration
 
-### 3. OpenCode Direct path
+### 3. OpenCode path
 
 **What it is**
 - an OpenCode-backed runtime path built around `opencode serve`
@@ -278,7 +278,7 @@ See [`../SECURITY.md`](../SECURITY.md) for the canonical security view.
 - replay is reconstructed from Pi-owned Claude JSONL session data
 - the active backend may also consult Claude's native JSONL session files for resume/follow-up state and context usage
 
-### OpenCode Direct
+### OpenCode
 - replay is reconstructed from OpenCode message APIs and adapted into the common event model
 
 ### Antigravity

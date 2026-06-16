@@ -31,7 +31,7 @@ Pi Web UI already unifies four very different runtime paths behind one browser U
 
 1. **Pi Coding Agent**
 2. **Claude runtime**
-3. **OpenCode Direct**
+3. **OpenCode**
 4. **Antigravity**
 
 That makes Pi Web UI a strong place to build a **runtime-aware context mediation layer** that can be benchmarked across all four harnesses, rather than trying to force a third-party proxy product unchanged into every path.
@@ -241,7 +241,7 @@ A Pi Coding Agent extension installed in `~/.pi/agent/extensions/` is active acr
 
 **Legacy direct path:** No hook surface on the legacy `claude -p` path. Compression is channel-backed only.
 
-### 3. OpenCode Direct
+### 3. OpenCode
 
 **Feasibility:** Observability and system-prompt shaping only. `tool.execute.after` cannot replace tool output — mutations to `output.output` are silently ignored (upstream issues #13574, #3384). Until those are fixed, OpenCode is a benchmarking and metrics target, not a compression target.
 

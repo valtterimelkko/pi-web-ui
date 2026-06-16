@@ -2,7 +2,7 @@
 
 > Read this when working on the Antigravity / `agy` runtime path. For first-stop debugging, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>`.
 
-Pi Web UI integrates Google's Antigravity agent (Gemini Flash 3.5 and others) as a fourth runtime path, alongside Pi Coding Agent, the Claude runtime family, and OpenCode Direct.
+Pi Web UI integrates Google's Antigravity agent (Gemini Flash 3.5 and others) as a fourth runtime path, alongside Pi Coding Agent, the Claude runtime family, and OpenCode.
 
 ## Adopter quick take
 

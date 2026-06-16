@@ -15,7 +15,7 @@ These cover user-visible behaviour such as:
 - auth and initial app load
 - session creation
 - session switching
-- runtime-specific flows for the Claude runtime family, OpenCode Direct, and any surfaced Antigravity session UX
+- runtime-specific flows for the Claude runtime family, OpenCode, and any surfaced Antigravity session UX
 - mobile / protocol / persistence / cross-tab behaviour
 
 Notable files include:
@@ -89,7 +89,7 @@ Server unit/integration coverage lives under:
 That includes coverage for:
 - Pi worker/session logic
 - Claude runtime replay and process handling
-- OpenCode Direct client/service/event handling
+- OpenCode client/service/event handling
 - Antigravity replay/store/subscriber handling (`server/tests/unit/antigravity/*`)
 - WebSocket routing
 - route handlers and security helpers
@@ -112,7 +112,7 @@ npm run test:e2e
 ```
 
 ### Runtime-path change
-If you touched Pi Coding Agent / the Claude runtime family / OpenCode Direct / Antigravity routing or replay logic, prefer:
+If you touched Pi Coding Agent / the Claude runtime family / OpenCode / Antigravity routing or replay logic, prefer:
 - unit tests for the affected runtime module(s)
 - relevant WebSocket tests
 - `npm run validate:live -- --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`
@@ -121,6 +121,6 @@ If you touched Pi Coding Agent / the Claude runtime family / OpenCode Direct / A
 ## Notes
 
 - Some runtime-specific tests may depend on optional tools being installed locally.
-- OpenCode Direct tests are especially sensitive to `opencode` availability in fully live scenarios.
+- OpenCode tests are especially sensitive to `opencode` availability in fully live scenarios.
 - Antigravity live validation depends on `agy` being installed and authenticated for the same OS user running Pi Web UI.
 - Prefer the canonical app commands from the root `package.json` unless you are targeting one workspace deliberately.

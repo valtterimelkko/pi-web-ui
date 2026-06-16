@@ -1,10 +1,10 @@
-# OpenCode Direct Integration Architecture
+# OpenCode Integration Architecture
 
 > Status: **implemented**
 >
-> Audience: maintainers working on the OpenCode Direct runtime path.
+> Audience: maintainers working on the OpenCode runtime path.
 >
-> This is the canonical architecture/rationale doc for the implemented OpenCode Direct path.
+> This is the canonical architecture/rationale doc for the implemented OpenCode path.
 
 ## Adopter quick take
 
@@ -18,7 +18,7 @@ Recommended public framing:
 
 ## Summary
 
-OpenCode Direct is one of the four runtime paths in Pi Web UI.
+OpenCode is one of the four runtime paths in Pi Web UI.
 
 Its job is to let Pi Web UI remain the browser interface while a **real OpenCode runtime** handles the backend session execution.
 
@@ -30,10 +30,10 @@ Pi Web UI has four runtime paths:
 
 1. **Pi Coding Agent** — Pi-native sessions and extensions
 2. **Claude runtime** — legacy `claude -p` or the channel-backed Claude Code path
-3. **OpenCode Direct** — `opencode serve` backend sessions
+3. **OpenCode** — `opencode serve` backend sessions
 4. **Antigravity** — `agy -p` Gemini sessions
 
-OpenCode Direct exists because:
+OpenCode exists because:
 - OpenCode is the supported backend tool for the relevant OpenCode/Z.AI workflows
 - Pi Web UI wants to preserve its browser UX without spoofing OpenCode internals
 - a server/API integration is cleaner than a subprocess-per-turn wrapper
@@ -51,7 +51,7 @@ OpenCode Direct exists because:
 ```text
 Browser UI
   -> Pi Web UI server
-    -> OpenCode Direct service
+    -> OpenCode service
       -> OpenCode process manager
         -> opencode serve
           -> OpenCode session/message/permission APIs + SSE
@@ -143,7 +143,7 @@ Instead:
 
 ## Permission Bridge and Trusted Sessions
 
-A key feature of OpenCode Direct is that OpenCode permission requests are bridged into the UI's existing approval mechanism.
+A key feature of OpenCode is that OpenCode permission requests are bridged into the UI's existing approval mechanism.
 
 At a high level:
 1. OpenCode emits a permission request
@@ -154,7 +154,7 @@ At a high level:
 
 By default, user approval replies use OpenCode's `always` response semantics (`OPENCODE_PERMISSION_APPROVE_MODE=always`) so repeated matching prompts in the same OpenCode session are reduced. Set `OPENCODE_PERMISSION_APPROVE_MODE=once` to preserve one-shot approval behaviour.
 
-For long-running trusted tasks, Pi Web UI can create new OpenCode Direct sessions with session-level permission rules by setting:
+For long-running trusted tasks, Pi Web UI can create new OpenCode sessions with session-level permission rules by setting:
 
 ```bash
 OPENCODE_TRUSTED_PERMISSIONS=true
@@ -167,18 +167,18 @@ This keeps the browser experience aligned with the rest of the app instead of in
 ## Comparison with Other Runtime Paths
 
 ### Compared with Pi Coding Agent
-- OpenCode Direct is less Pi-native
+- OpenCode is less Pi-native
 - it uses an external backend runtime rather than Pi-managed session execution
 
 ### Compared with the Claude runtime
-- OpenCode Direct uses a long-lived backend and APIs/SSE
+- OpenCode uses a long-lived backend and APIs/SSE
 - the legacy Claude direct backend uses `claude -p` subprocesses and Pi-owned replay storage
 - the channel-backed Claude backend adds PTY/plugin glue instead
-- OpenCode Direct therefore needs less of the workaround-heavy subprocess glue the Claude runtime family needs
+- OpenCode therefore needs less of the workaround-heavy subprocess glue the Claude runtime family needs
 
 ## Operational Notes
 
-OpenCode Direct depends on:
+OpenCode depends on:
 - `opencode` being installed and on PATH
 - OpenCode runtime configuration being valid
 - optional server password / host / port settings being aligned
@@ -189,7 +189,7 @@ Pi Web UI runs or attaches to a long-lived `opencode serve` process. To avoid st
 OPENCODE_SERVER_MAX_UPTIME_MS=86400000
 ```
 
-Set the value to `0` to disable idle-aware recycling. Recycling is deferred while any OpenCode Direct session is actively running, so long-running tasks are not interrupted by a blind timer.
+Set the value to `0` to disable idle-aware recycling. Recycling is deferred while any OpenCode session is actively running, so long-running tasks are not interrupted by a blind timer.
 
 Useful places to inspect:
 - `server/src/routes/health.ts`

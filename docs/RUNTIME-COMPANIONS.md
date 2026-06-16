@@ -28,7 +28,7 @@ What becomes richer with companions:
 Each runtime has different extension/plugin capabilities.
 
 - **Pi Coding Agent path** can expose custom tools, slash commands, widgets, status lines, and extension UI requests.
-- **OpenCode Direct** can expose plugin-driven state and runtime events that Pi Web UI normalizes into the common frontend model.
+- **OpenCode** can expose plugin-driven state and runtime events that Pi Web UI normalizes into the common frontend model.
 - **Claude** and **Antigravity** are integrated more as runtime wrappers than extension ecosystems.
 
 So Pi Web UI can feel reasonably consistent across runtimes, but some of its most workflow-rich behaviour was shaped around Pi Coding Agent extensions and OpenCode plugins.

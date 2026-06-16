@@ -21,7 +21,7 @@ Then add more runtimes only if they solve a real problem for you:
 |---|---|---|---|---|---|---|
 | **Pi Coding Agent** | Pi Coding Agent | Native SDK/session integration | Medium | Richest Pi Coding Agent behaviour | Pi Coding Agent extensions, custom tools, Pi Coding Agent-first workflows | Low |
 | **Claude Code** | `claude -p` or channel-backed Claude Code | Wrapper/process integration | Medium-high | Depends on backend mode; channel mode is richer | Claude Code-centric workflows | Higher |
-| **OpenCode Direct** | `opencode serve` | Local server/API integration | Medium | Strong normalized streaming via SSE adaptation | OpenCode-backed workflows and OpenCode/Z.AI setups | Low-medium |
+| **OpenCode** | `opencode serve` | Local server/API integration | Medium | Strong normalized streaming via SSE adaptation | OpenCode-backed workflows and OpenCode/Z.AI setups | Low-medium |
 | **Antigravity** | `agy -p` | Subprocess-per-turn wrapper | Medium | No true live streaming today; replay/log driven | Gemini/Antigravity access in the same UI | Higher |
 
 ## The important trust distinction
@@ -30,7 +30,7 @@ These runtime paths are **not equally native**.
 
 ### More native / supported integration surfaces
 - **Pi Coding Agent**
-- **OpenCode Direct**
+- **OpenCode**
 
 ### More wrapper-oriented paths
 - **Claude Code**
@@ -51,7 +51,7 @@ Read next:
 - [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md)
 - [`PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md)
 
-### Start with OpenCode Direct if...
+### Start with OpenCode if...
 - OpenCode is already in your workflow
 - you want a local server/API style integration rather than a per-turn wrapper
 - OpenCode/Z.AI/GLM access is one of the reasons you are considering Pi Web UI
@@ -78,7 +78,7 @@ Read next:
 
 ## Capability summary
 
-| Capability | Pi Coding Agent | Claude Code | OpenCode Direct | Antigravity |
+| Capability | Pi Coding Agent | Claude Code | OpenCode | Antigravity |
 |---|---|---|---|---|
 | Unified sidebar session | Yes | Yes | Yes | Yes |
 | History replay | Yes | Yes | Yes | Yes |
@@ -111,7 +111,7 @@ But only if you already know why each one belongs.
 |---|---|
 | **Pi Coding Agent** | `~/.pi/agent/sessions/` |
 | **Claude Code** | `~/.pi-web-ui/claude-sessions/` + Claude native session JSONL |
-| **OpenCode Direct** | OpenCode runtime owns transcript storage; Pi Web UI stores registry metadata and replay transforms |
+| **OpenCode** | OpenCode runtime owns transcript storage; Pi Web UI stores registry metadata and replay transforms |
 | **Antigravity** | `~/.pi-web-ui/antigravity-sessions/` + agy-owned conversation DBs |
 
 ## Companion repos

@@ -1,6 +1,6 @@
 # Process Isolation Design
 
-> Design record for the **Pi Coding Agent worker architecture** in Pi Web UI. This document is intentionally focused on the Pi worker/process model, not the Claude runtime family or OpenCode Direct paths.
+> Design record for the **Pi Coding Agent worker architecture** in Pi Web UI. This document is intentionally focused on the Pi worker/process model, not the Claude runtime family or OpenCode paths.
 
 ## Why This Doc Exists
 
@@ -8,7 +8,7 @@ Pi Web UI supports four runtime paths, but only one of them uses the repo's full
 
 - **Pi Coding Agent** → yes, this doc applies directly
 - **Claude runtime** → no, uses either `claude -p` subprocesses per turn or the channel-backed Claude Code path
-- **OpenCode Direct** → no, uses a long-lived `opencode serve` backend
+- **OpenCode** → no, uses a long-lived `opencode serve` backend
 - **Antigravity** → no, uses `agy -p` subprocesses per turn plus Pi-owned JSONL turn logs
 
 For the broader multi-runtime architecture, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
@@ -34,7 +34,7 @@ This document covers:
 
 It does **not** cover:
 - Claude runtime replay/session-file details
-- OpenCode Direct HTTP/SSE integration details
+- OpenCode HTTP/SSE integration details
 
 ## High-level Pi Coding Agent Worker Model
 
@@ -125,8 +125,8 @@ See:
 - `server/src/claude/`
 - [`docs/CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
 
-### OpenCode Direct
-OpenCode Direct has a separate design because it is built around a long-lived OpenCode backend and HTTP/SSE integration.
+### OpenCode
+OpenCode has a separate design because it is built around a long-lived OpenCode backend and HTTP/SSE integration.
 See:
 - `server/src/opencode/`
 - [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)

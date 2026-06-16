@@ -48,7 +48,7 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
 
 ### 4. Prompt-injection detection
 
-- User prompts are screened before being forwarded to Pi Coding Agent, Claude Direct, or OpenCode Direct.
+- User prompts are screened before being forwarded to Pi Coding Agent, Claude Direct, or OpenCode.
 - Detection currently uses pattern-based checks in:
   - `server/src/security/prompt-injection.ts`
 - Do not bypass this stage when adding new runtime paths or prompt-like entry points.
@@ -122,7 +122,7 @@ Mitigation:
 - Runs `claude -p` subprocesses server-side.
 - Treat subprocess spawning, environment inheritance, and abort handling as sensitive.
 
-### OpenCode Direct
+### OpenCode
 - Uses a local `opencode serve` backend.
 - If enabled, OpenCode availability and permission approval must stay server-mediated.
 - Do not expose OpenCode backend credentials or control surfaces directly to the browser.

@@ -16,7 +16,7 @@
 └─────────────────┘     └─────────────────────────────┘     │    PiFormat()    │
                                                             │                  │
 ┌─────────────────┐     ┌─────────────────────────────┐     │                  │
-│  OpenCode Direct│────▶│  opencode-event-adapter.ts  │────▶│                  │
+│  OpenCode│────▶│  opencode-event-adapter.ts  │────▶│                  │
 │  (SSE)          │     │  (NormalizedEvent)          │     │                  │
 └─────────────────┘     └─────────────────────────────┘     └──────────────────┘
 ```
@@ -82,7 +82,7 @@ Claude tool use
 
 The channel-backed path may also emit `stream_activity` so the frontend can show liveness during long-running turns.
 
-### OpenCode Direct
+### OpenCode
 
 OpenCode emits Server-Sent Events. `opencode-event-adapter.ts` maps SSE types to `NormalizedEvent`. This adapter also handles:
 - **Permission bridging:** OpenCode `permission.asked` → `extension_ui_request`

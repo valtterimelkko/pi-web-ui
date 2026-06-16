@@ -8,7 +8,7 @@ Pi Web UI is a single web application that fronts four runtime paths:
 
 - **Pi Coding Agent** — worker-managed Pi sessions
 - **Claude Code** — legacy `claude -p` subprocesses or the channel-backed Claude Code path
-- **OpenCode Direct** — `opencode serve`-backed sessions
+- **OpenCode** — `opencode serve`-backed sessions
 - **Antigravity** — `agy -p` Gemini sessions with Pi-owned turn logs plus agy-owned conversation DBs
 
 Operationally, this means deployment must consider:
@@ -16,7 +16,7 @@ Operationally, this means deployment must consider:
 - Pi worker capacity and memory
 - availability of `claude` if the Claude Code path is needed
 - availability of Bun if the channel-backed Claude path is enabled
-- availability of `opencode` if OpenCode Direct is needed
+- availability of `opencode` if OpenCode is needed
 - availability of `agy` if Antigravity is needed
 
 ## Recommended deployment shapes
@@ -62,7 +62,7 @@ Nginx is also perfectly viable, and an example is included below.
 - [ ] Confirm Pi CLI / SDK availability
 - [ ] Confirm `claude` availability if using the Claude Code path
 - [ ] Confirm Bun availability if using the channel-backed Claude path
-- [ ] Confirm `opencode` availability if using OpenCode Direct
+- [ ] Confirm `opencode` availability if using OpenCode
 - [ ] Confirm `agy` availability if using Antigravity
 - [ ] Configure logging / monitoring
 - [ ] Verify `npm run build` succeeds before restart
@@ -102,11 +102,11 @@ Prerequisites:
 - Bun available so `pi-claude-channel/package.json` scripts can run when needed
 - write access to `~/.claude/settings.json` so managed hooks can be installed
 
-### OpenCode Direct
+### OpenCode
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `OPENCODE_ENABLED` | `true` | enable/disable OpenCode Direct |
+| `OPENCODE_ENABLED` | `true` | enable/disable OpenCode |
 | `OPENCODE_SERVER_HOST` | `127.0.0.1` | OpenCode server bind host |
 | `OPENCODE_SERVER_PORT` | `4096` | OpenCode server port |
 | `OPENCODE_SERVER_PASSWORD` | empty | optional basic-auth password for OpenCode server |
@@ -154,9 +154,9 @@ Operational concerns are mostly:
 - logs and subprocess/PTy cleanup
 - hook configuration in `~/.claude/settings.json` for the channel-backed path
 
-### OpenCode Direct
+### OpenCode
 
-OpenCode Direct uses a long-lived `opencode serve` backend when enabled and used. By default, **Pi Web UI manages that backend itself** through `server/src/opencode/opencode-process-manager.ts`.
+OpenCode uses a long-lived `opencode serve` backend when enabled and used. By default, **Pi Web UI manages that backend itself** through `server/src/opencode/opencode-process-manager.ts`.
 
 Ensure:
 - the `opencode` binary exists on the host and is on `PATH`
@@ -298,7 +298,7 @@ sudo journalctl -u pi-web-ui -f | grep ClaudeChannel
 npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 ```
 
-### OpenCode Direct
+### OpenCode
 
 ```bash
 which opencode
@@ -343,7 +343,7 @@ npm run build
 - check `server/src/claude/` logs/errors in journal output
 - run `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` when the problem is session-specific
 
-### OpenCode Direct unavailable
+### OpenCode unavailable
 
 - verify `opencode` is on PATH for the service user
 - verify `OPENCODE_ENABLED=true`

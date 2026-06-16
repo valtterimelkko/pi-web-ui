@@ -98,7 +98,7 @@ Use live validation when you change:
 - runtime dispatch logic
 - event normalization or replay
 - Claude channel-backed behaviour
-- OpenCode Direct streaming/permissions
+- OpenCode streaming/permissions
 - Antigravity prompt/replay/model-listing behaviour
 - Internal API behaviour used by local tools or agents
 

@@ -75,8 +75,8 @@
 - `claude/claude-channel-ws-client.ts` — WebSocket client receiving channel plugin events.
 - `claude/claude-channel-event-adapter.ts` — Converts channel plugin events into the normalized event model.
 
-### OpenCode Direct Path (`server/src/opencode/`)
-- `opencode/opencode-service.ts` — OpenCode Direct lifecycle, prompt dispatch, context-window tracking, session cleanup, trusted permissions.
+### OpenCode Path (`server/src/opencode/`)
+- `opencode/opencode-service.ts` — OpenCode lifecycle, prompt dispatch, context-window tracking, session cleanup, trusted permissions.
 - `opencode/opencode-process-manager.ts` — `opencode serve` lifecycle, health checks, idle-aware recycling.
 - `opencode/opencode-client.ts` — HTTP client for OpenCode server APIs and SSE subscription.
 - `opencode/opencode-event-adapter.ts` — Adapts OpenCode SSE into `NormalizedEvent`; contains tool-event deduplication logic.

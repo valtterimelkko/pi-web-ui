@@ -13,7 +13,7 @@
 - **Security rules:** [`SECURITY.md`](./SECURITY.md)
 - **Deployment / ops:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 - **Pi worker isolation design:** [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md)
-- **OpenCode Direct design:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
+- **OpenCode design:** [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md)
 - **Antigravity design:** [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md)
 - **Code map:** [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md)
 - **Event pipeline:** [`docs/EVENT-PIPELINE.md`](./docs/EVENT-PIPELINE.md)
@@ -101,7 +101,7 @@ If anything looks like an env file, credential file, session artifact, local run
 - Four runtime paths:
   - **Pi Coding Agent** — Pi-native sessions, extensions, worker lifecycle, `~/.pi/agent/sessions/`
   - **Claude runtime** — legacy `claude -p` subprocesses or the channel-backed Claude Code path; replay store in `~/.pi-web-ui/claude-sessions/`, native Claude state in `~/.claude/projects/`
-  - **OpenCode Direct** — `opencode serve` backend for OpenCode/Z.AI GLM sessions, with Pi Web UI storing registry metadata only
+  - **OpenCode** — `opencode serve` backend for OpenCode/Z.AI GLM sessions, with Pi Web UI storing registry metadata only
   - **Antigravity** — `agy -p` subprocess-per-turn Gemini path with Pi-owned turn logs in `~/.pi-web-ui/antigravity-sessions/` and agy-owned conversation DBs in `~/.gemini/antigravity-cli/conversations/`
 - Unified session registry: `~/.pi-web-ui/session-registry.json`
 
@@ -114,7 +114,7 @@ If anything looks like an env file, credential file, session artifact, local run
 - `server/src/websocket/protocol.ts` — shared WebSocket message types
 - `server/src/pi/multi-session-manager.ts` — Pi Coding Agent lifecycle / cleanup / pinning
 - `server/src/claude/claude-service.ts` — Claude runtime lifecycle and backend selection
-- `server/src/opencode/opencode-service.ts` — OpenCode Direct lifecycle and replay
+- `server/src/opencode/opencode-service.ts` — OpenCode lifecycle and replay
 - `server/src/antigravity/antigravity-service.ts` — Antigravity lifecycle, prompt dispatch, and replay
 - `server/src/session-registry.ts` — unified cross-runtime session index
 - `server/src/routes/models.ts` / `server/src/routes/health.ts` — runtime-aware REST endpoints
@@ -135,7 +135,7 @@ See [`SECURITY.md`](./SECURITY.md) for the canonical security model.
 - **Auth / CSRF:** `server/src/security/auth.ts`, `server/src/security/csrf.ts`, `server/src/middleware/auth.ts`
 - **Pi Coding Agent path:** `server/src/pi/multi-session-manager.ts`, `server/src/workers/worker-pool.ts`
 - **Claude runtime:** `server/src/claude/claude-service.ts`, `server/src/claude/claude-process-pool.ts`, `server/src/claude/claude-channel-service.ts`, `server/src/claude/claude-channel-process-manager.ts`
-- **OpenCode Direct:** `server/src/opencode/opencode-service.ts`, `server/src/opencode/opencode-process-manager.ts`, `server/src/opencode/opencode-client.ts`
+- **OpenCode:** `server/src/opencode/opencode-service.ts`, `server/src/opencode/opencode-process-manager.ts`, `server/src/opencode/opencode-client.ts`
 - **Antigravity:** `server/src/antigravity/antigravity-service.ts`, `server/src/antigravity/antigravity-session-store.ts`, `server/src/antigravity/antigravity-history-replay.ts`
 - **Registry / persistence:** `server/src/session-registry.ts`
 - **Health / config:** `server/src/routes/health.ts`, `server/src/routes/config.ts`, `server/src/routes/models.ts`
@@ -146,7 +146,7 @@ Use [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md) for practical debuggi
 
 - The app uses a **light theme**.
 - Keep runtime differences understandable, but avoid noisy raw tool chatter unless the feature explicitly needs it.
-- Keep the unified-session UX intact across Pi Coding Agent, the Claude runtime family, and OpenCode Direct.
+- Keep the unified-session UX intact across Pi Coding Agent, the Claude runtime family, and OpenCode.
 - Do not rely on historical test counts in old docs; run the current checks.
 
 ## Handy Commands

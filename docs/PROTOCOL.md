@@ -207,7 +207,7 @@ Transfer error codes:
 - Claude Code PTY/channel events are adapted into the same common event model as the legacy direct path.
 - `stream_activity` is used as a heartbeat-like liveness signal during long turns.
 
-### OpenCode Direct
+### OpenCode
 - OpenCode SSE and message APIs are adapted into the common event model.
 - Permission requests are transformed into `extension_ui_request` so the browser can approve or reject them.
 
@@ -229,7 +229,7 @@ When switching sessions, the server may send:
 The current runtime-specific replay sources are:
 - Pi Coding Agent → Pi session state / Pi-aware service logic
 - Claude runtime → Pi-owned Claude replay JSONL plus native Claude session state where needed
-- OpenCode Direct → OpenCode message APIs adapted into replay events
+- OpenCode → OpenCode message APIs adapted into replay events
 - Antigravity → Pi-owned Antigravity JSONL turn logs plus registry conversation metadata
 
 The backing source differs by runtime, but the frontend contract is kept consistent.

@@ -83,7 +83,7 @@ Use `ws://` locally and `wss://` in production.
 - Claude Code also keeps native session JSONL under `~/.claude/projects/`
 - Availability is announced with `claude_available`
 
-#### OpenCode Direct
+#### OpenCode
 - Uses `opencode serve` via server-side HTTP/SSE integration
 - Availability is announced with `opencode_available`
 - OpenCode permission requests are bridged into existing `extension_ui_request` UI flows
@@ -182,7 +182,7 @@ Validate config and environment assumptions.
 Returns models for the default Pi Coding Agent path.
 
 #### `GET /api/models?sdkType=opencode`
-Returns models exposed through OpenCode Direct.
+Returns models exposed through OpenCode.
 
 #### `GET /api/models?sdkType=antigravity`
 Returns models exposed through the Antigravity / `agy` runtime.

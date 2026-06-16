@@ -35,7 +35,7 @@ Most adopters should start with **one runtime**, not all four.
 Good first choices:
 
 - **Pi Coding Agent** if you already use Pi Coding Agent and want the richest extension path
-- **OpenCode Direct** if OpenCode is already part of your workflow
+- **OpenCode** if OpenCode is already part of your workflow
 - **Claude Code** if Claude Code is your main coding runtime and you accept a more wrapper-oriented integration
 - **Antigravity** if Gemini/Antigravity is specifically why you want this UI
 
@@ -69,7 +69,7 @@ Install only the runtime(s) you plan to use first.
 - Bun installed
 - `pi-claude-channel/` dependencies installable locally
 
-### OpenCode Direct
+### OpenCode
 - `opencode` installed and configured
 
 ### Antigravity
