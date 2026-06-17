@@ -12,6 +12,45 @@ import type { SessionInfo } from '@pi-web-ui/shared';
 import { createWebUIContext, createCommandContextActions, type WebUIContext } from './extension-ui-adapter.js';
 import type { SessionPool } from './session-pool.js';
 
+/**
+ * Force-write a freshly-created SessionManager's in-memory entries to disk and
+ * mark the file as flushed so the SDK does not later try to re-create it.
+ *
+ * Background: the SDK's `SessionManager._persist()` uses `openSync(path, "wx")`
+ * (exclusive create) on the first assistant-message write when its internal
+ * `flushed` flag is false. Pi Web UI calls `_rewriteFile()` at session creation
+ * to make the file exist immediately for other components (registry, replay,
+ * debug tooling). `_rewriteFile()` writes the file but does NOT set
+ * `flushed = true`, so the SDK's later `_persist()` sees `flushed === false`,
+ * assumes the file does not exist yet, calls `openSync(path, "wx")`, and throws
+ * `EEXIST` — which masks any real error from the agent run (the EEXIST is
+ * thrown from inside `handleRunFailure`, swallowing the original cause).
+ *
+ * Setting `flushed = true` after `_rewriteFile()` matches the SDK's own
+ * internal contract (see `setSessionFile()` / `branch()` in session-manager.js,
+ * which set `flushed = true` whenever they call `_rewriteFile()` on a file that
+ * already contains entries).
+ *
+ * This is defensive against an upstream SDK quirk; if the SDK ever exposes a
+ * public `flush()` method or changes the `_persist()` write flag from `wx` to
+ * `w`/`a`, this helper can be simplified or removed.
+ */
+function forceFlushSessionManager(sessionManager: SessionManager): void {
+  // Cast through unknown to avoid TS collapsing the intersection: the SDK's
+  // `flushed` is private, so `SessionManager & { flushed?: boolean }` reduces
+  // to `never`. Going through `unknown` sidesteps the private-field clash.
+  const sm = sessionManager as unknown as {
+    _rewriteFile?: () => void;
+    flushed?: boolean;
+  };
+  if (typeof sm._rewriteFile === 'function') {
+    sm._rewriteFile();
+  }
+  if ('flushed' in sm) {
+    sm.flushed = true;
+  }
+}
+
 export interface CreateSessionOptions {
   clientId: string;
   cwd?: string;
@@ -142,7 +181,7 @@ export class PiService {
         sessionManager.setSessionFile(options.sessionPath);
         // Force immediate write to disk using internal _rewriteFile()
         // (public flush() not yet available in published SDK)
-        (sessionManager as any)._rewriteFile();
+        forceFlushSessionManager(sessionManager);
       }
     } else if (options.continueRecent) {
       sessionManager = await SessionManager.continueRecent(cwd, config.sessionDir);
@@ -150,7 +189,7 @@ export class PiService {
       sessionManager = SessionManager.create(cwd, config.sessionDir);
       // Force immediate write to disk so session file exists before anything else needs it
       // (SDK defers writing until first assistant message by default)
-      (sessionManager as any)._rewriteFile();
+      forceFlushSessionManager(sessionManager);
     }
 
     const sessionResourceLoader = await this.createSessionResourceLoader(cwd);

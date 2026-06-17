@@ -5,6 +5,30 @@ import { PiService, getPiService, initializePiService } from '../../src/pi/pi-se
 // Track DefaultResourceLoader constructor calls
 const resourceLoaderInstances: Array<{ cwd: string; agentDir: string }> = [];
 
+// Factory that builds a mock SessionManager whose `flushed` flag and
+// `_rewriteFile`/`setSessionFile` calls are observable. This mirrors the
+// real SDK field that Pi Web UI must keep in sync when force-writing the
+// session file at creation time (see forceFlushSessionManager in pi-service.ts).
+function createMockSessionManager() {
+  return {
+    flushed: false,
+    setSessionFile: vi.fn(function (this: { flushed: boolean }) {
+      // Real SDK resets flushed=false when switching to a non-existent file
+      this.flushed = false;
+    }),
+    _rewriteFile: vi.fn(),
+  };
+}
+
+// fs.access is non-configurable on Node's fs/promises module, so we mock the
+// whole module. `accessMock` lets individual tests simulate existing vs new files.
+const accessMock = vi.fn().mockRejectedValue(
+  Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+);
+vi.mock('fs/promises', () => ({
+  access: accessMock,
+}));
+
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: vi.fn().mockResolvedValue({
     session: {
@@ -17,19 +41,10 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
     },
   }),
   SessionManager: {
-    create: vi.fn().mockReturnValue({ 
-      setSessionFile: vi.fn(),
-      _rewriteFile: vi.fn(),
-    }),
-    open: vi.fn().mockReturnValue({
-      _rewriteFile: vi.fn(),
-    }),
-    inMemory: vi.fn().mockReturnValue({
-      _rewriteFile: vi.fn(),
-    }),
-    continueRecent: vi.fn().mockResolvedValue({
-      _rewriteFile: vi.fn(),
-    }),
+    create: vi.fn().mockReturnValue(createMockSessionManager()),
+    open: vi.fn().mockReturnValue(createMockSessionManager()),
+    inMemory: vi.fn().mockReturnValue(createMockSessionManager()),
+    continueRecent: vi.fn().mockResolvedValue(createMockSessionManager()),
     list: vi.fn().mockResolvedValue([
       {
         id: 'session-1',
@@ -109,6 +124,9 @@ describe('PiService', () => {
   afterEach(() => {
     vi.clearAllMocks();
     resourceLoaderInstances.length = 0;
+    // Restore accessMock's default (ENOENT) after per-test overrides
+    accessMock.mockClear();
+    accessMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
   });
 
   describe('constructor', () => {
@@ -149,6 +167,84 @@ describe('PiService', () => {
         sessionPath: '/path/to/session',
       });
       expect(session).toBeDefined();
+    });
+  });
+
+  describe('createSession — force-flush (EEXIST defence)', () => {
+    /**
+     * Regression coverage for the EEXIST bug where the SDK's `_persist()`
+     * would throw `EEXIST: file already exists, open '<path>.jsonl'` on the
+     * first assistant-message write, because Pi Web UI pre-wrote the file via
+     * `_rewriteFile()` without also setting the SDK's internal `flushed` flag
+     * to true. The EEXIST was thrown from inside `handleRunFailure` and masked
+     * any real upstream error from the agent run.
+     */
+    it('sets the SDK flushed flag to true after force-writing a new session file', async () => {
+      const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+      const mockSm = createMockSessionManager();
+      (SessionManager.create as ReturnType<typeof vi.fn>).mockReturnValueOnce(mockSm);
+
+      await service.createSession({ clientId: 'client-flush-1' });
+
+      // _rewriteFile must have been called to force the file onto disk
+      expect(mockSm._rewriteFile).toHaveBeenCalledTimes(1);
+      // The critical fix: the SDK's flushed flag must be true so its own
+      // _persist() does not later attempt an exclusive openSync(path, 'wx')
+      // against the file we just wrote.
+      expect(mockSm.flushed).toBe(true);
+    });
+
+    it('sets flushed=true after force-writing when an explicit sessionPath is given for a new file', async () => {
+      const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+      const mockSm = createMockSessionManager();
+      (SessionManager.create as ReturnType<typeof vi.fn>).mockReturnValueOnce(mockSm);
+
+      // accessMock defaults to ENOENT (file does not exist) -> createSession
+      // takes the create + setSessionFile + forceFlush path.
+      await service.createSession({
+        clientId: 'client-flush-2',
+        sessionPath: '/tmp/does-not-exist-yet.jsonl',
+      });
+
+      expect(accessMock).toHaveBeenCalledWith('/tmp/does-not-exist-yet.jsonl');
+      expect(mockSm.setSessionFile).toHaveBeenCalledWith('/tmp/does-not-exist-yet.jsonl');
+      expect(mockSm._rewriteFile).toHaveBeenCalledTimes(1);
+      expect(mockSm.flushed).toBe(true);
+    });
+
+    it('does NOT touch flushed/_rewriteFile when opening an existing session file', async () => {
+      const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+      const mockSm = createMockSessionManager();
+      (SessionManager.open as ReturnType<typeof vi.fn>).mockReturnValueOnce(mockSm);
+
+      // Simulate an existing file: fs.access resolves successfully.
+      accessMock.mockResolvedValueOnce(undefined);
+
+      await service.createSession({
+        clientId: 'client-flush-3',
+        sessionPath: '/tmp/already-exists.jsonl',
+      });
+
+      // SessionManager.open is used for existing files; the force-flush path
+      // is not taken, so _rewriteFile should not be invoked by pi-service.
+      expect(mockSm._rewriteFile).not.toHaveBeenCalled();
+      // flushed stays at its initial false value (open() owns its own load logic)
+      expect(mockSm.flushed).toBe(false);
+    });
+
+    it('forceFlushSessionManager tolerates a SessionManager that lacks _rewriteFile (future SDK)', async () => {
+      // If the SDK ever removes the internal _rewriteFile method (e.g. by
+      // adding a public flush()), forceFlushSessionManager must not throw.
+      const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+      const minimalSm: { flushed: boolean; _rewriteFile?: () => void } = { flushed: false };
+      (SessionManager.create as ReturnType<typeof vi.fn>).mockReturnValueOnce(minimalSm);
+
+      await expect(
+        service.createSession({ clientId: 'client-flush-4' })
+      ).resolves.toBeDefined();
+
+      // flushed is still flipped so the SDK's _persist() won't try exclusive create
+      expect(minimalSm.flushed).toBe(true);
     });
   });
 
