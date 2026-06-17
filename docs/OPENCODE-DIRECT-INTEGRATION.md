@@ -164,6 +164,72 @@ In trusted mode, routine OpenCode actions are allowed automatically, including e
 
 This keeps the browser experience aligned with the rest of the app instead of inventing a completely separate permission UX.
 
+## Credentials and Model Providers
+
+### Where OpenCode stores provider authentication
+
+Pi Web UI **never reads, stores, or echoes provider API keys**. All OpenCode
+provider credentials live in OpenCode's own files on the host, outside this repo:
+
+| File | What it holds |
+|---|---|
+| `~/.local/share/opencode/auth.json` | API keys / OAuth records per provider (e.g. `kilo`, `nvidia`, `moonshotai`, `zai-coding-plan`). Created and managed by `opencode auth login`. Mode `0600`. |
+| `~/.config/opencode/opencode.json` | Non-secret provider/model config (model options such as GLM `thinking`), plus any provider blocks and MCP entries the user added. May contain inline keys if the user put them there manually. |
+
+Both paths are in the user's home directory and are **not** part of this
+repository and never committed. Treat them as secret-bearing host state.
+
+The provider id in `auth.json` (its top-level key) is the same id OpenCode
+reports from `GET /config/providers` and the same id Pi Web UI uses as the
+`provider` field on each model (e.g. `kilo/meta-llama/llama-3.1-8b-instruct`).
+
+To add a provider/gateway, the user runs the OpenCode CLI directly — for example
+`opencode auth login` and selecting the Kilo Gateway, or providing an OpenCode
+Zen key. Pi Web UI does not implement an auth UI for OpenCode providers; it
+defers entirely to OpenCode.
+
+### How models reach the web UI (credential-safe routing)
+
+```text
+opencode auth login (user, in CLI)
+  -> key stored in ~/.local/share/opencode/auth.json   (host-only, secret)
+    -> opencode serve exposes GET /config/providers
+      -> OpenCodeService.getAvailableModels() reads the catalogue (NO keys)
+        -> GET /api/models?sdkType=opencode
+          -> model picker in the browser
+```
+
+Because Pi Web UI only consumes the provider **catalogue**, enabling a new
+provider/gateway in the UI requires no key handling in this codebase. The keys
+stay in OpenCode; the prompt dispatch (`POST /session/:id/prompt_async` with
+`model: { providerID, modelID }`) lets OpenCode apply its own stored credentials.
+
+### Provider allowlist
+
+`OpenCodeService.getAvailableModels()` filters the reported providers through an
+allowlist so the picker stays focused instead of dumping every catalogue model:
+
+- Configured via `OPENCODE_MODEL_PROVIDERS` (see `.env.example` / `config.ts`).
+- Default: `zai-coding-plan,kilo,opencode` — the Z.AI Coding Plan plus
+  **Kilo Gateway** and **OpenCode Zen** (which exposes free models).
+- Set to `all` (or `*`) to surface every provider OpenCode reports (e.g.
+  `nvidia`, `moonshotai`, `openai` when those are authenticated).
+- Model ids may contain slashes (gateway-style, e.g.
+  `meta-llama/llama-3.1-8b-instruct`); these are preserved end to end.
+
+Provider/model **discovery is automatic**: any model OpenCode lists for an
+allowlisted provider appears in the picker, so new models added upstream show up
+after the OpenCode server refreshes its catalogue. See
+[`./OPENCODE-MODEL-AUTOMATION.md`](./OPENCODE-MODEL-AUTOMATION.md) for the
+analysis of fully automating that refresh.
+
+### Provider-specific options caveat
+
+The GLM `thinking` control writes `provider[zai-coding-plan].models[*].options.thinking`
+to `opencode.json`. That option is Z.AI/GLM-specific, so Pi Web UI only writes it
+for `zai-coding-plan` models; selecting a thinking level for Kilo/Zen models is a
+no-op at the config level rather than injecting an option those gateways reject.
+
 ## Comparison with Other Runtime Paths
 
 ### Compared with Pi Coding Agent

@@ -45,6 +45,8 @@ export interface ValidationContext {
   capabilities: ValidationCapabilities;
   cwd: string;
   timeoutMs?: number;
+  /** Optional explicit model id (e.g. `kilo/...`, `opencode/...-free`). */
+  model?: string;
 }
 
 export interface ValidationScenario {

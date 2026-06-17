@@ -46,6 +46,7 @@ async function withEphemeralSession(
   const session = await context.client.createSession({
     runtime: context.runtime,
     cwd: context.cwd,
+    model: context.model,
     source: 'live-validation',
     scenarioId: 'ephemeral',
     ephemeral: true,
@@ -86,6 +87,40 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
         const assertions = buildAssertions(summary, 'LIVE-VALIDATION-OK');
         return {
           scenarioId: 'smoke',
+          runtime: context.runtime,
+          passed: assertions.every((assertion) => assertion.passed),
+          assertions,
+        };
+      });
+    },
+  },
+  'model-smoke': {
+    id: 'model-smoke',
+    description: 'Verify a specific model (via --model) is actually usable: minimal turn completes.',
+    async run(context) {
+      if (!context.model) {
+        return {
+          scenarioId: 'model-smoke',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: 'model-smoke requires --model <provider/id>',
+          assertions: [],
+        };
+      }
+      return withEphemeralSession(context, async (sessionId) => {
+        const events = await context.client.promptStream(sessionId, {
+          message: 'Reply with the exact text LIVE-VALIDATION-OK and nothing else.',
+          verbosity: 'full',
+          mode: 'prompt',
+        });
+        const summary = collectValidationSummary(events);
+        const assertions: ValidationAssertion[] = [
+          { name: 'model', passed: true, details: context.model },
+          ...buildAssertions(summary, 'LIVE-VALIDATION-OK'),
+        ];
+        return {
+          scenarioId: 'model-smoke',
           runtime: context.runtime,
           passed: assertions.every((assertion) => assertion.passed),
           assertions,

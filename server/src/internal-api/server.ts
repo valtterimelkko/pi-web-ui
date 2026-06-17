@@ -371,6 +371,14 @@ export class InternalApiServer {
       }
 
       case 'models': {
+        if (id === 'refresh') {
+          if (req.method === 'POST') {
+            await deps.modelsRoutes.handleRefreshModels(req, res);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
         if (req.method === 'GET') {
           await deps.modelsRoutes.handleListModels(req, res);
         } else {

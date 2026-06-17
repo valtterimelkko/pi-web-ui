@@ -1,0 +1,16 @@
+# Weekly trigger for opencode-model-refresh.service.
+#
+# Persistent=true means a run missed while the host was off fires on next boot,
+# so the schedule survives reboots and downtime.
+
+[Unit]
+Description=Pi Web UI - Weekly OpenCode model refresh timer
+
+[Timer]
+# Mondays at 04:30 (host local time). Adjust as desired.
+OnCalendar=Mon *-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

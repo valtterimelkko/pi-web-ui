@@ -13,6 +13,7 @@ function parseArgs(argv: string[]) {
     runtime: (get('--runtime') ?? 'claude') as ValidationRuntime | 'all',
     scenario: get('--scenario') ?? 'smoke',
     cwd: get('--cwd') ?? process.cwd(),
+    model: get('--model'),
     json: argv.includes('--json'),
     list: argv.includes('--list'),
   };
@@ -47,6 +48,7 @@ async function main() {
         scenario,
         capabilities,
         cwd: args.cwd,
+        model: args.model,
       });
       results.push(result);
       if (!args.json) {

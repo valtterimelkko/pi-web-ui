@@ -1,0 +1,28 @@
+# Pi Web UI — weekly OpenCode model refresh (oneshot, triggered by the .timer).
+#
+# Asks the running pi-web-ui internal API to warm the models.dev cache, recycle
+# the OpenCode backend (idle-aware), and record a snapshot diff. No secrets here:
+# the internal-API token is read from ~/.pi-web-ui/internal-api-token at runtime.
+#
+# Install (host-specific copy lives in /etc/systemd/system, NOT in the repo):
+#   sudo cp deploy/systemd/opencode-model-refresh.* /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now opencode-model-refresh.timer
+#
+# Adjust WorkingDirectory / User / PATH below to match your deployment.
+
+[Unit]
+Description=Pi Web UI - Weekly OpenCode model refresh
+After=network.target pi-web-ui.service
+Wants=pi-web-ui.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/pi-web-ui
+# PATH must include node/npm and the `opencode` binary (for the cache warm step).
+Environment=PATH=/root/.opencode/bin:/root/.local/bin:/root/.npm-global/bin:/usr/bin:/bin
+ExecStart=/usr/bin/npm run opencode:refresh-models
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opencode-model-refresh

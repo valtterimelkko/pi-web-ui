@@ -116,6 +116,8 @@ Prerequisites:
 | `OPENCODE_STALE_STREAMING_MS` | `900000` | stale-stream reset window |
 | `OPENCODE_MAX_PINNED_SESSIONS` | `2` | max pinned OpenCode sessions |
 | `OPENCODE_CLEANUP_INTERVAL_MS` | `60000` | cleanup loop interval |
+| `OPENCODE_MODEL_PROVIDERS` | `zai-coding-plan,kilo,opencode` | provider ids whose models appear in the picker, or `all`/`*` for every authenticated provider. Pi Web UI never reads provider keys — they stay in OpenCode's auth storage |
+| `OPENCODE_MODEL_SNAPSHOT_PATH` | `~/.pi-web-ui/opencode-model-snapshot.json` | host-side audit snapshot for the weekly model-refresh job (ids only) |
 
 ### Antigravity
 
@@ -215,6 +217,30 @@ sudo systemctl enable pi-web-ui
 sudo systemctl start pi-web-ui
 sudo systemctl status pi-web-ui
 ```
+
+### Weekly OpenCode model refresh (optional)
+
+Keeps the OpenCode model list current as Kilo Gateway / OpenCode Zen and upstream
+labs add models. It warms the models.dev cache, recycles the OpenCode backend
+(idle-aware — deferred while sessions run), and records an ids-only audit snapshot.
+No credentials are involved; it calls the internal API over the local Unix socket.
+
+Templates ship in `deploy/systemd/` (kept generic — copy host-specific units into
+`/etc/systemd/system`, never commit machine-specific ones):
+
+```bash
+sudo cp deploy/systemd/opencode-model-refresh.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now opencode-model-refresh.timer
+systemctl list-timers opencode-model-refresh.timer
+journalctl -u opencode-model-refresh.service   # diffs of added/removed models
+```
+
+The service unit's `PATH` must include `node`/`npm` and the `opencode` binary.
+Run on demand any time with `npm run opencode:refresh-models`. New providers still
+need a one-time `opencode auth login`; the refresh diff surfaces them so you can
+add the id to `OPENCODE_MODEL_PROVIDERS` (or set it to `all`). See
+[`docs/OPENCODE-MODEL-AUTOMATION.md`](./docs/OPENCODE-MODEL-AUTOMATION.md).
 
 ## Caddy Example
 

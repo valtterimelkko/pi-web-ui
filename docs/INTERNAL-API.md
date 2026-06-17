@@ -344,6 +344,57 @@ Models are always queried live — new models appear immediately.
 }
 ```
 
+For OpenCode, which providers appear is governed by the `OPENCODE_MODEL_PROVIDERS`
+allowlist (default `zai-coding-plan,kilo,opencode`; set `all` for every
+authenticated provider). API keys never pass through Pi Web UI — they live only
+in OpenCode's own auth storage. See
+[`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md).
+
+---
+
+### Refresh OpenCode Models
+
+```
+POST /api/v1/models/refresh
+```
+
+Warms the models.dev catalogue cache, recycles the OpenCode backend (idle-aware —
+deferred while any session is running), and returns a snapshot diff of what
+changed. Drives the weekly automation (`npm run opencode:refresh-models`) but is
+safe to call ad hoc. The response contains provider/model **ids only — never any
+credentials**. See [`OPENCODE-MODEL-AUTOMATION.md`](./OPENCODE-MODEL-AUTOMATION.md).
+
+**Body (optional):**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `warmCache` | boolean | `true` | Run `opencode models` to refresh the on-disk models.dev cache first |
+| `recycle` | boolean | `true` | Recycle the OpenCode backend so it reloads the catalogue (skipped while sessions run) |
+
+**Response:**
+```json
+{
+  "available": true,
+  "cacheWarmed": true,
+  "recycled": true,
+  "recycleDeferred": false,
+  "runningSessions": 0,
+  "providerCount": 3,
+  "modelCount": 355,
+  "diff": {
+    "addedModels": ["kilo/new-provider/new-model"],
+    "removedModels": [],
+    "addedProviders": [],
+    "removedProviders": [],
+    "changed": true
+  },
+  "snapshotPath": "~/.pi-web-ui/opencode-model-snapshot.json",
+  "generatedAt": "2026-06-17T04:30:00.000Z"
+}
+```
+
+Returns `503 OPENCODE_UNAVAILABLE` when OpenCode is not installed/enabled.
+
 ---
 
 ### Create Session

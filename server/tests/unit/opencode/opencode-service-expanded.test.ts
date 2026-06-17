@@ -113,7 +113,7 @@ describe('OpenCodeService — getAvailableModels', () => {
     expect(models[1].provider).toBe('zai-coding-plan');
     expect(models[0].contextWindow).toBe(64000);
     expect(models[1].contextWindow).toBe(128000);
-    expect(models[0].description).toBe('OpenCode Direct via Z.AI Coding Plan');
+    expect(models[0].description).toBe('Z.AI Coding Plan');
   });
 
   it('handles providers returned as a dict (object format)', async () => {
@@ -300,6 +300,72 @@ describe('OpenCodeService — getAvailableModels', () => {
     const models = await service.getAvailableModels();
     expect(models[0].contextWindow).toBe(0);
     expect(models[0].maxTokens).toBe(0);
+  });
+
+  // --- Multi-provider allowlist (Kilo Gateway + OpenCode Zen) ---
+
+  function multiProviderResponse() {
+    return jsonResponse({
+      providers: [
+        { id: 'zai-coding-plan', name: 'Z.AI Coding Plan', models: [{ id: 'glm-5.2', name: 'GLM 5.2' }] },
+        { id: 'kilo', name: 'Kilo Gateway', models: [{ id: 'meta-llama/llama-3.1-8b-instruct', name: 'Llama 3.1 8B' }] },
+        { id: 'opencode', name: 'OpenCode Zen', models: [{ id: 'deepseek-v4-flash-free', name: 'DeepSeek V4 Flash (free)' }] },
+        { id: 'nvidia', name: 'Nvidia', models: [{ id: 'meta/llama-3.1-70b', name: 'Llama 3.1 70B' }] },
+      ],
+    });
+  }
+
+  function mockMultiProvider(svc: OpenCodeService) {
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('/config/providers')) return Promise.resolve(multiProviderResponse());
+      if (url.match(/^http:\/\/127\.0\.0\.1:\d+\/?$/)) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      return Promise.resolve(jsonResponse(null));
+    });
+    return svc;
+  }
+
+  it('includes Kilo Gateway and OpenCode Zen models by default, excludes non-allowlisted providers', async () => {
+    mockMultiProvider(service);
+    const models = await service.getAvailableModels();
+    const providers = new Set(models.map((m) => m.provider));
+    expect(providers.has('zai-coding-plan')).toBe(true);
+    expect(providers.has('kilo')).toBe(true);
+    expect(providers.has('opencode')).toBe(true);
+    // nvidia is not in the default allowlist
+    expect(providers.has('nvidia')).toBe(false);
+  });
+
+  it('preserves slashed model ids from gateway providers (e.g. Kilo)', async () => {
+    mockMultiProvider(service);
+    const models = await service.getAvailableModels();
+    const kilo = models.find((m) => m.provider === 'kilo');
+    expect(kilo?.id).toBe('meta-llama/llama-3.1-8b-instruct');
+  });
+
+  it('honours an explicit modelProviders allowlist', async () => {
+    const svc = new OpenCodeService({ registryPath, modelProviders: 'kilo' });
+    mockMultiProvider(svc);
+    const models = await svc.getAvailableModels();
+    expect(models).toHaveLength(1);
+    expect(models[0].provider).toBe('kilo');
+    await svc.shutdown().catch(() => {});
+  });
+
+  it('returns every configured provider when modelProviders is "all"', async () => {
+    const svc = new OpenCodeService({ registryPath, modelProviders: 'all' });
+    mockMultiProvider(svc);
+    const models = await svc.getAvailableModels();
+    const providers = new Set(models.map((m) => m.provider));
+    expect(providers.has('nvidia')).toBe(true);
+    expect(providers.size).toBe(4);
+    await svc.shutdown().catch(() => {});
+  });
+
+  it('uses each provider display name as the model description', async () => {
+    mockMultiProvider(service);
+    const models = await service.getAvailableModels();
+    const kilo = models.find((m) => m.provider === 'kilo');
+    expect(kilo?.description).toBe('Kilo Gateway');
   });
 });
 
@@ -557,5 +623,83 @@ describe('OpenCodeService — validateSetup', () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
+  });
+});
+
+describe('OpenCodeService — refreshModels', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    mockFetch.mockReset();
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-refresh-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  function mockProviders() {
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('/config/providers')) {
+        return Promise.resolve(jsonResponse({
+          providers: [
+            { id: 'zai-coding-plan', name: 'Z.AI Coding Plan', models: [{ id: 'glm-5.2', name: 'GLM 5.2' }] },
+            { id: 'kilo', name: 'Kilo Gateway', models: [{ id: 'meta-llama/llama-3.1-8b-instruct', name: 'Llama 3.1 8B' }] },
+            { id: 'opencode', name: 'OpenCode Zen', models: [{ id: 'deepseek-v4-flash-free', name: 'DeepSeek (free)' }] },
+            { id: 'nvidia', name: 'Nvidia', models: [{ id: 'meta/llama-70b', name: 'Llama 70B' }] },
+          ],
+        }));
+      }
+      if (url.match(/^http:\/\/127\.0\.0\.1:\d+\/?$/)) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      return Promise.resolve(jsonResponse(null));
+    });
+  }
+
+  it('builds a first-run snapshot, applies the allowlist, and writes it', async () => {
+    const svc = new OpenCodeService({ registryPath: path.join(tmpDir, 'reg.json') });
+    vi.spyOn(svc, 'isAvailable').mockResolvedValue(true);
+    mockProviders();
+    const snapshotPath = path.join(tmpDir, 'snap.json');
+
+    const result = await svc.refreshModels({ warmCache: false, recycle: false, snapshotPath });
+
+    // nvidia excluded by the default allowlist; kilo + opencode + zai included.
+    expect(result.providerCount).toBe(3);
+    expect(result.diff.changed).toBe(true);
+    expect(result.diff.addedModels).toContain('kilo/meta-llama/llama-3.1-8b-instruct');
+    expect(result.diff.addedModels).toContain('opencode/deepseek-v4-flash-free');
+    expect(result.diff.addedModels.some((m) => m.startsWith('nvidia/'))).toBe(false);
+    expect(result.recycled).toBe(false);
+    // snapshot persisted
+    const written = JSON.parse(await fs.readFile(snapshotPath, 'utf-8'));
+    expect(written.providers.kilo).toEqual(['meta-llama/llama-3.1-8b-instruct']);
+
+    await svc.shutdown().catch(() => {});
+  });
+
+  it('reports no change on a second identical refresh', async () => {
+    const svc = new OpenCodeService({ registryPath: path.join(tmpDir, 'reg.json') });
+    vi.spyOn(svc, 'isAvailable').mockResolvedValue(true);
+    mockProviders();
+    const snapshotPath = path.join(tmpDir, 'snap.json');
+
+    await svc.refreshModels({ warmCache: false, recycle: false, snapshotPath });
+    const second = await svc.refreshModels({ warmCache: false, recycle: false, snapshotPath });
+
+    expect(second.diff.changed).toBe(false);
+    expect(second.diff.addedModels).toEqual([]);
+
+    await svc.shutdown().catch(() => {});
+  });
+
+  it('throws (fail closed) when OpenCode is unavailable', async () => {
+    const svc = new OpenCodeService({ registryPath: path.join(tmpDir, 'reg.json') });
+    vi.spyOn(svc, 'isAvailable').mockResolvedValue(false);
+
+    await expect(
+      svc.refreshModels({ warmCache: false, recycle: false, snapshotPath: path.join(tmpDir, 'snap.json') }),
+    ).rejects.toThrow(/not available/);
+
+    await svc.shutdown().catch(() => {});
   });
 });

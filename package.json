@@ -20,6 +20,7 @@
     "benchmark": "vitest bench --config tests/benchmarks/vitest.bench.config.ts",
     "benchmark:quick": "tsx tests/benchmarks/index.ts",
     "validate:live": "npx tsx scripts/live-validate.ts",
+    "opencode:refresh-models": "npx tsx scripts/opencode-refresh-models.ts",
     "debug:where": "node scripts/debug-where.mjs",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared"
@@ -41,7 +42,7 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.79.6",
     "@types/multer": "^2.1.0",
     "compression": "^1.8.1",
     "multer": "^2.1.1",

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
@@ -11,6 +12,13 @@ import { opencodeMessagesToReplayEvents } from './opencode-history-replay.js';
 import { OpenCodeSessionSubscribers } from './opencode-session-subscribers.js';
 import type { OpenCodeConfig, OpenCodeSSEEvent, OpenCodePermissionRule } from './opencode-types.js';
 import { applyThinkingBudget, type ThinkingLevel } from './opencode-config-manager.js';
+import {
+  buildModelSnapshot,
+  diffModelSnapshots,
+  readSnapshot,
+  writeSnapshot,
+  type SnapshotDiff,
+} from './opencode-model-refresh.js';
 import { getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
 
@@ -204,8 +212,10 @@ export class OpenCodeService {
   private lifecycle: OpenCodeLifecycleConfig;
   private sessionMeta: Map<string, ActiveSessionMeta> = new Map();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private modelProviders: string;
 
-  constructor(cfg: { registryPath: string; lifecycle?: Partial<OpenCodeLifecycleConfig> }) {
+  constructor(cfg: { registryPath: string; lifecycle?: Partial<OpenCodeLifecycleConfig>; modelProviders?: string }) {
+    this.modelProviders = cfg.modelProviders ?? config.opencodeModelProviders;
     const opencodeConfig: OpenCodeConfig = {
       host: config.opencodeServerHost,
       port: config.opencodeServerPort,
@@ -733,6 +743,23 @@ export class OpenCodeService {
     return this.subscribers;
   }
 
+  /**
+   * Resolve the configured OpenCode model-provider allowlist.
+   *
+   * OpenCode owns provider credentials (in its own auth.json / opencode.json);
+   * Pi Web UI only reads the `/config/providers` catalogue, so this filter
+   * decides which already-authenticated providers are surfaced in the picker.
+   * "all"/"*" exposes everything OpenCode reports.
+   */
+  private resolveModelProviderFilter(): { all: boolean; allow: Set<string> } {
+    const raw = (this.modelProviders ?? '').trim().toLowerCase();
+    if (raw === 'all' || raw === '*') return { all: true, allow: new Set() };
+    const allow = new Set(
+      raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+    );
+    return { all: false, allow };
+  }
+
   async getAvailableModels(): Promise<Array<{
     id: string;
     name: string;
@@ -755,9 +782,14 @@ export class OpenCodeService {
       providerList = [];
     }
 
+    const { all: allowAll, allow } = this.resolveModelProviderFilter();
+
     const models = providerList.flatMap((provider) => {
       const providerId = provider.id ?? '';
-      if (providerId !== 'zai-coding-plan') return [];
+      if (!providerId) return [];
+      if (!allowAll && !allow.has(providerId.toLowerCase())) return [];
+
+      const providerName = (provider as { name?: string }).name ?? providerId;
 
       let modelEntries: Array<{ id?: string; name?: string; limit?: { context?: number; output?: number }; status?: string }>;
       const rawModels = provider.models;
@@ -777,12 +809,110 @@ export class OpenCodeService {
           provider: providerId,
           contextWindow: model.limit?.context ?? 0,
           maxTokens: model.limit?.output ?? 0,
-          description: 'OpenCode Direct via Z.AI Coding Plan',
+          description: providerName,
         }))
         .filter((model) => model.id !== '');
     });
 
     return models.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Refresh the OpenCode model catalogue and report what changed.
+   *
+   * A long-running `opencode serve` serves its catalogue from memory, so this:
+   *   1. (optional) warms the on-disk models.dev cache via `opencode models`;
+   *   2. (optional, idle-aware) recycles the backend so it reloads the catalogue
+   *      and picks up newly-authenticated providers — deferred while any session
+   *      is running so live work is never interrupted;
+   *   3. reads the resulting model list (allowlist applied) and diffs it against
+   *      the previous host-side snapshot (ids only — never any credentials).
+   *
+   * Intended to be driven on a schedule via the internal API. Safe to call ad hoc.
+   */
+  async refreshModels(opts: { warmCache?: boolean; recycle?: boolean; snapshotPath?: string } = {}): Promise<{
+    available: boolean;
+    cacheWarmed: boolean;
+    recycled: boolean;
+    recycleDeferred: boolean;
+    runningSessions: number;
+    providerCount: number;
+    modelCount: number;
+    diff: SnapshotDiff;
+    snapshotPath: string;
+    generatedAt: string;
+  }> {
+    const warmCache = opts.warmCache ?? true;
+    const recycle = opts.recycle ?? true;
+    const snapshotPath = opts.snapshotPath ?? config.opencodeModelSnapshotPath;
+
+    if (!(await this.isAvailable())) {
+      throw new Error('OpenCode is not available; cannot refresh models');
+    }
+
+    let cacheWarmed = false;
+    if (warmCache) {
+      cacheWarmed = await this.warmModelCache();
+    }
+
+    let recycled = false;
+    let recycleDeferred = false;
+    if (recycle) {
+      const runningBefore = this.runningSessions.size;
+      if (runningBefore > 0) {
+        recycleDeferred = true;
+        console.log(
+          `[OpenCodeService] Model-refresh recycle deferred for ${runningBefore} running session(s)`,
+        );
+      } else {
+        this.sseUnsubscribe?.();
+        this.sseUnsubscribe = null;
+        this.sseStarted = false;
+        await this.processManager.recycle('model refresh');
+        recycled = true;
+      }
+    }
+
+    // Read the freshly-served catalogue (ensureServer re-spawns if recycled).
+    const models = await this.getAvailableModels();
+    const snapshot = buildModelSnapshot(models);
+    const prev = await readSnapshot(snapshotPath);
+    const diff = diffModelSnapshots(prev, snapshot);
+    await writeSnapshot(snapshotPath, snapshot).catch((err) => {
+      console.error('[OpenCodeService] Failed to persist model snapshot:', err);
+    });
+
+    return {
+      available: true,
+      cacheWarmed,
+      recycled,
+      recycleDeferred,
+      runningSessions: this.runningSessions.size,
+      providerCount: Object.keys(snapshot.providers).length,
+      modelCount: models.length,
+      diff,
+      snapshotPath,
+      generatedAt: snapshot.generatedAt,
+    };
+  }
+
+  /**
+   * Warm the on-disk models.dev cache by running `opencode models` in a separate
+   * process. Best-effort: failures are non-fatal (the running serve already has a
+   * catalogue, and it refreshes on its own timer).
+   */
+  private async warmModelCache(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const child = execFile('opencode', ['models'], { timeout: 90_000 }, (err) => {
+        if (err) {
+          console.warn('[OpenCodeService] `opencode models` cache warm failed:', err.message);
+          resolve(false);
+        } else {
+          resolve(true);
+        }
+      });
+      child.on('error', () => resolve(false));
+    });
   }
 
   async setModel(sessionId: string, modelId: string): Promise<string> {
@@ -816,7 +946,7 @@ export class OpenCodeService {
     }
 
     // If the stored model ID has no provider prefix, resolve it via the providers API.
-    // getAvailableModels() only returns zai-coding-plan models and includes the provider field.
+    // getAvailableModels() includes the provider field for each surfaced model.
     if (!modelString.includes('/')) {
       try {
         const available = await this.getAvailableModels();

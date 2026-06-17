@@ -32,6 +32,8 @@ export interface ServerConfig {
   opencodeTrustedPermissions: boolean;
   opencodePermissionApproveMode: 'once' | 'always';
   opencodeServerMaxUptimeMs: number;
+  opencodeModelProviders: string;
+  opencodeModelSnapshotPath: string;
   internalApiEnabled: boolean;
   internalApiSocketPath: string;
   internalApiKey: string;
@@ -99,6 +101,13 @@ export const config: ServerConfig = {
   opencodeTrustedPermissions: process.env.OPENCODE_TRUSTED_PERMISSIONS === 'true',
   opencodePermissionApproveMode: process.env.OPENCODE_PERMISSION_APPROVE_MODE === 'once' ? 'once' : 'always',
   opencodeServerMaxUptimeMs: parseInt(process.env.OPENCODE_SERVER_MAX_UPTIME_MS || '86400000', 10),
+  // Which OpenCode providers' models are surfaced in the web UI model picker.
+  // Comma-separated provider ids (e.g. "zai-coding-plan,kilo,opencode"), or
+  // "all"/"*" to expose every provider OpenCode reports. API keys never leave
+  // OpenCode's own auth storage — Pi Web UI only reads /config/providers.
+  opencodeModelProviders: (process.env.OPENCODE_MODEL_PROVIDERS?.trim() || 'zai-coding-plan,kilo,opencode'),
+  // Host-side audit snapshot for the weekly model-refresh job (ids only, no secrets).
+  opencodeModelSnapshotPath: process.env.OPENCODE_MODEL_SNAPSHOT_PATH || path.join(os.homedir(), '.pi-web-ui', 'opencode-model-snapshot.json'),
   internalApiEnabled: process.env.INTERNAL_API_ENABLED !== 'false',
   internalApiSocketPath: process.env.INTERNAL_API_SOCKET_PATH || path.join(os.homedir(), '.pi-web-ui', 'internal-api.sock'),
   internalApiKey: process.env.INTERNAL_API_KEY || '',

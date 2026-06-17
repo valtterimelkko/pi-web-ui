@@ -160,6 +160,7 @@ npm run build
 npm test
 npm run test:e2e
 npm run debug:where -- <session-id-or-runtime-session-id-or-path>
+npm run opencode:refresh-models   # refresh OpenCode model catalogue (Kilo/Zen), see docs/OPENCODE-MODEL-AUTOMATION.md
 ```
 
 ### Live Validation

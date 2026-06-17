@@ -6,6 +6,7 @@ import type {
   ApprovalResponseResult,
   CapabilitiesResponse,
   CreateSessionResponse,
+  RefreshModelsResponse,
   SendPromptRequest,
   SessionControlRequest,
   SessionDetail,
@@ -132,6 +133,10 @@ export class InternalApiClient implements InternalApiClientLike {
 
   async getCapabilities(): Promise<CapabilitiesResponse> {
     return this.request<CapabilitiesResponse>('GET', '/api/v1/capabilities');
+  }
+
+  async refreshOpenCodeModels(input: { warmCache?: boolean; recycle?: boolean } = {}): Promise<RefreshModelsResponse> {
+    return this.request<RefreshModelsResponse>('POST', '/api/v1/models/refresh', input);
   }
 
   async controlSession(sessionId: string, input: SessionControlRequest): Promise<unknown> {

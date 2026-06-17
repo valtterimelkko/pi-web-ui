@@ -105,6 +105,13 @@ export async function applyThinkingBudget(
     return;
   }
 
+  // The `options.thinking` control is a Z.AI / GLM-specific config key. Writing
+  // it for other gateway providers (Kilo, OpenCode Zen, etc.) would inject an
+  // option their APIs don't understand, so we only apply it for zai-coding-plan.
+  if (providerId !== 'zai-coding-plan') {
+    return;
+  }
+
   const cfg = await readOpenCodeConfig();
 
   if (!cfg.provider) cfg.provider = {};

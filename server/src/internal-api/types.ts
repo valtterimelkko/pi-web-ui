@@ -351,6 +351,26 @@ export interface ModelsResponse {
   };
 }
 
+/** Result of POST /api/v1/models/refresh. Ids only — never any credentials. */
+export interface RefreshModelsResponse {
+  available: boolean;
+  cacheWarmed: boolean;
+  recycled: boolean;
+  recycleDeferred: boolean;
+  runningSessions: number;
+  providerCount: number;
+  modelCount: number;
+  diff: {
+    addedModels: string[];
+    removedModels: string[];
+    addedProviders: string[];
+    removedProviders: string[];
+    changed: boolean;
+  };
+  snapshotPath: string;
+  generatedAt: string;
+}
+
 export interface RuntimeCapabilities {
   available: boolean;
   backendMode: RuntimeBackendMode;
