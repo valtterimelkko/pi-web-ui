@@ -6,6 +6,14 @@ import type { InternalApiClientLike, ValidationCapabilities } from '../../../src
 function makeCapabilities(overrides: Partial<ValidationCapabilities['runtimes']> = {}): ValidationCapabilities {
   return {
     status: 'ok',
+    contract: {
+      name: 'pi-web-ui-internal-api',
+      routePrefix: '/api/v1',
+      majorVersion: 'v1',
+      contractVersion: '1.0.0',
+      stability: 'beta',
+      contractDoc: 'docs/INTERNAL-API-CONTRACT.md',
+    },
     runtimes: {
       pi: {
         available: true,
@@ -41,6 +49,18 @@ function makeCapabilities(overrides: Partial<ValidationCapabilities['runtimes']>
         supportsPinning: true,
         supportsReplayHistory: true,
         supportsApprovals: true,
+        supportsHeartbeat: false,
+      },
+      antigravity: {
+        available: true,
+        backendMode: 'subprocess',
+        supportsFollowUp: true,
+        supportsSteer: false,
+        supportsModelSwitch: true,
+        supportsThinkingLevel: false,
+        supportsPinning: true,
+        supportsReplayHistory: true,
+        supportsApprovals: false,
         supportsHeartbeat: false,
       },
       ...overrides,

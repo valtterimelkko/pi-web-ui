@@ -29,7 +29,7 @@ The same local API is now increasingly useful for two broader purposes:
 Examples of the first category include:
 - voice interfaces
 - custom frontends
-- agent OS style tooling
+- Agent OS style tooling
 - observer/monitoring layers
 - local automation scripts
 
@@ -98,6 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.0.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -131,11 +132,13 @@ The current surface is strong enough for the full Tier-1 orchestration loop:
 ### Recommended docs by task
 
 - Need endpoint reference → [`INTERNAL-API.md`](./INTERNAL-API.md)
+- Need compatibility/versioning rules → [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md)
 - Need orchestration workflow patterns → [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
 - Need browserless runtime validation → [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
 
 ### Known limitations and caveats
 
+- **Local consumers exist beyond the browser:** the API is intended for trusted same-machine tools, including Agent OS style tooling. Treat `/api/v1` as a contracted local integration surface rather than a private implementation detail.
 - **Claude channel `/events` caveat:** for parallel Claude-child monitoring on
   the same host, `GET /sessions/:id/events` can be less reliable than it is
   for Pi, OpenCode, and Antigravity. For Claude fan-out workflows, prefer
@@ -283,6 +286,14 @@ No authentication required.
 ```json
 {
   "status": "ok",
+  "contract": {
+    "name": "pi-web-ui-internal-api",
+    "routePrefix": "/api/v1",
+    "majorVersion": "v1",
+    "contractVersion": "1.0.0",
+    "stability": "beta",
+    "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
+  },
   "runtimes": {
     "pi": "available",
     "claude": "available",
@@ -623,6 +634,14 @@ It reports runtime availability, Claude backend mode, and feature flags.
 ```json
 {
   "status": "ok",
+  "contract": {
+    "name": "pi-web-ui-internal-api",
+    "routePrefix": "/api/v1",
+    "majorVersion": "v1",
+    "contractVersion": "1.0.0",
+    "stability": "beta",
+    "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
+  },
   "runtimes": {
     "pi": {
       "available": true,

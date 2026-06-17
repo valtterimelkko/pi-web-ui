@@ -108,8 +108,11 @@ It began as the preferred surface for **live end-to-end validation against real 
 
 Reference docs:
 - [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md) — endpoint reference and known limitations
+- [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md) — contract metadata, compatibility rules, and local-consumer coordination notes
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
+
+`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.0.0`) for local consumers such as Agent OS style tooling.
 
 Important endpoints include:
 - `GET /api/v1/capabilities`

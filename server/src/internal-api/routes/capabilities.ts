@@ -6,7 +6,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'http';
-import type { CapabilitiesResponse } from '../types.js';
+import { getInternalApiContractInfo, type CapabilitiesResponse } from '../types.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
@@ -33,6 +33,7 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
 
     const body: CapabilitiesResponse = {
       status: 'ok',
+      contract: getInternalApiContractInfo(),
       runtimes: {
         pi: {
           available: true,

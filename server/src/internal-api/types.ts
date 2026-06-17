@@ -35,6 +35,35 @@ export type PromptMode = 'prompt' | 'follow_up' | 'steer';
 export type SessionRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity';
 export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 'subprocess';
 
+// ─── API contract metadata ───────────────────────────────────────────────────
+
+export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.0.0' as const;
+export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
+export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
+
+export interface InternalApiContractInfo {
+  name: typeof INTERNAL_API_CONTRACT_NAME;
+  routePrefix: `/${typeof INTERNAL_API_MAJOR_VERSION}` | `/api/${typeof INTERNAL_API_MAJOR_VERSION}`;
+  majorVersion: typeof INTERNAL_API_MAJOR_VERSION;
+  contractVersion: typeof INTERNAL_API_CONTRACT_VERSION;
+  stability: 'beta' | 'stable';
+  contractDoc: typeof INTERNAL_API_CONTRACT_DOC;
+}
+
+export function getInternalApiContractInfo(
+  routePrefix: InternalApiContractInfo['routePrefix'] = '/api/v1',
+): InternalApiContractInfo {
+  return {
+    name: INTERNAL_API_CONTRACT_NAME,
+    routePrefix,
+    majorVersion: INTERNAL_API_MAJOR_VERSION,
+    contractVersion: INTERNAL_API_CONTRACT_VERSION,
+    stability: 'beta',
+    contractDoc: INTERNAL_API_CONTRACT_DOC,
+  };
+}
+
 // ─── Request types ───────────────────────────────────────────────────────────
 
 export interface CreateSessionRequest {
@@ -337,6 +366,7 @@ export interface RuntimeCapabilities {
 
 export interface CapabilitiesResponse {
   status: 'ok' | 'degraded';
+  contract: InternalApiContractInfo;
   runtimes: {
     pi: RuntimeCapabilities;
     claude: RuntimeCapabilities;
@@ -347,6 +377,7 @@ export interface CapabilitiesResponse {
 
 export interface HealthResponse {
   status: 'ok' | 'degraded';
+  contract: InternalApiContractInfo;
   runtimes: {
     pi: 'available' | 'unavailable';
     claude: 'available' | 'unavailable';

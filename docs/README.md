@@ -26,6 +26,7 @@ If you arrived here from the public GitHub repo, start with the **public/adopter
 ### Automation and integration
 - [`../API.md`](../API.md) — REST / WebSocket / automation API index
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — local automation API for live validation, integration, and orchestration experiments
+- [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) — compatibility/versioning rules for local consumers such as Agent OS style tooling
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — patterns for spawning and collecting child sessions across runtimes
 
 ### Deployment and trust

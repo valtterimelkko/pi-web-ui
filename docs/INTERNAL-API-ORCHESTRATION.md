@@ -2,13 +2,13 @@
 
 > Task-oriented guide for using Pi Web UI's Internal API as a local multi-agent orchestration surface.
 >
-> Read [`INTERNAL-API.md`](./INTERNAL-API.md) for the canonical endpoint reference. Read this guide when you want to spawn child sessions across runtimes, monitor them, collect their results, and hand context between them.
+> Read [`INTERNAL-API.md`](./INTERNAL-API.md) for the canonical endpoint reference and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) for compatibility/versioning rules. Read this guide when you want to spawn child sessions across runtimes, monitor them, collect their results, and hand context between them.
 >
 > Important framing: the Internal API began first as a **live-validation API** for exercising real runtime sessions during development and troubleshooting. The orchestration role described here is real and growing, but parts of the broader cross-runtime vision are still early and evolving.
 
 ## What this guide is for
 
-Use this guide when a **parent agent** or local automation process wants to:
+Use this guide when a **parent agent**, Agent OS style local consumer, or local automation process wants to:
 - choose different runtimes/models for different subtasks
 - create several child sessions in parallel
 - monitor progress while those children work
@@ -56,9 +56,9 @@ These are the main limitations to keep in mind when designing orchestrators:
 
 ### 1. Discover runtimes and capabilities first
 
-Always start by asking the server what is available now.
+Always start by asking the server what is available now and which contract version it is publishing.
 
-- `GET /api/v1/capabilities`
+- `GET /api/v1/capabilities` — includes `contract.name`, `contract.majorVersion`, and `contract.contractVersion`
 - `GET /api/v1/models`
 
 This lets you decide:
@@ -245,6 +245,7 @@ assuming identical runtime behaviour where the backends are actually different.
 ## Related docs
 
 - [`INTERNAL-API.md`](./INTERNAL-API.md)
+- [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md)
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
 - [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)

@@ -39,13 +39,15 @@ So the first value of the API was **live validation**.
 The API is also becoming a local backend surface for other tools running on the same machine or trusted host.
 
 That could include things like:
-- an agent OS
+- Agent OS style tooling running as a separate local project
 - observer or monitoring tools
 - voice interfaces
 - custom frontends
 - automation helpers
 
 In that model, Pi Web UI is not just a browser app. It is a runtime-aware backend that other local software can call.
+
+The API now publishes explicit contract metadata and has a short compatibility policy in [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), because local consumers should be able to detect which Internal API surface they are using.
 
 ## The longer-term orchestration vision
 

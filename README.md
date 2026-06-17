@@ -126,7 +126,10 @@ It is now also becoming:
 
 Current docs:
 - [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
+- [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md)
+
+The API now publishes contract metadata through `/health` and `/capabilities` because trusted local consumers may use Pi Web UI as a runtime backend. One such consumer under separate design is Agent OS; Pi Web UI should remain the runtime gateway rather than absorbing Agent OS memory/work-object concerns.
 
 Longer-term direction:
 - [`docs/VISION.md`](./docs/VISION.md)
@@ -159,6 +162,7 @@ Canonical architecture doc:
 - **Vision / direction of travel:** [`docs/VISION.md`](./docs/VISION.md)
 - **Companion repos:** [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md)
 - **Automation API:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
+- **Automation API contract:** [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)
 - **Deployment:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 - **Security:** [`SECURITY.md`](./SECURITY.md)
 - **API index:** [`API.md`](./API.md)

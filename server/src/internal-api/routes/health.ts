@@ -5,7 +5,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'http';
-import type { HealthResponse } from '../types.js';
+import { getInternalApiContractInfo, type HealthResponse } from '../types.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
@@ -44,6 +44,7 @@ export function createHealthRoutes(deps: HealthRoutesDeps) {
 
     sendJson(res, 200, {
       status: overallStatus,
+      contract: getInternalApiContractInfo(),
       runtimes,
       uptime,
     } satisfies HealthResponse);

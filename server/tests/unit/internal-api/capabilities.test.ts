@@ -59,6 +59,11 @@ describe('createCapabilitiesRoutes', () => {
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toMatchObject({
       status: 'ok',
+      contract: {
+        name: 'pi-web-ui-internal-api',
+        majorVersion: 'v1',
+        contractVersion: '1.0.0',
+      },
       runtimes: {
         pi: {
           available: true,
