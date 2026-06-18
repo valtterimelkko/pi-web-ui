@@ -287,6 +287,56 @@ describe('createSessionRoutes live-validation extensions', () => {
     });
   });
 
+  it('returns the OpenCode ses_* id as nativeSessionId for observability', async () => {
+    registry.get.mockResolvedValueOnce({
+      id: 'pi-opencode-session-id',
+      path: 'pi-opencode-session-id',
+      sdkType: 'opencode',
+      opencodeSessionId: 'ses_realOpenCode123',
+      cwd: '/root/opencode-plugins',
+      model: 'zai-coding-plan/glm-5.1',
+      firstMessage: '',
+      messageCount: 0,
+      status: 'idle',
+      createdAt: '2026-05-20T00:00:00.000Z',
+      lastActivity: '2026-05-20T00:10:00.000Z',
+    });
+    opencodeService.getSessionStats.mockResolvedValueOnce({
+      sessionId: 'pi-opencode-session-id',
+      cwd: '/root/opencode-plugins',
+      userMessages: 1,
+      assistantMessages: 1,
+      toolCalls: 0,
+      toolResults: 0,
+      totalMessages: 2,
+      tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, total: 15 },
+      cost: 0,
+      model: 'zai-coding-plan/glm-5.1',
+    });
+
+    const routes = createSessionRoutes({
+      claudeService,
+      opencodeService,
+      multiSessionManager,
+      sessionRegistry: registry,
+      piService,
+      internalClientId: 'internal-test',
+    });
+
+    const req = createJsonReq('GET', '/api/v1/sessions/pi-opencode-session-id/info');
+    const res = createMockRes();
+
+    await routes.handleGetSessionInfo(req, res, 'pi-opencode-session-id');
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({
+      sessionId: 'pi-opencode-session-id',
+      runtime: 'opencode',
+      nativeSessionId: 'ses_realOpenCode123',
+      model: 'zai-coding-plan/glm-5.1',
+    });
+  });
+
   it('supports session control actions and approval responses', async () => {
     registry.get
       .mockResolvedValueOnce({

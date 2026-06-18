@@ -407,6 +407,34 @@ describe('OpenCodeService — setModel', () => {
     const entry = await service.getSession(sessionId);
     expect(entry?.model).toBe('zai-coding-plan/glm-5.1');
   });
+
+  it('canonicalizes a bare OpenCode model id to provider/model before persisting it', async () => {
+    mockFetch.mockImplementation((url: string, opts: RequestInit) => {
+      if (url.includes('/config/providers')) {
+        return Promise.resolve(jsonResponse({
+          providers: [
+            {
+              id: 'zai-coding-plan',
+              name: 'Z.AI Coding Plan',
+              models: [{ id: 'glm-5.1', name: 'GLM 5.1', limit: { context: 200000, output: 8192 }, status: 'active' }],
+            },
+          ],
+        }));
+      }
+      if (url.match(/^http:\/\/127\.0\.0\.1:\d+\/?$/)) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      if (url.includes('/session') && opts?.method === 'POST') return Promise.resolve(jsonResponse(makeSession()));
+      if (url.includes('/event')) return Promise.resolve(new Response('', { status: 200, headers: { 'Content-Type': 'text/event-stream' } }));
+      return Promise.resolve(jsonResponse(null));
+    });
+
+    const { sessionId } = await service.createSession('/tmp');
+
+    const result = await service.setModel(sessionId, 'glm-5.1');
+    expect(result).toBe('zai-coding-plan/glm-5.1');
+
+    const entry = await service.getSession(sessionId);
+    expect(entry?.model).toBe('zai-coding-plan/glm-5.1');
+  });
 });
 
 describe('OpenCodeService — sendPrompt (single service instance)', () => {

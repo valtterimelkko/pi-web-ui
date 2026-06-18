@@ -354,7 +354,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       detail.pinned = opencodeService.isSessionPinned(sessionId);
       detail.status = opencodeService.isRunning(sessionId) ? 'running' : detail.status;
       if (stats) {
-        detail.nativeSessionId = stats.sessionId;
+        detail.nativeSessionId = entry.opencodeSessionId ?? stats.sessionId;
         detail.model = stats.model ?? detail.model;
         detail.tokens = { input: stats.tokens.input, output: stats.tokens.output, total: stats.tokens.total };
         detail.cost = stats.cost;

@@ -958,18 +958,33 @@ export class OpenCodeService {
     });
   }
 
+  private async canonicalizeModelId(modelId: string): Promise<string> {
+    if (modelId.includes('/')) return modelId;
+
+    try {
+      const models = await this.getAvailableModels();
+      const match = models.find((model) => model.id === modelId && model.provider);
+      if (match) return `${match.provider}/${match.id}`;
+    } catch {
+      // Keep the caller-provided value if the live catalogue cannot be read.
+    }
+
+    return modelId;
+  }
+
   async setModel(sessionId: string, modelId: string): Promise<string> {
     const entry = await this.registry.get(sessionId);
     if (!entry) throw new Error(`OpenCode session not found: ${sessionId}`);
+    const canonicalModelId = await this.canonicalizeModelId(modelId);
     await this.registry.upsert({
       ...entry,
       id: entry.id,
       sdkType: 'opencode',
       cwd: entry.cwd,
-      model: modelId,
+      model: canonicalModelId,
       opencodeSessionId: entry.opencodeSessionId,
     });
-    return modelId;
+    return canonicalModelId;
   }
 
   /**
