@@ -102,23 +102,35 @@ async function initialize(): Promise<void> {
 
     console.log('WebSocket server ready at /ws');
 
-    // Rebuild session registry from disk (ensures Pi sessions are indexed)
-    try {
-      const registry = getSessionRegistry(config.sessionRegistryPath);
-      const piSessionDir = path.join(config.piAgentDir, 'sessions');
-      await registry.rebuildFromPiSessions(piSessionDir);
-    } catch (err) {
-      console.warn('[Startup] Failed to rebuild session registry from Pi sessions:', err instanceof Error ? err.message : String(err));
+    // Rebuild session registry from disk (ensures Pi sessions are indexed).
+    // Skipped in validation mode so the disposable instance never reads the
+    // real Pi session directory into its (isolated) registry.
+    if (config.validationMode) {
+      console.log('[Validation] Ephemeral validation mode: skipping real-session registry rebuild.');
+    } else {
+      try {
+        const registry = getSessionRegistry(config.sessionRegistryPath);
+        const piSessionDir = path.join(config.piAgentDir, 'sessions');
+        await registry.rebuildFromPiSessions(piSessionDir);
+      } catch (err) {
+        console.warn('[Startup] Failed to rebuild session registry from Pi sessions:', err instanceof Error ? err.message : String(err));
+      }
     }
 
-    // Start session cleanup service (auto-unpin after 24h, auto-delete archived after 90 days)
-    sessionCleanup = new SessionCleanupService();
-    sessionCleanup.bindRuntimes({
-      multiSessionManager: wsManager.getMultiSessionManager(),
-      claudeService: wsManager.getClaudeService(),
-      opencodeService: wsManager.getOpenCodeService(),
-    });
-    sessionCleanup.start();
+    // Start session cleanup service (auto-unpin after 24h, auto-delete archived
+    // after 90 days). DISABLED in validation mode — a disposable validation
+    // instance must never delete real session data as a side effect of booting.
+    if (config.validationMode) {
+      console.log('[Validation] Ephemeral validation mode: session cleanup disabled.');
+    } else {
+      sessionCleanup = new SessionCleanupService();
+      sessionCleanup.bindRuntimes({
+        multiSessionManager: wsManager.getMultiSessionManager(),
+        claudeService: wsManager.getClaudeService(),
+        opencodeService: wsManager.getOpenCodeService(),
+      });
+      sessionCleanup.start();
+    }
 
     // Start internal API server (local backend API for other applications)
     if (config.internalApiEnabled) {

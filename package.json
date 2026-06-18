@@ -21,6 +21,7 @@
     "benchmark:quick": "tsx tests/benchmarks/index.ts",
     "validate:live": "npx tsx scripts/live-validate.ts",
     "validate:long-horizon": "npx tsx scripts/long-horizon-validate.ts",
+    "validate:server": "npx tsx scripts/validation-server.ts",
     "opencode:refresh-models": "npx tsx scripts/opencode-refresh-models.ts",
     "debug:where": "node scripts/debug-where.mjs",
     "docs:sync-agent-guides": "node scripts/sync-agent-guides.mjs",

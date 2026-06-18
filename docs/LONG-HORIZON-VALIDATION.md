@@ -150,6 +150,38 @@ npm run validate:long-horizon -- \
   --interval 5 --max-wait 120
 ```
 
+## Validating without disturbing the running server
+
+Live validation should never touch the user's running server, web UI, or real
+session data. Boot a **disposable validation server** instead:
+
+```bash
+npm run validate:server          # prints an isolated socket + token; stays up
+npm run validate:server -- --port 3092
+```
+
+It is fully isolated — separate port, Unix socket, API token, session registry,
+watch dir, and Claude/Antigravity session dirs (all under
+`~/.pi-web-ui/validation/`) — and it boots in **validation mode**
+(`PI_WEB_UI_VALIDATION_MODE=true`), which **disables session cleanup** and skips
+the real-session registry rebuild. That combination is what guarantees booting
+it can't delete or mutate real session data (the destructive default-server
+behaviour that auto-removes >90-day archived sessions does not run here).
+
+Pi keeps its real agent dir for auth/models; any Pi sessions created during a
+run are ephemeral and the runner deletes them.
+
+Point the runner (or any Internal API client) at the printed paths:
+
+```bash
+npm run validate:long-horizon -- \
+  --socket ~/.pi-web-ui/validation/internal-api.sock \
+  --token-path ~/.pi-web-ui/validation/internal-api-token \
+  --subject pi --seed "…" --watch-text DONE --interval 5 --max-wait 120
+```
+
+Then kill the validation-server process and remove `~/.pi-web-ui/validation/`.
+
 ## Runtime support
 
 The watch engine is runtime-agnostic, but the *conditions you can usefully write* depend on what a runtime emits:

@@ -62,6 +62,11 @@ npm run validate:live -- --runtime claude --scenario all --json
 
 ## How it works
 
+> **Tip:** to validate without touching the running server or real session data,
+> boot a disposable, isolated instance with `npm run validate:server` (validation
+> mode disables destructive session cleanup) and point the runner at the socket
+> it prints. See [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
+
 The runner talks to:
 
 - socket: `~/.pi-web-ui/internal-api.sock`
