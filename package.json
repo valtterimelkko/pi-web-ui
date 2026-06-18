@@ -22,6 +22,8 @@
     "validate:live": "npx tsx scripts/live-validate.ts",
     "opencode:refresh-models": "npx tsx scripts/opencode-refresh-models.ts",
     "debug:where": "node scripts/debug-where.mjs",
+    "docs:sync-agent-guides": "node scripts/sync-agent-guides.mjs",
+    "docs:check-agent-guides": "node scripts/check-agent-guides.mjs",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared"
   },

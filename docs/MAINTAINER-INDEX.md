@@ -7,8 +7,8 @@ Many docs below intentionally contain concrete paths, socket locations, service 
 If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` before reading deeper architecture docs.
 
 ## 1. Agent quick start
-- [`../AGENTS.md`](../AGENTS.md) — agent entry point
-- [`../CLAUDE.md`](../CLAUDE.md) — Claude Code agent entry point (same content as `AGENTS.md`)
+- [`../AGENTS.md`](../AGENTS.md) — agent entry point; canonical source for the root guide
+- [`../CLAUDE.md`](../CLAUDE.md) — Claude Code agent entry point; kept byte-identical to `AGENTS.md` via `npm run docs:sync-agent-guides`
 
 ## 2. First-stop debugging
 - [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) — fastest path to logs, session files, registry inspection, and runtime-specific diagnosis
