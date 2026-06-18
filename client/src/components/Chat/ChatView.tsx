@@ -12,6 +12,7 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 import { useDictation } from '../../hooks/useDictation';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
 import { messagesToLiveMessages } from '../../lib/messageAdapter';
+import { deriveGoalTag } from '../../lib/piExtensionControls';
 
 interface ChatViewProps {
   onOpenSettings?: () => void;
@@ -23,6 +24,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const isLoading = useSessionStore((state) => state.isLoading);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const extensionWidgets = useSessionStore((state) => state.extensionWidgets);
+  const goalEngineStatus = useSessionStore((state) => state.extensionStatuses['goal-engine']);
   const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
   const bottomNavCollapsed = useNavigationStore((state) => state.bottomNavCollapsed);
   const sessionInfoOpen = useUIStore((state) => state.sessionInfoOpen);
@@ -49,6 +51,10 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
 
   // Get worker status for current session
   const workerStatus = currentSessionId ? getWorkerStatus(currentSessionId) : undefined;
+
+  // Live goal indicator (OpenCode/Pi goal engine). Pulses "running…" during the
+  // long silent model-thinking gaps so an active goal never looks frozen.
+  const goalTag = deriveGoalTag(goalEngineStatus, isStreaming);
 
   // Memoize message conversion to avoid creating new arrays on every render
   // Only recomputes when the messages array reference changes
@@ -115,6 +121,29 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         {/* Message Input */}
         <div className={`bg-white pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[70px]' : ''}`}>
           <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
+            {goalTag.active && (
+              <div className="mb-2 flex items-center" data-testid="goal-tag">
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${
+                    goalTag.paused
+                      ? 'border-amber-200 bg-amber-50 text-amber-800'
+                      : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                  }`}
+                  title={goalEngineStatus}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      goalTag.paused ? 'bg-amber-500' : 'bg-emerald-500'
+                    } ${goalTag.pulsing ? 'animate-pulse' : ''}`}
+                    data-testid={goalTag.pulsing ? 'goal-tag-pulse' : undefined}
+                  />
+                  <span>
+                    🎯 Goal {goalTag.label}
+                    {goalTag.run !== null ? ` · Run ${goalTag.run}` : ''}
+                  </span>
+                </span>
+              </div>
+            )}
             {Object.entries(extensionWidgets).length > 0 && (
               <div className="mb-2 space-y-2" data-testid="extension-widgets">
                 {Object.entries(extensionWidgets).map(([key, lines]) => (
