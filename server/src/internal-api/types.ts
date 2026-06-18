@@ -38,7 +38,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.0.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.1.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -446,3 +446,139 @@ export interface SSETaskStatusEvent {
 // ─── Internal event observation ──────────────────────────────────────────────
 
 export type InternalApiEventObserver = (event: NormalizedEvent) => void;
+
+// ─── Watch (long-horizon validation) ─────────────────────────────────────────
+
+/**
+ * A watch is a durable, server-side standing observer on a session. It
+ * evaluates declarative conditions against the normalized event stream and
+ * records every match to a disk-backed ledger that survives the observer
+ * disconnecting, the session going idle, and even a server restart.
+ *
+ * The point is to decouple *observation* from the *observer's liveness*: a
+ * headless validator can register a watch, walk away for an hour, then poll
+ * `GET /sessions/:id/watch` to learn what happened while it was gone — without
+ * holding an SSE connection open the whole time.
+ *
+ * Conditions are intentionally generic / runtime-neutral. They match against
+ * the common `NormalizedEvent` shape that every runtime already emits, so a
+ * watch never needs per-runtime code.
+ */
+export type WatchConditionType = 'event_type' | 'tool' | 'text';
+
+export interface WatchConditionSpec {
+  /** Stable id for this condition. Auto-generated (`c0`, `c1`, …) if omitted. */
+  id?: string;
+  /** Which kind of predicate this is. */
+  type: WatchConditionType;
+
+  // type: 'event_type'
+  /** The `NormalizedEvent.type` to match, e.g. `agent_end`, `session_compaction`. */
+  eventType?: string;
+  /** Optional shallow equality check on the event's `data` object. */
+  dataMatch?: Record<string, string | number | boolean>;
+
+  // type: 'tool'
+  /** Tool name to match, e.g. `Bash`, `Read`. */
+  toolName?: string;
+  /** Which tool phase to match. Defaults to `start`. */
+  phase?: 'start' | 'end';
+  /** Optional substring that must appear in the stringified tool args/result. */
+  argIncludes?: string;
+
+  // type: 'text'
+  /** Substring to find in the text. */
+  contains?: string;
+  /** JS regular-expression source tested against the text. */
+  pattern?: string;
+  /** Flags for `pattern`. Defaults to `i`. */
+  patternFlags?: string;
+  /** Which text to scan: assistant output only (default), or any text the event carries. */
+  source?: 'assistant' | 'any';
+
+  /**
+   * Fire only on the first match (default `true`). When `false`, every match
+   * is appended to the ledger (capped to avoid unbounded growth).
+   */
+  once?: boolean;
+}
+
+export interface WatchConditionState {
+  id: string;
+  type: WatchConditionType;
+  /** The resolved spec, echoed back so the caller can confirm defaults. */
+  spec: WatchConditionSpec;
+  fired: boolean;
+  fireCount: number;
+  firstFiredAt?: number;
+  lastFiredAt?: number;
+}
+
+export interface WatchFiring {
+  conditionId: string;
+  firedAt: number;
+  /** The `NormalizedEvent.type` that triggered the match. */
+  eventType: string;
+  /** Short human-readable evidence (truncated to ~200 chars). */
+  evidence: string;
+}
+
+export interface WatchSnapshot {
+  /** Last observed session status (event-derived: agent_start → running, agent_end → idle). */
+  status: 'idle' | 'running';
+  /** Total normalized events seen by this watch. */
+  eventCount: number;
+  /** Number of `tool_execution_start` events seen. */
+  toolCallCount: number;
+  /** Whether at least one turn has completed (an `agent_end` was seen). */
+  sawAgentEnd: boolean;
+  lastEventType?: string;
+  lastEventAt?: number;
+}
+
+export type WatchStatus = 'active' | 'detached' | 'closed';
+
+export interface RegisterWatchRequest {
+  /** Conditions to evaluate. Must be non-empty. */
+  conditions: WatchConditionSpec[];
+  /**
+   * Pin the subject session so idle/timeout eviction can't kill it while the
+   * watch is running and the validator is asleep. Defaults to `true`.
+   */
+  pin?: boolean;
+  /** Optional human-readable label for the watch. */
+  label?: string;
+}
+
+export interface WatchResponse {
+  watchId: string;
+  sessionId: string;
+  runtime: SessionRuntime;
+  label?: string;
+  /**
+   * `active` — live broker subscription attached.
+   * `detached` — ledger restored from disk but no live subscription (e.g. after
+   *   a server restart, or the session no longer exists). Past firings are still
+   *   readable; new ones won't be recorded until re-registered.
+   * `closed` — explicitly torn down.
+   */
+  status: WatchStatus;
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+  conditions: WatchConditionState[];
+  /** Append-only ledger of every condition match recorded. */
+  firings: WatchFiring[];
+  /** `firings.length` — lets a poller compute the next `sinceIndex`. */
+  firingCount: number;
+  /** Ids of conditions that have not yet fired. */
+  pendingConditionIds: string[];
+  /** True once every condition has fired at least once. */
+  allFired: boolean;
+  snapshot: WatchSnapshot;
+}
+
+export interface DeleteWatchResponse {
+  success: boolean;
+  watchId?: string;
+}

@@ -38,6 +38,7 @@ export interface ServerConfig {
   internalApiSocketPath: string;
   internalApiKey: string;
   internalApiTokenPath: string;
+  internalApiWatchDir: string;
   dictationOpenaiApiKey: string;
   dictationVocabularyDbPath: string;
   ttsOpenaiApiKey: string;
@@ -112,6 +113,7 @@ export const config: ServerConfig = {
   internalApiSocketPath: process.env.INTERNAL_API_SOCKET_PATH || path.join(os.homedir(), '.pi-web-ui', 'internal-api.sock'),
   internalApiKey: process.env.INTERNAL_API_KEY || '',
   internalApiTokenPath: process.env.INTERNAL_API_TOKEN_PATH || path.join(os.homedir(), '.pi-web-ui', 'internal-api-token'),
+  internalApiWatchDir: process.env.INTERNAL_API_WATCH_DIR || path.join(os.homedir(), '.pi-web-ui', 'watches'),
   dictationOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',
   dictationVocabularyDbPath: process.env.DICTATION_VOCABULARY_DB_PATH || '/root/voicenotebot/streaming-dictation/backend/data/transcripts.db',
   ttsOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.TTS_OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',

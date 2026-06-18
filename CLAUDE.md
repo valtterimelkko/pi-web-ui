@@ -54,6 +54,7 @@ Core architectural themes:
 | Session transfer | `server/src/session-transfer/*`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |
 | Drive Mode | `client/src/components/DriveMode/*`, `client/src/store/driveModeStore.ts`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |
 | Internal API / orchestration / live validation | `server/src/internal-api/*`, `scripts/live-validate.ts`, [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md), [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md), [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) |
+| Long-horizon validation / durable watches | `server/src/internal-api/watch/*`, `server/src/live-validation/long-horizon-runner.ts`, `scripts/long-horizon-validate.ts`, [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md) |
 | Add a REST route | `server/src/routes/*.ts` and `cookieAuthMiddleware`; then read [`SECURITY.md`](./SECURITY.md) |
 | Auth / CSRF / prompt-injection / path validation | `server/src/security/*`, `server/src/middleware/auth.ts`, [`SECURITY.md`](./SECURITY.md) |
 | Config / env vars / ops | `server/src/config.ts`, `.env.example`, [`DEPLOYMENT.md`](./DEPLOYMENT.md) |
@@ -101,6 +102,7 @@ Core architectural themes:
 
 - General checks: `npm run lint`, `npm run typecheck`, `npm run build`, `npm test`
 - Browserless runtime validation: `npm run validate:live -- --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`
+- Long-horizon (autonomous, restart-surviving) validation: `npm run validate:long-horizon -- --subject <runtime> --seed "<prompt>" --watch-text <substr> --interval <seconds>` — see [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md)
 - Fast runtime/session lookup: `npm run debug:where -- <session-id-or-runtime-id-or-path>`
 - OpenCode model catalogue refresh: `npm run opencode:refresh-models`
 

@@ -35,6 +35,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API reference
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — task-oriented guide for spawning, monitoring, and collecting child sessions across runtimes
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — browserless runtime validation runner built on top of the local automation API
+- [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watches + headless `validate:long-horizon` runner for autonomous, restart-surviving, long-running validation
 
 ## 7. Integration & extension
 - [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md) — checklist for adding a new runtime

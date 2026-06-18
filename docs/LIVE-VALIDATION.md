@@ -26,6 +26,11 @@ WebSocket cookie login, or manual UI clicking. That makes it suitable for
 future agents, automation, and local debugging while preserving the main app's
 security model.
 
+This document covers **single-turn** validation. For validation that must wait
+out a long horizon (minutes to hours) and survive the validator disconnecting or
+the server restarting — driven by the durable watch endpoints and the headless
+`validate:long-horizon` runner — read [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
+
 If you are building agentic orchestration rather than test scenarios, read:
 - [`INTERNAL-API.md`](./INTERNAL-API.md)
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)

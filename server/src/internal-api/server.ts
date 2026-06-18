@@ -40,6 +40,8 @@ export interface InternalApiConfig {
   apiKey?: string;
   /** Path to store the auto-generated API token */
   tokenPath?: string;
+  /** Directory for durable long-horizon watch ledgers */
+  watchDir?: string;
   /** Enable the API (default: true if config present) */
   enabled?: boolean;
   /** Callback invoked when a session is created via the API */
@@ -48,6 +50,7 @@ export interface InternalApiConfig {
 
 const DEFAULT_SOCKET_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api.sock');
 const DEFAULT_TOKEN_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api-token');
+const DEFAULT_WATCH_DIR = path.join(os.homedir(), '.pi-web-ui', 'watches');
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 
@@ -110,6 +113,7 @@ export class InternalApiServer {
       sessionRegistry: this.sessionRegistry,
       piService: this.piService,
       internalClientId: this.internalClientId,
+      watchDir: this.config.watchDir || DEFAULT_WATCH_DIR,
       onSessionCreated: this.config.onSessionCreated,
     });
 
@@ -312,6 +316,19 @@ export class InternalApiServer {
         if (action === 'wait') {
           if (req.method === 'GET') {
             await deps.sessionRoutes.handleSessionWait(req, res, sessionId, parsed.query);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          }
+          return;
+        }
+
+        if (action === 'watch') {
+          if (req.method === 'POST') {
+            await deps.sessionRoutes.handleRegisterWatch(req, res, sessionId);
+          } else if (req.method === 'GET') {
+            await deps.sessionRoutes.handleGetWatch(req, res, sessionId, parsed.query);
+          } else if (req.method === 'DELETE') {
+            await deps.sessionRoutes.handleDeleteWatch(req, res, sessionId);
           } else {
             sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
           }

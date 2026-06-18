@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.0.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.1.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -290,7 +290,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.0.0",
+    "contractVersion": "1.1.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -689,7 +689,7 @@ It reports runtime availability, Claude backend mode, and feature flags.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.0.0",
+    "contractVersion": "1.1.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -833,6 +833,7 @@ any existing endpoint.
 | Hand child context into another session | `POST /sessions/:id/transfer` | Reuses the same transfer machinery as the web UI |
 | Sum usage/cost across children | `POST /sessions/usage` | Aggregate report |
 | Inspect approval state | `GET /sessions/:id/approvals/pending` | Currently informational only; use `/events` to observe approval requests live |
+| Watch for a condition over a long horizon | `POST/GET /sessions/:id/watch` | Durable, restart-surviving ledger; poll instead of holding `/events`. See [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) |
 
 ### Persistent Event Stream
 
@@ -1143,6 +1144,70 @@ they arise, subscribe to `GET /sessions/:id/events` and watch for
 
 
 
+### Watch (long-horizon validation)
+
+A **watch** is a durable, server-side standing observer on a session. It
+evaluates generic, runtime-neutral conditions against the normalized event
+stream and records every match to a disk-backed ledger that survives the
+observer disconnecting, the session going idle, and a **server restart**. This
+decouples observation from the observer's liveness: a headless validator can
+register a watch, sleep for an hour, then poll for what fired — without holding
+any connection open. See [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
+
+```
+POST   /api/v1/sessions/:sessionId/watch     # register (one per session); pins the subject
+GET    /api/v1/sessions/:sessionId/watch     # poll: fired conditions + ledger + snapshot
+DELETE /api/v1/sessions/:sessionId/watch     # tear down
+```
+
+**Register body:**
+```json
+{
+  "conditions": [
+    { "id": "sentinel", "type": "text", "contains": "GOAL-OK" },
+    { "type": "event_type", "eventType": "session_compaction" },
+    { "type": "tool", "toolName": "Bash", "phase": "end", "argIncludes": "PASS" }
+  ],
+  "pin": true,
+  "label": "goal-survives-compaction"
+}
+```
+
+Condition types (all generic): `event_type` (`eventType` + optional `dataMatch`),
+`tool` (`toolName`, `phase`, `argIncludes`), `text` (`contains` or
+`pattern`/`patternFlags`, `source`). Common fields: `id` (auto `c0`,`c1`,…),
+`once` (default `true`). Registering pins the subject by default so idle
+eviction can't kill it mid-watch.
+
+**Poll response (200):**
+```json
+{
+  "watchId": "watch-...",
+  "sessionId": "...",
+  "runtime": "pi",
+  "status": "active",
+  "pinned": true,
+  "conditions": [ { "id": "sentinel", "type": "text", "fired": true, "fireCount": 1, "firstFiredAt": 1747744002000 } ],
+  "firings": [ { "conditionId": "sentinel", "firedAt": 1747744002000, "eventType": "message_update", "evidence": "…GOAL-OK…" } ],
+  "firingCount": 1,
+  "pendingConditionIds": [],
+  "allFired": true,
+  "snapshot": { "status": "idle", "eventCount": 12, "toolCallCount": 2, "sawAgentEnd": true }
+}
+```
+
+`GET ...?sinceIndex=N` returns only firings after the caller's last poll;
+`firingCount` stays the absolute total. `status` is `active`, `detached`
+(reloaded from disk after a restart — past firings readable, new ones need a
+re-register), or `closed`.
+
+**Errors:**
+- `400` — empty `conditions`, or an invalid regex `pattern`
+- `404 WATCH_NOT_FOUND` — no watch registered (GET/DELETE)
+- `404 SESSION_NOT_FOUND` — session does not exist (POST)
+
+---
+
 ### Abort Session
 
 ```
@@ -1376,6 +1441,11 @@ POST /api/v1/sessions/batch           # batch-create child sessions
 POST /api/v1/sessions/batch/prompt    # batch-dispatch prompts
 POST /api/v1/sessions/usage           # aggregate token usage / cost
 GET  /api/v1/sessions/:id/approvals/pending   # pending-approval state
+
+# Watch (long-horizon validation)
+POST   /api/v1/sessions/:id/watch     # register durable condition watch (pins subject)
+GET    /api/v1/sessions/:id/watch     # poll fired conditions + ledger (?sinceIndex=N)
+DELETE /api/v1/sessions/:id/watch     # tear down
 
 # Verbosity levels (for /prompt)
 answers  — final text only (non-streaming, default)

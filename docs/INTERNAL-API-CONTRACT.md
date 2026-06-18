@@ -16,11 +16,18 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.0.0",
+  "contractVersion": "1.1.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
+
+### Changelog
+
+- **1.1.0** (minor, additive) — added the durable watch endpoints
+  `POST/GET/DELETE /sessions/:id/watch` for long-horizon validation. Old
+  clients can ignore them. See [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
+- **1.0.0** — initial contracted surface.
 
 Implementation source of truth:
 

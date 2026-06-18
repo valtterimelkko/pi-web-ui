@@ -129,6 +129,7 @@ async function initialize(): Promise<void> {
             socketPath: config.internalApiSocketPath,
             apiKey: config.internalApiKey || undefined,
             tokenPath: config.internalApiTokenPath,
+            watchDir: config.internalApiWatchDir,
             enabled: config.internalApiEnabled,
             // Notify all WebSocket clients when a session is created via the API
             onSessionCreated: (sessionId, sessionPath, runtime) => {

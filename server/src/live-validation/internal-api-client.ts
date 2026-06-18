@@ -6,11 +6,18 @@ import type {
   ApprovalResponseResult,
   CapabilitiesResponse,
   CreateSessionResponse,
+  DeleteWatchResponse,
+  ListSessionsResponse,
+  PromptResponse,
   RefreshModelsResponse,
+  RegisterWatchRequest,
   SendPromptRequest,
   SessionControlRequest,
+  SessionControlResponse,
   SessionDetail,
   SessionHistoryResponse,
+  WaitResponse,
+  WatchResponse,
 } from '../internal-api/types.js';
 import type { InternalApiClientLike, ValidationRuntime } from './types.js';
 
@@ -153,5 +160,40 @@ export class InternalApiClient implements InternalApiClientLike {
 
   async deleteSession(sessionId: string): Promise<void> {
     await this.request('DELETE', `/api/v1/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  // ─── Long-horizon validation surface ──────────────────────────────────────
+
+  async listSessions(): Promise<ListSessionsResponse> {
+    return this.request<ListSessionsResponse>('GET', '/api/v1/sessions');
+  }
+
+  /** Answers-mode prompt (non-streaming): returns the final assistant text. */
+  async prompt(sessionId: string, input: SendPromptRequest): Promise<PromptResponse> {
+    return this.request<PromptResponse>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`, {
+      ...input,
+      verbosity: input.verbosity ?? 'answers',
+    });
+  }
+
+  async pinSession(sessionId: string): Promise<SessionControlResponse> {
+    return this.request<SessionControlResponse>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/control`, { action: 'pin' } satisfies SessionControlRequest);
+  }
+
+  async waitForStatus(sessionId: string, status: 'idle' | 'running' = 'idle', timeoutMs = 60000): Promise<WaitResponse> {
+    return this.request<WaitResponse>('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/wait?status=${status}&timeout=${timeoutMs}`);
+  }
+
+  async registerWatch(sessionId: string, body: RegisterWatchRequest): Promise<WatchResponse> {
+    return this.request<WatchResponse>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/watch`, body);
+  }
+
+  async getWatch(sessionId: string, sinceIndex?: number): Promise<WatchResponse> {
+    const qs = sinceIndex && sinceIndex > 0 ? `?sinceIndex=${sinceIndex}` : '';
+    return this.request<WatchResponse>('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/watch${qs}`);
+  }
+
+  async deleteWatch(sessionId: string): Promise<DeleteWatchResponse> {
+    return this.request<DeleteWatchResponse>('DELETE', `/api/v1/sessions/${encodeURIComponent(sessionId)}/watch`);
   }
 }

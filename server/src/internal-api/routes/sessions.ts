@@ -41,8 +41,10 @@ import type {
   PendingApprovalsResponse,
   WaitResponse,
   TranscriptResponse,
+  RegisterWatchRequest,
 } from '../types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
+import { WatchManager, WatchValidationError } from '../watch/watch-manager.js';
 import {
   createEventCollector,
   collectAnswerEvent,
@@ -66,6 +68,8 @@ export interface SessionRoutesDeps {
   piService: PiService;
   /** Internal API client ID prefix for Pi SDK sessions */
   internalClientId: string;
+  /** Directory for durable watch ledgers (long-horizon validation). */
+  watchDir: string;
   /** Callback to notify WebSocket clients of new sessions */
   onSessionCreated?: (sessionId: string, sessionPath: string, runtime: string) => void;
 }
@@ -114,6 +118,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       /* session may not be loaded yet; retry on next prompt */
     }
   }
+
+  /** Pin a session via the right runtime service. Used by watch registration. */
+  async function pinSessionById(sessionId: string): Promise<boolean> {
+    const entry = await sessionRegistry.get(sessionId);
+    if (!entry) return false;
+    if (entry.sdkType === 'claude') return claudeService.pinSession(sessionId);
+    if (entry.sdkType === 'opencode') return opencodeService.pinSession(sessionId);
+    if (entry.sdkType === 'antigravity') return antigravityService.pinSession(sessionId);
+    return multiSessionManager.pinSession(entry.path);
+  }
+
+  /**
+   * Long-horizon watch manager. Subscribes to the same broker the prompt and
+   * `/events` paths feed, so a watch records condition firings to a durable
+   * ledger regardless of whether any client is connected.
+   */
+  const watchManager = new WatchManager({
+    broker,
+    storeDir: deps.watchDir,
+    pinSession: pinSessionById,
+  });
 
   async function handleCreateSession(
     req: IncomingMessage,
@@ -1431,6 +1456,88 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     });
   }
 
+  // ─── Watch endpoints (long-horizon validation) ───────────────────────────
+
+  async function handleRegisterWatch(
+    req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    const body = await readJsonBody<RegisterWatchRequest>(req);
+    if (!body || !Array.isArray(body.conditions) || body.conditions.length === 0) {
+      sendJson(res, 400, { error: 'conditions[] is required and must be non-empty', code: 'INVALID_REQUEST' });
+      return;
+    }
+
+    const entry = await sessionRegistry.get(sessionId);
+    if (!entry) {
+      sendJson(res, 404, { error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    // For Pi, ensure the persistent observer is attached so events flow into
+    // the broker (and therefore the watch) even before any prompt/SSE consumer.
+    if (entry.sdkType === 'pi') {
+      attachPiObserverIfNeeded(entry.path);
+    }
+
+    try {
+      const watch = await watchManager.register({
+        sessionId,
+        sessionPath: entry.path,
+        runtime: entry.sdkType as SessionRuntime,
+        request: body,
+      });
+      sendJson(res, 201, watch);
+    } catch (err) {
+      if (err instanceof WatchValidationError) {
+        sendJson(res, 400, { error: err.message, code: 'INVALID_REQUEST' });
+        return;
+      }
+      console.error('[InternalAPI] Failed to register watch:', err);
+      sendJson(res, 500, { error: 'Failed to register watch', code: 'INTERNAL_ERROR' });
+    }
+  }
+
+  async function handleGetWatch(
+    _req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+    query: URLSearchParams,
+  ): Promise<void> {
+    await watchManager.init();
+    const watch = watchManager.get(sessionId);
+    if (!watch) {
+      sendJson(res, 404, { error: 'No watch registered for this session', code: 'WATCH_NOT_FOUND' });
+      return;
+    }
+    // `?sinceIndex=N` returns only firings recorded after the caller's last
+    // poll. `firingCount` stays the absolute total so the caller can compute
+    // its next `sinceIndex`.
+    const sinceRaw = query.get('sinceIndex');
+    if (sinceRaw !== null) {
+      const sinceIndex = parseInt(sinceRaw, 10);
+      if (Number.isFinite(sinceIndex) && sinceIndex > 0) {
+        watch.firings = watch.firings.slice(sinceIndex);
+      }
+    }
+    sendJson(res, 200, watch);
+  }
+
+  async function handleDeleteWatch(
+    _req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    await watchManager.init();
+    const existed = await watchManager.delete(sessionId);
+    if (!existed) {
+      sendJson(res, 404, { error: 'No watch registered for this session', code: 'WATCH_NOT_FOUND' });
+      return;
+    }
+    sendJson(res, 200, { success: true, watchId: `watch-${sessionId}` });
+  }
+
   return {
     handleCreateSession,
     handleListSessions,
@@ -1451,6 +1558,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     handleBatchPrompt,
     handleAggregateUsage,
     handleListPendingApprovals,
+    // Watch endpoints
+    handleRegisterWatch,
+    handleGetWatch,
+    handleDeleteWatch,
   };
 }
 

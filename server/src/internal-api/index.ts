@@ -46,7 +46,19 @@ export type {
   PendingApprovalsResponse,
   WaitResponse,
   TranscriptResponse,
+  WatchConditionType,
+  WatchConditionSpec,
+  WatchConditionState,
+  WatchFiring,
+  WatchSnapshot,
+  WatchStatus,
+  RegisterWatchRequest,
+  WatchResponse,
+  DeleteWatchResponse,
 } from './types.js';
 export { SSE_EVENT_TYPES } from './types.js';
 export { InternalApiEventBroker } from './event-broker.js';
 export type { EventBrokerSubscriber, EventBrokerOptions } from './event-broker.js';
+export { WatchManager, WatchValidationError } from './watch/watch-manager.js';
+export { WatchStore } from './watch/watch-store.js';
+export { ConditionEngine } from './watch/condition-evaluator.js';

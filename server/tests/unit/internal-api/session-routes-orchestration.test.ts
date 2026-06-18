@@ -245,6 +245,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       claudeService, opencodeService, antigravityService,
       multiSessionManager, sessionRegistry: registry, piService,
       internalClientId: 'test-client',
+      watchDir: path.join(tempDir, 'watches'),
     });
   }
 
