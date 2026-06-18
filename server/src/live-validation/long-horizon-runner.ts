@@ -77,6 +77,8 @@ export interface LongHorizonConfig {
   probePrompt?: string;
   /** Keep a runner-created subject alive after finishing (default: delete it). */
   keepSubject?: boolean;
+  /** Keep the server-side watch ledger after finishing (default: delete it). */
+  keepWatch?: boolean;
   /** Where to persist run-state JSON. */
   statePath?: string;
   logger?: (message: string) => void;
@@ -104,6 +106,7 @@ export interface LongHorizonRunState {
   verdict?: string;
   statePath?: string;
   keepSubject: boolean;
+  keepWatch?: boolean;
 }
 
 export interface TickResult {
@@ -193,6 +196,7 @@ export async function startRun(config: LongHorizonConfig): Promise<{ state: Long
     firings: [...watch.firings],
     statePath: config.statePath,
     keepSubject: config.keepSubject ?? false,
+    keepWatch: config.keepWatch ?? false,
   };
 
   if (config.statePath) await persistState(config.statePath, state);
@@ -282,9 +286,14 @@ export async function finalize(state: LongHorizonRunState, config: LongHorizonCo
     }
   }
 
-  // Cleanup. Always remove the watch ledger; remove the subject only if we
-  // created it and the caller didn't ask to keep it.
-  try { await config.client.deleteWatch(state.subjectSessionId); } catch { /* non-fatal */ }
+  // Cleanup. Remove the watch ledger unless the caller explicitly asked to keep
+  // it for post-run evidence queries; remove the subject only if we created it
+  // and the caller didn't ask to keep it.
+  if (!state.keepWatch && !config.keepWatch) {
+    try { await config.client.deleteWatch(state.subjectSessionId); } catch { /* non-fatal */ }
+  } else {
+    state.keepWatch = true;
+  }
   if (state.createdSubject && !state.keepSubject) {
     try { await config.client.deleteSession(state.subjectSessionId); } catch { /* non-fatal */ }
     log(`Deleted runner-created subject ${state.subjectSessionId}`);

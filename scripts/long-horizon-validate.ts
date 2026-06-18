@@ -13,6 +13,7 @@
  *   --mode start              create subject + watch + seed, persist state, exit
  *   --mode once               run a single poll on an existing --state file, exit
  *                             (exit 0 passed, 2 still running, 1 timeout/failed)
+ *   --keep-watch              keep the server-side watch ledger after success/failure
  *
  * Conditions (repeatable, combined):
  *   --watch-event <type>      match a NormalizedEvent type (e.g. agent_end)
@@ -95,7 +96,7 @@ async function main(): Promise<void> {
     state.statePath = statePath;
     const result = await tick(state, client, logger);
     if (result.done) {
-      await finalize(state, { client, conditions: state.conditions, statePath, logger });
+      await finalize(state, { client, conditions: state.conditions, statePath, logger, keepWatch: state.keepWatch });
     }
     if (asJson) console.log(JSON.stringify(state, null, 2));
     else console.error(`[long-horizon] ${state.status}: ${state.verdict ?? 'still running'}`);
@@ -125,6 +126,7 @@ async function main(): Promise<void> {
     maxWaitMs: Number(getFlag(argv, '--max-wait') ?? '3600') * 1000,
     probePrompt: getFlag(argv, '--probe'),
     keepSubject: argv.includes('--keep'),
+    keepWatch: argv.includes('--keep-watch'),
     statePath,
     logger,
   };

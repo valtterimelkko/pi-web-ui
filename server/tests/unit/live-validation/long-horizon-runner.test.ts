@@ -3,6 +3,7 @@ import {
   startRun,
   tick,
   runToCompletion,
+  finalize,
   type LongHorizonClient,
 } from '../../../src/live-validation/long-horizon-runner.js';
 import type { WatchResponse } from '../../../src/internal-api/types.js';
@@ -98,6 +99,24 @@ describe('long-horizon-runner', () => {
     expect(client.deleteWatch).toHaveBeenCalledWith('subj');
     expect(client.deleteSession).toHaveBeenCalledWith('subj');
     expect(final.probeAnswer).toBe('ok');
+  });
+
+  it('can keep the watch ledger after completion for post-run evidence queries', async () => {
+    const { client } = makeFakeClient({ fireAfter: 1 });
+    const { state } = await startRun({
+      client,
+      subjectRuntime: 'pi',
+      conditions: [{ type: 'tool', toolName: 'Bash' }],
+      keepWatch: true,
+      keepSubject: true,
+    });
+    await tick(state, client);
+    await finalize(state, { client, conditions: state.conditions, keepWatch: true, keepSubject: true });
+
+    expect(state.status).toBe('passed');
+    expect(client.deleteWatch).not.toHaveBeenCalled();
+    expect(client.deleteSession).not.toHaveBeenCalled();
+    expect(state.keepWatch).toBe(true);
   });
 
   it('honours stopWhen=any', async () => {
