@@ -54,6 +54,8 @@ interface GoalState {
   lastErrorAt: number | null;
   compactionCount: number;
   lastCompactedAt: number | null;
+  lastCompactionTokens?: number | null;
+  lastCompactionEntryId?: string | null;
   showWidget?: boolean;  // toggled by /goal status; defaults to true
 }
 
@@ -98,7 +100,11 @@ function buildGoalWidgetLines(gs: GoalState): string[] {
     const label = gs.progressLabel ?? 'Progress';
     lines.push(`${label}: ${gs.progressCurrent}/${gs.progressTotal}`);
   }
-  if (gs.compactionCount > 0) lines.push(`Compactions: ${gs.compactionCount}`);
+  if (gs.compactionCount > 0) {
+    lines.push(`Compactions: ${gs.compactionCount}`);
+    if (gs.lastCompactedAt) lines.push(`Last compaction: ${new Date(gs.lastCompactedAt).toLocaleString()}`);
+    if (gs.lastCompactionTokens !== null && gs.lastCompactionTokens !== undefined) lines.push(`Last compacted tokens: ${gs.lastCompactionTokens}`);
+  }
   if (gs.consecutiveErrors > 0) lines.push(`Errors: ${gs.consecutiveErrors}`);
   if (gs.planItems.length > 0) {
     lines.push('');
@@ -212,6 +218,7 @@ export class OpenCodeService {
     onEvent: (event: NormalizedEvent) => void;
     onComplete: (error?: Error) => void;
   }> = new Map();
+  private apiObservers: Map<string, Set<(event: NormalizedEvent) => void>> = new Map();
   private opencodeSessionIds: Map<string, string> = new Map();
   private piSessionByOpencodeId: Map<string, string> = new Map();
 
@@ -348,6 +355,7 @@ export class OpenCodeService {
     this.sessionMeta.delete(sessionId);
     this.runningSessions.delete(sessionId);
     this.promptCallbacks.delete(sessionId);
+    this.apiObservers.delete(sessionId);
     this.opencodeSessionIds.delete(sessionId);
 
     for (const [ocId, piId] of this.piSessionByOpencodeId) {
@@ -749,6 +757,30 @@ export class OpenCodeService {
     return this.subscribers;
   }
 
+  addApiObserver(sessionId: string, observer: (event: NormalizedEvent) => void): void {
+    let observers = this.apiObservers.get(sessionId);
+    if (!observers) {
+      observers = new Set();
+      this.apiObservers.set(sessionId, observers);
+    }
+    observers.add(observer);
+  }
+
+  removeApiObserver(sessionId: string, observer: (event: NormalizedEvent) => void): void {
+    const observers = this.apiObservers.get(sessionId);
+    if (!observers) return;
+    observers.delete(observer);
+    if (observers.size === 0) this.apiObservers.delete(sessionId);
+  }
+
+  private emitApiObserverEvent(sessionId: string, event: NormalizedEvent): void {
+    const observers = this.apiObservers.get(sessionId);
+    if (!observers || observers.size === 0) return;
+    for (const observer of observers) {
+      try { observer(event); } catch { /* non-fatal */ }
+    }
+  }
+
   /**
    * Resolve the configured OpenCode model-provider allowlist.
    *
@@ -1069,6 +1101,7 @@ export class OpenCodeService {
       if (callback) {
         try { callback.onEvent(evt); } catch { /* non-fatal */ }
       }
+      this.emitApiObserverEvent(sessionId, evt);
     }
 
     for (const evt of normalized) {
@@ -1086,7 +1119,6 @@ export class OpenCodeService {
     sessionId: string,
     callback: { onEvent: (event: NormalizedEvent) => void; onComplete: (error?: Error) => void } | undefined,
   ): Promise<void> {
-    if (!callback) return;
     const props = event.properties as Record<string, unknown> | undefined;
     const ocSessionId = (props?.sessionID as string | undefined) ?? (props?.sessionId as string | undefined);
     if (!ocSessionId) return;
@@ -1096,7 +1128,10 @@ export class OpenCodeService {
       if (!gs) return;
 
       for (const evt of goalEngineNormalizedEvents(gs, sessionId)) {
-        try { callback.onEvent(evt); } catch { /* non-fatal */ }
+        if (callback) {
+          try { callback.onEvent(evt); } catch { /* non-fatal */ }
+        }
+        this.emitApiObserverEvent(sessionId, evt);
       }
     } catch {
       // Non-fatal

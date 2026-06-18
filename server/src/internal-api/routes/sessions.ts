@@ -94,8 +94,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
    */
   const broker = new InternalApiEventBroker({ replayBufferSize: 100 });
 
-  /** Track Pi sessions we have already attached a long-lived observer to. */
+  /** Track Pi/OpenCode sessions we have already attached a long-lived observer to. */
   const piObservedSessions = new Set<string>();
+  const opencodeObservedSessions = new Set<string>();
 
   /**
    * Attach a long-lived api observer to a Pi session so events emitted by
@@ -116,6 +117,28 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       piObservedSessions.add(sessionPath);
     } catch {
       /* session may not be loaded yet; retry on next prompt */
+    }
+  }
+
+  /**
+   * Attach a long-lived observer to an OpenCode session so plugin-driven turns
+   * (for example goal-engine auto-continuations started inside OpenCode rather
+   * than through this API) still flow into the broker and durable watches.
+   */
+  function attachOpenCodeObserverIfNeeded(sessionId: string): void {
+    if (opencodeObservedSessions.has(sessionId)) return;
+    const observer = (event: NormalizedEvent) => {
+      try {
+        broker.publish(sessionId, event);
+      } catch {
+        /* non-fatal */
+      }
+    };
+    try {
+      opencodeService.addApiObserver(sessionId, observer);
+      opencodeObservedSessions.add(sessionId);
+    } catch {
+      /* session may not be loaded yet; retry on next prompt/watch */
     }
   }
 
@@ -1475,10 +1498,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    // For Pi, ensure the persistent observer is attached so events flow into
-    // the broker (and therefore the watch) even before any prompt/SSE consumer.
+    // For Pi/OpenCode, ensure the persistent observer is attached so events
+    // flow into the broker (and therefore the watch) even before any prompt/SSE
+    // consumer. OpenCode needs this for plugin-driven auto-continuation turns.
     if (entry.sdkType === 'pi') {
       attachPiObserverIfNeeded(entry.path);
+    } else if (entry.sdkType === 'opencode') {
+      attachOpenCodeObserverIfNeeded(sessionId);
     }
 
     try {

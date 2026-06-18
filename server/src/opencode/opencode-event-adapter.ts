@@ -226,6 +226,15 @@ export class OpenCodeEventAdapter {
         }];
       }
 
+      case 'session.compacted': {
+        return [{
+          type: 'session_compaction',
+          sessionId,
+          timestamp,
+          data: { sessionId },
+        }];
+      }
+
       case 'permission.updated':
       case 'permission.asked': {
         const nestedPermission = props.permission as Record<string, unknown> | undefined;

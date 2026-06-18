@@ -180,6 +180,25 @@ describe('OpenCodeService — goal engine events', () => {
     await svc.shutdown().catch(() => {});
   });
 
+  it('notifies API observers for OpenCode events that are not tied to an Internal API prompt callback', async () => {
+    const svc = new OpenCodeService({ registryPath: path.join(tmpDir, 'r-observer.json') });
+    mockFetchForSession(ocSessionId);
+    const { sessionId } = await svc.createSession('/tmp');
+
+    const seen: NormalizedEvent[] = [];
+    const observer = (event: NormalizedEvent) => seen.push(event);
+    svc.addApiObserver(sessionId, observer);
+
+    await (svc as unknown as {
+      forwardSSEToSession: (event: { type: string; properties?: Record<string, unknown> }, sessionId: string) => Promise<void>;
+    }).forwardSSEToSession({ type: 'session.compacted', properties: { sessionID: ocSessionId } }, sessionId);
+
+    expect(seen.some(e => e.type === 'session_compaction')).toBe(true);
+
+    svc.removeApiObserver(sessionId, observer);
+    await svc.shutdown().catch(() => {});
+  });
+
   it('abort pauses an active goal state file', async () => {
     const runningGoal = {
       objective: 'Keep going',

@@ -51,6 +51,16 @@ describe('OpenCodeEventAdapter', () => {
     expect(data.usage).toEqual({});
   });
 
+  it('session.compacted → session_compaction for durable watch conditions', () => {
+    const events = adapter.adaptSSEEvent(
+      sse('session.compacted', { sessionID: SID }),
+      SID,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('session_compaction');
+    expect(events[0].sessionId).toBe(SID);
+  });
+
   it('message.updated (assistant, no finish) → message_start', () => {
     const events = adapter.adaptSSEEvent(
       sse('message.updated', {
