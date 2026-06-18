@@ -1,19 +1,34 @@
 /**
  * OpenCode config-file bridge for thinking control.
  *
- * GLM-5.x (including GLM-5.2 and other Z.AI models) support a `thinking` API
- * parameter via OpenCode's `provider[id].models[id].options.thinking` config
- * key. The Z.AI API accepts:
- *   { "type": "enabled" }  — model automatically reasons (default)
- *   { "type": "disabled" } — skip chain-of-thought entirely
+ * Z.AI / GLM models expose reasoning depth through OpenCode's
+ * `provider[id].models[id].options` config, which `@ai-sdk/openai-compatible`
+ * forwards verbatim into the chat-completion request body. Two controls matter
+ * (verified live against the coding-plan endpoint, https://api.z.ai/api/coding/paas/v4):
  *
- * The API does NOT support a numeric thinking budget; reasoning depth is
- * decided by the model based on task complexity. We therefore map:
- *   off  → thinking disabled
- *   any other level (minimal/low/medium/high/xhigh) → thinking enabled
+ *   options.thinking          { "type": "enabled" | "disabled" }
+ *                             Binary on/off (GLM-4.5+). Reasoning is OFF unless
+ *                             explicitly enabled, so 'off' must write "disabled".
  *
- * The non-off levels are preserved in the registry so the UI can show the
- * user's selection, but the API-level control is binary.
+ *   options.reasoning_effort  "minimal" | "low" | "medium" | "high" | "max" | …
+ *                             Graduated reasoning depth, takes effect while
+ *                             thinking is enabled. Honoured at full granularity
+ *                             by GLM-5.2; older GLM models accept it and collapse
+ *                             it internally (none/minimal→off, low/medium→high,
+ *                             xhigh→max), so it is safe to write uniformly for
+ *                             every zai-coding-plan model.
+ *
+ * We therefore map the six UI levels onto both controls:
+ *   off     → thinking disabled, no reasoning_effort
+ *   minimal → thinking enabled, reasoning_effort "minimal"
+ *   low     → thinking enabled, reasoning_effort "low"
+ *   medium  → thinking enabled, reasoning_effort "medium"
+ *   high    → thinking enabled, reasoning_effort "high"
+ *   xhigh   → thinking enabled, reasoning_effort "max"  (UI ceiling → API ceiling)
+ *
+ * This control is Z.AI/GLM-specific, so it is only written for the
+ * `zai-coding-plan` provider; see resolveReasoningStrategy for the generalized,
+ * capability-aware handling of other gateways.
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -28,6 +43,18 @@ const OPENCODE_CONFIG_PATH = path.join(os.homedir(), '.config', 'opencode', 'ope
 interface ThinkingOption {
   type: 'enabled' | 'disabled';
 }
+
+/**
+ * UI thinking level -> Z.AI `reasoning_effort` enum value. The UI's top level
+ * ('xhigh', labelled "Maximum reasoning") maps to the API's true ceiling 'max'.
+ */
+const REASONING_EFFORT_BY_LEVEL: Record<Exclude<ThinkingLevel, 'off'>, string> = {
+  minimal: 'minimal',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'max',
+};
 
 interface OpenCodeJsonConfig {
   $schema?: string;
@@ -87,12 +114,13 @@ function thinkingLevelToOption(level: ThinkingLevel): ThinkingOption {
 /**
  * Apply a thinking level for the given model in opencode.json.
  *
- * Writes `provider[providerId].models[modelId].options.thinking` with
- * `{type:"enabled"}` or `{type:"disabled"}`.
+ * Writes, under `provider[providerId].models[modelId].options`:
+ *   - `thinking`         `{type:"enabled"}` for any non-off level, `{type:"disabled"}` for off
+ *   - `reasoning_effort` the mapped enum value for non-off levels; removed on off
  *
- * The Z.AI API defaults to thinking-enabled, so 'off' must EXPLICITLY
- * write `{type:"disabled"}` — removing the key would silently revert
- * to the enabled default.
+ * The Z.AI API defaults to thinking-off, so 'off' must EXPLICITLY write
+ * `{type:"disabled"}`, and any stale `reasoning_effort` must be cleared so it
+ * cannot keep the model reasoning once the user turns thinking off.
  *
  * If providerId cannot be determined, the function is a no-op.
  */
@@ -105,9 +133,10 @@ export async function applyThinkingBudget(
     return;
   }
 
-  // The `options.thinking` control is a Z.AI / GLM-specific config key. Writing
-  // it for other gateway providers (Kilo, OpenCode Zen, etc.) would inject an
-  // option their APIs don't understand, so we only apply it for zai-coding-plan.
+  // The `thinking` / `reasoning_effort` controls are Z.AI / GLM-specific config
+  // keys. Writing them for other gateway providers (Kilo, OpenCode Zen, etc.)
+  // would inject options their APIs don't understand, so we only apply them for
+  // zai-coding-plan. Other providers are handled by the capability-aware path.
   if (providerId !== 'zai-coding-plan') {
     return;
   }
@@ -124,9 +153,16 @@ export async function applyThinkingBudget(
 
   const options = models[modelId].options!;
 
-  // Z.AI defaults to thinking-enabled, so 'off' must explicitly disable it.
-  // Both branches write the thinking object; the only difference is the type.
+  // Z.AI defaults to thinking-off, so 'off' must explicitly disable it.
   options['thinking'] = thinkingLevelToOption(level);
+
+  // reasoning_effort only takes effect while thinking is enabled. On 'off',
+  // delete it so a previously-selected depth can't keep the model reasoning.
+  if (level === 'off') {
+    delete options['reasoning_effort'];
+  } else {
+    options['reasoning_effort'] = REASONING_EFFORT_BY_LEVEL[level];
+  }
 
   await writeOpenCodeConfig(cfg);
 }

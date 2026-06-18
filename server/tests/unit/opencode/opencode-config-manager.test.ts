@@ -20,6 +20,16 @@ const MOCK_CONFIG_PATH = path.join(os.homedir(), '.config', 'opencode', 'opencod
 
 const NON_OFF_LEVELS: Exclude<ThinkingLevel, 'off'>[] = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 
+// UI thinking level -> Z.AI reasoning_effort enum value. The UI's top level
+// ('xhigh', labelled "Maximum reasoning") maps to the API's true ceiling 'max'.
+const EXPECTED_EFFORT: Record<Exclude<ThinkingLevel, 'off'>, string> = {
+  minimal: 'minimal',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'max',
+};
+
 // Reset all mock state before every test so call counts don't bleed across describe blocks
 beforeEach(() => {
   vi.clearAllMocks();
@@ -96,27 +106,50 @@ describe('applyThinkingBudget', () => {
     expect(fs.writeFile).not.toHaveBeenCalled();
   });
 
-  it('writes thinking:{type:"enabled"} for each non-off level', async () => {
+  it('writes thinking:{type:"enabled"} + reasoning_effort for each non-off level', async () => {
     for (const level of NON_OFF_LEVELS) {
       vi.clearAllMocks();
       mockConfigFile({});
       await applyThinkingBudget('zai-coding-plan/glm-5.2', level);
       expect(fs.writeFile).toHaveBeenCalledTimes(1);
       const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
-      expect(written.provider['zai-coding-plan'].models['glm-5.2'].options.thinking).toEqual({
-        type: 'enabled',
-      });
+      const options = written.provider['zai-coding-plan'].models['glm-5.2'].options;
+      expect(options.thinking).toEqual({ type: 'enabled' });
+      expect(options.reasoning_effort).toBe(EXPECTED_EFFORT[level]);
     }
   });
 
-  it('writes thinking:{type:"disabled"} for level=off', async () => {
+  it('writes thinking:{type:"disabled"} and no reasoning_effort for level=off', async () => {
     mockConfigFile({});
     await applyThinkingBudget('zai-coding-plan/glm-5.2', 'off');
     expect(fs.writeFile).toHaveBeenCalledTimes(1);
     const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
-    expect(written.provider['zai-coding-plan'].models['glm-5.2'].options.thinking).toEqual({
-      type: 'disabled',
-    });
+    const options = written.provider['zai-coding-plan'].models['glm-5.2'].options;
+    expect(options.thinking).toEqual({ type: 'disabled' });
+    expect(options.reasoning_effort).toBeUndefined();
+  });
+
+  it('clears a stale reasoning_effort when switching to off', async () => {
+    const existing = {
+      provider: {
+        'zai-coding-plan': {
+          models: { 'glm-5.2': { options: { thinking: { type: 'enabled' }, reasoning_effort: 'max' } } },
+        },
+      },
+    };
+    mockConfigFile(existing);
+    await applyThinkingBudget('zai-coding-plan/glm-5.2', 'off');
+    const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
+    const options = written.provider['zai-coding-plan'].models['glm-5.2'].options;
+    expect(options.thinking).toEqual({ type: 'disabled' });
+    expect(options.reasoning_effort).toBeUndefined();
+  });
+
+  it('maps xhigh to reasoning_effort "max" (the API ceiling)', async () => {
+    mockConfigFile({});
+    await applyThinkingBudget('zai-coding-plan/glm-5.2', 'xhigh');
+    const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
+    expect(written.provider['zai-coding-plan'].models['glm-5.2'].options.reasoning_effort).toBe('max');
   });
 
   it('overwrites enabled with disabled when switching to off', async () => {
@@ -184,13 +217,13 @@ describe('applyThinkingBudget', () => {
     });
   });
 
-  it('works for GLM-5.1 model ID', async () => {
+  it('works for GLM-5.1 model ID (reasoning_effort applied to all zai-coding-plan models)', async () => {
     mockConfigFile({});
     await applyThinkingBudget('zai-coding-plan/glm-5.1', 'high');
     const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
-    expect(written.provider['zai-coding-plan'].models['glm-5.1'].options.thinking).toEqual({
-      type: 'enabled',
-    });
+    const options = written.provider['zai-coding-plan'].models['glm-5.1'].options;
+    expect(options.thinking).toEqual({ type: 'enabled' });
+    expect(options.reasoning_effort).toBe('high');
   });
 
   it('works for GLM-5.2 model ID', async () => {

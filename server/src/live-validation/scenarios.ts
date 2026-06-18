@@ -30,6 +30,18 @@ function findThinkingOption(cfg: OpenCodeJsonConfig): { type: string } | null {
   return null;
 }
 
+function findReasoningEffort(cfg: OpenCodeJsonConfig): string | null {
+  for (const prov of Object.values(cfg.provider ?? {})) {
+    for (const model of Object.values(prov.models ?? {})) {
+      const effort = model.options?.['reasoning_effort'];
+      if (typeof effort === 'string') {
+        return effort;
+      }
+    }
+  }
+  return null;
+}
+
 function requireCapability(
   capabilities: ValidationCapabilities,
   runtime: ValidationRuntime,
@@ -310,6 +322,7 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
 
         if (controlOk) {
           // Verify opencode.json was written with thinking:{type:"enabled"}
+          // AND reasoning_effort:"high" — the graduated depth control.
           const cfgHigh = readConfig();
           const highThinking = findThinkingOption(cfgHigh);
           assertions.push({
@@ -317,8 +330,41 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
             passed: highThinking?.type === 'enabled',
             details: `thinking=${JSON.stringify(highThinking)} (expected type=enabled)`,
           });
+          const highEffort = findReasoningEffort(cfgHigh);
+          assertions.push({
+            name: 'config_reasoning_effort_high',
+            passed: highEffort === 'high',
+            details: `reasoning_effort=${JSON.stringify(highEffort)} (expected "high")`,
+          });
 
-          // Reset to off — should clean up the config entry
+          // Intermediate level: 'low' must write reasoning_effort:"low", proving
+          // the control is graduated rather than collapsed to a binary on/off.
+          try {
+            await context.client.controlSession(sessionId, { action: 'set_thinking_level', level: 'low' });
+          } catch {
+            // surfaced by the assertion below if the config didn't update
+          }
+          const lowEffort = findReasoningEffort(readConfig());
+          assertions.push({
+            name: 'config_reasoning_effort_low',
+            passed: lowEffort === 'low',
+            details: `reasoning_effort=${JSON.stringify(lowEffort)} (expected "low")`,
+          });
+
+          // UI ceiling 'xhigh' must map to the API ceiling 'max'.
+          try {
+            await context.client.controlSession(sessionId, { action: 'set_thinking_level', level: 'xhigh' });
+          } catch {
+            // surfaced by the assertion below
+          }
+          const maxEffort = findReasoningEffort(readConfig());
+          assertions.push({
+            name: 'config_reasoning_effort_xhigh_maps_max',
+            passed: maxEffort === 'max',
+            details: `reasoning_effort=${JSON.stringify(maxEffort)} (expected "max")`,
+          });
+
+          // Reset to off — should disable thinking and clear reasoning_effort
           try {
             await context.client.controlSession(sessionId, { action: 'set_thinking_level', level: 'off' });
             assertions.push({ name: 'set_thinking_level_off', passed: true, details: 'off accepted' });
@@ -332,6 +378,12 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
             name: 'config_written_off',
             passed: offThinking?.type === 'disabled',
             details: `thinking after off=${JSON.stringify(offThinking)} (expected type=disabled)`,
+          });
+          const offEffort = findReasoningEffort(cfgOff);
+          assertions.push({
+            name: 'config_reasoning_effort_cleared_on_off',
+            passed: offEffort === null,
+            details: `reasoning_effort after off=${JSON.stringify(offEffort)} (expected none)`,
           });
         }
 
