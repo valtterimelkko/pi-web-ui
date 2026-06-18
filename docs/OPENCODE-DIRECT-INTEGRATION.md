@@ -223,12 +223,28 @@ after the OpenCode server refreshes its catalogue. See
 [`./OPENCODE-MODEL-AUTOMATION.md`](./OPENCODE-MODEL-AUTOMATION.md) for the
 analysis of fully automating that refresh.
 
-### Provider-specific options caveat
+### Reasoning effort / thinking control (capability-aware)
 
-The GLM `thinking` control writes `provider[zai-coding-plan].models[*].options.thinking`
-to `opencode.json`. That option is Z.AI/GLM-specific, so Pi Web UI only writes it
-for `zai-coding-plan` models; selecting a thinking level for Kilo/Zen models is a
-no-op at the config level rather than injecting an option those gateways reject.
+Selecting a thinking level writes model `options` into `opencode.json`, which
+`@ai-sdk/openai-compatible` forwards into the chat-completion request body. The
+keys written depend on the model's provider and reasoning capability (resolved
+from the catalogue's `capabilities.reasoning` flag via `getAvailableModels()`):
+
+| Model | Strategy | Keys written under `options` |
+|---|---|---|
+| `zai-coding-plan/*` (GLM) | `zai` | `thinking` `{type:enabled\|disabled}` **and** `reasoning_effort` (`minimal\|low\|medium\|high\|max`) |
+| any other provider, `reasoning`-capable | `openai-effort` | `reasoning_effort` only (clamped to `low\|medium\|high`); no `thinking` key (that key is Z.AI-specific) |
+| any model without `reasoning` capability | `none` | nothing written (no-op) |
+
+The six UI levels map onto Z.AI's `reasoning_effort` enum
+(`off→thinking disabled`, `minimal/low/medium/high` 1:1, `xhigh→max`). This was
+verified live against the coding-plan endpoint: `reasoning_effort` is honoured at
+full granularity by GLM-5.2 (reasoning tokens scale `0 → 2482 → ~3997` for
+`minimal/low/high`) and accepted-and-collapsed by older GLM models, so it is
+written for every `zai-coding-plan` model without per-model special-casing. On
+`off`, any stale `reasoning_effort` is removed so it cannot keep the model
+reasoning. The strategy logic lives in `resolveReasoningStrategy()` /
+`applyThinkingBudget()` in `opencode-config-manager.ts`.
 
 ## Comparison with Other Runtime Paths
 

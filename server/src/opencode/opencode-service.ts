@@ -11,7 +11,13 @@ import { OpenCodeEventAdapter } from './opencode-event-adapter.js';
 import { opencodeMessagesToReplayEvents } from './opencode-history-replay.js';
 import { OpenCodeSessionSubscribers } from './opencode-session-subscribers.js';
 import type { OpenCodeConfig, OpenCodeSSEEvent, OpenCodePermissionRule } from './opencode-types.js';
-import { applyThinkingBudget, type ThinkingLevel } from './opencode-config-manager.js';
+import {
+  applyThinkingBudget,
+  parseModelId,
+  resolveReasoningStrategy,
+  type ReasoningStrategy,
+  type ThinkingLevel,
+} from './opencode-config-manager.js';
 import {
   buildModelSnapshot,
   diffModelSnapshots,
@@ -767,6 +773,7 @@ export class OpenCodeService {
     contextWindow: number;
     maxTokens: number;
     description: string;
+    reasoning: boolean;
   }>> {
     await this.ensureServer();
     const providers = await this.client.getProviders();
@@ -791,12 +798,13 @@ export class OpenCodeService {
 
       const providerName = (provider as { name?: string }).name ?? providerId;
 
-      let modelEntries: Array<{ id?: string; name?: string; limit?: { context?: number; output?: number }; status?: string }>;
+      type CatalogueModel = { id?: string; name?: string; limit?: { context?: number; output?: number }; status?: string; capabilities?: { reasoning?: boolean } };
+      let modelEntries: CatalogueModel[];
       const rawModels = provider.models;
       if (Array.isArray(rawModels)) {
-        modelEntries = rawModels as Array<{ id?: string; name?: string; limit?: { context?: number; output?: number }; status?: string }>;
+        modelEntries = rawModels as CatalogueModel[];
       } else if (rawModels && typeof rawModels === 'object') {
-        modelEntries = Object.values(rawModels as Record<string, unknown>) as Array<{ id?: string; name?: string; limit?: { context?: number; output?: number }; status?: string }>;
+        modelEntries = Object.values(rawModels as Record<string, unknown>) as CatalogueModel[];
       } else {
         modelEntries = [];
       }
@@ -810,6 +818,9 @@ export class OpenCodeService {
           contextWindow: model.limit?.context ?? 0,
           maxTokens: model.limit?.output ?? 0,
           description: providerName,
+          // The `reasoning` capability lives under `capabilities` in
+          // /config/providers (top-level `reasoning` is absent there).
+          reasoning: model.capabilities?.reasoning === true,
         }))
         .filter((model) => model.id !== '');
     });
@@ -945,21 +956,32 @@ export class OpenCodeService {
       throw new Error('Cannot set thinking level: session has no model selected');
     }
 
-    // If the stored model ID has no provider prefix, resolve it via the providers API.
-    // getAvailableModels() includes the provider field for each surfaced model.
-    if (!modelString.includes('/')) {
-      try {
-        const available = await this.getAvailableModels();
-        const found = available.find((m) => m.id === modelString);
-        if (found?.provider) {
-          modelString = `${found.provider}/${modelString}`;
-        }
-      } catch {
-        // Non-fatal; applyThinkingBudget will be a no-op if provider is still missing.
+    // Resolve the model against the live catalogue to recover both its provider
+    // prefix (needed to write the right opencode.json key) and its `reasoning`
+    // capability (needed to pick the reasoning strategy). getAvailableModels()
+    // surfaces provider + reasoning for every model it lists.
+    let providerId = parseModelId(modelString).providerId;
+    let supportsReasoning = false;
+    try {
+      const available = await this.getAvailableModels();
+      const found = available.find((m) => `${m.provider}/${m.id}` === modelString)
+        ?? available.find((m) => m.id === modelString);
+      if (found) {
+        providerId = found.provider;
+        supportsReasoning = found.reasoning;
+        // Canonicalize to `<provider>/<modelId>` so applyThinkingBudget's
+        // parseModelId recovers the right keys even when the model id itself
+        // contains slashes (gateway ids like `kilo-auto/free` or
+        // `meta-llama/llama-3.1-8b-instruct`), where a bare id would otherwise
+        // be mis-split into the wrong provider/model.
+        modelString = `${found.provider}/${found.id}`;
       }
+    } catch {
+      // Non-fatal; strategy falls back to the parsed provider id below.
     }
 
-    await applyThinkingBudget(modelString, level);
+    const strategy: ReasoningStrategy = resolveReasoningStrategy(providerId, supportsReasoning);
+    await applyThinkingBudget(modelString, level, strategy);
 
     await this.registry.upsert({
       ...entry,

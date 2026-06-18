@@ -72,6 +72,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
               displayName: m.name || m.id,
               provider: m.provider,
               contextWindow: m.contextWindow,
+              reasoning: m.reasoning,
             }));
           } catch {
             // OpenCode may not respond — return empty

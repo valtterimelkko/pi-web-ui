@@ -11,6 +11,7 @@ vi.mock('node:fs');
 import {
   parseModelId,
   applyThinkingBudget,
+  resolveReasoningStrategy,
   readOpenCodeConfig,
   writeOpenCodeConfig,
 } from '../../../src/opencode/opencode-config-manager.js';
@@ -233,5 +234,67 @@ describe('applyThinkingBudget', () => {
     expect(written.provider['zai-coding-plan'].models['glm-5.2'].options.thinking).toEqual({
       type: 'enabled',
     });
+  });
+
+  it("'zai' strategy is a no-op for non-zai providers (thinking key is Z.AI-specific)", async () => {
+    mockConfigFile({});
+    await applyThinkingBudget('kilo/some-reasoning-model', 'high', 'zai');
+    expect(fs.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("'none' strategy never writes", async () => {
+    mockConfigFile({});
+    await applyThinkingBudget('zai-coding-plan/glm-5.2', 'high', 'none');
+    expect(fs.writeFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyThinkingBudget — openai-effort strategy', () => {
+  it('writes reasoning_effort only (no thinking object) for a gateway model', async () => {
+    mockConfigFile({});
+    await applyThinkingBudget('kilo/kilo-auto/free', 'high', 'openai-effort');
+    const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
+    const options = written.provider['kilo'].models['kilo-auto/free'].options;
+    expect(options.reasoning_effort).toBe('high');
+    expect(options.thinking).toBeUndefined();
+  });
+
+  it('clamps minimal->low and xhigh->high for broad gateway compatibility', async () => {
+    for (const [level, expected] of [['minimal', 'low'], ['xhigh', 'high']] as const) {
+      vi.clearAllMocks();
+      mockConfigFile({});
+      await applyThinkingBudget('opencode/deepseek-v4-flash-free', level, 'openai-effort');
+      const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
+      expect(written.provider['opencode'].models['deepseek-v4-flash-free'].options.reasoning_effort).toBe(expected);
+    }
+  });
+
+  it('removes reasoning_effort on off and writes no thinking key', async () => {
+    const existing = {
+      provider: { kilo: { models: { 'kilo-auto/free': { options: { reasoning_effort: 'high' } } } } },
+    };
+    mockConfigFile(existing);
+    await applyThinkingBudget('kilo/kilo-auto/free', 'off', 'openai-effort');
+    const written = JSON.parse((vi.mocked(fs.writeFile).mock.calls[0] as [string, string])[1]);
+    const options = written.provider['kilo'].models['kilo-auto/free'].options;
+    expect(options.reasoning_effort).toBeUndefined();
+    expect(options.thinking).toBeUndefined();
+  });
+});
+
+describe('resolveReasoningStrategy', () => {
+  it('maps zai-coding-plan to the zai strategy regardless of capability flag', () => {
+    expect(resolveReasoningStrategy('zai-coding-plan', false)).toBe('zai');
+    expect(resolveReasoningStrategy('zai-coding-plan', true)).toBe('zai');
+  });
+
+  it('maps reasoning-capable non-zai providers to openai-effort', () => {
+    expect(resolveReasoningStrategy('kilo', true)).toBe('openai-effort');
+    expect(resolveReasoningStrategy('opencode', true)).toBe('openai-effort');
+  });
+
+  it('maps non-reasoning models to none', () => {
+    expect(resolveReasoningStrategy('kilo', false)).toBe('none');
+    expect(resolveReasoningStrategy(null, false)).toBe('none');
   });
 });

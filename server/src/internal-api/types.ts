@@ -341,6 +341,8 @@ export interface ModelInfo {
   provider?: string;
   contextWindow?: number;
   aliases?: string[];
+  /** Whether the model exposes a reasoning/thinking capability. */
+  reasoning?: boolean;
 }
 
 export interface ModelsResponse {
