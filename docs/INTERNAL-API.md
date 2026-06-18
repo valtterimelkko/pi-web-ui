@@ -763,6 +763,13 @@ Examples:
 { "action": "unpin" }
 ```
 
+`set_thinking_level` accepts `off | minimal | low | medium | high | xhigh`. For
+the OpenCode runtime the level is translated, capability-aware, into the model's
+reasoning controls in `opencode.json` (GLM → `thinking` + `reasoning_effort`;
+other reasoning-capable gateway models → `reasoning_effort`; non-reasoning models
+→ no-op) and the idle backend is recycled so the next prompt picks it up. See
+[`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md#reasoning-effort--thinking-control-capability-aware).
+
 ---
 
 ### Session History

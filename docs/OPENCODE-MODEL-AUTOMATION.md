@@ -107,8 +107,12 @@ Implemented in this repo:
   provider appear with **zero** config.
 - Slash-bearing gateway model ids (e.g. `kilo/meta-llama/llama-3.1-8b-instruct`)
   are preserved through dispatch.
-- `thinking` config writes are scoped to `zai-coding-plan` so enabling other
-  gateways can't corrupt `opencode.json` for models that don't support that option.
+- Reasoning-depth config writes are **capability-aware**: GLM (`zai-coding-plan`)
+  models get `thinking` + the full `reasoning_effort` enum; other gateway models
+  that report the `reasoning` capability get `reasoning_effort` only; models
+  without that capability get nothing — so enabling a gateway can't corrupt
+  `opencode.json` with an option its models reject. See the strategy table in
+  [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md#reasoning-effort--thinking-control-capability-aware).
 
 This already satisfies "new models become selectable automatically" for the
 configured gateways once OpenCode's catalogue updates.
@@ -187,9 +191,11 @@ cache-warm step). cron works too (`@weekly cd /path && npm run opencode:refresh-
 - **No secret exposure.** The job reads provider *names* (`opencode auth list`,
   `/config/providers`) and model ids only — never key material. Snapshot/diff files
   contain ids, not secrets, and live under `~/.pi-web-ui/` (host-only).
-- **Capability awareness (optional polish).** `/config/providers` includes
-  `capabilities` (`reasoning`, `toolcall`, `input.image`, …) and `cost`. The job
-  (or `getAvailableModels`) could tag free models and filter out non-tool-call
+- **Capability awareness.** `/config/providers` exposes per-model `capabilities`
+  (`reasoning`, `toolcall`, `input.image`, …) and `cost`. `getAvailableModels()`
+  now reads `capabilities.reasoning` and surfaces it as a `reasoning` flag, which
+  drives the capability-aware reasoning-effort strategy (above). The same
+  capability data could be extended to tag free models or filter out non-tool-call
   models so the picker only offers models that actually work for agentic use.
 - **Binary drift.** Track the installed `opencode --version`; if `opencode upgrade`
   runs, re-verify the API shape (`/config/providers` is large and occasionally
