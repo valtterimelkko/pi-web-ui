@@ -16,7 +16,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.1.0",
+  "contractVersion": "1.2.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -24,6 +24,13 @@ Current contract:
 
 ### Changelog
 
+- **1.2.0** (minor, additive) — added standalone, time-bounded session pinning
+  (`pin`/`pinTtlSeconds` on `POST /sessions` and `POST /sessions/batch`;
+  `pinTtlSeconds` on `POST /sessions/:id/control` `pin` action) and detached
+  fire-and-forget prompt dispatch (`detach` on `POST /sessions/:id/prompt`,
+  returns `202`). API pins carry an absolute expiry surfaced as `pinnedUntil`
+  and are revoked automatically (default 24h, hard max 7d). Old clients ignore
+  the new fields. See [`INTERNAL-API.md`](./INTERNAL-API.md).
 - **1.1.0** (minor, additive) — added the durable watch endpoints
   `POST/GET/DELETE /sessions/:id/watch` for long-horizon validation. Old
   clients can ignore them. See [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).

@@ -100,8 +100,18 @@ export class InternalApiClient implements InternalApiClientLike {
     });
   }
 
-  async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: string; source?: string; scenarioId?: string; ephemeral?: boolean }): Promise<CreateSessionResponse> {
+  async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: string; source?: string; scenarioId?: string; ephemeral?: boolean; pin?: boolean; pinTtlSeconds?: number }): Promise<CreateSessionResponse> {
     return this.request<CreateSessionResponse>('POST', '/api/v1/sessions', input);
+  }
+
+  /** Detached (fire-and-forget) prompt dispatch: returns 202 immediately; the
+   * turn keeps running server-side. Read results later via getSessionInfo(). */
+  async promptDetached(sessionId: string, message: string): Promise<{ sessionId: string; detached: boolean; status: string }> {
+    return this.request<{ sessionId: string; detached: boolean; status: string }>(
+      'POST',
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`,
+      { message, verbosity: 'answers', detach: true },
+    );
   }
 
   async promptStream(sessionId: string, input: SendPromptRequest): Promise<NormalizedEvent[]> {

@@ -177,6 +177,41 @@ Use:
 - `POST /api/v1/sessions/:id/abort` to stop a running child
 - `DELETE /api/v1/sessions/:id` to remove a child from the registry
 
+## Pin-and-forget: long tasks without polling
+
+Sometimes you want to start a child on a longer task, guarantee it **won't be
+cleaned up** while it runs, and check back later — **without** the polling
+contract of a long-horizon watch. This is the lightweight alternative to
+[long-horizon validation](./LONG-HORIZON-VALIDATION.md) for tasks where you don't
+need durable condition detection, just survival.
+
+The flow is two calls and a later read:
+
+```text
+1. POST /sessions            { "runtime": "claude", "pin": true }   # pinned at birth
+2. POST /sessions/:id/prompt { "message": "...", "detach": true }   # 202, runs in background
+   ...time passes...
+3. GET  /sessions/:id/info          # status: idle|running, pinned, pinnedUntil
+   GET  /sessions/:id/transcript    # the result
+```
+
+**What you must know about the pin (it is time-bounded, not permanent):**
+
+- A pin is **time-bounded by default**: 24h lifetime, hard max 7d, returned as
+  `pinnedUntil`. It is auto-revoked at the deadline so a forgotten task can't
+  hog a slot forever. Re-pin (`control {action:"pin"}`) to extend.
+- Max **2 pinned sessions per runtime**. At the limit, `pin:true` still creates
+  the session but returns `pinned:false, pinReason:"PIN_LIMIT_REACHED"`.
+- Pinning is **independent of the watch**. You can pin with no watch; deleting a
+  watch does not unpin. Use pin-only when you don't need durable condition
+  matching, or pin+watch when you do.
+
+`detach:true` returns `202` immediately and the turn keeps running server-side
+even after you disconnect — so you can fire the task and close the connection.
+Combine with pin for the full "set and walk away" pattern. This needs a
+**disposable validation server** when validating (`npm run validate:server`),
+never the production instance by default.
+
 ## Which endpoint should I use?
 
 | Need | Best endpoint |

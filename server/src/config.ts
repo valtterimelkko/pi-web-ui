@@ -39,6 +39,14 @@ export interface ServerConfig {
   internalApiKey: string;
   internalApiTokenPath: string;
   internalApiWatchDir: string;
+  /** Directory for the durable API-pin expiry ledger. */
+  internalApiPinDir: string;
+  /** Default API-pin lifetime (ms). */
+  internalApiPinDefaultTtlMs: number;
+  /** Hard maximum API-pin lifetime (ms). */
+  internalApiPinMaxTtlMs: number;
+  /** How often the API-pin expiry sweep runs (ms). */
+  internalApiPinExpiryIntervalMs: number;
   /** Ephemeral validation mode: isolated, disposable instance for live validation (no destructive cleanup). */
   validationMode: boolean;
   dictationOpenaiApiKey: string;
@@ -116,6 +124,10 @@ export const config: ServerConfig = {
   internalApiKey: process.env.INTERNAL_API_KEY || '',
   internalApiTokenPath: process.env.INTERNAL_API_TOKEN_PATH || path.join(os.homedir(), '.pi-web-ui', 'internal-api-token'),
   internalApiWatchDir: process.env.INTERNAL_API_WATCH_DIR || path.join(os.homedir(), '.pi-web-ui', 'watches'),
+  internalApiPinDir: process.env.INTERNAL_API_PIN_DIR || path.join(os.homedir(), '.pi-web-ui', 'pins'),
+  internalApiPinDefaultTtlMs: parseInt(process.env.INTERNAL_API_PIN_DEFAULT_TTL_MS || String(24 * 60 * 60 * 1000), 10),
+  internalApiPinMaxTtlMs: parseInt(process.env.INTERNAL_API_PIN_MAX_TTL_MS || String(7 * 24 * 60 * 60 * 1000), 10),
+  internalApiPinExpiryIntervalMs: parseInt(process.env.INTERNAL_API_PIN_EXPIRY_INTERVAL_MS || String(5 * 60 * 1000), 10),
   validationMode: process.env.PI_WEB_UI_VALIDATION_MODE === 'true',
   dictationOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',
   dictationVocabularyDbPath: process.env.DICTATION_VOCABULARY_DB_PATH || '/root/voicenotebot/streaming-dictation/backend/data/transcripts.db',

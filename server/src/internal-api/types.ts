@@ -38,7 +38,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.1.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.2.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -74,12 +74,28 @@ export interface CreateSessionRequest {
   source?: string;
   scenarioId?: string;
   ephemeral?: boolean;
+  /**
+   * Pin the session at creation time so idle/timeout eviction can't clean it
+   * up. Unlike a long-horizon watch, this pins with no observation machinery —
+   * a "set a longer task and walk away" guarantee. The pin is time-bounded
+   * (see {@link pinTtlSeconds}); see the Internal API docs for the default/max TTL.
+   */
+  pin?: boolean;
+  /** Pin lifetime in seconds. Defaults to 24h; clamped to a hard max (7d). */
+  pinTtlSeconds?: number;
 }
 
 export interface SendPromptRequest {
   message: string;
   verbosity?: Verbosity;
   mode?: PromptMode;
+  /**
+   * Fire-and-forget dispatch: run the pre-flight checks, kick off the turn, and
+   * return `202 Accepted` immediately without waiting for it to complete. The
+   * turn keeps running server-side; read results later via `/info` + `/transcript`.
+   * Only valid with `verbosity=answers`. See the Internal API docs.
+   */
+  detach?: boolean;
 }
 
 // ─── Async / orchestration request types ─────────────────────────────────────
@@ -123,6 +139,9 @@ export interface BatchCreateEntry {
   cwd?: string;
   model?: string;
   thinkingLevel?: string;
+  /** Pin each created session at creation time (see CreateSessionRequest.pin). */
+  pin?: boolean;
+  pinTtlSeconds?: number;
 }
 
 export interface BatchCreateRequest {
@@ -137,6 +156,9 @@ export interface BatchCreateResultItem {
   runtime: SessionRuntime;
   model?: string;
   cwd?: string;
+  pinned?: boolean;
+  /** ISO timestamp of the pin's absolute expiry, when pinned. */
+  pinnedUntil?: string;
   error?: { code: string; message: string };
 }
 
@@ -243,6 +265,12 @@ export interface SessionControlRequest {
   action: 'set_model' | 'set_thinking_level' | 'pin' | 'unpin';
   modelId?: string;
   level?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  /**
+   * Pin lifetime in seconds for the `pin` action. Defaults to 24h; clamped to a
+   * hard max (7d). Re-pinning extends the deadline. The granted expiry is
+   * returned as `pinnedUntil` on the response.
+   */
+  pinTtlSeconds?: number;
 }
 
 export interface ApprovalResponseRequest {
@@ -258,6 +286,12 @@ export interface CreateSessionResponse {
   model?: string;
   cwd: string;
   createdAt: string;
+  /** True when the session was pinned at creation (pin:true requested). */
+  pinned?: boolean;
+  /** ISO timestamp of the pin's absolute expiry, when pinned. */
+  pinnedUntil?: string;
+  /** Why a requested pin was not granted, when pinned is false. */
+  pinReason?: 'PIN_LIMIT_REACHED';
 }
 
 export interface SessionInfo {
@@ -272,6 +306,8 @@ export interface SessionInfo {
   createdAt: string;
   lastActivity: string;
   pinned?: boolean;
+  /** ISO timestamp of an API pin's absolute expiry, when set. */
+  pinnedUntil?: string;
 }
 
 export interface SessionDetail extends SessionInfo {
@@ -311,6 +347,10 @@ export interface SessionControlResponse {
   modelId?: string;
   level?: string;
   pinned?: boolean;
+  /** ISO timestamp of the pin's absolute expiry, when pinned. */
+  pinnedUntil?: string;
+  /** Why a requested pin was not granted, when pinned is false. */
+  pinReason?: 'PIN_LIMIT_REACHED';
 }
 
 export interface ApprovalResponseResult {

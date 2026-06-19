@@ -142,6 +142,10 @@ async function initialize(): Promise<void> {
             apiKey: config.internalApiKey || undefined,
             tokenPath: config.internalApiTokenPath,
             watchDir: config.internalApiWatchDir,
+            pinDir: config.internalApiPinDir,
+            pinDefaultTtlMs: config.internalApiPinDefaultTtlMs,
+            pinMaxTtlMs: config.internalApiPinMaxTtlMs,
+            pinExpiryIntervalMs: config.internalApiPinExpiryIntervalMs,
             enabled: config.internalApiEnabled,
             // Notify all WebSocket clients when a session is created via the API
             onSessionCreated: (sessionId, sessionPath, runtime) => {

@@ -42,6 +42,14 @@ export interface InternalApiConfig {
   tokenPath?: string;
   /** Directory for durable long-horizon watch ledgers */
   watchDir?: string;
+  /** Directory for the durable API-pin expiry ledger */
+  pinDir?: string;
+  /** Default API-pin lifetime (ms) */
+  pinDefaultTtlMs?: number;
+  /** Hard maximum API-pin lifetime (ms) */
+  pinMaxTtlMs?: number;
+  /** How often the pin-expiry sweep runs (ms) */
+  pinExpiryIntervalMs?: number;
   /** Enable the API (default: true if config present) */
   enabled?: boolean;
   /** Callback invoked when a session is created via the API */
@@ -51,6 +59,7 @@ export interface InternalApiConfig {
 const DEFAULT_SOCKET_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api.sock');
 const DEFAULT_TOKEN_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api-token');
 const DEFAULT_WATCH_DIR = path.join(os.homedir(), '.pi-web-ui', 'watches');
+const DEFAULT_PIN_DIR = path.join(os.homedir(), '.pi-web-ui', 'pins');
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 
@@ -114,6 +123,10 @@ export class InternalApiServer {
       piService: this.piService,
       internalClientId: this.internalClientId,
       watchDir: this.config.watchDir || DEFAULT_WATCH_DIR,
+      pinDir: this.config.pinDir || DEFAULT_PIN_DIR,
+      pinDefaultTtlMs: this.config.pinDefaultTtlMs,
+      pinMaxTtlMs: this.config.pinMaxTtlMs,
+      pinExpiryIntervalMs: this.config.pinExpiryIntervalMs,
       onSessionCreated: this.config.onSessionCreated,
     });
 

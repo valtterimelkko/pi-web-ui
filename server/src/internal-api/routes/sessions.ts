@@ -34,6 +34,7 @@ import type {
   TransferSessionResponse,
   BatchCreateRequest,
   BatchCreateResponse,
+  BatchCreateResultItem,
   BatchPromptRequest,
   BatchPromptResponse,
   AggregateUsageRequest,
@@ -45,6 +46,7 @@ import type {
 } from '../types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
 import { WatchManager, WatchValidationError } from '../watch/watch-manager.js';
+import { PinExpiryManager, type ApplyPinResult } from '../pin-expiry-manager.js';
 import {
   createEventCollector,
   collectAnswerEvent,
@@ -70,6 +72,15 @@ export interface SessionRoutesDeps {
   internalClientId: string;
   /** Directory for durable watch ledgers (long-horizon validation). */
   watchDir: string;
+  /** Directory for the durable API-pin expiry ledger. Optional: when absent, pin
+   * requests still pin in-memory but are not time-bounded/tracked (used by some unit tests). */
+  pinDir?: string;
+  /** Default API-pin lifetime (ms). Defaults to 24h. */
+  pinDefaultTtlMs?: number;
+  /** Hard maximum API-pin lifetime (ms). Defaults to 7d. */
+  pinMaxTtlMs?: number;
+  /** How often the pin-expiry sweep runs (ms). */
+  pinExpiryIntervalMs?: number;
   /** Callback to notify WebSocket clients of new sessions */
   onSessionCreated?: (sessionId: string, sessionPath: string, runtime: string) => void;
 }
@@ -152,6 +163,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     return multiSessionManager.pinSession(entry.path);
   }
 
+  /** Revoke a session's pin via the right runtime service (mirror of pinSessionById). */
+  async function unpinSessionById(sessionId: string): Promise<boolean> {
+    const entry = await sessionRegistry.get(sessionId);
+    if (!entry) return false;
+    if (entry.sdkType === 'claude') return claudeService.unpinSession(sessionId);
+    if (entry.sdkType === 'opencode') return opencodeService.unpinSession(sessionId);
+    if (entry.sdkType === 'antigravity') return antigravityService.unpinSession(sessionId);
+    return multiSessionManager.unpinSession(entry.path);
+  }
+
   /**
    * Long-horizon watch manager. Subscribes to the same broker the prompt and
    * `/events` paths feed, so a watch records condition firings to a durable
@@ -162,6 +183,55 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     storeDir: deps.watchDir,
     pinSession: pinSessionById,
   });
+
+  /**
+   * API-pin expiry manager. Owns the time-bounded pin lifecycle for sessions
+   * pinned through this API (create-time `pin:true` or `control {action:"pin"}`).
+   * Only constructed when a pin directory is configured; otherwise pin requests
+   * fall back to direct in-memory pinning (no TTL tracking).
+   */
+  const pinExpiry = deps.pinDir
+    ? new PinExpiryManager({
+        dir: deps.pinDir,
+        pin: pinSessionById,
+        unpin: unpinSessionById,
+        defaultTtlMs: deps.pinDefaultTtlMs,
+        maxTtlMs: deps.pinMaxTtlMs,
+        intervalMs: deps.pinExpiryIntervalMs,
+        logger: (message) => console.log(`[InternalAPI/PinExpiry] ${message}`),
+      })
+    : undefined;
+  if (pinExpiry) {
+    // init() is async; kick it off without blocking route construction. On
+    // resolve it re-applies non-expired pins from the ledger (restart safety)
+    // and the periodic expiry sweep starts.
+    void pinExpiry.init().then(() => pinExpiry.start());
+  }
+
+  /** Pin without TTL tracking — the fallback when no PinExpiryManager exists. */
+  async function pinWithoutExpiry(sessionId: string): Promise<ApplyPinResult> {
+    const ok = await pinSessionById(sessionId);
+    return ok ? { pinned: true } : { pinned: false, reason: 'PIN_LIMIT_REACHED' };
+  }
+
+  /** ISO deadline for a session's API pin, when tracked. */
+  function apiPinDeadline(sessionId: string): string | undefined {
+    const ms = pinExpiry?.getPinnedUntil(sessionId);
+    return ms ? new Date(ms).toISOString() : undefined;
+  }
+
+  /** Merge an ApplyPinResult into the pin fields of a response object. */
+  function pinResponseFields(result: ApplyPinResult): {
+    pinned: boolean;
+    pinnedUntil?: string;
+    pinReason?: 'PIN_LIMIT_REACHED';
+  } {
+    return {
+      pinned: result.pinned,
+      pinnedUntil: result.pinned ? new Date(result.pinnedUntil as number).toISOString() : undefined,
+      pinReason: result.pinned ? undefined : result.reason,
+    };
+  }
 
   async function handleCreateSession(
     req: IncomingMessage,
@@ -175,6 +245,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const runtime: SessionRuntime = body.runtime;
     const cwd = body.cwd || process.cwd();
+    let base: CreateSessionResponse | null = null;
 
     try {
       switch (runtime) {
@@ -184,16 +255,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             return;
           }
           const { sessionId } = await claudeService.createSession(cwd, body.model || 'sonnet', body.thinkingLevel);
-          sendJson(res, 201, {
+          base = {
             sessionId,
             sessionPath: sessionId,
             runtime: 'claude',
             model: body.model || 'sonnet',
             cwd,
             createdAt: new Date().toISOString(),
-          } satisfies CreateSessionResponse);
-          onSessionCreated?.(sessionId, sessionId, 'claude');
-          return;
+          };
+          break;
         }
 
         case 'opencode': {
@@ -205,16 +275,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           if (body.model) {
             await opencodeService.setModel?.(sessionId, body.model).catch(() => { /* non-fatal */ });
           }
-          sendJson(res, 201, {
+          base = {
             sessionId,
             sessionPath: sessionId,
             runtime: 'opencode',
             model: body.model,
             cwd,
             createdAt: new Date().toISOString(),
-          } satisfies CreateSessionResponse);
-          onSessionCreated?.(sessionId, sessionId, 'opencode');
-          return;
+          };
+          break;
         }
 
         case 'antigravity': {
@@ -223,16 +292,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             return;
           }
           const { sessionId } = await antigravityService.createSession(cwd, body.model);
-          sendJson(res, 201, {
+          base = {
             sessionId,
             sessionPath: sessionId,
             runtime: 'antigravity',
             model: body.model,
             cwd,
             createdAt: new Date().toISOString(),
-          } satisfies CreateSessionResponse);
-          onSessionCreated?.(sessionId, sessionId, 'antigravity');
-          return;
+          };
+          break;
         }
 
         case 'pi':
@@ -250,18 +318,39 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           if (body.model) {
             await piService.setModel(status.sessionId, body.model).catch(() => { /* non-fatal */ });
           }
-          sendJson(res, 201, {
+          base = {
             sessionId: status.sessionId,
             sessionPath: status.sessionPath,
             runtime: 'pi',
             model: body.model,
             cwd,
             createdAt: new Date().toISOString(),
-          } satisfies CreateSessionResponse);
-          onSessionCreated?.(status.sessionId, status.sessionPath, 'pi');
-          return;
+          };
+          break;
         }
       }
+
+      if (!base) {
+        sendJson(res, 500, { error: 'Failed to create session', code: 'SESSION_CREATE_FAILED' });
+        return;
+      }
+
+      // Optional create-time pin: a persistent, time-bounded "don't clean this
+      // up while my long task runs" guarantee, decoupled from the watch machinery.
+      if (body.pin) {
+        const result = pinExpiry
+          ? await pinExpiry.applyPin(base.sessionId, {
+              ttlSeconds: body.pinTtlSeconds,
+              sessionPath: base.sessionPath,
+              runtime: base.runtime,
+              label: 'internal-api:create',
+            })
+          : await pinWithoutExpiry(base.sessionId);
+        Object.assign(base, pinResponseFields(result));
+      }
+
+      sendJson(res, 201, base satisfies CreateSessionResponse);
+      onSessionCreated?.(base.sessionId, base.sessionPath, base.runtime);
     } catch (err) {
       console.error('[InternalAPI] Failed to create session:', err);
       sendJson(res, 500, {
@@ -323,6 +412,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       detail.backendMode = backendMode;
       detail.pinned = claudeService.isSessionPinned(sessionId);
+      const claudePinUntil = apiPinDeadline(sessionId);
+      if (claudePinUntil) detail.pinnedUntil = claudePinUntil;
       detail.status = claudeService.isRunning(sessionId) ? 'running' : detail.status;
       if (stats) {
         detail.nativeSessionId = stats.sessionId;
@@ -352,6 +443,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       const context = opencodeService.getContextUsage(sessionId);
       detail.backendMode = 'server';
       detail.pinned = opencodeService.isSessionPinned(sessionId);
+      const opencodePinUntil = apiPinDeadline(sessionId);
+      if (opencodePinUntil) detail.pinnedUntil = opencodePinUntil;
       detail.status = opencodeService.isRunning(sessionId) ? 'running' : detail.status;
       if (stats) {
         detail.nativeSessionId = entry.opencodeSessionId ?? stats.sessionId;
@@ -378,6 +471,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       const stats = await antigravityService.getSessionStats(sessionId);
       detail.backendMode = 'subprocess';
       detail.pinned = antigravityService.isSessionPinned(sessionId);
+      const antigravityPinUntil = apiPinDeadline(sessionId);
+      if (antigravityPinUntil) detail.pinnedUntil = antigravityPinUntil;
       detail.status = antigravityService.isRunning(sessionId) ? 'running' : detail.status;
       if (stats) {
         detail.model = stats.model ?? detail.model;
@@ -395,6 +490,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const agentSession = multiSessionManager.getAgentSession(entry.path);
     detail.backendMode = 'native';
     detail.pinned = multiSessionManager.isSessionPinned(entry.path);
+    const piPinUntil = apiPinDeadline(sessionId);
+    if (piPinUntil) detail.pinnedUntil = piPinUntil;
     if (agentSession) {
       const stats = agentSession.getSessionStats();
       const context = agentSession.getContextUsage();
@@ -541,6 +638,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
 
       await sessionRegistry.delete(sessionId);
+      // Drop any API-pin ledger record so the expiry sweep won't try to unpin a
+      // session that no longer exists.
+      if (pinExpiry) await pinExpiry.clear(sessionId).catch(() => { /* non-fatal */ });
       sendJson(res, 200, { success: true });
     } catch (err) {
       console.error('[InternalAPI] Failed to delete session:', err);
@@ -591,6 +691,38 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     if (isBusy && mode === 'prompt') {
       sendJson(res, 409, { error: 'Session is currently busy', code: 'SESSION_BUSY' });
+      return;
+    }
+
+    // Detached / fire-and-forget dispatch: run the same pre-flight checks, kick
+    // the turn off without awaiting it, and return 202 immediately. The turn
+    // keeps running server-side (a disconnected request does not abort it), and
+    // every event still flows into the broker so /events and /transcript observe
+    // progress. Combine with create-time pin for a "long task that won't be
+    // cleaned up and needs no polling" workflow.
+    if (body.detach) {
+      if (verbosity === 'full' || verbosity === 'tasks') {
+        sendJson(res, 400, {
+          error: 'detach=true requires verbosity=answers (non-streaming)',
+          code: 'INVALID_REQUEST',
+        });
+        return;
+      }
+      void executePrompt(
+        sessionId,
+        runtime,
+        body.message,
+        mode,
+        () => { /* progress events flow to the broker inside executePrompt */ },
+        (err) => {
+          if (err) {
+            console.error(`[InternalAPI] Detached prompt failed for ${sessionId}:`, err.message);
+          }
+        },
+      ).catch((err) => {
+        console.error('[InternalAPI] Detached prompt error:', err instanceof Error ? err.message : String(err));
+      });
+      sendJson(res, 202, { sessionId, detached: true, status: 'accepted' });
       return;
     }
 
@@ -793,17 +925,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
 
         case 'pin': {
-          let pinned: boolean;
-          if (entry.sdkType === 'claude') {
-            pinned = claudeService.pinSession(sessionId);
-          } else if (entry.sdkType === 'opencode') {
-            pinned = await opencodeService.pinSession(sessionId);
-          } else if (entry.sdkType === 'antigravity') {
-            pinned = await antigravityService.pinSession(sessionId);
+          if (pinExpiry) {
+            const result = await pinExpiry.applyPin(sessionId, {
+              ttlSeconds: body.pinTtlSeconds,
+              sessionPath: entry.path,
+              runtime: entry.sdkType as SessionRuntime,
+              label: 'internal-api:control',
+            });
+            response = { success: result.pinned, action: 'pin', ...pinResponseFields(result) };
           } else {
-            pinned = multiSessionManager.pinSession(entry.path);
+            let pinned: boolean;
+            if (entry.sdkType === 'claude') {
+              pinned = claudeService.pinSession(sessionId);
+            } else if (entry.sdkType === 'opencode') {
+              pinned = await opencodeService.pinSession(sessionId);
+            } else if (entry.sdkType === 'antigravity') {
+              pinned = await antigravityService.pinSession(sessionId);
+            } else {
+              pinned = multiSessionManager.pinSession(entry.path);
+            }
+            response = { success: pinned, action: 'pin', pinned };
           }
-          response = { success: pinned, action: 'pin', pinned };
           break;
         }
 
@@ -818,6 +960,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           } else {
             unpinned = multiSessionManager.unpinSession(entry.path);
           }
+          // Drop the API-pin ledger record so a later restart won't re-pin a
+          // session the caller explicitly unpinned.
+          if (pinExpiry) await pinExpiry.clear(sessionId);
           response = { success: unpinned, action: 'unpin', pinned: false };
           break;
         }
@@ -1282,7 +1427,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           },
         });
         onSessionCreated?.(created.sessionId, created.sessionPath, created.runtime);
-        return {
+        const result: BatchCreateResultItem = {
           index,
           success: true,
           sessionId: created.sessionId,
@@ -1291,6 +1436,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           model: created.model,
           cwd: created.cwd,
         };
+        // Optional per-entry create-time pin (see POST /sessions pin field).
+        if (entry.pin) {
+          const pinResult = pinExpiry
+            ? await pinExpiry.applyPin(created.sessionId, {
+                ttlSeconds: entry.pinTtlSeconds,
+                sessionPath: created.sessionPath,
+                runtime: created.runtime,
+                label: 'internal-api:batch',
+              })
+            : await pinWithoutExpiry(created.sessionId);
+          Object.assign(result, pinResponseFields(pinResult));
+        }
+        return result;
       } catch (err) {
         return {
           index,

@@ -47,6 +47,11 @@ tests/screenshots/
 cookies.txt
 agent-os/
 
+# Internal API runtime artifacts (secrets/sockets — must never be committed).
+# These belong under ~/.pi-web-ui/; ignore any stray copies at the repo root.
+/internal-api-token
+/internal-api.sock
+
 # Python
 __pycache__/
 *.py[cod]

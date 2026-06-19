@@ -62,6 +62,14 @@ POST /api/v1/sessions/:sessionId/watch
 
 Registering **pins the subject by default** so idle/timeout eviction can't kill it while the validator sleeps. Returns the full watch object (`201`). A bad regex or an empty `conditions` array returns `400`.
 
+> **Pinning is also available standalone**, without a watch. If you only need a
+> session to survive cleanup for a long task — and don't need durable condition
+> detection or interval polling — use `pin:true` on `POST /sessions` (or
+> `control {action:"pin"}`) instead of the watch machinery. API pins are
+> time-bounded (default 24h, max 7d, renewable) and auto-revoked. See
+> [Session Pinning](./INTERNAL-API.md#session-pinning-persistent-time-bounded).
+> Note: deleting a watch does **not** unpin — pin and watch are separate primitives.
+
 ### Condition types (generic / function-agnostic)
 
 | `type` | Matches when… | Key fields |

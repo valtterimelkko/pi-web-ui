@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.1.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.2.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -300,7 +300,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.1.0",
+    "contractVersion": "1.2.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -418,7 +418,9 @@ POST /api/v1/sessions
 {
   "runtime": "claude",
   "cwd": "/home/user/myproject",
-  "model": "sonnet"
+  "model": "sonnet",
+  "pin": true,
+  "pinTtlSeconds": 7200
 }
 ```
 
@@ -427,6 +429,8 @@ POST /api/v1/sessions
 | `runtime` | string | **Yes** | — | `pi`, `claude`, `opencode`, or `antigravity` |
 | `cwd` | string | No | `process.cwd()` | Working directory |
 | `model` | string | No | runtime default | Model ID (from `/models`) |
+| `pin` | boolean | No | `false` | Pin the session at creation so it survives idle/timeout cleanup. Time-bounded — see [Session Pinning](#session-pinning-persistent-time-bounded). |
+| `pinTtlSeconds` | number | No | `86400` (24h) | Pin lifetime in seconds when `pin:true`. Clamped to a hard max of 7 days. |
 
 **Response (201):**
 ```json
@@ -436,9 +440,15 @@ POST /api/v1/sessions
   "runtime": "claude",
   "model": "sonnet",
   "cwd": "/home/user/myproject",
-  "createdAt": "2026-04-28T12:00:00.000Z"
+  "createdAt": "2026-04-28T12:00:00.000Z",
+  "pinned": true,
+  "pinnedUntil": "2026-04-28T14:00:00.000Z"
 }
 ```
+
+When `pin:true` is requested but the runtime already has its maximum pinned
+sessions (2), the session is still created and returned with `pinned: false`
+and `"pinReason": "PIN_LIMIT_REACHED"` (unpin another session, then re-pin).
 
 **Errors:**
 - `400` — Missing `runtime` field
@@ -543,6 +553,7 @@ how much detail you receive.
 | `message` | string | **Yes** | — | The prompt to send |
 | `verbosity` | string | No | `answers` | `answers`, `tasks`, or `full` |
 | `mode` | string | No | `prompt` | `prompt`, `follow_up`, or `steer` |
+| `detach` | boolean | No | `false` | Fire-and-forget: run the pre-flight checks, start the turn, and return `202 Accepted` immediately without waiting. The turn keeps running server-side; read results later via `/info` + `/transcript`. Only valid with `verbosity=answers`. See [Detached dispatch](#detached-fire-and-forget-dispatch). |
 
 You can also set verbosity via header: `X-Verbosity: tasks`
 
@@ -699,7 +710,7 @@ It reports runtime availability, Claude backend mode, and feature flags.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.1.0",
+    "contractVersion": "1.2.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -770,8 +781,16 @@ Examples:
 { "action": "set_model", "modelId": "opus" }
 { "action": "set_thinking_level", "level": "high" }
 { "action": "pin" }
+{ "action": "pin", "pinTtlSeconds": 7200 }
 { "action": "unpin" }
 ```
+
+`pin` grants a **time-bounded** API pin (default 24h, hard max 7d) that protects
+the session from idle/timeout cleanup, and returns the absolute expiry as
+`pinnedUntil`. Re-pinning extends the deadline. If the runtime is already at its
+maximum pinned sessions (2), the response is `pinned: false` with
+`"pinReason": "PIN_LIMIT_REACHED"`. `unpin` revokes the pin and clears its expiry
+record. See [Session Pinning](#session-pinning-persistent-time-bounded).
 
 `set_thinking_level` accepts `off | minimal | low | medium | high | xhigh`. For
 the OpenCode runtime the level is translated, capability-aware, into the model's
@@ -1036,12 +1055,16 @@ parallel.
 ```json
 {
   "sessions": [
-    { "runtime": "claude", "cwd": "/root/a", "model": "sonnet" },
+    { "runtime": "claude", "cwd": "/root/a", "model": "sonnet", "pin": true },
     { "runtime": "opencode", "cwd": "/root/b" },
     { "runtime": "antigravity", "model": "Gemini 3.5 Flash (Medium)" }
   ]
 }
 ```
+
+Each entry accepts the same fields as `POST /sessions`, including `pin` and
+`pinTtlSeconds` (see [Session Pinning](#session-pinning-persistent-time-bounded));
+each result item echoes `pinned` / `pinnedUntil` when pinned.
 
 **Response (200):**
 ```json
@@ -1215,6 +1238,87 @@ re-register), or `closed`.
 - `400` — empty `conditions`, or an invalid regex `pattern`
 - `404 WATCH_NOT_FOUND` — no watch registered (GET/DELETE)
 - `404 SESSION_NOT_FOUND` — session does not exist (POST)
+
+---
+
+### Session Pinning (persistent, time-bounded)
+
+A **pin** protects a session from idle/timeout eviction so a longer-running task
+isn't cleaned up while it works. The web UI has always pinned sessions (max 2 per
+runtime); the Internal API now exposes the same guarantee as a first-class,
+**standalone** operation — no watch or long-horizon machinery required.
+
+Use it for the common agent workflow: *"kick off a longer task, make sure it
+survives, and check back later — without being locked into polling."*
+
+```
+POST /api/v1/sessions                       # { "runtime": "claude", "pin": true, "pinTtlSeconds": 7200 }
+POST /api/v1/sessions/:id/control           # { "action": "pin", "pinTtlSeconds": 3600 }
+POST /api/v1/sessions/:id/control           # { "action": "unpin" }
+GET  /api/v1/sessions/:id/info              # reports pinned + pinnedUntil
+```
+
+**Behaviour and rules (read these):**
+
+- **Time-bounded by default.** Every API pin carries an absolute expiry returned
+  as `pinnedUntil` (ISO). Default lifetime **24h**; hard maximum **7 days**
+  (longer requests are clamped). This is deliberate: a pin must not hold a slot
+  forever. Configure via `INTERNAL_API_PIN_DEFAULT_TTL_MS` /
+  `INTERNAL_API_PIN_MAX_TTL_MS`.
+- **Renewable.** Calling `pin` again (create-time or control) extends the
+  deadline — re-pin periodically to keep a genuinely long task alive.
+- **Auto-revoked.** A background sweep revokes pins past their `pinnedUntil`, so
+  resources are reclaimed even if the caller disappears.
+- **Restart-safe.** Pin records are persisted to a disk-backed ledger
+  (`~/.pi-web-ui/pins/`). On server restart, still-valid pins are re-applied and
+  already-expired ones are revoked immediately.
+- **Max 2 per runtime**, same as the web UI. At the limit, `pin:true` still
+  creates the session but returns `pinned: false`, `pinReason: PIN_LIMIT_REACHED`.
+- **Independent of the watch.** A long-horizon watch also pins by default, but
+  you can pin with no watch at all. Deleting a watch does **not** unpin — pin and
+  watch are separate primitives.
+
+**Pin-only vs pin+watch vs nothing:**
+
+| Goal | Use |
+|---|---|
+| Long task that should survive cleanup; check back whenever | **pin only** (`pin:true` on create, or `control pin`) |
+| Long task where you also want durable, restart-surviving condition detection | **pin + watch** (the watch pins by default) |
+| Short, synchronous task | neither — just `prompt` and read the answer |
+
+Combine pin-only with [detached dispatch](#detached-fire-and-forget-dispatch) for
+the full "set a long task and walk away" pattern: create a pinned session,
+dispatch a detached prompt, then read `/info` + `/transcript` later.
+
+---
+
+### Detached (fire-and-forget) dispatch
+
+```
+POST /api/v1/sessions/:sessionId/prompt      # { "message": "...", "detach": true }
+```
+
+`detach: true` runs the normal pre-flight checks (session exists, not busy,
+prompt-injection scan), **starts the turn, and returns `202 Accepted`
+immediately** without waiting for it to complete:
+
+```json
+{ "sessionId": "a1b2c3d4-...", "detached": true, "status": "accepted" }
+```
+
+The turn keeps running server-side — a disconnected request does **not** abort
+it — and every event still flows into the broker, so `GET /sessions/:id/events`
+and `GET /sessions/:id/transcript` observe progress whenever you look. This is
+exactly how the long-horizon runner dispatches seeds, promoted to a declared
+contract.
+
+Rules:
+
+- Only valid with `verbosity=answers` (streaming needs the connection). Any other
+  verbosity with `detach:true` returns `400 INVALID_REQUEST`.
+- Still subject to the busy check — a session processes one prompt at a time.
+- Read results later via `GET /sessions/:id/info` (`status: idle|running`) and
+  `GET /sessions/:id/transcript`.
 
 ---
 
@@ -1399,6 +1503,16 @@ INTERNAL_API_KEY=
 
 # Path for auto-generated token (default: ~/.pi-web-ui/internal-api-token)
 INTERNAL_API_TOKEN_PATH=
+
+# Directory for durable API-pin expiry ledger (default: ~/.pi-web-ui/pins)
+INTERNAL_API_PIN_DIR=
+
+# API-pin lifetime: default 24h, hard max 7d (milliseconds)
+INTERNAL_API_PIN_DEFAULT_TTL_MS=86400000
+INTERNAL_API_PIN_MAX_TTL_MS=604800000
+
+# How often expired API pins are swept (default 5 min, milliseconds)
+INTERNAL_API_PIN_EXPIRY_INTERVAL_MS=300000
 ```
 
 The API key is auto-generated on first start and written to
@@ -1432,15 +1546,20 @@ GET /api/v1/models?runtime=claude         # Claude only
 GET /api/v1/models?runtime=antigravity    # Antigravity only
 
 # Sessions
-POST   /api/v1/sessions               # create
+POST   /api/v1/sessions               # create (optional pin:true, pinTtlSeconds)
 GET    /api/v1/sessions               # list all
 GET    /api/v1/sessions/:id           # get one
-GET    /api/v1/sessions/:id/info      # get one (rich)
+GET    /api/v1/sessions/:id/info      # get one (rich, includes pinned + pinnedUntil)
 DELETE /api/v1/sessions/:id           # delete
 
 # Conversation
-POST /api/v1/sessions/:id/prompt      # send prompt
+POST /api/v1/sessions/:id/prompt      # send prompt (detach:true → 202 fire-and-forget)
 POST /api/v1/sessions/:id/abort       # abort running
+POST /api/v1/sessions/:id/control     # set_model / set_thinking_level / pin / unpin
+
+# Session pinning (persistent, time-bounded — independent of the watch)
+# pin:true on create, or control {action:"pin", pinTtlSeconds:N} → pinnedUntil
+# default 24h, hard max 7d, renewable, auto-revoked, restart-safe. Max 2/runtime.
 
 # Orchestration
 GET  /api/v1/sessions/:id/events      # persistent SSE event stream

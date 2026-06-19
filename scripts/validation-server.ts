@@ -43,6 +43,7 @@ const claudeHookPort = getFlag('--claude-hook-port') ?? process.env.PI_WEB_UI_VA
 const opencodePort = getFlag('--opencode-port') ?? process.env.PI_WEB_UI_VALIDATION_OPENCODE_PORT ?? '44097';
 
 mkdirSync(path.join(validationDir, 'watches'), { recursive: true });
+mkdirSync(path.join(validationDir, 'pins'), { recursive: true });
 
 const socketPath = path.join(validationDir, 'internal-api.sock');
 const tokenPath = path.join(validationDir, 'internal-api-token');
@@ -54,6 +55,7 @@ Object.assign(process.env, {
   INTERNAL_API_SOCKET_PATH: socketPath,
   INTERNAL_API_TOKEN_PATH: tokenPath,
   INTERNAL_API_WATCH_DIR: path.join(validationDir, 'watches'),
+  INTERNAL_API_PIN_DIR: path.join(validationDir, 'pins'),
   SESSION_REGISTRY_PATH: path.join(validationDir, 'session-registry.json'),
   CLAUDE_SESSION_DIR: path.join(validationDir, 'claude-sessions'),
   ANTIGRAVITY_SESSION_DIR: path.join(validationDir, 'antigravity-sessions'),
