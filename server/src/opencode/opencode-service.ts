@@ -88,6 +88,22 @@ async function writeGoalState(ocSessionId: string, gs: GoalState): Promise<void>
   }
 }
 
+async function removeGoalState(ocSessionId: string): Promise<void> {
+  try {
+    await unlink(goalStatePath(ocSessionId));
+  } catch {
+    // Non-fatal (already gone)
+  }
+}
+
+/**
+ * Continuation prompt used to restart an autonomous goal after a manual resume.
+ * Mirrors the goal-engine plugin's own auto-continuation text so the model
+ * picks up the goal loop again.
+ */
+export const GOAL_RESUME_CONTINUATION =
+  'Continue working toward the goal. Report your progress and state whether the objective has been fully achieved.';
+
 function buildGoalWidgetLines(gs: GoalState): string[] {
   const lines: string[] = [];
   lines.push(`🎯 Goal Status`);
@@ -670,6 +686,61 @@ export class OpenCodeService {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Manually pause an active goal from the UI. Sets the goal state to `paused`
+   * (so the goal-engine plugin's auto-continuation halts) and aborts any
+   * in-flight turn. Returns the updated goal state, or null if there was no
+   * active goal to pause.
+   */
+  async pauseGoal(sessionId: string): Promise<GoalState | null> {
+    const ocSessionId = await this.getOpencodeSessionId(sessionId);
+    if (!ocSessionId) return null;
+    const gs = await readGoalState(ocSessionId);
+    if (!gs || gs.status === 'idle' || !gs.objective) return null;
+    const next: GoalState = { ...gs, status: 'paused' };
+    await writeGoalState(ocSessionId, next);
+    // Stop the current turn if one is running; abort() also pauses, which is a
+    // harmless no-op now that we've already written `paused`.
+    if (this.isRunning(sessionId)) this.abort(sessionId);
+    return next;
+  }
+
+  /**
+   * Manually resume a paused goal from the UI. Flips the state back to
+   * `running`; the caller is responsible for kicking a continuation turn so the
+   * loop actually restarts. Returns the updated state, or null if there was no
+   * paused goal.
+   */
+  async resumeGoal(sessionId: string): Promise<GoalState | null> {
+    const ocSessionId = await this.getOpencodeSessionId(sessionId);
+    if (!ocSessionId) return null;
+    const gs = await readGoalState(ocSessionId);
+    if (!gs || gs.status !== 'paused' || !gs.objective) return null;
+    const next: GoalState = { ...gs, status: 'running', consecutiveErrors: 0 };
+    await writeGoalState(ocSessionId, next);
+    return next;
+  }
+
+  /**
+   * Manually clear a goal from the UI. Aborts any in-flight turn and deletes the
+   * goal state file so the goal disappears entirely. Returns true if a goal
+   * existed and was cleared.
+   */
+  async clearGoal(sessionId: string): Promise<boolean> {
+    const ocSessionId = await this.getOpencodeSessionId(sessionId);
+    if (!ocSessionId) return false;
+    const gs = await readGoalState(ocSessionId);
+    const wasActive = !!gs && gs.status !== 'idle' && !!gs.objective;
+    // Pause first so an in-flight continuation can't re-fire between abort and
+    // file removal, then abort the running turn, then remove the state file.
+    if (gs && (gs.status === 'running' || gs.status === 'wrapping-up')) {
+      await writeGoalState(ocSessionId, { ...gs, status: 'paused' });
+    }
+    if (this.isRunning(sessionId)) this.abort(sessionId);
+    await removeGoalState(ocSessionId);
+    return wasActive || !!gs;
   }
 
   async replyPermission(

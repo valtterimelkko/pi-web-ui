@@ -23,6 +23,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const isStreaming = useSessionStore((state) => state.isStreaming);
   const isLoading = useSessionStore((state) => state.isLoading);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
+  const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   const extensionWidgets = useSessionStore((state) => state.extensionWidgets);
   const goalEngineStatus = useSessionStore((state) => state.extensionStatuses['goal-engine']);
   const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
@@ -36,8 +37,9 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const listRef = useRef<VirtualizedMessageListHandle>(null);
-  const { createNewSession } = useWebSocket();
+  const { createNewSession, goalControl } = useWebSocket();
   const setDraft = useDraftStore((s) => s.setDraft);
+  const [confirmClearGoal, setConfirmClearGoal] = useState(false);
 
   const handleDictationTranscript = useCallback((text: string) => {
     if (currentSessionId) {
@@ -55,6 +57,15 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   // Live goal indicator (OpenCode/Pi goal engine). Pulses "running…" during the
   // long silent model-thinking gaps so an active goal never looks frozen.
   const goalTag = deriveGoalTag(goalEngineStatus, isStreaming);
+
+  // Goal controls (pause / resume / clear) are driven server-side and are
+  // OpenCode-only; Pi handles its own goal slash commands.
+  const goalControlsEnabled = goalTag.active && currentSessionSdkType === 'opencode';
+
+  // Reset the clear-confirmation when the goal is no longer active.
+  useEffect(() => {
+    if (!goalTag.active) setConfirmClearGoal(false);
+  }, [goalTag.active]);
 
   // Memoize message conversion to avoid creating new arrays on every render
   // Only recomputes when the messages array reference changes
@@ -142,6 +153,52 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
                     {goalTag.run !== null ? ` · Run ${goalTag.run}` : ''}
                   </span>
                 </span>
+                {goalControlsEnabled && currentSessionId && (
+                  <span className="ml-2 inline-flex items-center gap-1" data-testid="goal-controls">
+                    {goalTag.paused ? (
+                      <button
+                        type="button"
+                        onClick={() => goalControl(currentSessionId, 'resume')}
+                        className="rounded px-1.5 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                        title="Resume goal"
+                        data-testid="goal-resume"
+                      >
+                        ▶ Resume
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => goalControl(currentSessionId, 'pause')}
+                        className="rounded px-1.5 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                        title="Pause goal (stops the current run and halts auto-continuation)"
+                        data-testid="goal-pause"
+                      >
+                        ⏸ Pause
+                      </button>
+                    )}
+                    {confirmClearGoal ? (
+                      <button
+                        type="button"
+                        onClick={() => { goalControl(currentSessionId, 'clear'); setConfirmClearGoal(false); }}
+                        className="rounded px-1.5 py-0.5 text-xs font-medium text-white bg-red-500 hover:bg-red-600"
+                        title="Confirm: clear this goal"
+                        data-testid="goal-clear-confirm"
+                      >
+                        Clear?
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearGoal(true)}
+                        className="rounded px-1.5 py-0.5 text-xs font-medium text-gray-500 hover:bg-gray-100"
+                        title="Clear goal (removes it entirely)"
+                        data-testid="goal-clear"
+                      >
+                        ✕ Clear
+                      </button>
+                    )}
+                  </span>
+                )}
               </div>
             )}
             {Object.entries(extensionWidgets).length > 0 && (

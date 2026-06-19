@@ -20,6 +20,8 @@ import { validateCsrfToken, hasCsrfToken } from '../security/csrf.js';
 import { getClaudeService, type ClaudeService } from '../claude/index.js';
 import { ClaudeSessionSubscribers } from '../claude/claude-session-subscribers.js';
 import { getOpenCodeService, type OpenCodeService } from '../opencode/index.js';
+import { GOAL_RESUME_CONTINUATION } from '../opencode/opencode-service.js';
+import { parseGoalCommand, type GoalCommand } from '../opencode/goal-command.js';
 import { OpenCodeSessionSubscribers } from '../opencode/opencode-session-subscribers.js';
 import { getAntigravityService, type AntigravityService } from '../antigravity/index.js';
 import { AntigravitySessionSubscribers } from '../antigravity/antigravity-session-subscribers.js';
@@ -647,6 +649,10 @@ export class WebSocketConnectionManager {
         await this.handleCompact(clientId, message);
         break;
 
+      case 'goal_control':
+        await this.handleGoalControl(clientId, message.sessionId, message.action);
+        break;
+
       case 'extension_ui_response':
         await this.handleExtensionUiResponse(clientId, message);
         break;
@@ -999,6 +1005,14 @@ export class WebSocketConnectionManager {
     _images?: ImageContent[],
     agent?: string,
   ): Promise<void> {
+    // Intercept `/goal …` commands and drive goal state directly instead of
+    // forwarding the text to the model (OpenCode has no slash-command layer).
+    const goalCmd = parseGoalCommand(prompt);
+    if (goalCmd) {
+      await this.handleGoalControl(clientId, sessionId, goalCmd);
+      return;
+    }
+
     try {
       await this.opencodeService.sendPrompt(
         sessionId,
@@ -1222,6 +1236,97 @@ export class WebSocketConnectionManager {
     if (!agentSession) return;
 
     await agentSession.abort();
+  }
+
+  /**
+   * Manually pause / resume / clear an OpenCode goal from the UI (goal chip
+   * buttons or an intercepted `/goal …` command). Drives the goal-engine state
+   * directly server-side — no dependency on the model deciding to call the
+   * goal_engine tool — then re-emits the goal status so the UI updates live.
+   */
+  private async handleGoalControl(
+    clientId: string,
+    sessionId: string,
+    action: GoalCommand,
+  ): Promise<void> {
+    const sessionPath = sessionId || this.getCurrentSessionPath(clientId);
+    if (!sessionPath) return;
+
+    // Goal control is OpenCode-only (Pi handles its own goal slash commands).
+    if (!this.opencodeSessionIds.has(sessionPath)) {
+      const entry = await getSessionRegistry().get(sessionPath);
+      if (entry?.sdkType !== 'opencode') return;
+    }
+
+    const subscribers = this.opencodeSubs.getSubscribers(sessionPath);
+    const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
+
+    const sendTurnEnded = () => {
+      for (const subId of targets) {
+        this.sendMessage(subId, {
+          type: 'session_event',
+          sessionId: sessionPath,
+          event: { type: 'agent_end', result: null, usage: {} },
+        } as unknown as ServerMessage);
+      }
+    };
+
+    switch (action) {
+      case 'pause': {
+        await this.opencodeService.pauseGoal(sessionPath);
+        sendTurnEnded();
+        await this.emitOpencodeGoalState(sessionPath, targets);
+        break;
+      }
+      case 'clear': {
+        await this.opencodeService.clearGoal(sessionPath);
+        sendTurnEnded();
+        this.emitOpencodeGoalCleared(sessionPath, targets);
+        break;
+      }
+      case 'resume': {
+        const resumed = await this.opencodeService.resumeGoal(sessionPath);
+        await this.emitOpencodeGoalState(sessionPath, targets);
+        if (resumed) {
+          // Kick a continuation turn so the goal loop restarts; events stream
+          // live through the normal prompt path.
+          await this.handleOpencodePrompt(clientId, sessionPath, GOAL_RESUME_CONTINUATION);
+        }
+        break;
+      }
+      case 'status':
+        await this.emitOpencodeGoalState(sessionPath, targets);
+        break;
+    }
+  }
+
+  /**
+   * Emit the current goal-engine status + widget for an OpenCode session to the
+   * given targets. Normalized to the Pi/client wire shape so the client's
+   * session_event handlers can unwrap them.
+   */
+  private async emitOpencodeGoalState(sessionId: string, targets: string[]): Promise<void> {
+    const events = await this.opencodeService.getGoalEngineEvents(sessionId);
+    for (const evt of events) {
+      const msg = { type: 'session_event' as const, sessionId, event: normEventToPiFormat(evt) };
+      for (const subId of targets) this.sendMessage(subId, msg as unknown as ServerMessage);
+    }
+  }
+
+  /**
+   * Emit explicit clear events when a goal is removed. getGoalEngineEvents
+   * returns nothing once the state file is gone, so the widget/status must be
+   * cleared directly.
+   */
+  private emitOpencodeGoalCleared(sessionId: string, targets: string[]): void {
+    const clearedEvents: Array<Record<string, unknown>> = [
+      { type: 'widget_cleared', key: 'goal-engine-status' },
+      { type: 'extension_status', status: { key: 'goal-engine', text: undefined } },
+    ];
+    for (const event of clearedEvents) {
+      const msg = { type: 'session_event' as const, sessionId, event };
+      for (const subId of targets) this.sendMessage(subId, msg as unknown as ServerMessage);
+    }
   }
 
   private async handleNewSession(

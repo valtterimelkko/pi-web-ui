@@ -105,6 +105,10 @@ export function useWebSocket() {
     return sendMessage({ type: 'abort' });
   }, [sendMessage]);
 
+  const goalControl = useCallback((sessionId: string, action: 'pause' | 'resume' | 'clear') => {
+    return sendMessage({ type: 'goal_control', sessionId, action });
+  }, [sendMessage]);
+
   const createNewSession = useCallback((cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity', model?: string, thinkingLevel?: string) => {
     return sendMessage({ type: 'new_session', cwd, sdkType: sdkType || 'pi', model, thinkingLevel });
   }, [sendMessage]);
@@ -161,6 +165,7 @@ export function useWebSocket() {
     sendSteer,
     sendFollowUp,
     abortGeneration,
+    goalControl,
     createNewSession,
     switchSession,
     subscribeToSession,

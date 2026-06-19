@@ -199,6 +199,86 @@ describe('OpenCodeService — goal engine events', () => {
     await svc.shutdown().catch(() => {});
   });
 
+  const runningGoalFixture = {
+    objective: 'Keep going',
+    status: 'running',
+    turnCount: 2,
+    startedAt: Date.now(),
+    completedAt: null,
+    planItems: [],
+    planDone: [],
+    maxTurns: 100,
+    progressCurrent: null,
+    progressTotal: null,
+    progressLabel: null,
+    consecutiveErrors: 0,
+    lastErrorMessage: null,
+    lastErrorAt: null,
+    compactionCount: 0,
+    lastCompactedAt: null,
+    verifyCommand: null,
+  };
+
+  it('pauseGoal sets the goal state file to paused', async () => {
+    await writeGoalFile(ocSessionId, runningGoalFixture);
+    const svc = new OpenCodeService({ registryPath: path.join(tmpDir, 'r-pause.json') });
+    mockFetchForSession(ocSessionId);
+    const { sessionId } = await svc.createSession('/tmp');
+
+    const result = await svc.pauseGoal(sessionId);
+    expect(result?.status).toBe('paused');
+    const updated = await readGoalFile(ocSessionId) as Record<string, unknown>;
+    expect(updated.status).toBe('paused');
+
+    await svc.shutdown().catch(() => {});
+  });
+
+  it('pauseGoal returns null when there is no active goal', async () => {
+    const svc = new OpenCodeService({ registryPath: path.join(tmpDir, 'r-pause-none.json') });
+    mockFetchForSession(ocSessionId);
+    const { sessionId } = await svc.createSession('/tmp');
+    expect(await svc.pauseGoal(sessionId)).toBeNull();
+    await svc.shutdown().catch(() => {});
+  });
+
+  it('resumeGoal flips a paused goal back to running', async () => {
+    await writeGoalFile(ocSessionId, { ...runningGoalFixture, status: 'paused' });
+    const svc = new OpenCodeService({ registryPath: path.join(tmpDir, 'r-resume.json') });
+    mockFetchForSession(ocSessionId);
+    const { sessionId } = await svc.createSession('/tmp');
+
+    const result = await svc.resumeGoal(sessionId);
+    expect(result?.status).toBe('running');
+    const updated = await readGoalFile(ocSessionId) as Record<string, unknown>;
+    expect(updated.status).toBe('running');
+
+    await svc.shutdown().catch(() => {});
+  });
+
+  it('resumeGoal returns null when the goal is not paused', async () => {
+    await writeGoalFile(ocSessionId, runningGoalFixture);
+    const svc = new OpenCodeService({ registryPath: path.join(tmpDir, 'r-resume-running.json') });
+    mockFetchForSession(ocSessionId);
+    const { sessionId } = await svc.createSession('/tmp');
+    expect(await svc.resumeGoal(sessionId)).toBeNull();
+    await svc.shutdown().catch(() => {});
+  });
+
+  it('clearGoal removes the goal state file', async () => {
+    await writeGoalFile(ocSessionId, runningGoalFixture);
+    const svc = new OpenCodeService({ registryPath: path.join(tmpDir, 'r-clear.json') });
+    mockFetchForSession(ocSessionId);
+    const { sessionId } = await svc.createSession('/tmp');
+
+    const cleared = await svc.clearGoal(sessionId);
+    expect(cleared).toBe(true);
+    // Allow the async abort path (if any) to settle, then confirm the file is gone.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(await readGoalFile(ocSessionId)).toBeNull();
+
+    await svc.shutdown().catch(() => {});
+  });
+
   it('abort pauses an active goal state file', async () => {
     const runningGoal = {
       objective: 'Keep going',

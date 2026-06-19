@@ -113,6 +113,7 @@ export type ClientMessage =
   | { type: 'set_model'; modelId: string }
   | { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' }
   | { type: 'compact'; customInstructions?: string }
+  | { type: 'goal_control'; sessionId: string; action: 'pause' | 'resume' | 'clear' }
   | { type: 'extension_ui_response'; response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean } }
   | { type: 'set_session_name'; sessionId: string; name: string }
   // Multi-session subscription types
