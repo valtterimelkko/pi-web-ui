@@ -105,6 +105,54 @@ describe('extension UI state', () => {
     expect(useSessionStore.getState().extensionStatuses['goal-engine']).toBe('running');
   });
 
+  // OpenCode/Pi goal-engine events arrive wrapped in a `session_event` envelope
+  // (server applies normEventToPiFormat → spread fields). The store must unwrap
+  // them so the live goal tag / widget reflect goal state for OpenCode sessions.
+  it('handles widget_content wrapped in a session_event envelope', () => {
+    useSessionStore.getState().handleServerMessage({
+      type: 'session_event',
+      sessionId: 'session-1',
+      event: {
+        type: 'widget_content',
+        key: 'goal-engine-status',
+        content: ['🎯 Goal Status', 'Status: ▶ Running'],
+      },
+    });
+
+    expect(useSessionStore.getState().extensionWidgets['goal-engine-status']).toEqual([
+      '🎯 Goal Status',
+      'Status: ▶ Running',
+    ]);
+  });
+
+  it('handles extension_status wrapped in a session_event envelope', () => {
+    useSessionStore.getState().handleServerMessage({
+      type: 'session_event',
+      sessionId: 'session-1',
+      event: {
+        type: 'extension_status',
+        status: { key: 'goal-engine', text: '🎯 ▶ Running — Run 4' },
+      },
+    });
+
+    expect(useSessionStore.getState().extensionStatuses['goal-engine']).toBe('🎯 ▶ Running — Run 4');
+  });
+
+  it('handles widget_cleared wrapped in a session_event envelope', () => {
+    useSessionStore.setState({
+      extensionWidgets: { 'goal-engine-status': ['🎯 Goal Status'] },
+      sessionExtensionWidgets: { 'session-1': { 'goal-engine-status': ['🎯 Goal Status'] } },
+    } as Partial<ReturnType<typeof useSessionStore.getState>>);
+
+    useSessionStore.getState().handleServerMessage({
+      type: 'session_event',
+      sessionId: 'session-1',
+      event: { type: 'widget_cleared', key: 'goal-engine-status' },
+    });
+
+    expect(useSessionStore.getState().extensionWidgets['goal-engine-status']).toBeUndefined();
+  });
+
   it('only shows session-scoped notifications for the active session', () => {
     const addToast = vi.spyOn(useUIStore.getState(), 'addToast');
 

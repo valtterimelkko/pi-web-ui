@@ -1607,12 +1607,14 @@ export class WebSocketConnectionManager {
         } as unknown as ServerMessage);
       }
       // Append goal-engine widget/status events so the frontend displays
-      // the current goal state immediately on session load.
+      // the current goal state immediately on session load. Normalize to the
+      // Pi/client wire shape (spread fields) so they match the live prompt path
+      // and the client's session_event handlers can unwrap them.
       for (const evt of goalEvents) {
         this.sendMessage(clientId, {
           type: 'session_event',
           sessionId,
-          event: evt,
+          event: normEventToPiFormat(evt),
         } as unknown as ServerMessage);
       }
       this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);

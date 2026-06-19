@@ -2095,6 +2095,19 @@ export const useSessionStore = create<SessionState>()(
                 break;
               }
 
+              // OpenCode/Pi goal-engine extension UI events arrive wrapped in a
+              // `session_event` envelope (the server runs them through
+              // normEventToPiFormat, producing spread fields). Re-dispatch them
+              // through the top-level handlers so the goal widget / live goal tag
+              // update for OpenCode sessions, not just Pi. Without this they were
+              // silently dropped and no goal tag ever appeared.
+              case 'widget_content':
+              case 'widget_cleared':
+              case 'extension_status': {
+                get().handleServerMessage({ ...event, sessionId });
+                break;
+              }
+
               case 'message': {
                 // Raw JSONL entry replayed during history replay.
                 // These arrive when the client reconnects and the server replays the session JSONL.
