@@ -7,7 +7,7 @@
  * user's running server, web UI, or real session data**.
  *
  * Isolation:
- *  - separate port, Unix socket, and API token
+ *  - separate port, Unix socket, API token, and runtime companion ports
  *  - separate session registry, watch dir, and Claude/Antigravity session dirs
  *    (all under a throwaway validation directory)
  *  - validation mode ON → session cleanup disabled and the real-session
@@ -38,6 +38,9 @@ const validationDir = getFlag('--dir')
   ?? process.env.PI_WEB_UI_VALIDATION_DIR
   ?? path.join(os.homedir(), '.pi-web-ui', 'validation');
 const port = getFlag('--port') ?? process.env.PI_WEB_UI_VALIDATION_PORT ?? '3091';
+const claudeWsPort = getFlag('--claude-ws-port') ?? process.env.PI_WEB_UI_VALIDATION_CLAUDE_WS_PORT ?? '43110';
+const claudeHookPort = getFlag('--claude-hook-port') ?? process.env.PI_WEB_UI_VALIDATION_CLAUDE_HOOK_PORT ?? '43111';
+const opencodePort = getFlag('--opencode-port') ?? process.env.PI_WEB_UI_VALIDATION_OPENCODE_PORT ?? '44097';
 
 mkdirSync(path.join(validationDir, 'watches'), { recursive: true });
 
@@ -54,26 +57,37 @@ Object.assign(process.env, {
   SESSION_REGISTRY_PATH: path.join(validationDir, 'session-registry.json'),
   CLAUDE_SESSION_DIR: path.join(validationDir, 'claude-sessions'),
   ANTIGRAVITY_SESSION_DIR: path.join(validationDir, 'antigravity-sessions'),
+  CLAUDE_CHANNEL_WS_PORT: claudeWsPort,
+  CLAUDE_CHANNEL_HOOK_PORT: claudeHookPort,
+  OPENCODE_SERVER_PORT: opencodePort,
 });
 
 console.error('────────────────────────────────────────────────────────');
 console.error(' Pi Web UI — EPHEMERAL VALIDATION SERVER');
 console.error(' (isolated & disposable; your real server is untouched)');
 console.error('────────────────────────────────────────────────────────');
-console.error(` port   : ${port}`);
-console.error(` socket : ${socketPath}`);
-console.error(` token  : ${tokenPath}`);
-console.error(` dir    : ${validationDir}`);
+console.error(` port        : ${port}`);
+console.error(` socket      : ${socketPath}`);
+console.error(` token       : ${tokenPath}`);
+console.error(` dir         : ${validationDir}`);
+console.error(` claude ws   : ${claudeWsPort}`);
+console.error(` claude hook : ${claudeHookPort}`);
+console.error(` opencode    : ${opencodePort}`);
 console.error('');
 console.error(' Point a validator at it, e.g.:');
 console.error(`   npm run validate:long-horizon -- --socket ${socketPath} --token-path ${tokenPath} ...`);
 console.error(' Stop with Ctrl-C.');
 console.error('────────────────────────────────────────────────────────');
 
+// Some native dependencies inspect process.argv at import time. Keep validation
+// server flags local to this wrapper so imported server modules don't interpret
+// flags like --dir as their own options.
+process.argv = process.argv.slice(0, 2);
+
 // Booting the server entry runs start() and registers its own SIGINT/SIGTERM
 // shutdown (which unlinks the socket). Importing after env is set is what makes
 // the isolation take effect. (No top-level await — tsx transforms to CJS.)
 import('../server/src/index.js').catch((err) => {
-  console.error('[validation-server] Failed to boot:', err instanceof Error ? err.message : String(err));
+  console.error('[validation-server] Failed to boot:', err instanceof Error ? (err.stack ?? err.message) : String(err));
   process.exit(1);
 });

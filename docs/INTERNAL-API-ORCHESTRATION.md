@@ -5,6 +5,8 @@
 > Read [`INTERNAL-API.md`](./INTERNAL-API.md) for the canonical endpoint reference and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) for compatibility/versioning rules. Read this guide when you want to spawn child sessions across runtimes, monitor them, collect their results, and hand context between them.
 >
 > Important framing: the Internal API began first as a **live-validation API** for exercising real runtime sessions during development and troubleshooting. The orchestration role described here is real and growing, but parts of the broader cross-runtime vision are still early and evolving.
+>
+> **Safety boundary:** live validation must target a disposable validation server by default, not the running production Web UI. Production validation requires explicit user permission and the CLI-level `--allow-production` acknowledgement.
 
 ## What this guide is for
 
@@ -24,6 +26,17 @@ Typical example:
 - it prompts them independently
 - it monitors them, gathers their results, and continues the parent task with
   the combined output
+
+## Live-validation guardrails
+
+When the task is validation rather than ordinary orchestration, never use the default production socket (`~/.pi-web-ui/internal-api.sock`) just because it exists. Use this flow:
+
+1. Start `npm run validate:server` with an isolated validation directory.
+2. Pass the printed `--socket` and `--token-path` into `validate:live`, `validate:long-horizon`, or your custom client.
+3. Tear the validation server down after collecting evidence.
+4. Report that production was untouched.
+
+Do not stop, restart, or redeploy `pi-web-ui.service` during validation unless the user explicitly asked you to control the production service. If the user genuinely wants production validation, say so in the report and use `--allow-production`.
 
 ## What the Internal API can do today
 

@@ -35,46 +35,82 @@ If you are building agentic orchestration rather than test scenarios, read:
 - [`INTERNAL-API.md`](./INTERNAL-API.md)
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
 
+## Safety contract: never validate on production by default
+
+Live validation must not touch the user's running production Web UI, active browser sessions, or real session registry unless the user explicitly asks for that exact thing.
+
+Default rule for agents and scripts:
+
+- **DO** boot a disposable validation server with `npm run validate:server`.
+- **DO** pass that server's `--socket` and `--token-path` to the validator.
+- **DO NOT** call the default `~/.pi-web-ui/internal-api.sock` from validation code.
+- **DO NOT** stop, restart, redeploy, or reconfigure the production `pi-web-ui.service` as part of validation unless the user explicitly requested production service control.
+- If production validation is genuinely intended, the CLI requires `--allow-production` as an explicit acknowledgement.
+
+This guardrail exists because validation agents can run with broad tool permissions. A validator must be able to prove runtime behaviour without disturbing the UI the user is actively using.
+
 ## Canonical entrypoint
 
+Start an isolated validation server in one terminal/background task:
+
 ```bash
-npm run validate:live -- --runtime claude --scenario smoke
-npm run validate:live -- --runtime antigravity --scenario smoke
+npm run validate:server
 ```
 
-List available scenarios:
+It prints a socket, token path, and isolated runtime companion ports. Point `validate:live` at those paths:
+
+```bash
+npm run validate:live -- \
+  --socket ~/.pi-web-ui/validation/internal-api.sock \
+  --token-path ~/.pi-web-ui/validation/internal-api-token \
+  --runtime claude --scenario smoke
+```
+
+For a concurrent or throwaway run, prefer a unique directory. If you run multiple validation servers concurrently, also pass unique `--claude-ws-port`, `--claude-hook-port`, and `--opencode-port` values:
+
+```bash
+VALIDATION_DIR=~/.pi-web-ui/validation/$(date +%s)
+npm run validate:server -- --dir "$VALIDATION_DIR" --port 0
+npm run validate:live -- \
+  --socket "$VALIDATION_DIR/internal-api.sock" \
+  --token-path "$VALIDATION_DIR/internal-api-token" \
+  --runtime antigravity --scenario smoke
+```
+
+List available scenarios without connecting to a server:
 
 ```bash
 npm run validate:live -- --list
 ```
 
-Run against every available runtime:
+Run against every available runtime on the disposable server:
 
 ```bash
-npm run validate:live -- --runtime all --scenario all
+npm run validate:live -- --socket <sock> --token-path <token> --runtime all --scenario all
 ```
 
 JSON output for agents/tools:
 
 ```bash
-npm run validate:live -- --runtime claude --scenario all --json
+npm run validate:live -- --socket <sock> --token-path <token> --runtime claude --scenario all --json
+```
+
+Only when the user explicitly asks to validate against the running production Web UI:
+
+```bash
+npm run validate:live -- --allow-production --runtime claude --scenario smoke
 ```
 
 ## How it works
 
-> **Tip:** to validate without touching the running server or real session data,
-> boot a disposable, isolated instance with `npm run validate:server` (validation
-> mode disables destructive session cleanup) and point the runner at the socket
-> it prints. See [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
+The runner talks to the Internal API socket you pass with `--socket` and authenticates with the token passed via `--token-path`.
 
-The runner talks to:
+If neither flag is provided, the runner refuses to proceed unless `--allow-production` is supplied. This prevents accidental validation against:
 
 - socket: `~/.pi-web-ui/internal-api.sock`
 - token: `~/.pi-web-ui/internal-api-token`
 
-The runner automatically reads the token file, queries runtime capabilities,
-creates an ephemeral session, streams normalized events with `verbosity=full`,
-runs assertions, and cleans the session up afterwards.
+The runner queries runtime capabilities, creates an ephemeral session on the targeted server, streams normalized events with `verbosity=full`, runs assertions, and cleans the session up afterwards.
 
 ## Current scenarios
 
@@ -103,7 +139,7 @@ Examples:
 
 ## When to use it
 
-Use live validation when you change:
+Use live validation on a disposable validation server when you change:
 
 - runtime dispatch logic
 - event normalization or replay
@@ -112,13 +148,17 @@ Use live validation when you change:
 - Antigravity prompt/replay/model-listing behaviour
 - Internal API behaviour used by local tools or agents
 
-Prefer it when you want a **real-runtime confirmation** without opening the web UI.
+Prefer it when you want a **real-runtime confirmation** without opening or disturbing the production web UI.
 
 Use it alongside orchestrator development when you need confidence that the
 runtime itself still behaves correctly, but do not confuse live validation with
 an orchestration guide or a general-purpose control plane.
 
 ## When not to use it
+
+Do **not** use live validation against the production server just because it is convenient. Use `--allow-production` only after an explicit user instruction such as "test this against my running Web UI".
+
+Do **not** stop, restart, or redeploy `pi-web-ui.service` for validation unless the user has explicitly asked for production service control.
 
 Do **not** treat live validation as a replacement for:
 
@@ -137,6 +177,10 @@ Add code under:
 Use the Internal API client from:
 
 - `server/src/live-validation/internal-api-client.ts`
+
+Respect the validation target guard from:
+
+- `server/src/live-validation/validation-safety.ts`
 
 Keep scenarios:
 

@@ -112,7 +112,7 @@ the same ones the web UI uses.
 
 ### Primary use cases
 
-- **Browserless live validation** — repo-owned runtime checks that confirm the real server/runtime path still works without opening the web UI. This was the original reason the API was built.
+- **Browserless live validation** — repo-owned runtime checks that confirm a real server/runtime path still works without opening the web UI. Validation should use a disposable validation server by default; targeting the running production Web UI requires explicit user permission and `--allow-production` in the validation CLI.
 - **Local app integration** — voice chat, custom frontends, daemon processes, and other local tools that want to create sessions and send prompts.
 - **Multi-agent orchestration** — parent agents spawning child sessions across Pi, Claude, OpenCode, and Antigravity, then monitoring, collecting, and transferring results.
 
@@ -154,6 +154,16 @@ The current surface is strong enough for the full Tier-1 orchestration loop:
 - **`/history` and `/transcript` serve different needs:** `/history` is closer
   to replay/event reconstruction; `/transcript` is the easier runtime-agnostic
   result-reading surface for agents.
+
+## Validation safety boundary
+
+The default socket (`~/.pi-web-ui/internal-api.sock`) belongs to the running production Web UI. Agents must not use it for live validation unless the user explicitly asked to validate against production. Normal validation flow is:
+
+1. `npm run validate:server` to boot an isolated disposable server.
+2. Pass its `--socket` and `--token-path` to `validate:live`, `validate:long-horizon`, or custom validation clients.
+3. Do not stop, restart, redeploy, or reconfigure `pi-web-ui.service` as part of validation unless the user explicitly asked for production service control.
+
+The Internal API remains available for trusted local orchestration, but validation tasks are special because they are expected to exercise real runtimes without disturbing the user's active UI or real session data.
 
 ## Connection
 

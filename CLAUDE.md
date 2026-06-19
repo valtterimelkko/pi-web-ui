@@ -101,8 +101,8 @@ Core architectural themes:
 ## Runtime-aware validation shortcuts
 
 - General checks: `npm run lint`, `npm run typecheck`, `npm run build`, `npm test`
-- Browserless runtime validation: `npm run validate:live -- --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`
-- Long-horizon (autonomous, restart-surviving) validation: `npm run validate:long-horizon -- --subject <runtime> --seed "<prompt>" --watch-text <substr> --interval <seconds>` — see [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md)
+- Browserless runtime validation: start `npm run validate:server`, then run `npm run validate:live -- --socket <validation.sock> --token-path <validation-token> --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`; use production only with explicit user permission plus `--allow-production`.
+- Long-horizon (autonomous, restart-surviving) validation: start `npm run validate:server`, then run `npm run validate:long-horizon -- --socket <validation.sock> --token-path <validation-token> --subject <runtime> --seed "<prompt>" --watch-text <substr> --interval <seconds>` — see [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md)
 - Fast runtime/session lookup: `npm run debug:where -- <session-id-or-runtime-id-or-path>`
 - OpenCode model catalogue refresh: `npm run opencode:refresh-models`
 

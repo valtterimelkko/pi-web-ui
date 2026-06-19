@@ -97,6 +97,19 @@ DELETE /api/v1/sessions/:sessionId/watch
 
 Tears down the subscription and removes the ledger.
 
+## Safety contract: disposable server first
+
+Long-horizon validation must not use the running production Web UI by default. The subject may run for minutes or hours, may be pinned, and may register durable watches, so it must live on an isolated validation server unless the user explicitly asks to target production.
+
+Default rule:
+
+- boot `npm run validate:server`
+- pass `--socket <validation-socket>` and `--token-path <validation-token>` to every `validate:long-horizon` command, including later `--mode once` checks
+- do not use the default `~/.pi-web-ui/internal-api.sock`
+- do not stop, restart, or redeploy `pi-web-ui.service` as part of validation unless the user explicitly requested production service control
+
+The CLI refuses to target the default production Internal API unless `--allow-production` is supplied.
+
 ## CLI
 
 ```bash
@@ -126,7 +139,8 @@ Subject / behaviour:
 | `--mode daemon\|start\|once` | `daemon` | see below |
 | `--state <path>` | auto | run-state file (required for `--mode once`) |
 | `--keep` | off | keep a runner-created subject after finishing |
-| `--socket` / `--token-path` | defaults | point at a specific Internal API instance |
+| `--socket` / `--token-path` | required unless `--allow-production` | point at the disposable validation server |
+| `--allow-production` | off | explicitly permit targeting the running production Web UI Internal API |
 | `--json` | off | emit final run-state JSON on stdout |
 
 ### Modes
@@ -140,9 +154,12 @@ Because a seed dispatched in `start` mode continues server-side after the proces
 ### Example
 
 ```bash
-# Drive a Pi subject, succeed when it both runs Bash and reports PASS,
-# polling every 5s for up to 2 minutes.
+# Drive a Pi subject on a disposable validation server, succeed when it both
+# runs Bash and reports PASS, polling every 5s for up to 2 minutes.
+npm run validate:server -- --dir ~/.pi-web-ui/validation/example --port 0
 npm run validate:long-horizon -- \
+  --socket ~/.pi-web-ui/validation/example/internal-api.sock \
+  --token-path ~/.pi-web-ui/validation/example/internal-api-token \
   --subject pi \
   --seed "Run the test suite and tell me if it passed." \
   --watch-tool Bash \
@@ -153,15 +170,15 @@ npm run validate:long-horizon -- \
 ## Validating without disturbing the running server
 
 Live validation should never touch the user's running server, web UI, or real
-session data. Boot a **disposable validation server** instead:
+session data unless explicitly requested. Boot a **disposable validation server** instead:
 
 ```bash
 npm run validate:server          # prints an isolated socket + token; stays up
 npm run validate:server -- --port 3092
 ```
 
-It is fully isolated — separate port, Unix socket, API token, session registry,
-watch dir, and Claude/Antigravity session dirs (all under
+It is fully isolated — separate port, Unix socket, API token, runtime companion
+ports, session registry, watch dir, and Claude/Antigravity session dirs (all under
 `~/.pi-web-ui/validation/`) — and it boots in **validation mode**
 (`PI_WEB_UI_VALIDATION_MODE=true`), which **disables session cleanup** and skips
 the real-session registry rebuild. That combination is what guarantees booting
@@ -171,7 +188,7 @@ behaviour that auto-removes >90-day archived sessions does not run here).
 Pi keeps its real agent dir for auth/models; any Pi sessions created during a
 run are ephemeral and the runner deletes them.
 
-Point the runner (or any Internal API client) at the printed paths:
+Point the runner (or any Internal API client) at the printed paths. This is not optional for normal validation; the CLI will refuse to use production defaults without `--allow-production`:
 
 ```bash
 npm run validate:long-horizon -- \
@@ -180,7 +197,7 @@ npm run validate:long-horizon -- \
   --subject pi --seed "…" --watch-text DONE --interval 5 --max-wait 120
 ```
 
-Then kill the validation-server process and remove `~/.pi-web-ui/validation/`.
+Then kill the validation-server process and remove the validation directory when the run is complete. If you used `--mode start`, keep the validation server running until all later `--mode once` checks have reached a final verdict.
 
 ## Runtime support
 
@@ -191,6 +208,10 @@ The watch engine is runtime-agnostic, but the *conditions you can usefully write
 - **Antigravity** — works as a subject for coarse conditions (`agent_end`, text); subprocess-per-turn means fewer fine-grained events.
 
 The **validator** (the runner) is plain headless code — it is not tied to any runtime or harness. Use whichever runtime fits the *subject* you want to test.
+
+## Production validation exception
+
+Use production only when the user clearly asks for it, for example "validate this against my running Web UI". In that case, add `--allow-production`, record that you intentionally targeted production in your report, avoid destructive cleanup, and do not restart/stop/redeploy the service unless separately requested.
 
 ## Limitations
 

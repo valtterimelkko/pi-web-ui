@@ -1,6 +1,7 @@
 #!/usr/bin/env npx tsx
 import { InternalApiClient } from '../server/src/live-validation/internal-api-client.js';
 import { listScenarioIds, runScenario, scenarioRegistry } from '../server/src/live-validation/scenarios.js';
+import { resolveValidationTarget } from '../server/src/live-validation/validation-safety.js';
 import type { ValidationRuntime } from '../server/src/live-validation/types.js';
 
 function parseArgs(argv: string[]) {
@@ -16,6 +17,9 @@ function parseArgs(argv: string[]) {
     model: get('--model'),
     json: argv.includes('--json'),
     list: argv.includes('--list'),
+    socketPath: get('--socket'),
+    tokenPath: get('--token-path'),
+    allowProduction: argv.includes('--allow-production'),
   };
 }
 
@@ -27,7 +31,20 @@ async function main() {
     return;
   }
 
-  const client = new InternalApiClient();
+  const target = resolveValidationTarget({
+    socketPath: args.socketPath,
+    tokenPath: args.tokenPath,
+    allowProduction: args.allowProduction,
+  });
+
+  if (target.usingProductionServer) {
+    console.error('[live-validate] WARNING: using the running production Pi Web UI Internal API because --allow-production was supplied.');
+  }
+
+  const client = new InternalApiClient({
+    socketPath: target.socketPath,
+    tokenPath: target.tokenPath,
+  });
   const capabilities = await client.getCapabilities();
   const runtimes: ValidationRuntime[] = args.runtime === 'all'
     ? (['pi', 'claude', 'opencode'] as ValidationRuntime[]).filter((runtime) => capabilities.runtimes[runtime].available)

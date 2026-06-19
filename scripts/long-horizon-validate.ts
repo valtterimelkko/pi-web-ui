@@ -14,6 +14,7 @@
  *   --mode once               run a single poll on an existing --state file, exit
  *                             (exit 0 passed, 2 still running, 1 timeout/failed)
  *   --keep-watch              keep the server-side watch ledger after success/failure
+ *   --allow-production        explicitly permit targeting the running production Web UI
  *
  * Conditions (repeatable, combined):
  *   --watch-event <type>      match a NormalizedEvent type (e.g. agent_end)
@@ -40,6 +41,7 @@ import {
   type LongHorizonConfig,
   type StopWhen,
 } from '../server/src/live-validation/long-horizon-runner.js';
+import { resolveValidationTarget } from '../server/src/live-validation/validation-safety.js';
 import type { WatchConditionSpec } from '../server/src/internal-api/types.js';
 import type { ValidationRuntime } from '../server/src/live-validation/types.js';
 
@@ -83,9 +85,19 @@ async function main(): Promise<void> {
   const mode = (getFlag(argv, '--mode') ?? 'daemon') as 'daemon' | 'start' | 'once';
   const asJson = argv.includes('--json');
 
-  const client = new InternalApiClient({
+  const target = resolveValidationTarget({
     socketPath: getFlag(argv, '--socket'),
     tokenPath: getFlag(argv, '--token-path'),
+    allowProduction: argv.includes('--allow-production'),
+  });
+
+  if (target.usingProductionServer) {
+    console.error('[long-horizon] WARNING: using the running production Pi Web UI Internal API because --allow-production was supplied.');
+  }
+
+  const client = new InternalApiClient({
+    socketPath: target.socketPath,
+    tokenPath: target.tokenPath,
   });
 
   // ── once: drive a single poll on an existing run-state file ──
