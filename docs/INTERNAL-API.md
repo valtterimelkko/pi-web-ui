@@ -1272,8 +1272,10 @@ GET  /api/v1/sessions/:id/info              # reports pinned + pinnedUntil
 - **Restart-safe.** Pin records are persisted to a disk-backed ledger
   (`~/.pi-web-ui/pins/`). On server restart, still-valid pins are re-applied and
   already-expired ones are revoked immediately.
-- **Max 2 per runtime**, same as the web UI. At the limit, `pin:true` still
-  creates the session but returns `pinned: false`, `pinReason: PIN_LIMIT_REACHED`.
+- **Max 2 per runtime per server instance**, same as the web UI. A production
+  server and an isolated validation server each have their own pin slots and
+  durable pin ledger. At the limit, `pin:true` still creates the session but
+  returns `pinned: false`, `pinReason: PIN_LIMIT_REACHED`.
 - **Independent of the watch.** A long-horizon watch also pins by default, but
   you can pin with no watch at all. Deleting a watch does **not** unpin — pin and
   watch are separate primitives.
@@ -1559,7 +1561,7 @@ POST /api/v1/sessions/:id/control     # set_model / set_thinking_level / pin / u
 
 # Session pinning (persistent, time-bounded — independent of the watch)
 # pin:true on create, or control {action:"pin", pinTtlSeconds:N} → pinnedUntil
-# default 24h, hard max 7d, renewable, auto-revoked, restart-safe. Max 2/runtime.
+# default 24h, hard max 7d, renewable, auto-revoked, restart-safe. Max 2/runtime/server.
 
 # Orchestration
 GET  /api/v1/sessions/:id/events      # persistent SSE event stream

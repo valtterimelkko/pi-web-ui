@@ -247,7 +247,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
     expect(claudeService.sendPrompt).not.toHaveBeenCalled();
   });
 
-  it('deleting a session clears its pin ledger record', async () => {
+  it('deleting a session clears its pin ledger record and releases the runtime pin slot', async () => {
     const routes = makeRoutes();
     await routes.handleSessionControl(
       createJsonReq('POST', '/x', { action: 'pin', pinTtlSeconds: 3600 }),
@@ -255,6 +255,9 @@ describe('createSessionRoutes — API pinning + detach', () => {
       'claude-1',
     );
     await routes.handleDeleteSession(createJsonReq('DELETE', '/x'), createMockRes(), 'claude-1');
+
+    expect(claudeService.unpinSession).toHaveBeenCalledWith('claude-1');
+
     // After delete, /info no longer reports a pinnedUntil for this session.
     claudeService.isSessionPinned.mockReturnValue(false);
     const infoRes = createMockRes();

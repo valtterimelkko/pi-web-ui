@@ -200,8 +200,10 @@ The flow is two calls and a later read:
 - A pin is **time-bounded by default**: 24h lifetime, hard max 7d, returned as
   `pinnedUntil`. It is auto-revoked at the deadline so a forgotten task can't
   hog a slot forever. Re-pin (`control {action:"pin"}`) to extend.
-- Max **2 pinned sessions per runtime**. At the limit, `pin:true` still creates
-  the session but returns `pinned:false, pinReason:"PIN_LIMIT_REACHED"`.
+- Max **2 pinned sessions per runtime per server instance**. Production and
+  disposable validation servers have independent pin slots and pin ledgers. At
+  the limit, `pin:true` still creates the session but returns `pinned:false` and
+  `pinReason:"PIN_LIMIT_REACHED"`.
 - Pinning is **independent of the watch**. You can pin with no watch; deleting a
   watch does not unpin. Use pin-only when you don't need durable condition
   matching, or pin+watch when you do.

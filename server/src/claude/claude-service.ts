@@ -78,6 +78,17 @@ export class ClaudeService {
     }
   }
 
+  private hasChannelSession(sessionId: string): boolean {
+    return this.channelService?.hasSession(sessionId) ?? false;
+  }
+
+  private hasDirectSession(sessionId: string): boolean {
+    return this.pinnedSessions.has(sessionId)
+      || this.processPool.isActive(sessionId)
+      || this.sessionsWithHistory.has(sessionId)
+      || existsSync(this.sessionStore.getFilePath(sessionId));
+  }
+
   // ── Auth & availability ───────────────────────────────────────────────────
 
   /**
@@ -289,8 +300,8 @@ export class ClaudeService {
 
   /** Abort the running prompt for a session. */
   abort(sessionId: string): void {
-    if (this.channelService) {
-      this.channelService.abort(sessionId);
+    if (this.hasChannelSession(sessionId)) {
+      this.channelService?.abort(sessionId);
       return;
     }
     this.processPool.abort(sessionId);
@@ -298,15 +309,15 @@ export class ClaudeService {
 
   /** Return true if a prompt is currently running for the session. */
   isRunning(sessionId: string): boolean {
-    if (this.channelService) {
-      return this.channelService.isRunning(sessionId);
+    if (this.hasChannelSession(sessionId)) {
+      return this.channelService?.isRunning(sessionId) ?? false;
     }
     return this.processPool.isActive(sessionId);
   }
 
   async loadSessionHistory(sessionId: string) {
-    if (this.channelService) {
-      return this.channelService.loadSessionHistory(sessionId);
+    if (this.hasChannelSession(sessionId)) {
+      return this.channelService?.loadSessionHistory(sessionId) ?? [];
     }
     return this.sessionStore.loadHistory(sessionId);
   }
@@ -325,8 +336,8 @@ export class ClaudeService {
   }
 
   async setModel(sessionId: string, model: string): Promise<'opus' | 'sonnet' | 'haiku'> {
-    if (this.channelService) {
-      const result = await this.channelService.setModel(sessionId, model);
+    if (this.hasChannelSession(sessionId)) {
+      const result = await this.channelService!.setModel(sessionId, model);
       return normalizeClaudeModelAlias(result);
     }
 
@@ -340,8 +351,8 @@ export class ClaudeService {
   }
 
   setThinkingLevel(sessionId: string, level: string): void {
-    if (this.channelService) {
-      this.channelService.setThinkingLevel(sessionId, level);
+    if (this.hasChannelSession(sessionId)) {
+      this.channelService?.setThinkingLevel(sessionId, level);
       return;
     }
   }
@@ -349,14 +360,14 @@ export class ClaudeService {
   // ── Queries ───────────────────────────────────────────────────────────────
 
   async getSession(sessionId: string) {
-    if (this.channelService) {
-      return this.channelService.getSession(sessionId);
+    if (this.hasChannelSession(sessionId)) {
+      return this.channelService?.getSession(sessionId);
     }
     return this.registry.get(sessionId);
   }
 
   async listSessions() {
-    if (this.channelService) {
+    if (this.channelService && await this.channelService.isHealthy()) {
       return this.channelService.listSessions();
     }
     return this.registry.listBySdkType('claude');
@@ -365,10 +376,10 @@ export class ClaudeService {
   // ── Pinning ─────────────────────────────────────────────────────────────
 
   pinSession(sessionId: string): boolean {
-    if (this.channelService) {
-      return this.channelService.pinSession(sessionId);
+    if (this.hasChannelSession(sessionId)) {
+      return this.channelService!.pinSession(sessionId);
     }
-    if (!this.hasSession(sessionId)) return false;
+    if (!this.hasDirectSession(sessionId)) return false;
     if (this.pinnedSessions.has(sessionId)) return true;
     if (this.pinnedSessions.size >= ClaudeService.MAX_PINNED_SESSIONS) return false;
     this.pinnedSessions.add(sessionId);
@@ -376,26 +387,21 @@ export class ClaudeService {
   }
 
   unpinSession(sessionId: string): boolean {
-    if (this.channelService) {
-      return this.channelService.unpinSession(sessionId);
+    if (this.hasChannelSession(sessionId)) {
+      return this.channelService!.unpinSession(sessionId);
     }
     return this.pinnedSessions.delete(sessionId);
   }
 
   isSessionPinned(sessionId: string): boolean {
-    if (this.channelService) {
-      return this.channelService.isSessionPinned(sessionId);
+    if (this.hasChannelSession(sessionId)) {
+      return this.channelService!.isSessionPinned(sessionId);
     }
     return this.pinnedSessions.has(sessionId);
   }
 
   hasSession(sessionId: string): boolean {
-    if (this.channelService) {
-      return this.channelService.hasSession(sessionId);
-    }
-    return this.pinnedSessions.has(sessionId)
-      || this.processPool.isActive(sessionId)
-      || this.sessionsWithHistory.has(sessionId);
+    return this.hasChannelSession(sessionId) || this.hasDirectSession(sessionId);
   }
 
   /**

@@ -637,6 +637,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
       }
 
+      // Release the runtime's in-memory pin slot before removing registry
+      // metadata. The durable API-pin ledger is cleared below, but services also
+      // keep their own per-runtime pinned state; deleting a pinned session must
+      // not leave a stale slot occupied until process restart.
+      await unpinSessionById(sessionId).catch(() => false);
+
       await sessionRegistry.delete(sessionId);
       // Drop any API-pin ledger record so the expiry sweep won't try to unpin a
       // session that no longer exists.

@@ -25,6 +25,8 @@ describe('sessionStore', () => {
       lastStreamEventAt: null,
       sessionCache: new Map(),
       sessionCacheMeta: {},
+      pinnedSessionPaths: [],
+      archivedSessionPaths: [],
     });
     useUIStore.setState({ toasts: [] });
   });
@@ -110,6 +112,36 @@ describe('sessionStore', () => {
     const state = useSessionStore.getState();
     state.setCurrentSession('session-1');
     expect(useSessionStore.getState().currentSessionId).toBe('session-1');
+  });
+
+  it('should allow two pinned sessions per runtime instead of globally', () => {
+    const state = useSessionStore.getState();
+    state.setSessions([
+      { id: 'pi-1', path: 'pi-1', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'pi' },
+      { id: 'pi-2', path: 'pi-2', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'pi' },
+      { id: 'claude-1', path: 'claude-1', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
+    ]);
+
+    state.pinSession('pi-1');
+    state.pinSession('pi-2');
+    state.pinSession('claude-1');
+
+    expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['pi-1', 'pi-2', 'claude-1']);
+  });
+
+  it('should still cap pinned sessions at two within the same runtime', () => {
+    const state = useSessionStore.getState();
+    state.setSessions([
+      { id: 'claude-1', path: 'claude-1', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
+      { id: 'claude-2', path: 'claude-2', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
+      { id: 'claude-3', path: 'claude-3', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
+    ]);
+
+    state.pinSession('claude-1');
+    state.pinSession('claude-2');
+    state.pinSession('claude-3');
+
+    expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['claude-1', 'claude-2']);
   });
 
   it('should clear messages', () => {

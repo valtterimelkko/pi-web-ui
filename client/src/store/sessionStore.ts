@@ -773,7 +773,22 @@ export const useSessionStore = create<SessionState>()(
       pinSession: (sessionPath) => {
         set((state) => {
           if (state.pinnedSessionPaths.includes(sessionPath)) return state;
-          if (state.pinnedSessionPaths.length >= 2) return state; // Max 2 pinned
+
+          const sessionRuntime = (path: string): Session['sdkType'] | undefined => {
+            const session = state.sessions.find(s => s.path === path || s.id === path);
+            return session?.sdkType;
+          };
+          const targetRuntime = sessionRuntime(sessionPath);
+          const sameRuntimePinnedCount = state.pinnedSessionPaths.filter((path) => {
+            const runtime = sessionRuntime(path);
+            // Ignore stale preference entries whose sessions are no longer in
+            // the sidebar; the server remains authoritative and will reject if
+            // this client-side estimate is too permissive.
+            return runtime !== undefined && runtime === targetRuntime;
+          }).length;
+
+          if (targetRuntime !== undefined && sameRuntimePinnedCount >= 2) return state;
+          if (targetRuntime === undefined && state.pinnedSessionPaths.length >= 2) return state; // Backward-compatible fallback
           return { pinnedSessionPaths: [...state.pinnedSessionPaths, sessionPath] };
         });
         // Fire-and-forget sync to server so all devices stay in sync
