@@ -1,0 +1,357 @@
+{
+  "defaultProfileId": "glm52-claude-sdk-native-profile",
+  "profiles": [
+    {
+      "id": "glm52-claude-sdk-native-profile",
+      "label": "GLM 5.2 \u2014 Claude SDK",
+      "backend": "sdk-subscription",
+      "launcherType": "native-env",
+      "baseUrl": "https://api.z.ai/api/anthropic",
+      "authTokenEnv": "GLM_CODING_PLAN_TOKEN",
+      "authMode": "anthropic-compatible-token",
+      "model": "sonnet",
+      "modelMode": "claude-alias",
+      "modelAliases": {
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7"
+      },
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true
+    },
+    {
+      "id": "claude-sonnet-sdk-subscription",
+      "label": "Claude Sonnet \u2014 SDK subscription",
+      "backend": "sdk-subscription",
+      "launcherType": "native-env",
+      "authMode": "subscription",
+      "model": "sonnet",
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true
+    },
+    {
+      "id": "glm52-claude-cli-direct",
+      "label": "GLM 5.2 \u2014 Claude CLI direct fallback",
+      "backend": "cli-direct",
+      "launcherType": "native-env",
+      "baseUrl": "https://api.z.ai/api/anthropic",
+      "authTokenEnv": "GLM_CODING_PLAN_TOKEN",
+      "authMode": "anthropic-compatible-token",
+      "model": "sonnet",
+      "modelMode": "claude-alias",
+      "modelAliases": {
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7"
+      },
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true
+    },
+    {
+      "launcherType": "native-env",
+      "authMode": "subscription",
+      "modelMode": "claude-alias",
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true,
+      "id": "claude-opus-sdk-subscription",
+      "label": "Claude Opus \u2014 SDK",
+      "backend": "sdk-subscription",
+      "model": "opus"
+    },
+    {
+      "launcherType": "native-env",
+      "authMode": "subscription",
+      "modelMode": "claude-alias",
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true,
+      "id": "claude-haiku-sdk-subscription",
+      "label": "Claude Haiku \u2014 SDK",
+      "backend": "sdk-subscription",
+      "model": "haiku"
+    },
+    {
+      "launcherType": "native-env",
+      "authMode": "subscription",
+      "modelMode": "claude-alias",
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true,
+      "id": "claude-sonnet-cli-direct",
+      "label": "Claude Sonnet \u2014 CLI direct",
+      "backend": "cli-direct",
+      "model": "sonnet"
+    },
+    {
+      "launcherType": "native-env",
+      "authMode": "subscription",
+      "modelMode": "claude-alias",
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true,
+      "id": "claude-opus-cli-direct",
+      "label": "Claude Opus \u2014 CLI direct",
+      "backend": "cli-direct",
+      "model": "opus"
+    },
+    {
+      "launcherType": "native-env",
+      "authMode": "subscription",
+      "modelMode": "claude-alias",
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true,
+      "id": "claude-haiku-cli-direct",
+      "label": "Claude Haiku \u2014 CLI direct",
+      "backend": "cli-direct",
+      "model": "haiku"
+    },
+    {
+      "launcherType": "native-env",
+      "authMode": "subscription",
+      "modelMode": "claude-alias",
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true,
+      "id": "claude-sonnet-channel",
+      "label": "Claude Sonnet \u2014 Channel",
+      "backend": "channel",
+      "model": "sonnet"
+    },
+    {
+      "launcherType": "native-env",
+      "authMode": "subscription",
+      "modelMode": "claude-alias",
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true,
+      "id": "claude-opus-channel",
+      "label": "Claude Opus \u2014 Channel",
+      "backend": "channel",
+      "model": "opus"
+    },
+    {
+      "launcherType": "native-env",
+      "authMode": "subscription",
+      "modelMode": "claude-alias",
+      "settingSources": [
+        "user",
+        "project"
+      ],
+      "skills": "all",
+      "permissionMode": "dontAsk",
+      "allowedTools": [
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "Skill",
+        "TodoWrite"
+      ],
+      "maxConcurrent": 2,
+      "enabled": true,
+      "id": "claude-haiku-channel",
+      "label": "Claude Haiku \u2014 Channel",
+      "backend": "channel",
+      "model": "haiku"
+    }
+  ]
+}

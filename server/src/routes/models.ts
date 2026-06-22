@@ -32,20 +32,30 @@ router.get('/', async (req: Request, res: Response) => {
 
     if (sdkType === 'claude') {
       // Base alias models, always available for the Claude runtime.
-      const models: Array<{ id: string; displayName: string; provider: string }> = [
+      type ClaudeModelEntry = {
+        id: string;
+        displayName: string;
+        provider: string;
+        backend?: string;
+        claudeModel?: string;
+      };
+      const models: ClaudeModelEntry[] = [
         { id: 'sonnet', displayName: 'Claude Sonnet', provider: 'anthropic' },
         { id: 'opus', displayName: 'Claude Opus', provider: 'anthropic' },
         { id: 'haiku', displayName: 'Claude Haiku', provider: 'anthropic' },
       ];
 
       // When provider profiles are enabled, surface each enabled profile as a
-      // selectable `profile:<id>` model entry so the browser can choose a
-      // backend/provider (e.g. GLM 5.2 via SDK) at session-creation time.
+      // selectable `profile:<id>` model entry. The `provider`/`backend`/
+      // `claudeModel` fields let the browser group them into the structured
+      // provider → backend → model selector.
       for (const profile of getClaudeProfiles()) {
         models.push({
           id: `profile:${profile.id}`,
           displayName: profile.label,
           provider: profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic',
+          backend: profile.backend,
+          claudeModel: profile.model,
         });
       }
 
