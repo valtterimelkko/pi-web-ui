@@ -55,7 +55,7 @@ Then retain:
 4. **Claude Direct CLI fallback** using `claude -p --output-format stream-json --verbose`.
 5. **Claude Channel fallback** for cases where channel mode is still useful or if Anthropic policy changes again.
 
-The implementation should introduce a **small Pi Web UI-native provider profile layer**. Do **not** make Clother a hard dependency. Use Clother as a reference implementation and validation baseline, then implement native profile launching/env construction inside Pi Web UI.
+The implementation should introduce a **small Pi Web UI-native provider profile layer**. Do **not** make Clother a hard dependency. Use Clother only as an optional benchmark/reference implementation if it is already available, then implement native profile launching/env construction inside Pi Web UI.
 
 The final backend priority for the user is:
 
@@ -91,10 +91,19 @@ Only use production if the user explicitly authorises it.
 
 When testing or implementing Claude SDK/direct subscription paths:
 
-- Strip `ANTHROPIC_API_KEY` from spawned subprocess environments unless a profile explicitly says otherwise.
+- Treat `ANTHROPIC_API_KEY` as out of scope for this plan and keep it far away from the launch path.
+- Strip `ANTHROPIC_API_KEY` from spawned subprocess/SDK environments by default.
+- Do not read `ANTHROPIC_API_KEY` as a fallback credential.
 - Do not implement API-key Claude as an automatic fallback.
 - Do not hide pay-per-use behaviour behind a normal profile.
-- If a Claude API-key profile is ever added later, it must be visibly labelled as pay-per-use and disabled by default. This plan does not require it.
+- If a Claude API-key profile is ever added later, it must be visibly labelled as pay-per-use, disabled by default, and require an explicit user decision. This plan does not require it.
+
+Acceptable auth paths for this plan are:
+
+1. Claude Code subscription auth for native Anthropic Claude profiles.
+2. Explicit Anthropic-compatible provider token auth for GLM/Z.ai profiles, sourced from a named env var or validated secret file.
+
+If neither path is available, fail closed and ask the user. Do **not** silently fall back to paid Anthropic API-key billing.
 
 ### 2.3 No manual global settings mutation as the profile mechanism
 
@@ -102,7 +111,7 @@ The desired final UX is not “edit `~/.claude/settings.json` to switch provider
 
 If a launch path must rely on global settings, treat that as a validation finding and come back to the user before building around it.
 
-### 2.4 Keep channel backend available
+### 2.4 Keep channel backend available, but isolate channel validation
 
 Do not delete the channel backend. The final implementation should make the Claude backend selectable/configurable:
 
@@ -111,6 +120,8 @@ sdk-subscription | cli-direct | channel
 ```
 
 Channel should remain an escape hatch for Anthropic policy/runtime changes.
+
+However, channel mode is not passive: the current channel implementation writes managed hooks into `~/.claude/settings.json`. During SDK/direct validation, keep `CLAUDE_CHANNEL_ENABLED=false` unless the scenario is explicitly testing channel fallback. Test channel separately so SDK/direct failures are not confused with hook/config side effects. A disposable Pi Web UI validation server isolates Pi Web UI session data, but it does not automatically isolate global Claude Code settings.
 
 ### 2.5 Use live validation as a readiness gate
 
@@ -122,7 +133,7 @@ Unit tests alone are insufficient. The user specifically wants end-to-end runtim
 
 ## 3. Skills, Claude SDK resources, and docs to consult
 
-Use these skills by name where relevant:
+Use these skills by name where relevant **if they are available in the execution environment**:
 
 - `claude-sdk` — for Claude Agent SDK and `claude -p` implementation details. Treat it as a starting point; verify important details against current official docs or installed packages.
 - `claude-p` — for direct CLI subprocess semantics, stream-json, session locks, `--session-id` vs `--resume`.
@@ -130,6 +141,8 @@ Use these skills by name where relevant:
 - `pi-web-ui-internal-api-orchestration` — for disposable validation server and Internal API orchestration.
 - `systematic-debugging` — if validation or runtime behaviour is unexpected.
 - `test-driven-development` — when implementing changes.
+
+Skills are acceleration aids, not the source of truth. If a skill is missing, continue with the repository docs, source files, official Claude SDK docs, and this plan rather than trying to repair the local skill installation.
 
 ### 3.1 Claude SDK official resources
 
@@ -199,10 +212,21 @@ server/src/claude/claude-channel-process-manager.ts
 server/src/claude/claude-channel-event-adapter.ts
 server/src/config.ts
 server/src/session-registry.ts
-shared/                    # shared runtime/model/session types
-client/src/                # model/profile selector UI if needed
+server/src/internal-api/types.ts
+server/src/internal-api/routes/sessions.ts
+server/src/internal-api/routes/batch-helpers.ts
+server/src/internal-api/routes/models.ts
+server/src/internal-api/routes/capabilities.ts
+server/src/websocket/connection.ts
+server/src/websocket/protocol.ts
+shared/src/protocol-types.ts
+client/src/components/Settings/SettingsModal.tsx
+client/src/components/Settings/ModelSelector.tsx
+client/src/store/sessionStore.ts
+client/src/hooks/useWebSocket.ts
 scripts/validation-server.ts
 scripts/live-validate.ts
+scripts/validate-claude-profiles.ts   # add this or an equivalent dedicated post-validation runner
 ```
 
 ---
@@ -262,13 +286,25 @@ exec /path/to/real/claude "$@"
 
 Use Clother as:
 
-1. A **validation baseline**: prove SDK/CLI can run through `clother-zai`.
-2. A **reference design**: copy the environment/profile pattern.
-3. An **optional command launcher** profile.
+1. A **benchmark/reference baseline** if it is already installed: prove whether SDK/CLI can run through `clother-zai` and compare behaviour against native profile launching.
+2. A **reference design**: understand the environment/profile pattern and provider launch details.
+3. An **optional command launcher** profile only if native Pi-owned profiles fail and the user approves.
+
+Clother is **not** a required dependency for the final implementation. If Clother is absent, do not install it automatically and do not stop solely because it is missing. Continue with native profile validation using the known-good GLM/Z.ai settings backup and explicit provider credentials.
 
 Do **not** hard-depend on Clother as the final core architecture unless native profiles fail and the user approves.
 
-### 4.3 Desired provider profile direction
+### 4.3 Known-good GLM/Z.ai settings reference
+
+The user has a known-good Claude Code native-format GLM/Z.ai settings backup at:
+
+```text
+/root/.claude/settings.json.glm
+```
+
+Use this as the primary reference for endpoint/model/provider-token mapping during native profile validation. Do **not** overwrite live `~/.claude/settings.json`. Do **not** log secrets copied from this file. Migrate only the necessary non-secret structure and secret-source references into Pi Web UI profile config.
+
+### 4.4 Desired provider profile direction
 
 Pi Web UI should own profiles, e.g.:
 
@@ -329,6 +365,30 @@ These structures are illustrative. Adjust to match project conventions.
 
 Pre-validation is mandatory. It prevents wasting time building a backend around assumptions that are false.
 
+Important distinction:
+
+- **Pre-validation** happens before implementation. It may use temporary TypeScript scripts, direct SDK calls, direct CLI commands, Clother if available, native env experiments, and disposable working directories. It is allowed to be bespoke and exploratory.
+- **Post-implementation live validation** happens after implementation. It must exercise the implemented Pi Web UI runtime through the Internal API on a disposable validation server. See §11 for the required executable validation runner.
+
+### 5.0 Environment readiness gate
+
+Before running deeper pre-validation or editing implementation code, record a readiness checklist:
+
+```markdown
+## Readiness checklist
+- Repo root confirmed.
+- Claude Code binary path and version recorded (`which claude`, `claude --version`). Treat an outdated/unsupported Claude Code version as a readiness risk.
+- Claude Code subscription auth status recorded (`claude auth status --json`) for native Claude subscription profiles.
+- Correct Claude Agent SDK TypeScript package name and current API verified from official docs/source.
+- GLM/Z.ai provider mapping checked against `/root/.claude/settings.json.glm` without logging secrets.
+- GLM/Z.ai auth source identified as a named env var or validated secret file; token value not printed.
+- `ANTHROPIC_API_KEY` confirmed absent from the intended launch env or explicitly stripped.
+- Clother availability recorded if present, but Clother missing does not block native profile validation.
+- Disposable validation-server profile config path decided for later post-validation.
+```
+
+If GLM/Z.ai credentials or the provider mapping are unavailable, stop and ask the user. If Clother is unavailable, continue unless the chosen implementation path explicitly requires it and the user approves that dependency.
+
 ### 5.1 Create a pre-validation workspace
 
 Use a timestamped directory, for example:
@@ -367,11 +427,13 @@ npm --version
 opencode --version || true
 ```
 
-If Clother is missing, do not install it without user approval unless it is already an accepted project dependency. You can still continue with native env profile investigation if credentials are available.
+If Clother is missing, do not install it automatically. Clother is only a benchmark/reference launcher unless the user later approves it as an optional command-profile dependency. Continue with native env profile investigation using `/root/.claude/settings.json.glm` and explicit GLM/Z.ai credentials if available.
 
-### 5.3 Verify current official SDK behaviour
+### 5.3 Verify current official SDK behaviour and dependency
 
 Do not rely only on bundled skill knowledge. Fetch/check current official docs and installed package behaviour.
+
+The implementation must use the TypeScript SDK path because the Pi Web UI backend is TypeScript/Node. During pre-validation, verify the current package name/API (for example, whether the package is `@anthropic-ai/claude-agent-sdk` or has changed), then explicitly add/pin the chosen SDK package in the server workspace during implementation. Do not rely on transitive `@anthropic-ai/sdk` packages as if they were the Claude Agent SDK.
 
 Read/check:
 
@@ -397,7 +459,7 @@ Important questions to answer in the pre-validation report:
 
 Goal: prove the SDK works with native Claude subscription auth and exposes enough events.
 
-Suggested minimal TypeScript or Python script:
+Suggested minimal TypeScript script:
 
 - Use SDK `query()` or client equivalent.
 - Use `cwd: RUN_ROOT/native-claude`.
@@ -424,9 +486,11 @@ Failure handling:
 - If SDK cannot use subscription auth, stop and report before implementation.
 - If SDK only works with API key, do not proceed with SDK backend unless user approves a different strategy.
 
-### 5.5 Pre-validation test B — SDK + Clother Z.ai / GLM
+### 5.5 Optional pre-validation test B — SDK + Clother Z.ai / GLM benchmark
 
-Goal: prove SDK can use a wrapper executable such as `clother-zai` with GLM 5.2.
+Goal: if Clother is already installed, prove SDK can use a wrapper executable such as `clother-zai` with GLM 5.2 and compare it against native profile launching.
+
+This is a benchmark/reference test, not a required final architecture test. If Clother is absent, skip this test and continue to native env validation.
 
 Use the SDK executable-path option to point to `clother-zai` or an absolute path resolved by `which clother-zai`.
 
@@ -449,9 +513,11 @@ Failure handling:
 - If SDK + Clother fails due to flags not being passed through, test raw CLI + Clother before concluding GLM is impossible.
 - If SDK + Clother works only by mutating global settings, stop and ask user.
 
-### 5.6 Pre-validation test C — CLI direct + Clother Z.ai / GLM
+### 5.6 Optional pre-validation test C — CLI direct + Clother Z.ai / GLM benchmark
 
-Goal: prove the fallback direct path works with GLM through Clother.
+Goal: if Clother is already installed, prove the fallback direct path works with GLM through Clother and compare it against native profile launching.
+
+This is a benchmark/reference test, not a required final architecture test. If Clother is absent, skip this test and continue to native env validation.
 
 Run something like:
 
@@ -475,11 +541,11 @@ Success criteria:
 - Follow-up with `--resume` works.
 - Session lock behaviour is understood.
 
-### 5.7 Pre-validation test D — native Pi Web UI-style provider profile without Clother
+### 5.7 Primary pre-validation test D — native Pi Web UI-style provider profile without Clother
 
-Goal: determine whether a native Pi profile can replace Clother by setting env vars directly.
+Goal: determine whether a native Pi-owned profile can replace Clother by setting env vars directly.
 
-Only do this if credentials are available in a safe env var or config. Do not print secrets.
+This is the primary GLM/Z.ai validation path. Use `/root/.claude/settings.json.glm` as the known-good Claude Code native-format reference for endpoint/model/provider-token mapping. Only do this if credentials are available in a safe env var or validated secret file. Do not print secrets.
 
 Test a direct spawn of `claude` or SDK executable `claude` with env vars similar to Clother:
 
@@ -504,11 +570,13 @@ If this fails but Clother works, record why and ask user whether to use Clother 
 
 Goal: answer the user’s explicit concurrency question before building.
 
-Test at least:
+Test at least the validated primary paths:
 
-1. SDK native Claude + SDK GLM/Clother in parallel.
-2. Two SDK GLM/Clother sessions in parallel.
-3. CLI direct GLM/Clother + SDK native Claude in parallel.
+1. SDK native Claude + SDK GLM native-env profile in parallel.
+2. Two SDK GLM native-env profile sessions in parallel.
+3. CLI direct GLM native-env profile + SDK native Claude in parallel.
+
+If Clother benchmark paths were validated and the user approved Clother as an optional dependency, repeat the relevant combinations with Clother command profiles.
 
 Use simple prompts that each run at least one tool and take enough time to overlap, e.g. read/write small files in separate directories:
 
@@ -557,9 +625,9 @@ Before implementation, produce a report with:
 ## Environment
 ## SDK docs/package facts checked
 ## Test A: SDK native Claude
-## Test B: SDK Clother Z.ai
-## Test C: CLI direct Clother Z.ai
-## Test D: native env profile without Clother
+## Test B: SDK Clother Z.ai benchmark (optional; skipped if unavailable)
+## Test C: CLI direct Clother Z.ai benchmark (optional; skipped if unavailable)
+## Test D: native env profile without Clother (primary GLM path)
 ## Test E: concurrency
 ## Recommendation
 ## Implementation path chosen
@@ -584,20 +652,21 @@ Concurrency is safe enough or can be managed with a simple limit.
 
 Implement SDK backend + native profile launcher.
 
-### Path 2 — acceptable
+### Path 2 — acceptable only with user approval
 
 ```text
-SDK + Clother works for GLM 5.2.
 SDK + native Claude works.
 Native env profile does not work yet.
+SDK + Clother works for GLM 5.2, and the user approves Clother as an optional command-profile dependency.
 ```
 
-Implement SDK backend with command-launcher profiles first, but design config so native env profiles can be added later.
+Implement SDK backend with command-launcher profiles first, but design config so native env profiles can be added later. Do not choose this path solely because Clother was convenient during benchmarking.
 
 ### Path 3 — fallback
 
 ```text
-SDK + GLM fails, but CLI direct + Clother/native env works.
+SDK + GLM fails, but CLI direct + native env works.
+OR SDK + GLM fails, CLI direct + Clother works, and the user approves Clother as an optional dependency.
 ```
 
 Implement direct CLI profile support first, keep SDK backend behind feature flag or postpone. Ask user before choosing this path.
@@ -626,11 +695,40 @@ model: string
 launcherType: 'native-env' | 'command'
 ```
 
+Reconcile this Claude-specific vocabulary with the existing Internal API `RuntimeBackendMode` type instead of creating contradictory parallel meanings. Recommended mapping:
+
+```ts
+type RuntimeBackendMode =
+  | 'native'
+  | 'direct'
+  | 'channel'
+  | 'server'
+  | 'subprocess'
+  | 'sdk'; // add if SDK backend is implemented
+
+// Claude profile metadata remains more specific:
+type ClaudeProfileBackend = 'sdk-subscription' | 'cli-direct' | 'channel';
+```
+
+Suggested API/session representation:
+
+```ts
+backendMode: 'sdk' | 'direct' | 'channel';   // broad automation/runtime capability label
+claudeProfileId?: string;                    // exact selected profile
+claudeProfileBackend?: ClaudeProfileBackend; // exact Claude implementation path
+providerId?: 'anthropic' | 'zai' | string;
+model?: string;
+```
+
+Do not force all profile semantics into `RuntimeBackendMode`. Keep `RuntimeBackendMode` broad for cross-runtime automation, and expose Claude-specific profile details separately through session info, capabilities/models metadata, and registry entries.
+
 Existing sessions without these fields should continue to work with the configured default backend.
 
 ### 7.2 Add profile configuration
 
-Add a profile config source. Prefer project/server config patterns already used by Pi Web UI. Possible locations:
+Add a profile config source. Prefer project/server config patterns already used by Pi Web UI. Validate the profile file with Zod or equivalent before use, and treat profile loading as a security-sensitive boundary because it can choose executables, env vars, and optional secret files.
+
+Possible locations:
 
 ```text
 ~/.pi-web-ui/claude-profiles.json
@@ -659,7 +757,7 @@ type ClaudeProfile = {
   command?: string;              // e.g. 'claude', 'clother-zai'
   baseUrl?: string;              // native-env only
   authTokenEnv?: string;         // native-env only; name of env var, not value
-  authTokenPath?: string;        // optional secret file; be careful with permissions
+  authTokenPath?: string;        // optional secret file; validate path and permissions before reading
   authMode?: 'subscription' | 'anthropic-compatible-token' | 'wrapper';
   model: string;
   modelMode: ClaudeModelMode;
@@ -674,7 +772,9 @@ type ClaudeProfile = {
 };
 ```
 
-Do not log token values. If reading token values, redact in logs/errors.
+Do not log token values. If reading token values, redact in logs/errors. Do not expose resolved token values, token file contents, or raw secret paths through `/api/v1/models`, `/api/v1/capabilities`, session info, client logs, or validation artifacts.
+
+For `authTokenPath`, require an explicit configured path, validate it before file access, reject traversal/symlink surprises where practical, and fail closed on unreadable or overly broad files. Prefer `authTokenEnv` when possible so Pi Web UI never stores secret values.
 
 ### 7.3 Native provider profile launcher
 
@@ -837,14 +937,21 @@ Use TDD/systematic debugging. Add or update tests as you build.
 Add tests for:
 
 - profile config parsing and validation
+- `authTokenPath` path validation / unreadable secret handling
 - secret redaction
 - profile resolution to executable/env/model
+- `ANTHROPIC_API_KEY` stripping and fail-closed behaviour
 - default profile selection
 - disabled/missing command handling
 - model/profile ID mapping
 - concurrency limiter behaviour
 - SDK message adapter mapping with mocked SDK messages
 - direct CLI spawn options with mocked process spawn
+- feature-flag rollback behaviour:
+  - `CLAUDE_SDK_ENABLED=false` does not route to SDK
+  - `CLAUDE_PROFILES_ENABLED=false` preserves current Claude behaviour
+  - `CLAUDE_BACKEND_DEFAULT=direct` routes to direct when enabled
+  - `CLAUDE_CHANNEL_ENABLED=true` still allows channel fallback
 - backward compatibility for existing sessions
 
 ### 10.2 Integration tests with mocks
@@ -867,7 +974,23 @@ npm run lint
 npm test
 ```
 
-If the whole suite is too slow, run targeted workspace tests while iterating, then full checks before declaring readiness.
+Before declaring readiness, run the repo-required checks:
+
+```bash
+npm run docs:check-agent-guides
+npm run lint
+npm run typecheck
+npm run build
+npm test
+```
+
+If the model/profile selector UI changes, also run relevant E2E or browser validation, normally:
+
+```bash
+npm run test:e2e
+```
+
+If the whole suite is too slow while iterating, run targeted workspace tests first, then the full checks before declaring readiness.
 
 Current root scripts include:
 
@@ -875,8 +998,11 @@ Current root scripts include:
 npm run test
 npm run lint
 npm run typecheck
+npm run build
+npm run test:e2e
 npm run validate:live
 npm run validate:server
+npm run docs:check-agent-guides
 ```
 
 ---
@@ -884,6 +1010,18 @@ npm run validate:server
 ## 11. Live validation strategy after implementation
 
 Live validation must use a disposable validation server unless explicitly authorised otherwise.
+
+The profile-specific scenarios below are **post-implementation validation requirements**, not the same thing as pre-validation tests A–E. They cannot be claimed as passing until there is an executable mechanism for them.
+
+Recommended implementation: add a dedicated runner such as:
+
+```text
+scripts/validate-claude-profiles.ts
+```
+
+The runner should drive the Pi Web UI Internal API directly, accept socket/token/profile arguments, create temporary sessions/CWDs, run the prompts below, save artifacts, and return non-zero on failure. Existing `npm run validate:live` scenarios remain useful generic smoke checks, but they do not currently encode all Claude profile scenarios in §11.2.
+
+Alternative: extend `server/src/live-validation/scenarios.ts` with profile-aware scenarios and add any required CLI flags to `scripts/live-validate.ts`. If choosing this route, keep the generic runner maintainable and capability-aware.
 
 ### 11.1 Start disposable validation server
 
@@ -918,9 +1056,28 @@ GET /api/v1/capabilities
 GET /api/v1/models
 ```
 
+Profile validation must run with an explicit disposable profile config. Prefer creating it under the validation directory, for example:
+
+```text
+$VAL_DIR/claude-profiles.json
+```
+
+Start the validation server with the relevant profile env vars, for example:
+
+```bash
+CLAUDE_PROFILES_PATH="$VAL_DIR/claude-profiles.json" \
+CLAUDE_DEFAULT_PROFILE="glm52-claude-sdk-native-profile" \
+CLAUDE_PROFILES_ENABLED=true \
+CLAUDE_SDK_ENABLED=true \
+CLAUDE_CHANNEL_ENABLED=false \
+npm run validate:server -- ...
+```
+
+Only set `CLAUDE_CHANNEL_ENABLED=true` for the dedicated channel fallback scenario.
+
 Save artifacts under a run results directory.
 
-### 11.2 Required live validation scenarios
+### 11.2 Required post-implementation live validation scenarios
 
 #### Scenario 1 — capabilities/models expose profiles
 
@@ -1099,24 +1256,34 @@ This project is **not ready** unless all of the following are true:
 
 - Profiles are visible/selectable in the Web UI or through Internal API model/profile selection.
 - Profile labels are clear enough to avoid accidentally using expensive API-key mode.
-- `/api/v1/capabilities` and/or `/api/v1/models` expose enough information for automation.
+- `/api/v1/capabilities` and/or `/api/v1/models` expose enough information for automation, including broad backend mode and Claude-specific profile metadata without leaking secrets.
 - Internal API can create sessions with selected profiles.
+- Session info/transcript surfaces show enough backend/profile metadata to prove follow-ups stayed on the intended profile.
 
 ### 12.3 Safety
 
 - No Claude API-key fallback is automatic.
-- Secrets are not logged.
+- `ANTHROPIC_API_KEY` is stripped from SDK/CLI launch environments unless a future explicitly approved pay-per-use profile exists outside this plan.
+- Secrets are not logged, exposed through APIs, or written to validation artifacts.
+- Profile config is schema-validated.
+- `authTokenPath` is path-validated before file access.
+- New/changed REST surfaces keep existing auth/rate-limit protections.
+- Prompt-injection checks remain in place before forwarding user text to runtimes.
 - Destructive tools are governed by existing permission model or conservative SDK permissions.
 - Channel mode does not globally corrupt hooks/settings when not selected.
 
 ### 12.4 Quality validation
 
-- `npm run typecheck` passes.
+- `npm run docs:check-agent-guides` passes.
 - `npm run lint` passes or any failures are pre-existing and documented.
+- `npm run typecheck` passes.
+- `npm run build` passes.
 - `npm test` passes or any failures are pre-existing and documented.
-- Live validation scenarios 1–8 pass on a disposable validation server.
-- Tool visibility is demonstrably better than current channel mode for SDK/direct profiles.
-- GLM profile demonstrably loads/uses a relevant skill in validation.
+- Relevant E2E/browser validation passes if the model/profile selector UI changed.
+- A dedicated executable profile validation runner exists (recommended: `scripts/validate-claude-profiles.ts`) or the generic live-validation runner has been extended with equivalent profile-aware scenarios.
+- Post-implementation live validation scenarios 1–8 pass on a disposable validation server.
+- Tool visibility is mechanically checked for SDK/direct profiles, e.g. by asserting `tool_execution_start` and `tool_execution_end` events in saved event streams.
+- GLM profile demonstrably loads/uses a relevant skill in validation, or if the specific skill is unavailable in the execution environment, the report clearly distinguishes environmental absence from backend/profile failure.
 
 If any non-negotiable criterion fails, do not mark done. Report exact failure and recommended next step.
 
@@ -1151,6 +1318,8 @@ CLAUDE_CHANNEL_ENABLED=true
 
 Do not remove existing env support for `CLAUDE_CHANNEL_ENABLED`.
 
+Rollback flags are not complete until they are tested. Add automated tests proving disabled SDK/profiles fall back cleanly and channel/direct modes still work when selected.
+
 ---
 
 ## 14. Suggested implementation phases
@@ -1158,12 +1327,14 @@ Do not remove existing env support for `CLAUDE_CHANNEL_ENABLED`.
 ### Phase 0 — Read and pre-validate
 
 - Read docs/source.
-- Run pre-validation tests A–E.
+- Complete the environment readiness gate in §5.0.
+- Run pre-validation tests A–E, treating Clother tests as optional benchmark/reference tests.
 - Produce pre-validation report.
 - Stop for user decision if results are ambiguous.
 
-### Phase 1 — Profile schema and resolver
+### Phase 1 — SDK dependency, profile schema, and resolver
 
+- Verify the current TypeScript Claude Agent SDK package/API and add/pin the package in the server workspace if the SDK path is chosen.
 - Add config parsing.
 - Add profile manager/resolver.
 - Add tests.
@@ -1192,7 +1363,9 @@ Do not remove existing env support for `CLAUDE_CHANNEL_ENABLED`.
 
 ### Phase 5 — Live validation and hardening
 
-- Run scenarios 1–8.
+- Add the dedicated profile validation runner (`scripts/validate-claude-profiles.ts`) or equivalent generic live-validation extensions.
+- Run scenarios 1–8 through the disposable Internal API validation server.
+- Run repo-required static/test gates.
 - Fix issues.
 - Document final behaviour.
 
@@ -1200,7 +1373,7 @@ Do not remove existing env support for `CLAUDE_CHANNEL_ENABLED`.
 
 ## 15. Specific questions the implementation agent must answer in its final report
 
-1. Which pre-validation path succeeded: SDK native env, SDK Clother, CLI direct Clother, or other?
+1. Which pre-validation path succeeded: SDK native env, SDK Clother benchmark, CLI direct Clother benchmark, CLI direct native env, or other? If Clother was skipped because it was absent, say so explicitly.
 2. Does SDK + GLM 5.2 work without mutating global Claude settings?
 3. Can two provider profiles run concurrently? Which combinations were tested?
 4. Are tool calls visible in the Web UI transcript/events?
@@ -1232,6 +1405,8 @@ Docs should clearly say:
 - API-key/pay-per-use is not enabled by default.
 - Channel remains fallback.
 - How to validate with `npm run validate:server` and Internal API.
+
+If editing `AGENTS.md` or `CLAUDE.md`, preserve their byte-identical sync rule and run `npm run docs:check-agent-guides`.
 
 ---
 
