@@ -10,6 +10,7 @@ import { wsMessageLimiter } from '../security/rate-limit.js';
 import { detectPromptInjection } from '../security/prompt-injection.js';
 import { getPiService, type PiService } from '../pi/index.js';
 import { SessionPool } from '../pi/session-pool.js';
+import { readSessionCwd } from '../pi/session-cwd.js';
 import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
@@ -1547,13 +1548,14 @@ export class WebSocketConnectionManager {
       console.log(`[handleSwitchSession] Client ${clientId} unsubscribed from ${oldSessionPath}`);
     }
 
-    // Look up the cwd for this session from the sessions list
+    // Resolve the cwd for this session from its file header (single-file read).
+    // This replaces a full SessionManager.listAll() scan that parsed every
+    // on-disk session (~4s for ~800 sessions) just to read one cwd.
     let cwd = this.clientCwd.get(clientId) || process.cwd();
     try {
-      const allSessions = await this.piService.listAllSessions();
-      const sessionInfo = allSessions.find(s => s.path === sessionPath);
-      if (sessionInfo?.cwd) {
-        cwd = sessionInfo.cwd;
+      const resolved = await readSessionCwd(sessionPath);
+      if (resolved) {
+        cwd = resolved;
       }
     } catch {
       // Fallback to existing cwd

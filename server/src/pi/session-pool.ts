@@ -1,5 +1,6 @@
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { PiService, CreateSessionOptions } from './pi-service.js';
+import { readSessionCwd } from './session-cwd.js';
 import type { WebUIContext } from './extension-ui-adapter.js';
 
 export interface ClientSession {
@@ -87,13 +88,13 @@ export class SessionPool {
       webUIContext,
     });
 
-    // Look up the proper cwd from the sessions list
+    // Resolve the proper cwd from the session file header (single-file read),
+    // not a full SessionManager.listAll() scan. See server/src/pi/session-cwd.ts.
     let cwd = existing?.cwd || process.cwd();
     try {
-      const allSessions = await this.piService.listAllSessions();
-      const sessionInfo = allSessions.find(s => s.path === sessionPath);
-      if (sessionInfo?.cwd) {
-        cwd = sessionInfo.cwd;
+      const resolved = await readSessionCwd(sessionPath);
+      if (resolved) {
+        cwd = resolved;
       }
     } catch {
       // Fallback to existing cwd
