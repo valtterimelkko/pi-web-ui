@@ -3,6 +3,7 @@ import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { getPiService } from '../pi/index.js';
 import { getOpenCodeService } from '../opencode/index.js';
 import { getAntigravityService } from '../antigravity/index.js';
+import { getClaudeProfiles } from '../claude/index.js';
 import { apiLimiter } from '../security/rate-limit.js';
 
 const router = Router();
@@ -25,6 +26,29 @@ router.get('/', async (req: Request, res: Response) => {
     if (sdkType === 'antigravity') {
       const antigravityService = getAntigravityService();
       const models = await antigravityService.getAvailableModels();
+      res.json({ models });
+      return;
+    }
+
+    if (sdkType === 'claude') {
+      // Base alias models, always available for the Claude runtime.
+      const models: Array<{ id: string; displayName: string; provider: string }> = [
+        { id: 'sonnet', displayName: 'Claude Sonnet', provider: 'anthropic' },
+        { id: 'opus', displayName: 'Claude Opus', provider: 'anthropic' },
+        { id: 'haiku', displayName: 'Claude Haiku', provider: 'anthropic' },
+      ];
+
+      // When provider profiles are enabled, surface each enabled profile as a
+      // selectable `profile:<id>` model entry so the browser can choose a
+      // backend/provider (e.g. GLM 5.2 via SDK) at session-creation time.
+      for (const profile of getClaudeProfiles()) {
+        models.push({
+          id: `profile:${profile.id}`,
+          displayName: profile.label,
+          provider: profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic',
+        });
+      }
+
       res.json({ models });
       return;
     }
