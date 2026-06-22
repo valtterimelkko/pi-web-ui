@@ -11,6 +11,7 @@ import { detectPromptInjection } from '../security/prompt-injection.js';
 import { getPiService, type PiService } from '../pi/index.js';
 import { SessionPool } from '../pi/session-pool.js';
 import { readSessionCwd } from '../pi/session-cwd.js';
+import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
 import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
@@ -264,6 +265,12 @@ export class WebSocketConnectionManager {
 
     // Set up event forwarder to track streaming state
     this.eventForwarder.setSessionPool(this.sessionPool);
+
+    // Pre-warm the Pi session list cache in the background so the first
+    // get_sessions (page load / reconnect) is fast instead of paying the full
+    // scan cold. Fire-and-forget; the first client shares this in-flight parse
+    // via the cache's single-flight guard (no double-parse).
+    getPiSessionListCache().list().catch(() => { /* non-fatal warm-up failure */ });
 
     // Set up Web UI context provider for MultiSessionManager (extension binding)
     this.multiSessionManager.setWebUIContextProvider(this.getWebUIContextForMultiSession.bind(this));
@@ -1893,7 +1900,7 @@ export class WebSocketConnectionManager {
     clientId: string,
     _message: { type: 'get_sessions'; cwd?: string }
   ): Promise<void> {
-    const piSessions = await this.piService.listAllSessions();
+    const piSessions = await getPiSessionListCache().list();
 
     const formattedPiSessions: Array<{
       id: string; path: string; sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity';
