@@ -20,7 +20,7 @@ Then add more runtimes only if they solve a real problem for you:
 | Runtime family | Uses | Integration style | Setup difficulty | Streaming/tool visibility | Best for | Caveat level |
 |---|---|---|---|---|---|---|
 | **Pi Coding Agent** | Pi Coding Agent | Native SDK/session integration | Medium | Richest Pi Coding Agent behaviour | Pi Coding Agent extensions, custom tools, Pi Coding Agent-first workflows | Low |
-| **Claude Code** | `claude -p` or channel-backed Claude Code | Wrapper/process integration | Medium-high | Depends on backend mode; channel mode is richer | Claude Code-centric workflows | Higher |
+| **Claude Code** | Claude Agent SDK, `claude -p`, or channel-backed Claude Code | SDK integration (preferred), subprocess, or PTY/plugin | Medium-high | SDK and channel modes offer good tool visibility; legacy direct is weaker | Claude Code-centric workflows, multi-provider access (GLM via Z.ai, etc.) | Medium–higher |
 | **OpenCode** | `opencode serve` | Local server/API integration | Medium | Strong normalized streaming via SSE adaptation | OpenCode-backed workflows and OpenCode/Z.AI setups | Low-medium |
 | **Antigravity** | `agy -p` | Subprocess-per-turn wrapper | Medium | No true live streaming today; replay/log driven | Gemini/Antigravity access in the same UI | Higher |
 
@@ -62,11 +62,13 @@ Read next:
 
 ### Start with Claude Code if...
 - Claude Code is the reason you want a browser UI
-- you accept that this path has more wrapper glue and operational nuance
+- you want to route through alternative providers (e.g. GLM 5.2 via Z.ai Coding Plan) using the same browser UI and session model
+- you accept that this path has more operational nuance than Pi Coding Agent or OpenCode
 - you specifically want channel-backed Claude visibility/features later
 
 Read next:
 - [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
+- [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md) (if you want to configure provider profiles)
 
 ### Start with Antigravity if...
 - Gemini/Antigravity access is the key reason you want this repo

@@ -164,18 +164,27 @@ curl http://localhost:<server-port>/api/health/workers
 
 ## Claude Runtime
 
-Claude sessions use the unified `sdkType='claude'` in the UI and registry, but the backend can run in two different modes:
+Claude sessions use the unified `sdkType='claude'` in the UI and registry, but the backend can run in three different modes:
 
-1. **Legacy direct mode** — `claude -p` subprocesses
-2. **Channel-backed mode** — Claude Code launched with the development channel plugin and PTY supervision
+1. **SDK backend** — `@anthropic-ai/claude-agent-sdk` query() with profile-resolved env (preferred when profiles are enabled)
+2. **Legacy direct mode** — `claude -p` subprocesses (profile-aware or plain)
+3. **Channel-backed mode** — Claude Code launched with the development channel plugin and PTY supervision
 
-Read [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md) for the architecture details.
+Read [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md) for architecture details and [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md) for profile setup and failure modes.
 
 ### Check first
 
+**For SDK/profile sessions:**
+- `server/src/claude/claude-sdk-service.ts`
+- `server/src/claude/claude-profiles.ts`
+- `server/src/claude/claude-sdk-event-adapter.ts`
+
+**For legacy direct sessions:**
 - `server/src/claude/claude-service.ts`
 - `server/src/claude/claude-process-pool.ts`
 - `server/src/claude/claude-history-replay.ts`
+
+**For channel-backed sessions:**
 - `server/src/claude/claude-channel-service.ts`
 - `server/src/claude/claude-channel-process-manager.ts`
 - `pi-claude-channel/server.ts`
@@ -187,10 +196,14 @@ which claude
 claude auth status --json
 sudo journalctl -u pi-web-ui -f
 sudo journalctl -u pi-web-ui -f | grep ClaudeChannel
+sudo journalctl -u pi-web-ui -f | grep -i "profile\|ClaudeSdk"
 
 # Live validation via the Internal API (no browser required)
 npm run validate:live -- --runtime claude --scenario smoke
 npm run validate:live -- --runtime claude --scenario channel-heartbeat
+
+# Profile-specific validation (requires a disposable validation server)
+npm run validate:claude-profiles -- --list
 ```
 
 ### Session files to correlate
@@ -198,10 +211,14 @@ npm run validate:live -- --runtime claude --scenario channel-heartbeat
 - Pi-owned replay file: `~/.pi-web-ui/claude-sessions/<internal-session-id>.jsonl`
 - Claude native session file: `~/.claude/projects/-<encoded-cwd>/<claudeSessionId>.jsonl`
 - Channel hook config: `~/.claude/settings.json`
+- Profile config: `~/.pi-web-ui/claude-profiles.json` (or path set by `CLAUDE_PROFILES_PATH`)
 
 ### Typical symptoms
 
-- **Session lock / resume trouble** → inspect native Claude JSONL and `claude-process-pool.ts`
+- **Profile not appearing in model picker** → confirm `CLAUDE_PROFILES_ENABLED=true`, check startup logs for Zod errors, confirm profile `enabled: true`
+- **Session creation fails with a profile** → check `authTokenEnv` is set in the environment; if using `authTokenPath`, verify absolute, non-symlink, readable
+- **Wrong model identity at runtime** → check `modelAliases` env var names; run `sdk-model-identity` scenario via `validate:claude-profiles`
+- **Session lock / resume trouble** → inspect native Claude JSONL and `claude-process-pool.ts` (legacy direct only)
 - **Tools stuck as running** → inspect replay JSONL and history reconstruction
 - **Channel session appears idle too early or too late** → inspect PTY busy-state / idle detection in `claude-channel-process-manager.ts`
 - **Auth expired** → `claude auth status --json`, then inspect channel auth-expiry handling or legacy subprocess error propagation

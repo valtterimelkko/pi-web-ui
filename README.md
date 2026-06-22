@@ -41,7 +41,7 @@ For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY
 | Runtime family | Integration style | Best for | Caveat level |
 |---|---|---|---|
 | **Pi Coding Agent** | Native Pi Coding Agent integration via its SDK path | Pi Coding Agent workflows, extensions, custom tools | Lowest |
-| **Claude Code** | `claude -p` wrapper or channel-backed Claude Code | Harder coding work on Claude Code | Higher |
+| **Claude Code** | Claude Agent SDK (profiles), `claude -p`, or channel-backed Claude Code | Harder coding work on Claude Code; multi-provider access via provider profiles | Medium–higher |
 | **OpenCode** | `opencode serve` + HTTP/SSE | OpenCode-backed workflows, especially OpenCode/Z.AI setups | Low–medium |
 | **Antigravity** | `agy -p` subprocess-per-turn | Gemini/Antigravity workflows in the same UI | Higher |
 

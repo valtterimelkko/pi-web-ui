@@ -25,7 +25,8 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 ## 5. Runtime deep dives
 - [`PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md) — Pi Coding Agent worker architecture
 - [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md) — which behaviours are core vs enhanced by companion Pi extensions / OpenCode plugins
-- [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md) — Claude legacy-direct vs channel-backed backend modes, logs, and failure modes
+- [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md) — all three Claude backend modes (SDK, legacy direct, channel), env vars, logs, and failure modes
+- [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md) — operator reference for the provider profile system: field reference, examples (native Claude, GLM 5.2), secrets, safety invariants, validation runner
 - [`CLAUDE-CHANNEL-NATIVE-HOOK-ROUTING-DESIGN.md`](./CLAUDE-CHANNEL-NATIVE-HOOK-ROUTING-DESIGN.md) — proposed safer design for routing richer native Claude hook events into the Web UI
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md) — OpenCode architecture, provider auth storage, credential-safe model routing, and the provider allowlist
 - [`OPENCODE-MODEL-AUTOMATION.md`](./OPENCODE-MODEL-AUTOMATION.md) — analysis/proposal for keeping the OpenCode model list current (Kilo Gateway, OpenCode Zen) automatically
