@@ -175,9 +175,12 @@ These are enforced in code and verified by the profile validation runner:
 
 ## How profiles appear in the UI
 
-When `CLAUDE_PROFILES_ENABLED=true`, each enabled profile appears in the new-session model picker under the Claude runtime family. Its model ID is `profile:<id>` (e.g. `profile:glm52-claude-sdk`). Selecting one creates a session bound to that profile.
+When `CLAUDE_PROFILES_ENABLED=true`, profiles are selectable in two places:
 
-Profile binding persists across follow-up turns in the same session. To use a different profile, create a new session.
+- **Browser UI** — In the New Session modal, choose the **Claude Direct** session type. A **Model / Provider Profile** dropdown then appears, listing the base Claude aliases (`sonnet`/`opus`/`haiku`) plus every enabled profile (e.g. *GLM 5.2 — Claude SDK*). The chosen entry is sent as the session's `model` (`profile:<id>` for profiles), and the server resolves the backend/provider at creation time.
+- **Internal API** — `GET /api/v1/models` returns profile-backed entries with `profile:<id>` IDs; create a session with `model: "profile:<id>"` (or an explicit `profileId`).
+
+Selecting a profile creates a session bound to it. Profile binding persists across follow-up turns in the same session. To use a different profile, create a new session.
 
 ## Validating a profile setup
 

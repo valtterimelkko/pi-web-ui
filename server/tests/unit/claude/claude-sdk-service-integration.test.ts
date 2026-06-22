@@ -117,6 +117,7 @@ describe('ClaudeSdkService integration with mocked SDK', () => {
 
     // Mock SDK to throw
     mockQuery.mockImplementation(() => {
+      // eslint-disable-next-line require-yield -- intentional: mock generator throws before yielding
       return (async function* () {
         throw new Error('SDK connection failed');
       })();

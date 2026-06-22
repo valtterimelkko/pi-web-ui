@@ -1,4 +1,4 @@
-export { ClaudeService, getClaudeService } from './claude-service.js';
+export { ClaudeService, getClaudeService, getClaudeProfiles } from './claude-service.js';
 export type { ClaudeAuthStatus } from './claude-service.js';
 export { ClaudeProcessPool } from './claude-process-pool.js';
 export type { ClaudeProcessOptions, ClaudeEventHandler, ActiveProcess } from './claude-process-pool.js';

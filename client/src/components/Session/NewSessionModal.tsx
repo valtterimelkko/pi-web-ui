@@ -26,6 +26,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const [showRecentFolders, setShowRecentFolders] = useState(true);
   const [pathInput, setPathInput] = useState('/root');
   const [sdkType, setSdkType] = useState<'pi' | 'claude' | 'opencode' | 'antigravity'>('pi');
+  const [claudeModels, setClaudeModels] = useState<Array<{ id: string; displayName: string; provider: string }>>([]);
+  const [selectedClaudeModel, setSelectedClaudeModel] = useState<string>('sonnet');
+  const [claudeModelsLoading, setClaudeModelsLoading] = useState(false);
   const recentDropdownRef = useRef<HTMLDivElement>(null);
 
   const { recentFolders, addRecentFolder, getRecentFolders } = useUIStore();
@@ -88,6 +91,30 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Fetch Claude models/profiles when the Claude session type is chosen so the
+  // user can pick a backend/provider profile (e.g. GLM 5.2 via SDK) before the
+  // session opens. Profiles surface as `profile:<id>` model entries.
+  useEffect(() => {
+    if (!isOpen || sdkType !== 'claude' || claudeModels.length > 0) return;
+    let cancelled = false;
+    setClaudeModelsLoading(true);
+    api.get('/api/models?sdkType=claude')
+      .then((resp) => {
+        if (cancelled) return;
+        const models = (resp as { models?: Array<{ id: string; displayName: string; provider: string }> }).models || [];
+        setClaudeModels(models);
+        // Prefer the first provider profile if one exists, else the sonnet alias.
+        const firstProfile = models.find((m) => m.id.startsWith('profile:'));
+        setSelectedClaudeModel(firstProfile?.id || 'sonnet');
+      })
+      .catch((err) => console.error('Failed to fetch Claude models:', err))
+      .finally(() => { if (!cancelled) setClaudeModelsLoading(false); });
+    return () => { cancelled = true; };
+  }, [isOpen, sdkType, claudeModels.length]);
+
+  // The model arg passed to onCreateSession — only Claude sessions carry one here.
+  const claudeModelArg = () => (sdkType === 'claude' ? selectedClaudeModel : undefined);
+
   const handleNavigate = (dir: DirectoryItem) => {
     fetchDirectories(dir.path);
   };
@@ -109,7 +136,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(currentPath);
-    onCreateSession(currentPath, sdkType);
+    onCreateSession(currentPath, sdkType, claudeModelArg());
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -117,7 +144,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(path);
-    onCreateSession(path, sdkType);
+    onCreateSession(path, sdkType, claudeModelArg());
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -132,7 +159,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     e.stopPropagation();
     setIsCreating(true);
     addRecentFolder(path);
-    onCreateSession(path, sdkType);
+    onCreateSession(path, sdkType, claudeModelArg());
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -248,6 +275,38 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
               </span>
             </button>
           </div>
+
+          {/* Claude model / provider profile selector */}
+          {sdkType === 'claude' && (
+            <div className="mt-2" data-testid="claude-model-selector">
+              <p className="text-xs font-medium text-gray-500 mb-1.5">Model / Provider Profile</p>
+              {claudeModelsLoading ? (
+                <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading profiles…
+                </div>
+              ) : (
+                <select
+                  value={selectedClaudeModel}
+                  onChange={(e) => setSelectedClaudeModel(e.target.value)}
+                  data-testid="claude-model-select"
+                  className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                >
+                  {!claudeModels.some((m) => m.id.startsWith('profile:')) && claudeModels.length === 0 && (
+                    <option value="sonnet">Claude Sonnet</option>
+                  )}
+                  {claudeModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.displayName}
+                      {m.provider === 'zai' ? ' • GLM' : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <p className="text-[11px] text-gray-400 mt-1">
+                Profiles (e.g. GLM 5.2 via SDK) route through the selected backend. Plain aliases use the native Claude subscription.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Scrollable Content Area */}

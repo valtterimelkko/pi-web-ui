@@ -1397,7 +1397,21 @@ export class WebSocketConnectionManager {
     if (sdkType === 'claude') {
       try {
         const createModel = message.model || 'sonnet';
-        const { sessionId } = await this.claudeService.createSession(cwd, createModel);
+        // A model id of the form `profile:<id>` selects a Claude provider
+        // profile (SDK / direct / channel backend). The profile determines
+        // the effective model, so we pass a neutral alias as the model arg.
+        let profileId: string | undefined;
+        let modelArg = createModel;
+        if (createModel.startsWith('profile:')) {
+          profileId = createModel.slice('profile:'.length);
+          modelArg = 'sonnet';
+        }
+        const { sessionId } = await this.claudeService.createSession(
+          cwd,
+          modelArg,
+          message.thinkingLevel,
+          profileId,
+        );
 
         // Persist thinking level if provided
         if (message.thinkingLevel) {
