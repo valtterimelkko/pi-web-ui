@@ -6,7 +6,38 @@
 
 ---
 
-## 0. Executive summary
+## 0. Context, intent, and why this exists
+
+### 0.1 What happened before this plan
+
+This plan comes after a GLM 5.2 harness comparison in which the same underlying GLM 5.2 model was exercised through different Pi Web UI runtime paths. The important findings were:
+
+- **GLM 5.2 behaved better inside a Claude Code-style harness than inside default OpenCode for several quality dimensions**: more autonomous skill use, more self-verification, richer tool use, stronger frontend/product execution, and more willingness to run checks before claiming success.
+- **OpenCode was operationally reliable**, and it does have access to the same global skills, but GLM 5.2 through the default OpenCode build agent still appeared more prone to under-using skills and doing less verification.
+- **The Claude channel-backed path became unreliable when Claude Code was routed to GLM 5.2 / non-Anthropic endpoints**. In the comparison run, Claude channel sessions could acknowledge prompts and then hang or fail to initiate useful work. Direct Claude CLI use outside the channel path remained workable.
+- **The existing channel-backed path also has Web UI visibility limitations for the user**: it can show a prompt and final result while hiding or under-reporting detailed tool activity.
+- **The user’s practical motivation is cost and quota**: native Claude models are excellent but expensive/limited under heavy use; GLM 5.2 has much more generous usage limits and may be “good enough” if placed inside the right harness.
+
+The conclusion is not “replace OpenCode forever”. The conclusion is that the fastest path to high-quality, cheap GLM 5.2 for this user is likely a **Claude Code-style SDK/direct backend with explicit provider profiles**, while keeping OpenCode available separately.
+
+### 0.2 Intent of the implementation
+
+The implementation should make Pi Web UI able to run Claude-family sessions through explicit profiles such as:
+
+- native Claude subscription via Claude Agent SDK,
+- GLM 5.2 via Claude Agent SDK using an Anthropic-compatible provider profile,
+- GLM 5.2 via direct `claude -p` fallback,
+- existing channel-backed Claude mode as a fallback/escape hatch.
+
+The user should not have to manually edit `~/.claude/settings.json` or switch global Claude configuration to move between native Claude and GLM. Profile selection should be a Pi Web UI concept and should persist per session.
+
+### 0.3 Economic constraint
+
+Do **not** treat Anthropic API-key / pay-per-use Claude as a normal fallback. The user explicitly does not want this because subscription usage is dramatically cheaper for their workload. If subscription-backed SDK/CLI becomes unavailable, report that and ask the user rather than silently falling back to API-key billing.
+
+---
+
+## 1. Executive summary
 
 Pi Web UI currently has a `claude` runtime family with two backend modes:
 
@@ -36,9 +67,9 @@ The final backend priority for the user is:
 
 ---
 
-## 1. Non-negotiable safety and quality rules
+## 2. Non-negotiable safety and quality rules
 
-### 1.1 Do not disrupt production while validating
+### 2.1 Do not disrupt production while validating
 
 By default, do **not** target the production Internal API socket:
 
@@ -56,7 +87,7 @@ npm run validate:server -- --dir "$VAL_DIR" --port 0 ...
 
 Only use production if the user explicitly authorises it.
 
-### 1.2 No API-key fallback for Claude
+### 2.2 No API-key fallback for Claude
 
 When testing or implementing Claude SDK/direct subscription paths:
 
@@ -65,13 +96,13 @@ When testing or implementing Claude SDK/direct subscription paths:
 - Do not hide pay-per-use behaviour behind a normal profile.
 - If a Claude API-key profile is ever added later, it must be visibly labelled as pay-per-use and disabled by default. This plan does not require it.
 
-### 1.3 No manual global settings mutation as the profile mechanism
+### 2.3 No manual global settings mutation as the profile mechanism
 
 The desired final UX is not “edit `~/.claude/settings.json` to switch providers”. Profiles must be represented in Pi Web UI config/session metadata and applied at process/SDK launch time.
 
 If a launch path must rely on global settings, treat that as a validation finding and come back to the user before building around it.
 
-### 1.4 Keep channel backend available
+### 2.4 Keep channel backend available
 
 Do not delete the channel backend. The final implementation should make the Claude backend selectable/configurable:
 
@@ -81,7 +112,7 @@ sdk-subscription | cli-direct | channel
 
 Channel should remain an escape hatch for Anthropic policy/runtime changes.
 
-### 1.5 Use live validation as a readiness gate
+### 2.5 Use live validation as a readiness gate
 
 Do not claim completion unless live validation passes through the Pi Web UI Internal API on a disposable validation server.
 
@@ -89,7 +120,7 @@ Unit tests alone are insufficient. The user specifically wants end-to-end runtim
 
 ---
 
-## 2. Skills and docs to consult
+## 3. Skills, Claude SDK resources, and docs to consult
 
 Use these skills by name where relevant:
 
@@ -99,6 +130,46 @@ Use these skills by name where relevant:
 - `pi-web-ui-internal-api-orchestration` — for disposable validation server and Internal API orchestration.
 - `systematic-debugging` — if validation or runtime behaviour is unexpected.
 - `test-driven-development` — when implementing changes.
+
+### 3.1 Claude SDK official resources
+
+The implementation agent must consult current official resources during pre-validation. Do not assume this plan or local skills are fully up to date.
+
+Primary Claude Agent SDK docs:
+
+```text
+https://platform.claude.com/docs/en/agent-sdk/overview
+https://platform.claude.com/docs/en/agent-sdk/quickstart
+https://platform.claude.com/docs/en/agent-sdk/typescript
+https://platform.claude.com/docs/en/agent-sdk/python
+https://platform.claude.com/docs/en/agent-sdk/sessions
+https://platform.claude.com/docs/en/agent-sdk/permissions
+https://platform.claude.com/docs/en/agent-sdk/user-input
+https://platform.claude.com/docs/en/agent-sdk/hooks
+https://platform.claude.com/docs/en/agent-sdk/skills
+https://platform.claude.com/docs/en/agent-sdk/subagents
+https://platform.claude.com/docs/en/agent-sdk/mcp
+https://platform.claude.com/docs/en/agent-sdk/cost-tracking
+```
+
+Public SDK repositories:
+
+```text
+https://github.com/anthropics/claude-agent-sdk-typescript
+https://github.com/anthropics/claude-agent-sdk-python
+```
+
+Specific facts to verify from current docs/source before building:
+
+- How to choose the Claude Code executable path (`pathToClaudeCodeExecutable`, `cli_path`, or current equivalent).
+- Whether subscription auth is usable in the intended local/single-user context and how it is detected.
+- How to strip or avoid `ANTHROPIC_API_KEY` so pay-per-use API billing is not used accidentally.
+- How skills are discovered and enabled (`~/.claude/skills`, `settingSources`, `skills: "all"`, current equivalents).
+- How sessions are captured/resumed/forked.
+- How tool use, tool result, rate-limit, usage, and result messages are represented.
+- How permission modes, callbacks, hooks, and abort/cancellation work.
+
+### 3.2 Pi Web UI repository docs
 
 Also read these repo docs before editing:
 
@@ -136,9 +207,9 @@ scripts/live-validate.ts
 
 ---
 
-## 3. Current known facts to preserve
+## 4. Current known facts to preserve
 
-### 3.1 Skill directories are already shared across harnesses
+### 4.1 Skill directories are already shared across harnesses
 
 The canonical global skill folder is:
 
@@ -165,7 +236,7 @@ blackboard-gradebook
 
 So do not assume OpenCode underperformed because it lacked skills. The issue is more likely harness behaviour/tool-use policy/verification discipline.
 
-### 3.2 Clother summary and reference repo
+### 4.2 Clother summary and reference repo
 
 Clother is a provider-switching wrapper for Claude Code.
 
@@ -197,7 +268,7 @@ Use Clother as:
 
 Do **not** hard-depend on Clother as the final core architecture unless native profiles fail and the user approves.
 
-### 3.3 Desired provider profile direction
+### 4.3 Desired provider profile direction
 
 Pi Web UI should own profiles, e.g.:
 
@@ -254,11 +325,11 @@ These structures are illustrative. Adjust to match project conventions.
 
 ---
 
-## 4. Pre-validation strategy — do this before building
+## 5. Pre-validation strategy — do this before building
 
 Pre-validation is mandatory. It prevents wasting time building a backend around assumptions that are false.
 
-### 4.1 Create a pre-validation workspace
+### 5.1 Create a pre-validation workspace
 
 Use a timestamped directory, for example:
 
@@ -280,7 +351,7 @@ concurrency-results.md/json
 available-skills-*.json
 ```
 
-### 4.2 Verify current installed tools and versions
+### 5.2 Verify current installed tools and versions
 
 Record:
 
@@ -298,7 +369,7 @@ opencode --version || true
 
 If Clother is missing, do not install it without user approval unless it is already an accepted project dependency. You can still continue with native env profile investigation if credentials are available.
 
-### 4.3 Verify current official SDK behaviour
+### 5.3 Verify current official SDK behaviour
 
 Do not rely only on bundled skill knowledge. Fetch/check current official docs and installed package behaviour.
 
@@ -322,7 +393,7 @@ Important questions to answer in the pre-validation report:
 7. What message types represent tool start/result/final result?
 8. Can permission callbacks or hooks be used in the chosen language?
 
-### 4.4 Pre-validation test A — SDK + native Claude subscription
+### 5.4 Pre-validation test A — SDK + native Claude subscription
 
 Goal: prove the SDK works with native Claude subscription auth and exposes enough events.
 
@@ -353,7 +424,7 @@ Failure handling:
 - If SDK cannot use subscription auth, stop and report before implementation.
 - If SDK only works with API key, do not proceed with SDK backend unless user approves a different strategy.
 
-### 4.5 Pre-validation test B — SDK + Clother Z.ai / GLM
+### 5.5 Pre-validation test B — SDK + Clother Z.ai / GLM
 
 Goal: prove SDK can use a wrapper executable such as `clother-zai` with GLM 5.2.
 
@@ -378,7 +449,7 @@ Failure handling:
 - If SDK + Clother fails due to flags not being passed through, test raw CLI + Clother before concluding GLM is impossible.
 - If SDK + Clother works only by mutating global settings, stop and ask user.
 
-### 4.6 Pre-validation test C — CLI direct + Clother Z.ai / GLM
+### 5.6 Pre-validation test C — CLI direct + Clother Z.ai / GLM
 
 Goal: prove the fallback direct path works with GLM through Clother.
 
@@ -404,7 +475,7 @@ Success criteria:
 - Follow-up with `--resume` works.
 - Session lock behaviour is understood.
 
-### 4.7 Pre-validation test D — native Pi Web UI-style provider profile without Clother
+### 5.7 Pre-validation test D — native Pi Web UI-style provider profile without Clother
 
 Goal: determine whether a native Pi profile can replace Clother by setting env vars directly.
 
@@ -429,7 +500,7 @@ If this works, prefer native profiles over Clother dependency.
 
 If this fails but Clother works, record why and ask user whether to use Clother as a command profile for now.
 
-### 4.8 Pre-validation test E — concurrent sessions across profiles
+### 5.8 Pre-validation test E — concurrent sessions across profiles
 
 Goal: answer the user’s explicit concurrency question before building.
 
@@ -476,7 +547,7 @@ If concurrency fails:
 - Recommend initial single-active Claude profile lock if needed.
 - Do not build optimistic parallel support without user approval.
 
-### 4.9 Pre-validation gate report
+### 5.9 Pre-validation gate report
 
 Before implementation, produce a report with:
 
@@ -499,7 +570,7 @@ If the recommended path is not clearly viable, stop and ask the user.
 
 ---
 
-## 5. Decision gates before implementation
+## 6. Decision gates before implementation
 
 Proceed only if one of these paths is validated:
 
@@ -541,9 +612,9 @@ Do not build. Report findings and recommend OpenCode custom agent or another rou
 
 ---
 
-## 6. Target architecture
+## 7. Target architecture
 
-### 6.1 Claude runtime family remains one UI/runtime family
+### 7.1 Claude runtime family remains one UI/runtime family
 
 The UI can still expose runtime `claude`, but each Claude session should have metadata:
 
@@ -557,7 +628,7 @@ launcherType: 'native-env' | 'command'
 
 Existing sessions without these fields should continue to work with the configured default backend.
 
-### 6.2 Add profile configuration
+### 7.2 Add profile configuration
 
 Add a profile config source. Prefer project/server config patterns already used by Pi Web UI. Possible locations:
 
@@ -605,7 +676,7 @@ type ClaudeProfile = {
 
 Do not log token values. If reading token values, redact in logs/errors.
 
-### 6.3 Native provider profile launcher
+### 7.3 Native provider profile launcher
 
 Implement a small profile resolver that returns:
 
@@ -636,7 +707,7 @@ Rules:
   - still set safe env / strip API key where appropriate.
   - do not assume command is present; validate and show helpful error.
 
-### 6.4 SDK backend service
+### 7.4 SDK backend service
 
 Add a new SDK-backed service or abstraction under `server/src/claude/`, e.g.:
 
@@ -658,7 +729,7 @@ Potential responsibilities:
 - Abort running sessions if SDK supports abort; otherwise track process/control mechanism.
 - Enforce concurrency limits by profile/backend.
 
-### 6.5 Direct CLI backend update
+### 7.5 Direct CLI backend update
 
 Update existing `ClaudeProcessPool` to support profile-resolved executable/env/model rather than hardcoded `claude` and `opus|sonnet|haiku` only.
 
@@ -672,7 +743,7 @@ and strips both `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` globally. That is
 
 Change to profile-aware behaviour.
 
-### 6.6 Model/profile selector
+### 7.6 Model/profile selector
 
 The existing model list can remain, but Claude profiles should be visible/selectable. Options:
 
@@ -700,7 +771,7 @@ GLM 5.2 — Claude CLI direct fallback
 Claude Sonnet — Channel fallback
 ```
 
-### 6.7 Backward compatibility
+### 7.7 Backward compatibility
 
 Existing Claude sessions without `backend/profileId` should continue with current behaviour:
 
@@ -711,7 +782,7 @@ But new sessions should prefer configured default profile.
 
 ---
 
-## 7. Event normalization requirements
+## 8. Event normalization requirements
 
 The Web UI must show:
 
@@ -737,7 +808,7 @@ Do not regress tool visibility. Tool visibility is a primary reason for moving a
 
 ---
 
-## 8. Verification and guardrail behaviour to build in
+## 9. Verification and guardrail behaviour to build in
 
 The backend itself should encourage high-quality GLM work via profile/system/tool policy where possible:
 
@@ -757,11 +828,11 @@ Do not let this prompt override user/project instructions unexpectedly. Make it 
 
 ---
 
-## 9. Test strategy during implementation
+## 10. Test strategy during implementation
 
 Use TDD/systematic debugging. Add or update tests as you build.
 
-### 9.1 Unit tests
+### 10.1 Unit tests
 
 Add tests for:
 
@@ -776,7 +847,7 @@ Add tests for:
 - direct CLI spawn options with mocked process spawn
 - backward compatibility for existing sessions
 
-### 9.2 Integration tests with mocks
+### 10.2 Integration tests with mocks
 
 Existing channel integration tests use mock services. Add analogous tests for SDK backend if feasible:
 
@@ -785,7 +856,7 @@ Existing channel integration tests use mock services. Add analogous tests for SD
 - follow-up resumes same session/profile
 - errors surface cleanly
 
-### 9.3 Static checks
+### 10.3 Static checks
 
 Run during development:
 
@@ -810,11 +881,11 @@ npm run validate:server
 
 ---
 
-## 10. Live validation strategy after implementation
+## 11. Live validation strategy after implementation
 
 Live validation must use a disposable validation server unless explicitly authorised otherwise.
 
-### 10.1 Start disposable validation server
+### 11.1 Start disposable validation server
 
 Use the project’s existing validation server. Prefer unique ports/dir.
 
@@ -849,7 +920,7 @@ GET /api/v1/models
 
 Save artifacts under a run results directory.
 
-### 10.2 Required live validation scenarios
+### 11.2 Required live validation scenarios
 
 #### Scenario 1 — capabilities/models expose profiles
 
@@ -983,7 +1054,7 @@ Pass criteria:
 
 This specifically validates the “better harness for data workflows” goal.
 
-### 10.3 Required artifact capture
+### 11.3 Required artifact capture
 
 Save:
 
@@ -998,7 +1069,7 @@ logs/validation-server.log
 created-files-checks.txt
 ```
 
-### 10.4 Cleanup
+### 11.4 Cleanup
 
 After validation:
 
@@ -1009,11 +1080,11 @@ After validation:
 
 ---
 
-## 11. Definition of done
+## 12. Definition of done
 
 This project is **not ready** unless all of the following are true:
 
-### 11.1 Architecture/functionality
+### 12.1 Architecture/functionality
 
 - Claude runtime supports selectable backend/profile metadata.
 - SDK subscription backend works for native Claude.
@@ -1024,21 +1095,21 @@ This project is **not ready** unless all of the following are true:
 - Existing Claude sessions remain backward compatible.
 - Profile used by a session persists across follow-ups.
 
-### 11.2 UX/API
+### 12.2 UX/API
 
 - Profiles are visible/selectable in the Web UI or through Internal API model/profile selection.
 - Profile labels are clear enough to avoid accidentally using expensive API-key mode.
 - `/api/v1/capabilities` and/or `/api/v1/models` expose enough information for automation.
 - Internal API can create sessions with selected profiles.
 
-### 11.3 Safety
+### 12.3 Safety
 
 - No Claude API-key fallback is automatic.
 - Secrets are not logged.
 - Destructive tools are governed by existing permission model or conservative SDK permissions.
 - Channel mode does not globally corrupt hooks/settings when not selected.
 
-### 11.4 Quality validation
+### 12.4 Quality validation
 
 - `npm run typecheck` passes.
 - `npm run lint` passes or any failures are pre-existing and documented.
@@ -1051,7 +1122,7 @@ If any non-negotiable criterion fails, do not mark done. Report exact failure an
 
 ---
 
-## 12. Rollback and feature flags
+## 13. Rollback and feature flags
 
 Add feature flags/config so the user can revert quickly:
 
@@ -1082,7 +1153,7 @@ Do not remove existing env support for `CLAUDE_CHANNEL_ENABLED`.
 
 ---
 
-## 13. Suggested implementation phases
+## 14. Suggested implementation phases
 
 ### Phase 0 — Read and pre-validate
 
@@ -1127,7 +1198,7 @@ Do not remove existing env support for `CLAUDE_CHANNEL_ENABLED`.
 
 ---
 
-## 14. Specific questions the implementation agent must answer in its final report
+## 15. Specific questions the implementation agent must answer in its final report
 
 1. Which pre-validation path succeeded: SDK native env, SDK Clother, CLI direct Clother, or other?
 2. Does SDK + GLM 5.2 work without mutating global Claude settings?
@@ -1142,7 +1213,7 @@ Do not remove existing env support for `CLAUDE_CHANNEL_ENABLED`.
 
 ---
 
-## 15. Expected final documentation updates
+## 16. Expected final documentation updates
 
 Update or add docs as appropriate:
 
@@ -1164,7 +1235,7 @@ Docs should clearly say:
 
 ---
 
-## 16. Final caution
+## 17. Final caution
 
 The most important failure mode is building too much before proving the provider/profile path works. Do not do that.
 
