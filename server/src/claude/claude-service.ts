@@ -187,9 +187,25 @@ export class ClaudeService {
     thinkingLevel?: string,
     profileId?: string,
   ): Promise<{ sessionId: string; claudeSessionId: string }> {
-    // Resolve the effective profile
+    // Resolve the effective profile.
+    //
+    // Resolution order:
+    //   1. An explicit profileId always wins.
+    //   2. A bare Claude alias (sonnet/opus/haiku) resolves to a *native
+    //      Claude* profile for that model — never the (possibly GLM) default
+    //      profile. This prevents the footgun where picking "Claude Sonnet"
+    //      silently ran GLM because a GLM default profile was configured.
+    //   3. Otherwise fall back to the configured default profile.
     let profile: ClaudeProfile | undefined;
-    const effectiveProfileId = profileId ?? this.profileManager?.getDefaultProfileId();
+    let effectiveProfileId = profileId;
+    if (!effectiveProfileId && this.profileManager) {
+      const BARE_ALIASES = ['sonnet', 'opus', 'haiku'];
+      if (BARE_ALIASES.includes(model)) {
+        effectiveProfileId = this.findNativeClaudeProfileId(model);
+      } else {
+        effectiveProfileId = this.profileManager.getDefaultProfileId();
+      }
+    }
 
     if (effectiveProfileId && this.profileManager) {
       try {
@@ -444,6 +460,19 @@ export class ClaudeService {
   /** Return available profiles for model selector / API. */
   getProfiles(): ClaudeProfile[] {
     return this.profileManager?.listEnabledProfiles() ?? [];
+  }
+
+  /**
+   * Find an enabled native-Claude SDK profile (Anthropic subscription, not a
+   * provider profile like GLM) whose model matches `model`. Used to resolve a
+   * bare Claude alias to native Claude rather than the default profile.
+   * Returns undefined if none matches (caller falls back to legacy direct).
+   */
+  private findNativeClaudeProfileId(model: string): string | undefined {
+    if (!this.profileManager) return undefined;
+    const isNative = (p: ClaudeProfile) =>
+      !p.baseUrl && p.backend === 'sdk-subscription' && p.model === model;
+    return this.profileManager.listEnabledProfiles().find(isNative)?.id;
   }
 
   /** Return the profile manager (for profile resolution by ID). */

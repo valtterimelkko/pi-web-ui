@@ -69,6 +69,8 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
               id: `profile:${profile.id}`,
               displayName: profile.label,
               provider: profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic',
+              backend: profile.backend,
+              claudeModel: profile.model,
             };
             result.claude.push(profileModel);
           }

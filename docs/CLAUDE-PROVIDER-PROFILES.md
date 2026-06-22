@@ -177,10 +177,35 @@ These are enforced in code and verified by the profile validation runner:
 
 When `CLAUDE_PROFILES_ENABLED=true`, profiles are selectable in two places:
 
-- **Browser UI** — In the New Session modal, choose the **Claude Direct** session type. A **Model / Provider Profile** dropdown then appears, listing the base Claude aliases (`sonnet`/`opus`/`haiku`) plus every enabled profile (e.g. *GLM 5.2 — Claude SDK*). The chosen entry is sent as the session's `model` (`profile:<id>` for profiles), and the server resolves the backend/provider at creation time.
-- **Internal API** — `GET /api/v1/models` returns profile-backed entries with `profile:<id>` IDs; create a session with `model: "profile:<id>"` (or an explicit `profileId`).
+- **Browser UI** — In the New Session modal, choose the **Claude Direct** session type. A **structured selector** then appears with three axes:
+  - **Provider** — Claude or GLM.
+  - **Backend** — SDK / CLI direct / Channel (in priority order). Only the backends that have a matching profile are shown; GLM omits Channel.
+  - **Model** — Sonnet / Opus / Haiku (shown for Claude only; GLM has a single model).
+
+  The selection is resolved to the matching `profile:<id>` and sent as the session's `model`; the server resolves the backend/provider at creation time. For the structured selector to offer a combination, a profile for it must exist in `claude-profiles.json` (see the matrix below).
+- **Internal API** — `GET /api/v1/models` returns profile-backed entries with `profile:<id>` IDs plus `backend` and `claudeModel` fields; create a session with `model: "profile:<id>"` (or an explicit `profileId`).
 
 Selecting a profile creates a session bound to it. Profile binding persists across follow-up turns in the same session. To use a different profile, create a new session.
+
+### Base-alias routing
+
+A bare model alias (`sonnet`/`opus`/`haiku`, with no `profile:` prefix) resolves to a **native Claude** SDK profile for that model — never the configured default profile. This prevents the footgun where a GLM default profile caused a bare "Claude Sonnet" selection to silently run GLM. The `defaultProfileId` / `CLAUDE_DEFAULT_PROFILE` setting now only applies to sessions created with no model at all (e.g. session transfer).
+
+### Recommended profile matrix
+
+For the structured selector to expose the full grid, define one profile per combination:
+
+| Provider | Backend | Models | Example ids |
+|---|---|---|---|
+| Claude | SDK | sonnet/opus/haiku | `claude-sonnet-sdk-subscription`, `claude-opus-sdk-subscription`, `claude-haiku-sdk-subscription` |
+| Claude | CLI direct | sonnet/opus/haiku | `claude-{sonnet,opus,haiku}-cli-direct` |
+| Claude | Channel | sonnet/opus/haiku | `claude-{sonnet,opus,haiku}-channel` |
+| GLM | SDK | (single) | `glm52-claude-sdk-native-profile` |
+| GLM | CLI direct | (single) | `glm52-claude-cli-direct` |
+
+Channel profiles require `CLAUDE_CHANNEL_ENABLED=true`.
+
+A ready-to-copy config with all of the above is committed at [`claude-profiles.example.json`](./claude-profiles.example.json). Copy it to `~/.pi-web-ui/claude-profiles.json` and set `GLM_CODING_PLAN_TOKEN` in the environment.
 
 ## Validating a profile setup
 

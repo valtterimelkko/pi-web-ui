@@ -37,8 +37,8 @@ describe('GET /api/models?sdkType=claude', () => {
 
   it('surfaces base Claude aliases plus profile-backed entries', async () => {
     getClaudeProfilesMock.mockReturnValue([
-      { id: 'glm52-claude-sdk', label: 'GLM 5.2 — Claude SDK', baseUrl: 'https://api.z.ai/api/anthropic' },
-      { id: 'claude-sonnet-sdk', label: 'Claude Sonnet — SDK', baseUrl: undefined },
+      { id: 'glm52-claude-sdk', label: 'GLM 5.2 — Claude SDK', baseUrl: 'https://api.z.ai/api/anthropic', backend: 'sdk-subscription', model: 'sonnet' },
+      { id: 'claude-opus-cli-direct', label: 'Claude Opus — CLI direct', baseUrl: undefined, backend: 'cli-direct', model: 'opus' },
     ]);
 
     const res = await request(app).get('/api/models?sdkType=claude').expect(200);
@@ -48,14 +48,18 @@ describe('GET /api/models?sdkType=claude', () => {
     expect(ids).toContain('opus');
     expect(ids).toContain('haiku');
     expect(ids).toContain('profile:glm52-claude-sdk');
-    expect(ids).toContain('profile:claude-sonnet-sdk');
+    expect(ids).toContain('profile:claude-opus-cli-direct');
 
     const glm = res.body.models.find((m: { id: string }) => m.id === 'profile:glm52-claude-sdk');
     expect(glm.provider).toBe('zai');
     expect(glm.displayName).toBe('GLM 5.2 — Claude SDK');
+    expect(glm.backend).toBe('sdk-subscription');
+    expect(glm.claudeModel).toBe('sonnet');
 
-    const native = res.body.models.find((m: { id: string }) => m.id === 'profile:claude-sonnet-sdk');
+    const native = res.body.models.find((m: { id: string }) => m.id === 'profile:claude-opus-cli-direct');
     expect(native.provider).toBe('anthropic');
+    expect(native.backend).toBe('cli-direct');
+    expect(native.claudeModel).toBe('opus');
   });
 
   it('returns only base aliases when no profiles are enabled', async () => {

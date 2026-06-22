@@ -385,6 +385,10 @@ export interface ModelInfo {
   aliases?: string[];
   /** Whether the model exposes a reasoning/thinking capability. */
   reasoning?: boolean;
+  /** For Claude profile entries: the backend that drives this profile. */
+  backend?: 'sdk-subscription' | 'cli-direct' | 'channel';
+  /** For Claude profile entries: the underlying model alias (sonnet/opus/haiku). */
+  claudeModel?: string;
 }
 
 export interface ModelsResponse {

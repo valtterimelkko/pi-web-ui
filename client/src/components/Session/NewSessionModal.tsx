@@ -16,6 +16,67 @@ interface DirectoryItem {
   path: string;
 }
 
+// ─── Claude provider/backend/model selection ──────────────────────────────────
+
+type ClaudeProvider = 'claude' | 'glm';
+
+interface ClaudeModelEntry {
+  id: string;            // 'sonnet' | 'opus' | 'haiku' | 'profile:<id>'
+  displayName: string;
+  provider: string;      // 'anthropic' | 'zai'
+  backend?: 'sdk-subscription' | 'cli-direct' | 'channel';
+  claudeModel?: string;  // sonnet/opus/haiku for profile entries
+}
+
+const PROVIDER_OF = (entry: ClaudeModelEntry): ClaudeProvider =>
+  entry.provider === 'zai' ? 'glm' : 'claude';
+
+const BACKEND_ORDER = ['sdk-subscription', 'cli-direct', 'channel'] as const;
+const BACKEND_LABEL: Record<string, string> = {
+  'sdk-subscription': 'SDK',
+  'cli-direct': 'CLI direct',
+  'channel': 'Channel',
+};
+const PROVIDER_LABEL: Record<ClaudeProvider, string> = { claude: 'Claude', glm: 'GLM' };
+const MODEL_LABEL: Record<string, string> = { sonnet: 'Sonnet', opus: 'Opus', haiku: 'Haiku' };
+
+/** Only profile-backed entries participate in the structured selector. */
+const profileEntries = (models: ClaudeModelEntry[]) =>
+  models.filter((m) => m.id.startsWith('profile:') && m.backend);
+
+const providersOf = (models: ClaudeModelEntry[]): ClaudeProvider[] => {
+  const set = new Set<ClaudeProvider>();
+  for (const m of profileEntries(models)) set.add(PROVIDER_OF(m));
+  return (['claude', 'glm'] as ClaudeProvider[]).filter((p) => set.has(p));
+};
+
+const backendsOf = (models: ClaudeModelEntry[], provider: ClaudeProvider): string[] => {
+  const set = new Set<string>();
+  for (const m of profileEntries(models)) if (PROVIDER_OF(m) === provider && m.backend) set.add(m.backend);
+  return BACKEND_ORDER.filter((b) => set.has(b));
+};
+
+const modelsOf = (models: ClaudeModelEntry[], provider: ClaudeProvider, backend: string): string[] => {
+  const set = new Set<string>();
+  for (const m of profileEntries(models))
+    if (PROVIDER_OF(m) === provider && m.backend === backend && m.claudeModel) set.add(m.claudeModel);
+  return ['sonnet', 'opus', 'haiku'].filter((mm) => set.has(mm));
+};
+
+/** Resolve a (provider, backend, model) selection to a `profile:<id>` model id. */
+const resolveProfileId = (
+  models: ClaudeModelEntry[],
+  provider: ClaudeProvider,
+  backend: string,
+  model: string,
+): string | undefined => {
+  const match = profileEntries(models).find(
+    (m) => PROVIDER_OF(m) === provider && m.backend === backend &&
+      (provider === 'glm' || m.claudeModel === model),
+  );
+  return match?.id;
+};
+
 export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveMode }: NewSessionModalProps) {
   const [currentPath, setCurrentPath] = useState<string>('/root');
   const [parentPath, setParentPath] = useState<string | null>(null);
@@ -26,9 +87,12 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const [showRecentFolders, setShowRecentFolders] = useState(true);
   const [pathInput, setPathInput] = useState('/root');
   const [sdkType, setSdkType] = useState<'pi' | 'claude' | 'opencode' | 'antigravity'>('pi');
-  const [claudeModels, setClaudeModels] = useState<Array<{ id: string; displayName: string; provider: string }>>([]);
-  const [selectedClaudeModel, setSelectedClaudeModel] = useState<string>('sonnet');
+  const [claudeModels, setClaudeModels] = useState<ClaudeModelEntry[]>([]);
   const [claudeModelsLoading, setClaudeModelsLoading] = useState(false);
+  // Structured Claude selection: provider → backend → model.
+  const [claudeProvider, setClaudeProvider] = useState<ClaudeProvider>('claude');
+  const [claudeBackend, setClaudeBackend] = useState<string>('sdk-subscription');
+  const [claudeModel, setClaudeModel] = useState<string>('sonnet');
   const recentDropdownRef = useRef<HTMLDivElement>(null);
 
   const { recentFolders, addRecentFolder, getRecentFolders } = useUIStore();
@@ -101,19 +165,53 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     api.get('/api/models?sdkType=claude')
       .then((resp) => {
         if (cancelled) return;
-        const models = (resp as { models?: Array<{ id: string; displayName: string; provider: string }> }).models || [];
+        const models = (resp as { models?: ClaudeModelEntry[] }).models || [];
         setClaudeModels(models);
-        // Prefer the first provider profile if one exists, else the sonnet alias.
-        const firstProfile = models.find((m) => m.id.startsWith('profile:'));
-        setSelectedClaudeModel(firstProfile?.id || 'sonnet');
+        // Default to the first available provider/backend/model in priority order.
+        const provs = providersOf(models);
+        const prov = provs.includes('claude') ? 'claude' : (provs[0] || 'claude');
+        const backends = backendsOf(models, prov);
+        const backend = backends[0] || 'sdk-subscription';
+        const ms = modelsOf(models, prov, backend);
+        setClaudeProvider(prov);
+        setClaudeBackend(backend);
+        setClaudeModel(ms.includes('sonnet') ? 'sonnet' : (ms[0] || 'sonnet'));
       })
       .catch((err) => console.error('Failed to fetch Claude models:', err))
       .finally(() => { if (!cancelled) setClaudeModelsLoading(false); });
     return () => { cancelled = true; };
   }, [isOpen, sdkType, claudeModels.length]);
 
-  // The model arg passed to onCreateSession — only Claude sessions carry one here.
-  const claudeModelArg = () => (sdkType === 'claude' ? selectedClaudeModel : undefined);
+  // Switch provider: reset backend + model to the first available for it.
+  const selectProvider = (prov: ClaudeProvider) => {
+    setClaudeProvider(prov);
+    const backends = backendsOf(claudeModels, prov);
+    const backend = backends[0] || 'sdk-subscription';
+    setClaudeBackend(backend);
+    const ms = modelsOf(claudeModels, prov, backend);
+    setClaudeModel(ms.includes('sonnet') ? 'sonnet' : (ms[0] || 'sonnet'));
+  };
+
+  // Switch backend: reset model to the first available for provider+backend.
+  const selectBackend = (backend: string) => {
+    setClaudeBackend(backend);
+    const ms = modelsOf(claudeModels, claudeProvider, backend);
+    setClaudeModel(ms.includes('sonnet') ? 'sonnet' : (ms[0] || 'sonnet'));
+  };
+
+  // The model arg passed to onCreateSession — only Claude sessions carry one.
+  // Resolves the structured selection to `profile:<id>`; falls back to the bare
+  // model alias if profiles are unavailable.
+  const claudeModelArg = () => {
+    if (sdkType !== 'claude') return undefined;
+    if (profileEntries(claudeModels).length === 0) return claudeModel;
+    return resolveProfileId(claudeModels, claudeProvider, claudeBackend, claudeModel) || claudeModel;
+  };
+
+  // Derived lists for the structured Claude selector.
+  const providerList = providersOf(claudeModels);
+  const backendList = backendsOf(claudeModels, claudeProvider);
+  const modelList = modelsOf(claudeModels, claudeProvider, claudeBackend);
 
   const handleNavigate = (dir: DirectoryItem) => {
     fetchDirectories(dir.path);
@@ -276,35 +374,96 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
             </button>
           </div>
 
-          {/* Claude model / provider profile selector */}
+          {/* Claude provider / backend / model selector */}
           {sdkType === 'claude' && (
-            <div className="mt-2" data-testid="claude-model-selector">
-              <p className="text-xs font-medium text-gray-500 mb-1.5">Model / Provider Profile</p>
+            <div className="mt-2 space-y-2" data-testid="claude-model-selector">
               {claudeModelsLoading ? (
                 <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading profiles…
                 </div>
-              ) : (
-                <select
-                  value={selectedClaudeModel}
-                  onChange={(e) => setSelectedClaudeModel(e.target.value)}
-                  data-testid="claude-model-select"
-                  className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-                >
-                  {!claudeModels.some((m) => m.id.startsWith('profile:')) && claudeModels.length === 0 && (
+              ) : providerList.length === 0 ? (
+                // No profiles configured — fall back to a simple model dropdown.
+                <div>
+                  <p className="text-xs font-medium text-gray-500 mb-1.5">Model</p>
+                  <select
+                    value={claudeModel}
+                    onChange={(e) => setClaudeModel(e.target.value)}
+                    data-testid="claude-model-select"
+                    className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                  >
                     <option value="sonnet">Claude Sonnet</option>
+                    <option value="opus">Claude Opus</option>
+                    <option value="haiku">Claude Haiku</option>
+                  </select>
+                </div>
+              ) : (
+                <>
+                  {/* Provider */}
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 mb-1.5">Provider</p>
+                    <div className="flex gap-2" data-testid="claude-provider-toggle">
+                      {providerList.map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => selectProvider(p)}
+                          data-testid={`claude-provider-${p}`}
+                          className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${
+                            claudeProvider === p
+                              ? 'border-amber-500 bg-amber-50 text-gray-900 font-medium'
+                              : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                          }`}
+                        >
+                          {PROVIDER_LABEL[p]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Backend */}
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 mb-1.5">Backend</p>
+                    <div className="flex flex-wrap gap-2" data-testid="claude-backend-toggle">
+                      {backendList.map((b) => (
+                        <button
+                          key={b}
+                          onClick={() => selectBackend(b)}
+                          data-testid={`claude-backend-${b}`}
+                          className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${
+                            claudeBackend === b
+                              ? 'border-amber-500 bg-amber-50 text-gray-900 font-medium'
+                              : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                          }`}
+                        >
+                          {BACKEND_LABEL[b] || b}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Model (Claude only) */}
+                  {claudeProvider === 'claude' && modelList.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 mb-1.5">Model</p>
+                      <select
+                        value={claudeModel}
+                        onChange={(e) => setClaudeModel(e.target.value)}
+                        data-testid="claude-model-select"
+                        className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                      >
+                        {modelList.map((m) => (
+                          <option key={m} value={m}>{MODEL_LABEL[m] || m}</option>
+                        ))}
+                      </select>
+                    </div>
                   )}
-                  {claudeModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.displayName}
-                      {m.provider === 'zai' ? ' • GLM' : ''}
-                    </option>
-                  ))}
-                </select>
+
+                  <p className="text-[11px] text-gray-400" data-testid="claude-resolved-profile">
+                    {claudeProvider === 'glm'
+                      ? 'GLM 5.2 routes through the selected backend.'
+                      : 'Native Claude subscription via the selected backend.'}
+                  </p>
+                </>
               )}
-              <p className="text-[11px] text-gray-400 mt-1">
-                Profiles (e.g. GLM 5.2 via SDK) route through the selected backend. Plain aliases use the native Claude subscription.
-              </p>
             </div>
           )}
         </div>
