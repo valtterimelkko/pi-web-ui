@@ -33,7 +33,7 @@ export type PromptMode = 'prompt' | 'follow_up' | 'steer';
 // ─── Session runtime ─────────────────────────────────────────────────────────
 
 export type SessionRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity';
-export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 'subprocess';
+export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 'subprocess' | 'sdk';
 
 // ─── API contract metadata ───────────────────────────────────────────────────
 
@@ -83,6 +83,8 @@ export interface CreateSessionRequest {
   pin?: boolean;
   /** Pin lifetime in seconds. Defaults to 24h; clamped to a hard max (7d). */
   pinTtlSeconds?: number;
+  /** Claude-specific: select a provider profile by ID. */
+  profileId?: string;
 }
 
 export interface SendPromptRequest {

@@ -13,6 +13,13 @@ import { ClaudeSessionStore } from './claude-session-store.js';
 import { SessionRegistryManager, getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
 import { ClaudeChannelService } from './claude-channel-service.js';
+import { ClaudeSdkService } from './claude-sdk-service.js';
+import {
+  ClaudeProfileManager,
+  resolveProfile,
+  type ClaudeProfile,
+  type ResolvedClaudeLaunch,
+} from './claude-profiles.js';
 
 // ─── Public interfaces ────────────────────────────────────────────────────────
 
@@ -40,6 +47,8 @@ export class ClaudeService {
   private pinnedSessions: Set<string> = new Set();
   private static readonly MAX_PINNED_SESSIONS = 2;
   private channelService: ClaudeChannelService | null = null;
+  private sdkService: ClaudeSdkService | null = null;
+  private profileManager: ClaudeProfileManager | null = null;
 
   constructor(cfg: {
     claudeSessionDir: string;
@@ -49,6 +58,9 @@ export class ClaudeService {
     channelPluginDir?: string;
     channelWsPort?: number;
     channelHookPort?: number;
+    useSdk?: boolean;
+    profilesPath?: string;
+    defaultProfileId?: string;
   }) {
     this.processPool = new ClaudeProcessPool(cfg.maxProcesses ?? 10);
     this.sessionStore = new ClaudeSessionStore(cfg.claudeSessionDir);
@@ -63,6 +75,17 @@ export class ClaudeService {
         hookPort: cfg.channelHookPort ?? 3101,
         cwd: process.cwd(),
       });
+    }
+
+    // SDK backend (opt-in via config.claudeProfilesEnabled + config.claudeSdkEnabled)
+    if (cfg.useSdk) {
+      this.sdkService = new ClaudeSdkService({
+        claudeSessionDir: cfg.claudeSessionDir,
+        registryPath: cfg.registryPath,
+        profilesPath: cfg.profilesPath ?? '',
+        defaultProfileId: cfg.defaultProfileId,
+      });
+      this.profileManager = this.sdkService.profiles;
     }
   }
 
@@ -154,23 +177,53 @@ export class ClaudeService {
   /**
    * Create a new Claude session: allocate IDs, register in the registry and
    * session store, and return the IDs.
+   *
+   * When a profileId is provided (or a default profile exists), the session
+   * is created with the profile's backend (sdk-subscription, cli-direct, or channel).
    */
   async createSession(
     cwd: string,
     model: string = 'sonnet',
     thinkingLevel?: string,
+    profileId?: string,
   ): Promise<{ sessionId: string; claudeSessionId: string }> {
-    if (this.channelService && await this.channelService.isHealthy()) {
-      return this.channelService.createSession(cwd, model, thinkingLevel);
+    // Resolve the effective profile
+    let profile: ClaudeProfile | undefined;
+    const effectiveProfileId = profileId ?? this.profileManager?.getDefaultProfileId();
+
+    if (effectiveProfileId && this.profileManager) {
+      try {
+        profile = this.profileManager.requireProfile(effectiveProfileId);
+      } catch (err) {
+        console.warn(`[ClaudeService] Profile '${effectiveProfileId}' not available:`, err instanceof Error ? err.message : err);
+      }
     }
 
+    // Route to the appropriate backend
+    if (profile?.backend === 'sdk-subscription' && this.sdkService && await this.sdkService.isHealthy()) {
+      const result = await this.sdkService.createSession(cwd, model, thinkingLevel, profile.id);
+      // Record profile metadata in registry
+      await this.registry.upsert({
+        id: result.sessionId,
+        sdkType: 'claude',
+        cwd,
+        claudeProfileId: profile.id,
+        claudeProfileBackend: 'sdk-subscription',
+        claudeProviderId: profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic',
+      });
+      return { sessionId: result.sessionId, claudeSessionId: result.claudeSessionId };
+    }
+
+    if (profile?.backend === 'channel' && this.channelService && await this.channelService.isHealthy()) {
+      return this.channelService.createSession(cwd, profile.model ?? model, thinkingLevel);
+    }
+
+    // Direct CLI (default or cli-direct profile)
     const sessionId = randomUUID();
     const claudeSessionId = randomUUID();
+    const effectiveModel = profile?.model ?? model;
 
-    // Persist to JSONL store
-    await this.sessionStore.initSession(sessionId, claudeSessionId, cwd, model);
-
-    // Register in the shared session registry
+    await this.sessionStore.initSession(sessionId, claudeSessionId, cwd, effectiveModel);
     const filePath = this.sessionStore.getFilePath(sessionId);
     await this.registry.upsert({
       id: sessionId,
@@ -178,11 +231,14 @@ export class ClaudeService {
       path: filePath,
       claudeSessionId,
       cwd,
-      model,
+      model: effectiveModel,
       thinkingLevel,
       firstMessage: '',
       messageCount: 0,
       status: 'idle',
+      claudeProfileId: profile?.id,
+      claudeProfileBackend: profile ? 'cli-direct' : undefined,
+      claudeProviderId: profile?.baseUrl?.includes('z.ai') ? 'zai' : (profile ? 'anthropic' : undefined),
     });
 
     return { sessionId, claudeSessionId };
@@ -200,16 +256,28 @@ export class ClaudeService {
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
   ): Promise<void> {
-    if (this.channelService && await this.channelService.isHealthy()) {
-      return this.channelService.sendPrompt(sessionId, prompt, onEvent, onComplete);
+    // Route to channel if this is a channel session
+    if (this.hasChannelSession(sessionId)) {
+      return this.channelService!.sendPrompt(sessionId, prompt, onEvent, onComplete);
     }
 
+    // Route to SDK if this is an SDK session
+    if (this.sdkService?.hasSession(sessionId)) {
+      return this.sdkService.sendPrompt(sessionId, prompt, onEvent, onComplete);
+    }
+
+    // Check registry for profile backend
     const entry = await this.registry.get(sessionId);
     if (!entry) {
       throw new Error(`Claude session not found: ${sessionId}`);
     }
     if (!entry.claudeSessionId) {
       throw new Error(`Registry entry for ${sessionId} is missing claudeSessionId`);
+    }
+
+    // If the session was created with sdk-subscription backend, delegate to SDK
+    if (entry.claudeProfileBackend === 'sdk-subscription' && this.sdkService) {
+      return this.sdkService.sendPrompt(sessionId, prompt, onEvent, onComplete);
     }
 
     // Persist the user prompt
@@ -219,30 +287,33 @@ export class ClaudeService {
       timestamp: Date.now(),
     });
 
-    // Update registry status to running
     await this.registry.updateStatus(sessionId, 'running');
 
-    // Emit agent_start before spawning
     const agentStartEvent: NormalizedEvent = {
       type: 'agent_start',
       sessionId,
       timestamp: Date.now(),
       data: { sessionId, claudeSessionId: entry.claudeSessionId },
     };
-    try {
-      onEvent(agentStartEvent);
-    } catch { /* non-fatal */ }
+    try { onEvent(agentStartEvent); } catch { /* non-fatal */ }
 
-    // Check if this session has had a previous turn (for --resume vs --session-id)
-    // 1. In-memory tracker (accurate within a single process lifetime)
-    // 2. messageCount from registry (may be stale if never updated)
-    // 3. Existence of Claude's own session JSONL file (survives restarts)
     const claudeSessionFile = resolveClaudeSessionPath(entry.cwd, entry.claudeSessionId);
     const isFollowUp = this.sessionsWithHistory.has(sessionId)
       || (entry.messageCount != null && entry.messageCount > 0)
       || existsSync(claudeSessionFile);
 
-    // Spawn the process
+    // Resolve profile for direct CLI if one is configured
+    let resolvedLaunch: ResolvedClaudeLaunch | undefined;
+    if (entry.claudeProfileId && this.profileManager) {
+      try {
+        const profile = this.profileManager.requireProfile(entry.claudeProfileId);
+        resolvedLaunch = resolveProfile(profile);
+      } catch (err) {
+        console.warn(`[ClaudeService] Failed to resolve profile '${entry.claudeProfileId}':`, err instanceof Error ? err.message : err);
+      }
+    }
+
+    // Spawn the process (profile-aware if resolvedLaunch is set)
     await this.processPool.spawn(
       {
         sessionId,
@@ -251,6 +322,7 @@ export class ClaudeService {
         model: entry.model ?? 'sonnet',
         prompt,
         isFollowUp,
+        resolvedLaunch,
       },
       // onEvent: persist interesting events, capture confirmed session_id, and forward to caller
       async (event: NormalizedEvent) => {
@@ -304,6 +376,10 @@ export class ClaudeService {
       this.channelService?.abort(sessionId);
       return;
     }
+    if (this.sdkService?.hasSession(sessionId)) {
+      this.sdkService.abort(sessionId);
+      return;
+    }
     this.processPool.abort(sessionId);
   }
 
@@ -311,6 +387,9 @@ export class ClaudeService {
   isRunning(sessionId: string): boolean {
     if (this.hasChannelSession(sessionId)) {
       return this.channelService?.isRunning(sessionId) ?? false;
+    }
+    if (this.sdkService?.hasSession(sessionId)) {
+      return this.sdkService.isRunning(sessionId);
     }
     return this.processPool.isActive(sessionId);
   }
@@ -322,9 +401,12 @@ export class ClaudeService {
     return this.sessionStore.loadHistory(sessionId);
   }
 
-  async getBackendMode(): Promise<'direct' | 'channel'> {
+  async getBackendMode(): Promise<'direct' | 'channel' | 'sdk'> {
     if (this.channelService && await this.channelService.isHealthy()) {
       return 'channel';
+    }
+    if (this.sdkService && await this.sdkService.isHealthy()) {
+      return 'sdk';
     }
     return 'direct';
   }
@@ -358,6 +440,16 @@ export class ClaudeService {
   }
 
   // ── Queries ───────────────────────────────────────────────────────────────
+
+  /** Return available profiles for model selector / API. */
+  getProfiles(): ClaudeProfile[] {
+    return this.profileManager?.listEnabledProfiles() ?? [];
+  }
+
+  /** Return the profile manager (for profile resolution by ID). */
+  getProfileManager(): ClaudeProfileManager | null {
+    return this.profileManager;
+  }
 
   async getSession(sessionId: string) {
     if (this.hasChannelSession(sessionId)) {
@@ -573,7 +665,21 @@ export function getClaudeService(): ClaudeService {
       channelPluginDir: config.claudeChannelPluginDir,
       channelWsPort: config.claudeChannelWsPort,
       channelHookPort: config.claudeChannelHookPort,
+      useSdk: config.claudeProfilesEnabled && config.claudeSdkEnabled,
+      profilesPath: config.claudeProfilesPath,
+      defaultProfileId: config.claudeDefaultProfile,
     });
   }
   return claudeServiceInstance;
+}
+
+// ─── Profile accessors ─────────────────────────────────────────────────────
+
+/**
+ * Return enabled Claude profiles for the model selector / API.
+ * Returns empty when profiles are not enabled.
+ */
+export function getClaudeProfiles(): ClaudeProfile[] {
+  const svc = getClaudeService();
+  return svc.getProfiles();
 }

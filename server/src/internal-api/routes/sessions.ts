@@ -254,12 +254,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sendJson(res, 503, { error: 'Claude runtime is not available', code: 'RUNTIME_UNAVAILABLE' });
             return;
           }
-          const { sessionId } = await claudeService.createSession(cwd, body.model || 'sonnet', body.thinkingLevel);
+          // Support profile selection via model="profile:<id>" or explicit profileId
+          let profileId: string | undefined = (body as { profileId?: string }).profileId;
+          let model: string | undefined = body.model || 'sonnet';
+          if (model.startsWith('profile:')) {
+            profileId = model.slice('profile:'.length);
+            model = undefined; // the profile determines the model
+          }
+          const { sessionId } = await claudeService.createSession(cwd, model || 'sonnet', body.thinkingLevel, profileId);
           base = {
             sessionId,
             sessionPath: sessionId,
             runtime: 'claude',
-            model: body.model || 'sonnet',
+            model: profileId ? `profile:${profileId}` : (body.model || 'sonnet'),
             cwd,
             createdAt: new Date().toISOString(),
           };
@@ -415,6 +422,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       const claudePinUntil = apiPinDeadline(sessionId);
       if (claudePinUntil) detail.pinnedUntil = claudePinUntil;
       detail.status = claudeService.isRunning(sessionId) ? 'running' : detail.status;
+      // Expose Claude-specific profile metadata (never secrets)
+      if (entry.claudeProfileId) {
+        (detail as SessionDetail & { claudeProfileId?: string; claudeProfileBackend?: string; claudeProviderId?: string }).claudeProfileId = entry.claudeProfileId;
+        (detail as SessionDetail & { claudeProfileBackend?: string }).claudeProfileBackend = entry.claudeProfileBackend;
+        (detail as SessionDetail & { claudeProviderId?: string }).claudeProviderId = entry.claudeProviderId;
+      }
       if (stats) {
         detail.nativeSessionId = stats.sessionId;
         detail.sessionFile = stats.sessionFile;

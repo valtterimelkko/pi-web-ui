@@ -86,6 +86,21 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
       },
     };
 
+    // Expose Claude profiles as extra metadata (non-secret fields only).
+    // Added at the top level so automation clients can discover them.
+    const claudeProfiles = claudeService.getProfiles();
+    if (claudeProfiles.length > 0) {
+      (body as CapabilitiesResponse & { claudeProfiles?: unknown }).claudeProfiles = claudeProfiles.map((p) => ({
+        id: p.id,
+        label: p.label,
+        backend: p.backend,
+        launcherType: p.launcherType,
+        model: p.model,
+        provider: p.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic',
+        enabled: p.enabled,
+      }));
+    }
+
     sendJson(res, 200, body);
   }
 

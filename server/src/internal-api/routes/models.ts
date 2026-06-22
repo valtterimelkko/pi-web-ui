@@ -54,11 +54,24 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
       // Claude models
       if (!runtimeFilter || runtimeFilter === 'claude') {
         if (await claudeService.isAvailable()) {
+          // Always include the base alias models for backward compat
           result.claude = [
             { id: 'sonnet', displayName: 'Claude Sonnet 4', provider: 'anthropic' },
             { id: 'opus', displayName: 'Claude Opus 4', provider: 'anthropic' },
             { id: 'haiku', displayName: 'Claude Haiku 3.5', provider: 'anthropic' },
           ];
+
+          // When profiles are enabled, add profile-backed model entries
+          // with `profile:<id>` IDs so callers can select a specific profile.
+          const profiles = claudeService.getProfiles();
+          for (const profile of profiles) {
+            const profileModel: ModelInfo = {
+              id: `profile:${profile.id}`,
+              displayName: profile.label,
+              provider: profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic',
+            };
+            result.claude.push(profileModel);
+          }
         }
       }
 

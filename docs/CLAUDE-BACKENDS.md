@@ -27,9 +27,20 @@ Recent work introduced a **channel-backed Claude Code path** alongside the older
 
 This doc centralizes that.
 
-## The Two Claude Backend Modes
+## The Three Claude Backend Modes
 
-### 1. Legacy direct mode
+### 1. SDK backend (preferred for profiles)
+
+- **How it runs:** Claude Agent SDK `query()` → spawns Claude Code binary with profile-resolved env
+- **Main modules:**
+  - `server/src/claude/claude-sdk-service.ts`
+  - `server/src/claude/claude-sdk-event-adapter.ts`
+  - `server/src/claude/claude-profiles.ts`
+- **Strengths:** `canUseTool` permission callbacks, AbortController cancellation, structured SDK messages, profile-based provider switching (native Claude subscription, GLM/Z.ai, etc.)
+- **When to use:** when `CLAUDE_PROFILES_ENABLED=true` and the session's profile has `backend: 'sdk-subscription'`
+- **Main limitations:** requires `@anthropic-ai/claude-agent-sdk` dependency
+
+### 2. Legacy direct mode
 
 - **How it runs:** `claude -p`
 - **Main modules:**
@@ -38,10 +49,11 @@ This doc centralizes that.
   - `server/src/claude/claude-event-normalizer.ts`
   - `server/src/claude/claude-history-replay.ts`
   - `server/src/claude/claude-session-store.ts`
-- **Strengths:** straightforward subprocess-per-turn model
+- **Strengths:** straightforward subprocess-per-turn model, now profile-aware
 - **Main limitations:** no true mid-turn steer, subprocess lock edge cases, weaker interactivity
+- **Profile support:** when a profile with `backend: 'cli-direct'` is selected, the pool uses the profile's resolved executable/env/model instead of hardcoded defaults
 
-### 2. Channel-backed mode
+### 3. Channel-backed mode
 
 - **How it runs:** Claude Code launched with the development channel plugin under PTY supervision
 - **Main modules:**
@@ -125,12 +137,63 @@ Browser
 
 Defined in `.env.example` and parsed in `server/src/config.ts`:
 
+**Backend selection:**
+- `CLAUDE_BACKEND_DEFAULT` — `sdk` | `direct` | `channel` (default: `direct`)
+- `CLAUDE_PROFILES_ENABLED` — enable the profile system (default: `false`)
+- `CLAUDE_SDK_ENABLED` — enable the SDK backend (default: `true` when profiles enabled)
+- `CLAUDE_DIRECT_PROFILES_ENABLED` — enable direct CLI profile support (default: `true`)
+- `CLAUDE_DEFAULT_PROFILE` — default profile ID for new Claude sessions
+- `CLAUDE_PROFILES_PATH` — path to `claude-profiles.json` (default: `~/.pi-web-ui/claude-profiles.json`)
+
+**Channel-backed:**
 - `CLAUDE_CHANNEL_ENABLED`
 - `CLAUDE_CHANNEL_PLUGIN_DIR`
 - `CLAUDE_CHANNEL_WS_PORT`
 - `CLAUDE_CHANNEL_HOOK_PORT`
 
+**Rollback:** to revert to legacy direct mode:
+```env
+CLAUDE_PROFILES_ENABLED=false
+CLAUDE_SDK_ENABLED=false
+CLAUDE_BACKEND_DEFAULT=direct
+```
+
 See [`../DEPLOYMENT.md`](../DEPLOYMENT.md) for operational guidance.
+
+## Provider Profiles
+
+When `CLAUDE_PROFILES_ENABLED=true`, Claude sessions can run through explicit
+provider profiles defined in `~/.pi-web-ui/claude-profiles.json`. Each profile
+specifies a backend (`sdk-subscription`, `cli-direct`, or `channel`), a launcher
+type (`native-env` or `command`), a model, and optional provider settings
+(base URL, auth token, model aliases, skills, tools).
+
+**Key safety rules:**
+- `ANTHROPIC_API_KEY` is **always stripped** from the subprocess env (no pay-per-use)
+- Auth tokens are sourced from env vars (`authTokenEnv`) or validated secret files (`authTokenPath`) — never stored in the profile file itself
+- Token values are never logged, exposed through APIs, or written to artifacts
+- `authTokenPath` must be absolute, non-symlink, and readable
+
+**Profile-backed model entries** appear in `/api/v1/models` as `profile:<id>` and in
+the web UI model selector. Selecting one creates a session bound to that profile.
+
+**GLM/Z.ai profile example** (uses GLM Coding Plan subscription token):
+```json
+{
+  "id": "glm52-claude-sdk",
+  "label": "GLM 5.2 — Claude SDK",
+  "backend": "sdk-subscription",
+  "launcherType": "native-env",
+  "baseUrl": "https://api.z.ai/api/anthropic",
+  "authTokenEnv": "GLM_CODING_PLAN_TOKEN",
+  "model": "sonnet",
+  "modelAliases": {
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]"
+  },
+  "skills": "all",
+  "permissionMode": "dontAsk"
+}
+```
 
 ## Logs and Quick Checks
 
@@ -223,6 +286,33 @@ npm run validate:live -- --runtime claude --scenario tool-visibility
 npm run validate:live -- --runtime claude --scenario session-info
 npm run validate:live -- --runtime claude --scenario follow-up
 ```
+
+For **profile-specific validation** (SDK/direct backends, GLM profiles):
+
+```bash
+# 1. Start a disposable validation server with profiles enabled
+CLAUDE_PROFILES_ENABLED=true \
+CLAUDE_SDK_ENABLED=true \
+CLAUDE_PROFILES_PATH="$VAL_DIR/claude-profiles.json" \
+GLM_CODING_PLAN_TOKEN="<token>" \
+npm run validate:server -- --dir "$VAL_DIR" --port 0
+
+# 2. Run the profile validation scenarios
+npm run validate:claude-profiles -- \
+  --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --glm-profile "glm52-claude-sdk" \
+  --native-profile "claude-sonnet-sdk" \
+  --direct-profile "glm52-claude-cli-direct"
+```
+
+This validates:
+- SDK native Claude subscription works
+- SDK GLM profile runs without channel mode
+- Direct CLI GLM profile works
+- Tool calls visible (`tool_execution_start`/`tool_execution_end`)
+- Skills available and usable
+- Follow-up/resume works with profile persistence
 
 If Claude is running in channel-backed mode, also run:
 

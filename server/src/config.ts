@@ -57,6 +57,12 @@ export interface ServerConfig {
   claudeChannelPluginDir: string;
   claudeChannelWsPort: number;
   claudeChannelHookPort: number;
+  claudeProfilesEnabled: boolean;
+  claudeSdkEnabled: boolean;
+  claudeDirectProfilesEnabled: boolean;
+  claudeProfilesPath: string;
+  claudeDefaultProfile?: string;
+  claudeBackendDefault: 'sdk' | 'direct' | 'channel';
   piStaleStreamingMs: number;
   antigravityEnabled: boolean;
   antigravitySessionDir: string;
@@ -137,6 +143,13 @@ export const config: ServerConfig = {
   claudeChannelPluginDir: process.env.CLAUDE_CHANNEL_PLUGIN_DIR ?? path.resolve(process.cwd(), 'pi-claude-channel'),
   claudeChannelWsPort: parseInt(process.env.CLAUDE_CHANNEL_WS_PORT || '3100', 10),
   claudeChannelHookPort: parseInt(process.env.CLAUDE_CHANNEL_HOOK_PORT || '3101', 10),
+  // Claude provider profiles (SDK + direct CLI)
+  claudeProfilesEnabled: process.env.CLAUDE_PROFILES_ENABLED === 'true',
+  claudeSdkEnabled: process.env.CLAUDE_SDK_ENABLED !== 'false',
+  claudeDirectProfilesEnabled: process.env.CLAUDE_DIRECT_PROFILES_ENABLED !== 'false',
+  claudeProfilesPath: process.env.CLAUDE_PROFILES_PATH ?? path.join(os.homedir(), '.pi-web-ui', 'claude-profiles.json'),
+  claudeDefaultProfile: process.env.CLAUDE_DEFAULT_PROFILE || undefined,
+  claudeBackendDefault: (process.env.CLAUDE_BACKEND_DEFAULT as 'sdk' | 'direct' | 'channel') || 'direct',
   piStaleStreamingMs: parseInt(process.env.PI_STALE_STREAMING_MS || '900000', 10),
   antigravityEnabled: process.env.ANTIGRAVITY_ENABLED !== 'false',
   antigravitySessionDir: process.env.ANTIGRAVITY_SESSION_DIR || path.join(os.homedir(), '.pi-web-ui', 'antigravity-sessions'),

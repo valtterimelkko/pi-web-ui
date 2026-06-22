@@ -79,6 +79,7 @@ export class ClaudeEventNormalizer {
           sessionId: event.session_id,
           cwd: event.cwd,
           permissionMode: event.permissionMode,
+          apiKeySource: event.apiKeySource,
         },
       },
     ];

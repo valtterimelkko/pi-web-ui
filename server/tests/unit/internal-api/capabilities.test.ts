@@ -42,6 +42,7 @@ describe('createCapabilitiesRoutes', () => {
       claudeService: {
         isAvailable: vi.fn().mockResolvedValue(true),
         getBackendMode: vi.fn().mockResolvedValue('channel'),
+        getProfiles: vi.fn().mockReturnValue([]),
       } as any,
       opencodeService: {
         isAvailable: vi.fn().mockResolvedValue(false),
@@ -93,6 +94,7 @@ describe('createCapabilitiesRoutes', () => {
       claudeService: {
         isAvailable: vi.fn().mockResolvedValue(true),
         getBackendMode: vi.fn().mockResolvedValue('direct'),
+        getProfiles: vi.fn().mockReturnValue([]),
       } as any,
       opencodeService: {
         isAvailable: vi.fn().mockResolvedValue(true),

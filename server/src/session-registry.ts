@@ -18,6 +18,12 @@ export interface RegistryEntry {
   createdAt: string;       // ISO string
   lastActivity: string;    // ISO string
   status: 'idle' | 'running' | 'error';
+  /** Claude-specific: which profile was selected for this session */
+  claudeProfileId?: string;
+  /** Claude-specific: which backend is handling this session */
+  claudeProfileBackend?: 'sdk-subscription' | 'cli-direct' | 'channel';
+  /** Claude-specific: provider id (anthropic, zai, etc.) — never a secret */
+  claudeProviderId?: string;
 }
 
 export interface SessionRegistry {
@@ -177,6 +183,9 @@ export class SessionRegistryManager {
         createdAt: entry.createdAt ?? now,
         lastActivity: entry.lastActivity ?? now,
         status: entry.status ?? 'idle',
+        claudeProfileId: entry.claudeProfileId,
+        claudeProfileBackend: entry.claudeProfileBackend,
+        claudeProviderId: entry.claudeProviderId,
       };
       registry.entries.push(newEntry);
       await this.save();

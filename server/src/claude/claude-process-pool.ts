@@ -4,13 +4,15 @@
  * Mirrors the WorkerPool pattern used for Pi SDK workers.
  */
 
-import { spawn, ChildProcess } from 'node:child_process';
+import { spawn, ChildProcess, execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readFile, writeFile } from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { ClaudeEventNormalizer } from './claude-event-normalizer.js';
+import type { ResolvedClaudeLaunch } from './claude-profiles.js';
 
 export interface ClaudeProcessOptions {
   sessionId: string;
@@ -19,6 +21,12 @@ export interface ClaudeProcessOptions {
   model: string;
   prompt: string;
   isFollowUp?: boolean;
+  /**
+   * Optional resolved profile launch. When provided, uses the profile's
+   * executable, env, model, and CLI args instead of the hardcoded defaults.
+   * When absent, preserves the existing behavior (strip API keys, use `claude`).
+   */
+  resolvedLaunch?: ResolvedClaudeLaunch;
 }
 
 export type ClaudeEventHandler = (event: NormalizedEvent) => void;
@@ -82,30 +90,60 @@ export class ClaudeProcessPool {
       );
     }
 
-    // ── Build environment WITHOUT API keys ──────────────────────────────────
-    // Removing these forces Claude CLI to use its subscription auth instead of
-    // pay-per-use API keys.  This is critical for the dual-SDK feature.
-    const claudeEnv: NodeJS.ProcessEnv = { ...process.env };
-    delete claudeEnv.ANTHROPIC_API_KEY;     // CRITICAL: forces subscription auth
-    delete claudeEnv.ANTHROPIC_AUTH_TOKEN;  // CRITICAL: forces subscription auth
+    // ── Build environment ──────────────────────────────────────────────────
+    // If a resolved profile is provided, use its env (already has API keys
+    // stripped/set per profile). Otherwise, strip API keys to force subscription.
+    const claudeEnv: NodeJS.ProcessEnv = options.resolvedLaunch
+      ? options.resolvedLaunch.env
+      : (() => {
+          const env = { ...process.env };
+          delete env.ANTHROPIC_API_KEY;     // CRITICAL: forces subscription auth
+          delete env.ANTHROPIC_AUTH_TOKEN;  // CRITICAL: forces subscription auth
+          return env;
+        })();
+
+    // ── Determine executable and model ─────────────────────────────────────
+    // Resolve the claude binary to an absolute path to avoid PATH resolution
+    // issues in spawned subprocesses (common with env replacement).
+    const rawExecutable = options.resolvedLaunch?.executable ?? 'claude';
+    let executable = rawExecutable;
+    if (rawExecutable === 'claude' || rawExecutable === 'node') {
+      try {
+        executable = execSync(`which ${rawExecutable}`, { encoding: 'utf-8', timeout: 2000 }).trim();
+      } catch {
+        // Fall back to the raw name; spawn will fail with ENOENT if truly missing
+        executable = rawExecutable;
+      }
+    }
+    const effectiveModel = options.resolvedLaunch?.model ?? options.model;
+    const extraCliArgs = options.resolvedLaunch?.cliArgsBase ?? [];
+
+    // Ensure cwd exists — spawn fails with ENOENT if the working directory is missing
+    try {
+      mkdirSync(options.cwd, { recursive: true });
+    } catch {
+      // non-fatal: if we can't create it, spawn will fail with a clear error
+    }
 
     // ── Spawn the process ───────────────────────────────────────────────────
     // Use --permission-mode dontAsk with a broad --allowedTools list so Claude
     // auto-approves common tools without prompting. In dontAsk mode, any tool NOT
     // in the allowlist is silently denied (instead of hanging for approval).
     // This is the recommended approach for non-interactive server-side usage.
-    // NOTE: --dangerously-skip-permissions is blocked for root users since
-    // Claude CLI v2.1.100+, so we cannot use it. A future migration to the
-    // Claude Agent SDK would give us canUseTool callbacks for fine-grained control.
+    const allowedTools = options.resolvedLaunch?.sdkOptions.allowedTools?.join(',') ??
+      'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,Skill,TodoWrite';
+    const permissionMode = options.resolvedLaunch?.sdkOptions.permissionMode ?? 'dontAsk';
+
     const proc = spawn(
-      'claude',
+      executable,
       [
         '-p', options.prompt,
         '--output-format', 'stream-json',
         '--verbose',
-        '--permission-mode', 'dontAsk',
-        '--allowedTools', 'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,Skill,TodoWrite',
-        '--model', options.model,
+        '--permission-mode', permissionMode,
+        '--allowedTools', allowedTools,
+        '--model', effectiveModel,
+        ...extraCliArgs.filter((a) => a !== '--model' && a !== effectiveModel),
         // First turn: --session-id creates the session.
         // Follow-up turns: --resume avoids the session lock conflict.
         ...(options.isFollowUp

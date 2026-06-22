@@ -8,6 +8,7 @@ import type {
   CreateSessionResponse,
   DeleteWatchResponse,
   ListSessionsResponse,
+  ModelsResponse,
   PromptResponse,
   RefreshModelsResponse,
   RegisterWatchRequest,
@@ -150,6 +151,12 @@ export class InternalApiClient implements InternalApiClientLike {
 
   async getCapabilities(): Promise<CapabilitiesResponse> {
     return this.request<CapabilitiesResponse>('GET', '/api/v1/capabilities');
+  }
+
+  /** Fetch the live model list across all (or one) runtime. */
+  async getModels(runtime?: string): Promise<ModelsResponse> {
+    const query = runtime ? `?runtime=${runtime}` : '';
+    return this.request<ModelsResponse>('GET', `/api/v1/models${query}`);
   }
 
   async refreshOpenCodeModels(input: { warmCache?: boolean; recycle?: boolean } = {}): Promise<RefreshModelsResponse> {
