@@ -120,6 +120,54 @@ The runner queries runtime capabilities, creates an ephemeral session on the tar
 - `follow-up` — verify the runtime accepts a follow-up turn when supported
 - `channel-heartbeat` — verify Claude channel-backed sessions emit `stream_activity`
 
+## Claude profile validation runner
+
+For validating Claude **provider profiles** (SDK backend, direct CLI backend, GLM/Z.ai provider routing, skills, concurrency), use the dedicated profile runner rather than `validate:live`:
+
+```bash
+# 1. Boot a throwaway validation server with profiles enabled
+VAL_DIR=$(mktemp -d)
+CLAUDE_PROFILES_ENABLED=true \
+CLAUDE_SDK_ENABLED=true \
+CLAUDE_PROFILES_PATH="$VAL_DIR/claude-profiles.json" \
+GLM_CODING_PLAN_TOKEN="<your-token>" \
+npm run validate:server -- --dir "$VAL_DIR" --port 0
+
+# 2. Run profile scenarios
+npm run validate:claude-profiles -- \
+  --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --glm-profile "glm52-claude-sdk" \
+  --native-profile "claude-sonnet-sdk" \
+  --direct-profile "glm52-claude-cli-direct"
+```
+
+Flags:
+- `--glm-profile <id>` — profile id to use for GLM/provider-token scenarios
+- `--native-profile <id>` — profile id to use for native subscription SDK scenarios
+- `--direct-profile <id>` — profile id to use for direct CLI scenarios
+- `--only <scenario1,scenario2>` — run a subset of scenarios by name
+- `--list` — print available scenario names and exit
+- `--allow-production` — allow the runner to target a production server socket
+
+What it validates:
+- `sdk-model-identity` — SDK native Claude returns expected model identity
+- `glm-model-identity` — SDK GLM profile returns expected model identity, `apiKeySource=none`
+- `cli-direct-model-identity` — direct CLI GLM profile returns expected model identity
+- `tool-visibility` — tool execution events are surfaced (`tool_execution_start` / `tool_execution_end`)
+- `skills` — skills are loaded and usable by the GLM profile
+- `follow-up` — profile binding persists across a follow-up turn
+
+For concurrency testing (simultaneous sessions, zero cross-contamination):
+
+```bash
+npx tsx scripts/concurrency-test.ts \
+  --socket <sock> --token-path <token> \
+  --profiles claude-sonnet-sdk,glm52-claude-sdk
+```
+
+See [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md) for profile setup and the full field reference.
+
 ## Capability-driven behaviour
 
 The runner reads `GET /api/v1/capabilities` first.

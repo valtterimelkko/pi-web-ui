@@ -69,6 +69,9 @@
 - `claude/claude-history-replay.ts` — Reconstructs session history from Pi-owned JSONL for UI replay.
 - `claude/claude-session-store.ts` — JSONL persistence (`~/.pi-web-ui/claude-sessions/`).
 - `claude/claude-session-subscribers.ts` — Multi-viewer fanout for Claude sessions.
+- `claude/claude-profiles.ts` — Profile schema (Zod), validation, `ClaudeProfileManager`, `resolveProfile`. Loads and validates `claude-profiles.json` at startup; secrets (auth tokens) are resolved from env vars or secret files at session launch time, never stored in the profile.
+- `claude/claude-sdk-service.ts` — SDK backend service (`ClaudeSdkService`). Manages Claude sessions through `@anthropic-ai/claude-agent-sdk` `query()` with `canUseTool` permission callbacks, `AbortController` cancellation, and structured SDK messages.
+- `claude/claude-sdk-event-adapter.ts` — Converts structured SDK messages into `NormalizedEvent` for the common event pipeline.
 - `claude/claude-channel-service.ts` — Channel-backed Claude session orchestration and event fanout.
 - `claude/claude-channel-process-manager.ts` — PTY-managed Claude Code process, busy-state tracking, auth-expiry detection.
 - `claude/claude-channel-hooks-config.ts` — Managed Claude hook config writer for `~/.claude/settings.json`.
@@ -130,6 +133,8 @@
 
 ### Operational Helpers
 - `scripts/debug-where.mjs` — Fast session locator: maps a session id, runtime-native id, path, or Antigravity conversation id to the relevant logs, registry entry, and runtime-owned files.
+- `scripts/validate-claude-profiles.ts` — Profile-specific validation runner. Validates SDK backend, direct CLI backend, tool visibility, skills, follow-up, and concurrency through a disposable server. Run via `npm run validate:claude-profiles`.
+- `scripts/concurrency-test.ts` — Tests simultaneous Claude + provider-profile sessions for cross-contamination. Run directly with `npx tsx scripts/concurrency-test.ts`.
 - `pi-claude-channel/server.ts` — Local Claude channel/plugin bridge process.
 
 ## Shared Package (`shared/src/`)

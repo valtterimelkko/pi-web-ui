@@ -37,6 +37,7 @@ If you arrived here from the public GitHub repo, start with the **public/adopter
 ### Runtime-specific deep dives
 These are deeper technical reads once you already know you care about a given runtime path:
 - [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
+- [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md)
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
 

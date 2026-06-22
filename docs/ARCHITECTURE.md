@@ -104,11 +104,22 @@ Important files:
 ### 2. Claude Code path
 
 **What it is**
-- a Claude Code integration with **two backend implementations**
-- both backends share the same UI/runtime family and Pi-owned replay store
+- a Claude Code integration with **three backend implementations**
+- all backends share the same UI/runtime family (`sdkType: 'claude'`) and Pi-owned replay store
+- backend selection is controlled by env vars and profile config; the frontend is runtime-family neutral throughout
 
-**Backend A: legacy direct path**
-- built around `claude -p`
+**Backend A: SDK backend (preferred when profiles are enabled)**
+- built around `@anthropic-ai/claude-agent-sdk` `query()` with profile-resolved env
+- provides `canUseTool` permission callbacks, `AbortController` cancellation, and structured SDK messages
+- selected when `CLAUDE_PROFILES_ENABLED=true` and the session profile has `backend: 'sdk-subscription'`
+- modules:
+  - `server/src/claude/claude-service.ts`
+  - `server/src/claude/claude-sdk-service.ts`
+  - `server/src/claude/claude-sdk-event-adapter.ts`
+  - `server/src/claude/claude-profiles.ts`
+
+**Backend B: legacy direct path**
+- built around `claude -p`; now profile-aware
 - modules:
   - `server/src/claude/claude-service.ts`
   - `server/src/claude/claude-process-pool.ts`
@@ -117,7 +128,7 @@ Important files:
   - `server/src/claude/claude-session-store.ts`
   - `server/src/claude/claude-session-subscribers.ts`
 
-**Backend B: channel-backed path**
+**Backend C: channel-backed path**
 - built around Claude Code launched under PTY supervision with the local channel plugin bridge
 - modules:
   - `server/src/claude/claude-service.ts`
@@ -133,10 +144,12 @@ Important files:
 - Claude native session state: `~/.claude/projects/`
 
 **Operational model**
-- backend selection happens on the server, while the frontend remains runtime-family neutral
-- legacy direct mode is subprocess-per-turn and workaround-heavy
-- channel-backed mode is richer but depends on PTY supervision, channel hooks, and plugin event bridging
-- both share the same sidebar/session UX via registry integration
+- SDK backend: preferred for provider profiles; structured messages, clean abort, `canUseTool` callbacks
+- legacy direct mode: subprocess-per-turn, now profile-aware but still workaround-heavy
+- channel-backed mode: richer tool and hook visibility, but depends on PTY supervision and plugin event bridging
+- all three share the same sidebar/session UX via registry integration
+
+For the provider profile system that controls which backend and provider a session uses, see [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md) and [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md).
 
 ### 3. OpenCode path
 

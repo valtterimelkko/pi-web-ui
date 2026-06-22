@@ -49,6 +49,7 @@ Core architectural themes:
 | Runtime-specific replay / event normalization | `server/src/<runtime>/<runtime>-event-*.ts`, `server/src/<runtime>/<runtime>-history-replay.ts`, [`docs/EVENT-PIPELINE.md`](./docs/EVENT-PIPELINE.md) |
 | Pi session lifecycle / cleanup / pinning | `server/src/pi/multi-session-manager.ts`, [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md) |
 | Claude backend behavior | `server/src/claude/*`, [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md) |
+| Claude provider profiles / backend switching | `server/src/claude/claude-profiles.ts`, `server/src/claude/claude-sdk-service.ts`, [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md) |
 | OpenCode integration / model automation | `server/src/opencode/*`, [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md), [`docs/OPENCODE-MODEL-AUTOMATION.md`](./docs/OPENCODE-MODEL-AUTOMATION.md) |
 | Antigravity integration | `server/src/antigravity/*`, [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md) |
 | Session transfer | `server/src/session-transfer/*`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |
@@ -68,6 +69,8 @@ Core architectural themes:
 - `server/src/session-registry.ts` — unified cross-runtime session index
 - `server/src/pi/multi-session-manager.ts` — Pi lifecycle / pinning / cleanup
 - `server/src/claude/claude-service.ts` — Claude lifecycle and backend selection
+- `server/src/claude/claude-profiles.ts` — provider profile schema, validation, and launch resolution
+- `server/src/claude/claude-sdk-service.ts` — SDK backend (preferred for profiles)
 - `server/src/opencode/opencode-service.ts` — OpenCode lifecycle / replay / permissions
 - `server/src/antigravity/antigravity-service.ts` — Antigravity lifecycle / replay
 - `server/src/session-transfer/*` — cross-runtime transcript transfer
@@ -102,6 +105,7 @@ Core architectural themes:
 
 - General checks: `npm run lint`, `npm run typecheck`, `npm run build`, `npm test`
 - Browserless runtime validation: start `npm run validate:server`, then run `npm run validate:live -- --socket <validation.sock> --token-path <validation-token> --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`; use production only with explicit user permission plus `--allow-production`.
+- Claude provider profile validation: start a profiles-enabled validation server, then run `npm run validate:claude-profiles -- --socket <sock> --token-path <token> --glm-profile <id> --native-profile <id>`; see [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md).
 - Long-horizon (autonomous, restart-surviving) validation: start `npm run validate:server`, then run `npm run validate:long-horizon -- --socket <validation.sock> --token-path <validation-token> --subject <runtime> --seed "<prompt>" --watch-text <substr> --interval <seconds>` — see [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md)
 - Fast runtime/session lookup: `npm run debug:where -- <session-id-or-runtime-id-or-path>`
 - OpenCode model catalogue refresh: `npm run opencode:refresh-models`

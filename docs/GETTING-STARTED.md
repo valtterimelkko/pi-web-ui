@@ -130,6 +130,16 @@ CLAUDE_CHANNEL_WS_PORT=3100
 CLAUDE_CHANNEL_HOOK_PORT=3101
 ```
 
+If you want to use the SDK backend or route through a provider profile (e.g. GLM 5.2 via Z.ai Coding Plan):
+
+```bash
+CLAUDE_PROFILES_ENABLED=true
+CLAUDE_SDK_ENABLED=true
+CLAUDE_PROFILES_PATH=~/.pi-web-ui/claude-profiles.json
+```
+
+Then create `claude-profiles.json` and read [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md) for the full field reference and examples.
+
 ### OpenCode-focused first run
 Check:
 

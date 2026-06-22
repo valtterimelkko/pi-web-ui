@@ -3,6 +3,7 @@
 > Living list of architectural traps, brittle patterns, and known limitations. Read this before debugging or extending a runtime.
 
 Quick jump:
+- [Claude SDK backend](#claude-sdk-backend)
 - [Claude Direct](#claude-direct)
 - [Claude channel-backed mode](#claude-channel-backed-mode)
 - [OpenCode](#opencode-direct)
@@ -10,6 +11,37 @@ Quick jump:
 - [Session Registry](#session-registry)
 - [WebSocket / Auth](#websocket--auth)
 - [Frontend](#frontend)
+
+## Claude SDK backend
+
+### `Options.env` replaces the subprocess environment, it does not merge
+
+The `@anthropic-ai/claude-agent-sdk` accepts an `env` field in its `Options`. Pi Web UI uses this to inject profile env vars (base URL, auth token, model aliases). This env **replaces** the subprocess environment entirely rather than extending it. Do not assume parent-process env vars are visible to the SDK subprocess unless they are explicitly included in the resolved env. The replacement is intentional — it is how `ANTHROPIC_API_KEY` stripping is enforced.
+
+### `ANTHROPIC_API_KEY` is always stripped — do not re-add it
+
+For all profile-backed sessions, `ANTHROPIC_API_KEY` is unconditionally removed from the subprocess environment. This is by design to prevent accidental pay-per-use charges when routing through a provider profile. If you see `apiKeySource: "none"` in session info, that is correct. If you see an error message suggesting the key is missing, the provider is not Anthropic-compatible and this path does not support it.
+
+### `authTokenPath` must be absolute and non-symlink
+
+The profile validator rejects `authTokenPath` values that are:
+- relative paths
+- symbolic links (resolved or not)
+- unreadable by the service user
+
+If a secret file path looks correct but loading fails at startup, check `ls -la <path>` — symlinks are rejected even if the target is readable.
+
+### Profile Zod validation is terminal at startup
+
+Profiles are loaded and validated when the server starts. A Zod parse error in any profile causes startup to fail for the profile manager — it does not silently skip the invalid profile. If the model picker shows no profile entries and profiles are enabled, check journal output for Zod validation errors before the first request.
+
+### `@anthropic-ai/claude-agent-sdk` is a hard dependency for the SDK backend
+
+If the package is absent or fails to install, `ClaudeSdkService` cannot initialise and sessions using `backend: 'sdk-subscription'` will fail at creation time. Confirm the package is present with `ls node_modules/@anthropic-ai/claude-agent-sdk`.
+
+### Per-profile concurrency limit applies globally, not per-user
+
+`maxConcurrent` in a profile is a cap on total simultaneous SDK sessions using that profile across all connected browser clients. It is not per-user. Two simultaneous browser connections that both start sessions on the same profile count toward the same limit.
 
 ## Claude Direct
 

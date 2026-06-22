@@ -61,6 +61,7 @@ Nginx is also perfectly viable, and an example is included below.
 - [ ] Configure systemd or equivalent restart policy
 - [ ] Confirm Pi CLI / SDK availability
 - [ ] Confirm `claude` availability if using the Claude Code path
+- [ ] If using provider profiles: confirm `CLAUDE_PROFILES_ENABLED=true`, profile file exists, and auth token env vars are set (never commit token values)
 - [ ] Confirm Bun availability if using the channel-backed Claude path
 - [ ] Confirm `opencode` availability if using OpenCode
 - [ ] Confirm `agy` availability if using Antigravity
@@ -87,6 +88,21 @@ Nginx is also perfectly viable, and an example is included below.
 | `PI_MAX_WORKERS` | `5` | max concurrent Pi workers |
 | `PI_WORKER_MEMORY` | `512` | MB per worker |
 | `PI_IDLE_TIMEOUT` | `1800000` | Pi worker idle timeout |
+
+### Claude provider profiles / SDK backend
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `CLAUDE_PROFILES_ENABLED` | `false` | enable the provider profile system |
+| `CLAUDE_PROFILES_PATH` | `~/.pi-web-ui/claude-profiles.json` | path to the profile config file |
+| `CLAUDE_DEFAULT_PROFILE` | — | profile id to use for all new Claude sessions (overrides `defaultProfileId` in the file) |
+| `CLAUDE_SDK_ENABLED` | `true` (when profiles enabled) | enable the `sdk-subscription` backend |
+| `CLAUDE_DIRECT_PROFILES_ENABLED` | `true` | enable `cli-direct` profile support |
+| `CLAUDE_BACKEND_DEFAULT` | `direct` | default backend: `sdk` \| `direct` \| `channel` |
+
+To roll back to legacy direct mode: set `CLAUDE_PROFILES_ENABLED=false`, `CLAUDE_SDK_ENABLED=false`, `CLAUDE_BACKEND_DEFAULT=direct`.
+
+See [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md) for the full profile field reference, examples, and validation instructions.
 
 ### Claude channel-backed path
 
@@ -145,16 +161,18 @@ Typical rough sizing:
 
 ### Claude Code
 
-The Claude Code path uses either:
-- legacy `claude -p` subprocesses, or
-- the channel-backed Claude Code path under PTY supervision.
+The Claude Code path uses one of three backends:
+- **SDK backend** — `@anthropic-ai/claude-agent-sdk` with provider profiles (preferred when profiles are enabled)
+- **legacy `claude -p` subprocesses** — profile-aware or plain direct mode
+- **channel-backed Claude Code path** — PTY supervision with local plugin bridge
 
-Operational concerns are mostly:
-- `claude` binary on PATH
+Operational concerns:
+- `claude` binary on PATH and authenticated for the service user
 - auth/session behaviour
 - replay-store vs native-Claude session-file correlation
-- logs and subprocess/PTy cleanup
+- logs and subprocess/PTY cleanup
 - hook configuration in `~/.claude/settings.json` for the channel-backed path
+- profile config file readable and valid; auth token env vars set (never in the profile file itself) for the SDK/profile path
 
 ### OpenCode
 
@@ -364,6 +382,8 @@ npm run build
 
 - verify `claude` is on PATH for the service user
 - verify auth state for the same user running the service
+- if using provider profiles: check startup logs for Zod validation errors and confirm `CLAUDE_PROFILES_ENABLED=true` and the profile file is readable
+- if using the SDK backend: confirm `@anthropic-ai/claude-agent-sdk` is installed (`ls node_modules/@anthropic-ai/claude-agent-sdk`)
 - if channel-backed mode is enabled, verify Bun availability and `CLAUDE_CHANNEL_*` values
 - inspect `~/.claude/settings.json` if hooks appear to be missing or malformed
 - check `server/src/claude/` logs/errors in journal output
