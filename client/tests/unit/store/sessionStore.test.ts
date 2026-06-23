@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useSessionStore, type Message, type Session } from '../../../src/store/sessionStore';
 import { useUIStore } from '../../../src/store/uiStore';
 
@@ -1182,5 +1182,135 @@ describe('sessionStore', () => {
       const cache = useSessionStore.getState().sessionCache;
       expect(cache.size).toBeLessThanOrEqual(2);
     });
+  });
+});
+
+// ── initPreferences merge behaviour ──────────────────────────────────────────
+
+vi.mock('../../../src/lib/api', () => ({
+  getPreferences: vi.fn(),
+  patchPreferences: vi.fn().mockResolvedValue({}),
+}));
+
+describe('initPreferences — archive merge', () => {
+  // Import the mocked api after vi.mock is hoisted
+  let getPreferences: ReturnType<typeof vi.fn>;
+  let patchPreferences: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    const api = await import('../../../src/lib/api');
+    getPreferences = api.getPreferences as ReturnType<typeof vi.fn>;
+    patchPreferences = api.patchPreferences as ReturnType<typeof vi.fn>;
+    vi.clearAllMocks();
+    patchPreferences.mockResolvedValue({});
+
+    // Reset relevant store slices
+    useSessionStore.setState({
+      archivedSessionPaths: [],
+      pinnedSessionPaths: [],
+      sessionDisplayNames: {},
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses server archive list when local has no extras', async () => {
+    const serverPaths = ['/sessions/a.jsonl', '/sessions/b.jsonl'];
+    getPreferences.mockResolvedValue({ archivedSessionPaths: serverPaths });
+
+    await useSessionStore.getState().initPreferences();
+
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(serverPaths);
+    // No sync-back needed — server already up to date
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it('merges local-only paths into the archive and syncs back to server', async () => {
+    const serverPaths = ['/sessions/a.jsonl'];
+    const localOnlyPath = '/sessions/b.jsonl';
+
+    // Pre-seed local state with a path not yet on the server
+    useSessionStore.setState({ archivedSessionPaths: [localOnlyPath] });
+    getPreferences.mockResolvedValue({ archivedSessionPaths: serverPaths });
+
+    await useSessionStore.getState().initPreferences();
+
+    const merged = useSessionStore.getState().archivedSessionPaths;
+    expect(merged).toContain('/sessions/a.jsonl');
+    expect(merged).toContain('/sessions/b.jsonl');
+    expect(merged).toHaveLength(2);
+
+    // Should push the merged list back to the server
+    expect(patchPreferences).toHaveBeenCalledWith(
+      expect.objectContaining({ archivedSessionPaths: expect.arrayContaining(['/sessions/a.jsonl', '/sessions/b.jsonl']) }),
+    );
+  });
+
+  it('does not duplicate paths already present on server', async () => {
+    const path = '/sessions/a.jsonl';
+    useSessionStore.setState({ archivedSessionPaths: [path] });
+    getPreferences.mockResolvedValue({ archivedSessionPaths: [path] });
+
+    await useSessionStore.getState().initPreferences();
+
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual([path]);
+    // No sync-back when server already has all local paths
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it('preserves full server list even when local is empty', async () => {
+    const serverPaths = ['/sessions/a.jsonl', '/sessions/b.jsonl', '/sessions/c.jsonl'];
+    getPreferences.mockResolvedValue({ archivedSessionPaths: serverPaths });
+
+    await useSessionStore.getState().initPreferences();
+
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(serverPaths);
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it('falls back to local cache when server request fails', async () => {
+    const localPaths = ['/sessions/local-only.jsonl'];
+    useSessionStore.setState({ archivedSessionPaths: localPaths });
+    getPreferences.mockRejectedValue(new Error('Network error'));
+
+    await useSessionStore.getState().initPreferences();
+
+    // Local state must be preserved
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(localPaths);
+  });
+
+  it('local display name wins over stale server value on conflict', async () => {
+    useSessionStore.setState({ sessionDisplayNames: { '/sessions/a.jsonl': 'Local Name' } });
+    getPreferences.mockResolvedValue({
+      sessionDisplayNames: { '/sessions/a.jsonl': 'Stale Server Name', '/sessions/b.jsonl': 'Server Only' },
+    });
+
+    await useSessionStore.getState().initPreferences();
+
+    const names = useSessionStore.getState().sessionDisplayNames;
+    expect(names['/sessions/a.jsonl']).toBe('Local Name');
+    expect(names['/sessions/b.jsonl']).toBe('Server Only');
+  });
+
+  it('cleans pins that are in the merged archive set', async () => {
+    const archivedPath = '/sessions/a.jsonl';
+    const pinnedPath = '/sessions/b.jsonl';
+    useSessionStore.setState({ archivedSessionPaths: [] });
+    getPreferences.mockResolvedValue({
+      archivedSessionPaths: [archivedPath],
+      pinnedSessionPaths: [archivedPath, pinnedPath],
+    });
+
+    await useSessionStore.getState().initPreferences();
+
+    const pins = useSessionStore.getState().pinnedSessionPaths;
+    expect(pins).not.toContain(archivedPath);
+    expect(pins).toContain(pinnedPath);
+    // Should sync the cleaned pins back
+    expect(patchPreferences).toHaveBeenCalledWith(
+      expect.objectContaining({ pinnedSessionPaths: [pinnedPath] }),
+    );
   });
 });

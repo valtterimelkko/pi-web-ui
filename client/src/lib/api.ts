@@ -167,11 +167,17 @@ export async function getPreferences(): Promise<WebUIPreferences> {
  * Only the supplied keys are updated; others are left unchanged.
  */
 export async function patchPreferences(updates: Partial<WebUIPreferences>): Promise<WebUIPreferences> {
+  const body = JSON.stringify(updates);
   const response = await fetch(`${API_URL}/api/preferences`, {
     method: 'PATCH',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updates),
+    body,
+    // keepalive lets the browser complete this request even if the page unloads
+    // (e.g. hard-refresh immediately after archiving a session).
+    // Browsers silently ignore keepalive when the body exceeds ~64 KB; the
+    // request is still sent, just without the keep-alive guarantee.
+    keepalive: true,
   });
 
   if (!response.ok) {

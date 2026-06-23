@@ -843,12 +843,29 @@ export const useSessionStore = create<SessionState>()(
         try {
           const serverPrefs = await getPreferences();
           if (serverPrefs.archivedSessionPaths !== undefined) {
-            // Server is the source of truth — overrides localStorage cache
-            set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
+            // Merge: union of server + local archived paths.
+            // Local-only entries survive here when the patchPreferences call was
+            // in-flight at the moment of page unload (hard-refresh race) or when
+            // the server write failed silently.  Taking the union means we never
+            // silently un-archive a session the user deliberately archived.
+            const localArchived = get().archivedSessionPaths;
+            const serverSet = new Set(serverPrefs.archivedSessionPaths);
+            const localOnlyPaths = localArchived.filter(p => !serverSet.has(p));
+            if (localOnlyPaths.length > 0) {
+              const merged = [...serverPrefs.archivedSessionPaths, ...localOnlyPaths];
+              set({ archivedSessionPaths: merged });
+              // Catch the server up so the next reload doesn't need to repeat this
+              patchPreferences({ archivedSessionPaths: merged }).catch((e) => {
+                console.warn('[initPreferences] Failed to sync merged archive state to server:', e);
+              });
+            } else {
+              set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
+            }
           }
           if (serverPrefs.pinnedSessionPaths !== undefined) {
+            // Use the current archivedSessionPaths (may have been merged above)
+            const archivedSet = new Set(get().archivedSessionPaths);
             // Clean stale pins: remove any pinned sessions that are also archived
-            const archivedSet = new Set(serverPrefs.archivedSessionPaths ?? []);
             const cleanedPins = serverPrefs.pinnedSessionPaths.filter(p => !archivedSet.has(p));
             if (cleanedPins.length !== serverPrefs.pinnedSessionPaths.length) {
               console.log(`[initPreferences] Cleaned ${serverPrefs.pinnedSessionPaths.length - cleanedPins.length} stale pinned-also-archived session(s)`);
@@ -862,12 +879,13 @@ export const useSessionStore = create<SessionState>()(
             }
           }
           if (serverPrefs.sessionDisplayNames !== undefined) {
-            // Merge server display names with local ones
-            // Server wins for conflicts, but local-only entries are preserved
+            // Merge server display names with local ones.
+            // Local wins for conflicts so a rename that was mid-flight at page
+            // unload is not silently overwritten by the stale server value.
             const currentDisplayNames = get().sessionDisplayNames;
             const mergedDisplayNames = {
-              ...currentDisplayNames,
               ...serverPrefs.sessionDisplayNames,
+              ...currentDisplayNames,
             };
             set({ sessionDisplayNames: mergedDisplayNames });
           }
