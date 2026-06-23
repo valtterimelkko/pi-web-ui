@@ -367,7 +367,54 @@ suppression, which is not the cause — the failures reproduce with it reverted)
 The **server** suite is the observability plan's test-hygiene surface and is
 green. Fixing the client suite is tracked as a separate effort.
 
-## Test output noise (`[Tag]` log lines)
+## Fast test loop for agents
+
+Don't run the whole suite on every edit. Target a single file or test, and use
+the machine-readable outputs to jump straight to failures. Commands below use the
+`server` workspace; swap to `client`/`shared` as needed.
+
+```bash
+# One file (fastest iteration):
+npx vitest run tests/unit/internal-api/error-codes.test.ts --root server
+# One test by name (substring match across file path + test name):
+npx vitest run -t "correlation id" --root server
+# Restore full app logging while debugging a test:
+VITEST_LOG=1 npx vitest run tests/unit/pi/multi-session-manager.test.ts --root server
+# Per-test timing (per-file timing is already in the default summary):
+npx vitest run tests/unit/claude/ --root server --reporter=verbose
+```
+
+- **Per-file timing** — the default reporter summary already prints
+  `✓ tests/.../foo.test.ts (N tests) Xms` per file, so you can see which file to
+  target. Add `--reporter=verbose` for per-test timing.
+- **Machine-readable results** — every run also writes a JSON report to
+  `server/test-results.json` (and `client/test-results.json`), git-ignored. It
+  has `numTotalTests`/`numPassedTests`/`numFailedTests` and a `testResults[]`
+  array whose `assertionResults[]` carry per-test `status` + `fullName` +
+  `failureMessages`. Parse it to jump straight to the failing test.
+- **Run the full suite** the proper way (fixtures resolve correctly):
+  `npm run test --workspace=server` (cwd is the workspace). Run `npm test`
+  (server + client) only at task completion / before commit.
+
+## Real-timer waits in tests
+
+Most `setTimeout` waits in the server suite are either **event-loop yields**
+(`await new Promise(r => setTimeout(r, 0))`, ~free) or **real async-I/O settle
+waits** that cannot be replaced by fake timers without breaking the test:
+
+- `tests/integration/claude/channel-prompt-flow.test.ts`,
+  `channel-permission-flow.test.ts`, `dual-path-coexistence.test.ts` — wait for
+  a **real WebSocket** round-trip with a mock channel server (network I/O; fake
+  timers cannot drive it). `dual-path-coexistence`'s channel-healthy case is
+  `it.skip` (see Known skipped tests).
+- `tests/unit/opencode/opencode-service-goal.test.ts` (50/150ms) — wait for
+  fire-and-forget `clearGoal`/`abort` **real fs + fetch** side-effects to settle.
+  Inline `// Reason:` comments mark each.
+
+Genuine internal-timing waits (polling/retry intervals that `vi.useFakeTimers` +
+`vi.advanceTimersByTimeAsync` could drive) are preferred where they exist; the
+`GET /sessions/:id/wait` timeout case in `session-routes-orchestration.test.ts`
+already uses fake timers.
 
 ## Test output noise (`[Tag]` log lines)
 

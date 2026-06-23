@@ -24,9 +24,37 @@
     "@typescript-eslint/explicit-module-boundary-types": "off",
     "@typescript-eslint/no-non-null-assertion": "warn",
     "no-console": ["warn", { "allow": ["warn", "error", "info"] }],
+    "no-empty": ["warn", { "allowEmptyCatch": false }],
     "prefer-const": "warn",
     "no-var": "error"
   },
+  "overrides": [
+    {
+      "files": ["server/src/**/*.ts"],
+      "rules": {
+        "no-console": "error",
+        "no-empty": ["error", { "allowEmptyCatch": false }]
+      }
+    },
+    {
+      "files": ["server/src/workers/crash-logger.ts"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["scripts/**/*.ts", "scripts/**/*.mjs", "scripts/**/*.js"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
+      "rules": {
+        "no-console": "off"
+      }
+    }
+  ],
   "ignorePatterns": [
     "node_modules/",
     "dist/",

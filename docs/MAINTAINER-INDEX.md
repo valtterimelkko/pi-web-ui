@@ -18,6 +18,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — high-level architecture, runtime paths, responsibilities
 - [`CODEBASE-MAP.md`](./CODEBASE-MAP.md) — granular file-to-purpose index
 - [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md) — how native events from Pi, Claude, OpenCode, and Antigravity converge into one frontend stream
+- [`OBSERVABILITY.md`](./OBSERVABILITY.md) — logging (levels/namespaces/format), correlation IDs, diagnostics endpoint, error-code catalog, request logging, fatal-error handlers
 
 ## 4. WebSocket contract
 - [`PROTOCOL.md`](./PROTOCOL.md) — message types, connection lifecycle, error codes

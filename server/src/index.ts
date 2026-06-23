@@ -183,11 +183,11 @@ async function initialize(): Promise<void> {
         await internalApiServer.start();
         logger.info(`[InternalAPI] Started on Unix socket: ${config.internalApiSocketPath}`);
       } catch (err) {
-        logger.error('[InternalAPI] Failed to start internal API:', err instanceof Error ? err.message : String(err));
+        logger.errorObject('Failed to start internal API', err);
       }
     }
   } catch (error) {
-    logger.error('Failed to initialize:', error);
+    logger.errorObject('Failed to initialize', error);
     process.exit(1);
   }
 }
@@ -259,7 +259,7 @@ process.on('unhandledRejection', fatalErrorHandlers.unhandledRejection);
 
 // Start the server
 start().catch((error) => {
-  logger.error('Failed to start server:', error);
+  logger.errorObject('Failed to start server', error);
   process.exit(1);
 });
 

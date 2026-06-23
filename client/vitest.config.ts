@@ -19,6 +19,9 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
     onConsoleLog: showAppConsoleLogs ? undefined : () => false,
+    // Machine-parseable JSON report (per-test pass/fail + messages), git-ignored.
+    reporter: ['default', 'json'],
+    outputFile: 'test-results.json',
     env: {
       NODE_ENV: 'test',
     },

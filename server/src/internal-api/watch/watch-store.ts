@@ -114,7 +114,7 @@ export class WatchStore {
   async delete(sessionId: string): Promise<void> {
     this.cache.delete(sessionId);
     // Wait for any in-flight write to finish before unlinking.
-    await (this.writeChains.get(sessionId) ?? Promise.resolve()).catch(() => {});
+    await (this.writeChains.get(sessionId) ?? Promise.resolve()).catch(() => { /* legitimate: isolate the write chain — a prior failure is already handled/logged */ });
     this.writeChains.delete(sessionId);
     try {
       await unlink(this.fileFor(sessionId));

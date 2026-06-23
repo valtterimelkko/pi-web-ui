@@ -21,6 +21,7 @@
 - **Security:** [`SECURITY.md`](./SECURITY.md)
 - **Deployment:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 - **Troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
+- **Observability (logging/diagnostics/errors):** [`docs/OBSERVABILITY.md`](./docs/OBSERVABILITY.md)
 - **Sharp edges:** [`docs/SHARP-EDGES.md`](./docs/SHARP-EDGES.md)
 
 ## What this repo is now
@@ -60,6 +61,7 @@ Core architectural themes:
 | Auth / CSRF / prompt-injection / path validation | `server/src/security/*`, `server/src/middleware/auth.ts`, [`SECURITY.md`](./SECURITY.md) |
 | Config / env vars / ops | `server/src/config.ts`, `.env.example`, [`DEPLOYMENT.md`](./DEPLOYMENT.md) |
 | Fast log or session-file lookup | [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md), `npm run debug:where -- <id-or-path>` |
+| Logging / levels / namespaces / correlation / diagnostics / error codes | `server/src/logging/*`, `server/src/internal-api/error-codes.ts`, `server/src/internal-api/diagnostics-buffer.ts`, [`docs/OBSERVABILITY.md`](./docs/OBSERVABILITY.md) |
 
 ## High-signal file map
 

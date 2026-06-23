@@ -54,8 +54,8 @@ import {
   writeFullEvent,
 } from '../event-filter.js';
 import { createSSEStream } from '../sse-stream.js';
-import { ErrorCode } from '../error-codes.js';
-import { withCorrelation, newRequestId } from '../../logging/correlation.js';
+import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
+import { withCorrelation, newRequestId, getCorrelationContext } from '../../logging/correlation.js';
 import { TransferService } from '../../session-transfer/transfer-service.js';
 import {
   extractPiTranscript,
@@ -257,7 +257,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       switch (runtime) {
         case 'claude': {
           if (!(await claudeService.isAvailable())) {
-            sendJson(res, 503, { error: 'Claude runtime is not available', code: ErrorCode.RUNTIME_UNAVAILABLE });
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Claude runtime is not available'));
             return;
           }
           // Support profile selection via model="profile:<id>" or explicit profileId
@@ -281,7 +281,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
         case 'opencode': {
           if (!(await opencodeService.isAvailable())) {
-            sendJson(res, 503, { error: 'OpenCode runtime is not available', code: ErrorCode.RUNTIME_UNAVAILABLE });
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'OpenCode runtime is not available'));
             return;
           }
           const { sessionId } = await opencodeService.createSession(cwd);
@@ -301,7 +301,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
         case 'antigravity': {
           if (!(await antigravityService.isAvailable())) {
-            sendJson(res, 503, { error: 'Antigravity runtime is not available', code: ErrorCode.RUNTIME_UNAVAILABLE });
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Antigravity runtime is not available'));
             return;
           }
           const { sessionId } = await antigravityService.createSession(cwd, body.model);
@@ -365,7 +365,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sendJson(res, 201, base satisfies CreateSessionResponse);
       onSessionCreated?.(base.sessionId, base.sessionPath, base.runtime);
     } catch (err) {
-      logger.error('[InternalAPI] Failed to create session:', err);
+      logger.errorObject('Failed to create session', err);
       sendJson(res, 500, {
         error: err instanceof Error ? err.message : 'Failed to create session',
         code: ErrorCode.SESSION_CREATE_FAILED,
@@ -394,7 +394,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       sendJson(res, 200, { sessions } satisfies ListSessionsResponse);
     } catch (err) {
-      logger.error('[InternalAPI] Failed to list sessions:', err);
+      logger.errorObject('Failed to list sessions', err);
       sendJson(res, 500, { error: 'Failed to list sessions', code: ErrorCode.INTERNAL_ERROR });
     }
   }
@@ -547,12 +547,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       const detail = await buildSessionDetail(sessionId);
       if (!detail) {
-        sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
       }
       sendJson(res, 200, detail);
     } catch (err) {
-      logger.error('[InternalAPI] Failed to get session:', err);
+      logger.errorObject('Failed to get session', err);
       sendJson(res, 500, { error: 'Failed to get session', code: ErrorCode.INTERNAL_ERROR });
     }
   }
@@ -565,12 +565,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       const detail = await buildSessionDetail(sessionId);
       if (!detail) {
-        sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
       }
       sendJson(res, 200, detail);
     } catch (err) {
-      logger.error('[InternalAPI] Failed to get session info:', err);
+      logger.errorObject('Failed to get session info', err);
       sendJson(res, 500, { error: 'Failed to get session info', code: ErrorCode.INTERNAL_ERROR });
     }
   }
@@ -583,7 +583,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       const entry = await sessionRegistry.get(sessionId);
       if (!entry) {
-        sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
       }
 
@@ -628,7 +628,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         events,
       } satisfies SessionHistoryResponse);
     } catch (err) {
-      logger.error('[InternalAPI] Failed to get session history:', err);
+      logger.errorObject('Failed to get session history', err);
       sendJson(res, 500, { error: 'Failed to get session history', code: ErrorCode.INTERNAL_ERROR });
     }
   }
@@ -641,7 +641,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       const entry = await sessionRegistry.get(sessionId);
       if (!entry) {
-        sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
       }
 
@@ -668,7 +668,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (pinExpiry) await pinExpiry.clear(sessionId).catch(() => { /* non-fatal */ });
       sendJson(res, 200, { success: true });
     } catch (err) {
-      logger.error('[InternalAPI] Failed to delete session:', err);
+      logger.errorObject('Failed to delete session', err);
       sendJson(res, 500, { error: 'Failed to delete session', code: ErrorCode.INTERNAL_ERROR });
     }
   }
@@ -686,10 +686,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const injectionCheck = detectPromptInjection(body.message);
     if (injectionCheck.recommendation === 'block') {
-      sendJson(res, 400, {
-        error: 'Prompt contains potentially malicious content',
-        code: ErrorCode.PROMPT_INJECTION,
-      });
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.PROMPT_INJECTION, 'Prompt contains potentially malicious content'));
       return;
     }
 
@@ -698,12 +695,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
-      sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
       return;
     }
 
     if (mode === 'steer' && entry.sdkType !== 'pi') {
-      sendJson(res, 400, { error: `Prompt mode '${mode}' is not supported for ${entry.sdkType}`, code: ErrorCode.UNSUPPORTED_OPERATION });
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, `Prompt mode '${mode}' is not supported for ${entry.sdkType}`));
       return;
     }
 
@@ -715,7 +712,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         : false;
 
     if (isBusy && mode === 'prompt') {
-      sendJson(res, 409, { error: 'Session is currently busy', code: ErrorCode.SESSION_BUSY });
+      sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy'));
       return;
     }
 
@@ -724,7 +721,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // `grep <requestId>` to reconstruct the whole causal chain in one pass.
     // AsyncLocalStorage propagates the context across the await boundaries inside
     // executePrompt → runtime sendPrompt → logger calls.
-    const requestId = newRequestId();
+    const requestId = getCorrelationContext()?.requestId ?? newRequestId();
     await withCorrelation({ requestId, sessionId, runtime: entry.sdkType }, async () => {
       logger.info(`[InternalAPI] Prompt dispatched: runtime=${runtime} verbosity=${verbosity} mode=${mode}`);
 
@@ -750,11 +747,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           () => { /* progress events flow to the broker inside executePrompt */ },
           (err) => {
             if (err) {
-              logger.error(`[InternalAPI] Detached prompt failed for ${sessionId}:`, err.message);
+              logger.errorObject(`Detached prompt failed for ${sessionId}`, err);
             }
           },
         ).catch((err) => {
-          logger.error('[InternalAPI] Detached prompt error:', err instanceof Error ? err.message : String(err));
+          logger.errorObject('Detached prompt error', err);
         });
         sendJson(res, 202, { sessionId, detached: true, status: 'accepted' });
         return;
@@ -768,7 +765,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
         await handleAnswersPrompt(res, sessionId, runtime, body.message, mode);
       } catch (err) {
-        logger.error('[InternalAPI] Prompt failed:', err);
+        logger.errorObject('Prompt failed', err);
         if (!res.headersSent) {
           sendJson(res, 500, {
             error: err instanceof Error ? err.message : 'Prompt execution failed',
@@ -869,7 +866,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       const entry = await sessionRegistry.get(sessionId);
       if (!entry) {
-        sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
       }
 
@@ -888,7 +885,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       sendJson(res, 200, { success: true });
     } catch (err) {
-      logger.error('[InternalAPI] Abort failed:', err);
+      logger.errorObject('Abort failed', err);
       sendJson(res, 500, { error: 'Failed to abort session', code: ErrorCode.INTERNAL_ERROR });
     }
   }
@@ -906,7 +903,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
-      sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
       return;
     }
 
@@ -948,12 +945,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           } else if (entry.sdkType === 'pi') {
             const agentSession = multiSessionManager.getAgentSession(entry.path);
             if (!agentSession) {
-              sendJson(res, 404, { error: 'Pi session not loaded', code: ErrorCode.SESSION_NOT_FOUND });
+              sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Pi session not loaded'));
               return;
             }
             agentSession.setThinkingLevel(body.level);
           } else {
-            sendJson(res, 400, { error: 'Thinking level not supported for this runtime', code: ErrorCode.UNSUPPORTED_OPERATION });
+            sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Thinking level not supported for this runtime'));
             return;
           }
 
@@ -1011,7 +1008,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       sendJson(res, 200, response);
     } catch (err) {
-      logger.error('[InternalAPI] Session control failed:', err);
+      logger.errorObject('Session control failed', err);
       sendJson(res, 500, { error: err instanceof Error ? err.message : 'Session control failed', code: ErrorCode.INTERNAL_ERROR });
     }
   }
@@ -1030,7 +1027,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
-      sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
       return;
     }
 
@@ -1040,7 +1037,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       } else if (entry.sdkType === 'opencode') {
         await opencodeService.replyPermission(sessionId, requestId, body.approved);
       } else {
-        sendJson(res, 400, { error: 'Approval responses are not supported for Pi sessions', code: ErrorCode.UNSUPPORTED_OPERATION });
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Approval responses are not supported for Pi sessions'));
         return;
       }
 
@@ -1049,7 +1046,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         approved: body.approved,
       } satisfies ApprovalResponseResult);
     } catch (err) {
-      logger.error('[InternalAPI] Approval response failed:', err);
+      logger.errorObject('Approval response failed', err);
       sendJson(res, 500, { error: 'Approval response failed', code: ErrorCode.INTERNAL_ERROR });
     }
   }
@@ -1175,7 +1172,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   ): Promise<void> {
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
-      sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
       return;
     }
 
@@ -1216,7 +1213,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   ): Promise<void> {
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
-      sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
       return;
     }
 
@@ -1278,7 +1275,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       const entry = await sessionRegistry.get(sessionId);
       if (!entry) {
-        sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
       }
 
@@ -1350,7 +1347,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         source: t.source,
       } satisfies TranscriptResponse);
     } catch (err) {
-      logger.error('[InternalAPI] Failed to build transcript:', err);
+      logger.errorObject('Failed to build transcript', err);
       sendJson(res, 500, { error: 'Failed to build transcript', code: ErrorCode.INTERNAL_ERROR });
     }
   }
@@ -1374,7 +1371,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
-      sendJson(res, 404, { error: 'Source session not found', code: ErrorCode.SESSION_NOT_FOUND });
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Source session not found'));
       return;
     }
 
@@ -1423,7 +1420,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       };
       sendJson(res, result.success ? 200 : 400, response);
     } catch (err) {
-      logger.error('[InternalAPI] Transfer failed:', err);
+      logger.errorObject('Transfer failed', err);
       sendJson(res, 500, {
         success: false,
         sourceSessionId: sessionId,
@@ -1651,7 +1648,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   ): Promise<void> {
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
-      sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
       return;
     }
 
@@ -1689,7 +1686,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
-      sendJson(res, 404, { error: 'Session not found', code: ErrorCode.SESSION_NOT_FOUND });
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
       return;
     }
 
@@ -1715,7 +1712,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 400, { error: err.message, code: ErrorCode.INVALID_REQUEST });
         return;
       }
-      logger.error('[InternalAPI] Failed to register watch:', err);
+      logger.errorObject('Failed to register watch', err);
       sendJson(res, 500, { error: 'Failed to register watch', code: ErrorCode.INTERNAL_ERROR });
     }
   }

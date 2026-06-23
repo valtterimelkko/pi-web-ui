@@ -21,6 +21,10 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     onConsoleLog: showAppConsoleLogs ? undefined : () => false,
+    // Also emit a machine-parseable JSON report (per-test pass/fail + messages)
+    // for agents/tools. Artifact is git-ignored. See docs/TROUBLESHOOTING.md.
+    reporter: ['default', 'json'],
+    outputFile: 'test-results.json',
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

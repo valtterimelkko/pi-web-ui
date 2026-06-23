@@ -182,6 +182,16 @@ describe('central logger — error helper (Task 8)', () => {
     const obj = JSON.parse(lines[0].line);
     expect(obj.error.message).toContain('string reason');
   });
+
+  it('includes a context object alongside message + stack', () => {
+    const { logger, lines } = makeLogger({ component: 'Foo', format: 'json', level: 'error' });
+    const err = new Error('boom');
+    logger.errorObject('operation failed', err, { sessionId: 's1', retry: 2 });
+    const obj = JSON.parse(lines[0].line);
+    expect(obj.error.stack).toContain('boom');
+    expect(obj.sessionId).toBe('s1');
+    expect(obj.retry).toBe(2);
+  });
 });
 
 describe('central logger — child & tap', () => {

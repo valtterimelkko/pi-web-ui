@@ -198,7 +198,7 @@ export class ClaudeChannelProcessManager extends EventEmitter {
       // Port conflict diagnostic: log who's listening on our WS port.
       // A stale process from a previous run can silently occupy the port,
       // causing our WS client to talk to the wrong plugin.
-      this.logPortDiagnostic(this.cfg.wsPort).catch(() => {});
+      this.logPortDiagnostic(this.cfg.wsPort).catch(() => { /* legitimate: port diagnostic is best-effort */ });
     } catch (err) {
       this.state.status = 'error';
       this.state.error = err instanceof Error ? err.message : String(err);

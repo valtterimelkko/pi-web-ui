@@ -24,6 +24,8 @@ import { createModelsRoutes, type ModelsRoutesDeps } from './routes/models.js';
 import { createHealthRoutes, type HealthRoutesDeps } from './routes/health.js';
 import { createCapabilitiesRoutes, type CapabilitiesRoutesDeps } from './routes/capabilities.js';
 import { createDiagnosticsRoutes } from './routes/diagnostics.js';
+import { createEventTypesRoutes } from './routes/event-types.js';
+import { createRequestLoggingMiddleware } from './request-logging.js';
 import { pushDiagnosticsRecord } from './diagnostics-buffer.js';
 import { setLogTap } from '../logging/logger.js';
 import type { ClaudeService } from '../claude/claude-service.js';
@@ -163,12 +165,16 @@ export class InternalApiServer {
 
     const diagnosticsRoutes = createDiagnosticsRoutes();
 
+    const eventTypesRoutes = createEventTypesRoutes();
+
     // Capture recent structured logs into the diagnostics ring buffer so the
     // /diagnostics endpoints can self-serve them. The buffer scrubs secrets on
     // push, so the tap never persists tokens/credentials.
     setLogTap((record) => pushDiagnosticsRecord(record));
 
     const authMiddleware = createAuthMiddleware(this.apiKey);
+
+    const requestLogging = createRequestLoggingMiddleware(logger);
 
     this.server = createServer((req: IncomingMessage, res: ServerResponse) => {
       // CORS for local development (permissive because local-only)
@@ -186,14 +192,19 @@ export class InternalApiServer {
       const url = req.url || '/';
       const parsed = parseUrl(url);
 
-      // Apply auth middleware (except health)
-      authMiddleware(req, res, () => {
-        void this.routeRequest(req, res, parsed, {
-          sessionRoutes,
-          modelsRoutes,
-          healthRoutes,
-          capabilitiesRoutes,
-          diagnosticsRoutes,
+      // Request logging (debug) wraps auth + routing so the per-request
+      // requestId is shared with prompt correlation lines.
+      requestLogging(req, res, () => {
+        // Apply auth middleware (except health)
+        authMiddleware(req, res, () => {
+          void this.routeRequest(req, res, parsed, {
+            sessionRoutes,
+            modelsRoutes,
+            healthRoutes,
+            capabilitiesRoutes,
+            diagnosticsRoutes,
+            eventTypesRoutes,
+          });
         });
       });
     });
@@ -236,6 +247,7 @@ export class InternalApiServer {
       healthRoutes: ReturnType<typeof createHealthRoutes>;
       capabilitiesRoutes: ReturnType<typeof createCapabilitiesRoutes>;
       diagnosticsRoutes: ReturnType<typeof createDiagnosticsRoutes>;
+      eventTypesRoutes: ReturnType<typeof createEventTypesRoutes>;
     },
   ): Promise<void> {
     // Skip 'api' prefix if present: /api/v1/health → ['api', 'v1', 'health']
@@ -463,6 +475,20 @@ export class InternalApiServer {
         } else {
           sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
         }
+        return;
+      }
+
+      case 'events': {
+        // GET /api/v1/events/types — structured event-type registry
+        if (id === 'types') {
+          if (req.method === 'GET') {
+            await deps.eventTypesRoutes.handleGetEventTypes(req, res);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+          return;
+        }
+        sendJson(res, 404, { error: 'Unknown events endpoint', code: ErrorCode.NOT_FOUND });
         return;
       }
 

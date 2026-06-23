@@ -75,7 +75,7 @@ export class ClaudeChannelHooksConfig {
         // file doesn't exist yet — that's fine
       } else {
         const backupPath = this.claudeSettingsPath + '.bak';
-        await fs.writeFile(backupPath, typeof (await fs.readFile(this.claudeSettingsPath, 'utf-8').catch(() => '')) === 'string' ? '' : '', 'utf-8').catch(() => {});
+        await fs.writeFile(backupPath, typeof (await fs.readFile(this.claudeSettingsPath, 'utf-8').catch(() => '')) === 'string' ? '' : '', 'utf-8').catch(() => { /* legitimate: settings backup is best-effort */ });
         existing = {};
       }
     }

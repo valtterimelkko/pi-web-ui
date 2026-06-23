@@ -294,9 +294,9 @@ export class ClaudeChannelService {
                 outputTokens: (existing?.outputTokens ?? 0) + (usage.output_tokens ?? 0),
                 model: entry?.model ?? existing?.model ?? 'sonnet',
               });
-            }).catch(() => {});
+            }).catch((err) => logger.debug('best-effort op failed:', err));
           }
-          this.registry.updateStatus(internalSid, 'idle').catch(() => {});
+          this.registry.updateStatus(internalSid, 'idle').catch((err) => logger.debug('best-effort op failed:', err));
           this.sessionsWithHistory.add(internalSid);
           const p = this.pendingPrompts.get(internalSid);
           if (p) {
@@ -316,7 +316,7 @@ export class ClaudeChannelService {
           if (p) {
             clearTimeout(p.timer);
             this.pendingPrompts.delete(internalSid);
-            this.registry.updateStatus(internalSid, 'error').catch(() => {});
+            this.registry.updateStatus(internalSid, 'error').catch((err) => logger.debug('best-effort op failed:', err));
             p.onComplete(new Error(msg));
           }
         }
@@ -331,7 +331,7 @@ export class ClaudeChannelService {
                 outputTokens: (existing?.outputTokens ?? 0) + (data.outputTokens ?? 0),
                 model: entry?.model ?? existing?.model ?? 'sonnet',
               });
-            }).catch(() => {});
+            }).catch((err) => logger.debug('best-effort op failed:', err));
           }
         }
       }
@@ -550,7 +550,7 @@ export class ClaudeChannelService {
       clearTimeout(pending.timer);
       this.pendingPrompts.delete(sessionId);
       this.processManager.markPromptComplete();
-      this.registry.updateStatus(sessionId, 'idle').catch(() => {});
+      this.registry.updateStatus(sessionId, 'idle').catch((err) => logger.debug('best-effort op failed:', err));
       pending.onComplete(new Error('Aborted'));
     }
   }
@@ -594,7 +594,7 @@ export class ClaudeChannelService {
     // Use patchSessionMeta to update ONLY the thinkingLevel field — this
     // eliminates the race condition where this method's async upsert could
     // overwrite the model back to its stale value.
-    this.registry.patchSessionMeta(sessionId, { thinkingLevel: level }).catch(() => {});
+    this.registry.patchSessionMeta(sessionId, { thinkingLevel: level }).catch((err) => logger.debug('best-effort op failed:', err));
   }
 
   async getSession(sessionId: string) {
@@ -903,7 +903,7 @@ export class ClaudeChannelService {
       // turn are forwarded to the UI instead of being silently dropped.
       // This mirrors handlePromptTimeout() behavior.
       this.startLatePromptListener(sessionId, pending.onEvent);
-      this.registry.updateStatus(sessionId, 'idle').catch(() => {});
+      this.registry.updateStatus(sessionId, 'idle').catch((err) => logger.debug('best-effort op failed:', err));
       this.sessionsWithHistory.add(sessionId);
 
       const agentEndEvent: NormalizedEvent = {
@@ -915,7 +915,7 @@ export class ClaudeChannelService {
       try {
         pending.onEvent(agentEndEvent);
       } catch { /* non-fatal */ }
-      this.persistEvent(sessionId, agentEndEvent).catch(() => {});
+      this.persistEvent(sessionId, agentEndEvent).catch((err) => logger.debug('best-effort op failed:', err));
       pending.onComplete();
     }
   }
@@ -928,7 +928,7 @@ export class ClaudeChannelService {
     clearTimeout(pending.timer);
     this.pendingPrompts.delete(sessionId);
     this.startLatePromptListener(sessionId, pending.onEvent);
-    this.registry.updateStatus(sessionId, 'idle').catch(() => {});
+    this.registry.updateStatus(sessionId, 'idle').catch((err) => logger.debug('best-effort op failed:', err));
     this.sessionsWithHistory.add(sessionId);
 
     const errorMessage = `Claude Direct prompt timed out after ${PROMPT_TIMEOUT_MS / 1000}s. If Claude Code was waiting on re-authentication, run /login or \`claude auth login\` and the queued reply may still arrive.`;
@@ -949,7 +949,7 @@ export class ClaudeChannelService {
       clearTimeout(pending.timer);
       this.pendingPrompts.delete(sessionId);
       this.startLatePromptListener(sessionId, pending.onEvent);
-      this.registry.updateStatus(sessionId, 'error').catch(() => {});
+      this.registry.updateStatus(sessionId, 'error').catch((err) => logger.debug('best-effort op failed:', err));
       this.sessionsWithHistory.add(sessionId);
       this.emitPromptError(sessionId, pending, errorMessage, 'CLAUDE_AUTH_EXPIRED', 'auth_expired', true);
       const error = new Error(errorMessage) as PromptCompletionError;
@@ -985,8 +985,8 @@ export class ClaudeChannelService {
       pending.onEvent(errorEvent);
       pending.onEvent(agentEndEvent);
     } catch { /* non-fatal */ }
-    this.persistEvent(sessionId, errorEvent).catch(() => {});
-    this.persistEvent(sessionId, agentEndEvent).catch(() => {});
+    this.persistEvent(sessionId, errorEvent).catch((err) => logger.debug('best-effort op failed:', err));
+    this.persistEvent(sessionId, agentEndEvent).catch((err) => logger.debug('best-effort op failed:', err));
   }
 
   private startLatePromptListener(sessionId: string, onEvent: (event: NormalizedEvent) => void): void {

@@ -831,8 +831,35 @@ diagnostics slice with a prompt's lifecycle.
 
 ---
 
-### Session Control
+### Event-type registry
 
+A machine-readable catalogue of the normalized event kinds emitted on the
+`/events` SSE stream, so consumers no longer have to infer event shapes from
+docs + source. Derived from the contracted `SSE_EVENT_TYPES` so it cannot drift
+from the stream. See [`docs/EVENT-PIPELINE.md`](./EVENT-PIPELINE.md).
+
+```
+GET /api/v1/events/types
+```
+
+**Response (200):**
+```json
+{
+  "eventTypes": [
+    { "type": "agent_start", "description": "A prompt turn started.", "category": "agent", "verbosity": ["full", "tasks"] },
+    { "type": "message_update", "description": "Incremental assistant content (text delta).", "category": "message", "verbosity": ["full", "tasks"] },
+    { "type": "tool_execution_end", "description": "A tool call finished (result included in full).", "category": "tool", "verbosity": ["full"] }
+  ]
+}
+```
+
+`category` is `agent | message | tool | control`. `verbosity` lists which stream
+levels include the event (`full` = every event; `tasks` = the status-headline
+subset). Authed like siblings.
+
+---
+
+### Session Control
 ```
 POST /api/v1/sessions/:sessionId/control
 ```
@@ -1637,6 +1664,9 @@ POST /api/v1/sessions/usage           # aggregate token usage / cost
 # Diagnostics (self-service scrubbed logs; authed like siblings)
 GET  /api/v1/diagnostics                       # recent logs + errors + summary
 GET  /api/v1/sessions/:id/diagnostics          # same, scoped to one session
+
+# Event-type registry (machine-readable SSE taxonomy; authed like siblings)
+GET  /api/v1/events/types                      # event kinds on the /events stream
 GET  /api/v1/sessions/:id/approvals/pending   # pending-approval state
 
 # Watch (long-horizon validation)

@@ -37,6 +37,9 @@ yarn-error.log*
 # Testing
 coverage/
 .nyc_output/
+# Vitest machine-parseable JSON reports (per-workspace)
+/server/test-results.json
+/client/test-results.json
 
 # Misc
 *.pem

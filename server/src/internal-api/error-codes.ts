@@ -209,3 +209,15 @@ export function buildErrorBody(
   if (options.docs && info?.docs) body.docs = info.docs;
   return body;
 }
+
+/**
+ * Build an error body enriched with the code's `hint` and `docs` (when present).
+ * Additive: the base `{ error, code }` shape is preserved, so existing consumers
+ * keep working. Use for the most actionable error responses (Task 11).
+ */
+export function enrichedErrorBody(
+  code: ErrorCode,
+  message: string,
+): { error: string; code: string; hint?: string; docs?: string } {
+  return buildErrorBody(code, message, { hint: true, docs: true });
+}

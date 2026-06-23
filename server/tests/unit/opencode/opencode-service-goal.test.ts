@@ -272,7 +272,8 @@ describe('OpenCodeService — goal engine events', () => {
 
     const cleared = await svc.clearGoal(sessionId);
     expect(cleared).toBe(true);
-    // Allow the async abort path (if any) to settle, then confirm the file is gone.
+    // Reason: wait for the fire-and-forget async abort side-effect (real fs +
+    // fetch I/O) to settle — not internal timing, so fake timers wouldn't help.
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(await readGoalFile(ocSessionId)).toBeNull();
 
@@ -310,7 +311,8 @@ describe('OpenCodeService — goal engine events', () => {
 
     svc.abort(sessionId);
 
-    // Allow the async abort logic to execute
+    // Reason: svc.abort() is fire-and-forget; wait for its real fs + fetch
+    // side-effects to settle. Not internal timing (fake timers wouldn't help).
     await new Promise(resolve => setTimeout(resolve, 150));
 
     const updated = await readGoalFile(ocSessionId) as Record<string, unknown> | null;
