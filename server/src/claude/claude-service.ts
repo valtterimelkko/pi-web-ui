@@ -382,6 +382,15 @@ export class ClaudeService {
           } catch (persistErr) {
             logger.warn('[ClaudeService] Failed to persist error entry:', persistErr);
           }
+          // Emit an `error` event so the UI surfaces a visible toast (same path
+          // the SDK backend uses), not just a silent stop. connection.ts maps
+          // this to a session_event the client renders.
+          try {
+            onEvent({
+              type: 'error', sessionId, timestamp: Date.now(),
+              data: { error: error.message, message: error.message },
+            });
+          } catch { /* non-fatal */ }
         }
         try {
           await this.registry.updateStatus(sessionId, error ? 'error' : 'idle');
