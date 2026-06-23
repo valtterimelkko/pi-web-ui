@@ -28,7 +28,8 @@
     "docs:sync-agent-guides": "node scripts/sync-agent-guides.mjs",
     "docs:check-agent-guides": "node scripts/check-agent-guides.mjs",
     "lint": "eslint . --ext .ts,.tsx",
-    "typecheck": "npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared"
+    "typecheck": "npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared",
+    "validate:proxy": "npx tsx scripts/validation-logging-proxy.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
