@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog, ArrowUp, History, ChevronDown, ChevronUp, Star, Mic } from 'lucide-react';
+import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog, ArrowUp, History, ChevronDown, ChevronUp, Star, Mic, Lock } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useUIStore } from '../../store/uiStore';
 import { useSessionStore } from '../../store';
@@ -40,6 +40,15 @@ const BACKEND_LABEL: Record<string, string> = {
 const PROVIDER_LABEL: Record<ClaudeProvider, string> = { claude: 'Claude', glm: 'GLM' };
 const MODEL_LABEL: Record<string, string> = { sonnet: 'Sonnet', opus: 'Opus', haiku: 'Haiku' };
 
+/**
+ * Backends that are present-but-locked in the selector. The Channel backend is
+ * kept as an escape hatch but is not user-selectable from the browser: it must
+ * be activated on the production server by an agent first. It still renders so
+ * users can see it exists, but it is grayed out and non-clickable.
+ */
+const LOCKED_BACKENDS = new Set<string>(['channel']);
+const isBackendLocked = (backend: string) => LOCKED_BACKENDS.has(backend);
+
 /** Only profile-backed entries participate in the structured selector. */
 const profileEntries = (models: ClaudeModelEntry[]) =>
   models.filter((m) => m.id.startsWith('profile:') && m.backend);
@@ -55,6 +64,11 @@ const backendsOf = (models: ClaudeModelEntry[], provider: ClaudeProvider): strin
   for (const m of profileEntries(models)) if (PROVIDER_OF(m) === provider && m.backend) set.add(m.backend);
   return BACKEND_ORDER.filter((b) => set.has(b));
 };
+
+/** Selectable backends for a provider: configured backends minus locked ones.
+ *  Locked backends still render (disabled) but are never auto-selected. */
+const selectableBackendsOf = (models: ClaudeModelEntry[], provider: ClaudeProvider): string[] =>
+  backendsOf(models, provider).filter((b) => !isBackendLocked(b));
 
 const modelsOf = (models: ClaudeModelEntry[], provider: ClaudeProvider, backend: string): string[] => {
   const set = new Set<string>();
@@ -170,7 +184,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
         // Default to the first available provider/backend/model in priority order.
         const provs = providersOf(models);
         const prov = provs.includes('claude') ? 'claude' : (provs[0] || 'claude');
-        const backends = backendsOf(models, prov);
+        const backends = selectableBackendsOf(models, prov);
         const backend = backends[0] || 'sdk-subscription';
         const ms = modelsOf(models, prov, backend);
         setClaudeProvider(prov);
@@ -178,14 +192,18 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
         setClaudeModel(ms.includes('sonnet') ? 'sonnet' : (ms[0] || 'sonnet'));
       })
       .catch((err) => console.error('Failed to fetch Claude models:', err))
-      .finally(() => { if (!cancelled) setClaudeModelsLoading(false); });
+      // Always clear the loading spinner when the request ends. The `cancelled`
+      // flag still guards the *data* writes above (so a superseded request
+      // can't overwrite newer state), but the loading flag is pure UI and must
+      // never get stuck true if this effect was cleaned up mid-flight.
+      .finally(() => setClaudeModelsLoading(false));
     return () => { cancelled = true; };
   }, [isOpen, sdkType, claudeModels.length]);
 
   // Switch provider: reset backend + model to the first available for it.
   const selectProvider = (prov: ClaudeProvider) => {
     setClaudeProvider(prov);
-    const backends = backendsOf(claudeModels, prov);
+    const backends = selectableBackendsOf(claudeModels, prov);
     const backend = backends[0] || 'sdk-subscription';
     setClaudeBackend(backend);
     const ms = modelsOf(claudeModels, prov, backend);
@@ -193,7 +211,10 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   };
 
   // Switch backend: reset model to the first available for provider+backend.
+  // Locked backends (e.g. Channel) are never selectable here — the button is
+  // disabled in the UI — but we guard defensively regardless.
   const selectBackend = (backend: string) => {
+    if (isBackendLocked(backend)) return;
     setClaudeBackend(backend);
     const ms = modelsOf(claudeModels, claudeProvider, backend);
     setClaudeModel(ms.includes('sonnet') ? 'sonnet' : (ms[0] || 'sonnet'));
@@ -423,21 +444,39 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                   <div>
                     <p className="text-xs font-medium text-gray-500 mb-1.5">Backend</p>
                     <div className="flex flex-wrap gap-2" data-testid="claude-backend-toggle">
-                      {backendList.map((b) => (
-                        <button
-                          key={b}
-                          onClick={() => selectBackend(b)}
-                          data-testid={`claude-backend-${b}`}
-                          className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${
-                            claudeBackend === b
-                              ? 'border-amber-500 bg-amber-50 text-gray-900 font-medium'
-                              : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
-                          }`}
-                        >
-                          {BACKEND_LABEL[b] || b}
-                        </button>
-                      ))}
+                      {backendList.map((b) => {
+                        const locked = isBackendLocked(b);
+                        return (
+                          <button
+                            key={b}
+                            onClick={() => !locked && selectBackend(b)}
+                            disabled={locked}
+                            data-testid={`claude-backend-${b}`}
+                            aria-disabled={locked || undefined}
+                            title={
+                              locked
+                                ? 'Locked — an agent must activate this backend on the production server first.'
+                                : undefined
+                            }
+                            className={`px-3 py-1.5 rounded-lg border text-sm transition-colors inline-flex items-center gap-1 ${
+                              locked
+                                ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                                : claudeBackend === b
+                                  ? 'border-amber-500 bg-amber-50 text-gray-900 font-medium'
+                                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                            }`}
+                          >
+                            {BACKEND_LABEL[b] || b}
+                            {locked && <Lock className="w-3 h-3" data-testid={`claude-backend-${b}-lock`} />}
+                          </button>
+                        );
+                      })}
                     </div>
+                    {backendList.some(isBackendLocked) && (
+                      <p className="text-[11px] text-gray-400 mt-1" data-testid="claude-backend-locked-note">
+                        The Channel backend is locked — an agent must activate it on the production server first.
+                      </p>
+                    )}
                   </div>
 
                   {/* Model (Claude only) */}

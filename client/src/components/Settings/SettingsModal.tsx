@@ -1,4 +1,4 @@
-import { X, Settings2, AlertCircle, RefreshCw, Info } from 'lucide-react';
+import { X, Settings2, AlertCircle, RefreshCw, Info, Lock } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
 import { api } from '../../lib/api';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -6,21 +6,21 @@ import { useSessionStore } from '../../store';
 import { ModelSelector, type Model } from './ModelSelector';
 import { ThinkingLevelSelector, type ThinkingLevel } from './ThinkingLevelSelector';
 
-// Claude models for Claude Direct sessions
-const CLAUDE_MODELS: Model[] = [
-  { id: 'opus', name: 'Claude Opus', provider: 'anthropic', contextWindow: 200000, maxTokens: 64000, description: 'Most powerful Claude model for complex tasks' },
-  { id: 'sonnet', name: 'Claude Sonnet', provider: 'anthropic', contextWindow: 200000, maxTokens: 64000, description: 'Balanced performance and speed' },
-  { id: 'haiku', name: 'Claude Haiku', provider: 'anthropic', contextWindow: 200000, maxTokens: 64000, description: 'Fastest Claude model for simple tasks' },
-];
-
-function normalizeClaudeModelId(modelId: string | null): 'opus' | 'sonnet' | 'haiku' | null {
-  if (!modelId) return null;
-  const lower = modelId.toLowerCase();
-  if (lower.includes('opus')) return 'opus';
-  if (lower.includes('haiku')) return 'haiku';
-  if (lower.includes('sonnet') || lower.includes('default')) return 'sonnet';
-  return null;
+// A Claude provider-profile model entry, as returned by GET /api/models?sdkType=claude.
+interface ClaudeProfileEntry {
+  id: string;            // 'profile:<id>' for profile entries, or a bare alias
+  displayName: string;
+  provider: string;
+  backend?: string;
+  claudeModel?: string;
 }
+
+// Backend labels mirror the NewSessionModal structured selector.
+const CLAUDE_BACKEND_LABEL: Record<string, string> = {
+  'sdk-subscription': 'SDK',
+  'cli-direct': 'CLI direct',
+  'channel': 'Channel',
+};
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -46,6 +46,28 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const isOpenCodeSession = useMemo(() => currentSessionSdkType === 'opencode', [currentSessionSdkType]);
   const isAntigravitySession = useMemo(() => currentSessionSdkType === 'antigravity', [currentSessionSdkType]);
 
+  // Profile entries for the locked Claude model panel (best-effort fetch).
+  const [claudeProfiles, setClaudeProfiles] = useState<ClaudeProfileEntry[]>([]);
+
+  // Human-readable label for the locked Claude model panel. Resolves the active
+  // session model to its profile displayName + backend when possible, otherwise
+  // humanizes whatever model string the server reported.
+  const lockedModelLabel = useMemo(() => {
+    if (!isClaudeSession) return '';
+    const model = storeCurrentModel || '';
+    const byId = claudeProfiles.find((p) => p.id === model);
+    if (byId) {
+      const be = byId.backend && CLAUDE_BACKEND_LABEL[byId.backend];
+      return be ? `${byId.displayName} · ${be}` : byId.displayName;
+    }
+    if (!model) return 'Claude (fixed)';
+    const parts = model.replace(/^profile:/, '').split('/');
+    const tail = parts[parts.length - 1] ?? model;
+    return tail
+      .replace(/-/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }, [isClaudeSession, storeCurrentModel, claudeProfiles]);
+
   // Fetch models on mount (or use Claude models for Claude sessions)
   useEffect(() => {
     if (!isOpen) return;
@@ -56,13 +78,19 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
     const fetchModels = async () => {
       try {
-        // For Claude sessions, use hardcoded Claude models
+        // Claude sessions lock the model at creation time — there is no
+        // interactive selector here. Best-effort fetch of the profile entries so
+        // the locked panel can show a clean provider/backend/model label.
         if (isClaudeSession) {
-          setModels(CLAUDE_MODELS);
-          // Default to sonnet if no model selected, or normalize any prior Claude model id
-          const normalizedCurrent = normalizeClaudeModelId(storeCurrentModel);
-          const validModel = CLAUDE_MODELS.find(m => m.id === normalizedCurrent);
-          setCurrentModel(validModel?.id || 'sonnet');
+          setModels([]);
+          setCurrentModel(storeCurrentModel || '');
+          try {
+            const resp = await api.get('/api/models?sdkType=claude') as { models?: ClaudeProfileEntry[] };
+            const entries = (resp.models || []).filter((m) => m.id.startsWith('profile:'));
+            setClaudeProfiles(entries);
+          } catch {
+            // Non-fatal: the locked panel falls back to a humanized model string.
+          }
           setIsLoading(false);
           return;
         }
@@ -119,21 +147,26 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   }, [errorMessage, isOpen]);
 
   const handleSave = () => {
-    if (currentModel) {
-      setIsSaving(true);
-      setError(null);
-      setModel(currentModel);
-      sendThinkingLevel(thinkingLevel);
-
-      setTimeout(() => {
-        setIsSaving(false);
-        if (!error) {
-          onClose();
-        }
-      }, 1000);
-    } else {
+    // Claude sessions lock the model at creation: never send a mid-session model
+    // change (a bare alias would silently re-route provider/backend). Only the
+    // thinking level is user-tunable for an existing Claude session.
+    if (!isClaudeSession && !currentModel) {
       onClose();
+      return;
     }
+    setIsSaving(true);
+    setError(null);
+    if (!isClaudeSession) {
+      setModel(currentModel);
+    }
+    sendThinkingLevel(thinkingLevel);
+
+    setTimeout(() => {
+      setIsSaving(false);
+      if (!error) {
+        onClose();
+      }
+    }, 1000);
   };
 
   // Close on escape
@@ -197,12 +230,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 </span>
               )}
             </h3>
-            {isClaudeSession && (
-              <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
-                <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                <span>Claude Direct sessions only support Claude models (Opus, Sonnet, Haiku).</span>
-              </div>
-            )}
             {isOpenCodeSession && (
               <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
                 <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
@@ -215,7 +242,26 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 <span>Antigravity sessions use Google Gemini models via the agy CLI.</span>
               </div>
             )}
-            {isLoading ? (
+            {isClaudeSession ? (
+              <div data-testid="claude-model-locked">
+                <div className="w-full flex items-center justify-between p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded flex items-center justify-center bg-amber-50">
+                      <Lock className="w-4 h-4 text-amber-600" />
+                    </div>
+                    <div className="text-left">
+                      <p className="text-sm font-medium text-gray-900" data-testid="claude-model-locked-label">{lockedModelLabel}</p>
+                      <p className="text-xs text-gray-500">Fixed for this session</p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Locked</span>
+                </div>
+                <p className="mt-2 flex items-start gap-2 text-xs text-gray-500" data-testid="claude-model-locked-note">
+                  <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>Provider, backend, and model are chosen when a Claude session is created. Start a new session to change them.</span>
+                </p>
+              </div>
+            ) : isLoading ? (
               <div className="flex items-center gap-2 text-gray-400 text-sm">
                 <RefreshCw className="w-4 h-4 animate-spin" />
                 Loading models...
@@ -314,7 +360,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </button>
           <button
             onClick={handleSave}
-            disabled={isSaving || !currentModel}
+            disabled={isSaving || (!isClaudeSession && !currentModel)}
             className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSaving ? 'Saving...' : 'Save Changes'}

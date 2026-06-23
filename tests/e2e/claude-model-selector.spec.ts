@@ -15,7 +15,7 @@ function isClaudeAvailable(): boolean {
 
 const CLAUDE_AVAILABLE = isClaudeAvailable();
 
-async function login(page: any) {
+async function login(page: import('@playwright/test').Page) {
   await page.goto('/');
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(1000);
@@ -35,19 +35,15 @@ test.describe('Claude Direct Model Selector', () => {
     await login(page);
   });
 
-  test('Claude session shows only Claude models in selector', async ({ page }) => {
+  test('Claude session locks the in-session model selector (Channel backend disabled)', async ({ page }) => {
     test.skip(!CLAUDE_AVAILABLE, 'Claude Code not installed/authenticated');
-    
-    // 1. Create a new Claude Direct session
-    // Check if modal is already open
+
+    // 1. Open the New Session modal
     const modalTitle = page.locator('text=Create New Session').first();
     const isModalOpen = await modalTitle.isVisible().catch(() => false);
-    
     if (!isModalOpen) {
-      // Try different selectors for the new session button
       const newSessionBtn = page.locator('button').filter({ hasText: /new session/i }).first();
       const createNewSessionBtn = page.locator('button:has-text("Create new session")').first();
-      
       if (await newSessionBtn.isVisible().catch(() => false)) {
         await newSessionBtn.click();
       } else if (await createNewSessionBtn.isVisible().catch(() => false)) {
@@ -55,103 +51,58 @@ test.describe('Claude Direct Model Selector', () => {
       }
       await page.waitForTimeout(500);
     }
-    
-    // Take screenshot of modal
-    await page.screenshot({ path: '/tmp/test-1-modal-open.png' });
-    
-    // Select Claude Direct
+
+    // 2. Select Claude Direct
     const claudeBtn = page.locator('button').filter({ hasText: /Claude Direct/i });
     await expect(claudeBtn).toBeVisible({ timeout: 5000 });
     await expect(claudeBtn).toBeEnabled();
     await claudeBtn.click();
-    await page.waitForTimeout(300);
-    
-    // Take screenshot after selection
-    await page.screenshot({ path: '/tmp/test-2-claude-selected.png' });
-    
-    // Click on the home/root folder to navigate there
-    const rootFolder = page.locator('button').filter({ hasText: /root|home|\/~|current directory/i }).first();
-    if (await rootFolder.isVisible().catch(() => false)) {
-      await rootFolder.click();
-      await page.waitForTimeout(300);
+    await page.waitForTimeout(800);
+
+    // 3. The Channel backend (if surfaced by configured profiles) must be disabled
+    const channelBackend = page.locator('[data-testid="claude-backend-channel"]');
+    if (await channelBackend.isVisible().catch(() => false)) {
+      await expect(channelBackend).toBeDisabled();
+      await expect(page.locator('[data-testid="claude-backend-locked-note"]')).toBeVisible();
     }
-    
-    // Create the session - look for Create button
+
+    // 4. Create the session
     const createBtn = page.locator('button').filter({ hasText: /^create$/i }).first();
     await expect(createBtn).toBeVisible({ timeout: 5000 });
     await createBtn.click();
     await page.waitForTimeout(2000);
-    
-    // Take screenshot after session created
-    await page.screenshot({ path: '/tmp/test-3-session-created.png' });
-    
-    // 2. Verify CC badge is visible in sidebar
+
+    // 5. Verify CC badge is visible
     const ccBadge = page.locator('span[title*="Claude Direct"]').first();
     await expect(ccBadge).toBeVisible({ timeout: 5000 });
-    
-    // 3. Open Settings modal
-    const settingsBtn = page.locator('button[title*="settings" i], button[aria-label*="settings" i]').first();
-    const altSettingsBtn = page.locator('[data-testid="settings-button"]').first();
-    const gearBtn = page.locator('button:has(svg[class*="settings"]), button:has([data-lucide="settings"])').first();
-    
-    const btn = (await settingsBtn.isVisible().catch(() => false)) ? settingsBtn :
-                (await altSettingsBtn.isVisible().catch(() => false)) ? altSettingsBtn : gearBtn;
-    
-    await btn.click();
+
+    // 6. Open Settings modal via the model pill in the composer
+    const modelPill = page.locator('button[title="Change model"]').first();
+    await expect(modelPill).toBeVisible({ timeout: 5000 });
+    await modelPill.click();
     await page.waitForTimeout(500);
-    
-    // 4. Verify "Claude Direct" badge appears in Settings
+
+    // 7. Claude Direct badge appears in Settings
     const claudeDirectBadge = page.locator('span').filter({ hasText: 'Claude Direct' }).first();
     await expect(claudeDirectBadge).toBeVisible({ timeout: 5000 });
-    
-    // 5. Verify the info message about Claude models only
-    const infoText = page.locator('text=Claude Direct sessions only support Claude models');
-    await expect(infoText).toBeVisible({ timeout: 5000 });
-    
-    // 6. Open the model selector dropdown
-    const modelSelector = page.locator('[data-testid="model-selector"]').first();
-    const modelTrigger = page.locator('[data-testid="model-selector-trigger"]').first();
-    
-    if (await modelSelector.isVisible().catch(() => false)) {
-      await modelSelector.click();
-    } else if (await modelTrigger.isVisible().catch(() => false)) {
-      await modelTrigger.click();
-    } else {
-      // Try to find any clickable model selector area
-      const altSelector = page.locator('button').filter({ hasText: /model/i }).first();
-      if (await altSelector.isVisible().catch(() => false)) {
-        await altSelector.click();
-      }
-    }
-    await page.waitForTimeout(500);
-    
-    // Take screenshot of model dropdown
-    await page.screenshot({ path: '/tmp/test-5-model-dropdown.png' });
-    
-    // 7. Verify only Claude models are shown (Opus, Sonnet, Haiku)
-    const pageContent = await page.locator('body').textContent();
-    
-    // Should contain Claude model names
-    expect(pageContent).toContain('Opus');
-    expect(pageContent).toContain('Sonnet');
-    expect(pageContent).toContain('Haiku');
-    
-    console.log('[TEST] Model selector content verified');
-    
-    // 8. Select Sonnet explicitly (matches the default Claude subscription path)
-    const sonnetOption = page.locator('text=Claude Sonnet').first();
-    await expect(sonnetOption).toBeVisible({ timeout: 5000 });
-    await sonnetOption.click();
-    await page.waitForTimeout(300);
-    
-    // 9. Save the changes
-    const saveBtn = page.locator('button').filter({ hasText: /save/i }).first();
-    if (await saveBtn.isVisible().catch(() => false)) {
-      await saveBtn.click();
-      await page.waitForTimeout(800);
-    }
 
-    const input = page.locator('textarea[placeholder*="message" i], textarea').first();
+    // 8. The model is LOCKED for the session: the locked panel is present and
+    //    there is NO interactive model selector dropdown.
+    await expect(page.locator('[data-testid="claude-model-locked"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="claude-model-locked-note"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="model-selector"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="model-selector-trigger"]')).toHaveCount(0);
+
+    // 9. The thinking-level selector is still present and interactive
+    await expect(page.getByText('Thinking Level')).toBeVisible({ timeout: 5000 });
+
+    // Close settings (Escape) before chatting
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+
+    // 10. Multi-turn messaging still works — the model is fixed by session
+    //     creation, not by the (now locked) in-session selector.
+    const input = page.locator('textarea').first();
     await expect(input).toBeVisible({ timeout: 5000 });
 
     const sendPrompt = async (prompt: string, expectedFragment: string, timeoutMs = 15000) => {
@@ -166,11 +117,8 @@ test.describe('Claude Direct Model Selector', () => {
       await expect(page.locator(`text=${expectedFragment}`)).toBeVisible({ timeout: timeoutMs });
     };
 
-    // 10. Multi-turn verification
-    await sendPrompt('what model are you? Reply in one short sentence.', 'Sonnet');
-    await sendPrompt('tell me more about yourself in one short sentence.', 'Anthropic');
     await sendPrompt('reply with exactly: followup works', 'followup works');
-    
-    console.log('[TEST] Claude Direct model selector and multi-turn messaging test completed successfully!');
+
+    console.log('[TEST] Claude locked model selector + disabled Channel backend test completed successfully!');
   });
 });
