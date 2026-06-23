@@ -1,6 +1,10 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { config, ServerConfig } from '../config.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Config');
+
 
 const router = Router();
 
@@ -62,7 +66,7 @@ router.get('/validate', (_req: Request, res: Response) => {
       issues.push({
         field: 'AUTH_PASSWORD',
         severity: 'error',
-        message: 'AUTH_PASSWORD must be a bcrypt hash in production (use: node -e "console.log(require(\'bcrypt\').hashSync(\'password\', 10))")',
+        message: 'AUTH_PASSWORD must be a bcrypt hash in production (use: node -e "logger.info(require(\'bcrypt\').hashSync(\'password\', 10))")',
       });
     }
   } else {

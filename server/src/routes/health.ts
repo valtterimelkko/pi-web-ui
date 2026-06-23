@@ -5,6 +5,10 @@ import os from 'os';
 import { getWorkerPool } from './sessions.js';
 import { getCrashLogger } from '../workers/crash-logger.js';
 import { getOpenCodeService } from '../opencode/index.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Health');
+
 
 const router = Router();
 
@@ -214,7 +218,7 @@ router.get('/workers', (_req: Request, res: Response) => {
       crashStats,
     });
   } catch (error) {
-    console.error('Error getting worker health:', error);
+    logger.error('Error getting worker health:', error);
     res.status(500).json({
       status: 'error',
       timestamp: new Date().toISOString(),

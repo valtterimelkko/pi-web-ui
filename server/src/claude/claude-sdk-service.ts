@@ -31,6 +31,10 @@ import {
 } from './claude-profiles.js';
 import { resolveClaudeSessionPath } from './claude-process-pool.js';
 import { getSessionRegistry, type SessionRegistryManager } from '../session-registry.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('ClaudeSdkService');
+
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -249,7 +253,7 @@ export class ClaudeSdkService {
           try {
             await this.persistEvent(sessionId, event);
           } catch (persistErr) {
-            console.warn('[ClaudeSdkService] Failed to persist event:', persistErr);
+            logger.warn('[ClaudeSdkService] Failed to persist event:', persistErr);
           }
           try { onEvent(event); } catch { /* non-fatal */ }
         }
@@ -257,7 +261,7 @@ export class ClaudeSdkService {
 
       // Update claudeSessionId if the SDK used a different one
       if (capturedClaudeSessionId && capturedClaudeSessionId !== claudeSessionId) {
-        console.log(`[ClaudeSdkService] Updating claudeSessionId: ${claudeSessionId} → ${capturedClaudeSessionId}`);
+        logger.info(`[ClaudeSdkService] Updating claudeSessionId: ${claudeSessionId} → ${capturedClaudeSessionId}`);
         await this.registry.upsert({
           id: sessionId, sdkType: 'claude', cwd, claudeSessionId: capturedClaudeSessionId,
         });

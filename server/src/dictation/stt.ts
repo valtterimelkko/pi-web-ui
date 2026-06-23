@@ -1,4 +1,8 @@
 import { getSharedOpenAIClient } from './connectionPool.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Stt');
+
 
 const STT_MODEL = 'gpt-4o-mini-transcribe';
 
@@ -49,7 +53,7 @@ export async function transcribeWithFallback(audioChunks: Buffer[], prompt?: str
   try {
     return await streamTranscribe(audioChunks, prompt);
   } catch (primaryError) {
-    console.error('primary STT failed, attempting batch fallback:', primaryError);
+    logger.error('primary STT failed, attempting batch fallback:', primaryError);
     const audioBuffer = Buffer.concat(audioChunks);
     return await batchTranscribe(audioBuffer, prompt);
   }

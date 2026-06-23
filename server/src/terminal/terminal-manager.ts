@@ -1,4 +1,8 @@
 import { EventEmitter } from 'events';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('TerminalManager');
+
 
 // node-pty is optional – gracefully degrade when not installed
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -15,9 +19,9 @@ async function getPty(): Promise<NodePty | null> {
       // Dynamic import for ESM compatibility
       const mod = await import('node-pty');
       ptyModule = mod.default || mod;
-      console.log('[TerminalManager] node-pty loaded successfully');
+      logger.info('[TerminalManager] node-pty loaded successfully');
     } catch (err) {
-      console.warn('[TerminalManager] node-pty not available, terminal feature disabled:', (err as Error).message);
+      logger.warn('[TerminalManager] node-pty not available, terminal feature disabled:', (err as Error).message);
       ptyModule = null;
     }
   }

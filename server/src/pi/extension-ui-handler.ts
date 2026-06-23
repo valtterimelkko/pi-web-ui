@@ -1,4 +1,8 @@
 import { EventEmitter } from 'events';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('ExtensionUiHandler');
+
 
 export interface ExtensionUIRequest {
   id: string;
@@ -56,7 +60,7 @@ export class ExtensionUIHandler extends EventEmitter {
   handleResponse(response: ExtensionUIResponse): void {
     const pending = this.pendingRequests.get(response.id);
     if (!pending) {
-      console.warn(`No pending request for ID: ${response.id}`);
+      logger.warn(`No pending request for ID: ${response.id}`);
       return;
     }
 

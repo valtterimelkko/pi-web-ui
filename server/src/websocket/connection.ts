@@ -29,6 +29,11 @@ import { getAntigravityService, type AntigravityService } from '../antigravity/i
 import { AntigravitySessionSubscribers } from '../antigravity/antigravity-session-subscribers.js';
 import { getSessionRegistry } from '../session-registry.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
+import { createLogger } from '../logging/logger.js';
+import { withCorrelation, newRequestId } from '../logging/correlation.js';
+
+const logger = createLogger('WebUI');
+
 
 // ============================================================================
 // NormalizedEvent → Pi-compatible format converter
@@ -232,7 +237,7 @@ export class WebSocketConnectionManager {
       if (available) {
         const authStatus = await this.claudeService.validateAuth();
         if (authStatus.ok) {
-          console.log(`[WebUI] Claude Direct available: ${authStatus.email}`);
+          logger.info(`[WebUI] Claude Direct available: ${authStatus.email}`);
         }
       }
     }).catch(() => { /* non-fatal */ });
@@ -280,7 +285,7 @@ export class WebSocketConnectionManager {
 
     if (config.claudeChannelEnabled) {
       this.claudeService.startChannel().catch((err) => {
-        console.error('[WebUI] Failed to start Claude channel:', err);
+        logger.error('[WebUI] Failed to start Claude channel:', err);
       });
     }
 
@@ -298,10 +303,10 @@ export class WebSocketConnectionManager {
         this.claudeSessionIds.add(entry.id);
       }
       if (claudeSessions.length > 0) {
-        console.log(`[WebUI] Restored ${claudeSessions.length} Claude session ID(s) from registry`);
+        logger.info(`[WebUI] Restored ${claudeSessions.length} Claude session ID(s) from registry`);
       }
     } catch (err) {
-      console.warn('[WebUI] Failed to restore Claude session IDs from registry:', err instanceof Error ? err.message : String(err));
+      logger.warn('[WebUI] Failed to restore Claude session IDs from registry:', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -313,10 +318,10 @@ export class WebSocketConnectionManager {
         this.opencodeSessionIds.add(entry.id);
       }
       if (opencodeSessions.length > 0) {
-        console.log(`[WebUI] Restored ${opencodeSessions.length} OpenCode session ID(s) from registry`);
+        logger.info(`[WebUI] Restored ${opencodeSessions.length} OpenCode session ID(s) from registry`);
       }
     } catch (err) {
-      console.warn('[WebUI] Failed to restore OpenCode session IDs from registry:', err instanceof Error ? err.message : String(err));
+      logger.warn('[WebUI] Failed to restore OpenCode session IDs from registry:', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -328,10 +333,10 @@ export class WebSocketConnectionManager {
         this.antigravitySessionIds.add(entry.id);
       }
       if (sessions.length > 0) {
-        console.log(`[WebUI] Restored ${sessions.length} Antigravity session ID(s) from registry`);
+        logger.info(`[WebUI] Restored ${sessions.length} Antigravity session ID(s) from registry`);
       }
     } catch (err) {
-      console.warn('[WebUI] Failed to restore Antigravity session IDs from registry:', err instanceof Error ? err.message : String(err));
+      logger.warn('[WebUI] Failed to restore Antigravity session IDs from registry:', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -410,7 +415,7 @@ export class WebSocketConnectionManager {
     this.wss.on('connection', (ws: WebSocket, req: IncomingMessage, authResult: WsAuthResult) => {
       const clientId = this.generateClientId();
 
-      console.log(`WebSocket client ${clientId} connected, auth success: ${authResult.success}, userId: ${authResult.user?.userId}`);
+      logger.info(`WebSocket client ${clientId} connected, auth success: ${authResult.success}, userId: ${authResult.user?.userId}`);
 
       const client: WebSocketClient = {
         id: clientId,
@@ -450,7 +455,7 @@ export class WebSocketConnectionManager {
       });
 
       ws.on('error', (error) => {
-        console.error(`WebSocket error for client ${clientId}:`, error);
+        logger.error(`WebSocket error for client ${clientId}:`, error);
         this.handleDisconnect(clientId);
       });
     });
@@ -459,10 +464,10 @@ export class WebSocketConnectionManager {
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     // Validate origin first
     const origin = req.headers.origin;
-    console.log(`WebSocket upgrade request from origin: ${origin}, allowed: ${config.allowedOrigins}`);
+    logger.info(`WebSocket upgrade request from origin: ${origin}, allowed: ${config.allowedOrigins}`);
     
     if (!origin || !config.allowedOrigins.includes(origin)) {
-      console.log(`Origin not allowed: ${origin}`);
+      logger.info(`Origin not allowed: ${origin}`);
       socket.destroy();
       return;
     }
@@ -475,12 +480,12 @@ export class WebSocketConnectionManager {
       const match = url.match(/\/ws\/sessions?\/([^/?]+)/);
       if (match) {
         const sessionId = match[1];
-        console.log(`JSON-RPC WebSocket upgrade for session: ${sessionId}`);
+        logger.info(`JSON-RPC WebSocket upgrade for session: ${sessionId}`);
 
         // Authenticate first
         const authResult = authenticateWebSocket(req);
         if (!authResult.success) {
-          console.log('JSON-RPC WebSocket auth failed, destroying socket');
+          logger.info('JSON-RPC WebSocket auth failed, destroying socket');
           socket.destroy();
           return;
         }
@@ -497,10 +502,10 @@ export class WebSocketConnectionManager {
 
     // Authenticate for legacy protocol
     const authResult = authenticateWebSocket(req);
-    console.log(`WebSocket auth result: ${authResult.success}, userId: ${authResult.user?.userId}`);
+    logger.info(`WebSocket auth result: ${authResult.success}, userId: ${authResult.user?.userId}`);
 
     if (!authResult.success) {
-      console.log('WebSocket auth failed, destroying socket');
+      logger.info('WebSocket auth failed, destroying socket');
       socket.destroy();
       return;
     }
@@ -528,7 +533,7 @@ export class WebSocketConnectionManager {
     if (protocol === 'jsonrpc') {
       // JSON-RPC message - should not reach here for session WebSocket
       // as those are handled by session-websocket.ts directly
-      console.log(`Received JSON-RPC message on legacy connection from ${clientId}`);
+      logger.info(`Received JSON-RPC message on legacy connection from ${clientId}`);
 
       // Send error response indicating wrong endpoint
       try {
@@ -555,14 +560,14 @@ export class WebSocketConnectionManager {
   private async handleMessage(clientId: string, data: Buffer): Promise<void> {
     const client = this.clients.get(clientId);
     if (!client) {
-      console.log(`Message from unknown client: ${clientId}`);
+      logger.info(`Message from unknown client: ${clientId}`);
       return;
     }
 
     let message: ClientMessage;
     try {
       message = JSON.parse(data.toString()) as ClientMessage;
-      console.log(`Received message from ${clientId}: ${message.type}, auth: ${client.isAuthenticated}`);
+      logger.info(`Received message from ${clientId}: ${message.type}, auth: ${client.isAuthenticated}`);
     } catch {
       this.sendMessage(clientId, { type: 'error', message: 'Invalid JSON', code: 'INVALID_JSON' });
       return;
@@ -587,7 +592,7 @@ export class WebSocketConnectionManager {
     try {
       await this.routeMessage(clientId, message);
     } catch (error) {
-      console.error(`Error handling message from ${clientId}:`, error);
+      logger.error(`Error handling message from ${clientId}:`, error);
       this.sendMessage(clientId, {
         type: 'error',
         message: error instanceof Error ? error.message : 'Internal error',
@@ -750,7 +755,7 @@ export class WebSocketConnectionManager {
     message: ClientMessage,
   ): Promise<void> {
     if (!isTransferSessionContext(message)) {
-      console.warn('[Transfer] Invalid message format:', JSON.stringify(message).slice(0, 200));
+      logger.warn('[Transfer] Invalid message format:', JSON.stringify(message).slice(0, 200));
       this.sendMessage(clientId, {
         type: 'error',
         message: 'Invalid transfer_session_context message format',
@@ -759,7 +764,7 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    console.log(`[Transfer] Request: source=${message.sourceSessionId}, target=${message.targetSessionId || 'new'}, createNew=${message.createNew}, sdk=${message.targetSdkType}, cwd=${message.targetCwd}, scope=${message.scope}`);
+    logger.info(`[Transfer] Request: source=${message.sourceSessionId}, target=${message.targetSessionId || 'new'}, createNew=${message.createNew}, sdk=${message.targetSdkType}, cwd=${message.targetCwd}, scope=${message.scope}`);
 
     const { TransferService } = await import('../session-transfer/transfer-service.js');
 
@@ -787,7 +792,7 @@ export class WebSocketConnectionManager {
     });
 
     if (result.success) {
-      console.log(`[Transfer] Success: ${result.sourceSessionId} -> ${result.targetSessionId} (new=${result.createdNewSession})`);
+      logger.info(`[Transfer] Success: ${result.sourceSessionId} -> ${result.targetSessionId} (new=${result.createdNewSession})`);
       if (result.createdNewSession && result.targetSessionPath) {
         this.clientViewingSession.set(clientId, result.targetSessionPath);
         this.clientCwd.set(clientId, message.targetCwd || '');
@@ -805,7 +810,7 @@ export class WebSocketConnectionManager {
         createdNewSession: result.createdNewSession,
       } as unknown as ServerMessage);
     } else {
-      console.warn(`[Transfer] Failed: ${result.sourceSessionId} -> ${result.targetSessionId || 'new'}: ${result.error?.code} - ${result.error?.message}`);
+      logger.warn(`[Transfer] Failed: ${result.sourceSessionId} -> ${result.targetSessionId || 'new'}: ${result.error?.code} - ${result.error?.message}`);
       this.sendMessage(clientId, {
         type: 'session_transfer_failed',
         sourceSessionId: result.sourceSessionId,
@@ -842,55 +847,59 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    // Dispatch to appropriate runtime handler
-    if (this.antigravitySessionIds.has(sessionPath)) {
-      await this.handleAntigravityPrompt(clientId, sessionPath, message.message);
-      return;
-    }
+    // Stamp a per-prompt correlation id on every log line for this prompt's
+    // lifecycle so an agent can reconstruct the causal chain with one grep.
+    await withCorrelation({ requestId: newRequestId(), sessionId: sessionPath }, async () => {
+      // Dispatch to appropriate runtime handler
+      if (this.antigravitySessionIds.has(sessionPath)) {
+        await this.handleAntigravityPrompt(clientId, sessionPath, message.message);
+        return;
+      }
 
-    if (this.opencodeSessionIds.has(sessionPath)) {
-      await this.handleOpencodePrompt(clientId, sessionPath, message.message, message.images, message.agent);
-      return;
-    }
+      if (this.opencodeSessionIds.has(sessionPath)) {
+        await this.handleOpencodePrompt(clientId, sessionPath, message.message, message.images, message.agent);
+        return;
+      }
 
-    if (this.claudeSessionIds.has(sessionPath)) {
-      await this.handleClaudePrompt(clientId, sessionPath, message.message, message.images);
-      return;
-    }
+      if (this.claudeSessionIds.has(sessionPath)) {
+        await this.handleClaudePrompt(clientId, sessionPath, message.message, message.images);
+        return;
+      }
 
-    // Pi SDK session — check status guard before calling SDK
-    const sessionStatus = this.multiSessionManager.getSessionStatus(sessionPath);
-    if (sessionStatus && (sessionStatus.status === 'busy' || sessionStatus.status === 'streaming')) {
-      this.sendMessage(clientId, {
-        type: 'error',
-        message: 'Session is busy processing. Wait for the current turn to finish or send with steer/followUp.',
-        code: 'SESSION_BUSY',
-      });
-      return;
-    }
-
-    const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
-    if (!agentSession) {
-      this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
-      return;
-    }
-
-    try {
-      await agentSession.prompt(message.message, {
-        images: message.images,
-      });
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      if (errorMsg.includes('already processing') || errorMsg.includes('Agent is already processing')) {
+      // Pi SDK session — check status guard before calling SDK
+      const sessionStatus = this.multiSessionManager.getSessionStatus(sessionPath);
+      if (sessionStatus && (sessionStatus.status === 'busy' || sessionStatus.status === 'streaming')) {
         this.sendMessage(clientId, {
           type: 'error',
-          message: 'Session stuck in processing state. Try switching away and back to force rehydration.',
-          code: 'SESSION_STUCK',
+          message: 'Session is busy processing. Wait for the current turn to finish or send with steer/followUp.',
+          code: 'SESSION_BUSY',
         });
         return;
       }
-      throw error;
-    }
+
+      const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
+      if (!agentSession) {
+        this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
+        return;
+      }
+
+      try {
+        await agentSession.prompt(message.message, {
+          images: message.images,
+        });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        if (errorMsg.includes('already processing') || errorMsg.includes('Agent is already processing')) {
+          this.sendMessage(clientId, {
+            type: 'error',
+            message: 'Session stuck in processing state. Try switching away and back to force rehydration.',
+            code: 'SESSION_STUCK',
+          });
+          return;
+        }
+        throw error;
+      }
+    });
   }
 
   /**
@@ -904,7 +913,7 @@ export class WebSocketConnectionManager {
   ): Promise<void> {
     // If the session already has a running process, wait for it to finish
     if (this.claudeService.isRunning(sessionId)) {
-      console.log(`[handleClaudePrompt] Session ${sessionId} busy, waiting for current turn to finish...`);
+      logger.info(`[handleClaudePrompt] Session ${sessionId} busy, waiting for current turn to finish...`);
       const maxWait = 30000; // 30 seconds max wait
       const pollInterval = 500;
       const start = Date.now();
@@ -1341,7 +1350,7 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity'; model?: string; thinkingLevel?: string }
   ): Promise<void> {
-    console.log(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}, sdkType=${message.sdkType || 'pi'}, model=${message.model || 'default'}, thinkingLevel=${message.thinkingLevel || 'default'}`);
+    logger.info(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}, sdkType=${message.sdkType || 'pi'}, model=${message.model || 'default'}, thinkingLevel=${message.thinkingLevel || 'default'}`);
 
     const cwd = message.cwd || process.cwd();
     const sdkType = message.sdkType || 'pi';
@@ -1426,7 +1435,7 @@ export class WebSocketConnectionManager {
         this.claudeSubs.subscribe(clientId, sessionId);
         this.clientCwd.set(clientId, cwd);
 
-        console.log(`[handleNewSession] Claude session created: ${sessionId} (model: ${createModel})`);
+        logger.info(`[handleNewSession] Claude session created: ${sessionId} (model: ${createModel})`);
 
         this.sendMessage(clientId, {
           type: 'session_created',
@@ -1457,7 +1466,7 @@ export class WebSocketConnectionManager {
     // Store the cwd for this client
     this.clientCwd.set(clientId, cwd);
 
-    console.log(`[handleNewSession] Pi session created: ${status.sessionId}, sessionPath=${sessionPath}`);
+    logger.info(`[handleNewSession] Pi session created: ${status.sessionId}, sessionPath=${sessionPath}`);
 
     this.sendMessage(clientId, {
       type: 'session_created',
@@ -1499,7 +1508,7 @@ export class WebSocketConnectionManager {
       this.clientViewingSession.set(clientId, sessionPath);
       this.claudeSubs.subscribe(clientId, sessionPath);
       await this.replayClaudeHistory(clientId, sessionPath);
-      console.log(`[handleSwitchSession] Client ${clientId} switched to Claude session ${sessionPath}`);
+      logger.info(`[handleSwitchSession] Client ${clientId} switched to Claude session ${sessionPath}`);
       return;
     }
 
@@ -1527,7 +1536,7 @@ export class WebSocketConnectionManager {
       this.opencodeSubs.subscribe(clientId, sessionPath);
       await this.opencodeService.touchSession(sessionPath);
       await this.replayOpencodeHistory(clientId, sessionPath);
-      console.log(`[handleSwitchSession] Client ${clientId} switched to OpenCode session ${sessionPath}`);
+      logger.info(`[handleSwitchSession] Client ${clientId} switched to OpenCode session ${sessionPath}`);
       return;
     }
 
@@ -1556,7 +1565,7 @@ export class WebSocketConnectionManager {
       this.antigravitySubs.subscribe(clientId, sessionPath);
       await this.antigravityService.touchSession(sessionPath);
       await this.replayAntigravityHistory(clientId, sessionPath);
-      console.log(`[handleSwitchSession] Client ${clientId} switched to Antigravity session ${sessionPath}`);
+      logger.info(`[handleSwitchSession] Client ${clientId} switched to Antigravity session ${sessionPath}`);
       return;
     }
 
@@ -1566,7 +1575,7 @@ export class WebSocketConnectionManager {
     // This prevents receiving events from the old session while viewing the new one
     if (oldSessionPath && oldSessionPath !== sessionPath) {
       this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
-      console.log(`[handleSwitchSession] Client ${clientId} unsubscribed from ${oldSessionPath}`);
+      logger.info(`[handleSwitchSession] Client ${clientId} unsubscribed from ${oldSessionPath}`);
     }
 
     // Resolve the cwd for this session from its file header (single-file read).
@@ -1620,7 +1629,7 @@ export class WebSocketConnectionManager {
     // Note: The old session (oldSessionPath) is NOT disposed here.
     // It remains active in MultiSessionManager for background processing
     // and can be switched back to by the client or other clients.
-    console.log(`[handleSwitchSession] Client ${clientId} switched from ${oldSessionPath || 'none'} to ${sessionPath}. Old session remains active.`);
+    logger.info(`[handleSwitchSession] Client ${clientId} switched from ${oldSessionPath || 'none'} to ${sessionPath}. Old session remains active.`);
   }
 
   /**
@@ -1691,7 +1700,7 @@ export class WebSocketConnectionManager {
       // Send history_end signal
       this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
     } catch (error) {
-      console.error(`[replayClaudeHistory] Error replaying history for ${sessionId}:`, error);
+      logger.error(`[replayClaudeHistory] Error replaying history for ${sessionId}:`, error);
     }
   }
 
@@ -1747,7 +1756,7 @@ export class WebSocketConnectionManager {
       }
       this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
     } catch (error) {
-      console.error('[replayOpencodeHistory] Error:', error);
+      logger.error('[replayOpencodeHistory] Error:', error);
     }
   }
 
@@ -1780,7 +1789,7 @@ export class WebSocketConnectionManager {
       }
       this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
     } catch (error) {
-      console.error('[replayAntigravityHistory] Error:', error);
+      logger.error('[replayAntigravityHistory] Error:', error);
     }
   }
 
@@ -1875,7 +1884,7 @@ export class WebSocketConnectionManager {
               ? `📚 **Skill loaded: ${skillName}**`
               : '📚 **Skill loaded**';
             
-            console.log(`[loadSessionMessages] Transforming skill content: ${skillName || 'unknown'}`);
+            logger.info(`[loadSessionMessages] Transforming skill content: ${skillName || 'unknown'}`);
             
             messages.push({
               id: (entry.id as string) || `msg_${timestamp || Date.now()}`,
@@ -1894,7 +1903,7 @@ export class WebSocketConnectionManager {
           });
         } catch (parseError) {
           // Skip invalid lines but continue processing
-          console.warn(`Failed to parse session line: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
+          logger.warn(`Failed to parse session line: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
         }
       }
 
@@ -1902,9 +1911,9 @@ export class WebSocketConnectionManager {
     } catch (error) {
       // Handle file reading errors gracefully
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        console.warn(`Session file not found: ${sessionPath}`);
+        logger.warn(`Session file not found: ${sessionPath}`);
       } else {
-        console.warn(`Failed to load session messages from ${sessionPath}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        logger.warn(`Failed to load session messages from ${sessionPath}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
       return { messages: [], fileTimestamp: 0 };
     }
@@ -1949,7 +1958,7 @@ export class WebSocketConnectionManager {
       }));
       allSessions = [...formattedPiSessions, ...formattedClaudeSessions];
     } catch (e) {
-      console.warn('[handleGetSessions] Failed to load Claude sessions:', e instanceof Error ? e.message : String(e));
+      logger.warn('[handleGetSessions] Failed to load Claude sessions:', e instanceof Error ? e.message : String(e));
     }
 
     try {
@@ -1967,7 +1976,7 @@ export class WebSocketConnectionManager {
       }));
       allSessions = [...allSessions, ...formattedOpencodeSessions];
     } catch (e) {
-      console.warn('[handleGetSessions] Failed to load OpenCode sessions:', e instanceof Error ? e.message : String(e));
+      logger.warn('[handleGetSessions] Failed to load OpenCode sessions:', e instanceof Error ? e.message : String(e));
     }
 
     try {
@@ -1985,7 +1994,7 @@ export class WebSocketConnectionManager {
       }));
       allSessions = [...allSessions, ...formattedAntigravitySessions];
     } catch (e) {
-      console.warn('[handleGetSessions] Failed to load Antigravity sessions:', e instanceof Error ? e.message : String(e));
+      logger.warn('[handleGetSessions] Failed to load Antigravity sessions:', e instanceof Error ? e.message : String(e));
     }
 
     this.sendMessage(clientId, {
@@ -2177,7 +2186,7 @@ export class WebSocketConnectionManager {
   private async handleSetModel(clientId: string, message: { type: 'set_model'; modelId: string }): Promise<void> {
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
-      console.error(`[handleSetModel] No active session for client ${clientId}`);
+      logger.error(`[handleSetModel] No active session for client ${clientId}`);
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
@@ -2200,7 +2209,7 @@ export class WebSocketConnectionManager {
     // Handle Claude session model change
     if (this.claudeSessionIds.has(sessionPath)) {
       try {
-        console.log(`[handleSetModel] Claude session ${sessionPath}, model: ${message.modelId}`);
+        logger.info(`[handleSetModel] Claude session ${sessionPath}, model: ${message.modelId}`);
         const normalizedModel = await this.claudeService.setModel(sessionPath, message.modelId);
         this.sendMessage(clientId, { type: 'model_changed', modelId: normalizedModel });
       } catch (error) {
@@ -2229,20 +2238,20 @@ export class WebSocketConnectionManager {
 
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
     if (!agentSession) {
-      console.error(`[handleSetModel] Session not found for client ${clientId}, path: ${sessionPath}`);
+      logger.error(`[handleSetModel] Session not found for client ${clientId}, path: ${sessionPath}`);
       this.sendMessage(clientId, { type: 'error', message: 'Session not found', code: 'SESSION_NOT_FOUND' });
       return;
     }
 
-    console.log(`[handleSetModel] Client ${clientId}, session ${agentSession.sessionId}, requested model: ${message.modelId}`);
-    console.log(`[handleSetModel] Session file: ${agentSession.sessionFile || 'N/A'}`);
+    logger.info(`[handleSetModel] Client ${clientId}, session ${agentSession.sessionId}, requested model: ${message.modelId}`);
+    logger.info(`[handleSetModel] Session file: ${agentSession.sessionFile || 'N/A'}`);
 
     // Parse model ID (format: provider/model-name)
     const [provider, ...modelParts] = message.modelId.split('/');
     const modelId = modelParts.join('/');
 
     if (!provider || !modelId) {
-      console.error(`[handleSetModel] Invalid model ID format: ${message.modelId}`);
+      logger.error(`[handleSetModel] Invalid model ID format: ${message.modelId}`);
       this.sendMessage(clientId, { type: 'error', message: 'Invalid model ID format', code: 'INVALID_MESSAGE' });
       return;
     }
@@ -2251,7 +2260,7 @@ export class WebSocketConnectionManager {
       // Use pi service to set model
       await this.piService.setModel(agentSession.sessionId, message.modelId);
       
-      console.log(`[handleSetModel] Model change successful for session ${agentSession.sessionId}`);
+      logger.info(`[handleSetModel] Model change successful for session ${agentSession.sessionId}`);
 
       this.sendMessage(clientId, {
         type: 'model_changed',
@@ -2259,7 +2268,7 @@ export class WebSocketConnectionManager {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`[handleSetModel] Failed to set model for session ${agentSession.sessionId}:`, errorMessage);
+      logger.error(`[handleSetModel] Failed to set model for session ${agentSession.sessionId}:`, errorMessage);
       
       this.sendMessage(clientId, {
         type: 'error',
@@ -2372,7 +2381,7 @@ export class WebSocketConnectionManager {
       try {
         await this.opencodeService.resolvePermission(id, isApproved);
       } catch (e) {
-        console.error('[handleExtensionUiResponse] OpenCode permission reply failed:', e);
+        logger.error('[handleExtensionUiResponse] OpenCode permission reply failed:', e);
       }
       return;
     }
@@ -2486,7 +2495,7 @@ export class WebSocketConnectionManager {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`[handleSubscribeSession] Failed to subscribe client ${clientId} to session:`, errorMessage);
+      logger.error(`[handleSubscribeSession] Failed to subscribe client ${clientId} to session:`, errorMessage);
       
       this.sendMessage(clientId, {
         type: 'error',
@@ -2627,7 +2636,7 @@ export class WebSocketConnectionManager {
       pinned: false,
     });
     if (!success) {
-      console.log(`[Connection] Unpin requested for inactive session ${message.sessionPath} — confirmed to client anyway`);
+      logger.info(`[Connection] Unpin requested for inactive session ${message.sessionPath} — confirmed to client anyway`);
     }
   }
 

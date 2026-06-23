@@ -8,6 +8,10 @@ import { RPCProtocolBridge } from './rpc-protocol-bridge.js';
 import type { EventHandler, RPCEvent } from './types.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { ImageContent } from '@earendil-works/pi-ai';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('SessionRPCClient');
+
 
 export interface CompactionResult {
   messageCount: number;
@@ -40,7 +44,7 @@ export class SessionRPCClient {
         try {
           subscriber(normalized);
         } catch (err) {
-          console.error('[SessionRPCClient] Subscriber error:', err);
+          logger.error('[SessionRPCClient] Subscriber error:', err);
         }
       }
     });

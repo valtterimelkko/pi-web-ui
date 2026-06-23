@@ -9,6 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'http';
 import { ApiError } from '../types.js';
+import { ErrorCode } from '../error-codes.js';
 
 export function createAuthMiddleware(apiKey: string) {
   return function authMiddleware(
@@ -24,19 +25,19 @@ export function createAuthMiddleware(apiKey: string) {
 
     const authHeader = req.headers.authorization;
     if (!authHeader) {
-      sendError(res, 401, 'UNAUTHORIZED', 'Missing Authorization header');
+      sendError(res, 401, ErrorCode.UNAUTHORIZED, 'Missing Authorization header');
       return;
     }
 
     const parts = authHeader.split(' ');
     if (parts.length !== 2 || parts[0] !== 'Bearer') {
-      sendError(res, 401, 'UNAUTHORIZED', 'Authorization header must be: Bearer <token>');
+      sendError(res, 401, ErrorCode.UNAUTHORIZED, 'Authorization header must be: Bearer <token>');
       return;
     }
 
     const token = parts[1];
     if (token !== apiKey) {
-      sendError(res, 401, 'UNAUTHORIZED', 'Invalid API key');
+      sendError(res, 401, ErrorCode.UNAUTHORIZED, 'Invalid API key');
       return;
     }
 

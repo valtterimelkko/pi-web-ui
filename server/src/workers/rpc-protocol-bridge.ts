@@ -5,6 +5,10 @@
 
 import type { RPCEvent, EventHandler } from './types.js';
 import type { InternalCommand, NormalizedEvent } from '@pi-web-ui/shared';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('RPCProtocolBridge');
+
 
 export class RPCProtocolBridge {
   private eventHandlers: Set<EventHandler> = new Set();
@@ -20,7 +24,7 @@ export class RPCProtocolBridge {
     try {
       return JSON.parse(trimmed) as RPCEvent;
     } catch {
-      console.error('[RPCProtocolBridge] Failed to parse line:', trimmed);
+      logger.error('[RPCProtocolBridge] Failed to parse line:', trimmed);
       return null;
     }
   }
@@ -86,7 +90,7 @@ export class RPCProtocolBridge {
       try {
         handler(event);
       } catch (err) {
-        console.error('[RPCProtocolBridge] Handler error:', err);
+        logger.error('[RPCProtocolBridge] Handler error:', err);
       }
     }
   }

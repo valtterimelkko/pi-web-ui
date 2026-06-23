@@ -9,6 +9,10 @@ import { turnsToReplayEvents } from './antigravity-history-replay.js';
 import { AntigravitySessionSubscribers } from './antigravity-session-subscribers.js';
 import { getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('AntigravityService');
+
 
 const AGY_CONVERSATION_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations');
 const AGY_BINARY = process.env.AGY_BINARY || '/root/.local/bin/agy';
@@ -391,7 +395,7 @@ export class AntigravityService {
       onComplete();
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      console.error(`[AntigravityService] Prompt failed for ${sessionId}:`, error.message);
+      logger.error(`[AntigravityService] Prompt failed for ${sessionId}:`, error.message);
 
       emit({ type: 'agent_end', sessionId, timestamp: Date.now(), data: { result: null, usage: {} } });
 

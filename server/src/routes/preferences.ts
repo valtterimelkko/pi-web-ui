@@ -5,6 +5,10 @@ import { config } from '../config.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { z } from 'zod';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Preferences');
+
 
 const router = Router();
 
@@ -57,7 +61,7 @@ export async function readPreferences(filePath = PREFS_FILE): Promise<Preference
     if (code === 'ENOENT' || code === 'ENOTDIR') {
       return { archivedSessionPaths: [] };
     }
-    console.error(
+    logger.error(
       `[Preferences] Corrupt prefs file (${filePath}), treating as empty:`,
       err instanceof Error ? err.message : String(err),
     );
@@ -99,7 +103,7 @@ router.get('/', async (_req: Request, res: Response) => {
     const prefs = await readPreferences();
     res.json(prefs);
   } catch (error) {
-    console.error('Error reading preferences:', error);
+    logger.error('Error reading preferences:', error);
     res.status(500).json({ error: 'Failed to read preferences' });
   }
 });
@@ -119,7 +123,7 @@ router.patch('/', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'Invalid preferences', details: error.errors });
       return;
     }
-    console.error('Error writing preferences:', error);
+    logger.error('Error writing preferences:', error);
     res.status(500).json({ error: 'Failed to write preferences' });
   }
 });

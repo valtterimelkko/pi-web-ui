@@ -15,6 +15,10 @@ import { z } from 'zod';
 import { readFileSync, statSync, accessSync, constants } from 'node:fs';
 import { resolve, isAbsolute, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('ClaudeProfiles');
+
 
 // ─── Schema types ────────────────────────────────────────────────────────────
 
@@ -306,7 +310,7 @@ function validateSecretFilePath(filePath: string): void {
   const mode = st.mode & 0o777;
   if (mode & 0o077) {
     // world or group readable — log a warning but don't block
-    console.warn(
+    logger.warn(
       `[claude-profiles] WARNING: secret file ${filePath} is accessible by group/others (mode ${mode.toString(8)})`,
     );
   }

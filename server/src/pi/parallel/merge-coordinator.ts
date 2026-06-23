@@ -8,6 +8,10 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { WorktreeManager, WorktreeInfo, ConflictInfo } from './worktree-manager.js';
+import { createLogger } from '../../logging/logger.js';
+
+const logger = createLogger('MergeCoordinator');
+
 
 export type MergeStrategy = 'merge' | 'squash' | 'rebase';
 export type ConflictResolution = 'ours' | 'theirs' | 'manual' | 'ai-assist';
@@ -330,7 +334,7 @@ ${theirs}
       
       // If merge failed with conflicts, stop batch
       if (!result.success && result.conflicts && result.conflicts.length > 0) {
-        console.warn(`[MergeCoordinator] Batch merge stopped at ${worktreeId} due to conflicts`);
+        logger.warn(`[MergeCoordinator] Batch merge stopped at ${worktreeId} due to conflicts`);
         break;
       }
     }

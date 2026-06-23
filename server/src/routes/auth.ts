@@ -6,6 +6,10 @@ import { generateCsrfToken, invalidateCsrfToken } from '../security/csrf.js';
 import { authLimiter } from '../security/rate-limit.js';
 import { validateBody, loginSchema } from '../security/input-validation.js';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Auth');
+
 
 const router = Router();
 
@@ -28,7 +32,7 @@ router.post('/login', authLimiter, validateBody(loginSchema), async (req: Reques
       validPassword = await bcrypt.compare(password, storedPassword);
     } else {
       if (config.nodeEnv === 'production') {
-        console.error('SECURITY ERROR: Plain text password detected in production. Use bcrypt hash.');
+        logger.error('SECURITY ERROR: Plain text password detected in production. Use bcrypt hash.');
         res.status(500).json({ error: 'Server configuration error' });
         return;
       }
@@ -52,7 +56,7 @@ router.post('/login', authLimiter, validateBody(loginSchema), async (req: Reques
       csrfToken,
     });
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error('Login error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

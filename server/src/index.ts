@@ -1,4 +1,8 @@
 import dotenv from 'dotenv';
+import { createLogger } from './logging/logger.js';
+
+const logger = createLogger('Server');
+
 dotenv.config();
 
 import { createServer } from 'http';
@@ -10,6 +14,7 @@ import { handleTerminalWebSocket } from './terminal/terminal-websocket.js';
 import { initializePiService, startSessionWatcher, getPiService, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
 import { SessionCleanupService } from './session-cleanup.js';
 import { getSessionRegistry } from './session-registry.js';
+import { createFatalErrorHandlers } from './fatal-error-handlers.js';
 
 const app = createApp();
 const server = createServer(app);
@@ -24,7 +29,7 @@ async function initialize(): Promise<void> {
   try {
     // Initialize Pi service first
     await initializePiService();
-    console.log('Pi service initialized');
+    logger.info('Pi service initialized');
 
     // Create WebSocket connection manager
     wsManager = new WebSocketConnectionManager();
@@ -54,7 +59,7 @@ async function initialize(): Promise<void> {
             handleSessionWebSocket(ws, request, sessionId, multiSessionManager);
           });
         }).catch((error) => {
-          console.error('Failed to handle session WebSocket upgrade:', error);
+          logger.error('Failed to handle session WebSocket upgrade:', error);
           socket.destroy();
         });
         return;
@@ -97,23 +102,23 @@ async function initialize(): Promise<void> {
     });
 
     sessionWatcher.on('error', (error: Error) => {
-      console.error('SessionWatcher error:', error);
+      logger.error('SessionWatcher error:', error);
     });
 
-    console.log('WebSocket server ready at /ws');
+    logger.info('WebSocket server ready at /ws');
 
     // Rebuild session registry from disk (ensures Pi sessions are indexed).
     // Skipped in validation mode so the disposable instance never reads the
     // real Pi session directory into its (isolated) registry.
     if (config.validationMode) {
-      console.log('[Validation] Ephemeral validation mode: skipping real-session registry rebuild.');
+      logger.info('[Validation] Ephemeral validation mode: skipping real-session registry rebuild.');
     } else {
       try {
         const registry = getSessionRegistry(config.sessionRegistryPath);
         const piSessionDir = path.join(config.piAgentDir, 'sessions');
         await registry.rebuildFromPiSessions(piSessionDir);
       } catch (err) {
-        console.warn('[Startup] Failed to rebuild session registry from Pi sessions:', err instanceof Error ? err.message : String(err));
+        logger.warn('[Startup] Failed to rebuild session registry from Pi sessions:', err instanceof Error ? err.message : String(err));
       }
     }
 
@@ -121,7 +126,7 @@ async function initialize(): Promise<void> {
     // after 90 days). DISABLED in validation mode — a disposable validation
     // instance must never delete real session data as a side effect of booting.
     if (config.validationMode) {
-      console.log('[Validation] Ephemeral validation mode: session cleanup disabled.');
+      logger.info('[Validation] Ephemeral validation mode: session cleanup disabled.');
     } else {
       sessionCleanup = new SessionCleanupService();
       sessionCleanup.bindRuntimes({
@@ -176,13 +181,13 @@ async function initialize(): Promise<void> {
           piService: getPiService(),
         });
         await internalApiServer.start();
-        console.log(`[InternalAPI] Started on Unix socket: ${config.internalApiSocketPath}`);
+        logger.info(`[InternalAPI] Started on Unix socket: ${config.internalApiSocketPath}`);
       } catch (err) {
-        console.error('[InternalAPI] Failed to start internal API:', err instanceof Error ? err.message : String(err));
+        logger.error('[InternalAPI] Failed to start internal API:', err instanceof Error ? err.message : String(err));
       }
     }
   } catch (error) {
-    console.error('Failed to initialize:', error);
+    logger.error('Failed to initialize:', error);
     process.exit(1);
   }
 }
@@ -192,16 +197,16 @@ async function start(): Promise<void> {
   await initialize();
 
   server.listen(config.port, '0.0.0.0', () => {
-    console.log(`Pi Web UI Server running on port ${config.port}`);
-    console.log(`Health check: http://localhost:${config.port}/health`);
-    console.log(`WebSocket: ws://localhost:${config.port}/ws`);
-    console.log(`Allowed origins: ${config.allowedOrigins.join(', ')}`);
+    logger.info(`Pi Web UI Server running on port ${config.port}`);
+    logger.info(`Health check: http://localhost:${config.port}/health`);
+    logger.info(`WebSocket: ws://localhost:${config.port}/ws`);
+    logger.info(`Allowed origins: ${config.allowedOrigins.join(', ')}`);
   });
 }
 
 // Graceful shutdown
 async function shutdown(): Promise<void> {
-  console.log('Shutting down...');
+  logger.info('Shutting down...');
 
   // Stop session watcher
   const { stopSessionWatcher } = await import('./pi/index.js');
@@ -220,13 +225,13 @@ async function shutdown(): Promise<void> {
   }
 
   server.close(() => {
-    console.log('Server closed');
+    logger.info('Server closed');
     process.exit(0);
   });
 
   // Force exit after timeout
   setTimeout(() => {
-    console.error('Forced shutdown');
+    logger.error('Forced shutdown');
     process.exit(1);
   }, 5000);
 }
@@ -234,9 +239,27 @@ async function shutdown(): Promise<void> {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
+// Process-level fatal-error handlers: log message + stack + a context snapshot
+// (active session count, uptime) via the central logger, then for
+// uncaughtException trigger the same graceful shutdown as SIGTERM/SIGINT. Registered
+// exactly once at startup. (Handler logic lives in ./fatal-error-handlers.js so
+// it is unit-testable without killing the test runner.)
+const fatalErrorHandlers = createFatalErrorHandlers({
+  logger,
+  shutdown: () => {
+    void shutdown();
+  },
+  getContext: () => ({
+    activeSessions: wsManager?.getMultiSessionManager()?.getAllSessionStatuses()?.length ?? 0,
+    uptimeSeconds: Math.round(process.uptime()),
+  }),
+});
+process.on('uncaughtException', fatalErrorHandlers.uncaughtException);
+process.on('unhandledRejection', fatalErrorHandlers.unhandledRejection);
+
 // Start the server
 start().catch((error) => {
-  console.error('Failed to start server:', error);
+  logger.error('Failed to start server:', error);
   process.exit(1);
 });
 

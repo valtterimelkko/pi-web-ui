@@ -18,16 +18,24 @@ import { writeFile, readFile, mkdir, unlink } from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { createAuthMiddleware } from './middleware/auth.js';
+import { ErrorCode } from './error-codes.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createModelsRoutes, type ModelsRoutesDeps } from './routes/models.js';
 import { createHealthRoutes, type HealthRoutesDeps } from './routes/health.js';
 import { createCapabilitiesRoutes, type CapabilitiesRoutesDeps } from './routes/capabilities.js';
+import { createDiagnosticsRoutes } from './routes/diagnostics.js';
+import { pushDiagnosticsRecord } from './diagnostics-buffer.js';
+import { setLogTap } from '../logging/logger.js';
 import type { ClaudeService } from '../claude/claude-service.js';
 import type { OpenCodeService } from '../opencode/opencode-service.js';
 import type { AntigravityService } from '../antigravity/antigravity-service.js';
 import type { MultiSessionManager } from '../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../session-registry.js';
 import type { PiService } from '../pi/pi-service.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('InternalAPI');
+
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -153,6 +161,13 @@ export class InternalApiServer {
     };
     const capabilitiesRoutes = createCapabilitiesRoutes(capabilitiesDeps);
 
+    const diagnosticsRoutes = createDiagnosticsRoutes();
+
+    // Capture recent structured logs into the diagnostics ring buffer so the
+    // /diagnostics endpoints can self-serve them. The buffer scrubs secrets on
+    // push, so the tap never persists tokens/credentials.
+    setLogTap((record) => pushDiagnosticsRecord(record));
+
     const authMiddleware = createAuthMiddleware(this.apiKey);
 
     this.server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -178,6 +193,7 @@ export class InternalApiServer {
           modelsRoutes,
           healthRoutes,
           capabilitiesRoutes,
+          diagnosticsRoutes,
         });
       });
     });
@@ -185,8 +201,8 @@ export class InternalApiServer {
     // Bind to Unix socket
     await this.bindToSocket(socketPath);
 
-    console.log(`[InternalAPI] Listening on Unix socket: ${socketPath}`);
-    console.log(`[InternalAPI] API token ready at: ${tokenPath}`);
+    logger.info(`[InternalAPI] Listening on Unix socket: ${socketPath}`);
+    logger.info(`[InternalAPI] API token ready at: ${tokenPath}`);
   }
 
   /**
@@ -202,7 +218,7 @@ export class InternalApiServer {
       this.server.close(() => {
         const socketPath = this.config.socketPath || DEFAULT_SOCKET_PATH;
         unlink(socketPath).catch(() => { /* socket may not exist */ });
-        console.log('[InternalAPI] Server stopped');
+        logger.info('[InternalAPI] Server stopped');
         resolve();
       });
     });
@@ -219,6 +235,7 @@ export class InternalApiServer {
       modelsRoutes: ReturnType<typeof createModelsRoutes>;
       healthRoutes: ReturnType<typeof createHealthRoutes>;
       capabilitiesRoutes: ReturnType<typeof createCapabilitiesRoutes>;
+      diagnosticsRoutes: ReturnType<typeof createDiagnosticsRoutes>;
     },
   ): Promise<void> {
     // Skip 'api' prefix if present: /api/v1/health → ['api', 'v1', 'health']
@@ -226,7 +243,7 @@ export class InternalApiServer {
     const [version, resource, id, action, subId, subAction] = segments;
 
     if (version !== 'v1') {
-      sendJson(res, 404, { error: 'API version not found', code: 'NOT_FOUND' });
+      sendJson(res, 404, { error: 'API version not found', code: ErrorCode.NOT_FOUND });
       return;
     }
 
@@ -239,7 +256,7 @@ export class InternalApiServer {
           } else if (req.method === 'POST') {
             await deps.sessionRoutes.handleCreateSession(req, res);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -249,7 +266,7 @@ export class InternalApiServer {
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleBatchCreate(req, res);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -257,7 +274,7 @@ export class InternalApiServer {
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleBatchPrompt(req, res);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -265,7 +282,7 @@ export class InternalApiServer {
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleAggregateUsage(req, res);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -276,7 +293,7 @@ export class InternalApiServer {
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleSendPrompt(req, res, sessionId);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -285,7 +302,7 @@ export class InternalApiServer {
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleAbort(req, res, sessionId);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -294,7 +311,16 @@ export class InternalApiServer {
           if (req.method === 'GET') {
             await deps.sessionRoutes.handleGetSessionInfo(req, res, sessionId);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+          return;
+        }
+
+        if (action === 'diagnostics') {
+          if (req.method === 'GET') {
+            await deps.diagnosticsRoutes.handleGetSessionDiagnostics(req, res, sessionId, parsed.query);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -303,7 +329,7 @@ export class InternalApiServer {
           if (req.method === 'GET') {
             await deps.sessionRoutes.handleGetSessionHistory(req, res, sessionId);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -312,7 +338,7 @@ export class InternalApiServer {
           if (req.method === 'GET') {
             await deps.sessionRoutes.handleSessionTranscript(req, res, sessionId, parsed.query);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -321,7 +347,7 @@ export class InternalApiServer {
           if (req.method === 'GET') {
             await deps.sessionRoutes.handleSessionEvents(req, res, sessionId);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -330,7 +356,7 @@ export class InternalApiServer {
           if (req.method === 'GET') {
             await deps.sessionRoutes.handleSessionWait(req, res, sessionId, parsed.query);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -343,7 +369,7 @@ export class InternalApiServer {
           } else if (req.method === 'DELETE') {
             await deps.sessionRoutes.handleDeleteWatch(req, res, sessionId);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -352,7 +378,7 @@ export class InternalApiServer {
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleSessionTransfer(req, res, sessionId);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -361,7 +387,7 @@ export class InternalApiServer {
           if (req.method === 'POST') {
             await deps.sessionRoutes.handleSessionControl(req, res, sessionId);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
@@ -372,7 +398,7 @@ export class InternalApiServer {
             if (req.method === 'GET') {
               await deps.sessionRoutes.handleListPendingApprovals(req, res, sessionId);
             } else {
-              sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+              sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
             }
             return;
           }
@@ -381,11 +407,11 @@ export class InternalApiServer {
             if (req.method === 'POST') {
               await deps.sessionRoutes.handleRespondApproval(req, res, sessionId, decodeURIComponent(subId));
             } else {
-              sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+              sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
             }
             return;
           }
-          sendJson(res, 404, { error: 'Unknown approvals endpoint', code: 'NOT_FOUND' });
+          sendJson(res, 404, { error: 'Unknown approvals endpoint', code: ErrorCode.NOT_FOUND });
           return;
         }
 
@@ -395,7 +421,7 @@ export class InternalApiServer {
         } else if (req.method === 'DELETE') {
           await deps.sessionRoutes.handleDeleteSession(req, res, sessionId);
         } else {
-          sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
         }
         return;
       }
@@ -405,14 +431,14 @@ export class InternalApiServer {
           if (req.method === 'POST') {
             await deps.modelsRoutes.handleRefreshModels(req, res);
           } else {
-            sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
         }
         if (req.method === 'GET') {
           await deps.modelsRoutes.handleListModels(req, res);
         } else {
-          sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
         }
         return;
       }
@@ -426,13 +452,22 @@ export class InternalApiServer {
         if (req.method === 'GET') {
           await deps.capabilitiesRoutes.handleGetCapabilities(req, res);
         } else {
-          sendJson(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+          sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+        }
+        return;
+      }
+
+      case 'diagnostics': {
+        if (req.method === 'GET') {
+          await deps.diagnosticsRoutes.handleGetDiagnostics(req, res, parsed.query);
+        } else {
+          sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
         }
         return;
       }
 
       default: {
-        sendJson(res, 404, { error: 'Unknown endpoint', code: 'NOT_FOUND' });
+        sendJson(res, 404, { error: 'Unknown endpoint', code: ErrorCode.NOT_FOUND });
       }
     }
   }
@@ -456,7 +491,7 @@ export class InternalApiServer {
         // Set restrictive permissions
         import('fs').then((fs) => {
           fs.chmod(socketPath, 0o600, (err) => {
-            if (err) console.warn(`[InternalAPI] Failed to set socket permissions:`, err.message);
+            if (err) logger.warn(`[InternalAPI] Failed to set socket permissions:`, err.message);
           });
         });
         resolve();

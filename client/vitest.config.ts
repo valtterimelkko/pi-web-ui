@@ -1,6 +1,14 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
+/**
+ * Suppress application `console.*` output during tests by default so a failing
+ * test shows the assertion, not log noise. Set `VITEST_LOG=1` to restore full
+ * app logging. Only `console.*` is affected — assertion diffs, thrown errors,
+ * and the reporter summary are never suppressed.
+ */
+const showAppConsoleLogs = process.env.VITEST_LOG === '1';
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -10,6 +18,7 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
+    onConsoleLog: showAppConsoleLogs ? undefined : () => false,
     env: {
       NODE_ENV: 'test',
     },

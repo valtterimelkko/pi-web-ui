@@ -12,6 +12,10 @@ import { ClaudeChannelHooksConfig } from './claude-channel-hooks-config.js';
 import { ClaudeSessionStore } from './claude-session-store.js';
 import { SessionRegistryManager, getSessionRegistry } from '../session-registry.js';
 import type { ClaudeAuthStatus } from './claude-service.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('ClaudeChannelService');
+
 
 export interface ClaudeChannelServiceConfig {
   claudeSessionDir: string;
@@ -174,7 +178,7 @@ export class ClaudeChannelService {
         try {
           await this.restartProcess();
         } catch (err) {
-          console.error('[ClaudeChannelService] Health check restart failed:', err);
+          logger.error('[ClaudeChannelService] Health check restart failed:', err);
         }
       }
     }, HEALTH_CHECK_INTERVAL_MS);
@@ -219,7 +223,7 @@ export class ClaudeChannelService {
       // that it received and processed our prompt before forwarding to Claude.
       if (channelEvent.type === 'prompt_ack') {
         const ackSid = channelEvent.sessionId as string;
-        console.log(`[ClaudeChannelService] Prompt ack received for session ${ackSid}`);
+        logger.info(`[ClaudeChannelService] Prompt ack received for session ${ackSid}`);
         return;
       }
 
@@ -274,7 +278,7 @@ export class ClaudeChannelService {
         }
 
         this.persistEvent(internalSid, ne).catch((err) => {
-          console.warn('[ClaudeChannelService] Failed to persist event:', err);
+          logger.warn('[ClaudeChannelService] Failed to persist event:', err);
         });
 
         if (ne.type === 'agent_end' && internalSid) {
@@ -334,11 +338,11 @@ export class ClaudeChannelService {
     });
 
     this.wsClient.onDisconnected(() => {
-      console.warn('[ClaudeChannelService] WS client disconnected');
+      logger.warn('[ClaudeChannelService] WS client disconnected');
     });
 
     this.wsClient.onError((err: Error) => {
-      console.error('[ClaudeChannelService] WS client error:', err.message);
+      logger.error('[ClaudeChannelService] WS client error:', err.message);
     });
   }
 
@@ -359,7 +363,7 @@ export class ClaudeChannelService {
         }
       }
     } catch (err) {
-      console.warn('[ClaudeChannelService] Failed to reconcile orphaned running sessions:', err instanceof Error ? err.message : String(err));
+      logger.warn('[ClaudeChannelService] Failed to reconcile orphaned running sessions:', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -444,7 +448,7 @@ export class ClaudeChannelService {
     const needsClear = this.contextOwnerSessionId !== sessionId
       && !this.sessionsWithHistory.has(sessionId);
     if (needsClear) {
-      console.log(
+      logger.info(
         `[ClaudeChannelService] Context isolation: clearing Claude context for new session ${sessionId}` +
         (this.contextOwnerSessionId ? ` (was owned by ${this.contextOwnerSessionId})` : ' (first session)'),
       );
@@ -473,7 +477,7 @@ export class ClaudeChannelService {
     // WebSocket prompt arrives via MCP.  Without this delay, Claude may
     // process the prompt using the old model.
     if (modelChanged || thinkingChanged) {
-      console.log(
+      logger.info(
         `[ClaudeChannelService] Model/thinking switch: model=${registeredModel}${modelChanged ? ' (changed)' : ''} thinking=${registeredThinking}${thinkingChanged ? ' (changed)' : ''}`,
       );
       await new Promise(r => setTimeout(r, 1000));
@@ -795,7 +799,7 @@ export class ClaudeChannelService {
       }
 
       if (process.env.ANTHROPIC_API_KEY) {
-        console.warn(
+        logger.warn(
           '[ClaudeChannelService] WARNING: ANTHROPIC_API_KEY detected in env — ' +
             'Claude Channel sessions will strip it to force subscription auth',
         );
@@ -839,7 +843,7 @@ export class ClaudeChannelService {
     if (this.processManager.isBusy()) {
       const idle = await this.processManager.waitForIdle(30_000);
       if (!idle) {
-        console.warn('[ClaudeChannelService] Timed out waiting for PTY idle before slash commands');
+        logger.warn('[ClaudeChannelService] Timed out waiting for PTY idle before slash commands');
       }
     }
     // 2. Ensure the minimum settle window after the last agent_end.
@@ -892,7 +896,7 @@ export class ClaudeChannelService {
       if (sinceLastEvent < IDLE_EVENT_SILENCE_MS) continue;
 
       const elapsed = now - pending.sentAt;
-      console.warn(`[ClaudeChannelService] PTY idle detected while session ${sessionId} (turn ${pending.promptId}) is pending — force-completing (elapsed=${elapsed}ms, sinceLastEvent=${sinceLastEvent}ms)`);
+      logger.warn(`[ClaudeChannelService] PTY idle detected while session ${sessionId} (turn ${pending.promptId}) is pending — force-completing (elapsed=${elapsed}ms, sinceLastEvent=${sinceLastEvent}ms)`);
       clearTimeout(pending.timer);
       this.pendingPrompts.delete(sessionId);
       // Register a late listener so any events from Claude's still-running
@@ -920,7 +924,7 @@ export class ClaudeChannelService {
     const pending = this.pendingPrompts.get(sessionId);
     if (!pending) return;
 
-    console.warn(`[ClaudeChannelService] Prompt timeout for session ${sessionId} after ${PROMPT_TIMEOUT_MS / 1000}s`);
+    logger.warn(`[ClaudeChannelService] Prompt timeout for session ${sessionId} after ${PROMPT_TIMEOUT_MS / 1000}s`);
     clearTimeout(pending.timer);
     this.pendingPrompts.delete(sessionId);
     this.startLatePromptListener(sessionId, pending.onEvent);
@@ -939,7 +943,7 @@ export class ClaudeChannelService {
     if (this.pendingPrompts.size === 0) return;
 
     const errorMessage = message || 'Claude Code authentication expired. Please run /login or `claude auth login` on the server, then retry.';
-    console.warn(`[ClaudeChannelService] Claude auth expired while ${this.pendingPrompts.size} prompt(s) pending`);
+    logger.warn(`[ClaudeChannelService] Claude auth expired while ${this.pendingPrompts.size} prompt(s) pending`);
 
     for (const [sessionId, pending] of [...this.pendingPrompts.entries()]) {
       clearTimeout(pending.timer);

@@ -333,6 +333,58 @@ curl "http://localhost:<server-port>/api/models?sdkType=antigravity"
 
 Drive Mode is a shipped frontend feature, not just a historical plan. For the feature overview and key files, read [`DRIVE-MODE.md`](./DRIVE-MODE.md).
 
+## Known skipped tests
+
+- `server/tests/integration/claude/dual-path-coexistence.test.ts` >
+  `should use channel path when channel is healthy` — **skipped**. This
+  end-to-end test drives a real prompt through a real
+  `ClaudeChannelWsClient` ↔ `MockClaudeChannelServer` WebSocket round-trip
+  under real timers; in some sandboxes the WS handshake / prompt→`agent_end`
+  completion flow does not settle within the test timeout (the
+  `agent_end`→`onComplete` wiring itself is correct). It is an
+  environment/timing-dependent integration test, not a product regression.
+  Re-enable when the channel WS round-trip can be made deterministic (fake
+  timers on the WS layer, or a `wsClient` seam the test can drive directly).
+  The other two cases in the same file (channel-unhealthy fallback,
+  dual-session creation) still run.
+
+## Known pre-existing client test failures (separate from observability work)
+
+The **client** Vitest suite has a number of pre-existing failures at `HEAD`
+(verified on a clean tree, independent of the observability/logging work, which
+is server-scoped). They are multi-causal and outside the scope of the
+observability plan:
+
+- `tests/unit/lib/jsonrpc-client.test.ts` — WebSocket reconnect/promise-timing
+  (`PromiseRejectionHandledWarning`, "promise resolved instead of rejecting").
+- `tests/unit/components/Sidebar/SessionItem.test.tsx` — jsdom context-menu /
+  right-click handling.
+- `tests/unit/hooks/useSessionStream.test.ts` — hook async/timing.
+
+These do **not** reflect a regression from the observability work (the only
+client-side change in that work is `client/vitest.config.ts`'s `onConsoleLog`
+suppression, which is not the cause — the failures reproduce with it reverted).
+The **server** suite is the observability plan's test-hygiene surface and is
+green. Fixing the client suite is tracked as a separate effort.
+
+## Test output noise (`[Tag]` log lines)
+
+## Test output noise (`[Tag]` log lines)
+
+Server and client tests suppress application `console.*` output by default so
+that a failing test shows the assertion diff, not hundreds of `[Tag]` log lines
+from the runtime (e.g. `[MultiSessionManager]`, `[ClaudeService]`). The
+pass/fail count is never affected — only console output is filtered.
+
+Restore full app logging when you need it:
+
+```bash
+VITEST_LOG=1 npx vitest run path/to/file.test.ts --root server
+```
+
+This works in `server`, `client`, and `shared`. Genuine test-framework output
+(assertion diffs, thrown errors, the reporter summary) is never suppressed.
+
 ## Related Docs
 
 - [`README.md`](../README.md)

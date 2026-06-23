@@ -1,6 +1,10 @@
 import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { SessionPool } from './session-pool.js';
 import type { JSONRPCNotification } from '@pi-web-ui/shared';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('EventForwarder');
+
 
 export type WebSocketSender = (clientId: string, message: unknown) => void;
 
@@ -69,9 +73,9 @@ export class EventForwarder {
     if (event.type === 'message_start') {
       const content = (event.message as {content?: Array<{type?: string; text?: string}>})?.content;
       const contentText = content?.map(c => c.text || '').join('') || '';
-      console.log(`[EventForwarder] message_start event, content length: ${contentText.length}, preview: ${contentText.substring(0, 50)}...`);
+      logger.info(`[EventForwarder] message_start event, content length: ${contentText.length}, preview: ${contentText.substring(0, 50)}...`);
       if (contentText.includes('skill') || contentText.includes('SKILL')) {
-        console.log(`[EventForwarder] SKILL content detected in message_start, content preview: ${contentText.substring(0, 200)}`);
+        logger.info(`[EventForwarder] SKILL content detected in message_start, content preview: ${contentText.substring(0, 200)}`);
       }
     }
 
@@ -80,7 +84,7 @@ export class EventForwarder {
 
     // Skip filtered messages (e.g., skill content)
     if (message === null) {
-      console.log(`[EventForwarder] Message filtered (null), event type: ${event.type}`);
+      logger.info(`[EventForwarder] Message filtered (null), event type: ${event.type}`);
       return;
     }
 
@@ -153,7 +157,7 @@ export class EventForwarder {
       // Extract skill name
       const skillNameMatch = contentText.match(/<skill name="([^"]+)"/);
       const skillName = skillNameMatch ? skillNameMatch[1] : undefined;
-      console.log(`[EventForwarder] Detected skill content: ${skillName || 'unknown'}`);
+      logger.info(`[EventForwarder] Detected skill content: ${skillName || 'unknown'}`);
       return { isSkillContent: true, skillName };
     }
     
@@ -185,7 +189,7 @@ export class EventForwarder {
     if (event.type === 'message_start') {
       const skillInfo = this.getSkillContentInfo(event.message);
       if (skillInfo.isSkillContent) {
-        console.log(`[EventForwarder] Transforming skill content message: ${skillInfo.skillName || 'unknown'}`);
+        logger.info(`[EventForwarder] Transforming skill content message: ${skillInfo.skillName || 'unknown'}`);
         const transformedMessage = this.transformSkillContent(event.message, skillInfo.skillName);
         return {
           ...base,

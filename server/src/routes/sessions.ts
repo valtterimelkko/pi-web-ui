@@ -5,6 +5,10 @@ import { apiLimiter } from '../security/rate-limit.js';
 import { WorkerPool } from '../workers/worker-pool.js';
 import type { WorkerPoolStats, WorkerInfo } from '@pi-web-ui/shared';
 import fs from 'fs/promises';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Sessions');
+
 
 const router = Router();
 
@@ -41,7 +45,7 @@ router.get('/', async (req: Request, res: Response) => {
     
     res.json({ sessions });
   } catch (error) {
-    console.error('Error listing sessions:', error);
+    logger.error('Error listing sessions:', error);
     res.status(500).json({ error: 'Failed to list sessions' });
   }
 });
@@ -63,7 +67,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     
     res.json({ session });
   } catch (error) {
-    console.error('Error getting session:', error);
+    logger.error('Error getting session:', error);
     res.status(500).json({ error: 'Failed to get session' });
   }
 });
@@ -87,7 +91,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
     
     res.json({ success: true });
   } catch (error) {
-    console.error('Error deleting session:', error);
+    logger.error('Error deleting session:', error);
     res.status(500).json({ error: 'Failed to delete session' });
   }
 });
@@ -142,7 +146,7 @@ router.get('/:id/export', async (req: Request, res: Response) => {
       }
     }
   } catch (error) {
-    console.error('Error exporting session:', error);
+    logger.error('Error exporting session:', error);
     res.status(500).json({ error: 'Failed to export session' });
   }
 });
@@ -290,7 +294,7 @@ router.get('/workers', async (_req: Request, res: Response) => {
       stats,
     });
   } catch (error) {
-    console.error('Error getting worker pool stats:', error);
+    logger.error('Error getting worker pool stats:', error);
     res.status(500).json({ 
       success: false,
       error: 'Failed to get worker pool statistics' 
@@ -338,7 +342,7 @@ router.get('/workers/:sessionPath', async (req: Request, res: Response) => {
       worker: workerInfo,
     });
   } catch (error) {
-    console.error('Error getting worker info:', error);
+    logger.error('Error getting worker info:', error);
     res.status(500).json({ 
       success: false,
       error: 'Failed to get worker information' 
@@ -361,7 +365,7 @@ router.get('/workers/crashes/stats', async (_req: Request, res: Response) => {
       stats,
     });
   } catch (error) {
-    console.error('Error getting crash stats:', error);
+    logger.error('Error getting crash stats:', error);
     res.status(500).json({ 
       success: false,
       error: 'Failed to get crash statistics' 
@@ -381,7 +385,7 @@ router.get('/workers/crashes/recent', async (req: Request, res: Response) => {
       crashes,
     });
   } catch (error) {
-    console.error('Error getting recent crashes:', error);
+    logger.error('Error getting recent crashes:', error);
     res.status(500).json({ 
       success: false,
       error: 'Failed to get recent crashes' 
@@ -417,7 +421,7 @@ router.get('/workers/crashes/by-session/:sessionPath', async (req: Request, res:
       crashes,
     });
   } catch (error) {
-    console.error('Error getting session crashes:', error);
+    logger.error('Error getting session crashes:', error);
     res.status(500).json({ 
       success: false,
       error: 'Failed to get session crash information' 

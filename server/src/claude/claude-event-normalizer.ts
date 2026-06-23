@@ -5,6 +5,10 @@
  */
 
 import type { NormalizedEvent } from '@pi-web-ui/shared';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('ClaudeEventNormalizer');
+
 
 export class ClaudeEventNormalizer {
   /**
@@ -207,7 +211,7 @@ export class ClaudeEventNormalizer {
     if (!info) return [];
 
     if (info.isUsingOverage === true) {
-      console.warn(
+      logger.warn(
         '[ClaudeEventNormalizer] WARNING: Claude subscription overage in use! ' +
           `rateLimitType=${info.rateLimitType}, resetsAt=${info.resetsAt}`,
       );

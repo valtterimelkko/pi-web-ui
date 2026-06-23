@@ -27,6 +27,10 @@ import {
 } from './opencode-model-refresh.js';
 import { getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('OpenCodeService');
+
 
 // ── Goal Engine integration ────────────────────────────────────────────────
 // The opencode goal-engine plugin stores per-session state in
@@ -349,7 +353,7 @@ export class OpenCodeService {
     if (!status.uptimeMs || status.uptimeMs < this.lifecycle.serverMaxUptimeMs) return false;
 
     if (this.runningSessions.size > 0) {
-      console.log(
+      logger.info(
         `[OpenCodeService] OpenCode server uptime ${status.uptimeMs}ms exceeds ${this.lifecycle.serverMaxUptimeMs}ms; recycle deferred for ${this.runningSessions.size} running session(s)`,
       );
       return false;
@@ -357,7 +361,7 @@ export class OpenCodeService {
 
     if (!status.healthy) return false;
 
-    console.log(
+    logger.info(
       `[OpenCodeService] Recycling idle OpenCode server after ${status.uptimeMs}ms uptime`,
     );
     this.sseUnsubscribe?.();
@@ -548,12 +552,12 @@ export class OpenCodeService {
       .sort((a, b) => a[1].lastActivity - b[1].lastActivity);
 
     if (candidates.length === 0) {
-      console.warn('[OpenCodeService] Cannot evict: all sessions are busy or pinned');
+      logger.warn('[OpenCodeService] Cannot evict: all sessions are busy or pinned');
       return false;
     }
 
     const [evictId] = candidates[0];
-    console.log(`[OpenCodeService] Evicting idle session ${evictId} to make room`);
+    logger.info(`[OpenCodeService] Evicting idle session ${evictId} to make room`);
     this.removeSession(evictId);
     return true;
   }
@@ -610,7 +614,7 @@ export class OpenCodeService {
     try {
       await this.client.promptAsync(ocSessionId, entry.cwd, prompt, entry.model, agent);
     } catch (err) {
-      console.error(`[OpenCodeService] promptAsync failed:`, err instanceof Error ? err.message : String(err));
+      logger.error(`[OpenCodeService] promptAsync failed:`, err instanceof Error ? err.message : String(err));
       this.completeSession(sessionId, err instanceof Error ? err : new Error(String(err)));
     }
   }
@@ -644,7 +648,7 @@ export class OpenCodeService {
           }
         } catch { /* non-fatal */ }
         return this.client.abort(ocSessionId, entry.cwd).catch((err) => {
-          console.error('[OpenCodeService] Abort failed:', err);
+          logger.error('[OpenCodeService] Abort failed:', err);
         });
       });
     });
@@ -667,7 +671,7 @@ export class OpenCodeService {
       const messages = await this.client.getMessages(ocSessionId, entry.cwd);
       return opencodeMessagesToReplayEvents(messages, sessionId);
     } catch (err) {
-      console.error('[OpenCodeService] Failed to get replay events:', err);
+      logger.error('[OpenCodeService] Failed to get replay events:', err);
       return [];
     }
   }
@@ -975,7 +979,7 @@ export class OpenCodeService {
       const runningBefore = this.runningSessions.size;
       if (runningBefore > 0) {
         recycleDeferred = true;
-        console.log(
+        logger.info(
           `[OpenCodeService] Model-refresh recycle deferred for ${runningBefore} running session(s)`,
         );
       } else {
@@ -993,7 +997,7 @@ export class OpenCodeService {
     const prev = await readSnapshot(snapshotPath);
     const diff = diffModelSnapshots(prev, snapshot);
     await writeSnapshot(snapshotPath, snapshot).catch((err) => {
-      console.error('[OpenCodeService] Failed to persist model snapshot:', err);
+      logger.error('[OpenCodeService] Failed to persist model snapshot:', err);
     });
 
     return {
@@ -1019,7 +1023,7 @@ export class OpenCodeService {
     return new Promise<boolean>((resolve) => {
       const child = execFile('opencode', ['models'], { timeout: 90_000 }, (err) => {
         if (err) {
-          console.warn('[OpenCodeService] `opencode models` cache warm failed:', err.message);
+          logger.warn('[OpenCodeService] `opencode models` cache warm failed:', err.message);
           resolve(false);
         } else {
           resolve(true);

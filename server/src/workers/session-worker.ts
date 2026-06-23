@@ -8,6 +8,10 @@ import type { SessionWorkerState, WorkerOptions, RPCEvent, EventHandler } from '
 import { RPCProtocolBridge } from './rpc-protocol-bridge.js';
 import type { WorkerStatus } from '@pi-web-ui/shared';
 import { getCrashLogger } from './crash-logger.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('SessionWorker');
+
 
 export class SessionWorker {
   private state: SessionWorkerState;
@@ -68,7 +72,7 @@ export class SessionWorker {
 
     // Handle stderr (logs)
     this.state.process.stderr?.on('data', (data: Buffer) => {
-      console.error(`[SessionWorker:${this.state.pid}] stderr:`, data.toString());
+      logger.error(`[SessionWorker:${this.state.pid}] stderr:`, data.toString());
     });
 
     // Handle process exit
@@ -79,13 +83,13 @@ export class SessionWorker {
     // Handle process spawn errors
     this.state.process.on('spawn', () => {
       this.state.status = 'ready';
-      console.log(`[SessionWorker:${this.state.pid}] Process spawned successfully`);
+      logger.info(`[SessionWorker:${this.state.pid}] Process spawned successfully`);
     });
 
     this.state.process.on('error', (err) => {
       this.state.status = 'error';
       this.state.error = err.message;
-      console.error(`[SessionWorker:${this.state.pid}] Process error:`, err);
+      logger.error(`[SessionWorker:${this.state.pid}] Process error:`, err);
 
       // Record spawn failure if process hasn't fully started
       if (!this.state.pid) {
@@ -217,7 +221,7 @@ export class SessionWorker {
       try {
         handler(event);
       } catch (err) {
-        console.error('[SessionWorker] Handler error:', err);
+        logger.error('[SessionWorker] Handler error:', err);
       }
     }
   }
@@ -231,7 +235,7 @@ export class SessionWorker {
     this.state.status = 'terminated';
 
     // Log basic exit info
-    console.log(`[SessionWorker:${this.state.pid}] Exited with code=${code}, signal=${signal}`);
+    logger.info(`[SessionWorker:${this.state.pid}] Exited with code=${code}, signal=${signal}`);
 
     // Record crash for monitoring (skip if graceful shutdown via terminate())
     if (signal !== 'SIGTERM' || code !== 0) {

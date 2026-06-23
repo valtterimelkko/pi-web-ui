@@ -6,6 +6,10 @@ import path from 'path';
 import { createWriteStream, mkdirSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Files');
+
 
 // Upload directory
 const UPLOAD_DIR = '/tmp/pi-uploads';
@@ -67,10 +71,10 @@ async function validatePath(requestedPath: string): Promise<string | null> {
       }
     }
     
-    console.warn(`Path validation failed: ${real} not in allowed directories: ${allowedDirs.join(', ')}`);
+    logger.warn(`Path validation failed: ${real} not in allowed directories: ${allowedDirs.join(', ')}`);
     return null;
   } catch (err) {
-    console.warn(`Path validation error for ${requestedPath}:`, err);
+    logger.warn(`Path validation error for ${requestedPath}:`, err);
     return null;
   }
 }
@@ -82,7 +86,7 @@ router.get('/browse', async (req: Request, res: Response) => {
     
     const validatedPath = await validatePath(requestedPath);
     if (!validatedPath) {
-      console.warn(`Browse access denied for path: ${requestedPath}, allowed dirs: ${getAllowedDirectories().join(', ')}`);
+      logger.warn(`Browse access denied for path: ${requestedPath}, allowed dirs: ${getAllowedDirectories().join(', ')}`);
       res.status(403).json({ error: 'Access denied to this path' });
       return;
     }
@@ -142,7 +146,7 @@ router.get('/browse', async (req: Request, res: Response) => {
       items,
     });
   } catch (error) {
-    console.error('Error browsing files:', error);
+    logger.error('Error browsing files:', error);
     res.status(500).json({ error: 'Failed to browse directory' });
   }
 });
@@ -202,7 +206,7 @@ router.get('/read', async (req: Request, res: Response) => {
       totalSize: stat.size,
     });
   } catch (error) {
-    console.error('Error reading file:', error);
+    logger.error('Error reading file:', error);
     res.status(500).json({ error: 'Failed to read file' });
   }
 });
@@ -263,7 +267,7 @@ router.post('/upload', async (req: Request, res: Response) => {
       mimeType: contentType.split(';')[0] || 'application/octet-stream',
     });
   } catch (error) {
-    console.error('Error uploading file:', error);
+    logger.error('Error uploading file:', error);
     res.status(500).json({ error: 'Failed to upload file' });
   }
 });

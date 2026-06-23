@@ -7,6 +7,10 @@ import type { MultiSessionManager } from './pi/multi-session-manager.js';
 import type { ClaudeService } from './claude/index.js';
 import type { OpenCodeService } from './opencode/index.js';
 import { config } from './config.js';
+import { createLogger } from './logging/logger.js';
+
+const logger = createLogger('SessionCleanup');
+
 
 export const DEFAULT_PIN_INACTIVITY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_ARCHIVE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -64,7 +68,7 @@ export class SessionCleanupService {
       this.timer.unref();
     }
     void this.runCleanup();
-    console.log(
+    logger.info(
       `[SessionCleanup] Started with pinInactivity=${this.config.pinInactivityMs}ms, archiveRetention=${this.config.archiveRetentionMs}ms, interval=${this.config.cleanupIntervalMs}ms`,
     );
   }
@@ -82,17 +86,17 @@ export class SessionCleanupService {
     try {
       await this.autoUnpinInactivePinnedSessions(result, prefsPath);
     } catch (err) {
-      console.error('[SessionCleanup] Error during auto-unpin pass:', err instanceof Error ? err.message : String(err));
+      logger.error('[SessionCleanup] Error during auto-unpin pass:', err instanceof Error ? err.message : String(err));
     }
 
     try {
       await this.autoDeleteArchivedSessions(result, prefsPath);
     } catch (err) {
-      console.error('[SessionCleanup] Error during auto-delete pass:', err instanceof Error ? err.message : String(err));
+      logger.error('[SessionCleanup] Error during auto-delete pass:', err instanceof Error ? err.message : String(err));
     }
 
     if (result.unpinned.length > 0 || result.deleted.length > 0 || result.errors.length > 0) {
-      console.log(
+      logger.info(
         `[SessionCleanup] Cleanup complete: ${result.unpinned.length} unpinned, ${result.deleted.length} deleted, ${result.errors.length} error(s)`,
       );
     }
@@ -148,7 +152,7 @@ export class SessionCleanupService {
     for (const sessionId of toUnpin) {
       this.unpinInRuntimes(sessionId);
       result.unpinned.push(sessionId);
-      console.log(`[SessionCleanup] Auto-unpinned session after inactivity: ${sessionId}`);
+      logger.info(`[SessionCleanup] Auto-unpinned session after inactivity: ${sessionId}`);
     }
   }
 
@@ -225,13 +229,13 @@ export class SessionCleanupService {
 
         this.unpinInRuntimes(sessionId);
         result.deleted.push(sessionId);
-        console.log(`[SessionCleanup] Deleted archived session: ${sessionId}`);
+        logger.info(`[SessionCleanup] Deleted archived session: ${sessionId}`);
       } catch (err) {
         result.errors.push({
           sessionId,
           error: err instanceof Error ? err.message : String(err),
         });
-        console.error(`[SessionCleanup] Failed to delete session ${sessionId}:`, err instanceof Error ? err.message : String(err));
+        logger.error(`[SessionCleanup] Failed to delete session ${sessionId}:`, err instanceof Error ? err.message : String(err));
       }
     }
 

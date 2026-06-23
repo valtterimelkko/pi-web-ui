@@ -2,6 +2,10 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import path from 'path';
 import fs from 'fs/promises';
 import { EventEmitter } from 'events';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('SessionWatcher');
+
 
 export interface SessionChangeEvent {
   type: 'add' | 'change' | 'unlink';
@@ -37,7 +41,7 @@ export class SessionWatcher extends EventEmitter {
    */
   start(): void {
     if (this.watcher) {
-      console.warn('SessionWatcher already started');
+      logger.warn('SessionWatcher already started');
       return;
     }
 
@@ -57,11 +61,11 @@ export class SessionWatcher extends EventEmitter {
       .on('change', (filePath) => this.handleChange('change', filePath))
       .on('unlink', (filePath) => this.handleChange('unlink', filePath))
       .on('error', (error) => {
-        console.error('SessionWatcher error:', error);
+        logger.error('SessionWatcher error:', error);
         this.emit('error', error);
       });
 
-    console.log(`SessionWatcher started on ${pattern}`);
+    logger.info(`SessionWatcher started on ${pattern}`);
   }
 
   /**
@@ -79,7 +83,7 @@ export class SessionWatcher extends EventEmitter {
     }
     this.debounceTimers.clear();
     
-    console.log('SessionWatcher stopped');
+    logger.info('SessionWatcher stopped');
   }
 
   /**
@@ -131,7 +135,7 @@ export class SessionWatcher extends EventEmitter {
         // Emit full session info
         this.emit('session_update', { ...event, info });
       } catch (error) {
-        console.warn(`Failed to read session info for ${filePath}:`, error);
+        logger.warn(`Failed to read session info for ${filePath}:`, error);
         this.emit('session_update', event);
       }
     } else {
@@ -266,12 +270,12 @@ export class SessionWatcher extends EventEmitter {
             const info = await this.readSessionInfo(filePath);
             sessions.push(info);
           } catch (error) {
-            console.warn(`Failed to read session ${filePath}:`, error);
+            logger.warn(`Failed to read session ${filePath}:`, error);
           }
         }
       }
     } catch (error) {
-      console.error('Failed to list sessions:', error);
+      logger.error('Failed to list sessions:', error);
     }
 
     return sessions.sort((a, b) => b.lastActivity.getTime() - a.lastActivity.getTime());
@@ -301,7 +305,7 @@ export class SessionWatcher extends EventEmitter {
       // Write back
       await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
     } catch (error) {
-      console.error(`Failed to set session name for ${sessionPath}:`, error);
+      logger.error(`Failed to set session name for ${sessionPath}:`, error);
       throw error;
     }
   }

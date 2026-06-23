@@ -4,6 +4,10 @@ import { apiLimiter } from '../security/rate-limit.js';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Usage');
+
 
 const router = Router();
 
@@ -107,7 +111,7 @@ router.post('/record', async (req: Request, res: Response) => {
 
     res.json({ success: true });
   } catch (error) {
-    console.error('Error recording usage:', error);
+    logger.error('Error recording usage:', error);
     res.status(500).json({ error: 'Failed to record usage' });
   }
 });
@@ -184,7 +188,7 @@ router.get('/', async (_req: Request, res: Response) => {
       lastUpdated: data.lastUpdated,
     });
   } catch (error) {
-    console.error('Error getting usage stats:', error);
+    logger.error('Error getting usage stats:', error);
     res.status(500).json({ error: 'Failed to get usage stats' });
   }
 });
@@ -197,7 +201,7 @@ router.delete('/', async (_req: Request, res: Response) => {
     await saveUsageData({ records: [], lastUpdated: new Date().toISOString() });
     res.json({ success: true });
   } catch (error) {
-    console.error('Error clearing usage:', error);
+    logger.error('Error clearing usage:', error);
     res.status(500).json({ error: 'Failed to clear usage' });
   }
 });

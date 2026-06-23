@@ -5,6 +5,10 @@ import type {
   OpenCodeSSEEvent,
   OpenCodePermissionRule,
 } from './opencode-types.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('OpenCodeSSE');
+
 
 export class OpenCodeClient {
   private baseUrl: string;
@@ -138,11 +142,11 @@ export class OpenCodeClient {
         },
       };
 
-      console.log('[OpenCodeSSE] Connecting to global event stream');
+      logger.info('[OpenCodeSSE] Connecting to global event stream');
 
       const req = http.get(options, (res) => {
         if (res.statusCode !== 200) {
-          console.error(`[OpenCodeSSE] Bad status ${res.statusCode}, reconnecting`);
+          logger.error(`[OpenCodeSSE] Bad status ${res.statusCode}, reconnecting`);
           res.resume();
           if (!aborted) reconnectTimer = setTimeout(connect, 3000);
           return;
@@ -163,27 +167,27 @@ export class OpenCodeClient {
                 eventCount++;
                 onEvent(data);
               } catch (e) {
-                console.error(`[OpenCodeSSE] Parse error:`, e instanceof Error ? e.message : String(e));
+                logger.error(`[OpenCodeSSE] Parse error:`, e instanceof Error ? e.message : String(e));
               }
             }
           }
         });
 
         res.on('end', () => {
-          console.log(`[OpenCodeSSE] Stream ended after ${eventCount} events, reconnecting`);
+          logger.info(`[OpenCodeSSE] Stream ended after ${eventCount} events, reconnecting`);
           currentReq = null;
           if (!aborted) reconnectTimer = setTimeout(connect, 3000);
         });
 
         res.on('error', (err) => {
-          console.error(`[OpenCodeSSE] Response error:`, err.message);
+          logger.error(`[OpenCodeSSE] Response error:`, err.message);
           currentReq = null;
           if (!aborted) reconnectTimer = setTimeout(connect, 3000);
         });
       });
 
       req.on('error', (err) => {
-        console.error(`[OpenCodeSSE] Request error:`, err.message);
+        logger.error(`[OpenCodeSSE] Request error:`, err.message);
         currentReq = null;
         if (!aborted) reconnectTimer = setTimeout(connect, 3000);
       });

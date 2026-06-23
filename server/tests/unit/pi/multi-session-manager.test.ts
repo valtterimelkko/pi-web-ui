@@ -1,4 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
+
+/** Capture structured log records via the central logger tap (restores on return). */
+function captureLogRecords(): { records: LogRecord[]; restore: () => void } {
+  const records: LogRecord[] = [];
+  setLogTap((r) => records.push(r));
+  return { records, restore: () => setLogTap(null) };
+}
 
 // Type definitions for the MultiSessionManager (will be implemented)
 export type SessionStatus = 'idle' | 'busy' | 'streaming' | 'error';
@@ -838,23 +846,20 @@ describe('MultiSessionManager', () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
 
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const log = captureLogRecords();
       mockBroadcast.mockImplementation(() => {
         throw new Error('Send failed');
       });
 
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
-      
+
       const message = { type: 'test_event', data: 'hello' };
       manager.broadcastToSubscribers('/path/to/session.jsonl', message);
-      
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[MultiSessionManager]'),
-        expect.any(String)
-      );
-      
-      consoleSpy.mockRestore();
+
+      expect(log.records.some((r) => r.level === 'warn' && r.component === 'MultiSessionManager')).toBe(true);
+
+      log.restore();
     });
   });
 
@@ -1005,20 +1010,18 @@ describe('MultiSessionManager', () => {
       vi.spyOn(Date, 'now').mockReturnValue(sixteenMinutesLater);
       
       // Run cleanup - should detect stale streaming and dispose the session
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const log = captureLogRecords();
       manager.cleanupInactiveSessions();
-      
+
       // Session should have been disposed (removed from map entirely)
       status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status).toBeUndefined();
       expect(mockSession.dispose).toHaveBeenCalled();
-      
+
       // Should have logged the stale detection
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Detected stale streaming session')
-      );
-      
-      consoleSpy.mockRestore();
+      expect(log.records.some((r) => r.msg.includes('Detected stale streaming session'))).toBe(true);
+
+      log.restore();
       if (typeof (Date.now as any).mockRestore === 'function') {
         (Date.now as any).mockRestore();
       } else {
@@ -1066,16 +1069,14 @@ describe('MultiSessionManager', () => {
       const sixteenMinutesLater = Date.now() + 16 * 60 * 1000;
       vi.spyOn(Date, 'now').mockReturnValue(sixteenMinutesLater);
       
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       manager.cleanupInactiveSessions();
-      
+
       const staleResetCalls = mockBroadcast.mock.calls.filter(
         (call: any[]) => call[1]?.event?.type === 'stale_stream_reset'
       );
       expect(staleResetCalls.length).toBe(1);
       expect(staleResetCalls[0][1].event.message).toContain('Disposed');
-      
-      consoleSpy.mockRestore();
+
       if (typeof (Date.now as any).mockRestore === 'function') {
         (Date.now as any).mockRestore();
       } else {
@@ -1104,12 +1105,9 @@ describe('MultiSessionManager', () => {
       // 6 minutes — should be stale (over 5 min threshold)
       const sixMinutesLater = Date.now() + 6 * 60 * 1000;
       (Date.now as any).mockReturnValue(sixMinutesLater);
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       manager.cleanupInactiveSessions();
       expect(manager.getSessionStatus('/path/to/session.jsonl')).toBeUndefined();
       expect(mockSession.dispose).toHaveBeenCalled();
-      
-      consoleSpy.mockRestore();
       if (typeof (Date.now as any).mockRestore === 'function') {
         (Date.now as any).mockRestore();
       } else {
@@ -1152,20 +1150,18 @@ describe('MultiSessionManager', () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
 
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const log = captureLogRecords();
 
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
       manager.updateSessionStatus('/path/to/session.jsonl', 'error');
       manager.unsubscribeClient('client-1', '/path/to/session.jsonl');
-      
+
       manager.cleanupInactiveSessions();
-      
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[MultiSessionManager] Cleaning up errored session:')
-      );
-      
-      consoleSpy.mockRestore();
+
+      expect(log.records.some((r) => r.msg.includes('Cleaning up errored session:'))).toBe(true);
+
+      log.restore();
     });
 
     it('should return count of cleaned up sessions (only errored ones)', async () => {

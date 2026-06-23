@@ -2,6 +2,10 @@ import fs from 'fs/promises';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import type { SdkType } from '@pi-web-ui/shared';
+import { createLogger } from './logging/logger.js';
+
+const logger = createLogger('SessionRegistry');
+
 
 export interface RegistryEntry {
   id: string;              // Internal UUID
@@ -77,7 +81,7 @@ export class SessionRegistryManager {
     } catch (err: unknown) {
       const isNotFound = err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT';
       if (!isNotFound) {
-        console.warn('[SessionRegistry] Failed to load registry, starting fresh:', err instanceof Error ? err.message : String(err));
+        logger.warn('[SessionRegistry] Failed to load registry, starting fresh:', err instanceof Error ? err.message : String(err));
       }
       this.registry = {
         version: REGISTRY_VERSION,
@@ -222,7 +226,7 @@ export class SessionRegistryManager {
         await this.save();
       }
     } catch (err) {
-      console.error(`[SessionRegistry] updateStatus failed for id=${id}:`, err instanceof Error ? err.message : String(err));
+      logger.error(`[SessionRegistry] updateStatus failed for id=${id}:`, err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -254,7 +258,7 @@ export class SessionRegistryManager {
         .filter(e => e.isDirectory())
         .map(e => path.join(piSessionDir, e.name));
     } catch (err) {
-      console.warn('[SessionRegistry] rebuildFromPiSessions: could not read session dir:', err instanceof Error ? err.message : String(err));
+      logger.warn('[SessionRegistry] rebuildFromPiSessions: could not read session dir:', err instanceof Error ? err.message : String(err));
       return;
     }
 
@@ -315,7 +319,7 @@ export class SessionRegistryManager {
       });
     }
 
-    console.log(`[SessionRegistry] rebuildFromPiSessions: processed ${sessionPaths.length} session(s) from ${piSessionDir}`);
+    logger.info(`[SessionRegistry] rebuildFromPiSessions: processed ${sessionPaths.length} session(s) from ${piSessionDir}`);
   }
 }
 

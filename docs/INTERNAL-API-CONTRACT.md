@@ -83,6 +83,50 @@ For `/api/v1`, preserve these rules:
 6. **Claude channel event caveats stay documented.** Do not imply all runtimes have identical event reliability.
 7. **Local-only security boundary stays intact.** Keep Unix-socket + bearer-token assumptions unless a separate public API is intentionally designed.
 
+## Error code catalog
+
+Every error response has the stable shape `{ error, code }` (plus optional
+additive `hint`/`docs`, see below). The `code` strings are a **contracted** set:
+consumers (live-validation scripts, the orchestration skill, Agent OS-style
+local tools) switch on their exact values, so they must never change. Adding a
+new code is additive and safe; renaming or removing one is a breaking change.
+
+The single source of truth is `server/src/internal-api/error-codes.ts`
+(`ErrorCode` constants + `ERROR_CODE_INFO` metadata). Routes reference
+`ErrorCode.SESSION_NOT_FOUND` etc.; raw `code: '…'` literals must not be
+re-introduced.
+
+| Code | HTTP | Meaning | Typical cause |
+|---|---|---|---|
+| `UNAUTHORIZED` | 401 | Missing/invalid bearer token | No/wrong `Authorization: Bearer <token>` |
+| `METHOD_NOT_ALLOWED` | 405 | HTTP method unsupported for endpoint | e.g. `PUT` on a GET-only route |
+| `NOT_FOUND` | 404 | Unknown endpoint / API version | Path not matched, or version ≠ `/api/v1` |
+| `INVALID_REQUEST` | 400 | Missing/malformed required field | e.g. no `runtime`; `detach:true` with streaming verbosity |
+| `SESSION_NOT_FOUND` | 404 | No session with that id | Wrong/expired id, or session deleted |
+| `SESSION_BUSY` | 409 | Session already processing a prompt | A session runs one prompt at a time |
+| `SESSION_CREATE_FAILED` | 500 | Session creation failed | Runtime threw while provisioning |
+| `RUNTIME_UNAVAILABLE` | 503 | Runtime not installed/enabled | Binary missing, disabled via env, or unhealthy |
+| `OPENCODE_UNAVAILABLE` | 503 | OpenCode backend unavailable | OpenCode not enabled, or recycle failed |
+| `RUNTIME_ERROR` | 500 | Runtime failed mid-prompt | Provider/model/tool/abort error |
+| `PROMPT_INJECTION` | 400 | Prompt blocked by safety filter | Injection-like text detected pre-runtime |
+| `UNSUPPORTED_OPERATION` | 400 | Op not supported for this runtime/config | e.g. `steer` outside Pi |
+| `NOT_IMPLEMENTED` | 501 | Endpoint exists but runtime path unimplemented | e.g. replay history for unsupported runtime |
+| `INTERNAL_ERROR` | 500 | Unexpected internal error | Unhandled exception in a route |
+| `WATCH_NOT_FOUND` | 404 | No long-horizon watch for session | GET/DELETE `/watch` before POST, or post-restart |
+| `TRANSFER_DISPATCH_FAILED` | 500 | Transfer could not be dispatched | Target creation / injection / IO failure |
+| `EMPTY_TRANSCRIPT` | 404 | No visible transcript yet | `/transcript` before any turn produced content |
+
+### Additive error enrichment (`hint`, `docs`)
+
+The most actionable codes additionally include a `hint` (an
+agent/human-actionable next step) and/or a `docs` anchor. These fields are
+**additive** — existing `{ error, code }` consumers ignore them. See
+[`docs/OBSERVABILITY.md`](./OBSERVABILITY.md).
+
+```json
+{ "error": "Session not found", "code": "SESSION_NOT_FOUND", "hint": "List current sessions with GET /api/v1/sessions …" }
+```
+
 ## Required workflow for API changes
 
 When changing the Internal API:

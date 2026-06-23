@@ -12,6 +12,10 @@ import { extractClaudeTranscript } from './claude-source-adapter.js';
 import { extractOpenCodeTranscript } from './opencode-source-adapter.js';
 import type { SourceAdapterResult } from './pi-source-adapter.js';
 import type { SdkType } from '@pi-web-ui/shared';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Transfer');
+
 
 export interface TransferServiceConfig {
   registry: SessionRegistryManager;
@@ -395,7 +399,7 @@ export class TransferService {
                   const permData = event.data as Record<string, unknown>;
                   const permId = permData.permissionId as string;
                   if (permId) {
-                    console.log(`[Transfer] Auto-approving permission ${permId} for transfer dispatch`);
+                    logger.info(`[Transfer] Auto-approving permission ${permId} for transfer dispatch`);
                     void this.config.opencodeService!.replyPermission(targetSessionId, permId, true);
                   }
                 }

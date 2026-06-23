@@ -3,6 +3,10 @@ import { join } from 'node:path';
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import pty from 'node-pty';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('ClaudeChannel');
+
 
 export interface ChannelProcessState {
   pid: number | null;
@@ -129,7 +133,7 @@ export class ClaudeChannelProcessManager extends EventEmitter {
       const text = this.sanitizePtyOutput(data);
       const logText = text.trim();
       if (logText) {
-        console.log(`[ClaudeChannel] output: ${logText.slice(0, 500)}`);
+        logger.info(`[ClaudeChannel] output: ${logText.slice(0, 500)}`);
       }
       this.detectAuthError(text);
       if (!confirmed && (text.includes('Entertoconfirm') || text.includes('Enter to confirm') || text.includes('local development'))) {
@@ -146,7 +150,7 @@ export class ClaudeChannelProcessManager extends EventEmitter {
           lastAutoApprove = Date.now();
           setTimeout(() => {
             proc.write('\r');
-            console.log('[ClaudeChannel] Auto-approved tool permission prompt');
+            logger.info('[ClaudeChannel] Auto-approved tool permission prompt');
           }, 300);
         }
 
@@ -159,7 +163,7 @@ export class ClaudeChannelProcessManager extends EventEmitter {
           lastAutoApprove = Date.now();
           setTimeout(() => {
             proc.write('1\r');
-            console.log('[ClaudeChannel] Auto-confirmed model switch dialog');
+            logger.info('[ClaudeChannel] Auto-confirmed model switch dialog');
           }, 300);
         }
       }
@@ -347,7 +351,7 @@ export class ClaudeChannelProcessManager extends EventEmitter {
     const proc = this.ptyProcess;
     if (!proc) return;
     proc.write('/clear\r');
-    console.log('[ClaudeChannel] Sent /clear to PTY for context isolation');
+    logger.info('[ClaudeChannel] Sent /clear to PTY for context isolation');
     await new Promise((r) => setTimeout(r, 1500));
   }
 
@@ -476,9 +480,9 @@ export class ClaudeChannelProcessManager extends EventEmitter {
         { encoding: 'utf-8', timeout: 3000 },
       ).trim();
       if (output) {
-        console.log(`[ClaudeChannel] Port ${port} diagnostic: ${output.replace(/\n/g, ' | ')}`);
+        logger.info(`[ClaudeChannel] Port ${port} diagnostic: ${output.replace(/\n/g, ' | ')}`);
       } else {
-        console.log(`[ClaudeChannel] Port ${port} diagnostic: no listener found`);
+        logger.info(`[ClaudeChannel] Port ${port} diagnostic: no listener found`);
       }
     } catch {
       // Diagnostic only — never fail startup.

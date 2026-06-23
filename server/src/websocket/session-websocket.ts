@@ -18,6 +18,10 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { MultiSessionManager, SessionStatusInfo } from '../pi/multi-session-manager.js';
 import type { ServerMessage } from './protocol.js';
 import type { ImageContent } from '@earendil-works/pi-ai';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('SessionWebSocket');
+
 
 // ============================================================================
 // New Worker-Based Architecture
@@ -391,7 +395,7 @@ export function handleSessionWebSocket(
 
   const log = (message: string, ...args: unknown[]) => {
     if (verboseLogging) {
-      console.log(`[SessionWs:${sessionId}] ${message}`, ...args);
+      logger.info(`[SessionWs:${sessionId}] ${message}`, ...args);
     }
   };
 
@@ -627,7 +631,7 @@ export function handleSessionWebSocket(
   };
 
   const handleError = (error: Error): void => {
-    console.error(`[SessionWs:${sessionId}] WebSocket error:`, error);
+    logger.error(`[SessionWs:${sessionId}] WebSocket error:`, error);
     if (client.sessionPath) {
       multiSessionManager.unsubscribeClient(clientId, client.sessionPath);
     }
@@ -657,7 +661,7 @@ export function handleSessionWebSocket(
         timestamp: Date.now(),
       });
     } catch (error) {
-      console.error(`[SessionWs:${sessionId}] Initialization failed:`, error);
+      logger.error(`[SessionWs:${sessionId}] Initialization failed:`, error);
       sendResponse('init', undefined, {
         code: -32603,
         message: `Initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -671,7 +675,7 @@ export function handleSessionWebSocket(
   ws.on('error', (error: Error) => handleError(error));
 
   initialize().catch((error) => {
-    console.error(`[SessionWs:${sessionId}] Unhandled initialization error:`, error);
+    logger.error(`[SessionWs:${sessionId}] Unhandled initialization error:`, error);
   });
 }
 
@@ -724,7 +728,7 @@ export async function replayHistory(
         }
         currentIndex++;
       } catch (parseError) {
-        console.warn(
+        logger.warn(
           `[replayHistory] Failed to parse line ${currentIndex}:`,
           parseError instanceof Error ? parseError.message : 'Unknown error'
         );
@@ -736,7 +740,7 @@ export async function replayHistory(
     fileStream.destroy();
   }
 
-  console.log(`[replayHistory] Replayed ${sentCount} events from ${sessionPath} (from index ${fromIndex})`);
+  logger.info(`[replayHistory] Replayed ${sentCount} events from ${sessionPath} (from index ${fromIndex})`);
 }
 
 /**

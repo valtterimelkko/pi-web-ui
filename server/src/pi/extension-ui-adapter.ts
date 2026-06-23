@@ -6,6 +6,10 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import type { ExtensionUIRequest } from './extension-ui-handler.js';
 import { getExtensionUIHandler } from './extension-ui-handler.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('ExtensionUiAdapter');
+
 
 export interface WebUIContext {
   sendToClient(message: unknown): void;
@@ -386,7 +390,7 @@ export function createCommandContextActions(
 
         return { cancelled: false };
       } catch (error) {
-        console.error('Error creating new session:', error);
+        logger.error('Error creating new session:', error);
         return { cancelled: true };
       }
     },
@@ -394,7 +398,7 @@ export function createCommandContextActions(
     // Fork from a specific entry
     async fork(entryId: string): Promise<{ cancelled: boolean }> {
       // Forking will be implemented when the SDK supports it
-      console.warn('Fork not yet implemented in Web UI, entryId:', entryId);
+      logger.warn('Fork not yet implemented in Web UI, entryId:', entryId);
       return { cancelled: true };
     },
 
@@ -409,7 +413,7 @@ export function createCommandContextActions(
       }
     ): Promise<{ cancelled: boolean }> {
       // Tree navigation will be implemented when the SDK supports it
-      console.warn('Tree navigation not yet implemented in Web UI, targetId:', targetId, options);
+      logger.warn('Tree navigation not yet implemented in Web UI, targetId:', targetId, options);
       return { cancelled: true };
     },
 
@@ -419,7 +423,7 @@ export function createCommandContextActions(
         await ctx.sessionPool.switchClientSession(ctx.clientId, sessionPath);
         return { cancelled: false };
       } catch (error) {
-        console.error('Error switching session:', error);
+        logger.error('Error switching session:', error);
         return { cancelled: true };
       }
     },

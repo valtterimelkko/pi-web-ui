@@ -2,6 +2,10 @@ import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { apiLimiter } from '../security/rate-limit.js';
 import { getPiService } from '../pi/index.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Extensions');
+
 
 const router = Router();
 
@@ -39,7 +43,7 @@ router.get('/', async (req: Request, res: Response) => {
       commands,
     });
   } catch (error) {
-    console.error('Error listing extensions:', error);
+    logger.error('Error listing extensions:', error);
     res.status(500).json({ error: 'Failed to list extensions' });
   }
 });
@@ -52,7 +56,7 @@ router.get('/skills', async (req: Request, res: Response) => {
     
     res.json({ skills });
   } catch (error) {
-    console.error('Error listing skills:', error);
+    logger.error('Error listing skills:', error);
     res.status(500).json({ error: 'Failed to list skills' });
   }
 });
@@ -107,7 +111,7 @@ router.get('/commands', async (req: Request, res: Response) => {
     
     res.json({ commands });
   } catch (error) {
-    console.error('Error listing commands:', error);
+    logger.error('Error listing commands:', error);
     res.status(500).json({ error: 'Failed to list commands' });
   }
 });
@@ -133,7 +137,7 @@ router.post('/:name/toggle', async (req: Request, res: Response) => {
       message: 'Extension toggling requires server restart',
     });
   } catch (error) {
-    console.error('Error toggling extension:', error);
+    logger.error('Error toggling extension:', error);
     res.status(500).json({ error: 'Failed to toggle extension' });
   }
 });

@@ -1,6 +1,10 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { config } from '../config.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Tts');
+
 
 const router = Router();
 
@@ -70,7 +74,7 @@ router.post('/', async (req: Request, res: Response) => {
     res.send(buffer);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'TTS generation failed';
-    console.error('TTS error:', message);
+    logger.error('TTS error:', message);
     res.status(502).json({ error: 'Failed to generate speech', detail: message });
   }
 });

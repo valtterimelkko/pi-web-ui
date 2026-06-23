@@ -11,6 +11,11 @@ import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import type { PiService } from '../../pi/pi-service.js';
+import { ErrorCode } from '../error-codes.js';
+import { createLogger } from '../../logging/logger.js';
+
+const logger = createLogger('InternalAPI');
+
 
 export interface ModelsRoutesDeps {
   piService: PiService;
@@ -113,8 +118,8 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
 
       sendJson(res, 200, { models: result });
     } catch (err) {
-      console.error('[InternalAPI] Failed to list models:', err);
-      sendJson(res, 500, { error: 'Failed to list models', code: 'INTERNAL_ERROR' });
+      logger.error('[InternalAPI] Failed to list models:', err);
+      sendJson(res, 500, { error: 'Failed to list models', code: ErrorCode.INTERNAL_ERROR });
     }
   }
 
@@ -135,15 +140,15 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
       const recycle = typeof body.recycle === 'boolean' ? body.recycle : undefined;
 
       if (!(await opencodeService.isAvailable())) {
-        sendJson(res, 503, { error: 'OpenCode is not available', code: 'OPENCODE_UNAVAILABLE' });
+        sendJson(res, 503, { error: 'OpenCode is not available', code: ErrorCode.OPENCODE_UNAVAILABLE });
         return;
       }
 
       const result = await opencodeService.refreshModels({ warmCache, recycle });
       sendJson(res, 200, result);
     } catch (err) {
-      console.error('[InternalAPI] Failed to refresh OpenCode models:', err);
-      sendJson(res, 500, { error: 'Failed to refresh models', code: 'INTERNAL_ERROR' });
+      logger.error('[InternalAPI] Failed to refresh OpenCode models:', err);
+      sendJson(res, 500, { error: 'Failed to refresh models', code: ErrorCode.INTERNAL_ERROR });
     }
   }
 

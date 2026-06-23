@@ -5,6 +5,7 @@
  */
 
 import type { ServerResponse } from 'http';
+import { ErrorCode } from './error-codes.js';
 
 export interface SSEController {
   /** Write an event with a named event type. */
@@ -80,7 +81,7 @@ export function createSSEStream(res: ServerResponse): SSEController {
 
   function error(message: string, code?: string): void {
     if (closed) return;
-    write('error', { error: message, code: code || 'INTERNAL_ERROR' });
+    write('error', { error: message, code: code || ErrorCode.INTERNAL_ERROR });
     res.end();
     closed = true;
     clearInterval(heartbeat);

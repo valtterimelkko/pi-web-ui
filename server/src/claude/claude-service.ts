@@ -21,6 +21,10 @@ import {
   type ClaudeProfile,
   type ResolvedClaudeLaunch,
 } from './claude-profiles.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('ClaudeService');
+
 
 // ─── Public interfaces ────────────────────────────────────────────────────────
 
@@ -142,7 +146,7 @@ export class ClaudeService {
       // Warn (but don't fail) if a pay-per-use API key is present in the
       // environment — Claude Direct sessions will strip it at spawn time.
       if (process.env.ANTHROPIC_API_KEY) {
-        console.warn(
+        logger.warn(
           '[ClaudeService] WARNING: ANTHROPIC_API_KEY detected in env — ' +
             'Claude Direct sessions will strip it to force subscription auth',
         );
@@ -212,7 +216,7 @@ export class ClaudeService {
       try {
         profile = this.profileManager.requireProfile(effectiveProfileId);
       } catch (err) {
-        console.warn(`[ClaudeService] Profile '${effectiveProfileId}' not available:`, err instanceof Error ? err.message : err);
+        logger.warn(`[ClaudeService] Profile '${effectiveProfileId}' not available:`, err instanceof Error ? err.message : err);
       }
     }
 
@@ -326,7 +330,7 @@ export class ClaudeService {
         const profile = this.profileManager.requireProfile(entry.claudeProfileId);
         resolvedLaunch = resolveProfile(profile);
       } catch (err) {
-        console.warn(`[ClaudeService] Failed to resolve profile '${entry.claudeProfileId}':`, err instanceof Error ? err.message : err);
+        logger.warn(`[ClaudeService] Failed to resolve profile '${entry.claudeProfileId}':`, err instanceof Error ? err.message : err);
       }
     }
 
@@ -348,7 +352,7 @@ export class ClaudeService {
         if (event.type === 'session_init' && !this.sessionsWithHistory.has(sessionId)) {
           const confirmedSid = (event.data as Record<string, unknown>)?.sessionId as string | undefined;
           if (confirmedSid && confirmedSid !== entry.claudeSessionId) {
-            console.log(`[ClaudeService] Updating claudeSessionId for ${sessionId}: ${entry.claudeSessionId} → ${confirmedSid}`);
+            logger.info(`[ClaudeService] Updating claudeSessionId for ${sessionId}: ${entry.claudeSessionId} → ${confirmedSid}`);
             await this.registry.upsert({ id: sessionId, sdkType: 'claude', cwd: entry.cwd, claudeSessionId: confirmedSid });
             // Mutate entry so onComplete and future sends use the confirmed id
             entry.claudeSessionId = confirmedSid;
@@ -357,7 +361,7 @@ export class ClaudeService {
         try {
           await this.persistEvent(sessionId, event);
         } catch (persistErr) {
-          console.warn('[ClaudeService] Failed to persist event:', persistErr);
+          logger.warn('[ClaudeService] Failed to persist event:', persistErr);
         }
         try {
           onEvent(event);
@@ -379,7 +383,7 @@ export class ClaudeService {
             lastActivity: new Date().toISOString(),
           });
         } catch (regErr) {
-          console.warn('[ClaudeService] Failed to update registry on complete:', regErr);
+          logger.warn('[ClaudeService] Failed to update registry on complete:', regErr);
         }
         onComplete(error);
       },
@@ -459,7 +463,7 @@ export class ClaudeService {
     // Persist the level so the next turn maps it to a Claude `--effort`/SDK
     // `options.effort` value. Fire-and-forget: the WS handler does not await.
     void this.registry.patchSessionMeta(sessionId, { thinkingLevel: level }).catch((err) => {
-      console.warn(`[ClaudeService] Failed to persist thinkingLevel for ${sessionId}:`, err instanceof Error ? err.message : err);
+      logger.warn(`[ClaudeService] Failed to persist thinkingLevel for ${sessionId}:`, err instanceof Error ? err.message : err);
     });
   }
 

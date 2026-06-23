@@ -1,9 +1,26 @@
 import { defineConfig } from 'vitest/config';
 
+/**
+ * By default, suppress application log output during tests so that a failing
+ * test's output shows the assertion diff — not hundreds of `[Component] …` log
+ * lines from the server runtime. Two layers cooperate, both re-enabled by
+ * `VITEST_LOG=1`:
+ *   1. `onConsoleLog` drops residual `console.*` calls (e.g. crash-logger).
+ *   2. The central logger's default sink self-silences when `process.env.VITEST`
+ *      is set (see server/src/logging/logger.ts) — it writes to process.stdout/
+ *      stderr directly, which onConsoleLog does not intercept.
+ *
+ * Genuine test-framework output (assertion diffs, thrown errors, the reporter
+ * summary) is never suppressed. The structured log tap (setLogTap) and loggers
+ * built with an explicit sink still emit, so tests can assert on log output.
+ */
+const showAppConsoleLogs = process.env.VITEST_LOG === '1';
+
 export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    onConsoleLog: showAppConsoleLogs ? undefined : () => false,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

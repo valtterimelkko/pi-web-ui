@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { PassThrough, Writable } from 'stream';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import fs from 'fs/promises';
 import path from 'path';
@@ -303,13 +304,16 @@ describe('createSessionRoutes orchestration endpoints', () => {
       registry.get.mockResolvedValue(claudeEntry('c1'));
       const routes = makeRoutes();
 
-      // Open the SSE stream first
+      // Open the SSE stream first. handleSessionEvents stays open until the
+      // client disconnects (it awaits sse.res 'close'), so do NOT await it to
+      // completion — let it subscribe, then drive the prompt, then close.
       const eventsReq = new PassThrough() as IncomingMessage;
       (eventsReq as any).method = 'GET';
       (eventsReq as any).url = '/api/v1/sessions/c1/events';
       (eventsReq as any).headers = {};
       const eventsRes = createMockRes();
-      await routes.handleSessionEvents(eventsReq, eventsRes, 'c1');
+      const eventsDone = routes.handleSessionEvents(eventsReq, eventsRes, 'c1');
+      await new Promise((r) => setImmediate(r)); // let the subscription settle
 
       // Now run a prompt — its events should appear in the broker
       const promptReq = createJsonReq('POST', '/api/v1/sessions/c1/prompt', {
@@ -323,6 +327,10 @@ describe('createSessionRoutes orchestration endpoints', () => {
       const types = sseEvents.map((e) => e.event);
       expect(types).toContain('agent_start');
       expect(types).toContain('agent_end');
+
+      // Close the stream so the handler's promise resolves cleanly.
+      (eventsRes as any)._closeCb?.();
+      await eventsDone;
     });
 
     it('replays buffered events to late subscribers', async () => {
@@ -340,12 +348,16 @@ describe('createSessionRoutes orchestration endpoints', () => {
       (eventsReq as any).method = 'GET';
       (eventsReq as any).headers = {};
       const eventsRes = createMockRes();
-      await routes.handleSessionEvents(eventsReq, eventsRes, 'c2');
+      const eventsDone = routes.handleSessionEvents(eventsReq, eventsRes, 'c2');
+      await new Promise((r) => setImmediate(r)); // let the replay deliver
 
       const sseEvents = parseSSEChunks(eventsRes.chunks);
       const types = sseEvents.map((e) => e.event);
       expect(types).toContain('agent_start');
       expect(types).toContain('agent_end');
+
+      (eventsRes as any)._closeCb?.();
+      await eventsDone;
     });
   });
 
@@ -727,6 +739,57 @@ describe('createSessionRoutes orchestration endpoints', () => {
       const body = JSON.parse(res.body);
       expect(body.content).toBe('hi');
       expect(body.turnComplete).toBe(true);
+    });
+  });
+
+  // ─── Prompt correlation (Task 5) ──────────────────────────────────────────
+
+  describe('prompt correlation id (Task 5)', () => {
+    it('stamps a shared requestId + sessionId on prompt-lifecycle logs', async () => {
+      registry.get.mockResolvedValue(claudeEntry('corr-1'));
+      const routes = makeRoutes();
+      const records: LogRecord[] = [];
+      setLogTap((r) => records.push(r));
+      try {
+        const req = createJsonReq('POST', '/api/v1/sessions/corr-1/prompt', {
+          message: 'hi', verbosity: 'answers',
+        });
+        await routes.handleSendPrompt(req, createMockRes(), 'corr-1');
+
+        const withReq = records.filter((r) => r.requestId);
+        expect(withReq.length).toBeGreaterThan(0);
+        // every in-scope log shares one requestId
+        expect(new Set(withReq.map((r) => r.requestId)).size).toBe(1);
+        // and carries the sessionId + runtime
+        expect(withReq.every((r) => r.sessionId === 'corr-1')).toBe(true);
+        expect(withReq[0].runtime).toBe('claude');
+        // and the dispatch anchor line is among them
+        expect(withReq.some((r) => r.msg.includes('Prompt dispatched'))).toBe(true);
+      } finally {
+        setLogTap(null);
+      }
+    });
+
+    it('assigns a different requestId per prompt', async () => {
+      registry.get.mockResolvedValue(claudeEntry('corr-2'));
+      const routes = makeRoutes();
+      const ids: string[] = [];
+      setLogTap((r) => {
+        if (r.requestId) ids.push(r.requestId);
+      });
+      try {
+        await routes.handleSendPrompt(
+          createJsonReq('POST', '/api/v1/sessions/corr-2/prompt', { message: 'a' }),
+          createMockRes(), 'corr-2',
+        );
+        await routes.handleSendPrompt(
+          createJsonReq('POST', '/api/v1/sessions/corr-2/prompt', { message: 'b' }),
+          createMockRes(), 'corr-2',
+        );
+        expect(new Set(ids).size).toBe(2);
+      } finally {
+        setLogTap(null);
+      }
     });
   });
 });

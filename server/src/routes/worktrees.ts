@@ -8,6 +8,10 @@ import { Router, Request, Response } from 'express';
 import { createWorktreeManager, WorktreeManager, WorktreeInfo } from '../pi/parallel/worktree-manager.js';
 import { parsePlanFile, validatePlan, type ParsedPlan, type TaskNode } from '../pi/parallel/plan-parser.js';
 import { z } from 'zod';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('Worktrees');
+
 
 const router = Router();
 
@@ -60,7 +64,7 @@ router.get('/', async (req: Request, res: Response) => {
     
     res.json({ worktrees });
   } catch (error) {
-    console.error('[Worktrees] List error:', error);
+    logger.error('[Worktrees] List error:', error);
     res.status(500).json({ 
       error: 'Failed to list worktrees',
       message: error instanceof Error ? error.message : 'Unknown error',
@@ -90,7 +94,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     
     res.json({ worktree });
   } catch (error) {
-    console.error('[Worktrees] Get error:', error);
+    logger.error('[Worktrees] Get error:', error);
     res.status(500).json({ 
       error: 'Failed to get worktree',
       message: error instanceof Error ? error.message : 'Unknown error',
@@ -109,10 +113,10 @@ router.post('/', async (req: Request, res: Response) => {
     const manager = await getManager(data.repoPath);
     const worktree = await manager.createWorktree(data);
     
-    console.log(`[Worktrees] Created worktree ${worktree.id} at ${worktree.path}`);
+    logger.info(`[Worktrees] Created worktree ${worktree.id} at ${worktree.path}`);
     res.status(201).json({ worktree });
   } catch (error) {
-    console.error('[Worktrees] Create error:', error);
+    logger.error('[Worktrees] Create error:', error);
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation error', details: error.errors });
     }
@@ -150,7 +154,7 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
     const worktree = await manager.getWorktree(id);
     res.json({ worktree });
   } catch (error) {
-    console.error('[Worktrees] Update status error:', error);
+    logger.error('[Worktrees] Update status error:', error);
     res.status(500).json({ 
       error: 'Failed to update worktree status',
       message: error instanceof Error ? error.message : 'Unknown error',
@@ -174,10 +178,10 @@ router.delete('/:id', async (req: Request, res: Response) => {
     const manager = await getManager(repoPath);
     await manager.deleteWorktree(id, deleteBranch === 'true');
     
-    console.log(`[Worktrees] Deleted worktree ${id}`);
+    logger.info(`[Worktrees] Deleted worktree ${id}`);
     res.json({ success: true, message: 'Worktree deleted' });
   } catch (error) {
-    console.error('[Worktrees] Delete error:', error);
+    logger.error('[Worktrees] Delete error:', error);
     res.status(500).json({ 
       error: 'Failed to delete worktree',
       message: error instanceof Error ? error.message : 'Unknown error',
@@ -204,7 +208,7 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
     
     res.json(result);
   } catch (error) {
-    console.error('[Worktrees] Sync error:', error);
+    logger.error('[Worktrees] Sync error:', error);
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation error', details: error.errors });
     }
@@ -233,7 +237,7 @@ router.get('/:id/diff', async (req: Request, res: Response) => {
     
     res.json({ diff });
   } catch (error) {
-    console.error('[Worktrees] Diff error:', error);
+    logger.error('[Worktrees] Diff error:', error);
     res.status(500).json({ 
       error: 'Failed to get worktree diff',
       message: error instanceof Error ? error.message : 'Unknown error',
@@ -259,7 +263,7 @@ router.get('/:id/conflicts', async (req: Request, res: Response) => {
     
     res.json({ conflicts });
   } catch (error) {
-    console.error('[Worktrees] Conflicts error:', error);
+    logger.error('[Worktrees] Conflicts error:', error);
     res.status(500).json({ 
       error: 'Failed to get conflicts',
       message: error instanceof Error ? error.message : 'Unknown error',
@@ -285,14 +289,14 @@ router.post('/:id/merge', async (req: Request, res: Response) => {
     const result = await manager.mergeWorktree(id, strategy, message);
     
     if (result.success) {
-      console.log(`[Worktrees] Merged worktree ${id} into base branch`);
+      logger.info(`[Worktrees] Merged worktree ${id} into base branch`);
     } else {
-      console.warn(`[Worktrees] Merge failed for ${id}: ${result.message}`);
+      logger.warn(`[Worktrees] Merge failed for ${id}: ${result.message}`);
     }
     
     res.json(result);
   } catch (error) {
-    console.error('[Worktrees] Merge error:', error);
+    logger.error('[Worktrees] Merge error:', error);
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation error', details: error.errors });
     }
@@ -332,7 +336,7 @@ router.post('/parse-plan', async (req: Request, res: Response) => {
       validation,
     });
   } catch (error) {
-    console.error('[Worktrees] Parse plan error:', error);
+    logger.error('[Worktrees] Parse plan error:', error);
     res.status(500).json({ 
       error: 'Failed to parse plan',
       message: error instanceof Error ? error.message : 'Unknown error',
@@ -382,7 +386,7 @@ router.post('/orchestrate', async (req: Request, res: Response) => {
     
     const orchestrationId = `orch-${Date.now()}`;
     
-    console.log(`[Worktrees] Started orchestration ${orchestrationId} with ${worktrees.length} worktrees`);
+    logger.info(`[Worktrees] Started orchestration ${orchestrationId} with ${worktrees.length} worktrees`);
     
     res.json({
       orchestrationId,
@@ -395,7 +399,7 @@ router.post('/orchestrate', async (req: Request, res: Response) => {
       nextGroup: plan.parallelGroups[1]?.map(t => ({ id: t.id, title: t.title })) || [],
     });
   } catch (error) {
-    console.error('[Worktrees] Orchestrate error:', error);
+    logger.error('[Worktrees] Orchestrate error:', error);
     res.status(500).json({ 
       error: 'Failed to start orchestration',
       message: error instanceof Error ? error.message : 'Unknown error',

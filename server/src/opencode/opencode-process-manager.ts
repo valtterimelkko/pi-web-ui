@@ -1,6 +1,10 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { execSync } from 'node:child_process';
 import type { OpenCodeConfig } from './opencode-types.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('OpenCodeProcessManager');
+
 
 export interface OpenCodeProcessStatus {
   healthy: boolean;
@@ -57,7 +61,7 @@ export class OpenCodeProcessManager {
     // If a server is already running at this address, attach to it without spawning
     const alreadyUp = await this.isHealthy();
     if (alreadyUp) {
-      console.log('[OpenCodeProcessManager] Server already running, attaching');
+      logger.info('[OpenCodeProcessManager] Server already running, attaching');
       this.serverStartedAt = this.serverStartedAt ?? Date.now();
       this.attachedExternal = true;
       return;
@@ -77,7 +81,7 @@ export class OpenCodeProcessManager {
     });
 
     this.process.on('error', (err) => {
-      console.error('[OpenCodeProcessManager] Process error:', err.message);
+      logger.error('[OpenCodeProcessManager] Process error:', err.message);
       this.process = null;
       this.healthy = false;
       this.serverStartedAt = null;
@@ -85,7 +89,7 @@ export class OpenCodeProcessManager {
     });
 
     this.process.on('exit', (code, signal) => {
-      console.log(`[OpenCodeProcessManager] Process exited code=${code} signal=${signal}`);
+      logger.info(`[OpenCodeProcessManager] Process exited code=${code} signal=${signal}`);
       this.process = null;
       this.healthy = false;
       this.serverStartedAt = null;
@@ -93,14 +97,14 @@ export class OpenCodeProcessManager {
       if (!this.shuttingDown && this.restartCount < this.maxRestarts) {
         const delay = Math.min(1000 * Math.pow(2, this.restartCount), 30000);
         this.restartCount++;
-        console.log(`[OpenCodeProcessManager] Restarting in ${delay}ms (attempt ${this.restartCount})`);
+        logger.info(`[OpenCodeProcessManager] Restarting in ${delay}ms (attempt ${this.restartCount})`);
         setTimeout(() => { void this.start(); }, delay);
       }
     });
 
     this.process.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString().trim();
-      if (text) console.error(`[OpenCodeProcessManager] stderr:`, text);
+      if (text) logger.error(`[OpenCodeProcessManager] stderr:`, text);
     });
 
     await this.waitForHealthy();
@@ -185,7 +189,7 @@ export class OpenCodeProcessManager {
   }
 
   async recycle(reason: string): Promise<void> {
-    console.log(`[OpenCodeProcessManager] Recycling OpenCode server: ${reason}`);
+    logger.info(`[OpenCodeProcessManager] Recycling OpenCode server: ${reason}`);
     this.shuttingDown = true;
 
     if (this.process) {

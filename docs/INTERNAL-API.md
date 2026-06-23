@@ -787,6 +787,50 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
 
 ---
 
+### Diagnostics (self-service logs)
+
+In-process observability over the same Unix socket agents already use — no need
+to shell out to `journalctl` (often unavailable in an agent sandbox). A bounded
+ring buffer captures recent structured log lines (secret-scrubbed on push), and
+these endpoints return them. Authed like every other route (only `/health` is
+exempt). See [`docs/OBSERVABILITY.md`](./OBSERVABILITY.md).
+
+```
+GET /api/v1/diagnostics                       # global recent logs + errors + summary
+GET /api/v1/diagnostics?limit=200&minLevel=warn
+GET /api/v1/sessions/:sessionId/diagnostics   # scoped to one session
+```
+
+**Query parameters:**
+
+| Param | Values | Default | Notes |
+|---|---|---|---|
+| `limit` | 1–1000 | 200 | Max records returned |
+| `minLevel` | `error`,`warn`,`info`,`debug` | (all) | Include this severity and above |
+
+**Response (200):**
+```json
+{
+  "recentLogs": [
+    { "ts": "2026-06-23T12:00:00.000Z", "level": "info", "component": "InternalAPI",
+      "msg": "Prompt dispatched: runtime=pi …", "requestId": "req_…", "sessionId": "…", "runtime": "pi" }
+  ],
+  "recentErrors": [ { "ts": "...", "level": "error", "component": "...", "msg": "...", "error": { "name": "Error", "message": "...", "stack": "..." } } ],
+  "summary": { "bufferedRecords": 35, "errorCount": 0, "warnCount": 1, "oldestTs": "...", "newestTs": "..." }
+}
+```
+
+Each record is a scrubbed structured log line. Secret values (tokens, passwords,
+`Bearer …`, `sk-…` keys, sensitive keys like `apiKey`/`authorization`) are
+redacted to `[REDACTED]` before they reach the buffer, so diagnostics never leak
+credentials. `requestId`/`sessionId` are preserved so an agent can correlate a
+diagnostics slice with a prompt's lifecycle.
+
+**Errors:**
+- `401` — Missing/invalid token (authed like siblings)
+
+---
+
 ### Session Control
 
 ```
@@ -1589,6 +1633,10 @@ POST /api/v1/sessions/:id/transfer    # cross-session context transfer
 POST /api/v1/sessions/batch           # batch-create child sessions
 POST /api/v1/sessions/batch/prompt    # batch-dispatch prompts
 POST /api/v1/sessions/usage           # aggregate token usage / cost
+
+# Diagnostics (self-service scrubbed logs; authed like siblings)
+GET  /api/v1/diagnostics                       # recent logs + errors + summary
+GET  /api/v1/sessions/:id/diagnostics          # same, scoped to one session
 GET  /api/v1/sessions/:id/approvals/pending   # pending-approval state
 
 # Watch (long-horizon validation)

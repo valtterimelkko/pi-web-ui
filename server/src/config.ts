@@ -4,9 +4,111 @@ import os from 'os';
 
 dotenv.config();
 
+// ─── Logging configuration (observability) ──────────────────────────────────
+
+/**
+ * Ordered log severity levels, most severe first.
+ *
+ * Semantics:
+ * - `error` — failures needing attention.
+ * - `warn`  — recoverable anomalies.
+ * - `info`  — lifecycle milestones (default).
+ * - `debug` — per-operation detail.
+ */
+export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+
+export const LOG_LEVELS: readonly LogLevel[] = ['error', 'warn', 'info', 'debug'];
+
+/**
+ * Parse a `LOG_LEVEL` env value into a known level. Unset/blank/invalid values
+ * fall back to `fallback` (default `info`). Case-insensitive.
+ *
+ * Extracted as a pure function so the resolution is unit-testable without
+ * manipulating process.env at import time.
+ */
+export function parseLogLevel(raw: string | undefined, fallback: LogLevel = 'info'): LogLevel {
+  if (!raw) return fallback;
+  const value = raw.trim().toLowerCase();
+  return (LOG_LEVELS as readonly string[]).includes(value) ? (value as LogLevel) : fallback;
+}
+
+// ─── Per-component DEBUG namespaces ──────────────────────────────────────────
+
+/**
+ * A compiled `DEBUG` namespace filter.
+ *
+ * When {@link active} is `false` the filter is "off": every component is
+ * allowed to emit (subject to {@link LOG_LEVEL}). When `active` is `true` only
+ * components matching one of {@link patterns} are allowed; all others are
+ * suppressed entirely. Matching is case-insensitive and supports `*` as a
+ * wildcard for any sequence (e.g. `claude*`, `*`).
+ */
+export interface DebugNamespaceFilter {
+  readonly active: boolean;
+  readonly patterns: readonly string[];
+  isEnabled(component: string): boolean;
+}
+
+/**
+ * Compile a `DEBUG` env value (comma-separated component names with `*`
+ * wildcards) into a {@link DebugNamespaceFilter}. Unset/blank → inactive
+ * (respects `LOG_LEVEL` only). Example: `DEBUG=claude,opencode-sse`.
+ */
+export function parseDebugNamespaces(raw: string | undefined): DebugNamespaceFilter {
+  const cleaned = (raw ?? '').trim();
+  const patterns = cleaned ? cleaned.split(',').map((p) => p.trim()).filter(Boolean) : [];
+  // No usable patterns (unset, blank, or only separators) → inactive: allow all
+  // components per LOG_LEVEL. This also avoids the footgun where a stray comma
+  // would otherwise suppress every component.
+  if (patterns.length === 0) {
+    return { active: false, patterns: [], isEnabled: () => true };
+  }
+  const testers = patterns.map(namespaceTester);
+  return {
+    active: true,
+    patterns,
+    isEnabled: (component: string) => testers.some((test) => test(component)),
+  };
+}
+
+/** Build a case-insensitive, anchored matcher for one namespace pattern. */
+function namespaceTester(pattern: string): (component: string) => boolean {
+  const source = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&') // escape regex specials (keep *)
+    .replace(/\*/g, '.*'); // * → any sequence
+  const re = new RegExp(`^${source}$`, 'i');
+  return (component: string) => re.test(component);
+}
+
+// ─── Log output format ───────────────────────────────────────────────────────
+
+/**
+ * Log line rendering mode.
+ * - `pretty` — human-readable text (default).
+ * - `json`   — one JSON object per line for machine consumption.
+ */
+export type LogFormat = 'pretty' | 'json';
+
+export const LOG_FORMATS: readonly LogFormat[] = ['pretty', 'json'];
+
+/**
+ * Parse a `LOG_FORMAT` env value. Unset/blank/invalid → `pretty`.
+ */
+export function parseLogFormat(raw: string | undefined, fallback: LogFormat = 'pretty'): LogFormat {
+  if (!raw) return fallback;
+  const value = raw.trim().toLowerCase();
+  return (LOG_FORMATS as readonly string[]).includes(value) ? (value as LogFormat) : fallback;
+}
+
 export interface ServerConfig {
   port: number;
   nodeEnv: string;
+  /** Minimum severity emitted by the central logger. See {@link parseLogLevel}. */
+  logLevel: LogLevel;
+  /** Compiled `DEBUG` component-namespace filter. See {@link parseDebugNamespaces}. */
+  debugNamespaces: DebugNamespaceFilter;
+  /** Log line rendering mode. See {@link parseLogFormat}. */
+  logFormat: LogFormat;
   jwtSecret: string;
   jwtExpiresIn: string;
   allowedOrigins: string[];
@@ -87,6 +189,9 @@ const isProduction = process.env.NODE_ENV === 'production';
 export const config: ServerConfig = {
   port: parseInt(process.env.PORT || '3001', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
+  logLevel: parseLogLevel(process.env.LOG_LEVEL),
+  debugNamespaces: parseDebugNamespaces(process.env.DEBUG),
+  logFormat: parseLogFormat(process.env.LOG_FORMAT),
   jwtSecret: isProduction 
     ? getRequiredEnvVar('JWT_SECRET')
     : (process.env.JWT_SECRET || 'dev-secret-change-in-production'),

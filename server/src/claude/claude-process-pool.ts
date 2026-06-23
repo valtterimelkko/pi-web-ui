@@ -13,6 +13,10 @@ import { homedir } from 'node:os';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { ClaudeEventNormalizer } from './claude-event-normalizer.js';
 import type { ResolvedClaudeLaunch } from './claude-profiles.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('ClaudeProcessPool');
+
 
 export interface ClaudeProcessOptions {
   sessionId: string;
@@ -81,7 +85,7 @@ export class ClaudeProcessPool {
     // period for the lock file to be cleaned up.
     const pendingExit = this.exitPromises.get(options.sessionId);
     if (pendingExit) {
-      console.log(`[ClaudeProcessPool] Waiting for previous process to exit for ${options.sessionId}...`);
+      logger.info(`[ClaudeProcessPool] Waiting for previous process to exit for ${options.sessionId}...`);
       await pendingExit;
       // Grace period: allow Claude CLI to release its session lock file
       await new Promise(r => setTimeout(r, this.postExitGraceMs));
@@ -189,11 +193,11 @@ export class ClaudeProcessPool {
           try {
             onEvent(ev);
           } catch (handlerErr) {
-            console.error('[ClaudeProcessPool] onEvent handler threw:', handlerErr);
+            logger.error('[ClaudeProcessPool] onEvent handler threw:', handlerErr);
           }
         }
       } catch (parseErr) {
-        console.error('[ClaudeProcessPool] Failed to normalise line:', parseErr);
+        logger.error('[ClaudeProcessPool] Failed to normalise line:', parseErr);
       }
     });
 
@@ -203,7 +207,7 @@ export class ClaudeProcessPool {
       const text = chunk.toString();
       stderrOutput += text;
       if (!text.includes('no stdin data received')) {
-        console.error(`[ClaudeProcessPool:${options.sessionId}] stderr:`, text.trim());
+        logger.error(`[ClaudeProcessPool:${options.sessionId}] stderr:`, text.trim());
       }
     });
 
@@ -232,7 +236,7 @@ export class ClaudeProcessPool {
 
       // If this is a stale exit from a previous (aborted) process, skip events
       if (!isCurrentProcess) {
-        console.log(`[ClaudeProcessPool] Stale exit handler fired for ${options.sessionId}, skipping`);
+        logger.info(`[ClaudeProcessPool] Stale exit handler fired for ${options.sessionId}, skipping`);
         return;
       }
 
@@ -246,7 +250,7 @@ export class ClaudeProcessPool {
           try {
             const cleaned = await this._lockCleaner(options.cwd, options.claudeSessionId);
             if (cleaned) {
-              console.log(`[ClaudeProcessPool] Removed stale last-prompt lock for ${options.claudeSessionId}, retrying immediately`);
+              logger.info(`[ClaudeProcessPool] Removed stale last-prompt lock for ${options.claudeSessionId}, retrying immediately`);
               // Retry quickly since we've fixed the root cause
               setTimeout(() => {
                 this.spawn(options, onEvent, onComplete, retryCount + 1).catch((retryErr) => {
@@ -256,12 +260,12 @@ export class ClaudeProcessPool {
               return;
             }
           } catch (cleanErr) {
-            console.warn('[ClaudeProcessPool] Failed to clean stale lock:', cleanErr);
+            logger.warn('[ClaudeProcessPool] Failed to clean stale lock:', cleanErr);
           }
         }
 
         const delay = 1500 + retryCount * 1000; // 1.5s, 2.5s, 3.5s, 4.5s, 5.5s
-        console.log(`[ClaudeProcessPool] Session lock detected for ${options.sessionId}, retry ${retryCount + 1}/5 in ${delay}ms...`);
+        logger.info(`[ClaudeProcessPool] Session lock detected for ${options.sessionId}, retry ${retryCount + 1}/5 in ${delay}ms...`);
         setTimeout(() => {
           this.spawn(options, onEvent, onComplete, retryCount + 1).catch((retryErr) => {
             onComplete(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
@@ -384,7 +388,7 @@ export async function removeLockFromFile(filePath: string): Promise<boolean> {
   if (removed > 0) {
     const newContent = lines.join('\n').replace(/\n{3,}/g, '\n\n');
     await writeFile(filePath, newContent.endsWith('\n') ? newContent : newContent + '\n');
-    console.log(`[ClaudeProcessPool] Stripped ${removed} stale last-prompt lock(s) from ${filePath}`);
+    logger.info(`[ClaudeProcessPool] Stripped ${removed} stale last-prompt lock(s) from ${filePath}`);
     return true;
   }
 

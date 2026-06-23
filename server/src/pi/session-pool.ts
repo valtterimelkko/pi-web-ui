@@ -2,6 +2,10 @@ import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-
 import type { PiService, CreateSessionOptions } from './pi-service.js';
 import { readSessionCwd } from './session-cwd.js';
 import type { WebUIContext } from './extension-ui-adapter.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('SessionPool');
+
 
 export interface ClientSession {
   clientId: string;
@@ -43,7 +47,7 @@ export class SessionPool {
 
     // Get Web UI context for extension binding
     const webUIContext = this.getWebUIContext?.(clientId);
-    console.log(`[SessionPool] Creating new session for ${clientId}, cwd=${options.cwd || 'default'}`);
+    logger.info(`[SessionPool] Creating new session for ${clientId}, cwd=${options.cwd || 'default'}`);
     
     const session = await this.piService.createSession({
       ...options,
@@ -60,7 +64,7 @@ export class SessionPool {
       lastActivity: new Date(),
     };
 
-    console.log(`[SessionPool] Client session created: sessionId=${session.sessionId}, cwd=${clientSession.cwd}`);
+    logger.info(`[SessionPool] Client session created: sessionId=${session.sessionId}, cwd=${clientSession.cwd}`);
     this.clientSessions.set(clientId, clientSession);
     return clientSession;
   }
@@ -109,7 +113,7 @@ export class SessionPool {
       lastActivity: new Date(),
     };
 
-    console.log(`[SessionPool] Switched to session: sessionId=${session.sessionId}, cwd=${cwd}`);
+    logger.info(`[SessionPool] Switched to session: sessionId=${session.sessionId}, cwd=${cwd}`);
     this.clientSessions.set(clientId, clientSession);
     return clientSession;
   }

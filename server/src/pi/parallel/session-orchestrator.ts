@@ -10,6 +10,10 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import type { WorktreeManager, WorktreeInfo } from './worktree-manager.js';
 import type { TaskNode } from './plan-parser.js';
+import { createLogger } from '../../logging/logger.js';
+
+const logger = createLogger('SessionOrchestrator');
+
 
 export interface OrchestrationSession {
   id: string;
@@ -90,7 +94,7 @@ export class SessionOrchestrator {
       try {
         callback(event);
       } catch (error) {
-        console.error('[SessionOrchestrator] Event callback error:', error);
+        logger.error('[SessionOrchestrator] Event callback error:', error);
       }
     }
   }
@@ -192,7 +196,7 @@ export class SessionOrchestrator {
     const taskPrompt = `Task: ${task.title}\n\n${task.description}`;
     args.push(taskPrompt);
 
-    console.log(`[SessionOrchestrator] Starting session ${sessionId} in ${worktree.path}`);
+    logger.info(`[SessionOrchestrator] Starting session ${sessionId} in ${worktree.path}`);
 
     try {
       const childProcess = spawn('pi', args, {
@@ -221,7 +225,7 @@ export class SessionOrchestrator {
 
       // Handle stderr
       childProcess.stderr?.on('data', (data: Buffer) => {
-        console.error(`[SessionOrchestrator] Session ${sessionId} stderr:`, data.toString());
+        logger.error(`[SessionOrchestrator] Session ${sessionId} stderr:`, data.toString());
       });
 
       // Handle completion
@@ -242,7 +246,7 @@ export class SessionOrchestrator {
             data: { output: outputBuffer },
           });
 
-          console.log(`[SessionOrchestrator] Session ${sessionId} completed`);
+          logger.info(`[SessionOrchestrator] Session ${sessionId} completed`);
         } else {
           session!.status = 'error';
           session!.error = `Process exited with code ${code}`;
@@ -256,7 +260,7 @@ export class SessionOrchestrator {
             data: { error: session.error, code },
           });
 
-          console.error(`[SessionOrchestrator] Session ${sessionId} failed with code ${code}`);
+          logger.error(`[SessionOrchestrator] Session ${sessionId} failed with code ${code}`);
         }
       });
 
@@ -275,7 +279,7 @@ export class SessionOrchestrator {
           data: { error: error.message },
         });
 
-        console.error(`[SessionOrchestrator] Session ${sessionId} error:`, error);
+        logger.error(`[SessionOrchestrator] Session ${sessionId} error:`, error);
       });
 
       this.emit({

@@ -1,5 +1,9 @@
 import type { PiService } from './pi-service.js';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('MultiSessionManager');
+
 
 /**
  * WebUIContext for extension binding
@@ -158,7 +162,7 @@ export class MultiSessionManager {
       this.startMemoryMonitoring();
     }
     
-    console.log(`[MultiSessionManager] Initialized with cleanupInterval=${this.cleanupIntervalMs}ms, idleTimeout=${this.idleSessionTimeoutMs}ms, maxSessions=${this.maxSessions}, maxPinned=${this.maxPinnedSessions}`);
+    logger.info(`[MultiSessionManager] Initialized with cleanupInterval=${this.cleanupIntervalMs}ms, idleTimeout=${this.idleSessionTimeoutMs}ms, maxSessions=${this.maxSessions}, maxPinned=${this.maxPinnedSessions}`);
   }
   
   /**
@@ -212,13 +216,13 @@ export class MultiSessionManager {
     
     // Only log if memory is high or session count is significant
     if (heapUsedMB > 500 || sessionCount > 5) {
-      console.log(`[MultiSessionManager] Memory: heap=${heapUsedMB}MB/${heapTotalMB}MB, rss=${rssMB}MB, external=${externalMB}MB, sessions=${sessionCount}`);
+      logger.info(`[MultiSessionManager] Memory: heap=${heapUsedMB}MB/${heapTotalMB}MB, rss=${rssMB}MB, external=${externalMB}MB, sessions=${sessionCount}`);
     }
     
     // If memory is very high, trigger aggressive cleanup
     // Threshold is 2.5GB to provide buffer before systemd MemoryHigh (3GB) kicks in
     if (heapUsedMB > 2500) {
-      console.warn(`[MultiSessionManager] High memory usage detected (${heapUsedMB}MB), triggering aggressive cleanup`);
+      logger.warn(`[MultiSessionManager] High memory usage detected (${heapUsedMB}MB), triggering aggressive cleanup`);
       this.aggressiveCleanup();
     }
   }
@@ -233,7 +237,7 @@ export class MultiSessionManager {
     for (const [sessionPath, activeSession] of this.sessions.entries()) {
       // Only clean up sessions that are not currently active and not pinned
       if (activeSession.status === 'idle' && activeSession.subscribers.size === 0 && !activeSession.pinned) {
-        console.log(`[MultiSessionManager] Aggressive cleanup: disposing session ${sessionPath}`);
+        logger.info(`[MultiSessionManager] Aggressive cleanup: disposing session ${sessionPath}`);
         this.disposeSession(sessionPath);
         cleanedCount++;
       }
@@ -248,7 +252,7 @@ export class MultiSessionManager {
       
       for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
         const [sessionPath] = idleSessions[i];
-        console.log(`[MultiSessionManager] Aggressive cleanup: disposing oldest session ${sessionPath}`);
+        logger.info(`[MultiSessionManager] Aggressive cleanup: disposing oldest session ${sessionPath}`);
         this.disposeSession(sessionPath);
         cleanedCount++;
       }
@@ -257,7 +261,7 @@ export class MultiSessionManager {
     // Force garbage collection if available
     if (global.gc) {
       global.gc();
-      console.log(`[MultiSessionManager] Triggered garbage collection after aggressive cleanup (${cleanedCount} sessions removed)`);
+      logger.info(`[MultiSessionManager] Triggered garbage collection after aggressive cleanup (${cleanedCount} sessions removed)`);
     }
   }
   
@@ -283,7 +287,7 @@ export class MultiSessionManager {
         const timeSinceLastEvent = now - activeSession.lastEventTimestamp;
         if (timeSinceLastEvent > this.staleStreamingThresholdMs) {
           if (activeSession.pinned) {
-            console.log(`[MultiSessionManager] Detected stale streaming PINNED session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), resetting to idle (keeping alive): ${sessionPath}`);
+            logger.info(`[MultiSessionManager] Detected stale streaming PINNED session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), resetting to idle (keeping alive): ${sessionPath}`);
             activeSession.status = 'idle';
             activeSession.lastActivity = new Date();
             this.broadcastToSubscribers(sessionPath, {
@@ -296,7 +300,7 @@ export class MultiSessionManager {
               },
             });
           } else {
-            console.log(`[MultiSessionManager] Detected stale streaming session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), disposing for fresh rehydration: ${sessionPath}`);
+            logger.info(`[MultiSessionManager] Detected stale streaming session (no events for ${Math.round(timeSinceLastEvent / 1000)}s), disposing for fresh rehydration: ${sessionPath}`);
             this.broadcastToSubscribers(sessionPath, {
               type: 'session_event',
               sessionId: activeSession.sessionId,
@@ -330,7 +334,7 @@ export class MultiSessionManager {
       
       // Clean up errored sessions immediately
       if (activeSession.status === 'error') {
-        console.log(`[MultiSessionManager] Cleaning up errored session: ${sessionPath}`);
+        logger.info(`[MultiSessionManager] Cleaning up errored session: ${sessionPath}`);
         this.unloadSession(sessionPath);
         cleanedCount++;
         continue;
@@ -339,7 +343,7 @@ export class MultiSessionManager {
       // Clean up idle sessions after timeout
       const idleTime = now - activeSession.lastActivity.getTime();
       if (idleTime > this.idleSessionTimeoutMs) {
-        console.log(`[MultiSessionManager] Unloading idle session after ${Math.round(idleTime / 60000)}min: ${sessionPath}`);
+        logger.info(`[MultiSessionManager] Unloading idle session after ${Math.round(idleTime / 60000)}min: ${sessionPath}`);
         this.unloadSession(sessionPath);
         cleanedCount++;
       }
@@ -357,14 +361,14 @@ export class MultiSessionManager {
       
       for (let i = 0; i < Math.min(sessionsToRemove, idleSessions.length); i++) {
         const [sessionPath] = idleSessions[i];
-        console.log(`[MultiSessionManager] Unloading oldest idle session to enforce limit: ${sessionPath}`);
+        logger.info(`[MultiSessionManager] Unloading oldest idle session to enforce limit: ${sessionPath}`);
         this.unloadSession(sessionPath);
         cleanedCount++;
       }
     }
     
     if (cleanedCount > 0) {
-      console.log(`[MultiSessionManager] Cleaned up ${cleanedCount} sessions, ${this.sessions.size} remaining`);
+      logger.info(`[MultiSessionManager] Cleaned up ${cleanedCount} sessions, ${this.sessions.size} remaining`);
     }
     
     return cleanedCount;
@@ -390,7 +394,7 @@ export class MultiSessionManager {
     try {
       activeSession.agentSession.dispose();
     } catch (error) {
-      console.error(`[MultiSessionManager] Error disposing session ${sessionPath}:`, error);
+      logger.error(`[MultiSessionManager] Error disposing session ${sessionPath}:`, error);
     }
     
     // Remove event handler
@@ -431,7 +435,7 @@ export class MultiSessionManager {
     try {
       activeSession.agentSession.dispose();
     } catch (error) {
-      console.error(`[MultiSessionManager] Error unloading session ${sessionPath}:`, error);
+      logger.error(`[MultiSessionManager] Error unloading session ${sessionPath}:`, error);
     }
     
     // Remove event handler
@@ -451,12 +455,12 @@ export class MultiSessionManager {
       .sort((a, b) => a[1].lastActivity.getTime() - b[1].lastActivity.getTime());
     
     if (idleSessions.length === 0) {
-      console.warn(`[MultiSessionManager] Cannot evict: no idle sessions available (${this.sessions.size} loaded)`);
+      logger.warn(`[MultiSessionManager] Cannot evict: no idle sessions available (${this.sessions.size} loaded)`);
       return false;
     }
     
     const [sessionPath] = idleSessions[0];
-    console.log(`[MultiSessionManager] Evicting oldest idle session: ${sessionPath}`);
+    logger.info(`[MultiSessionManager] Evicting oldest idle session: ${sessionPath}`);
     this.unloadSession(sessionPath);
     return true;
   }
@@ -480,7 +484,7 @@ export class MultiSessionManager {
       throw new Error('Invalid client ID');
     }
 
-    console.log(`[MultiSessionManager] Creating new session for client ${clientId} with cwd: ${cwd}`);
+    logger.info(`[MultiSessionManager] Creating new session for client ${clientId} with cwd: ${cwd}`);
 
     // Use a temporary unique clientId to avoid handler key collisions when
     // the same client creates multiple sessions concurrently.
@@ -560,7 +564,7 @@ export class MultiSessionManager {
     }
     this.clientSubscriptions.get(clientId)!.add(sessionPath);
 
-    console.log(`[MultiSessionManager] Session created: ${agentSession.sessionId}, path=${sessionPath}`);
+    logger.info(`[MultiSessionManager] Session created: ${agentSession.sessionId}, path=${sessionPath}`);
 
     return this.getSessionStatus(sessionPath)!;
   }
@@ -595,11 +599,11 @@ export class MultiSessionManager {
 
     if (!activeSession) {
       // Session not in memory - need to rehydrate from disk
-      console.log(`[MultiSessionManager] Rehydrating session from disk: ${sessionPath}`);
+      logger.info(`[MultiSessionManager] Rehydrating session from disk: ${sessionPath}`);
       
       // Check if we're at capacity and need to make room
       if (this.sessions.size >= this.maxSessions) {
-        console.log(`[MultiSessionManager] At capacity (${this.sessions.size}/${this.maxSessions}), unloading oldest idle session`);
+        logger.info(`[MultiSessionManager] At capacity (${this.sessions.size}/${this.maxSessions}), unloading oldest idle session`);
         this.evictOldestIdleSession();
       }
       
@@ -648,7 +652,7 @@ export class MultiSessionManager {
       };
 
       this.sessions.set(sessionPath, activeSession);
-      console.log(`[MultiSessionManager] Session rehydrated: ${agentSession.sessionId}`);
+      logger.info(`[MultiSessionManager] Session rehydrated: ${agentSession.sessionId}`);
     } else if (webUIContext) {
       // Update webUIContext if provided for existing session
       activeSession.webUIContext = webUIContext;
@@ -709,7 +713,7 @@ export class MultiSessionManager {
       try {
         this.broadcast(clientId, message);
       } catch (error) {
-        console.warn(
+        logger.warn(
           `[MultiSessionManager] Failed to broadcast to client ${clientId}:`,
           error instanceof Error ? error.message : String(error)
         );
@@ -918,7 +922,7 @@ export class MultiSessionManager {
     // Transform skill content messages
     const skillInfo = this.getSkillContentInfo(event);
     if (skillInfo.isSkillContent) {
-      console.log(`[MultiSessionManager] Transforming skill content event for session: ${sessionPath}, skill: ${skillInfo.skillName || 'unknown'}`);
+      logger.info(`[MultiSessionManager] Transforming skill content event for session: ${sessionPath}, skill: ${skillInfo.skillName || 'unknown'}`);
       event = this.transformSkillContentEvent(event, skillInfo.skillName);
     }
 
@@ -1029,7 +1033,7 @@ export class MultiSessionManager {
       // and the timer raced), do nothing.
       if (activeSession.status !== 'streaming') return;
 
-      console.log(
+      logger.info(
         `[MultiSessionManager] API-error grace period expired with no further events, ` +
         `emitting synthetic agent_end for: ${sessionPath}`
       );
@@ -1175,12 +1179,12 @@ export class MultiSessionManager {
     // Count current pinned sessions
     const currentPinned = Array.from(this.sessions.values()).filter(s => s.pinned).length;
     if (currentPinned >= this.maxPinnedSessions && !activeSession.pinned) {
-      console.warn(`[MultiSessionManager] Cannot pin session: already at max pinned limit (${this.maxPinnedSessions})`);
+      logger.warn(`[MultiSessionManager] Cannot pin session: already at max pinned limit (${this.maxPinnedSessions})`);
       return false;
     }
     
     activeSession.pinned = true;
-    console.log(`[MultiSessionManager] Session pinned: ${sessionPath} (${currentPinned + 1}/${this.maxPinnedSessions})`);
+    logger.info(`[MultiSessionManager] Session pinned: ${sessionPath} (${currentPinned + 1}/${this.maxPinnedSessions})`);
     return true;
   }
 
@@ -1194,7 +1198,7 @@ export class MultiSessionManager {
     
     activeSession.pinned = false;
     activeSession.lastActivity = new Date(); // Reset idle clock so it doesn't immediately expire
-    console.log(`[MultiSessionManager] Session unpinned: ${sessionPath}`);
+    logger.info(`[MultiSessionManager] Session unpinned: ${sessionPath}`);
     return true;
   }
 
@@ -1251,7 +1255,7 @@ export class MultiSessionManager {
       // The AgentSession should have a steer method
       await activeSession.agentSession.steer(message);
     } catch (error) {
-      console.error(`[MultiSessionManager] Error steering session ${sessionPath}:`, error);
+      logger.error(`[MultiSessionManager] Error steering session ${sessionPath}:`, error);
       throw error;
     }
   }
@@ -1273,7 +1277,7 @@ export class MultiSessionManager {
       await activeSession.agentSession.abort();
       activeSession.status = 'idle';
     } catch (error) {
-      console.error(`[MultiSessionManager] Error aborting session ${sessionPath}:`, error);
+      logger.error(`[MultiSessionManager] Error aborting session ${sessionPath}:`, error);
       throw error;
     }
   }
@@ -1294,7 +1298,7 @@ export class MultiSessionManager {
       clearTimeout(timer);
     }
     this.apiErrorGraceTimers.clear();
-    console.log('[MultiSessionManager] Cleanup timer stopped');
+    logger.info('[MultiSessionManager] Cleanup timer stopped');
   }
 
   /**
@@ -1321,7 +1325,7 @@ export class MultiSessionManager {
       return false;
     }
 
-    console.log(
+    logger.info(
       '[MultiSessionManager]',
       `Stopping session: ${sessionPath}`
     );
@@ -1330,7 +1334,7 @@ export class MultiSessionManager {
     try {
       activeSession.agentSession.abort();
     } catch (error) {
-      console.error(
+      logger.error(
         `[MultiSessionManager] Error aborting session ${sessionPath}:`,
         error
       );
@@ -1340,7 +1344,7 @@ export class MultiSessionManager {
     try {
       activeSession.agentSession.dispose();
     } catch (error) {
-      console.error(
+      logger.error(
         `[MultiSessionManager] Error disposing session ${sessionPath}:`,
         error
       );
@@ -1386,7 +1390,7 @@ export class MultiSessionManager {
         activeSession.agentSession.dispose();
         this.piService.removeEventHandler(activeSession.handlerKey);
       } catch (error) {
-        console.error(
+        logger.error(
           `[MultiSessionManager] Error disposing session ${sessionPath}:`,
           error
         );

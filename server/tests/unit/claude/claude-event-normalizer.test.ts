@@ -2,6 +2,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { ClaudeEventNormalizer } from '../../../src/claude/claude-event-normalizer.js';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
+
+/** Capture structured log records via the central logger tap (restores on return). */
+function captureLogRecords(): { records: LogRecord[]; restore: () => void } {
+  const records: LogRecord[] = [];
+  setLogTap((r) => records.push(r));
+  return { records, restore: () => setLogTap(null) };
+}
 
 // Load fixture files — server/tests/unit/claude/ → server/ → root → fixtures/
 const repoRoot = join(process.cwd(), '..');
@@ -193,8 +201,8 @@ describe('ClaudeEventNormalizer', () => {
 
   // ─── isUsingOverage warning ───────────────────────────────────────────────
 
-  it('isUsingOverage: true → warns to console', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('isUsingOverage: true → warns via the logger', () => {
+    const log = captureLogRecords();
 
     const line = JSON.stringify({
       type: 'rate_limit_event',
@@ -208,9 +216,9 @@ describe('ClaudeEventNormalizer', () => {
     });
 
     normalizer.normalize(line, SESSION_ID);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('overage'));
+    expect(log.records.some((r) => r.level === 'warn' && r.msg.includes('overage'))).toBe(true);
 
-    warnSpy.mockRestore();
+    log.restore();
   });
 
   // ─── Full fixture (with-tool) ─────────────────────────────────────────────

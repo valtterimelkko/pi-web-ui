@@ -5,6 +5,10 @@
 
 import type { InternalCommand } from '@pi-web-ui/shared';
 import type { RpcCommand } from './types.js';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('JSONRPCToRPCConverter');
+
 
 export interface JSONRPCMessage {
   jsonrpc?: string;
@@ -61,7 +65,7 @@ export class JSONRPCToRPCConverter {
         };
 
       default:
-        console.warn(`[JSONRPCToRPCConverter] Unknown method: ${method}`);
+        logger.warn(`[JSONRPCToRPCConverter] Unknown method: ${method}`);
         return null;
     }
   }
