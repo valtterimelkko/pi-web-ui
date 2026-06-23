@@ -8,6 +8,7 @@ import {
   ClaudeProfileManager,
   ClaudeProfileError,
   resolveProfile,
+  mapThinkingLevelToEffort,
   redactSecrets,
   DEFAULT_ALLOWED_TOOLS,
   defaultProfilesPath,
@@ -370,6 +371,64 @@ describe('resolveProfile', () => {
     const resolved = resolveProfile(glmNativeEnvProfile());
     expect(resolved.env.PATH).toBe(process.env.PATH);
     expect(resolved.env.HOME).toBe(process.env.HOME);
+  });
+
+  it('applies the profile env block (GLM 1M context knobs)', () => {
+    process.env.GLM_CODING_PLAN_TOKEN = 'token';
+    delete process.env.ANTHROPIC_API_KEY;
+    const profile = ClaudeProfileSchema.parse({
+      ...glmNativeEnvProfile(),
+      env: {
+        API_TIMEOUT_MS: '3000000',
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      },
+    });
+    const resolved = resolveProfile(profile);
+    expect(resolved.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('1000000');
+    expect(resolved.env.API_TIMEOUT_MS).toBe('3000000');
+    expect(resolved.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe('1');
+    // The 1M model alias should still be present alongside the env block.
+    expect(resolved.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('glm-5.2[1m]');
+  });
+
+  it('never lets the env block smuggle in ANTHROPIC_API_KEY', () => {
+    process.env.GLM_CODING_PLAN_TOKEN = 'token';
+    delete process.env.ANTHROPIC_API_KEY;
+    const profile = ClaudeProfileSchema.parse({
+      ...glmNativeEnvProfile(),
+      env: { ANTHROPIC_API_KEY: 'sneaky-pay-per-use-key', API_TIMEOUT_MS: '3000000' },
+    });
+    const resolved = resolveProfile(profile);
+    expect(resolved.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(resolved.env.API_TIMEOUT_MS).toBe('3000000');
+  });
+});
+
+// ─── Reasoning effort mapping ───────────────────────────────────────────────────
+
+describe('mapThinkingLevelToEffort', () => {
+  it('maps off/minimal/low to "low"', () => {
+    expect(mapThinkingLevelToEffort('off')).toBe('low');
+    expect(mapThinkingLevelToEffort('minimal')).toBe('low');
+    expect(mapThinkingLevelToEffort('low')).toBe('low');
+  });
+
+  it('maps medium/high/xhigh straight through', () => {
+    expect(mapThinkingLevelToEffort('medium')).toBe('medium');
+    expect(mapThinkingLevelToEffort('high')).toBe('high');
+    expect(mapThinkingLevelToEffort('xhigh')).toBe('xhigh');
+  });
+
+  it('passes through "max"', () => {
+    expect(mapThinkingLevelToEffort('max')).toBe('max');
+  });
+
+  it('returns undefined for missing or unknown levels', () => {
+    expect(mapThinkingLevelToEffort(undefined)).toBeUndefined();
+    expect(mapThinkingLevelToEffort(null)).toBeUndefined();
+    expect(mapThinkingLevelToEffort('')).toBeUndefined();
+    expect(mapThinkingLevelToEffort('bananas')).toBeUndefined();
   });
 });
 

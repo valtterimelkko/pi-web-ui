@@ -50,6 +50,16 @@ export const ClaudeProfileSchema = z.object({
   modelAliases: z
     .record(z.string(), z.string())
     .optional(),
+  /**
+   * Extra environment variables applied at launch (non-secret operational
+   * knobs only).  This is how provider profiles enable features such as GLM's
+   * 1M context window:
+   *   CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000
+   *   API_TIMEOUT_MS=3000000
+   *   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+   * Secret tokens must NOT be placed here — use authTokenEnv/authTokenPath.
+   */
+  env: z.record(z.string(), z.string()).optional(),
   settingSources: z
     .array(z.enum(['user', 'project', 'local']))
     .default(['user', 'project']),
@@ -402,6 +412,18 @@ export function resolveProfile(profile: ClaudeProfile): ResolvedClaudeLaunch {
     delete env.ANTHROPIC_AUTH_TOKEN;
   }
 
+  // Apply extra operational env vars (e.g. GLM 1M context knobs).
+  // Applied last so a profile can override inherited values, but the
+  // secret-stripping above and token-setting below are not reachable from here
+  // (env is schema-restricted to plain strings and validated upstream).
+  if (profile.env) {
+    for (const [key, value] of Object.entries(profile.env)) {
+      // Never allow a profile's `env` block to smuggle in a pay-per-use API key.
+      if (key === 'ANTHROPIC_API_KEY') continue;
+      env[key] = value;
+    }
+  }
+
   // Resolve the model
   const model = profile.model;
   const modelMode = profile.modelMode;
@@ -458,6 +480,49 @@ export function redactSecrets(env: NodeJS.ProcessEnv): Record<string, string | u
     }
   }
   return redacted;
+}
+
+// ─── Reasoning effort mapping ─────────────────────────────────────────────────
+
+/**
+ * Reasoning effort levels understood by Claude Code (CLI `--effort` and SDK
+ * `options.effort`).  GLM 5.2 only exposes a few internal reasoning steps, but
+ * the Z.ai coding-plan endpoint accepts and maps these Claude-native effort
+ * levels itself, so we always speak the Claude vocabulary regardless of
+ * provider.
+ */
+export const CLAUDE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
+
+/**
+ * Map a Pi Web UI thinking level (off/minimal/low/medium/high/xhigh) to a
+ * Claude effort level. Returns undefined when no level is set, so callers can
+ * leave effort unspecified and let Claude Code use its own default.
+ *
+ * - off / minimal / low → 'low'
+ * - medium              → 'medium'
+ * - high                → 'high'
+ * - xhigh               → 'xhigh'
+ * - max                 → 'max'  (passthrough if a caller already speaks effort)
+ */
+export function mapThinkingLevelToEffort(level?: string | null): ClaudeEffortLevel | undefined {
+  if (!level) return undefined;
+  switch (level) {
+    case 'off':
+    case 'minimal':
+    case 'low':
+      return 'low';
+    case 'medium':
+      return 'medium';
+    case 'high':
+      return 'high';
+    case 'xhigh':
+      return 'xhigh';
+    case 'max':
+      return 'max';
+    default:
+      return undefined;
+  }
 }
 
 // ─── Default profile file path ───────────────────────────────────────────────

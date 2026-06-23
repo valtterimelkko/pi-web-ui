@@ -459,7 +459,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
 
                   <p className="text-[11px] text-gray-400" data-testid="claude-resolved-profile">
                     {claudeProvider === 'glm'
-                      ? 'GLM 5.2 routes through the selected backend.'
+                      ? 'GLM 5.2 · 1M context window, via the selected backend. Reasoning effort follows the Thinking Level in Settings.'
                       : 'Native Claude subscription via the selected backend.'}
                   </p>
                 </>

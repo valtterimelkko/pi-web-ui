@@ -3,7 +3,7 @@
   "profiles": [
     {
       "id": "glm52-claude-sdk-native-profile",
-      "label": "GLM 5.2 \u2014 Claude SDK",
+      "label": "GLM 5.2 — Claude SDK",
       "backend": "sdk-subscription",
       "launcherType": "native-env",
       "baseUrl": "https://api.z.ai/api/anthropic",
@@ -13,7 +13,8 @@
       "modelMode": "claude-alias",
       "modelAliases": {
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7"
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2[1m]"
       },
       "settingSources": [
         "user",
@@ -36,11 +37,16 @@
         "TodoWrite"
       ],
       "maxConcurrent": 2,
-      "enabled": true
+      "enabled": true,
+      "env": {
+        "API_TIMEOUT_MS": "3000000",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+      }
     },
     {
       "id": "claude-sonnet-sdk-subscription",
-      "label": "Claude Sonnet \u2014 SDK subscription",
+      "label": "Claude Sonnet — SDK subscription",
       "backend": "sdk-subscription",
       "launcherType": "native-env",
       "authMode": "subscription",
@@ -70,7 +76,7 @@
     },
     {
       "id": "glm52-claude-cli-direct",
-      "label": "GLM 5.2 \u2014 Claude CLI direct fallback",
+      "label": "GLM 5.2 — Claude CLI direct fallback",
       "backend": "cli-direct",
       "launcherType": "native-env",
       "baseUrl": "https://api.z.ai/api/anthropic",
@@ -80,7 +86,8 @@
       "modelMode": "claude-alias",
       "modelAliases": {
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7"
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2[1m]"
       },
       "settingSources": [
         "user",
@@ -103,7 +110,12 @@
         "TodoWrite"
       ],
       "maxConcurrent": 2,
-      "enabled": true
+      "enabled": true,
+      "env": {
+        "API_TIMEOUT_MS": "3000000",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+      }
     },
     {
       "launcherType": "native-env",
@@ -132,7 +144,7 @@
       "maxConcurrent": 2,
       "enabled": true,
       "id": "claude-opus-sdk-subscription",
-      "label": "Claude Opus \u2014 SDK",
+      "label": "Claude Opus — SDK",
       "backend": "sdk-subscription",
       "model": "opus"
     },
@@ -163,7 +175,7 @@
       "maxConcurrent": 2,
       "enabled": true,
       "id": "claude-haiku-sdk-subscription",
-      "label": "Claude Haiku \u2014 SDK",
+      "label": "Claude Haiku — SDK",
       "backend": "sdk-subscription",
       "model": "haiku"
     },
@@ -194,7 +206,7 @@
       "maxConcurrent": 2,
       "enabled": true,
       "id": "claude-sonnet-cli-direct",
-      "label": "Claude Sonnet \u2014 CLI direct",
+      "label": "Claude Sonnet — CLI direct",
       "backend": "cli-direct",
       "model": "sonnet"
     },
@@ -225,7 +237,7 @@
       "maxConcurrent": 2,
       "enabled": true,
       "id": "claude-opus-cli-direct",
-      "label": "Claude Opus \u2014 CLI direct",
+      "label": "Claude Opus — CLI direct",
       "backend": "cli-direct",
       "model": "opus"
     },
@@ -256,7 +268,7 @@
       "maxConcurrent": 2,
       "enabled": true,
       "id": "claude-haiku-cli-direct",
-      "label": "Claude Haiku \u2014 CLI direct",
+      "label": "Claude Haiku — CLI direct",
       "backend": "cli-direct",
       "model": "haiku"
     },
@@ -287,7 +299,7 @@
       "maxConcurrent": 2,
       "enabled": true,
       "id": "claude-sonnet-channel",
-      "label": "Claude Sonnet \u2014 Channel",
+      "label": "Claude Sonnet — Channel",
       "backend": "channel",
       "model": "sonnet"
     },
@@ -318,7 +330,7 @@
       "maxConcurrent": 2,
       "enabled": true,
       "id": "claude-opus-channel",
-      "label": "Claude Opus \u2014 Channel",
+      "label": "Claude Opus — Channel",
       "backend": "channel",
       "model": "opus"
     },
@@ -349,7 +361,7 @@
       "maxConcurrent": 2,
       "enabled": true,
       "id": "claude-haiku-channel",
-      "label": "Claude Haiku \u2014 Channel",
+      "label": "Claude Haiku — Channel",
       "backend": "channel",
       "model": "haiku"
     }

@@ -17,6 +17,7 @@ import { ClaudeSdkService } from './claude-sdk-service.js';
 import {
   ClaudeProfileManager,
   resolveProfile,
+  mapThinkingLevelToEffort,
   type ClaudeProfile,
   type ResolvedClaudeLaunch,
 } from './claude-profiles.js';
@@ -339,6 +340,7 @@ export class ClaudeService {
         prompt,
         isFollowUp,
         resolvedLaunch,
+        effort: mapThinkingLevelToEffort(entry.thinkingLevel),
       },
       // onEvent: persist interesting events, capture confirmed session_id, and forward to caller
       async (event: NormalizedEvent) => {
@@ -453,6 +455,12 @@ export class ClaudeService {
       this.channelService?.setThinkingLevel(sessionId, level);
       return;
     }
+    // SDK and CLI-direct backends apply effort per-prompt from the registry.
+    // Persist the level so the next turn maps it to a Claude `--effort`/SDK
+    // `options.effort` value. Fire-and-forget: the WS handler does not await.
+    void this.registry.patchSessionMeta(sessionId, { thinkingLevel: level }).catch((err) => {
+      console.warn(`[ClaudeService] Failed to persist thinkingLevel for ${sessionId}:`, err instanceof Error ? err.message : err);
+    });
   }
 
   // ── Queries ───────────────────────────────────────────────────────────────

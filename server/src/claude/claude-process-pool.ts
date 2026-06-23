@@ -27,6 +27,11 @@ export interface ClaudeProcessOptions {
    * When absent, preserves the existing behavior (strip API keys, use `claude`).
    */
   resolvedLaunch?: ResolvedClaudeLaunch;
+  /**
+   * Reasoning effort level (Claude `--effort`), e.g. 'low'|'medium'|'high'|
+   * 'xhigh'|'max'. When set, forwarded to the CLI. Z.ai maps these for GLM.
+   */
+  effort?: string;
 }
 
 export type ClaudeEventHandler = (event: NormalizedEvent) => void;
@@ -143,6 +148,7 @@ export class ClaudeProcessPool {
         '--permission-mode', permissionMode,
         '--allowedTools', allowedTools,
         '--model', effectiveModel,
+        ...(options.effort ? ['--effort', options.effort] : []),
         ...extraCliArgs.filter((a) => a !== '--model' && a !== effectiveModel),
         // First turn: --session-id creates the session.
         // Follow-up turns: --resume avoids the session lock conflict.

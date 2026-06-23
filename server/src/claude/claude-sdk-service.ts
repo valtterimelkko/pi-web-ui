@@ -25,6 +25,7 @@ import { ClaudeSdkEventAdapter } from './claude-sdk-event-adapter.js';
 import {
   ClaudeProfileManager,
   resolveProfile,
+  mapThinkingLevelToEffort,
   type ClaudeProfile,
   type ResolvedClaudeLaunch,
 } from './claude-profiles.js';
@@ -161,6 +162,9 @@ export class ClaudeSdkService {
     const cwd = state?.cwd ?? entry.cwd;
     const profileId = state?.profileId;
     const model = state?.model ?? entry.model ?? 'sonnet';
+    // Reasoning effort: read the session's current thinking level from the
+    // registry each turn so Settings changes take effect on the next prompt.
+    const thinkingLevel = entry.thinkingLevel;
     const isFollowUp = state?.hasHistory === true ||
       (entry.messageCount != null && entry.messageCount > 0) ||
       existsSync(resolveClaudeSessionPath(cwd, claudeSessionId));
@@ -214,6 +218,7 @@ export class ClaudeSdkService {
       resolved,
       cwd,
       model,
+      thinkingLevel,
       claudeSessionId,
       isFollowUp,
       abortController,
@@ -353,11 +358,16 @@ export class ClaudeSdkService {
     resolved?: ResolvedClaudeLaunch;
     cwd: string;
     model: string;
+    thinkingLevel?: string;
     claudeSessionId: string;
     isFollowUp: boolean;
     abortController: AbortController;
   }): Options {
-    const { resolved, cwd, model, claudeSessionId, isFollowUp, abortController } = opts;
+    const { resolved, cwd, model, thinkingLevel, claudeSessionId, isFollowUp, abortController } = opts;
+
+    // Map the Web UI thinking level to a Claude effort level. Applies to both
+    // native Claude and GLM (Z.ai maps Claude-native effort levels itself).
+    const effort = mapThinkingLevelToEffort(thinkingLevel);
 
     // Always resolve the system claude binary to an absolute path.
     // The SDK ships its own bundled binary, but it may not match the host's
@@ -369,6 +379,7 @@ export class ClaudeSdkService {
       const sdkOpts: Options = {
         cwd,
         model: resolved.model,
+        ...(effort ? { effort } : {}),
         env: resolved.env,
         abortController,
         pathToClaudeCodeExecutable: claudePath,
@@ -394,6 +405,7 @@ export class ClaudeSdkService {
     return {
       cwd,
       model,
+      ...(effort ? { effort } : {}),
       env: cleanEnv,
       abortController,
       pathToClaudeCodeExecutable: claudePath,

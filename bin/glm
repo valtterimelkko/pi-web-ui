@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# glm — a tiny Clother-style launcher for Claude Code against GLM 5.2 (Z.ai).
+#
+# It runs the *real* `claude` CLI with the environment Claude Code needs to use
+# GLM 5.2 with its native 1M context window and the correct reasoning-effort
+# behaviour, WITHOUT touching ~/.claude/settings.json. Plain `claude` keeps
+# using your native Anthropic subscription; `glm` is the temporary GLM shell.
+#
+# Settings follow Z.ai's official Claude Code guide:
+#   https://docs.z.ai/devpack/tool/claude
+#
+# Usage:
+#   glm                       # interactive Claude Code on GLM 5.2 [1M]
+#   glm -p "do the thing"     # one-shot print mode
+#   glm /effort xhigh         # any normal claude args/flags pass straight through
+#
+# Auth token resolution (first match wins, never printed):
+#   1. $GLM_AUTH_TOKEN
+#   2. $ZAI_API_KEY
+#   3. $GLM_CODING_PLAN_TOKEN
+#   4. .env.ANTHROPIC_AUTH_TOKEN inside ~/.claude/settings.json.glm
+#
+set -euo pipefail
+
+# ── Resolve the GLM auth token ────────────────────────────────────────────────
+TOKEN="${GLM_AUTH_TOKEN:-${ZAI_API_KEY:-${GLM_CODING_PLAN_TOKEN:-}}}"
+
+GLM_SETTINGS="${GLM_SETTINGS_FILE:-$HOME/.claude/settings.json.glm}"
+if [ -z "${TOKEN}" ] && [ -f "${GLM_SETTINGS}" ]; then
+  # Pull only the token field; relies on node, which ships with this project.
+  TOKEN="$(node -e '
+    try {
+      const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+      process.stdout.write((s.env && s.env.ANTHROPIC_AUTH_TOKEN) || "");
+    } catch { process.stdout.write(""); }
+  ' "${GLM_SETTINGS}" 2>/dev/null || true)"
+fi
+
+if [ -z "${TOKEN}" ]; then
+  echo "glm: no GLM auth token found." >&2
+  echo "     Set GLM_AUTH_TOKEN (or ZAI_API_KEY / GLM_CODING_PLAN_TOKEN)," >&2
+  echo "     or put it in ${GLM_SETTINGS} under .env.ANTHROPIC_AUTH_TOKEN" >&2
+  echo "     Get a key at https://z.ai/manage-apikey/apikey-list" >&2
+  exit 1
+fi
+
+if ! command -v claude >/dev/null 2>&1; then
+  echo "glm: the 'claude' CLI is not on PATH. Install Claude Code first." >&2
+  exit 1
+fi
+
+# ── GLM 5.2 environment (Z.ai Anthropic-compatible endpoint) ──────────────────
+# Never fall back to pay-per-use Anthropic billing.
+unset ANTHROPIC_API_KEY
+
+export ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"
+export ANTHROPIC_AUTH_TOKEN="${TOKEN}"
+
+# Map Claude model aliases to GLM models. The [1m] suffix + AUTO_COMPACT_WINDOW
+# are what actually unlock GLM 5.2's 1M-token context window.
+export ANTHROPIC_DEFAULT_OPUS_MODEL="${GLM_OPUS_MODEL:-glm-5.2[1m]}"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="${GLM_SONNET_MODEL:-glm-5.2[1m]}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${GLM_HAIKU_MODEL:-glm-4.7}"
+
+# 1M context window + generous timeout for large contexts.
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-1000000}"
+export API_TIMEOUT_MS="${API_TIMEOUT_MS:-3000000}"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-1}"
+
+exec claude "$@"

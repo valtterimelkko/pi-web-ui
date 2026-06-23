@@ -162,4 +162,43 @@ describe('ClaudeProcessPool profile-aware spawning', () => {
     const modelIdx = args.indexOf('--model');
     expect(args[modelIdx + 1]).toBe('opus'); // from resolvedLaunch, not options.model
   });
+
+  it('forwards --effort when an effort level is provided', async () => {
+    await pool.spawn(
+      {
+        sessionId: 'test-sess-effort',
+        claudeSessionId: '00000000-0000-0000-0000-000000000004',
+        cwd: '/tmp/test-effort-spawn',
+        model: 'sonnet',
+        prompt: 'hello',
+        effort: 'xhigh',
+      },
+      () => {},
+      () => {},
+    );
+
+    const call = vi.mocked(spawn).mock.calls[0];
+    const args = call[1] as string[];
+    const effortIdx = args.indexOf('--effort');
+    expect(effortIdx).toBeGreaterThan(-1);
+    expect(args[effortIdx + 1]).toBe('xhigh');
+  });
+
+  it('omits --effort when no effort level is provided', async () => {
+    await pool.spawn(
+      {
+        sessionId: 'test-sess-no-effort',
+        claudeSessionId: '00000000-0000-0000-0000-000000000005',
+        cwd: '/tmp/test-no-effort-spawn',
+        model: 'sonnet',
+        prompt: 'hello',
+      },
+      () => {},
+      () => {},
+    );
+
+    const call = vi.mocked(spawn).mock.calls[0];
+    const args = call[1] as string[];
+    expect(args.indexOf('--effort')).toBe(-1);
+  });
 });
