@@ -238,7 +238,7 @@ describe('ClaudeChannelProcessManager', () => {
     expect(state.startedAt).toBeGreaterThan(0);
   });
 
-  it('should timeout when WS port never becomes connectable', { timeout: 35_000 }, async () => {
+  it('should timeout when WS port never becomes connectable', async () => {
     mockWsHealthResult = false;
     spawnMock.mockImplementationOnce(() => makeDeferredPty());
 
@@ -246,190 +246,242 @@ describe('ClaudeChannelProcessManager', () => {
       ...makeDefaultConfig(),
     });
 
-    await expect(managerSlow.start()).rejects.toThrow(/did not become ready/);
+    // Fast-forward the 30s ready-timeout with fake timers instead of waiting it
+    // out for real. start()→waitForReady() polls on setTimeout(500) + a mock-WS
+    // healthCheck that resolves via setImmediate — both are driven by fake timers.
+    vi.useFakeTimers();
+    const startP = managerSlow.start();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await expect(startP).rejects.toThrow(/did not become ready/);
+    vi.useRealTimers();
     try { await managerSlow.stop(); } catch { /* ignore */ }
   });
 
   describe('busy-state tracking', () => {
     const FAST = { idleQuietMs: 150, idleCheckIntervalMs: 30, activityThrottleMs: 20 };
-    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
     function makeFastManager() {
       return new ClaudeChannelProcessManager({ ...makeDefaultConfig(), ...FAST });
     }
 
-    it('reports busy after a prompt is dispatched and emits idle once the PTY goes quiet', { timeout: 15_000 }, async () => {
+    // Start under fake timers so the idle-watch interval (created during start())
+    // is driven by vi.advanceTimersByTimeAsync. Resolves once the WS ready-check
+    // succeeds (the mock WS healthCheck resolves via faked setImmediate).
+    async function startFake(mgr: ClaudeChannelProcessManager) {
+      vi.useFakeTimers();
+      const p = mgr.start();
+      await vi.advanceTimersByTimeAsync(600);
+      await p;
+    }
+    const tick = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+
+    it('reports busy after a prompt is dispatched and emits idle once the PTY goes quiet', async () => {
       const ptyProc = makeDeferredPty();
       spawnMock.mockImplementationOnce(() => ptyProc);
       manager = makeFastManager();
-      await manager.start();
+      await startFake(manager);
+      try {
+        const idleSpy = vi.fn();
+        manager.on('idle', idleSpy);
 
-      const idleSpy = vi.fn();
-      manager.on('idle', idleSpy);
+        manager.markPromptSent();
+        expect(manager.isBusy()).toBe(true);
 
-      manager.markPromptSent();
-      expect(manager.isBusy()).toBe(true);
+        ptyProc._emitter.emit('data', '✻ Thinking… (2s · esc to interrupt)');
+        expect(manager.isBusy()).toBe(true);
+        expect(idleSpy).not.toHaveBeenCalled();
 
-      ptyProc._emitter.emit('data', '✻ Thinking… (2s · esc to interrupt)');
-      expect(manager.isBusy()).toBe(true);
-      expect(idleSpy).not.toHaveBeenCalled();
-
-      // No further PTY output - after the quiet window the turn is declared done.
-      await wait(300);
-      expect(idleSpy).toHaveBeenCalledTimes(1);
-      expect(manager.isBusy()).toBe(false);
-    });
-
-    it('does NOT emit idle while a busy indicator keeps arriving (regression: false turn-completion)', { timeout: 15_000 }, async () => {
-      const ptyProc = makeDeferredPty();
-      spawnMock.mockImplementationOnce(() => ptyProc);
-      manager = makeFastManager();
-      await manager.start();
-
-      const idleSpy = vi.fn();
-      manager.on('idle', idleSpy);
-      manager.markPromptSent();
-
-      // Simulate a long turn: spinner frames keep arriving past the quiet window.
-      for (let i = 0; i < 8; i++) {
-        ptyProc._emitter.emit('data', `✶ Nesting… (${i}s · esc to interrupt)`);
-        await wait(60);
+        // No further PTY output - after the quiet window the turn is declared done.
+        await tick(300);
+        expect(idleSpy).toHaveBeenCalledTimes(1);
+        expect(manager.isBusy()).toBe(false);
+      } finally {
+        vi.useRealTimers();
       }
-
-      expect(idleSpy).not.toHaveBeenCalled();
-      expect(manager.isBusy()).toBe(true);
     });
 
-    it('stays busy when the "esc to interrupt" footer is rendered ABOVE the prompt box', { timeout: 15_000 }, async () => {
+    it('does NOT emit idle while a busy indicator keeps arriving (regression: false turn-completion)', async () => {
       const ptyProc = makeDeferredPty();
       spawnMock.mockImplementationOnce(() => ptyProc);
       manager = makeFastManager();
-      await manager.start();
+      await startFake(manager);
+      try {
+        const idleSpy = vi.fn();
+        manager.on('idle', idleSpy);
+        manager.markPromptSent();
 
-      const idleSpy = vi.fn();
-      manager.on('idle', idleSpy);
-      manager.markPromptSent();
+        // Simulate a long turn: spinner frames keep arriving past the quiet window.
+        for (let i = 0; i < 8; i++) {
+          ptyProc._emitter.emit('data', `✶ Nesting… (${i}s · esc to interrupt)`);
+          await tick(60);
+        }
 
-      // The footer sits above the input box - the old detector only scanned
-      // text AFTER the prompt and so wrongly force-completed live turns.
-      for (let i = 0; i < 6; i++) {
-        ptyProc._emitter.emit('data', '✻ Working… (esc to interrupt)\n--------\n❯ \n--------');
-        await wait(60);
+        expect(idleSpy).not.toHaveBeenCalled();
+        expect(manager.isBusy()).toBe(true);
+      } finally {
+        vi.useRealTimers();
       }
-
-      expect(idleSpy).not.toHaveBeenCalled();
-      expect(manager.isBusy()).toBe(true);
     });
 
-    it('emits idle when Claude returns to a bare prompt after the turn ends', { timeout: 15_000 }, async () => {
+    it('stays busy when the "esc to interrupt" footer is rendered ABOVE the prompt box', async () => {
       const ptyProc = makeDeferredPty();
       spawnMock.mockImplementationOnce(() => ptyProc);
       manager = makeFastManager();
-      await manager.start();
+      await startFake(manager);
+      try {
+        const idleSpy = vi.fn();
+        manager.on('idle', idleSpy);
+        manager.markPromptSent();
 
-      const idleSpy = vi.fn();
-      manager.on('idle', idleSpy);
-      manager.markPromptSent();
+        // The footer sits above the input box - the old detector only scanned
+        // text AFTER the prompt and so wrongly force-completed live turns.
+        for (let i = 0; i < 6; i++) {
+          ptyProc._emitter.emit('data', '✻ Working… (esc to interrupt)\n--------\n❯ \n--------');
+          await tick(60);
+        }
 
-      ptyProc._emitter.emit('data', '✻ Working… (esc to interrupt)');
-      await wait(40);
-      // Turn ends: a clean prompt frame with no busy indicator, then silence.
-      ptyProc._emitter.emit('data', '\rBoth channel messages handled\r❯');
-      await wait(300);
-
-      expect(idleSpy).toHaveBeenCalledTimes(1);
-    });
-
-    it('does not emit idle when no prompt was ever dispatched', { timeout: 15_000 }, async () => {
-      const ptyProc = makeDeferredPty();
-      spawnMock.mockImplementationOnce(() => ptyProc);
-      manager = makeFastManager();
-      await manager.start();
-
-      const idleSpy = vi.fn();
-      manager.on('idle', idleSpy);
-
-      ptyProc._emitter.emit('data', 'Some output\n❯ ');
-      await wait(300);
-
-      expect(idleSpy).not.toHaveBeenCalled();
-      expect(manager.isBusy()).toBe(false);
-    });
-
-    it('markPromptComplete clears the busy state immediately', { timeout: 15_000 }, async () => {
-      const ptyProc = makeDeferredPty();
-      spawnMock.mockImplementationOnce(() => ptyProc);
-      manager = makeFastManager();
-      await manager.start();
-
-      manager.markPromptSent();
-      expect(manager.isBusy()).toBe(true);
-
-      manager.markPromptComplete();
-      expect(manager.isBusy()).toBe(false);
-    });
-
-    it('waitForIdle resolves immediately when not busy', { timeout: 15_000 }, async () => {
-      const ptyProc = makeDeferredPty();
-      spawnMock.mockImplementationOnce(() => ptyProc);
-      manager = makeFastManager();
-      await manager.start();
-
-      expect(manager.isBusy()).toBe(false);
-      const result = await manager.waitForIdle(1000);
-      expect(result).toBe(true);
-    });
-
-    it('waitForIdle resolves when busy state clears', { timeout: 15_000 }, async () => {
-      const ptyProc = makeDeferredPty();
-      spawnMock.mockImplementationOnce(() => ptyProc);
-      manager = makeFastManager();
-      await manager.start();
-
-      manager.markPromptSent();
-      expect(manager.isBusy()).toBe(true);
-
-      // Clear busy after a short delay
-      setTimeout(() => manager.markPromptComplete(), 50);
-
-      const result = await manager.waitForIdle(5000);
-      expect(result).toBe(true);
-      expect(manager.isBusy()).toBe(false);
-    });
-
-    it('emits throttled activity pings while a turn is in progress', { timeout: 15_000 }, async () => {
-      const ptyProc = makeDeferredPty();
-      spawnMock.mockImplementationOnce(() => ptyProc);
-      manager = makeFastManager();
-      await manager.start();
-
-      const activitySpy = vi.fn();
-      manager.on('activity', activitySpy);
-      manager.markPromptSent();
-
-      for (let i = 0; i < 5; i++) {
-        ptyProc._emitter.emit('data', `✻ Working… (${i}s · esc to interrupt)`);
-        await wait(30);
+        expect(idleSpy).not.toHaveBeenCalled();
+        expect(manager.isBusy()).toBe(true);
+      } finally {
+        vi.useRealTimers();
       }
-
-      expect(activitySpy).toHaveBeenCalled();
     });
 
-    it('should emit auth_error when Claude reports expired credentials', { timeout: 15_000 }, async () => {
+    it('emits idle when Claude returns to a bare prompt after the turn ends', async () => {
       const ptyProc = makeDeferredPty();
       spawnMock.mockImplementationOnce(() => ptyProc);
-      await manager.start();
+      manager = makeFastManager();
+      await startFake(manager);
+      try {
+        const idleSpy = vi.fn();
+        manager.on('idle', idleSpy);
+        manager.markPromptSent();
 
-      const authErrorSpy = vi.fn();
-      manager.on('auth_error', authErrorSpy);
+        ptyProc._emitter.emit('data', '✻ Working… (esc to interrupt)');
+        await tick(40);
+        // Turn ends: a clean prompt frame with no busy indicator, then silence.
+        ptyProc._emitter.emit('data', '\rBoth channel messages handled\r❯');
+        await tick(300);
 
-      ptyProc._emitter.emit('data', 'Please run /login · API Error: 401 Invalid authentication credentials\r❯');
+        expect(idleSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
 
-      await new Promise((r) => setTimeout(r, 50));
+    it('does not emit idle when no prompt was ever dispatched', async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await startFake(manager);
+      try {
+        const idleSpy = vi.fn();
+        manager.on('idle', idleSpy);
 
-      expect(authErrorSpy).toHaveBeenCalledWith(expect.objectContaining({
-        message: expect.stringContaining('Claude Code authentication expired'),
-      }));
+        ptyProc._emitter.emit('data', 'Some output\n❯ ');
+        await tick(300);
+
+        expect(idleSpy).not.toHaveBeenCalled();
+        expect(manager.isBusy()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('markPromptComplete clears the busy state immediately', async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await startFake(manager);
+      try {
+        manager.markPromptSent();
+        expect(manager.isBusy()).toBe(true);
+
+        manager.markPromptComplete();
+        expect(manager.isBusy()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('waitForIdle resolves immediately when not busy', async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await startFake(manager);
+      try {
+        expect(manager.isBusy()).toBe(false);
+        const idleP = manager.waitForIdle(1000);
+        await tick(20);
+        const result = await idleP;
+        expect(result).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('waitForIdle resolves when busy state clears', async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await startFake(manager);
+      try {
+        manager.markPromptSent();
+        expect(manager.isBusy()).toBe(true);
+
+        // Clear busy after a short delay
+        setTimeout(() => manager.markPromptComplete(), 50);
+
+        const idleP = manager.waitForIdle(5000);
+        await tick(200); // past the 50ms clear + a poll iteration
+        const result = await idleP;
+        expect(result).toBe(true);
+        expect(manager.isBusy()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('emits throttled activity pings while a turn is in progress', async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await startFake(manager);
+      try {
+        const activitySpy = vi.fn();
+        manager.on('activity', activitySpy);
+        manager.markPromptSent();
+
+        for (let i = 0; i < 5; i++) {
+          ptyProc._emitter.emit('data', `✻ Working… (${i}s · esc to interrupt)`);
+          await tick(30);
+        }
+
+        expect(activitySpy).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should emit auth_error when Claude reports expired credentials', async () => {
+      const ptyProc = makeDeferredPty();
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      manager = makeFastManager();
+      await startFake(manager);
+      try {
+        const authErrorSpy = vi.fn();
+        manager.on('auth_error', authErrorSpy);
+
+        ptyProc._emitter.emit('data', 'Please run /login · API Error: 401 Invalid authentication credentials\r❯');
+
+        await tick(50);
+
+        expect(authErrorSpy).toHaveBeenCalledWith(expect.objectContaining({
+          message: expect.stringContaining('Claude Code authentication expired'),
+        }));
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -581,7 +633,12 @@ describe('ClaudeChannelProcessManager', () => {
       spawnMock.mockImplementationOnce(() => ptyProc);
       await manager.start();
 
-      await manager.clearContext();
+      // clearContext awaits a 1500ms processing delay — fast-forward it.
+      vi.useFakeTimers();
+      const ccP = manager.clearContext();
+      await vi.advanceTimersByTimeAsync(1500);
+      await ccP;
+      vi.useRealTimers();
 
       expect(writeSpy).toHaveBeenCalledWith('/clear\r');
     });
