@@ -35,8 +35,17 @@ The Pi Coding Agent path remained the most native and extensible route. It is th
 ### Claude Code
 Claude was added because it remained valuable for harder, more complex coding work, but direct usage patterns and policy constraints around subscription-backed harness integration changed over time. That forced the project to evolve a more wrapper-oriented Claude path rather than treating Claude as a normal external API-backed coding surface.
 
+A later twist was that Anthropic publicly signalled possible changes to how headless / SDK-style Claude Code usage might count against subscription access, then later backed away while reconsidering policy. That kind of uncertainty made it important not to build around only one Claude integration shape. Pi Web UI therefore evolved toward **three Claude backend paths** kept deliberately available:
+- **SDK backend** — preferred when possible
+- **direct CLI backend** — a practical fallback
+- **channel-backed backend** — an escape hatch when the richer Claude Code path is still worth it
+
+That flexibility is not just defensive. In practice, GLM 5.2 has also proved more effective inside the Claude Code harness than in some other harnesses, which is why provider profiles and GLM-through-Claude support became strategically important.
+
 ### OpenCode runtime
 OpenCode was added because some providers and plans were friendlier to it than to Pi Coding Agent, especially in the Z.AI / GLM context. Even when Pi Coding Agent was preferred as a harness, OpenCode became strategically useful because it unlocked access that was not always available through Pi Coding Agent.
+
+That remains true, but the story later became more nuanced: GLM access did not need to stay tied to only one harness. Once Pi Web UI gained Claude provider profiles, GLM could also be used through the Claude Code harness — which, for some coding tasks, turned out to be a better fit than default OpenCode behaviour.
 
 ### Antigravity runtime
 Antigravity was added as another way to bring subscription-backed Gemini-style agent use into the same browser surface. Like Claude, it is not the same kind of first-class extension ecosystem as Pi Coding Agent. The integration is therefore more wrapper-like and operationally sensitive.

@@ -11,7 +11,7 @@ It is built for people who want more than one vendor-owned coding surface: diffe
 Currently supported runtime paths:
 
 - **Pi Coding Agent**
-- **Claude Code** (legacy direct `claude -p` or channel-backed Claude Code)
+- **Claude Code** (SDK/profile-backed, direct `claude -p`, or channel-backed Claude Code)
 - **OpenCode**
 - **Antigravity** (`agy -p` / Gemini)
 
@@ -50,7 +50,12 @@ The important truth is that these paths are **not equally official in the eyes o
 - **Pi Coding Agent** and **OpenCode** use supported integration surfaces.
 - **Claude** and **Antigravity** are more wrapper-oriented and may need maintenance when upstream CLI behaviour, auth, or policy changes.
 
-That honesty is part of the project, not an embarrassment to hide.
+For Claude specifically, Pi Web UI now keeps **three usable backend paths** available on purpose:
+- **SDK backend** — preferred, especially for explicit provider profiles
+- **direct CLI backend** — a practical fallback when SDK behaviour regresses
+- **channel-backed backend** — an escape hatch for richer Claude Code semantics when you accept the extra moving parts
+
+That is not accidental complexity. It is deliberate flexibility in response to changing upstream policy/economic constraints and real-world runtime behaviour — including the fact that GLM 5.2 has proven more effective inside the Claude Code harness than in some other harnesses.
 
 For a fuller chooser, read [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md).
 
@@ -160,6 +165,8 @@ Canonical architecture doc:
 - **Platform support:** [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md)
 - **Project story:** [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY.md)
 - **Vision / direction of travel:** [`docs/VISION.md`](./docs/VISION.md)
+- **Claude backend modes:** [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md)
+- **Claude provider profiles / GLM routing:** [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md)
 - **Companion repos:** [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md)
 - **Automation API:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
 - **Automation API contract:** [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)

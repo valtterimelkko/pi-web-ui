@@ -7,7 +7,7 @@
 Pi Web UI is a single web application that fronts four runtime paths:
 
 - **Pi Coding Agent** — worker-managed Pi sessions
-- **Claude Code** — legacy `claude -p` subprocesses or the channel-backed Claude Code path
+- **Claude Code** — profile-driven SDK backend, direct `claude -p` fallback, or the channel-backed Claude Code path
 - **OpenCode** — `opencode serve`-backed sessions
 - **Antigravity** — `agy -p` Gemini sessions with Pi-owned turn logs plus agy-owned conversation DBs
 
@@ -15,6 +15,7 @@ Operationally, this means deployment must consider:
 - the Node/Express server itself
 - Pi worker capacity and memory
 - availability of `claude` if the Claude Code path is needed
+- profile config and token env vars if you want provider-routed Claude sessions (e.g. GLM 5.2 / Z.ai)
 - availability of Bun if the channel-backed Claude path is enabled
 - availability of `opencode` if OpenCode is needed
 - availability of `agy` if Antigravity is needed
@@ -91,6 +92,12 @@ Nginx is also perfectly viable, and an example is included below.
 
 ### Claude provider profiles / SDK backend
 
+This is the recommended current Claude deployment path. Use explicit profiles for:
+- native Claude subscription sessions through the SDK backend
+- GLM/Z.ai routing through the Claude Code harness
+- keeping direct CLI and channel-backed fallbacks available without changing the browser UX
+
+
 | Variable | Default | Purpose |
 |---|---:|---|
 | `CLAUDE_PROFILES_ENABLED` | `false` | enable the provider profile system |
@@ -105,6 +112,9 @@ To roll back to legacy direct mode: set `CLAUDE_PROFILES_ENABLED=false`, `CLAUDE
 See [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md) for the full profile field reference, examples, and validation instructions.
 
 ### Claude channel-backed path
+
+Treat this as an explicit opt-in backend, not the default starting point. It remains valuable as a richer PTY/plugin path and as an escape hatch if upstream Claude behaviour changes again.
+
 
 | Variable | Default | Purpose |
 |---|---:|---|

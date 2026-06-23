@@ -16,7 +16,7 @@ If you are still deciding whether to adopt the project, read these first:
 Pi Web UI is a single browser application that presents a unified chat/session UI over **four runtime paths**:
 
 1. **Pi Coding Agent** (via the SDK path)
-2. **Claude Code** (legacy direct or channel-backed backend)
+2. **Claude Code** (profile-driven SDK backend, direct CLI fallback, or channel-backed backend)
 3. **OpenCode**
 4. **Antigravity** (`agy` / Google Gemini)
 
@@ -41,7 +41,7 @@ Express server
   ├─ WebSocket connection router
   ├─ session registry
   ├─ Pi Coding Agent service + worker/session lifecycle
-  ├─ Claude service + (legacy subprocess or channel-backed PTY/plugin backend)
+  ├─ Claude service + (SDK/profile backend, direct CLI backend, or channel-backed PTY/plugin backend)
   ├─ OpenCode service + process manager/client/SSE adapter
   └─ Antigravity service + subprocess-per-turn `agy` adapter
 ```
@@ -55,6 +55,7 @@ Key frontend responsibilities:
 - create sessions for the selected runtime
 - display message/tool history and streaming updates
 - surface runtime availability (`claude_available`, `opencode_available`, `antigravity_available`)
+- expose structured runtime selectors where needed, such as the Claude provider → backend → model selector when profiles are enabled
 - handle extension/approval UI requests
 
 Important files:
@@ -208,10 +209,11 @@ Registry entries let the UI treat sessions consistently while preserving runtime
 - model hints
 - created / last activity
 - Claude session IDs
+- Claude profile IDs / Claude backend mode when applicable
 - OpenCode session IDs
 - Antigravity conversation IDs
 
-For Claude specifically, the registry still uses `sdkType: 'claude'` even though the backend may be legacy direct or channel-backed. That distinction is operational, not a separate frontend runtime family.
+For Claude specifically, the registry still uses `sdkType: 'claude'` even though the backend may be SDK, direct CLI, or channel-backed. That distinction is operational, not a separate frontend runtime family.
 
 ## WebSocket Routing Model
 
@@ -264,7 +266,8 @@ an Internal API over a Unix domain socket for local automation. That API:
 
 - reuses the same runtime services as the browser app
 - is authenticated with a bearer token stored on disk
-- powers browserless live validation via `scripts/live-validate.ts`
+- can select Claude provider profiles through `profile:<id>` model entries or explicit `profileId`
+- powers browserless live validation via `scripts/live-validate.ts`, profile validation via `scripts/validate-claude-profiles.ts`, and wire-level validation via `scripts/validation-logging-proxy.ts`
 
 Canonical docs:
 - [`./INTERNAL-API.md`](./INTERNAL-API.md)

@@ -168,6 +168,34 @@ npx tsx scripts/concurrency-test.ts \
 
 See [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md) for profile setup and the full field reference.
 
+## Wire-level validation with the logging proxy
+
+When you need proof of what a runtime actually sent to the upstream provider — the routed endpoint, concrete model id, reasoning-effort field, or 1M-context beta/header behaviour — do not rely only on the transcript. Use the logging proxy:
+
+```bash
+npm run validate:proxy -- \
+  --upstream https://api.z.ai/api/anthropic \
+  --port 8799 \
+  --log /tmp/validation-requests.jsonl \
+  --extract model,output_config.effort,thinking.type \
+  --header-allowlist anthropic-beta
+```
+
+Then point the disposable validation server's runtime configuration at that proxy:
+- **Claude** — set the chosen profile's `baseUrl` to `http://127.0.0.1:8799`
+- **OpenCode** — point the provider `baseURL` at the proxy before booting the validation server
+- **Pi SDK** — point the provider `baseUrl` at the proxy before booting the validation server
+
+What this is for:
+- proving GLM vs native Claude routing
+- proving the actual model id used on the wire
+- proving reasoning effort changed when you changed Thinking Level
+- proving 1M-context beta/header behaviour for provider-backed Claude profiles
+
+Two practical cautions:
+- use the proxy for **wire inspection**, not for throughput/latency measurement
+- for native Claude subscription sessions, prefer proving model identity from the runtime transcript plus the absence of `ANTHROPIC_API_KEY` in the validation-server environment rather than MITM-ing subscription auth traffic
+
 ## Capability-driven behaviour
 
 The runner reads `GET /api/v1/capabilities` first.

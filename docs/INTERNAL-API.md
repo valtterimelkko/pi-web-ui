@@ -53,7 +53,7 @@ Under the hood, each runtime slot exists for a different reason:
 | Runtime family | What it uses | Why it exists |
 |---|---|---|
 | **Pi Coding Agent** | [Pi Coding Agent](https://shittycodingagent.ai/) via its SDK path | The native path. When models are available through the Pi model registry and you want extensions, custom tools, and the full Pi experience. |
-| **Claude Code** | legacy `claude -p` subprocesses **or** the channel-backed Claude Code path | Claude's monthly subscription does not allow external coding-agent harnesses to use Claude via the Anthropic API — Claude Code must be the agent environment. Pi Web UI therefore runs Claude Code directly, normalizes either its legacy NDJSON output or channel/plugin events into the common event model, and owns the replay/persistence layer so sessions survive restarts. |
+| **Claude Code** | profile-driven SDK backend, legacy `claude -p`, **or** the channel-backed Claude Code path | Claude's monthly subscription does not allow external coding-agent harnesses to use Claude via the Anthropic API — Claude Code must be the agent environment. Pi Web UI therefore runs Claude Code directly, normalizes SDK messages, legacy NDJSON, or channel/plugin events into the common event model, and owns the replay/persistence layer so sessions survive restarts. Explicit provider profiles also let the same browser UI route Claude sessions through native Claude subscription or Anthropic-compatible providers such as GLM/Z.ai. |
 | **OpenCode** | `opencode serve` HTTP/SSE backend | Z.AI's GLM models (via the coding-plan provider) currently recognise OpenCode as a valid coding-agent harness but not Pi. Rather than bypass this, Pi Web UI integrates with the OpenCode server backend, adapting OpenCode SSE events into the same common event model. The OpenCode backend owns transcript storage; Pi Web UI stores registry metadata and replay transforms. |
 | **Antigravity** | `agy -p` subprocess-per-turn backend | Google Gemini via Antigravity CLI. Pi Web UI runs `agy` directly, stores Pi-owned turn logs for replay, and correlates them with agy-owned conversation SQLite DBs for follow-up continuity. |
 
@@ -342,7 +342,14 @@ Models are always queried live — new models appear immediately.
     "claude": [
       { "id": "sonnet", "displayName": "Sonnet", "provider": "anthropic" },
       { "id": "opus", "displayName": "Opus", "provider": "anthropic" },
-      { "id": "haiku", "displayName": "Haiku", "provider": "anthropic" }
+      { "id": "haiku", "displayName": "Haiku", "provider": "anthropic" },
+      {
+        "id": "profile:glm52-claude-sdk",
+        "displayName": "GLM 5.2 — Claude SDK",
+        "provider": "zai",
+        "backend": "sdk-subscription",
+        "claudeModel": "sonnet"
+      }
     ],
     "opencode": [
       { "id": "glm-4-plus", "displayName": "GLM-4 Plus", "provider": "zai", "contextWindow": 128000 }
@@ -353,6 +360,12 @@ Models are always queried live — new models appear immediately.
   }
 }
 ```
+
+For Claude, automation clients can either:
+- select a base alias such as `sonnet`, or
+- select a specific provider profile via `model: "profile:<id>"`
+
+Profile-backed Claude entries may include `backend` and `claudeModel` metadata so callers can deliberately choose SDK vs direct vs channel-backed sessions.
 
 For OpenCode, which providers appear is governed by the `OPENCODE_MODEL_PROVIDERS`
 allowlist (default `zai-coding-plan,kilo,opencode`; set `all` for every
@@ -418,7 +431,7 @@ POST /api/v1/sessions
 {
   "runtime": "claude",
   "cwd": "/home/user/myproject",
-  "model": "sonnet",
+  "model": "profile:glm52-claude-sdk",
   "pin": true,
   "pinTtlSeconds": 7200
 }
@@ -428,9 +441,10 @@ POST /api/v1/sessions
 |---|---|---|---|---|
 | `runtime` | string | **Yes** | — | `pi`, `claude`, `opencode`, or `antigravity` |
 | `cwd` | string | No | `process.cwd()` | Working directory |
-| `model` | string | No | runtime default | Model ID (from `/models`) |
+| `model` | string | No | runtime default | Model ID (from `/models`). For Claude, may be a base alias such as `sonnet` or a specific profile entry such as `profile:glm52-claude-sdk`. |
 | `pin` | boolean | No | `false` | Pin the session at creation so it survives idle/timeout cleanup. Time-bounded — see [Session Pinning](#session-pinning-persistent-time-bounded). |
 | `pinTtlSeconds` | number | No | `86400` (24h) | Pin lifetime in seconds when `pin:true`. Clamped to a hard max of 7 days. |
+| `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. |
 
 **Response (201):**
 ```json
@@ -438,7 +452,7 @@ POST /api/v1/sessions
   "sessionId": "a1b2c3d4-...",
   "sessionPath": "a1b2c3d4-...",
   "runtime": "claude",
-  "model": "sonnet",
+  "model": "profile:glm52-claude-sdk",
   "cwd": "/home/user/myproject",
   "createdAt": "2026-04-28T12:00:00.000Z",
   "pinned": true,
@@ -500,11 +514,14 @@ Both endpoints now return enriched runtime metadata where available.
   "sessionId": "a1b2c3d4-...",
   "sessionPath": "a1b2c3d4-...",
   "runtime": "claude",
-  "backendMode": "channel",
+  "backendMode": "sdk",
   "nativeSessionId": "claude-native-id",
   "sessionFile": "/root/.pi-web-ui/claude-sessions/a1b2c3d4-....jsonl",
   "cwd": "/home/user/myproject",
-  "model": "sonnet",
+  "model": "profile:glm52-claude-sdk",
+  "claudeProfileId": "glm52-claude-sdk",
+  "claudeProfileBackend": "sdk-subscription",
+  "claudeProviderId": "zai",
   "status": "idle",
   "messageCount": 14,
   "firstMessage": "Write a function...",
@@ -701,6 +718,7 @@ GET /api/v1/capabilities
 
 Use this first if you are building tools or running live validation.
 It reports runtime availability, Claude backend mode, and feature flags.
+For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/profile metadata from `/models` or session info when you need the exact selected provider profile.
 
 **Response (200):**
 ```json

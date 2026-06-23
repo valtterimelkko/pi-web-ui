@@ -139,6 +139,7 @@ Subject / behaviour:
 |---|---|---|
 | `--subject <runtime>` | `pi` | create a fresh subject of this runtime |
 | `--session <id>` | — | attach to an existing subject instead |
+| `--model <id>` | runtime default | model to use when creating a fresh subject. For Claude this may be a base alias such as `sonnet` or a profile-backed entry such as `profile:glm52-claude-sdk`. |
 | `--seed "<prompt>"` | — | initial prompt to drive the subject (dispatched without blocking) |
 | `--stop all\|any` | `all` | succeed when all (or any) target condition fires |
 | `--interval <seconds>` | `30` | poll cadence |
@@ -147,6 +148,7 @@ Subject / behaviour:
 | `--mode daemon\|start\|once` | `daemon` | see below |
 | `--state <path>` | auto | run-state file (required for `--mode once`) |
 | `--keep` | off | keep a runner-created subject after finishing |
+| `--keep-watch` | off | keep the server-side watch ledger after success/failure so evidence remains queryable via `GET /watch` |
 | `--socket` / `--token-path` | required unless `--allow-production` | point at the disposable validation server |
 | `--allow-production` | off | explicitly permit targeting the running production Web UI Internal API |
 | `--json` | off | emit final run-state JSON on stdout |
@@ -173,6 +175,19 @@ npm run validate:long-horizon -- \
   --watch-tool Bash \
   --watch-text PASS \
   --interval 5 --max-wait 120
+```
+
+```bash
+# Drive a Claude subject through an explicit provider profile.
+npm run validate:long-horizon -- \
+  --socket ~/.pi-web-ui/validation/example/internal-api.sock \
+  --token-path ~/.pi-web-ui/validation/example/internal-api-token \
+  --subject claude \
+  --model profile:glm52-claude-sdk \
+  --seed "Work until you can truthfully say LONG_HORIZON_OK." \
+  --watch-text LONG_HORIZON_OK \
+  --keep-watch \
+  --interval 10 --max-wait 900
 ```
 
 ## Validating without disturbing the running server
@@ -212,7 +227,7 @@ Then kill the validation-server process and remove the validation directory when
 The watch engine is runtime-agnostic, but the *conditions you can usefully write* depend on what a runtime emits:
 
 - **Pi** — best subject for event-rich conditions; emits clean `session_compaction`, tool, and message events.
-- **Claude / OpenCode** — full event streams; good subjects. (Claude channel `/events` reliability caveats for *parallel* fan-out still apply, but a long-horizon watch is a single standing server-side subscriber, not a held client stream, so it is not affected the same way.)
+- **Claude / OpenCode** — full event streams; good subjects. For Claude, you can target either a base alias model or a specific provider/backend route with `--model profile:<id>`. (Claude channel `/events` reliability caveats for *parallel* fan-out still apply, but a long-horizon watch is a single standing server-side subscriber, not a held client stream, so it is not affected the same way.)
 - **Antigravity** — works as a subject for coarse conditions (`agent_end`, text); subprocess-per-turn means fewer fine-grained events.
 
 The **validator** (the runner) is plain headless code — it is not tied to any runtime or harness. Use whichever runtime fits the *subject* you want to test.

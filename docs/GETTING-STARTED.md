@@ -115,13 +115,28 @@ If you are only enabling some runtimes, leave the others disabled or simply do n
 Usually just the base config is enough if your Pi Coding Agent environment is already available to the same OS user.
 
 ### Claude Code-focused first run
-Check these as well:
+For the current best Claude experience, start with the **profile-enabled SDK path** even if you only want native Claude at first. That gives you the same browser surface for:
+- native Claude subscription sessions
+- GLM 5.2 / Z.ai provider profiles
+- direct CLI fallback and channel fallback later if you need them
+
+Minimal Claude-first setup:
 
 ```bash
+CLAUDE_PROFILES_ENABLED=true
+CLAUDE_SDK_ENABLED=true
+CLAUDE_PROFILES_PATH=~/.pi-web-ui/claude-profiles.json
 CLAUDE_CHANNEL_ENABLED=false
 ```
 
-If you intentionally want the richer channel-backed path:
+Then create `claude-profiles.json` and read [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md) for the full field reference and examples.
+
+When profiles are enabled, the New Session modal exposes a **structured Claude selector**:
+- **Provider** → Claude or GLM
+- **Backend** → SDK, direct CLI, or channel (where available)
+- **Model** → Sonnet / Opus / Haiku for Claude, or the GLM profile route you configured
+
+If you intentionally want the richer channel-backed path later:
 
 ```bash
 CLAUDE_CHANNEL_ENABLED=true
@@ -129,16 +144,6 @@ CLAUDE_CHANNEL_PLUGIN_DIR=./pi-claude-channel
 CLAUDE_CHANNEL_WS_PORT=3100
 CLAUDE_CHANNEL_HOOK_PORT=3101
 ```
-
-If you want to use the SDK backend or route through a provider profile (e.g. GLM 5.2 via Z.ai Coding Plan):
-
-```bash
-CLAUDE_PROFILES_ENABLED=true
-CLAUDE_SDK_ENABLED=true
-CLAUDE_PROFILES_PATH=~/.pi-web-ui/claude-profiles.json
-```
-
-Then create `claude-profiles.json` and read [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md) for the full field reference and examples.
 
 ### OpenCode-focused first run
 Check:

@@ -231,7 +231,13 @@ A bare model alias (`sonnet`/`opus`/`haiku`, with no `profile:` prefix) resolves
 
 ### Recommended profile matrix
 
-For the structured selector to expose the full grid, define one profile per combination:
+For the structured selector to expose the full grid, define one profile per combination.
+
+The IDs below are **illustrative examples**, not fixed built-ins. Your actual IDs can differ as long as you use them consistently in:
+- `claude-profiles.json`
+- validation commands
+- any automation client that selects `model: "profile:<id>"` or `profileId`
+
 
 | Provider | Backend | Models | Example ids |
 |---|---|---|---|

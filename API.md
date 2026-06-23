@@ -78,9 +78,10 @@ Use `ws://` locally and `wss://` in production.
 - Session files live under `~/.pi/agent/sessions/`
 
 #### Claude runtime
-- Uses either legacy `claude -p` or the channel-backed Claude Code path
+- Uses one Claude runtime family in the UI, but can run through three backend modes: SDK/provider-profile, direct `claude -p`, or the channel-backed Claude Code path
 - Pi Web UI owns Claude replay JSONL persistence under `~/.pi-web-ui/claude-sessions/`
 - Claude Code also keeps native session JSONL under `~/.claude/projects/`
+- Profile-backed model entries appear as `profile:<id>` when Claude profiles are enabled
 - Availability is announced with `claude_available`
 
 #### OpenCode
@@ -112,12 +113,13 @@ Reference docs:
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
 
-`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.0.0`) for local consumers such as Agent OS style tooling.
+`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.2.0`) for local consumers such as Agent OS style tooling.
 
 Important endpoints include:
 - `GET /api/v1/capabilities`
-- `POST /api/v1/sessions`
-- `POST /api/v1/sessions/:id/prompt`
+- `GET /api/v1/models`
+- `POST /api/v1/sessions` (supports Claude `profileId` or `model: "profile:<id>"`)
+- `POST /api/v1/sessions/:id/prompt` (`detach:true` supported)
 - `GET /api/v1/sessions/:id/info`
 - `GET /api/v1/sessions/:id/history`
 - `GET /api/v1/sessions/:id/events`
@@ -128,8 +130,9 @@ Important endpoints include:
 - `POST /api/v1/sessions/batch/prompt`
 - `POST /api/v1/sessions/usage`
 - `GET /api/v1/sessions/:id/approvals/pending`
-- `POST /api/v1/sessions/:id/control`
+- `POST /api/v1/sessions/:id/control` (including standalone pin/unpin)
 - `POST /api/v1/sessions/:id/approvals/:requestId/respond`
+- `POST/GET/DELETE /api/v1/sessions/:id/watch`
 
 Known caveat: for Claude channel-backed sessions, `GET /sessions/:id/events`
 can be less reliable for multi-child parallel monitoring than it is for the
@@ -183,6 +186,9 @@ Validate config and environment assumptions.
 
 #### `GET /api/models`
 Returns models for the default Pi Coding Agent path.
+
+#### `GET /api/models?sdkType=claude`
+Returns Claude base aliases plus any enabled profile-backed entries as `profile:<id>`. Those entries may also include `provider`, `backend`, and `claudeModel` metadata so the browser can build the structured Claude selector.
 
 #### `GET /api/models?sdkType=opencode`
 Returns models exposed through OpenCode.

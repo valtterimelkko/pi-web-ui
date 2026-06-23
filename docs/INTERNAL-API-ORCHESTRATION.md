@@ -78,6 +78,9 @@ This lets you decide:
 - which runtimes are installed and healthy
 - whether a runtime supports follow-up, replay, approvals, or thinking level
 - which models are currently available without restarting the server
+- for Claude specifically, whether you want a base alias (`sonnet`) or an explicit profile-backed model (`profile:<id>`) tied to a chosen backend/provider
+
+When `GET /api/v1/models` returns Claude entries such as `profile:glm52-claude-sdk`, treat those as the safest way to request an exact Claude provider/backend route. They may also include `backend` and `claudeModel` metadata so you can deliberately choose SDK vs direct vs channel-backed paths.
 
 ### 2. Create child sessions
 
@@ -90,6 +93,15 @@ For many children at once:
 Track the returned `sessionId`s in your own orchestrator state, because the
 API does not yet store parent-child relationships for you.
 
+If the child is a Claude session and you care about the exact backend/provider, choose it at creation time:
+- `model: "profile:<id>"` — easiest if you discovered the profile through `/models`
+- `profileId: "<id>"` — explicit alternative for automation clients
+
+That lets one orchestration run compare, for example:
+- native Claude via SDK profile
+- GLM 5.2 via Claude SDK profile
+- GLM 5.2 via Claude direct CLI fallback profile
+
 ### 3. Prepare child sessions if needed
 
 Use `POST /api/v1/sessions/:id/control` to do things like:
@@ -99,6 +111,8 @@ Use `POST /api/v1/sessions/:id/control` to do things like:
 
 Do this before dispatching long work if the runtime supports the setting you
 care about.
+
+For Claude, prefer selecting the backend/provider profile at **session creation time** rather than relying on later model switching. Model switching is great within a chosen Claude route, but backend/provider comparisons are usually clearer and safer as one session per profile.
 
 ### 4. Dispatch prompts
 
@@ -260,6 +274,8 @@ A practical orchestration pattern is:
   monitoring over `/events`
 - use Claude children when the model is useful, but collect them via
   `/wait` + `/transcript`
+- when comparing Claude routes, create separate children bound to explicit
+  profile-backed models so your report can say exactly which backend/provider won
 
 ## Example orchestration pattern
 

@@ -2,7 +2,7 @@
 
 > Canonical reference for the Claude runtime family in Pi Web UI.
 >
-> Important: the UI and registry treat Claude sessions as one runtime family (`sdkType: 'claude'`), but the server can drive Claude through two different backend implementations with different failure modes.
+> Important: the UI and registry treat Claude sessions as one runtime family (`sdkType: 'claude'`), but the server can drive Claude through three backend implementations with different failure modes.
 >
 > For first-stop debugging, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>`.
 
@@ -13,12 +13,12 @@ Read this doc if Claude Code is one of your reasons for adopting Pi Web UI.
 Recommended public framing:
 - **Who this path is for:** people who specifically want Claude Code inside the same browser shell as other runtimes
 - **Setup difficulty:** medium to high
-- **Recommended starting mode:** start simple, understand the legacy-vs-channel distinction, and only enable the channel-backed path when you want the richer behaviour and accept the extra moving parts
+- **Recommended starting mode:** start with the SDK/profile path, keep direct available as a fallback, and only enable the channel-backed path when you want the richer behaviour and accept the extra moving parts
 - **Main caveat:** this runtime family is more wrapper-oriented and operationally sensitive than the Pi Coding Agent and OpenCode paths
 
 ## Why This Doc Exists
 
-Recent work introduced a **channel-backed Claude Code path** alongside the older **`claude -p` subprocess path**. Agents were repeatedly losing time rediscovering:
+Recent work first introduced a **channel-backed Claude Code path** alongside the older **`claude -p` subprocess path**, and later added the **SDK/profile backend**. Agents were repeatedly losing time rediscovering:
 
 - where Claude session files live
 - which code path is active
@@ -71,7 +71,7 @@ This doc centralizes that.
 
 ### Pi-owned replay store
 
-Both Claude backend modes still use Pi Web UI's own replay file:
+All three Claude backend modes still use Pi Web UI's own replay file:
 
 ```text
 ~/.pi-web-ui/claude-sessions/<internal-session-id>.jsonl
