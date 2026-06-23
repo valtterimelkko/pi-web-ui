@@ -372,6 +372,16 @@ export class ClaudeService {
         // Mark session as having history so future turns use --resume
         if (!error) {
           this.sessionsWithHistory.add(sessionId);
+        } else {
+          // Leave a diagnostic trail in the session store for failed turns
+          // (parity with the SDK backend; see `claude-sdk-opus-silent-fail`).
+          try {
+            await this.sessionStore.appendEntry(sessionId, {
+              type: 'error', content: error.message, isError: true, timestamp: Date.now(),
+            });
+          } catch (persistErr) {
+            logger.warn('[ClaudeService] Failed to persist error entry:', persistErr);
+          }
         }
         try {
           await this.registry.updateStatus(sessionId, error ? 'error' : 'idle');

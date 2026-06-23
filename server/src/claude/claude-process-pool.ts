@@ -13,6 +13,11 @@ import { homedir } from 'node:os';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { ClaudeEventNormalizer } from './claude-event-normalizer.js';
 import type { ResolvedClaudeLaunch } from './claude-profiles.js';
+import {
+  isTransientClaudeError,
+  getTransientRetryConfig,
+  computeBackoffMs,
+} from './claude-transient-errors.js';
 import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('ClaudeProcessPool');
@@ -78,6 +83,7 @@ export class ClaudeProcessPool {
     onEvent: ClaudeEventHandler,
     onComplete: (error?: Error) => void,
     retryCount: number = 0,
+    transientRetryCount: number = 0,
   ): Promise<void> {
     // ── Wait for any previous process for this session to fully exit ────────
     // This is critical after an abort: the old process may still be dying and
@@ -183,6 +189,15 @@ export class ClaudeProcessPool {
     this.exitPromises.set(options.sessionId, exitP);
 
     // ── Stream stdout line by line ──────────────────────────────────────────
+    // Track whether the model produced any real output, and the final result
+    // outcome, so we can (a) surface a silent empty/error result as an error and
+    // (b) safely retry transient failures only while nothing has streamed.
+    let sawAssistantContent = false;
+    let resultSeen = false;
+    let resultIsError = false;
+    let resultHasTokens = false;
+    let lastResultText: string | undefined;
+
     const rl = createInterface({ input: proc.stdout!, crlfDelay: Infinity });
 
     rl.on('line', (line) => {
@@ -190,6 +205,18 @@ export class ClaudeProcessPool {
       try {
         const events = this.normalizer.normalize(line, options.sessionId);
         for (const ev of events) {
+          if (ev.type === 'message_update' || ev.type === 'tool_execution_start') {
+            sawAssistantContent = true;
+          }
+          if (ev.type === 'claude_result') {
+            resultSeen = true;
+            const d = ev.data as Record<string, unknown> | undefined;
+            resultIsError = d?.isError === true;
+            lastResultText = typeof d?.result === 'string' ? (d.result as string) : undefined;
+            const usage = d?.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+            resultHasTokens = !!usage && ((usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)) > 0;
+            if (lastResultText && lastResultText.trim()) sawAssistantContent = true;
+          }
           try {
             onEvent(ev);
           } catch (handlerErr) {
@@ -253,7 +280,7 @@ export class ClaudeProcessPool {
               logger.info(`[ClaudeProcessPool] Removed stale last-prompt lock for ${options.claudeSessionId}, retrying immediately`);
               // Retry quickly since we've fixed the root cause
               setTimeout(() => {
-                this.spawn(options, onEvent, onComplete, retryCount + 1).catch((retryErr) => {
+                this.spawn(options, onEvent, onComplete, retryCount + 1, transientRetryCount).catch((retryErr) => {
                   onComplete(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
                 });
               }, 500);
@@ -274,13 +301,15 @@ export class ClaudeProcessPool {
         return;
       }
 
-      if (code !== 0 && signal !== 'SIGTERM') {
-        onComplete(
-          new Error(
-            `Claude process exited with code=${code ?? 'null'}, signal=${signal ?? 'null'}`,
-          ),
-        );
-      } else {
+      // ── Classify the outcome ────────────────────────────────────────────
+      // A SIGTERM is a user abort and is treated as a clean stop. Otherwise we
+      // treat a non-zero exit, an error result, or a silent empty result (no
+      // output + 0 tokens — the "Opus never answered" symptom) as a failure.
+      const exitFailure = code !== 0 && signal !== 'SIGTERM';
+      const emptyResult = signal !== 'SIGTERM' && !sawAssistantContent && resultSeen && !resultHasTokens && !resultIsError;
+      const failed = exitFailure || resultIsError || emptyResult;
+
+      if (!failed) {
         try {
           onEvent({
             type: 'agent_end',
@@ -292,7 +321,38 @@ export class ClaudeProcessPool {
           // non-fatal
         }
         onComplete();
+        return;
       }
+
+      const stderrTail = stderrOutput.trim().slice(0, 500);
+      const failMessage = resultIsError
+        ? (lastResultText && lastResultText.trim() ? lastResultText : 'Claude returned an error result.')
+        : emptyResult
+          ? 'Claude returned an empty response (no output, 0 tokens) — the model may be temporarily unavailable or overloaded.'
+          : `Claude process exited with code=${code ?? 'null'}, signal=${signal ?? 'null'}${stderrTail ? `: ${stderrTail}` : ''}`;
+
+      // ── Transient-failure retry (overload / temporarily unavailable / 5xx /
+      // socket errors). Bounded, exponential backoff, and only while nothing has
+      // streamed so a successful turn is never duplicated. An empty zero-token
+      // result is treated as transient (it is the capacity-failure fingerprint).
+      const transientCfg = getTransientRetryConfig();
+      const transient = !sawAssistantContent
+        && (emptyResult || isTransientClaudeError(`${stderrOutput} ${lastResultText ?? ''}`));
+      if (transient && transientRetryCount < transientCfg.maxRetries) {
+        const delay = computeBackoffMs(transientRetryCount + 1, transientCfg.baseDelayMs, transientCfg.maxDelayMs);
+        logger.warn(
+          `[ClaudeProcessPool] Transient failure for ${options.sessionId} ` +
+          `(retry ${transientRetryCount + 1}/${transientCfg.maxRetries}): ${failMessage} — retrying in ${delay}ms`,
+        );
+        setTimeout(() => {
+          this.spawn(options, onEvent, onComplete, retryCount, transientRetryCount + 1).catch((retryErr) => {
+            onComplete(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
+          });
+        }, delay);
+        return;
+      }
+
+      onComplete(new Error(failMessage));
     });
   }
 

@@ -30,6 +30,11 @@ import {
   type ResolvedClaudeLaunch,
 } from './claude-profiles.js';
 import { resolveClaudeSessionPath } from './claude-process-pool.js';
+import {
+  isTransientClaudeError,
+  getTransientRetryConfig,
+  computeBackoffMs,
+} from './claude-transient-errors.js';
 import { getSessionRegistry, type SessionRegistryManager } from '../session-registry.js';
 import { createLogger } from '../logging/logger.js';
 
@@ -211,95 +216,147 @@ export class ClaudeSdkService {
     };
     try { onEvent(agentStart); } catch { /* non-fatal */ }
 
-    // Build SDK options from the resolved profile
-    const abortController = new AbortController();
-    if (state) {
-      state.isRunning = true;
-      state.abortController = abortController;
-    }
-
-    const sdkOptions = this.buildSdkOptions({
-      resolved,
-      cwd,
-      model,
-      thinkingLevel,
-      claudeSessionId,
-      isFollowUp,
-      abortController,
-    });
+    // ── Execute with bounded transient-failure retries ──────────────────────
+    // Anthropic/z.ai occasionally return transient capacity failures (model
+    // "temporarily unavailable", overload, gateway/socket errors) or a silent
+    // empty result (a result message with no content and zero tokens). We retry
+    // those a bounded number of times with exponential backoff, but ONLY while
+    // nothing has streamed yet, so a successful turn is never duplicated.
+    // Permanent errors (auth, invalid model, prompt rejection) and user aborts
+    // are surfaced immediately. See `claude-transient-errors.ts`.
+    const retryCfg = getTransientRetryConfig();
+    let attempt = 0;
 
     try {
-      // Run the SDK query
-      const q = query({
-        prompt,
-        options: sdkOptions,
-      });
-
-      // Iterate the async generator, adapting each SDK message
-      let capturedClaudeSessionId: string | undefined;
-      for await (const sdkMessage of q) {
-        const events = this.adapter.adapt(sdkMessage as never, sessionId);
-
-        // Capture the confirmed session ID from init
-        if (!capturedClaudeSessionId) {
-          const initData = (sdkMessage as { type: string; session_id?: string }).session_id;
-          if (initData && initData !== claudeSessionId) {
-            capturedClaudeSessionId = initData;
-          }
+      for (;;) {
+        const abortController = new AbortController();
+        if (state) {
+          state.isRunning = true;
+          state.abortController = abortController;
         }
 
-        for (const event of events) {
-          // Persist interesting events
+        const sdkOptions = this.buildSdkOptions({
+          resolved, cwd, model, thinkingLevel, claudeSessionId, isFollowUp, abortController,
+        });
+
+        let capturedClaudeSessionId: string | undefined;
+        let sawContent = false;
+        let resultSeen = false;
+        let resultIsError = false;
+        let resultText: string | undefined;
+        let resultHasTokens = false;
+        let attemptError: Error | undefined;
+
+        try {
+          const q = query({ prompt, options: sdkOptions });
+          for await (const sdkMessage of q) {
+            const events = this.adapter.adapt(sdkMessage as never, sessionId);
+
+            // Capture the confirmed session ID from any message that carries one
+            if (!capturedClaudeSessionId) {
+              const sid = (sdkMessage as { type: string; session_id?: string }).session_id;
+              if (sid && sid !== claudeSessionId) capturedClaudeSessionId = sid;
+            }
+
+            for (const event of events) {
+              if (event.type === 'message_update' || event.type === 'tool_execution_start') {
+                sawContent = true;
+              }
+              if (event.type === 'claude_result') {
+                resultSeen = true;
+                const d = event.data as Record<string, unknown> | undefined;
+                resultIsError = d?.isError === true;
+                resultText = typeof d?.result === 'string' ? (d.result as string) : undefined;
+                const usage = d?.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+                resultHasTokens = !!usage && ((usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)) > 0;
+                if (resultText && resultText.trim()) sawContent = true;
+              }
+              try {
+                await this.persistEvent(sessionId, event);
+              } catch (persistErr) {
+                logger.warn('[ClaudeSdkService] Failed to persist event:', persistErr);
+              }
+              try { onEvent(event); } catch { /* non-fatal */ }
+            }
+          }
+        } catch (err) {
+          attemptError = err instanceof Error ? err : new Error(String(err));
+        }
+
+        // Persist the confirmed claudeSessionId as soon as we have one.
+        if (capturedClaudeSessionId && capturedClaudeSessionId !== claudeSessionId) {
+          logger.info(`[ClaudeSdkService] Updating claudeSessionId: ${claudeSessionId} → ${capturedClaudeSessionId}`);
+          await this.registry.upsert({
+            id: sessionId, sdkType: 'claude', cwd, claudeSessionId: capturedClaudeSessionId,
+          });
+          if (state) state.claudeSessionId = capturedClaudeSessionId;
+        }
+
+        const aborted = abortController.signal.aborted;
+        // A result message that came back with no content and zero tokens — the
+        // exact "Opus never answered" symptom.
+        const emptyResult = !sawContent && resultSeen && !resultHasTokens && !resultIsError;
+        // The generator ended without ever producing a result message.
+        const noResult = !resultSeen && !attemptError;
+        const failed = !!attemptError || resultIsError || emptyResult || noResult;
+
+        if (!failed) {
+          if (state) state.hasHistory = true;
           try {
-            await this.persistEvent(sessionId, event);
-          } catch (persistErr) {
-            logger.warn('[ClaudeSdkService] Failed to persist event:', persistErr);
-          }
-          try { onEvent(event); } catch { /* non-fatal */ }
+            onEvent({ type: 'agent_end', sessionId, timestamp: Date.now(), data: {} });
+          } catch { /* non-fatal */ }
+          await this.registry.updateStatus(sessionId, 'idle');
+          await this.registry.upsert({
+            id: sessionId, sdkType: 'claude', cwd, lastActivity: new Date().toISOString(),
+          });
+          onComplete();
+          return;
         }
+
+        const failMessage = attemptError?.message
+          ?? (resultIsError
+            ? (resultText && resultText.trim() ? resultText : 'Claude returned an error result.')
+            : emptyResult
+              ? 'Claude returned an empty response (no output, 0 tokens) — the model may be temporarily unavailable or overloaded.'
+              : 'Claude produced no result (the session ended without a response).');
+
+        // Retry only transient failures, only while nothing has streamed, and
+        // never after a user abort. An empty zero-token result is treated as
+        // transient (it is the capacity-failure fingerprint).
+        const transient = !aborted && (isTransientClaudeError(failMessage) || emptyResult);
+        const canRetry = transient && !sawContent && attempt < retryCfg.maxRetries;
+
+        if (canRetry) {
+          attempt += 1;
+          const delay = computeBackoffMs(attempt, retryCfg.baseDelayMs, retryCfg.maxDelayMs);
+          logger.warn(
+            `[ClaudeSdkService] Transient failure on ${sessionId} ` +
+            `(attempt ${attempt}/${retryCfg.maxRetries}): ${failMessage} — retrying in ${delay}ms`,
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+
+        // Surface as a real, persisted error.
+        if (state) state.hasHistory = true; // partial history counts
+        const error = new Error(failMessage);
+        await this.registry.updateStatus(sessionId, 'error');
+        try {
+          await this.sessionStore.appendEntry(sessionId, {
+            type: 'error', content: failMessage, isError: true, timestamp: Date.now(),
+          });
+        } catch (persistErr) {
+          logger.warn('[ClaudeSdkService] Failed to persist error entry:', persistErr);
+        }
+        try {
+          onEvent({
+            type: 'error', sessionId, timestamp: Date.now(),
+            data: { error: failMessage, message: failMessage },
+          });
+        } catch { /* non-fatal */ }
+        onComplete(error);
+        return;
       }
-
-      // Update claudeSessionId if the SDK used a different one
-      if (capturedClaudeSessionId && capturedClaudeSessionId !== claudeSessionId) {
-        logger.info(`[ClaudeSdkService] Updating claudeSessionId: ${claudeSessionId} → ${capturedClaudeSessionId}`);
-        await this.registry.upsert({
-          id: sessionId, sdkType: 'claude', cwd, claudeSessionId: capturedClaudeSessionId,
-        });
-        if (state) state.claudeSessionId = capturedClaudeSessionId;
-      }
-
-      // Mark session as having history
-      if (state) state.hasHistory = true;
-
-      // Emit agent_end (the query generator finishing is the true completion)
-      try {
-        onEvent({
-          type: 'agent_end',
-          sessionId,
-          timestamp: Date.now(),
-          data: {},
-        });
-      } catch { /* non-fatal */ }
-
-      await this.registry.updateStatus(sessionId, 'idle');
-      await this.registry.upsert({
-        id: sessionId, sdkType: 'claude', cwd, lastActivity: new Date().toISOString(),
-      });
-
-      onComplete();
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      await this.registry.updateStatus(sessionId, 'error');
-      try {
-        onEvent({
-          type: 'error',
-          sessionId,
-          timestamp: Date.now(),
-          data: { error: error.message, message: error.message },
-        });
-      } catch { /* non-fatal */ }
-      if (state) state.hasHistory = true; // partial history counts
-      onComplete(error);
     } finally {
       if (state) {
         state.isRunning = false;
@@ -510,9 +567,15 @@ export class ClaudeSdkService {
       }
 
       case 'claude_result': {
+        // Persist usage AND the outcome (isError + a truncated result string),
+        // so a failed/empty turn leaves a diagnostic trail instead of a silent
+        // empty meta. See `claude-sdk-opus-silent-fail`.
+        const rawResult = typeof data?.result === 'string' ? (data.result as string) : undefined;
         await this.sessionStore.appendEntry(sessionId, {
           type: 'meta',
           usage: data?.usage,
+          isError: data?.isError === true ? true : undefined,
+          content: rawResult ? rawResult.slice(0, 2000) : undefined,
           timestamp: event.timestamp,
         });
         break;
