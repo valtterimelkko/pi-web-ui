@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.2.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.4.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -300,7 +300,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.3.0",
+    "contractVersion": "1.4.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -728,7 +728,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.3.0",
+    "contractVersion": "1.4.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -1039,9 +1039,18 @@ without parsing runtime-specific files.
 | Param | Values | Default |
 |---|---|---|
 | `scope` | `visible_recent`, `visible_full` | `visible_recent` |
+| `view` | `screen` | (unset → transcript) |
+| `expand` | `tools`, `thinking` (comma-separated) | (unset) |
 
 `visible_recent` returns the most recent 20 visible items; `visible_full`
 returns the entire visible transcript.
+
+Pass `view=screen` to instead receive a **read-only screen-view projection** —
+a faithful "what the user sees by default" snapshot of the session (visible
+messages, collapsed tool cards, summarized/collapsed thinking, tool groups,
+skill placeholders). This is the fastest way for an agent to read what the user
+sees without driving a browser. See [Screen view (`view=screen`)](#screen-view-viewscreen)
+below.
 
 **Response (200):**
 ```json
@@ -1073,6 +1082,79 @@ the primary argument (file path, command, pattern, etc.).
 
 **Errors:**
 - `404` — Session not found, or no visible transcript (empty session)
+
+---
+
+### Screen view (`view=screen`)
+
+```
+GET /api/v1/sessions/:sessionId/transcript?view=screen
+GET /api/v1/sessions/:sessionId/transcript?view=screen&expand=tools,thinking
+```
+
+A **read-only** projection of *what the user sees by default on screen* in the
+session — the resting default view you get when you open a finished session:
+visible user/assistant messages, **collapsed** tool cards (output hidden),
+**summarized/collapsed** thinking, **collapsed tool groups** (3+ consecutive
+tools), and skill content collapsed to a `📚 Skill loaded: …` placeholder.
+
+This is the foundation for letting an agent (Claude or a cheaper delegated
+agent) read a session exactly as the user sees it, without the bloat of raw
+session logs or the auth friction of driving the UI with Playwright. It is
+strictly read-only — it never starts a session, sends a prompt, or writes state
+— and is safe to call against a production instance.
+
+The session resolves by **any id form** (internal id, registry path, Claude
+session id, OpenCode session id, or Antigravity conversation id) — whatever the
+user reads out of the Session Info box.
+
+`expand` is a comma-separated opt-in that surfaces content that is collapsed by
+default:
+
+| Value | Surfaces |
+|---|---|
+| `tools` | full (truncated-to-200-char) tool output, and un-groups tool groups into individual tool items |
+| `thinking` | the full thinking text behind the summarized thinking items |
+
+All four runtimes are supported (Pi, Claude, OpenCode, Antigravity); a
+thin/empty session yields a valid (empty) view rather than an error.
+
+**Response (200):**
+```json
+{
+  "sessionId": "...",
+  "runtime": "claude",
+  "view": "screen",
+  "expanded": { "tools": false, "thinking": false },
+  "screenView": {
+    "items": [
+      { "kind": "user", "text": "Refactor this", "collapsedByDefault": false, "estimatedLines": 1, "timestamp": 1747744000000 },
+      { "kind": "tool_group", "text": "(3 tools)", "collapsedByDefault": true, "groupSize": 3, "estimatedLines": 1 },
+      { "kind": "assistant", "text": "Done.", "collapsedByDefault": false, "estimatedLines": 1 }
+    ],
+    "itemCount": 3,
+    "estimatedTotalLines": 3,
+    "expanded": { "tools": false, "thinking": false }
+  },
+  "markdown": "# Screen view\n\nItems: 3\n...\n## 👤 User\n\nRefactor this\n...",
+  "source": {
+    "sessionId": "...",
+    "displayName": "Refactor this",
+    "sdkType": "claude",
+    "cwd": "/root/proj",
+    "createdAt": "...",
+    "lastActivity": "..."
+  }
+}
+```
+
+`screenView.items[].kind` is `user` | `assistant` | `tool` | `tool_group` |
+`thinking`. `markdown` is a stable, rendered "text screenshot" an agent can read
+directly. The projection is shared with the client (`@pi-web-ui/shared`), so the
+agent's view and the user's screen are defined by one body of code.
+
+**Errors:**
+- `404` — Session not found (no id form matched)
 
 ---
 

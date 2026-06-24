@@ -6,7 +6,7 @@
  * communication and are distinct from the WebSocket protocol types.
  */
 
-import type { NormalizedEvent } from '@pi-web-ui/shared';
+import type { NormalizedEvent, ScreenView } from '@pi-web-ui/shared';
 
 // ─── Verbosity levels ────────────────────────────────────────────────────────
 
@@ -38,7 +38,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.3.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.4.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -253,6 +253,35 @@ export interface TranscriptResponse {
     toolName?: string;
     toolPrimaryArg?: string;
   }>;
+  source: {
+    sessionId: string;
+    displayName: string;
+    sdkType: SessionRuntime;
+    cwd: string;
+    createdAt?: string;
+    lastActivity?: string;
+  };
+}
+
+/**
+ * Response for `GET /sessions/:id/transcript?view=screen` — a faithful,
+ * read-only projection of "what the user sees by default on screen" in the
+ * session (visible messages, collapsed tool cards, summarized/collapsed
+ * thinking, tool groups, skill placeholders). Additive to the existing
+ * transcript behaviour; requested only when `view=screen` is passed.
+ *
+ * The structured `screenView` is the shared projection (single source of truth
+ * shared with the client); `markdown` is the rendered "text screenshot" an
+ * agent can read directly. Strictly read-only: never starts a session, sends a
+ * prompt, or mutates state.
+ */
+export interface ScreenViewResponse {
+  sessionId: string;
+  runtime: SessionRuntime;
+  view: 'screen';
+  expanded: { tools: boolean; thinking: boolean };
+  screenView: ScreenView;
+  markdown: string;
   source: {
     sessionId: string;
     displayName: string;

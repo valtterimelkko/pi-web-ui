@@ -1,4 +1,7 @@
 import React, { useState, memo, useMemo } from 'react';
+// Shared default-collapse rule for thinking (collapsed by default) — mirrors
+// the server screen-view projection's `collapsedByDefault` for thinking items.
+import { THINKING_COLLAPSED_BY_DEFAULT } from '@pi-web-ui/shared';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check, Bot, AlertTriangle } from 'lucide-react';
@@ -79,7 +82,7 @@ function contentPartsEqual(a: ContentPart[], b: ContentPart[]): boolean {
 
 // Memoized MessageBubble for performance
 export const MessageBubble = memo(function MessageBubble({ message, isLast, isCurrentRun, forceExpanded }: MessageBubbleProps) {
-  const [showThinking, setShowThinking] = useState(false);
+  const [showThinking, setShowThinking] = useState(!THINKING_COLLAPSED_BY_DEFAULT);
   const [copied, setCopied] = useState(false);
   const isStreaming = useSessionStore((state) => state.isStreaming);
   const isUser = message.role === 'user';
@@ -236,9 +239,9 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
     );
   }
 
-  // For assistant messages with no visible content but thinking,
-  // auto-expand thinking block by default (but not for intermediate messages during streaming)
-  const showThinkingExpanded = !hasVisibleContent && hasThinking && !(isStreaming && !isLast && isCurrentRun);
+  // Thinking is collapsed by default in the resting screen view; the collapsed
+  // header still shows a short preview. This mirrors the shared projection's
+  // `thinking` item instead of auto-expanding thinking-only messages.
 
   return (
     <div className="w-full">
@@ -247,7 +250,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
         <div className="mb-1">
           <ThinkingBlock
             content={thinking}
-            isOpen={showThinking || showThinkingExpanded}
+            isOpen={showThinking}
             onToggle={() => setShowThinking(!showThinking)}
           />
         </div>

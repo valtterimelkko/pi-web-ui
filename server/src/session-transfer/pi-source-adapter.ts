@@ -24,6 +24,73 @@ export interface PiSessionEntry {
   [key: string]: unknown;
 }
 
+/**
+ * Read a Pi Coding Agent session JSONL and emit the common replay-event stream
+ * (`message_start` / `message_update` / `message_end` + `tool_execution_*`).
+ *
+ * Pi session files store `message` envelopes (role + content parts) and tool
+ * events rather than the message_start/update/end deltas the other runtimes
+ * produce, so this normalizes them into the same flat shape — letting the
+ * shared screen-view projection consume all four runtimes uniformly.
+ *
+ * Read-only: never writes. Returns [] if the file is missing/unreadable so a
+ * thin/empty session yields a valid (empty) screen view rather than an error.
+ */
+export async function piSessionToReplayEvents(
+  sessionPath: string,
+): Promise<Array<Record<string, unknown>>> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(sessionPath, 'utf-8');
+  } catch {
+    return [];
+  }
+
+  const events: Array<Record<string, unknown>> = [];
+
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let entry: PiSessionEntry;
+    try {
+      entry = JSON.parse(line) as PiSessionEntry;
+    } catch {
+      continue;
+    }
+
+    if (entry.type === 'message' && entry.message) {
+      const role = entry.message.role;
+      if (role !== 'user' && role !== 'assistant') continue;
+      const id = entry.id ?? `msg_${entry.timestamp ?? events.length}`;
+      const ts = entry.message.timestamp ?? entry.timestamp;
+      const parts = extractReplayContentParts(entry.message.content);
+      events.push({ type: 'message_start', message: { id, role }, timestamp: ts });
+      for (const part of parts) {
+        if (part.type === 'text' && part.text) {
+          events.push({
+            type: 'message_update',
+            message: { id },
+            assistantMessageEvent: { type: 'text_delta', delta: part.text },
+            timestamp: ts,
+          });
+        } else if (part.type === 'thinking' && part.thinking) {
+          events.push({
+            type: 'message_update',
+            message: { id },
+            assistantMessageEvent: { type: 'thinking', thinking: part.thinking },
+            timestamp: ts,
+          });
+        }
+      }
+      events.push({ type: 'message_end', message: { id }, timestamp: ts });
+    } else if (entry.type === 'tool_execution_start' || entry.type === 'tool_execution_end') {
+      // Already in the common replay-event shape — pass straight through.
+      events.push(entry as unknown as Record<string, unknown>);
+    }
+  }
+
+  return events;
+}
+
 export async function extractPiTranscript(
   sessionPath: string,
   source: VisibleTranscriptSource,
@@ -100,14 +167,19 @@ export async function extractPiTranscript(
   return { transcript: buildVisibleTranscript(items, source, scope) };
 }
 
+function extractReplayContentParts(
+  content: Array<{ type: string; text?: string; thinking?: string }> | string | undefined,
+): Array<{ type: string; text?: string; thinking?: string }> {
+  if (!content) return [];
+  if (typeof content === 'string') return [{ type: 'text', text: content }];
+  if (!Array.isArray(content)) return [];
+  return content;
+}
+
 function extractTextFromContent(
   content: Array<{ type: string; text?: string; thinking?: string }> | string | undefined,
 ): string {
-  if (!content) return '';
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-
-  return content
+  return extractReplayContentParts(content)
     .filter(item => item.type === 'text' && item.text)
     .map(item => item.text ?? '')
     .join('');

@@ -16,7 +16,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.3.0",
+  "contractVersion": "1.4.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -24,6 +24,14 @@ Current contract:
 
 ### Changelog
 
+- **1.4.0** (minor, additive) — added the read-only screen-view projection to the
+  transcript endpoint: `GET /sessions/:id/transcript?view=screen` (with optional
+  `expand=tools,thinking`) returns a faithful "what the user sees by default"
+  view (visible messages, collapsed tool cards, summarized/collapsed thinking,
+  tool groups, skill placeholders) as both a structured `screenView` and a
+  rendered `markdown` "text screenshot". Strictly read-only and prod-usable.
+  Additive: the existing transcript behaviour is unchanged when `view` is
+  absent. Old clients ignore the new param. See [`INTERNAL-API.md`](./INTERNAL-API.md).
 - **1.3.0** (minor, additive) — added observability and introspection endpoints plus enriched error responses:
   - `GET /api/v1/diagnostics` and `GET /api/v1/sessions/:id/diagnostics` for self-service, secret-scrubbed recent logs.
   - `GET /api/v1/events/types` for a machine-readable catalogue of normalized SSE event kinds.

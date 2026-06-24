@@ -10,7 +10,7 @@ function makeCapabilities(overrides: Partial<ValidationCapabilities['runtimes']>
       name: 'pi-web-ui-internal-api',
       routePrefix: '/api/v1',
       majorVersion: 'v1',
-      contractVersion: '1.2.0',
+      contractVersion: '1.4.0',
       stability: 'beta',
       contractDoc: 'docs/INTERNAL-API-CONTRACT.md',
     },

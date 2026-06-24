@@ -1,4 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect, memo } from 'react';
+// Shared rules — same values the server-side screen-view projection uses:
+// collapsed-by-default for tool cards, and the truncation length for output.
+import { MAX_TOOL_OUTPUT_LENGTH, TOOL_COLLAPSED_BY_DEFAULT } from '@pi-web-ui/shared';
 import {
   Terminal,
   CheckCircle,
@@ -142,19 +145,6 @@ function formatResult(output: string): string {
 function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/[\x1b\x9b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nq-uy=><~]/g, '');
-}
-
-// Truncate output for collapsed view
-function truncateOutput(output: string, maxLength: number = 200): string {
-  const cleaned = stripAnsi(output);
-  if (cleaned.length <= maxLength) return cleaned;
-  return cleaned.slice(0, maxLength) + '…';
-}
-
-// Check if output should be considered "long" and hidden by default
-function isLongOutput(output: string): boolean {
-  const cleaned = stripAnsi(output);
-  return cleaned.length > 200 || cleaned.split('\n').length > 5;
 }
 
 // Short parameter display (inline)
@@ -346,9 +336,6 @@ const ToolOutput = memo(function ToolOutput({
   const [copied, setCopied] = useState(false);
   const { output, isError } = result;
   const formattedOutput = useMemo(() => formatResult(output), [output]);
-  const truncatedOutput = useMemo(() => truncateOutput(output), [output]);
-  const isLong = isLongOutput(output);
-  
   // Parse todo output for special display
   const todoInfo = toolName === 'todo' ? parseTodoOutput(output) : null;
   
@@ -448,24 +435,9 @@ const ToolOutput = memo(function ToolOutput({
         </div>
       )}
       
-      {!isExpanded && isLong && !isBriefOnly && (
-        <span className="ml-4 text-xs text-gray-400">
-          {truncatedOutput}
-          <button
-            onClick={onToggle}
-            className="ml-2 text-blue-600 hover:text-blue-700 underline"
-          >
-            Show more
-          </button>
-        </span>
-      )}
-      
-      {/* Brief indicator for brief-only tools when collapsed */}
-      {!isExpanded && isBriefOnly && briefInfo && (
-        <span className="ml-4 text-xs text-emerald-600">
-          {getBriefSummary()}
-        </span>
-      )}
+      {/* Collapsed tool cards intentionally hide result output. The header's
+          brief status is the only default result signal; full output is shown
+          only after the card/result is explicitly expanded. */}
     </div>
   );
 });
@@ -567,30 +539,32 @@ export const CollapsibleToolCard = memo(function CollapsibleToolCard({
   startTime,
   forceExpanded,
 }: CollapsibleToolCardProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  // Collapsed by default (shared rule — matches the screen-view projection).
+  const [isExpanded, setIsExpanded] = useState(!TOOL_COLLAPSED_BY_DEFAULT);
   const [showResult, setShowResult] = useState(false);
   const [showInputs, setShowInputs] = useState(true);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const hasResult = result !== undefined && result !== null;
   const isError = hasResult && result.isError;
-  const isSuccess = hasResult && !result.isError;
   const isPending = !hasResult;
 
-  // Sync with external forceExpanded prop (e.g. "Expand all" group toggle)
+  // Sync with external forceExpanded prop (e.g. "Expand all" group toggle).
+  // Default/resting tool cards stay collapsed so the browser view matches the
+  // shared screen-view projection; expanding a group opts into full output.
   useEffect(() => {
     if (forceExpanded !== undefined) {
       setIsExpanded(forceExpanded);
+      setShowResult(forceExpanded);
     }
   }, [forceExpanded]);
 
-  // Auto-expand the result section when a tool completes (error or success)
+  // A newly completed tool should not auto-expand in the resting screen view.
   useEffect(() => {
-    if (hasResult) {
-      setShowResult(true);
-      setIsExpanded(true);
+    if (hasResult && forceExpanded === undefined) {
+      setShowResult(false);
     }
-  }, [hasResult]);
+  }, [hasResult, forceExpanded]);
 
   // Track elapsed time for pending operations
   useEffect(() => {

@@ -4,6 +4,16 @@ import { Loader2, AlertCircle } from 'lucide-react';
 import type { LiveMessage } from '../../hooks/useSessionStream.js';
 import type { WorkerStatus } from '../../store';
 import { MessageBubble } from './MessageBubble';
+// Screen-view rule primitives are imported from the shared package so the
+// message list and the Internal API `view=screen` projection are defined by
+// ONE body of code (the agent sees exactly what the user sees). See
+// shared/src/screen-view.ts and SCREEN-VIEW-OBSERVABILITY-PLAN.md §3.
+import {
+  isVisibleTool,
+  detectSkillContent,
+  skillPlaceholder,
+  findConsecutiveToolRuns,
+} from '@pi-web-ui/shared';
 
 export interface VirtualizedMessageListHandle {
   scrollToIndex: (index: number, behavior?: 'auto' | 'smooth') => void;
@@ -25,10 +35,20 @@ interface VirtualizedMessageListProps {
   sessionId?: string;
 }
 
-type ListItem = {
+type MessageListItem = {
+  kind: 'message';
   message: LiveMessage;
   index: number;
 };
+
+type ToolGroupListItem = {
+  kind: 'tool_group';
+  groupId: string;
+  groupSize: number;
+  startIndex: number;
+};
+
+type ListItem = MessageListItem | ToolGroupListItem;
 
 // Custom scroller component for Virtuoso
 const ScrollerComponent = forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<'div'>>(
@@ -154,65 +174,6 @@ function EmptyState({ hasSession, onCreateSession }: { hasSession: boolean; onCr
   );
 }
 
-// Extract skill name from skill content (XML format)
-function extractSkillName(content: string): string | null {
-  // Look for <skill name="skill-name"> format
-  const match = content.match(/<skill name="([^"]+)"/);
-  return match ? match[1] : null;
-}
-
-// Check if message content is skill content and extract info for display
-function getSkillContentInfo(message: LiveMessage): { isSkillContent: boolean; skillName?: string } {
-  // Extract text content from ContentPart[]
-  const content = message.content
-    .map(c => c.text || c.thinking || '')
-    .join('');
-  
-  const trimmed = content.trim();
-  
-  // Skill content indicators (XML format from SDK):
-  // Require BOTH opening AND closing tags to avoid false positives
-  const hasSkillOpenTag = trimmed.includes('<skill name="') || trimmed.includes('&lt;skill name="');
-  const hasSkillCloseTag = trimmed.includes('</skill>') || trimmed.includes('&lt;/skill&gt;');
-  const hasFullSkillStructure = hasSkillOpenTag && hasSkillCloseTag;
-  
-  // Skill content indicators (Markdown format after processing):
-  const hasLectureHeader = trimmed.startsWith('# Lecture Website Builder');
-  const hasSkillHeader = trimmed.startsWith('# Skill:');
-  const hasSkillStructure = trimmed.includes('### Skill Purpose') && trimmed.includes('### Workflow');
-  
-  const isSkillContent = hasFullSkillStructure || hasLectureHeader || hasSkillHeader || hasSkillStructure;
-  
-  if (isSkillContent) {
-    const skillName = extractSkillName(trimmed);
-    return { isSkillContent: true, skillName: skillName || undefined };
-  }
-  
-  return { isSkillContent: false };
-}
-
-/**
- * Tool names that should be visible as cards in the message list.
- * Includes Pi SDK names (lowercase), Claude SDK equivalents (PascalCase),
- * and OpenCode tool names.
- */
-const VISIBLE_TOOL_NAMES = new Set([
-  // Pi SDK names
-  'subagent', 'read', 'todo', 'bash', 'write', 'edit', 'grep', 'glob',
-  'web_search', 'web_fetch', 'search', 'fetch',
-  'think', 'skill', 'ask_user',
-  // Claude SDK equivalents (PascalCase)
-  'Agent', 'Task', 'Read', 'TodoWrite', 'TodoRead',
-  'Bash', 'Write', 'Edit', 'Grep', 'Glob',
-  'WebSearch', 'WebFetch',
-  'EnterPlanMode', 'ExitPlanMode',
-  'Skill', 'AskUserQuestion',
-  // OpenCode tool names (PascalCase)
-  'Read_tool', 'Bash_tool', 'Write_tool', 'Edit_tool',
-  'Grep_tool', 'Glob_tool', 'WebSearch_tool', 'WebFetch_tool',
-  'TodoRead_tool', 'TodoWrite_tool',
-]);
-
 function ToolGroupToggle({
   size,
   isExpanded,
@@ -303,18 +264,17 @@ export const VirtualizedMessageList = forwardRef<
       .filter(m =>
         m.role === 'user' ||
         m.role === 'assistant' ||
-        (m.role === 'tool' && !!m.toolCall?.name && VISIBLE_TOOL_NAMES.has(m.toolCall.name))
+        (m.role === 'tool' && !!m.toolCall?.name && isVisibleTool(m.toolCall.name))
       )
       .map(m => {
-        // Transform skill content to brief placeholder
-        const skillInfo = getSkillContentInfo(m);
-        if (skillInfo.isSkillContent) {
-          const placeholder = skillInfo.skillName
-            ? `📚 **Skill loaded: ${skillInfo.skillName}**`
-            : '📚 **Skill loaded**';
+        // Transform skill content to brief placeholder (shared rule — same as
+        // the server-side screen-view projection).
+        const joined = m.content.map(c => c.text || c.thinking || '').join('');
+        const skill = detectSkillContent(joined);
+        if (skill.isSkill) {
           return {
             ...m,
-            content: [{ type: 'text' as const, text: placeholder }]
+            content: [{ type: 'text' as const, text: skillPlaceholder(skill.skillName) }]
           };
         }
         return m;
@@ -322,34 +282,51 @@ export const VirtualizedMessageList = forwardRef<
     [messages]
   );
 
-  // Create list items from visible messages
-  const listItems = useMemo<ListItem[]>(() =>
-    visibleMessages.map((message, index) => ({ message, index })),
-    [visibleMessages]
-  );
-
-  // Compute group metadata for consecutive runs of 3+ tool messages
+  // Compute group metadata for consecutive runs of 3+ tool messages, using the
+  // shared grouping primitive (same rule the server screen-view projection uses).
   const toolGroupMeta = useMemo(() => {
     const meta: Record<string, { groupId: string; groupSize: number; isFirst: boolean }> = {};
-    let i = 0;
-    while (i < visibleMessages.length) {
-      if (visibleMessages[i].role === 'tool') {
-        let j = i;
-        while (j < visibleMessages.length && visibleMessages[j].role === 'tool') j++;
-        const groupSize = j - i;
-        if (groupSize >= 3) {
-          const groupId = visibleMessages[i].id;
-          for (let k = i; k < j; k++) {
-            meta[visibleMessages[k].id] = { groupId, groupSize, isFirst: k === i };
-          }
-        }
-        i = j;
-      } else {
-        i++;
+    const runs = findConsecutiveToolRuns(
+      visibleMessages.length,
+      (idx) => visibleMessages[idx].role === 'tool',
+    );
+    for (const run of runs) {
+      const groupId = visibleMessages[run.start].id;
+      for (let k = run.start; k < run.start + run.size; k++) {
+        meta[visibleMessages[k].id] = { groupId, groupSize: run.size, isFirst: k === run.start };
       }
     }
     return meta;
   }, [visibleMessages]);
+
+  // Create list items from visible messages. In the default/resting view, a
+  // consecutive run of 3+ tools is represented by a single group row, matching
+  // `projectDefaultViewFromEvents`. Expanding the group replaces that row with
+  // the individual tool cards.
+  const listItems = useMemo<ListItem[]>(() => {
+    const items: ListItem[] = [];
+    let i = 0;
+    while (i < visibleMessages.length) {
+      const meta = toolGroupMeta[visibleMessages[i].id];
+      if (meta?.isFirst) {
+        const isExpanded = toolGroupExpanded[meta.groupId] ?? false;
+        if (!isExpanded) {
+          items.push({
+            kind: 'tool_group',
+            groupId: meta.groupId,
+            groupSize: meta.groupSize,
+            startIndex: i,
+          });
+          i += meta.groupSize;
+          continue;
+        }
+      }
+
+      items.push({ kind: 'message', message: visibleMessages[i], index: i });
+      i++;
+    }
+    return items;
+  }, [visibleMessages, toolGroupMeta, toolGroupExpanded]);
 
   // Find the index of the last user message to scope collapsing to the current agent run
   const lastUserMessageIndex = useMemo(() => {
@@ -429,10 +406,27 @@ export const VirtualizedMessageList = forwardRef<
             Scroller: ScrollerComponent,
             List: ListComponent,
           }}
-          // Use message ID as key for stable rendering
-          computeItemKey={(_index, item) => item.message.id}
+          // Use stable keys for message and collapsed group rows
+          computeItemKey={(_index, item) =>
+            item.kind === 'tool_group' ? `tool-group:${item.groupId}` : item.message.id
+          }
           itemContent={(_index, item) => {
-            const isLast = item.index === listItems.length - 1;
+            if (item.kind === 'tool_group') {
+              return (
+                <ToolGroupToggle
+                  size={item.groupSize}
+                  isExpanded={false}
+                  onToggle={() =>
+                    setToolGroupExpanded(prev => ({
+                      ...prev,
+                      [item.groupId]: true,
+                    }))
+                  }
+                />
+              );
+            }
+
+            const isLast = item.index === visibleMessages.length - 1;
             const isCurrentRun = item.index > lastUserMessageIndex;
             const groupMeta = toolGroupMeta[item.message.id];
             const isGroupExpanded = groupMeta

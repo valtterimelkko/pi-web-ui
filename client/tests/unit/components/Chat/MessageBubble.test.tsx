@@ -142,6 +142,24 @@ describe('MessageBubble', () => {
     expect(screen.getByText('Here is the answer.')).toBeInTheDocument();
   });
 
+  it('keeps thinking-only messages collapsed by default', () => {
+    const thinkingMessage: LiveMessage = {
+      id: 'thinking-only',
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'I am reasoning through a private chain of thought before answering, and this longer sentence should not be fully visible until expanded.' },
+      ],
+      timestamp: Date.now(),
+      isComplete: true,
+    };
+
+    render(<MessageBubble message={thinkingMessage} />);
+
+    expect(screen.getByText('Thinking')).toBeInTheDocument();
+    expect(screen.getByText(/I am reasoning through/)).toBeInTheDocument();
+    expect(screen.queryByText(/this longer sentence should not be fully visible/)).not.toBeInTheDocument();
+  });
+
   it('renders error message with error styling', () => {
     const errorMessage: LiveMessage = {
       id: 'err-1',

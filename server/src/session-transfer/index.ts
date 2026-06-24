@@ -38,7 +38,7 @@ export {
   buildVisibleTranscript,
 } from './visible-transcript.js';
 
-export { extractPiTranscript } from './pi-source-adapter.js';
+export { extractPiTranscript, piSessionToReplayEvents } from './pi-source-adapter.js';
 export { extractClaudeTranscript } from './claude-source-adapter.js';
 export { extractOpenCodeTranscript } from './opencode-source-adapter.js';
 export type { OpenCodeReplayLoader } from './opencode-source-adapter.js';

@@ -13,8 +13,8 @@ const captured = vi.hoisted(() => ({
 // Mock react-virtuoso
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({ data, itemContent, atBottomStateChange, followOutput, defaultItemHeight }: {
-    data: Array<{ message: LiveMessage; index: number }>;
-    itemContent: (index: number, item: { message: LiveMessage; index: number }) => React.ReactNode;
+    data: Array<any>;
+    itemContent: (index: number, item: any) => React.ReactNode;
     atBottomStateChange?: (atBottom: boolean) => void;
     followOutput?: (atBottom: boolean) => 'auto' | 'smooth' | false;
     defaultItemHeight?: number;
@@ -33,7 +33,10 @@ vi.mock('react-virtuoso', () => ({
     return (
       <div data-testid="virtuoso-mock">
         {data.map((item, index) => (
-          <div key={item.message.id} data-testid={`message-${item.index}`}>
+          <div
+            key={item.kind === 'tool_group' ? `group-${item.groupId}` : item.message.id}
+            data-testid={item.kind === 'tool_group' ? `tool-group-${item.groupId}` : `message-${item.index}`}
+          >
             {itemContent(index, item)}
           </div>
         ))}

@@ -74,40 +74,39 @@ describe('CollapsibleToolCard', () => {
     expect(screen.getByText('Input parameters')).toBeInTheDocument();
   });
 
-  it('Input parameters section is expanded by default once the card is open', () => {
-    // A completed tool auto-expands the card; inputs are shown by default (verbosity increase).
+  it('keeps completed tool cards collapsed by default', () => {
     render(
       <CollapsibleToolCard
         name="bash"
         args={{ command: 'ls -la', extra: 'value' }}
-        result={{ output: 'total 8', isError: false }}
-      />
-    );
-
-    // "Input parameters" section header should be visible
-    expect(screen.getByText('Input parameters')).toBeInTheDocument();
-
-    // Args content (the "Arguments" label inside ToolInputSection) is visible by default
-    expect(screen.getByText('Arguments')).toBeInTheDocument();
-  });
-
-  it('Tool Result section is expanded by default on completion', () => {
-    render(
-      <CollapsibleToolCard
-        name="bash"
-        args={{ command: 'ls' }}
         result={{ output: 'total 8\nfile.txt', isError: false }}
       />
     );
 
-    // Card auto-expands on completion; the Result section toggle is visible
-    expect(screen.getByText('Result')).toBeInTheDocument();
-
-    // And the result content is shown (auto-expanded on completion)
-    expect(screen.getByText(/total 8/)).toBeInTheDocument();
+    expect(screen.getByText('Using Shell')).toBeInTheDocument();
+    expect(screen.queryByText('Input parameters')).not.toBeInTheDocument();
+    expect(screen.queryByText('Result')).not.toBeInTheDocument();
+    expect(screen.queryByText(/total 8/)).not.toBeInTheDocument();
   });
 
-  it('auto-expands Tool Result section on error', () => {
+  it('shows inputs when a completed card is manually opened but keeps output collapsed', () => {
+    render(
+      <CollapsibleToolCard
+        name="bash"
+        args={{ command: 'ls -la', extra: 'value' }}
+        result={{ output: 'total 8\nfile.txt', isError: false }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Using Shell/i }));
+
+    expect(screen.getByText('Input parameters')).toBeInTheDocument();
+    expect(screen.getByText('Arguments')).toBeInTheDocument();
+    expect(screen.getByText('Result')).toBeInTheDocument();
+    expect(screen.queryByText(/total 8/)).not.toBeInTheDocument();
+  });
+
+  it('keeps error output hidden until the completed card is expanded', () => {
     render(
       <CollapsibleToolCard
         name="bash"
@@ -116,8 +115,8 @@ describe('CollapsibleToolCard', () => {
       />
     );
 
-    // Card and result section auto-expand on completion; error text is visible without any click
-    expect(screen.getByText('bash: bad-cmd: command not found')).toBeInTheDocument();
+    expect(screen.getAllByText(/Error/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('bash: bad-cmd: command not found')).not.toBeInTheDocument();
   });
 
   it('expands card when forceExpanded prop is true', () => {
@@ -185,6 +184,19 @@ describe('CollapsibleToolCard', () => {
 
     // Should show line count
     expect(screen.getByText(/3 lines/)).toBeInTheDocument();
+  });
+
+  it('does not leak long tool output snippets while collapsed', () => {
+    const output = 'SECRET_OUTPUT '.repeat(30);
+    render(
+      <CollapsibleToolCard
+        name="bash"
+        args={{ command: 'test' }}
+        result={{ output, isError: false }}
+      />
+    );
+
+    expect(screen.queryByText(/SECRET_OUTPUT/)).not.toBeInTheDocument();
   });
 
   it('maps tool names to display names with "Using" prefix', () => {
@@ -298,7 +310,9 @@ describe('CollapsibleToolCard', () => {
       />
     );
 
-    // Card auto-expands; the Arguments content is visible by default
+    fireEvent.click(screen.getByRole('button', { name: /Using Shell/i }));
+
+    // Once the card is open, the Arguments content is visible by default
     expect(screen.getByText('Arguments')).toBeInTheDocument();
 
     // Click the Input parameters toggle → collapses the args content

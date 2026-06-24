@@ -64,3 +64,6 @@ __pycache__/
 # Test debug files
 tests/e2e_*_debug*.py
 .env.production.bak
+
+# Screen-view build handoff evidence (real session transcripts — never commit)
+.screen-view-handoff/

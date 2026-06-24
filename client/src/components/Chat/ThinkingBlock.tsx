@@ -1,5 +1,8 @@
 import { useState, useMemo } from 'react';
 import { Sparkles, ChevronDown } from 'lucide-react';
+// Shared default-collapse rule (collapsed by default) — same value the server
+// screen-view projection treats as `collapsedByDefault` for thinking items.
+import { THINKING_COLLAPSED_BY_DEFAULT, summarizeThinking } from '@pi-web-ui/shared';
 
 interface ThinkingBlockProps {
   content: string;
@@ -9,11 +12,11 @@ interface ThinkingBlockProps {
 
 /**
  * ThinkingBlock - Collapsible thinking content with preview
- * 
+ *
  * When collapsed, shows a brief preview of the thinking content
  * so users can understand what the agent considered without expanding.
  */
-export function ThinkingBlock({ content, isOpen = false, onToggle }: ThinkingBlockProps) {
+export function ThinkingBlock({ content, isOpen = !THINKING_COLLAPSED_BY_DEFAULT, onToggle }: ThinkingBlockProps) {
   const [internalOpen, setInternalOpen] = useState(isOpen);
   const isControlled = onToggle !== undefined;
   const isExpanded = isControlled ? isOpen : internalOpen;
@@ -26,14 +29,8 @@ export function ThinkingBlock({ content, isOpen = false, onToggle }: ThinkingBlo
     }
   };
 
-  // Generate a preview of the thinking content (first ~80 chars)
-  const preview = useMemo(() => {
-    if (!content) return '';
-    // Get first line or first 80 chars, whichever is shorter
-    const firstLine = content.split('\n')[0];
-    const truncated = firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine;
-    return truncated;
-  }, [content]);
+  // Generate the same preview text used by the screen-view projection.
+  const preview = useMemo(() => content ? summarizeThinking(content) : '', [content]);
 
   // Calculate word count for context
   const wordCount = useMemo(() => {

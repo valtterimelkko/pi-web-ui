@@ -7,12 +7,14 @@
 
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
+import { projectDefaultViewFromEvents, renderScreenViewMarkdown } from '@pi-web-ui/shared';
 import { detectPromptInjection } from '../../security/prompt-injection.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
+import type { RegistryEntry } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
 import type {
   CreateSessionRequest,
@@ -42,6 +44,7 @@ import type {
   PendingApprovalsResponse,
   WaitResponse,
   TranscriptResponse,
+  ScreenViewResponse,
   RegisterWatchRequest,
 } from '../types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
@@ -61,7 +64,10 @@ import {
   extractPiTranscript,
   extractClaudeTranscript,
   extractOpenCodeTranscript,
+  piSessionToReplayEvents,
 } from '../../session-transfer/index.js';
+import { stat, readdir } from 'fs/promises';
+import path from 'path';
 import { createLogger } from '../../logging/logger.js';
 
 const logger = createLogger('InternalAPI');
@@ -1266,6 +1272,173 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     poll();
   }
 
+  /**
+   * Resolve a session by ANY identifier form — internal id, registry path,
+   * Claude session id, OpenCode session id, or Antigravity conversation id.
+   * Mirrors scripts/debug-where.mjs `findSessionEntry` so the screen-view and
+   * transcript endpoints accept whatever id form the user reads off the UI.
+   */
+  async function resolveSessionEntry(identifier: string): Promise<RegistryEntry | undefined> {
+    // Fast path: the common case is the internal id.
+    const byId = await sessionRegistry.get(identifier);
+    if (byId) return byId;
+    const entries = await sessionRegistry.listAll();
+    return entries.find(
+      (e) =>
+        e.path === identifier ||
+        e.claudeSessionId === identifier ||
+        e.opencodeSessionId === identifier ||
+        e.antigravityConversationId === identifier,
+    );
+  }
+
+  /** Parse `?expand=tools,thinking` into the projection options. */
+  function parseScreenViewExpand(raw: string | null): { tools?: boolean; thinking?: boolean } {
+    if (!raw) return {};
+    const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    const expand: { tools?: boolean; thinking?: boolean } = {};
+    if (parts.includes('tools')) expand.tools = true;
+    if (parts.includes('thinking')) expand.thinking = true;
+    return expand;
+  }
+
+  /**
+   * Resolve a Pi session file from a registry entry path.
+   *
+   * Pi registry entries store a session *directory* (e.g.
+   * `~/.pi/agent/sessions/--root-pi-web-ui--/`), not a single `.jsonl` file.
+   * This resolver picks the best `.jsonl` to feed into the replay-event reader
+   * (`piSessionToReplayEvents`), using three strategies in order:
+   *
+   * 1. If `entryPath` is already a `.jsonl` file, use it directly.
+   * 2. If the session is active in `multiSessionManager`, use the live agent's
+   *    session file (the one the Pi SDK is actively writing to).
+   * 3. Otherwise scan the directory for `*.jsonl` files and return the most
+   *    recently modified one.
+   *
+   * Returns `null` when no readable `.jsonl` file can be found — callers
+   * should treat that as an empty/valid-thin session.
+   */
+  async function resolvePiSessionFile(entryPath: string): Promise<string | null> {
+    // 1. Already a .jsonl file — straightforward.
+    try {
+      const st = await stat(entryPath);
+      if (st.isFile() && entryPath.endsWith('.jsonl')) {
+        return entryPath;
+      }
+    } catch {
+      // Path doesn't exist or is not stat-able — fall through.
+    }
+
+    // 2. Active Pi session — prefer the file the live agent is writing to.
+    //    Iterate active sessions and pick the first whose sessionPath lives
+    //    under the entry directory and still exists on disk.
+    const allStatuses = multiSessionManager.getAllSessionStatuses();
+    for (const status of allStatuses) {
+      if (
+        status.sessionPath.startsWith(entryPath) &&
+        status.sessionPath.endsWith('.jsonl')
+      ) {
+        try {
+          await stat(status.sessionPath);
+          return status.sessionPath;
+        } catch {
+          continue; // stale reference — keep scanning.
+        }
+      }
+    }
+
+    // 3. Scan directory for .jsonl files, pick the most recently modified.
+    try {
+      const dirEntries = await readdir(entryPath);
+      const jsonlFiles = dirEntries.filter((f) => f.endsWith('.jsonl'));
+      if (jsonlFiles.length === 0) return null;
+
+      let bestPath: string | null = null;
+      let bestTime = 0;
+      for (const file of jsonlFiles) {
+        const fullPath = path.join(entryPath, file);
+        try {
+          const st = await stat(fullPath);
+          if (st.mtimeMs > bestTime) {
+            bestTime = st.mtimeMs;
+            bestPath = fullPath;
+          }
+        } catch {
+          // Skip unreadable entries.
+        }
+      }
+      return bestPath;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Load the common replay-event stream for a session, per runtime. All four
+   * runtimes reduce to the same flat event shape so the shared projection can
+   * consume them uniformly. Read-only — none of these loaders mutate state.
+   */
+  async function loadScreenViewEvents(entry: RegistryEntry): Promise<Array<Record<string, unknown>>> {
+    switch (entry.sdkType) {
+      case 'pi': {
+        const resolved = await resolvePiSessionFile(entry.path);
+        if (!resolved) return [];
+        return await piSessionToReplayEvents(resolved);
+      }
+      case 'claude':
+        return await claudeService.getReplayEvents(entry.id);
+      case 'opencode':
+        return await opencodeService.getReplayEvents(entry.id);
+      case 'antigravity':
+        return await antigravityService.getReplayEvents(entry.id);
+      default:
+        return [];
+    }
+  }
+
+  /**
+   * Build and return the read-only screen view for a resolved session. Never
+   * starts a session, sends a prompt, or writes registry/session state — it
+   * only reads replay events and runs the pure shared projection. A thin/empty
+   * session yields a valid (empty) view rather than an error.
+   */
+  async function handleScreenView(
+    res: ServerResponse,
+    entry: RegistryEntry,
+    query: URLSearchParams,
+  ): Promise<void> {
+    const expand = parseScreenViewExpand(query.get('expand'));
+    let events: Array<Record<string, unknown>>;
+    try {
+      events = await loadScreenViewEvents(entry);
+    } catch (err) {
+      logger.errorObject('Failed to load screen-view events', err);
+      sendJson(res, 500, { error: 'Failed to build screen view', code: ErrorCode.INTERNAL_ERROR });
+      return;
+    }
+
+    const screenView = projectDefaultViewFromEvents(events, { expand });
+    const markdown = renderScreenViewMarkdown(screenView);
+
+    sendJson(res, 200, {
+      sessionId: entry.id,
+      runtime: entry.sdkType as SessionRuntime,
+      view: 'screen',
+      expanded: screenView.expanded,
+      screenView,
+      markdown,
+      source: {
+        sessionId: entry.id,
+        displayName: entry.firstMessage?.slice(0, 50) ?? entry.id,
+        sdkType: entry.sdkType,
+        cwd: entry.cwd,
+        createdAt: entry.createdAt,
+        lastActivity: entry.lastActivity,
+      },
+    } satisfies ScreenViewResponse);
+  }
+
   async function handleSessionTranscript(
     _req: IncomingMessage,
     res: ServerResponse,
@@ -1273,9 +1446,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     query: URLSearchParams,
   ): Promise<void> {
     try {
-      const entry = await sessionRegistry.get(sessionId);
+      const entry = await resolveSessionEntry(sessionId);
       if (!entry) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+        return;
+      }
+
+      // view=screen → faithful read-only "what the user sees" projection.
+      // Additive: when `view` is absent the existing transcript behaviour is
+      // unchanged (regression-safe).
+      if (query.get('view') === 'screen') {
+        await handleScreenView(res, entry, query);
         return;
       }
 
@@ -1322,7 +1503,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         // Antigravity has no native VisibleTranscriptSource adapter, but its
         // replay events can be reduced into VisibleTranscriptItems using the
         // shared helper. This keeps the transcript format uniform.
-        const events = await antigravityService.getReplayEvents(sessionId);
+        const events = await antigravityService.getReplayEvents(entry.id);
         const { replayEventsToVisibleItems, buildVisibleTranscript } = await import('../../session-transfer/visible-transcript.js');
         const items = replayEventsToVisibleItems(events);
         transcriptResult = buildVisibleTranscript(items, source, scope);
@@ -1338,7 +1519,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       const t = transcriptResult;
       sendJson(res, 200, {
-        sessionId,
+        sessionId: entry.id,
         runtime: entry.sdkType as SessionRuntime,
         scope: t.scope,
         itemCount: t.itemCount,
