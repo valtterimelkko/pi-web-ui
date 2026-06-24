@@ -172,8 +172,12 @@ export function transformOpenRouterModel(m: OpenRouterModelEntry): PiModelDef | 
   if (!m?.id) return null;
   if (!isOpenRouterChatModel(m)) return null;
 
+  // Prefer the model's advertised context_length (what the OpenRouter model card
+  // and the CLI report) over top_provider.context_length, which is only the cap
+  // of OpenRouter's default/cheapest serving endpoint and can be smaller
+  // (e.g. minimax-m3: 1,048,576 vs a 524,288 top_provider cap).
   const contextWindow =
-    m.top_provider?.context_length ?? m.context_length ?? DEFAULT_CONTEXT_WINDOW;
+    m.context_length ?? m.top_provider?.context_length ?? DEFAULT_CONTEXT_WINDOW;
   const rawMax = m.top_provider?.max_completion_tokens;
   const maxTokens =
     typeof rawMax === 'number' && rawMax > 0

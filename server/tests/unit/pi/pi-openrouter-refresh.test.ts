@@ -123,6 +123,27 @@ describe('transformOpenRouterModel', () => {
     expect(def?.maxTokens).toBe(64_000);
   });
 
+  it('prefers the model context_length over the top_provider cap (matches card / CLI)', () => {
+    const def = transformOpenRouterModel({
+      id: 'minimax/minimax-m3',
+      name: 'Minimax M3',
+      architecture: { modality: 'text->text', output_modalities: ['text'] },
+      context_length: 1_048_576,
+      top_provider: { context_length: 524_288, max_completion_tokens: 512_000 },
+    });
+    expect(def?.contextWindow).toBe(1_048_576);
+    expect(def?.maxTokens).toBe(512_000);
+  });
+
+  it('falls back to top_provider.context_length when the model field is absent', () => {
+    const def = transformOpenRouterModel({
+      id: 'a/b',
+      architecture: { modality: 'text->text', output_modalities: ['text'] },
+      top_provider: { context_length: 200_000 },
+    });
+    expect(def?.contextWindow).toBe(200_000);
+  });
+
   it('returns null for non-chat models', () => {
     expect(
       transformOpenRouterModel({ id: 'img/gen', architecture: { modality: 'text->image' } }),
