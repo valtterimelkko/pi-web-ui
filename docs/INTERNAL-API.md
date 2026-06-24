@@ -300,7 +300,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.2.0",
+    "contractVersion": "1.3.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -728,7 +728,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.2.0",
+    "contractVersion": "1.3.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -1562,6 +1562,9 @@ All errors follow this shape:
   "code": "SESSION_NOT_FOUND"
 }
 ```
+
+Actionable errors may also include additive `hint` (next step) and `docs`
+(anchor) fields — existing consumers can ignore them.
 
 **Common error codes:**
 

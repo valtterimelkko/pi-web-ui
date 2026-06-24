@@ -16,7 +16,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.2.0",
+  "contractVersion": "1.3.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -24,6 +24,11 @@ Current contract:
 
 ### Changelog
 
+- **1.3.0** (minor, additive) — added observability and introspection endpoints plus enriched error responses:
+  - `GET /api/v1/diagnostics` and `GET /api/v1/sessions/:id/diagnostics` for self-service, secret-scrubbed recent logs.
+  - `GET /api/v1/events/types` for a machine-readable catalogue of normalized SSE event kinds.
+  - Error responses may now include additive `hint` and `docs` fields for the most actionable codes.
+  Old clients can ignore the new endpoints and fields.
 - **1.2.0** (minor, additive) — added standalone, time-bounded session pinning
   (`pin`/`pinTtlSeconds` on `POST /sessions` and `POST /sessions/batch`;
   `pinTtlSeconds` on `POST /sessions/:id/control` `pin` action) and detached
