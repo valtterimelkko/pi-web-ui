@@ -34,7 +34,6 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const closeTreeView = useUIStore((state) => state.closeTreeView);
   const openDriveMode = useUIStore((state) => state.openDriveMode);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
-  const [isAtBottom, setIsAtBottom] = useState(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const listRef = useRef<VirtualizedMessageListHandle>(null);
   const { createNewSession, goalControl } = useWebSocket();
@@ -81,9 +80,10 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
     children: index < messages.length - 1 ? [messages[index + 1].id] : [],
   }));
 
-  // Handle scroll position changes
+  // Handle scroll position changes. Auto-scroll during streaming is owned
+  // entirely by VirtualizedMessageList's followOutput; here we only drive the
+  // manual "scroll to bottom" affordance.
   const handleAtBottomChange = (atBottom: boolean) => {
-    setIsAtBottom(atBottom);
     setShowScrollButton(!atBottom && messages.length > 0);
   };
 
@@ -91,13 +91,6 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const handleScrollToBottom = () => {
     listRef.current?.scrollToBottom();
   };
-
-  // Auto-scroll to bottom during streaming when at bottom
-  useEffect(() => {
-    if (isStreaming && isAtBottom && messages.length > 0) {
-      listRef.current?.scrollToBottom();
-    }
-  }, [isStreaming, isAtBottom, messages.length]);
 
   const handleCreateSession = (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity', model?: string, thinkingLevel?: string) => {
     createNewSession(cwd, sdkType, model, thinkingLevel);
@@ -112,6 +105,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
           ref={listRef}
           messages={liveMessages}
           isStreaming={isStreaming}
+          sessionId={currentSessionId ?? undefined}
           onAtBottomChange={handleAtBottomChange}
           hasSession={!!currentSessionId}
           onCreateSession={() => setShowNewSessionModal(true)}

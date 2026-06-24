@@ -17,6 +17,12 @@ interface VirtualizedMessageListProps {
   hasSession?: boolean;
   onCreateSession?: () => void;
   workerStatus?: WorkerStatus;
+  /**
+   * Stable identifier for the current session. Used to scope the scroll
+   * identity guard so it resets exactly once per session switch — not every
+   * time the first visible message changes during history replay.
+   */
+  sessionId?: string;
 }
 
 type ListItem = {
@@ -259,18 +265,21 @@ export const VirtualizedMessageList = forwardRef<
   VirtualizedMessageListHandle,
   VirtualizedMessageListProps
 >(function VirtualizedMessageList(
-  { messages, isStreaming, onAtBottomChange, hasSession = true, onCreateSession, workerStatus },
+  // isStreaming stays in the props API (callers pass it) but auto-scroll is now
+  // driven entirely by Virtuoso's followOutput, so it is intentionally not read here.
+  { messages, onAtBottomChange, hasSession = true, onCreateSession, workerStatus, sessionId },
   ref
 ) {
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-  const scrollerRef = useRef<HTMLElement | null>(null);
 
   // Expand-all state keyed by the ID of the first message in each tool group
   const [toolGroupExpanded, setToolGroupExpanded] = useState<Record<string, boolean>>({});
 
-  // Identity guard for scroll events
+  // Identity guard for scroll events. Keyed on the real session id when
+  // provided so it resets once per session switch, falling back to the first
+  // message id only when no session id is supplied.
   const scrollIdentityRef = useRef<string>('');
-  const sessionId = useMemo(() => messages[0]?.id || 'default', [messages]);
+  const sessionKey = sessionId || messages[0]?.id || 'default';
 
   useEffect(() => {
     const identity = crypto.randomUUID();
@@ -279,7 +288,7 @@ export const VirtualizedMessageList = forwardRef<
     return () => {
       scrollIdentityRef.current = ''; // Invalidate scroll handlers
     };
-  }, [sessionId]);
+  }, [sessionKey]);
 
   const identity = scrollIdentityRef.current;
 
@@ -356,24 +365,15 @@ export const VirtualizedMessageList = forwardRef<
     onAtBottomChange?.(atBottom);
   }, [onAtBottomChange, identity]);
 
-  // Store scroller reference with identity guard
-  const handleScrollerRef = useCallback((ref: HTMLElement | Window | null) => {
-    if (scrollIdentityRef.current !== identity) return;
-    scrollerRef.current = ref instanceof HTMLElement ? ref : null;
-  }, [identity]);
-
-  // Follow output behavior - auto-scroll when at bottom
+  // Follow output behavior — the single source of streaming auto-scroll truth.
+  // Only follow when the user is already pinned to the bottom; never yank a
+  // user who has scrolled up back down. Instant ('auto') rather than 'smooth'
+  // so streaming height growth doesn't fight an in-flight animation. Initial
+  // bottom positioning on open/session-switch is handled by Virtuoso's
+  // initialTopMostItemIndex (see below), not a competing effect.
   const handleFollowOutput = useCallback((isAtBottom: boolean) => {
-    if (scrollIdentityRef.current !== identity) return false;
-    if (isAtBottom) return 'auto' as const;
-    const scroller = scrollerRef.current;
-    if (scroller) {
-      const gap = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-      // Auto-scroll if within threshold
-      if (gap <= 500) return 'auto' as const;
-    }
-    return false;
-  }, [identity]);
+    return isAtBottom ? ('auto' as const) : false;
+  }, []);
 
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
@@ -395,18 +395,6 @@ export const VirtualizedMessageList = forwardRef<
     },
   }), [listItems.length]);
 
-  // Auto-scroll to bottom when new messages arrive during streaming
-  useEffect(() => {
-    if (scrollIdentityRef.current !== identity) return;
-    if (isStreaming && listItems.length > 0) {
-      virtuosoRef.current?.scrollToIndex({
-        index: listItems.length - 1,
-        align: 'end',
-        behavior: 'smooth',
-      });
-    }
-  }, [isStreaming, listItems.length, identity]);
-
   if (visibleMessages.length === 0) {
     return <EmptyState hasSession={hasSession} onCreateSession={onCreateSession} />;
   }
@@ -421,10 +409,12 @@ export const VirtualizedMessageList = forwardRef<
           ref={virtuosoRef}
           data={listItems}
           className="h-full"
-          scrollerRef={handleScrollerRef}
           followOutput={handleFollowOutput}
-          // Estimated item height for virtualization
-          defaultItemHeight={80}
+          // Estimated item height for virtualization. Set to a realistic
+          // median (reasoning blocks, tool cards, and code output are tall) so
+          // unmeasured items don't trigger large scroll corrections — the main
+          // cause of scroll "jumping" when scrolling up through long sessions.
+          defaultItemHeight={240}
           // Render more items outside viewport for smoother scrolling
           increaseViewportBy={{ top: 400, bottom: 400 }}
           overscan={200}

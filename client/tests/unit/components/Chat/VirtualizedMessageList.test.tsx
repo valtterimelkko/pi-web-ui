@@ -4,13 +4,24 @@ import { VirtualizedMessageList } from '../../../../src/components/Chat/Virtuali
 import type { LiveMessage } from '../../../../src/hooks/useSessionStream';
 import React from 'react';
 
+// Shared holder so tests can inspect the props Virtuoso was rendered with.
+const captured = vi.hoisted(() => ({
+  followOutput: undefined as undefined | ((atBottom: boolean) => 'auto' | 'smooth' | false),
+  defaultItemHeight: undefined as undefined | number,
+}));
+
 // Mock react-virtuoso
 vi.mock('react-virtuoso', () => ({
-  Virtuoso: ({ data, itemContent, atBottomStateChange }: {
+  Virtuoso: ({ data, itemContent, atBottomStateChange, followOutput, defaultItemHeight }: {
     data: Array<{ message: LiveMessage; index: number }>;
     itemContent: (index: number, item: { message: LiveMessage; index: number }) => React.ReactNode;
     atBottomStateChange?: (atBottom: boolean) => void;
+    followOutput?: (atBottom: boolean) => 'auto' | 'smooth' | false;
+    defaultItemHeight?: number;
   }) => {
+    captured.followOutput = followOutput;
+    captured.defaultItemHeight = defaultItemHeight;
+
     // Call atBottomStateChange on mount
     React.useEffect(() => {
       atBottomStateChange?.(true);
@@ -327,6 +338,40 @@ describe('VirtualizedMessageList', () => {
 
     // Component shows empty state with Ready to help text
     expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
+  });
+
+  describe('Option A scroll behavior', () => {
+    it('uses a realistic default item height to reduce estimation jump', () => {
+      render(<VirtualizedMessageList {...defaultProps} />);
+
+      // The old estimate of 80px is far below real message heights and causes
+      // large scroll corrections as items are measured. Expect a realistic median.
+      expect(captured.defaultItemHeight).toBeGreaterThanOrEqual(200);
+    });
+
+    it('only auto-follows output when the user is already at the bottom', () => {
+      render(<VirtualizedMessageList {...defaultProps} />);
+
+      expect(typeof captured.followOutput).toBe('function');
+      // At bottom -> follow (instant). Not at bottom -> do not yank the user down.
+      expect(captured.followOutput!(true)).toBe('auto');
+      expect(captured.followOutput!(false)).toBe(false);
+    });
+
+    it('accepts an explicit sessionId prop for the scroll identity guard', () => {
+      const onAtBottomChange = vi.fn();
+      const { rerender } = render(
+        <VirtualizedMessageList {...defaultProps} sessionId="session-a" onAtBottomChange={onAtBottomChange} />
+      );
+      expect(screen.getByTestId('message-bubble-3')).toBeInTheDocument();
+
+      // Switching session id (even with identical messages) must not crash and
+      // should keep rendering correctly.
+      rerender(
+        <VirtualizedMessageList {...defaultProps} sessionId="session-b" onAtBottomChange={onAtBottomChange} />
+      );
+      expect(screen.getByTestId('message-bubble-3')).toBeInTheDocument();
+    });
   });
 
   it('uses identity guards for scroll events', () => {
