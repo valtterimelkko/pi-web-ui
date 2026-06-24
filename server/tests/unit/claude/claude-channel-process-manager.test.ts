@@ -251,8 +251,12 @@ describe('ClaudeChannelProcessManager', () => {
     // healthCheck that resolves via setImmediate — both are driven by fake timers.
     vi.useFakeTimers();
     const startP = managerSlow.start();
+    // Attach the rejection expectation before advancing timers so the rejection
+    // (which fires during advanceTimersByTimeAsync) is handled synchronously and
+    // is not reported as an unhandled rejection.
+    const expectation = expect(startP).rejects.toThrow(/did not become ready/);
     await vi.advanceTimersByTimeAsync(31_000);
-    await expect(startP).rejects.toThrow(/did not become ready/);
+    await expectation;
     vi.useRealTimers();
     try { await managerSlow.stop(); } catch { /* ignore */ }
   });

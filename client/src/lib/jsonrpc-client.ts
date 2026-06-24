@@ -522,6 +522,11 @@ export class JSONRPCClient {
 
     this.reconnectTimer = setTimeout(() => {
       if (this.url) {
+        // attemptReconnect() pre-set the state to 'connecting'; clear the stale
+        // (closed) socket and state so connect() actually establishes a new one
+        // instead of early-returning on the in-progress guard.
+        this.ws = null;
+        this.setConnectionState('disconnected');
         this.connect(this.url).catch((error) => {
           this.log('Reconnection attempt failed:', error);
           // Will try again if attempts remain

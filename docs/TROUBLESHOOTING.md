@@ -335,37 +335,39 @@ Drive Mode is a shipped frontend feature, not just a historical plan. For the fe
 
 ## Known skipped tests
 
-- `server/tests/integration/claude/dual-path-coexistence.test.ts` >
-  `should use channel path when channel is healthy` — **skipped**. This
-  end-to-end test drives a real prompt through a real
-  `ClaudeChannelWsClient` ↔ `MockClaudeChannelServer` WebSocket round-trip
-  under real timers; in some sandboxes the WS handshake / prompt→`agent_end`
-  completion flow does not settle within the test timeout (the
-  `agent_end`→`onComplete` wiring itself is correct). It is an
-  environment/timing-dependent integration test, not a product regression.
-  Re-enable when the channel WS round-trip can be made deterministic (fake
-  timers on the WS layer, or a `wsClient` seam the test can drive directly).
-  The other two cases in the same file (channel-unhealthy fallback,
-  dual-session creation) still run.
+None. Both the server and client Vitest suites are green with **zero** skipped
+tests in the baseline.
 
-## Known pre-existing client test failures (separate from observability work)
+The previously-skipped `dual-path-coexistence.test.ts` >
+`should use channel path when channel is healthy` is now **enabled and
+deterministic**. Its earlier flakiness was not a timer/sandbox issue: routing the
+prompt through `ClaudeService` without a `channel` profile fell through to the
+direct-CLI backend and spawned a **real `claude -p`** (real network → slow,
+flaky, token cost). The test now drives the `ClaudeChannelService` directly with
+the PTY/process-manager mocked, so the WS round-trip runs entirely against
+`MockClaudeChannelServer` (runs in ~100ms, no real process).
 
-The **client** Vitest suite has a number of pre-existing failures at `HEAD`
-(verified on a clean tree, independent of the observability/logging work, which
-is server-scoped). They are multi-causal and outside the scope of the
-observability plan:
+## Client test suite
 
-- `tests/unit/lib/jsonrpc-client.test.ts` — WebSocket reconnect/promise-timing
-  (`PromiseRejectionHandledWarning`, "promise resolved instead of rejecting").
-- `tests/unit/components/Sidebar/SessionItem.test.tsx` — jsdom context-menu /
-  right-click handling.
-- `tests/unit/hooks/useSessionStream.test.ts` — hook async/timing.
+The **client** Vitest suite is green (0 failures). The earlier batch of
+pre-existing client failures was multi-causal and has been resolved:
 
-These do **not** reflect a regression from the observability work (the only
-client-side change in that work is `client/vitest.config.ts`'s `onConsoleLog`
-suppression, which is not the cause — the failures reproduce with it reverted).
-The **server** suite is the observability plan's test-hygiene surface and is
-green. Fixing the client suite is tracked as a separate effort.
+- `tests/unit/lib/jsonrpc-client.test.ts` — fixed the mock harness (the failing
+  WebSocket mocks never suppressed the inherited auto-`open`; `runAllTimersAsync`
+  fired the request-timeout before responses) **and** a real reconnection bug
+  (`connect()` early-returned during reconnect because `attemptReconnect` pre-set
+  state to `connecting`).
+- `tests/unit/hooks/useSessionStream.test.ts` — the mock now answers the
+  `initialize`/`prompt` JSON-RPC requests the hook awaits; also fixed two real
+  hook bugs (the identity guard captured a render-time `''` instead of the active
+  session, blocking every received event; and `handleTurnEnd` pushed a `null`
+  message because the `setMessages` updater read `currentMessageRef.current` after
+  it was nulled).
+- `SessionItem` / `TransferConfirmationModal` — test mocks drifted from the
+  components (missing `lucide-react` icons, `useWebSocket`/`getState`).
+- `CollapsibleToolCard` / `VirtualizedMessageList` — assertions updated to match
+  the intentional verbosity changes (cards auto-expand on completion; common
+  tools are now shown as cards).
 
 ## Fast test loop for agents
 
@@ -405,8 +407,9 @@ waits** that cannot be replaced by fake timers without breaking the test:
 - `tests/integration/claude/channel-prompt-flow.test.ts`,
   `channel-permission-flow.test.ts`, `dual-path-coexistence.test.ts` — wait for
   a **real WebSocket** round-trip with a mock channel server (network I/O; fake
-  timers cannot drive it). `dual-path-coexistence`'s channel-healthy case is
-  `it.skip` (see Known skipped tests).
+  timers cannot drive it). `dual-path-coexistence`'s channel-healthy case waits
+  deterministically for the mock server to receive the prompt (via `vi.waitFor`)
+  rather than sleeping.
 - `tests/unit/opencode/opencode-service-goal.test.ts` (50/150ms) — wait for
   fire-and-forget `clearGoal`/`abort` **real fs + fetch** side-effects to settle.
   Inline `// Reason:` comments mark each.

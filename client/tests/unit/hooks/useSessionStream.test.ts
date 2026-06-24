@@ -67,6 +67,22 @@ class MockWebSocket {
 
   send(data: string): void {
     this.sentMessages.push(data);
+    // Behave like a real server: auto-respond to JSON-RPC *requests* (messages
+    // that carry an `id`, e.g. 'initialize' and 'prompt') with a success result
+    // so the hook's awaited client.request(...) calls resolve. Notifications
+    // (no `id`, e.g. 'cancel') are left unanswered.
+    try {
+      const parsed = JSON.parse(data) as { id?: string | number; method?: string };
+      if (parsed && parsed.id !== undefined && parsed.method) {
+        this.dispatchEvent(
+          new MessageEvent('message', {
+            data: JSON.stringify({ jsonrpc: '2.0', id: parsed.id, result: {} }),
+          })
+        );
+      }
+    } catch {
+      // Non-JSON payload; nothing to auto-respond to.
+    }
   }
 
   close(code?: number, reason?: string): void {

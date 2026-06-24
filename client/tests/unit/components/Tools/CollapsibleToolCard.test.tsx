@@ -49,18 +49,22 @@ describe('CollapsibleToolCard', () => {
       />
     );
 
-    // Should show error brief status
-    expect(screen.getByText(/Error/)).toBeInTheDocument();
+    // Should show error brief status. "Error" appears both in the brief status
+    // and in the auto-expanded result toggle, so match all occurrences.
+    expect(screen.getAllByText(/Error/).length).toBeGreaterThan(0);
   });
 
   it('expands when header is clicked', () => {
+    // Pending (no result) → card starts collapsed, so clicking the header expands it.
     render(
       <CollapsibleToolCard
         name="read"
         args={{ path: '/test/file.txt', extra: 'value' }}
-        result={{ output: 'File content', isError: false }}
       />
     );
+
+    // Collapsed: the "Input parameters" section is not yet rendered
+    expect(screen.queryByText('Input parameters')).not.toBeInTheDocument();
 
     // Click the header button (contains "Using Read")
     const headerButton = screen.getByRole('button', { name: /Using Read/i });
@@ -70,7 +74,8 @@ describe('CollapsibleToolCard', () => {
     expect(screen.getByText('Input parameters')).toBeInTheDocument();
   });
 
-  it('Input parameters section starts collapsed by default', () => {
+  it('Input parameters section is expanded by default once the card is open', () => {
+    // A completed tool auto-expands the card; inputs are shown by default (verbosity increase).
     render(
       <CollapsibleToolCard
         name="bash"
@@ -79,19 +84,14 @@ describe('CollapsibleToolCard', () => {
       />
     );
 
-    // Expand the card first
-    const headerButton = screen.getByRole('button', { name: /Using Shell/i });
-    fireEvent.click(headerButton);
-
     // "Input parameters" section header should be visible
     expect(screen.getByText('Input parameters')).toBeInTheDocument();
 
-    // But args content should NOT be visible (section collapsed by default)
-    // The actual "Arguments" label inside ToolInputSection should not be visible
-    expect(screen.queryByText('Arguments')).not.toBeInTheDocument();
+    // Args content (the "Arguments" label inside ToolInputSection) is visible by default
+    expect(screen.getByText('Arguments')).toBeInTheDocument();
   });
 
-  it('Tool Result section starts collapsed by default', () => {
+  it('Tool Result section is expanded by default on completion', () => {
     render(
       <CollapsibleToolCard
         name="bash"
@@ -100,15 +100,11 @@ describe('CollapsibleToolCard', () => {
       />
     );
 
-    // Expand the card
-    const headerButton = screen.getByRole('button', { name: /Using Shell/i });
-    fireEvent.click(headerButton);
-
-    // Result section toggle should be visible
+    // Card auto-expands on completion; the Result section toggle is visible
     expect(screen.getByText('Result')).toBeInTheDocument();
 
-    // But actual result content should NOT be visible (collapsed)
-    expect(screen.queryByText('total 8')).not.toBeInTheDocument();
+    // And the result content is shown (auto-expanded on completion)
+    expect(screen.getByText(/total 8/)).toBeInTheDocument();
   });
 
   it('auto-expands Tool Result section on error', () => {
@@ -120,11 +116,7 @@ describe('CollapsibleToolCard', () => {
       />
     );
 
-    // Expand the card
-    const headerButton = screen.getByRole('button', { name: /Using Shell/i });
-    fireEvent.click(headerButton);
-
-    // Result section should be auto-expanded (error text visible)
+    // Card and result section auto-expand on completion; error text is visible without any click
     expect(screen.getByText('bash: bad-cmd: command not found')).toBeInTheDocument();
   });
 
@@ -274,30 +266,30 @@ describe('CollapsibleToolCard', () => {
   });
 
   it('collapses when header is clicked again', () => {
+    // Pending (no result) → starts collapsed, so the toggle goes collapsed → expand → collapse.
     render(
       <CollapsibleToolCard
         name="read"
         args={{ path: '/test', extra: 'value' }}
-        result={{ output: 'content', isError: false }}
       />
     );
 
-    // Expand
     const headerButton = screen.getByRole('button', { name: /Using Read/i });
-    fireEvent.click(headerButton);
 
-    // Should show Input parameters section
+    // Starts collapsed
+    expect(screen.queryByText('Input parameters')).not.toBeInTheDocument();
+
+    // Expand
+    fireEvent.click(headerButton);
     expect(screen.getByText('Input parameters')).toBeInTheDocument();
 
     // Collapse
     fireEvent.click(headerButton);
-
-    // The card should be collapsed again
     expect(screen.queryByText('Input parameters')).not.toBeInTheDocument();
     expect(screen.getByText('Using Read')).toBeInTheDocument();
   });
 
-  it('Input parameters section expands when clicked', () => {
+  it('Input parameters section collapses and re-expands when its toggle is clicked', () => {
     render(
       <CollapsibleToolCard
         name="bash"
@@ -306,15 +298,16 @@ describe('CollapsibleToolCard', () => {
       />
     );
 
-    // Expand the card first
-    const headerButton = screen.getByRole('button', { name: /Using Shell/i });
-    fireEvent.click(headerButton);
+    // Card auto-expands; the Arguments content is visible by default
+    expect(screen.getByText('Arguments')).toBeInTheDocument();
 
-    // Click the Input parameters toggle
+    // Click the Input parameters toggle → collapses the args content
     const inputsToggle = screen.getByRole('button', { name: /Input parameters/i });
     fireEvent.click(inputsToggle);
+    expect(screen.queryByText('Arguments')).not.toBeInTheDocument();
 
-    // Args section (Arguments label) should now be visible
+    // Click again → re-expands
+    fireEvent.click(inputsToggle);
     expect(screen.getByText('Arguments')).toBeInTheDocument();
   });
 });

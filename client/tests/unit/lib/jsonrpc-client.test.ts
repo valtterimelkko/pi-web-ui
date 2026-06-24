@@ -35,9 +35,12 @@ class MockWebSocket {
 
   constructor(url: string) {
     this.url = url;
-    // Simulate async connection
+    // Simulate async connection. Subclasses that simulate a failed connection set
+    // readyState to CLOSED synchronously, which suppresses this auto-open.
     setTimeout(() => {
-      this.dispatchEvent(new Event('open'));
+      if (this.readyState === MockWebSocket.OPEN) {
+        this.dispatchEvent(new Event('open'));
+      }
     }, 0);
   }
 
@@ -79,6 +82,11 @@ class MockWebSocket {
   // Test helpers
   simulateMessage(data: unknown): void {
     this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(data) }));
+  }
+
+  // Dispatch a raw (already-serialized) payload, e.g. to test malformed JSON.
+  simulateRawMessage(raw: string): void {
+    this.dispatchEvent(new MessageEvent('message', { data: raw }));
   }
 
   simulateError(): void {
@@ -164,7 +172,8 @@ describe('JSONRPCClient', () => {
       class FailingWebSocket extends MockWebSocket {
         constructor(url: string) {
           super(url);
-          // Clear the default open timeout and schedule error instead
+          // Mark closed so the inherited auto-open is suppressed, then schedule an error.
+          this.readyState = MockWebSocket.CLOSED;
           setTimeout(() => {
             this.dispatchEvent(new Event('error'));
           }, 0);
@@ -172,12 +181,15 @@ describe('JSONRPCClient', () => {
       }
       
       global.WebSocket = FailingWebSocket as unknown as typeof WebSocket;
-      
+
       const connectPromise = client.connect('ws://localhost:3000/ws');
-      
+      // Attach the rejection expectation before advancing timers so the rejection
+      // is handled synchronously (no late-handled/unhandled-rejection warning).
+      const expectation = expect(connectPromise).rejects.toThrow(JSONRPCConnectionError);
+
       await vi.runAllTimersAsync();
-      
-      await expect(connectPromise).rejects.toThrow(JSONRPCConnectionError);
+
+      await expectation;
     });
 
     it('should emit connected event', async () => {
@@ -280,9 +292,10 @@ describe('JSONRPCClient', () => {
 
     it('should send a JSON-RPC request', async () => {
       const requestPromise = client.request('getUser', { id: '123' });
-      
-      await vi.runAllTimersAsync();
-      
+      // This test only inspects the serialized request; the request is left
+      // pending and rejected at disconnect, so swallow its eventual rejection.
+      requestPromise.catch(() => {});
+
       const sentMessage = mockWs.getLastMessage() as JSONRPCRequest;
       expect(sentMessage.jsonrpc).toBe('2.0');
       expect(sentMessage.method).toBe('getUser');
@@ -292,11 +305,11 @@ describe('JSONRPCClient', () => {
 
     it('should correlate request with response', async () => {
       const requestPromise = client.request<{ name: string }>('getUser', { id: '123' });
-      
-      await vi.runAllTimersAsync();
-      
+
+      // The request is sent synchronously; do NOT advance timers here or the
+      // request-timeout timer would fire before the response is delivered.
       const sentMessage = mockWs.getLastMessage() as JSONRPCRequest;
-      
+
       // Simulate response
       const response: JSONRPCSuccessResponse<{ name: string }> = {
         jsonrpc: '2.0',
@@ -311,11 +324,9 @@ describe('JSONRPCClient', () => {
 
     it('should reject on JSON-RPC error response', async () => {
       const requestPromise = client.request('getUser', { id: '123' });
-      
-      await vi.runAllTimersAsync();
-      
+
       const sentMessage = mockWs.getLastMessage() as JSONRPCRequest;
-      
+
       // Simulate error response
       const response: JSONRPCErrorResponse = {
         jsonrpc: '2.0',
@@ -342,12 +353,15 @@ describe('JSONRPCClient', () => {
       const shortMockWs = (shortTimeoutClient as unknown as { ws: MockWebSocket }).ws;
       
       const requestPromise = shortTimeoutClient.request('slowMethod');
-      
+      // Attach the rejection expectation before advancing timers so the timeout
+      // rejection is handled synchronously (no unhandled-rejection warning).
+      const expectation = expect(requestPromise).rejects.toThrow(JSONRPCTimeoutError);
+
       // Advance past timeout
       await vi.advanceTimersByTimeAsync(150);
-      
-      await expect(requestPromise).rejects.toThrow(JSONRPCTimeoutError);
-      
+
+      await expectation;
+
       shortTimeoutClient.disconnect();
     });
 
@@ -361,9 +375,7 @@ describe('JSONRPCClient', () => {
       const request1 = client.request('method1');
       const request2 = client.request('method2');
       const request3 = client.request('method3');
-      
-      await vi.runAllTimersAsync();
-      
+
       const messages = mockWs.sentMessages.map(m => JSON.parse(m) as JSONRPCRequest);
       
       expect(messages[0].id).not.toBe(messages[1].id);
@@ -401,11 +413,9 @@ describe('JSONRPCClient', () => {
 
     it('should include error data if present', async () => {
       const requestPromise = client.request('failingMethod');
-      
-      await vi.runAllTimersAsync();
-      
+
       const sentMessage = mockWs.getLastMessage() as JSONRPCRequest;
-      
+
       const response: JSONRPCErrorResponse = {
         jsonrpc: '2.0',
         id: sentMessage.id,
@@ -789,8 +799,8 @@ describe('JSONRPCClient', () => {
       const errorHandler = vi.fn();
       client.on('error', errorHandler);
       
-      // Simulate invalid JSON
-      mockWs.onmessage!(new MessageEvent('message', { data: 'not valid json' }));
+      // Simulate invalid JSON (raw payload; the client listens via addEventListener)
+      mockWs.simulateRawMessage('not valid json');
       
       expect(errorHandler).toHaveBeenCalled();
       const call = errorHandler.mock.calls[0][0];

@@ -110,8 +110,10 @@ describe('VirtualizedMessageList', () => {
     expect(screen.getByTestId('message-bubble-1')).toBeInTheDocument();
   });
 
-  it('filters out non-read tool messages from visible list', () => {
-    const bashToolMessage: LiveMessage = {
+  it('filters out unknown (non-visible) tool messages from visible list', () => {
+    // Common tools (bash, web_search, …) are now shown as cards. Tools NOT in the
+    // visible-tool allowlist (e.g. arbitrary MCP tools) are still filtered out.
+    const unknownToolMessage: LiveMessage = {
       id: 'tool-1',
       role: 'tool',
       content: [],
@@ -119,8 +121,8 @@ describe('VirtualizedMessageList', () => {
       isComplete: true,
       toolCall: {
         id: 'call-1',
-        name: 'bash',
-        args: { command: 'ls -la' },
+        name: 'mcp__custom__do_thing',
+        args: { foo: 'bar' },
       },
       toolResult: {
         output: 'total 0',
@@ -128,10 +130,10 @@ describe('VirtualizedMessageList', () => {
       },
     };
 
-    // Non-read tool messages should be filtered out
-    render(<VirtualizedMessageList messages={[bashToolMessage]} isStreaming={false} />);
+    // Unknown tool messages should be filtered out
+    render(<VirtualizedMessageList messages={[unknownToolMessage]} isStreaming={false} />);
 
-    // Should show empty state since the only message is a non-read tool message
+    // Should show empty state since the only message is a non-visible tool message
     expect(screen.getByText(/Ready to help|Create a session/i)).toBeInTheDocument();
   });
 
@@ -200,7 +202,7 @@ describe('VirtualizedMessageList', () => {
         content: [],
         timestamp: 2500,
         isComplete: true,
-        toolCall: { id: 'call-1', name: 'web_search', args: { query: 'test' } },
+        toolCall: { id: 'call-1', name: 'mcp__custom__do_thing', args: { query: 'test' } },
         toolResult: { output: 'results', isError: false },
       },
       { id: '3', role: 'assistant', content: [{ type: 'text', text: 'Here are the results' }], timestamp: 3000, isComplete: true },

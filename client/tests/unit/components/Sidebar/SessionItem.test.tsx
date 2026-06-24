@@ -40,6 +40,9 @@ vi.mock('lucide-react', () => ({
   FileJson: () => <span data-testid="file-json-icon">📋</span>,
   Code: () => <span data-testid="code-icon">💻</span>,
   Loader2: () => <span data-testid="loader-icon">⏳</span>,
+  Pin: () => <span data-testid="pin-icon">📌</span>,
+  PinOff: () => <span data-testid="pin-off-icon">📍</span>,
+  GripVertical: () => <span data-testid="grip-icon">⠿</span>,
 }));
 
 describe('SessionItem', () => {
@@ -65,6 +68,9 @@ describe('SessionItem', () => {
   const mockSetSwitchingSession = vi.fn();
   const mockSetSessions = vi.fn();
   const mockDeleteSession = vi.fn();
+  const mockPinSession = vi.fn();
+  const mockUnpinSession = vi.fn();
+  const mockIsSessionPinned = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -72,6 +78,8 @@ describe('SessionItem', () => {
     // Default mock implementations
     (useWebSocket as any).mockReturnValue({
       switchSession: mockSwitchSession,
+      pinSession: mockPinSession,
+      unpinSession: mockUnpinSession,
     });
 
     (useSessionStore as any).mockImplementation((selector: any) => {
@@ -84,12 +92,17 @@ describe('SessionItem', () => {
         setSessionDisplayName: mockSetSessionDisplayName,
         removeSessionDisplayName: mockRemoveSessionDisplayName,
         setSwitchingSession: mockSetSwitchingSession,
+        isSessionPinned: mockIsSessionPinned.mockReturnValue(false),
         sessionData: {},
         workerStatus: {},
         isSwitchingSession: false,
         switchingToSessionId: null,
       };
       return selector ? selector(state) : state;
+    });
+    (useSessionStore as any).getState = () => ({
+      sessions: [mockSession],
+      getSessionDisplayName: mockGetSessionDisplayName,
     });
 
     (api.deleteSession as any).mockImplementation(mockDeleteSession);

@@ -306,17 +306,22 @@ export function useSessionStream(
    */
   const withIdentityGuard = useCallback(
     <T extends (...args: any[]) => any>(callback: T): T => {
-      const identity = wsIdentityRef.current;
+      // This handler belongs to the session that was active when it was created
+      // (the `sessionId` closed over here). Block it whenever the live connection
+      // is bound to a different (or no) session — i.e. after a session switch or
+      // teardown. wsIdentityRef is set to the connected sessionId by connect()
+      // and cleared on disconnect. Comparing against the closed-over sessionId
+      // (rather than a value captured at wrap time) is what makes the guard let
+      // the active session's events through while still blocking stale ones.
       return ((...args: Parameters<T>) => {
-        // CRITICAL: Check if this callback is still valid
-        if (wsIdentityRef.current !== identity) {
+        if (wsIdentityRef.current !== sessionId) {
           log('Stale callback blocked');
           return;
         }
         return callback(...args) as ReturnType<T>;
       }) as T;
     },
-    [log]
+    [log, sessionId]
   );
 
   /**
@@ -494,10 +499,14 @@ export function useSessionStream(
           toolCallsRef.current
         );
 
-        currentMessageRef.current.content = finalContent;
-        currentMessageRef.current.isComplete = true;
+        // Capture the completed message in a local: the setMessages updater runs
+        // asynchronously, after currentMessageRef.current is reset to null below,
+        // so reading the ref inside the updater would push a null message.
+        const completedMessage = currentMessageRef.current;
+        completedMessage.content = finalContent;
+        completedMessage.isComplete = true;
 
-        setMessages((prev) => [...prev, currentMessageRef.current!]);
+        setMessages((prev) => [...prev, completedMessage]);
       }
 
       // Reset refs for next turn
@@ -621,8 +630,11 @@ export function useSessionStream(
       return;
     }
 
-    // Generate new identity for this connection
-    const identity = crypto.randomUUID();
+    // Bind this connection to the active session id. The identity guard blocks
+    // any handler whose session no longer matches wsIdentityRef.current, so a
+    // session switch (which changes sessionId) invalidates the previous
+    // connection's callbacks.
+    const identity = sessionId;
     wsIdentityRef.current = identity;
 
     isConnectingRef.current = true;

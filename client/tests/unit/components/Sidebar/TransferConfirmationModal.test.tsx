@@ -18,6 +18,10 @@ vi.mock('../../../../src/store/uiStore', () => ({
   useUIStore: vi.fn(),
 }));
 
+vi.mock('../../../../src/hooks/useWebSocket', () => ({
+  useWebSocket: vi.fn(() => ({ switchSession: vi.fn() })),
+}));
+
 vi.mock('../../../../src/lib/api', () => ({
   api: { get: vi.fn() },
 }));
@@ -75,9 +79,11 @@ describe('TransferConfirmationModal', () => {
         claudeAuthError: null,
         opencodeAvailable: true,
         opencodeAuthError: null,
+        switchSession: vi.fn(),
       };
       return typeof selector === 'function' ? selector(state) : state;
     });
+    (useSessionStore as any).getState = () => ({ sessions: [] });
 
     (useUIStore as any).mockImplementation((selector: any) =>
       selector({
