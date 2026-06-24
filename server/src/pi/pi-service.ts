@@ -366,9 +366,9 @@ export class PiService {
     if (!config.piOpenrouterModelsEnabled) return;
     const cached = await readOpenRouterCache(config.piOpenrouterModelsCachePath);
     if (!cached || cached.models.length === 0) return;
-    if (!process.env.OPENROUTER_API_KEY) {
+    if (!this.authStorage.hasAuth(OPENROUTER_PROVIDER)) {
       logger.info(
-        '[PiService] OpenRouter catalogue cached but OPENROUTER_API_KEY not set; skipping registration',
+        '[PiService] OpenRouter catalogue cached but provider not authenticated (no key in auth.json or OPENROUTER_API_KEY); skipping registration',
       );
       return;
     }
@@ -411,14 +411,15 @@ export class PiService {
       logger.error('[PiService] Failed to persist OpenRouter model cache:', err);
     });
 
-    // Registration only matters when the key is present; otherwise the models
-    // are cached and ready, and will appear once OPENROUTER_API_KEY is set.
-    const registered = !!process.env.OPENROUTER_API_KEY;
+    // Registration only matters when the provider is authenticated (key in
+    // auth.json or OPENROUTER_API_KEY); otherwise the models are cached and
+    // ready, and will appear once auth is configured.
+    const registered = this.authStorage.hasAuth(OPENROUTER_PROVIDER);
     if (registered) {
       this.registerOpenRouterProvider(providerConfig);
     } else {
       logger.info(
-        '[PiService] OpenRouter catalogue cached but OPENROUTER_API_KEY not set; not registering',
+        '[PiService] OpenRouter catalogue cached but provider not authenticated (no key in auth.json or OPENROUTER_API_KEY); not registering',
       );
     }
 

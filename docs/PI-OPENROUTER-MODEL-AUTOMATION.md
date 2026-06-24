@@ -54,18 +54,22 @@ search box; new models simply flow in.
   it host-side, and registers it into the running `ModelRegistry`. New models
   within OpenRouter appear with **zero** config after a refresh.
 - **No secrets are stored anywhere in this repo or in Pi Web UI's files.**
-  OpenRouter is a *built-in* Pi SDK provider; the key is auto-detected from the
-  `OPENROUTER_API_KEY` env var (see `@earendil-works/pi-ai` `env-api-keys.js`).
-  The registered provider config uses an env-reference (`$OPENROUTER_API_KEY`)
-  resolved lazily by the SDK, so the cache file and snapshot contain **only
-  public model ids and pricing/capability metadata — never the key**.
+  OpenRouter is a *built-in* Pi SDK provider. The **preferred** auth path is to
+  authenticate once with the Pi SDK so the key lives in `~/.pi/agent/auth.json`
+  (mode 0600, gitignored) — exactly like the OAuth providers (openai-codex,
+  anthropic, …). The server reads `auth.json`; no env entry is required. (The Pi
+  SDK also auto-detects `OPENROUTER_API_KEY` from the env as an optional
+  fallback.) The registered provider config uses an env-reference
+  (`$OPENROUTER_API_KEY`) resolved lazily by the SDK, so the cache file and
+  snapshot contain **only public model ids and pricing/capability metadata —
+  never the key**.
 - **A small weekly scheduled job** closes the freshness gap: fetch the live
   catalogue, cache + register it, and diff what changed. Fail-closed: a failed
   fetch never clobbers the existing cache/snapshot with an empty result.
-- **Adding OpenRouter at all is the one (non-secret) prerequisite:** the
-  `OPENROUTER_API_KEY` env var must be present in the server's environment. On a
-  systemd deployment that means the gitignored `.env.production` (or the unit's
-  `Environment=`), **never** a committed file.
+- **The one prerequisite is authenticating OpenRouter (non-secret action):**
+  `pi auth login` (or an SDK `AuthStorage.set('openrouter', …)`), which writes
+  the key to the gitignored `auth.json`. Registration is gated on
+  `AuthStorage.hasAuth('openrouter')`, so models surface only once auth exists.
 
 ## The refresh chain (where models actually come from)
 
@@ -84,7 +88,7 @@ Grounding facts:
 | Fact | Evidence |
 |---|---|
 | OpenRouter is a built-in Pi SDK provider | `provider-attribution.js` adds OpenRouter headers for `provider === "openrouter"`; `env-api-keys.js` maps `openrouter → OPENROUTER_API_KEY` |
-| Auth is env-detected | `AuthStorage.hasAuth('openrouter')` is true when `OPENROUTER_API_KEY` is set; `getApiKeyAndHeaders` resolves it |
+| Auth lives in auth.json (preferred) | `pi auth login` writes the key to `~/.pi/agent/auth.json`; `AuthStorage.hasAuth('openrouter')` is then true and `getApiKeyAndHeaders` resolves it. `OPENROUTER_API_KEY` env var is an optional fallback |
 | Pi Web UI holds only a public-metadata cache | `~/.pi-web-ui/pi-openrouter-models.json` (model ids, names, context windows, pricing, capabilities) |
 | Routing uses the SDK's built-in OpenRouter path | registered config sets `baseUrl=https://openrouter.ai/api/v1`, `api=openai-completions`; the SDK adds `HTTP-Referer` / `X-OpenRouter-Title` attribution |
 | Slash/colon-bearing ids round-trip | e.g. `openrouter/openai/gpt-4o:extended` → picker value `openrouter/openai/gpt-4o:extended` → `setModel` splits on the first `/` → `find("openrouter", "openai/gpt-4o:extended")` |
@@ -94,9 +98,10 @@ Grounding facts:
 1. **Catalogue lag.** New models appear only after a refresh runs. The weekly
    job makes the cadence explicit; run `pi:refresh-models` ad hoc for instant
    updates.
-2. **Key absent in the server env.** If `OPENROUTER_API_KEY` is unset, models are
-   cached (ready) but not surfaced as available — they cannot route without the
-   key. Put the key in the gitignored `.env.production` for systemd deployments.
+2. **Provider not authenticated.** If OpenRouter has no credential in
+   `~/.pi/agent/auth.json` (and `OPENROUTER_API_KEY` is unset), models are cached
+   (ready) but not surfaced as available — they cannot route without the key.
+   Authenticate once with `pi auth login` (writes the gitignored `auth.json`).
 3. **Browser caching of the picker.** The picker fetches `/api/models` when
    opened; an already-open client won't see changes until it refetches.
 
@@ -128,7 +133,7 @@ function (`isOpenRouterChatModel`) — loosen or tighten it there.
 2. fetch the public OpenRouter /api/v1/models catalogue (throws on failure)
 3. transform → filter → dedupe → sort into a Pi SDK provider config
 4. write the cache (PI_OPENROUTER_MODELS_CACHE_PATH) — public metadata only
-5. register the provider into the live ModelRegistry (iff OPENROUTER_API_KEY set)
+5. register the provider into the live ModelRegistry (iff `hasAuth('openrouter')`)
 6. build a snapshot {openrouter: [ids]}, diff against the previous snapshot
 7. persist the snapshot; return { counts, registered, diff, ... }
 ```
@@ -159,9 +164,9 @@ journalctl -u pi-openrouter-model-refresh.service          # see diffs / errors
 
 `OnCalendar=Mon *-*-* 04:45:00` (staggered from the OpenCode timer) with
 `Persistent=true` so a run missed while the host was off fires on next boot. cron
-works too (`@weekly cd /path && npm run pi:refresh-models`). The service unit's
-environment must include `OPENROUTER_API_KEY` (via the gitignored
-`EnvironmentFile=.env.production`) for the registered models to route.
+works too (`@weekly cd /path && npm run pi:refresh-models`). The server resolves
+OpenRouter auth from `~/.pi/agent/auth.json` (provisioned once via `pi auth
+login`), so no secret needs to live in the service unit's environment.
 
 ## Robustness considerations
 
