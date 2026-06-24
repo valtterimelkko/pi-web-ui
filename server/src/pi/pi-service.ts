@@ -11,6 +11,20 @@ import { config } from '../config.js';
 import type { SessionInfo } from '@pi-web-ui/shared';
 import { createWebUIContext, createCommandContextActions, type WebUIContext } from './extension-ui-adapter.js';
 import type { SessionPool } from './session-pool.js';
+import {
+  fetchOpenRouterCatalogue,
+  transformOpenRouterCatalogue,
+  readOpenRouterCache,
+  writeOpenRouterCache,
+  openRouterModelIds,
+  buildModelSnapshot,
+  diffModelSnapshots,
+  readSnapshot,
+  writeSnapshot,
+  OPENROUTER_PROVIDER,
+  type OpenRouterProviderConfig,
+  type SnapshotDiff,
+} from './pi-openrouter-refresh.js';
 import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('PiService');
@@ -125,6 +139,10 @@ export class PiService {
     await this.resourceLoader.reload();
 
     this.logExtensions(this.resourceLoader.getExtensions());
+
+    // Surface the cached OpenRouter catalogue (if any) so models survive a
+    // server restart without a network fetch. See refreshOpenRouterModels().
+    await this.loadOpenRouterCache();
   }
 
   private logExtensions(extensions: ReturnType<DefaultResourceLoader['getExtensions']>): void {
@@ -311,13 +329,125 @@ export class PiService {
 
   async getAvailableModels() {
     const models = this.modelRegistry.getAvailable();
-    
+
     // Log available providers for debugging
     const providers = [...new Set(models.map(m => m.provider))];
     logger.info('[PiService] Available model providers:', providers.join(', '));
     logger.info(`[PiService] Total models available: ${models.length}`);
-    
+
     return models;
+  }
+
+  /**
+   * Register an OpenRouter provider config into the live ModelRegistry so its
+   * models appear in the picker and route via the Pi SDK's built-in OpenRouter
+   * support (env-detected key + attribution headers). No literal secret is
+   * stored: the config uses an env-reference resolved lazily by the SDK.
+   */
+  registerOpenRouterProvider(providerConfig: OpenRouterProviderConfig): void {
+    this.modelRegistry.registerProvider(OPENROUTER_PROVIDER, {
+      name: 'OpenRouter',
+      baseUrl: providerConfig.baseUrl,
+      api: providerConfig.api,
+      apiKey: providerConfig.apiKey,
+      models: providerConfig.models,
+    });
+    logger.info(
+      `[PiService] Registered OpenRouter provider: ${providerConfig.models.length} models`,
+    );
+  }
+
+  /**
+   * Load the cached OpenRouter catalogue (if any) and register it so the full
+   * gateway model list survives a server restart without a network fetch.
+   * Idempotent; a no-op when disabled, unauthenticated, or no cache exists.
+   */
+  async loadOpenRouterCache(): Promise<void> {
+    if (!config.piOpenrouterModelsEnabled) return;
+    const cached = await readOpenRouterCache(config.piOpenrouterModelsCachePath);
+    if (!cached || cached.models.length === 0) return;
+    if (!process.env.OPENROUTER_API_KEY) {
+      logger.info(
+        '[PiService] OpenRouter catalogue cached but OPENROUTER_API_KEY not set; skipping registration',
+      );
+      return;
+    }
+    this.registerOpenRouterProvider(cached);
+  }
+
+  /**
+   * Refresh the OpenRouter model catalogue: fetch the public /api/v1/models
+   * endpoint, cache it, register it into the running registry, and report a
+   * snapshot diff. This is the Pi-SDK analogue of OpenCodeService.refreshModels()
+   * and drives the weekly automation. No secrets are read or written.
+   *
+   * Fails closed (throws) on fetch failure so the cache/snapshot are never
+   * clobbered with an empty or garbled result.
+   */
+  async refreshOpenRouterModels(): Promise<{
+    available: boolean;
+    cacheWarmed: boolean;
+    registered: boolean;
+    recycled: boolean;
+    recycleDeferred: boolean;
+    runningSessions: number;
+    providerCount: number;
+    modelCount: number;
+    diff: SnapshotDiff;
+    snapshotPath: string;
+    generatedAt: string;
+  }> {
+    if (!config.piOpenrouterModelsEnabled) {
+      throw new Error(
+        'OpenRouter model surfacing is disabled (PI_OPENROUTER_MODELS_ENABLED=false)',
+      );
+    }
+    const snapshotPath = config.piOpenrouterModelsSnapshotPath;
+
+    const resp = await fetchOpenRouterCatalogue();
+    const providerConfig = transformOpenRouterCatalogue(resp);
+
+    await writeOpenRouterCache(config.piOpenrouterModelsCachePath, providerConfig).catch((err) => {
+      logger.error('[PiService] Failed to persist OpenRouter model cache:', err);
+    });
+
+    // Registration only matters when the key is present; otherwise the models
+    // are cached and ready, and will appear once OPENROUTER_API_KEY is set.
+    const registered = !!process.env.OPENROUTER_API_KEY;
+    if (registered) {
+      this.registerOpenRouterProvider(providerConfig);
+    } else {
+      logger.info(
+        '[PiService] OpenRouter catalogue cached but OPENROUTER_API_KEY not set; not registering',
+      );
+    }
+
+    const snapshot = buildModelSnapshot(openRouterModelIds(providerConfig));
+    const prev = await readSnapshot(snapshotPath);
+    const diff = diffModelSnapshots(prev, snapshot);
+    await writeSnapshot(snapshotPath, snapshot).catch((err) => {
+      logger.error('[PiService] Failed to persist OpenRouter model snapshot:', err);
+    });
+
+    logger.info(
+      `[PiService] OpenRouter refresh: ${providerConfig.models.length} models${
+        diff.changed ? `, ${diff.addedModels.length} added / ${diff.removedModels.length} removed` : ', no change'
+      }`,
+    );
+
+    return {
+      available: true,
+      cacheWarmed: true,
+      registered,
+      recycled: false,
+      recycleDeferred: false,
+      runningSessions: this.sessions.size,
+      providerCount: 1,
+      modelCount: providerConfig.models.length,
+      diff,
+      snapshotPath,
+      generatedAt: snapshot.generatedAt,
+    };
   }
 
   /**

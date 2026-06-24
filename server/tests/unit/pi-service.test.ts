@@ -2,8 +2,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PiService, getPiService, initializePiService } from '../../src/pi/pi-service.js';
 
 // Mock the pi-coding-agent module
-// Track DefaultResourceLoader constructor calls
-const resourceLoaderInstances: Array<{ cwd: string; agentDir: string }> = [];
+// Top-level mocks referenced inside vi.mock() factories must be created with
+// vi.hoisted() so they exist when the (hoisted) factories run during module
+// load — pi-service now imports fs/promises eagerly via its refresh module.
+const { resourceLoaderInstances, accessMock } = vi.hoisted(() => ({
+  // Track DefaultResourceLoader constructor calls
+  resourceLoaderInstances: [] as Array<{ cwd: string; agentDir: string }>,
+  // fs.access is non-configurable on Node's fs/promises module, so we mock the
+  // whole module. `accessMock` lets individual tests simulate existing vs new files.
+  accessMock: vi.fn().mockRejectedValue(
+    Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
+  ),
+}));
 
 // Factory that builds a mock SessionManager whose `flushed` flag and
 // `_rewriteFile`/`setSessionFile` calls are observable. This mirrors the
@@ -20,11 +30,6 @@ function createMockSessionManager() {
   };
 }
 
-// fs.access is non-configurable on Node's fs/promises module, so we mock the
-// whole module. `accessMock` lets individual tests simulate existing vs new files.
-const accessMock = vi.fn().mockRejectedValue(
-  Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
-);
 vi.mock('fs/promises', () => ({
   access: accessMock,
 }));
@@ -111,6 +116,8 @@ vi.mock('../../src/config.js', () => ({
     jwtRefreshExpiresIn: '7d',
     piAgentDir: '/tmp/pi-agent',
     sessionDir: '/tmp/sessions',
+    // Keep the OpenRouter refresh path out of these unit tests.
+    piOpenrouterModelsEnabled: false,
   },
 }));
 

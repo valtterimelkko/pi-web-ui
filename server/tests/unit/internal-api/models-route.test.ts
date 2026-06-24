@@ -107,3 +107,64 @@ describe('createModelsRoutes — handleRefreshModels', () => {
     expect(JSON.parse(res.body).code).toBe('INTERNAL_ERROR');
   });
 });
+
+describe('createModelsRoutes — handleRefreshModels (runtime=pi)', () => {
+  const piResult = {
+    available: true,
+    cacheWarmed: true,
+    registered: true,
+    recycled: false,
+    recycleDeferred: false,
+    runningSessions: 0,
+    providerCount: 1,
+    modelCount: 300,
+    diff: { addedModels: ['openrouter/a/b'], removedModels: [], addedProviders: [], removedProviders: [], changed: true },
+    snapshotPath: '/home/user/.pi-web-ui/pi-openrouter-model-snapshot.json',
+    generatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  function makePiDeps(refreshOpenRouterModels: ReturnType<typeof vi.fn>) {
+    return {
+      piService: { getAvailableModels: vi.fn().mockResolvedValue([]), refreshOpenRouterModels },
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) },
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) },
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(true), refreshModels: vi.fn() },
+    } as any;
+  }
+
+  it('dispatches to piService.refreshOpenRouterModels when runtime=pi in body', async () => {
+    const refreshOpenRouterModels = vi.fn().mockResolvedValue(piResult);
+    const routes = createModelsRoutes(makePiDeps(refreshOpenRouterModels));
+    const res = createMockRes();
+
+    await routes.handleRefreshModels(createMockReq({ runtime: 'pi' }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(refreshOpenRouterModels).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(res.body)).toMatchObject({ runtime: 'pi', modelCount: 300 });
+  });
+
+  it('dispatches to piService when runtime=pi in the query string', async () => {
+    const refreshOpenRouterModels = vi.fn().mockResolvedValue(piResult);
+    const routes = createModelsRoutes(makePiDeps(refreshOpenRouterModels));
+    const res = createMockRes();
+    const req = createMockReq({});
+    req.url = '/api/v1/models/refresh?runtime=pi';
+
+    await routes.handleRefreshModels(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(refreshOpenRouterModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 500 when the pi refresh throws', async () => {
+    const refreshOpenRouterModels = vi.fn().mockRejectedValue(new Error('fetch failed'));
+    const routes = createModelsRoutes(makePiDeps(refreshOpenRouterModels));
+    const res = createMockRes();
+
+    await routes.handleRefreshModels(createMockReq({ runtime: 'pi' }), res);
+
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body).code).toBe('INTERNAL_ERROR');
+  });
+});

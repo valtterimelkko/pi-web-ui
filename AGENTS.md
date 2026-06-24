@@ -52,6 +52,7 @@ Core architectural themes:
 | Claude backend behavior | `server/src/claude/*`, [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md) |
 | Claude provider profiles / backend switching | `server/src/claude/claude-profiles.ts`, `server/src/claude/claude-sdk-service.ts`, [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md) |
 | OpenCode integration / model automation | `server/src/opencode/*`, [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md), [`docs/OPENCODE-MODEL-AUTOMATION.md`](./docs/OPENCODE-MODEL-AUTOMATION.md) |
+| Pi runtime: OpenRouter model automation | `server/src/pi/pi-openrouter-refresh.ts`, `server/src/pi/pi-service.ts`, [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md) |
 | Antigravity integration | `server/src/antigravity/*`, [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md) |
 | Session transfer | `server/src/session-transfer/*`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |
 | Drive Mode | `client/src/components/DriveMode/*`, `client/src/store/driveModeStore.ts`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |
@@ -111,6 +112,7 @@ Core architectural themes:
 - Long-horizon (autonomous, restart-surviving) validation: start `npm run validate:server`, then run `npm run validate:long-horizon -- --socket <validation.sock> --token-path <validation-token> --subject <runtime> --seed "<prompt>" --watch-text <substr> --interval <seconds>` — see [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md)
 - Fast runtime/session lookup: `npm run debug:where -- <session-id-or-runtime-id-or-path>`
 - OpenCode model catalogue refresh: `npm run opencode:refresh-models`
+- Pi runtime OpenRouter catalogue refresh: `npm run pi:refresh-models` (see [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md))
 
 If you touch runtime behavior, read [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) and run the relevant scenario(s).
 

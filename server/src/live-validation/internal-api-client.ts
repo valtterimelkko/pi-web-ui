@@ -163,6 +163,14 @@ export class InternalApiClient implements InternalApiClientLike {
     return this.request<RefreshModelsResponse>('POST', '/api/v1/models/refresh', input);
   }
 
+  /**
+   * Refresh the Pi runtime's OpenRouter catalogue (fetch + cache + register) and
+   * return a snapshot diff. Drives the weekly automation; safe to call ad hoc.
+   */
+  async refreshPiOpenRouterModels(): Promise<RefreshModelsResponse> {
+    return this.request<RefreshModelsResponse>('POST', '/api/v1/models/refresh', { runtime: 'pi' });
+  }
+
   async controlSession(sessionId: string, input: SessionControlRequest): Promise<unknown> {
     return this.request('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/control`, input);
   }

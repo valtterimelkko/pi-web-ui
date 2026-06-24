@@ -1,0 +1,29 @@
+# Pi Web UI — weekly Pi/OpenRouter model refresh (oneshot, triggered by the .timer).
+#
+# Asks the running pi-web-ui internal API to fetch the public OpenRouter model
+# catalogue, cache it, register it into the Pi SDK ModelRegistry, and record a
+# snapshot diff. No secrets here: the internal-API token is read from
+# ~/.pi-web-ui/internal-api-token at runtime, and the OpenRouter models endpoint
+# is public. Routing auth is the Pi SDK's built-in OPENROUTER_API_KEY detection.
+#
+# Install (host-specific copy lives in /etc/systemd/system, NOT in the repo):
+#   sudo cp deploy/systemd/pi-openrouter-model-refresh.* /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pi-openrouter-model-refresh.timer
+#
+# Adjust WorkingDirectory / User / PATH below to match your deployment.
+
+[Unit]
+Description=Pi Web UI - Weekly Pi/OpenRouter model refresh
+After=network.target pi-web-ui.service
+Wants=pi-web-ui.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/pi-web-ui
+Environment=PATH=/root/.local/bin:/root/.npm-global/bin:/usr/bin:/bin
+ExecStart=/usr/bin/npm run pi:refresh-models
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-openrouter-model-refresh

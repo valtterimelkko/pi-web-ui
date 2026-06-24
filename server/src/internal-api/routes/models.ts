@@ -50,6 +50,8 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             id: m.id,
             displayName: m.name || m.id,
             provider: m.provider,
+            contextWindow: m.contextWindow,
+            reasoning: m.reasoning,
           }));
         } catch {
           // Pi SDK may not be available — return empty list
@@ -126,16 +128,32 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
   /**
    * POST /api/v1/models/refresh
    *
-   * Refresh the OpenCode model catalogue (warm cache + idle-aware recycle) and
-   * return a snapshot diff. Drives the weekly automation; safe to call ad hoc.
-   * Body (optional): { warmCache?: boolean, recycle?: boolean }.
+   * Refresh a runtime model catalogue and return a snapshot diff. Drives the
+   * weekly automation; safe to call ad hoc.
+   *
+   * Body/query (optional): { runtime?: 'opencode' | 'pi' }. Defaults to
+   * 'opencode'. For OpenCode: { warmCache?: boolean, recycle?: boolean }. For
+   * Pi: fetches the public OpenRouter catalogue and registers it.
    */
   async function handleRefreshModels(
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
     try {
+      const url = new URL(req.url || '/', 'http://localhost');
       const body = await readJsonBody(req);
+      const runtime =
+        (typeof body.runtime === 'string' && body.runtime) ||
+        url.searchParams.get('runtime') ||
+        'opencode';
+
+      if (runtime === 'pi') {
+        // Fetch + cache + register the OpenRouter catalogue for the Pi runtime.
+        const result = await piService.refreshOpenRouterModels();
+        sendJson(res, 200, { ...result, runtime: 'pi' });
+        return;
+      }
+
       const warmCache = typeof body.warmCache === 'boolean' ? body.warmCache : undefined;
       const recycle = typeof body.recycle === 'boolean' ? body.recycle : undefined;
 
@@ -145,9 +163,9 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
       }
 
       const result = await opencodeService.refreshModels({ warmCache, recycle });
-      sendJson(res, 200, result);
+      sendJson(res, 200, { ...result, runtime: 'opencode' });
     } catch (err) {
-      logger.errorObject('Failed to refresh OpenCode models', err);
+      logger.errorObject('Failed to refresh models', err);
       sendJson(res, 500, { error: 'Failed to refresh models', code: ErrorCode.INTERNAL_ERROR });
     }
   }

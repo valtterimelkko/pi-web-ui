@@ -1,0 +1,17 @@
+# Weekly trigger for pi-openrouter-model-refresh.service.
+#
+# Persistent=true means a run missed while the host was off fires on next boot,
+# so the schedule survives reboots and downtime.
+
+[Unit]
+Description=Pi Web UI - Weekly Pi/OpenRouter model refresh timer
+
+[Timer]
+# Mondays at 04:45 (host local time) — staggered from the OpenCode timer.
+# Adjust as desired.
+OnCalendar=Mon *-*-* 04:45:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

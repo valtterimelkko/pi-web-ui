@@ -136,6 +136,10 @@ export interface ServerConfig {
   opencodeServerMaxUptimeMs: number;
   opencodeModelProviders: string;
   opencodeModelSnapshotPath: string;
+  /** Surface the full OpenRouter catalogue in the Pi runtime path (refresh job). */
+  piOpenrouterModelsEnabled: boolean;
+  piOpenrouterModelsCachePath: string;
+  piOpenrouterModelsSnapshotPath: string;
   internalApiEnabled: boolean;
   internalApiSocketPath: string;
   internalApiKey: string;
@@ -230,6 +234,14 @@ export const config: ServerConfig = {
   opencodeModelProviders: (process.env.OPENCODE_MODEL_PROVIDERS?.trim() || 'zai-coding-plan,kilo,opencode'),
   // Host-side audit snapshot for the weekly model-refresh job (ids only, no secrets).
   opencodeModelSnapshotPath: process.env.OPENCODE_MODEL_SNAPSHOT_PATH || path.join(os.homedir(), '.pi-web-ui', 'opencode-model-snapshot.json'),
+  // Surface the full OpenRouter gateway catalogue in the Pi runtime path. The
+  // fetched catalogue (public model ids/metadata only) is cached here and
+  // registered into the Pi SDK ModelRegistry. No secrets are stored: OpenRouter
+  // is a built-in Pi SDK provider whose key is auto-detected from
+  // OPENROUTER_API_KEY, and the registered config uses an env-reference.
+  piOpenrouterModelsEnabled: process.env.PI_OPENROUTER_MODELS_ENABLED !== 'false',
+  piOpenrouterModelsCachePath: process.env.PI_OPENROUTER_MODELS_CACHE_PATH || path.join(os.homedir(), '.pi-web-ui', 'pi-openrouter-models.json'),
+  piOpenrouterModelsSnapshotPath: process.env.PI_OPENROUTER_MODELS_SNAPSHOT_PATH || path.join(os.homedir(), '.pi-web-ui', 'pi-openrouter-model-snapshot.json'),
   internalApiEnabled: process.env.INTERNAL_API_ENABLED !== 'false',
   internalApiSocketPath: process.env.INTERNAL_API_SOCKET_PATH || path.join(os.homedir(), '.pi-web-ui', 'internal-api.sock'),
   internalApiKey: process.env.INTERNAL_API_KEY || '',

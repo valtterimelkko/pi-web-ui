@@ -434,6 +434,8 @@ export interface RefreshModelsResponse {
   cacheWarmed: boolean;
   recycled: boolean;
   recycleDeferred: boolean;
+  /** Pi runtime: whether the catalogue was registered into the live registry. */
+  registered?: boolean;
   runningSessions: number;
   providerCount: number;
   modelCount: number;
@@ -446,6 +448,8 @@ export interface RefreshModelsResponse {
   };
   snapshotPath: string;
   generatedAt: string;
+  /** Which runtime catalogue was refreshed. */
+  runtime?: 'opencode' | 'pi';
 }
 
 export interface RuntimeCapabilities {

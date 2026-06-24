@@ -24,6 +24,7 @@
     "validate:server": "npx tsx scripts/validation-server.ts",
     "validate:claude-profiles": "npx tsx scripts/validate-claude-profiles.ts",
     "opencode:refresh-models": "npx tsx scripts/opencode-refresh-models.ts",
+    "pi:refresh-models": "npx tsx scripts/pi-refresh-openrouter-models.ts",
     "debug:where": "node scripts/debug-where.mjs",
     "docs:sync-agent-guides": "node scripts/sync-agent-guides.mjs",
     "docs:check-agent-guides": "node scripts/check-agent-guides.mjs",
