@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   FolderOpen,
   File,
@@ -12,9 +12,12 @@ import {
   AlertCircle,
   Search,
   X,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { useFilesStore, type FileEntry } from '../../store/filesStore';
 import { useSessionStore } from '../../store/sessionStore';
+import { copyToClipboard } from '../../lib/clipboard';
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -65,6 +68,47 @@ export function FilesTab() {
   const [newItemType, setNewItemType]   = useState<'file' | 'dir' | null>(null);
   const [renaming, setRenaming]         = useState<string | null>(null);
   const [renameValue, setRenameValue]   = useState('');
+
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const longPressedRef = useRef<boolean>(false);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleCopyPath = async (path: string) => {
+    const success = await copyToClipboard(path, 'Path copied to clipboard');
+    if (success) {
+      setCopiedPath(path);
+      setTimeout(() => {
+        setCopiedPath((curr) => curr === path ? null : curr);
+      }, 2000);
+    }
+  };
+
+  const handleTouchStart = (path: string) => {
+    longPressedRef.current = false;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      void handleCopyPath(path);
+      longPressedRef.current = true;
+    }, 600);
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (longPressedRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
+  const handleTouchMove = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
 
   // Use the CWD of the currently active session as the initial path.
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
@@ -275,9 +319,30 @@ export function FilesTab() {
             <div
               key={item.path}
               className={`group flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors ${selectedFile === item.path ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}
-              onClick={() => handleNavigate(item)}
+              onTouchStart={() => handleTouchStart(item.path)}
+              onTouchEnd={(e) => handleTouchEnd(e)}
+              onTouchMove={handleTouchMove}
+              onClick={(e) => {
+                if (longPressedRef.current) {
+                  e.stopPropagation();
+                  longPressedRef.current = false;
+                  return;
+                }
+                handleNavigate(item);
+              }}
             >
-              <FileIcon entry={item} />
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleCopyPath(item.path);
+                }}
+                className="p-1 -m-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors flex-shrink-0"
+                title="Copy path"
+                aria-label="Copy path"
+              >
+                <FileIcon entry={item} />
+              </button>
 
               <div className="flex-1 min-w-0">
                 {renaming === item.path ? (
@@ -304,25 +369,47 @@ export function FilesTab() {
                 </div>
               </div>
 
-              {/* Row actions (files only) */}
-              {!item.isDirectory && (
-                <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleStartRename(item); }}
-                    className="p-1 text-gray-400 hover:text-blue-500"
-                    title="Rename"
-                  >
-                    <Edit size={12} />
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); void handleDelete(item); }}
-                    className="p-1 text-gray-400 hover:text-red-500"
-                    title="Delete"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              )}
+              {/* Row actions */}
+              <div className="flex gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleCopyPath(item.path);
+                  }}
+                  className={`p-1 rounded transition-colors ${
+                    copiedPath === item.path
+                      ? 'text-green-500 hover:text-green-600'
+                      : 'text-gray-400 hover:text-green-500'
+                  }`}
+                  title={copiedPath === item.path ? 'Copied!' : 'Copy path'}
+                  aria-label={copiedPath === item.path ? 'Copied path' : 'Copy path'}
+                >
+                  {copiedPath === item.path ? <Check size={12} /> : <Copy size={12} />}
+                </button>
+                {!item.isDirectory && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); handleStartRename(item); }}
+                      className="p-1 text-gray-400 hover:text-blue-500"
+                      title="Rename"
+                      aria-label="Rename file"
+                    >
+                      <Edit size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); void handleDelete(item); }}
+                      className="p-1 text-gray-400 hover:text-red-500"
+                      title="Delete"
+                      aria-label="Delete file"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           ))}
 
