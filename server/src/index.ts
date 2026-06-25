@@ -133,6 +133,7 @@ async function initialize(): Promise<void> {
         multiSessionManager: wsManager.getMultiSessionManager(),
         claudeService: wsManager.getClaudeService(),
         opencodeService: wsManager.getOpenCodeService(),
+        antigravityService: wsManager.getAntigravityService(),
       });
       sessionCleanup.start();
     }

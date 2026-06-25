@@ -34,6 +34,7 @@ import type { AntigravityService } from '../antigravity/antigravity-service.js';
 import type { MultiSessionManager } from '../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../session-registry.js';
 import type { PiService } from '../pi/pi-service.js';
+import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('InternalAPI');
@@ -138,6 +139,9 @@ export class InternalApiServer {
       pinMaxTtlMs: this.config.pinMaxTtlMs,
       pinExpiryIntervalMs: this.config.pinExpiryIntervalMs,
       onSessionCreated: this.config.onSessionCreated,
+      piSessionDir: path.join(config.piAgentDir, 'sessions'),
+      claudeSessionDir: config.claudeSessionDir,
+      antigravitySessionDir: config.antigravitySessionDir,
     });
 
     const modelsDeps: ModelsRoutesDeps = {

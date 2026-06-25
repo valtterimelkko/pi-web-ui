@@ -66,8 +66,9 @@ import {
   extractOpenCodeTranscript,
   piSessionToReplayEvents,
 } from '../../session-transfer/index.js';
-import { stat, readdir } from 'fs/promises';
+import { stat, readdir, unlink, rm } from 'fs/promises';
 import path from 'path';
+import { config } from '../../config.js';
 import { createLogger } from '../../logging/logger.js';
 
 const logger = createLogger('InternalAPI');
@@ -95,6 +96,12 @@ export interface SessionRoutesDeps {
   pinExpiryIntervalMs?: number;
   /** Callback to notify WebSocket clients of new sessions */
   onSessionCreated?: (sessionId: string, sessionPath: string, runtime: string) => void;
+  /** Directory for Pi session files. Defaults to config. */
+  piSessionDir?: string;
+  /** Directory for Claude session JSONL files. Defaults to config. */
+  claudeSessionDir?: string;
+  /** Directory for Antigravity session JSONL/log files. Defaults to config. */
+  antigravitySessionDir?: string;
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps) {
@@ -108,6 +115,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     internalClientId,
     onSessionCreated,
   } = deps;
+
+  const piSessionDir = deps.piSessionDir ?? path.join(config.piAgentDir, 'sessions');
+  const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
+  const antigravitySessionDir = deps.antigravitySessionDir ?? config.antigravitySessionDir;
 
   /**
    * Per-session event broker. Long-lived: subscribers added via
@@ -639,6 +650,55 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  async function deleteSessionFiles(entry: { sdkType: string; path: string; id: string }): Promise<void> {
+    switch (entry.sdkType) {
+      case 'pi': {
+        try {
+          const s = await stat(entry.path);
+          if (s.isDirectory()) {
+            await rm(entry.path, { recursive: true, force: true });
+          } else {
+            await unlink(entry.path);
+          }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
+        break;
+      }
+      case 'claude': {
+        const jsonlFile = path.join(claudeSessionDir, `${entry.id}.jsonl`);
+        try {
+          await unlink(jsonlFile);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
+        break;
+      }
+      case 'antigravity': {
+        const jsonlFile = path.join(antigravitySessionDir, `${entry.id}.jsonl`);
+        try {
+          await unlink(jsonlFile);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
+        const logsDir = path.join(antigravitySessionDir, 'agy-logs');
+        try {
+          const logFiles = await readdir(logsDir);
+          for (const logFile of logFiles) {
+            if (logFile.startsWith(`${entry.id}-`)) {
+              await unlink(path.join(logsDir, logFile));
+            }
+          }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
+        break;
+      }
+      case 'opencode':
+        break;
+    }
+  }
+
   async function handleDeleteSession(
     _req: IncomingMessage,
     res: ServerResponse,
@@ -655,6 +715,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         claudeService.abort(sessionId);
       } else if (entry.sdkType === 'opencode') {
         opencodeService.abort(sessionId);
+      } else if (entry.sdkType === 'antigravity') {
+        antigravityService.abort(sessionId);
       } else {
         const agentSession = multiSessionManager.getAgentSession(entry.path);
         if (agentSession) {
@@ -667,6 +729,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // keep their own per-runtime pinned state; deleting a pinned session must
       // not leave a stale slot occupied until process restart.
       await unpinSessionById(sessionId).catch(() => false);
+
+      // Remove the runtime's persisted session files so the session does not
+      // reappear in the UI after a registry rebuild.
+      await deleteSessionFiles(entry);
 
       await sessionRegistry.delete(sessionId);
       // Drop any API-pin ledger record so the expiry sweep won't try to unpin a

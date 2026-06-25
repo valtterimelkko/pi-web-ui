@@ -38,6 +38,7 @@ vi.mock('../../src/config.js', () => ({
   config: {
     piAgentDir: '/tmp/test-pi-agent',
     claudeSessionDir: '/tmp/test-claude-sessions',
+    antigravitySessionDir: '/tmp/test-antigravity-sessions',
     sessionRegistryPath: '/tmp/test-session-registry.json',
   },
 }));
@@ -59,6 +60,12 @@ function makeOpenCodeService(statuses: any[] = []) {
   return {
     unpinSession: vi.fn(() => true),
     getSessionStatuses: vi.fn(() => statuses),
+  } as any;
+}
+
+function makeAntigravityService() {
+  return {
+    unpinSession: vi.fn(() => true),
   } as any;
 }
 
@@ -96,14 +103,16 @@ describe('SessionCleanupService', () => {
       cleanupIntervalMs: 999999999,
       piSessionDir: path.join(tmpDir, 'pi-sessions'),
       claudeSessionDir: path.join(tmpDir, 'claude-sessions'),
+      antigravitySessionDir: path.join(tmpDir, 'antigravity-sessions'),
     });
   }
 
-  function bindAll(service: any, extra: { multi?: any; claude?: any; opencode?: any } = {}) {
+  function bindAll(service: any, extra: { multi?: any; claude?: any; opencode?: any; antigravity?: any } = {}) {
     service.bindRuntimes({
       multiSessionManager: extra.multi ?? makeMultiSessionManager(),
       claudeService: extra.claude ?? makeClaudeService(),
       opencodeService: extra.opencode ?? makeOpenCodeService(),
+      antigravityService: extra.antigravity ?? makeAntigravityService(),
     });
   }
 
@@ -588,6 +597,203 @@ describe('SessionCleanupService', () => {
       expect(prefs.archivedSessionPaths).toContain(errId);
       expect(prefs.archivedSessionPaths).toContain(keepId);
       expect(prefs.archivedSessionPaths).not.toContain(okId);
+    });
+  });
+
+  describe('antigravity cleanup', () => {
+    it('should delete archived Antigravity session JSONL and agy logs', async () => {
+      const sessionId = 'old-antigravity-archived';
+      const agDir = path.join(tmpDir, 'antigravity-sessions');
+      const logsDir = path.join(agDir, 'agy-logs');
+      await fs.mkdir(logsDir, { recursive: true });
+
+      const jsonlFile = path.join(agDir, `${sessionId}.jsonl`);
+      const logFile = path.join(logsDir, `${sessionId}-1780000000000-abc.log`);
+      const otherLogFile = path.join(logsDir, 'other-session-1780000000000-abc.log');
+      await fs.writeFile(jsonlFile, 'turn\n', 'utf-8');
+      await fs.writeFile(logFile, 'agy output', 'utf-8');
+      await fs.writeFile(otherLogFile, 'other output', 'utf-8');
+
+      await writePrefs({ archivedSessionPaths: [sessionId], pinnedSessionPaths: [] });
+      mockRegistryEntries.set(sessionId, {
+        id: sessionId, sdkType: 'antigravity', path: sessionId,
+        lastActivity: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+
+      const antigravity = makeAntigravityService();
+      const service = makeService();
+      bindAll(service, { antigravity });
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).toContain(sessionId);
+      await expect(fs.stat(jsonlFile)).rejects.toThrow();
+      await expect(fs.stat(logFile)).rejects.toThrow();
+      await expect(fs.stat(otherLogFile)).resolves.toBeDefined();
+      expect(antigravity.unpinSession).toHaveBeenCalledWith(sessionId);
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).not.toContain(sessionId);
+    });
+
+    it('should delete archived Antigravity session even when logs dir is missing', async () => {
+      const sessionId = 'old-antigravity-no-logs';
+      const agDir = path.join(tmpDir, 'antigravity-sessions');
+      await fs.mkdir(agDir, { recursive: true });
+
+      const jsonlFile = path.join(agDir, `${sessionId}.jsonl`);
+      await fs.writeFile(jsonlFile, 'turn\n', 'utf-8');
+
+      await writePrefs({ archivedSessionPaths: [sessionId], pinnedSessionPaths: [] });
+      mockRegistryEntries.set(sessionId, {
+        id: sessionId, sdkType: 'antigravity', path: sessionId,
+        lastActivity: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).toContain(sessionId);
+      await expect(fs.stat(jsonlFile)).rejects.toThrow();
+    });
+  });
+
+  describe('pi path mismatch cleanup', () => {
+    it('should delete archived Pi file path based on file mtime even when inside an active directory', async () => {
+      const sessionDir = path.join(tmpDir, 'pi-sessions', '--root--');
+      const sessionFile = path.join(sessionDir, '2026-03-01T00-00-00-000Z_old.jsonl');
+      await fs.mkdir(sessionDir, { recursive: true });
+      await fs.writeFile(sessionFile, '{"type":"session","id":"pi-session-id"}\n', 'utf-8');
+      const oldMtime = new Date(Date.now() - 95 * 24 * 60 * 60 * 1000);
+      await fs.utimes(sessionFile, oldMtime, oldMtime);
+
+      // Registry stores the directory with a recent lastActivity (other sessions
+      // in the same cwd are still active). The archived file itself is old.
+      const dirEntryId = 'pi-dir-entry';
+      mockRegistryEntries.set(dirEntryId, {
+        id: dirEntryId,
+        sdkType: 'pi',
+        path: sessionDir,
+        lastActivity: new Date().toISOString(),
+        status: 'idle',
+      });
+
+      // UI archive stores the full file path
+      await writePrefs({ archivedSessionPaths: [sessionFile], pinnedSessionPaths: [] });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).toContain(sessionFile);
+      await expect(fs.stat(sessionFile)).rejects.toThrow();
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).not.toContain(sessionFile);
+    });
+
+    it('should delete orphan archived Pi file with no registry entry when file mtime is old', async () => {
+      const sessionDir = path.join(tmpDir, 'pi-sessions', '--root--');
+      const sessionFile = path.join(sessionDir, '2026-03-01T00-00-00-000Z_orphan.jsonl');
+      await fs.mkdir(sessionDir, { recursive: true });
+      await fs.writeFile(sessionFile, '{"type":"session","id":"orphan"}\n', 'utf-8');
+      // Set mtime to >90 days ago
+      const oldMtime = new Date(Date.now() - 95 * 24 * 60 * 60 * 1000);
+      await fs.utimes(sessionFile, oldMtime, oldMtime);
+
+      await writePrefs({ archivedSessionPaths: [sessionFile], pinnedSessionPaths: [] });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).toContain(sessionFile);
+      await expect(fs.stat(sessionFile)).rejects.toThrow();
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).not.toContain(sessionFile);
+    });
+
+    it('should NOT delete orphan archived Pi file when file mtime is recent', async () => {
+      const sessionDir = path.join(tmpDir, 'pi-sessions', '--root--');
+      const sessionFile = path.join(sessionDir, '2026-06-01T00-00-00-000Z_recent.jsonl');
+      await fs.mkdir(sessionDir, { recursive: true });
+      await fs.writeFile(sessionFile, '{"type":"session","id":"recent"}\n', 'utf-8');
+
+      await writePrefs({ archivedSessionPaths: [sessionFile], pinnedSessionPaths: [] });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).not.toContain(sessionFile);
+      await expect(fs.stat(sessionFile)).resolves.toBeDefined();
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).toContain(sessionFile);
+    });
+  });
+
+  describe('orphan runtime file cleanup', () => {
+    it('should delete orphan archived Claude JSONL file with no registry entry when mtime is old', async () => {
+      const sessionId = 'orphan-claude-old';
+      const claudeDir = path.join(tmpDir, 'claude-sessions');
+      await fs.mkdir(claudeDir, { recursive: true });
+      const jsonlFile = path.join(claudeDir, `${sessionId}.jsonl`);
+      await fs.writeFile(jsonlFile, 'claude data', 'utf-8');
+      const oldMtime = new Date(Date.now() - 95 * 24 * 60 * 60 * 1000);
+      await fs.utimes(jsonlFile, oldMtime, oldMtime);
+
+      await writePrefs({ archivedSessionPaths: [sessionId], pinnedSessionPaths: [] });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).toContain(sessionId);
+      await expect(fs.stat(jsonlFile)).rejects.toThrow();
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).not.toContain(sessionId);
+    });
+
+    it('should delete orphan archived Antigravity JSONL file with no registry entry when mtime is old', async () => {
+      const sessionId = 'orphan-antigravity-old';
+      const agDir = path.join(tmpDir, 'antigravity-sessions');
+      await fs.mkdir(agDir, { recursive: true });
+      const jsonlFile = path.join(agDir, `${sessionId}.jsonl`);
+      await fs.writeFile(jsonlFile, 'turn', 'utf-8');
+      const oldMtime = new Date(Date.now() - 95 * 24 * 60 * 60 * 1000);
+      await fs.utimes(jsonlFile, oldMtime, oldMtime);
+
+      await writePrefs({ archivedSessionPaths: [sessionId], pinnedSessionPaths: [] });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).toContain(sessionId);
+      await expect(fs.stat(jsonlFile)).rejects.toThrow();
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).not.toContain(sessionId);
+    });
+
+    it('should clean stale archived entries whose files are already gone', async () => {
+      const ghostPi = '/nonexistent/pi-session.jsonl';
+      const ghostClaude = 'ghost-claude-id';
+      await writePrefs({ archivedSessionPaths: [ghostPi, ghostClaude], pinnedSessionPaths: [] });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).toContain(ghostPi);
+      expect(result.deleted).toContain(ghostClaude);
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).toEqual([]);
     });
   });
 });
