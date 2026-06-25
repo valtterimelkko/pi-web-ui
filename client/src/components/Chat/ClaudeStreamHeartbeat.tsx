@@ -1,10 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useSessionStore } from '../../store';
-import { useUIStore } from '../../store/uiStore';
 
 const STALE_THRESHOLD_MS = 5000;
 const TICK_INTERVAL_MS = 1000;
-const SLOW_PROMPT_WARNING_MS = 60_000;
 
 interface ClaudeStreamHeartbeatProps {
   compact?: boolean;
@@ -14,43 +12,15 @@ export function ClaudeStreamHeartbeat({ compact = false }: ClaudeStreamHeartbeat
   const isStreaming = useSessionStore((s) => s.isStreaming);
   const sdkType = useSessionStore((s) => s.currentSessionSdkType);
   const currentToolName = useSessionStore((s) => s.currentToolName);
-  const promptStartedAt = useSessionStore((s) => s.promptStartedAt);
-  const lastStreamEventAt = useSessionStore((s) => s.lastStreamEventAt);
   const [stale, setStale] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
-  const [warnedSlow, setWarnedSlow] = useState(false);
 
-  // Slow-prompt warning: warn only when the turn is old AND no stream
-  // activity has arrived for the warning window. Long Claude channel turns can
-  // be healthy while emitting only stream_activity pings, so elapsed turn time
-  // alone is not a stuck signal.
-  useEffect(() => {
-    if (!isStreaming || sdkType !== 'claude' || !promptStartedAt) {
-      setWarnedSlow(false);
-      return;
-    }
-
-    const maybeWarn = () => {
-      if (warnedSlow) return;
-      const now = Date.now();
-      const promptAge = now - promptStartedAt;
-      const lastEvent = useSessionStore.getState().lastStreamEventAt ?? promptStartedAt;
-      const eventAge = now - lastEvent;
-      if (promptAge < SLOW_PROMPT_WARNING_MS || eventAge < SLOW_PROMPT_WARNING_MS) {
-        return;
-      }
-      setWarnedSlow(true);
-      useUIStore.getState().addToast({
-        type: 'warning',
-        message: 'Claude hasn\'t responded with activity for a while — may still be processing or the prompt could be stuck.',
-      });
-    };
-
-    maybeWarn();
-    const timer = setInterval(maybeWarn, TICK_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [isStreaming, sdkType, promptStartedAt, lastStreamEventAt, warnedSlow]);
-
+  // Inline liveness indicator. After STALE_THRESHOLD_MS of stream silence the
+  // label switches to an amber "Working…" pulse with elapsed seconds. This is
+  // the persistent in-place feedback; long-but-healthy turns (slow models,
+  // long-running tools) are normal on the SDK backend and are NOT treated as a
+  // "stuck" alarm — the previous toast warning was removed because it fired on
+  // every long step rather than on genuine hangs.
   useEffect(() => {
     if (!isStreaming || sdkType !== 'claude') {
       setStale(false);
