@@ -947,6 +947,7 @@ any existing endpoint.
 | Watch progress live | `GET /sessions/:id/events` | Best for Pi / OpenCode / Antigravity, and for single-session Claude monitoring |
 | Wait for a child to finish safely | `GET /sessions/:id/wait` | Recommended fallback for Claude fan-out cases |
 | Read child output in a runtime-agnostic form | `GET /sessions/:id/transcript` | Best default for orchestrators |
+| Read what the user sees by default | `GET /sessions/:id/transcript?view=screen` | Fastest read-only UI-faithful view |
 | Reconstruct UI-style event replay | `GET /sessions/:id/history` | Lower-level replay/event shape |
 | Hand child context into another session | `POST /sessions/:id/transfer` | Reuses the same transfer machinery as the web UI |
 | Sum usage/cost across children | `POST /sessions/usage` | Aggregate report |
@@ -1051,6 +1052,11 @@ messages, collapsed tool cards, summarized/collapsed thinking, tool groups,
 skill placeholders). This is the fastest way for an agent to read what the user
 sees without driving a browser. See [Screen view (`view=screen`)](#screen-view-viewscreen)
 below.
+
+Choose the read path like this:
+- use plain `/transcript` for runtime-agnostic result extraction
+- use `/transcript?view=screen` for operator-visible state / what the user sees
+- use `/history` for replay/debug reconstruction rather than ordinary result reading
 
 **Response (200):**
 ```json

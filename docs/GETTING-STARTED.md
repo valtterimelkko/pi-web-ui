@@ -114,6 +114,14 @@ If you are only enabling some runtimes, leave the others disabled or simply do n
 ### Pi Coding Agent-focused first run
 Usually just the base config is enough if your Pi Coding Agent environment is already available to the same OS user.
 
+Optional but useful now: the Pi runtime can also surface a much broader **OpenRouter-backed model catalogue** into the Pi model picker. That is not required for first success, but once your Pi auth is working you can refresh the catalogue with:
+
+```bash
+npm run pi:refresh-models
+```
+
+Read [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md) if you want the weekly refresh path or the auth/storage details.
+
 ### Claude Code-focused first run
 For the current best Claude experience, start with the **profile-enabled SDK path** even if you only want native Claude at first. That gives you the same browser surface for:
 - native Claude subscription sessions
@@ -240,5 +248,6 @@ The maintainer's own preferred shape is an always-on server behind a reverse pro
 - [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md)
 - [`PLATFORM-SUPPORT.md`](./PLATFORM-SUPPORT.md)
 - [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md)
+- [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md)
 - [`../DEPLOYMENT.md`](../DEPLOYMENT.md)
 - [`../SECURITY.md`](../SECURITY.md)

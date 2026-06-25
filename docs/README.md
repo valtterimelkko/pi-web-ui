@@ -57,6 +57,13 @@ If you are changing code, debugging a runtime, or operating this repo as a live 
 - [`PROTOCOL.md`](./PROTOCOL.md)
 - [`SHARP-EDGES.md`](./SHARP-EDGES.md)
 
+### If you are an LLM fixing the repo, read only this first
+- [`MAINTAINER-INDEX.md`](./MAINTAINER-INDEX.md)
+- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
+- [`CODEBASE-MAP.md`](./CODEBASE-MAP.md)
+- [`OBSERVABILITY.md`](./OBSERVABILITY.md)
+- [`INTERNAL-API.md`](./INTERNAL-API.md) — if the issue touches runtime routing, orchestration, diagnostics, or transcript readback
+
 LLM coding agents should also read:
 - [`../AGENTS.md`](../AGENTS.md)
 - [`../CLAUDE.md`](../CLAUDE.md)

@@ -40,7 +40,7 @@ For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY
 
 | Runtime family | Integration style | Best for | Caveat level |
 |---|---|---|---|
-| **Pi Coding Agent** | Native Pi Coding Agent integration via its SDK path | Pi Coding Agent workflows, extensions, custom tools | Lowest |
+| **Pi Coding Agent** | Native Pi Coding Agent integration via its SDK path | Pi Coding Agent workflows, extensions, custom tools, and now a much broader optional OpenRouter-backed model catalogue | Lowest |
 | **Claude Code** | Claude Agent SDK (profiles), `claude -p`, or channel-backed Claude Code | Harder coding work on Claude Code; multi-provider access via provider profiles | Medium–higher |
 | **OpenCode** | `opencode serve` + HTTP/SSE | OpenCode-backed workflows, especially OpenCode/Z.AI setups | Low–medium |
 | **Antigravity** | `agy -p` subprocess-per-turn | Gemini/Antigravity workflows in the same UI | Higher |
@@ -79,6 +79,13 @@ Pi Web UI is not pretending every operating system is equally supported.
 - **Windows** — not a primary target today; use a Linux host or treat WSL as experimental
 
 Read [`docs/PLATFORM-SUPPORT.md`](./docs/PLATFORM-SUPPORT.md) before planning a deployment.
+
+## Choose your docs path
+
+- **Adopting / self-hosting / evaluating the repo?** Start with [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md)
+- **Choosing between runtime families?** Read [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md)
+- **Integrating programmatically or orchestrating agents?** Read [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
+- **Maintaining, contributing, or debugging the repo itself?** Start with [`docs/README.md`](./docs/README.md)
 
 ## Quick start paths
 
@@ -134,6 +141,11 @@ Current docs:
 - [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md)
 
+Recent power-user additions worth knowing about:
+- **self-service diagnostics** and **event-type introspection** for local consumers
+- a read-only **screen-view transcript projection** (`view=screen`) for fetching what the user sees without browser automation
+- optional **Pi runtime OpenRouter model refresh** via `npm run pi:refresh-models`; see [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md)
+
 The API now publishes contract metadata through `/health` and `/capabilities` because trusted local consumers may use Pi Web UI as a runtime backend. One such consumer under separate design is Agent OS; Pi Web UI should remain the runtime gateway rather than absorbing Agent OS memory/work-object concerns.
 
 Longer-term direction:
@@ -174,6 +186,7 @@ Canonical architecture doc:
 - **Security:** [`SECURITY.md`](./SECURITY.md)
 - **API index:** [`API.md`](./API.md)
 - **Docs hub:** [`docs/README.md`](./docs/README.md)
+- **Recent doc-relevant changes:** [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md)
 
 ### Maintainer / contributor / LLM-agent path
 - **Agent instructions:** [`AGENTS.md`](./AGENTS.md)

@@ -6,6 +6,12 @@ Many docs below intentionally contain concrete paths, socket locations, service 
 
 If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` before reading deeper architecture docs.
 
+## Recent major doc-relevant changes
+- **Internal API contract `1.4.0`** — adds the read-only screen-view transcript projection: `GET /api/v1/sessions/:id/transcript?view=screen`
+- **Observability/introspection endpoints (`1.3.0`)** — `GET /api/v1/diagnostics`, `GET /api/v1/sessions/:id/diagnostics`, and `GET /api/v1/events/types`
+- **Pi runtime OpenRouter model automation** — Pi can now surface a broader OpenRouter-backed model catalogue; see [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md)
+- **Fast delta summary:** [`RECENT-CHANGES.md`](./RECENT-CHANGES.md)
+
 ## 1. Agent quick start
 - [`../AGENTS.md`](../AGENTS.md) — agent entry point; canonical source for the root guide
 - [`../CLAUDE.md`](../CLAUDE.md) — Claude Code agent entry point; kept byte-identical to `AGENTS.md` via `npm run docs:sync-agent-guides`
@@ -35,7 +41,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md) — Antigravity / `agy` architecture, logs, and failure modes
 
 ## 6. Internal API and orchestration
-- [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API reference
+- [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API reference (including transcript vs screen-view vs history read paths)
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — task-oriented guide for spawning, monitoring, and collecting child sessions across runtimes
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — browserless runtime validation runner built on top of the local automation API
 - [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watches + headless `validate:long-horizon` runner for autonomous, restart-surviving, long-running validation

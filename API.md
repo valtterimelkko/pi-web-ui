@@ -113,11 +113,15 @@ Reference docs:
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
 
-`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.2.0`) for local consumers such as Agent OS style tooling.
+`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.4.0`) for local consumers such as Agent OS style tooling.
 
 Important endpoints include:
 - `GET /api/v1/capabilities`
 - `GET /api/v1/models`
+- `POST /api/v1/models/refresh` (OpenCode and Pi runtime catalogue refresh; Pi uses `{"runtime":"pi"}` for the OpenRouter-backed catalogue)
+- `GET /api/v1/diagnostics`
+- `GET /api/v1/sessions/:id/diagnostics`
+- `GET /api/v1/events/types`
 - `POST /api/v1/sessions` (supports Claude `profileId` or `model: "profile:<id>"`)
 - `POST /api/v1/sessions/:id/prompt` (`detach:true` supported)
 - `GET /api/v1/sessions/:id/info`
@@ -125,6 +129,7 @@ Important endpoints include:
 - `GET /api/v1/sessions/:id/events`
 - `GET /api/v1/sessions/:id/wait`
 - `GET /api/v1/sessions/:id/transcript`
+- `GET /api/v1/sessions/:id/transcript?view=screen` (read-only “what the user sees” projection; optional `expand=tools,thinking`)
 - `POST /api/v1/sessions/:id/transfer`
 - `POST /api/v1/sessions/batch`
 - `POST /api/v1/sessions/batch/prompt`
@@ -133,6 +138,11 @@ Important endpoints include:
 - `POST /api/v1/sessions/:id/control` (including standalone pin/unpin)
 - `POST /api/v1/sessions/:id/approvals/:requestId/respond`
 - `POST/GET/DELETE /api/v1/sessions/:id/watch`
+
+Use the session read paths like this:
+- `/transcript` — runtime-agnostic result reading
+- `/transcript?view=screen` — faithful read-only projection of what the user sees by default
+- `/history` — lower-level replay/debug detail
 
 Known caveat: for Claude channel-backed sessions, `GET /sessions/:id/events`
 can be less reliable for multi-child parallel monitoring than it is for the
@@ -248,6 +258,8 @@ REST errors generally return:
   "error": "Error message"
 }
 ```
+
+Internal API errors use a stable `{ error, code }` shape and may also include additive `hint` and `docs` fields for the most actionable cases.
 
 WebSocket errors generally use:
 

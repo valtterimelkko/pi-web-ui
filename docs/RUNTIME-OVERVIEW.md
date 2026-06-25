@@ -19,7 +19,7 @@ Then add more runtimes only if they solve a real problem for you:
 
 | Runtime family | Uses | Integration style | Setup difficulty | Streaming/tool visibility | Best for | Caveat level |
 |---|---|---|---|---|---|---|
-| **Pi Coding Agent** | Pi Coding Agent | Native SDK/session integration | Medium | Richest Pi Coding Agent behaviour | Pi Coding Agent extensions, custom tools, Pi Coding Agent-first workflows | Low |
+| **Pi Coding Agent** | Pi Coding Agent | Native SDK/session integration | Medium | Richest Pi Coding Agent behaviour | Pi Coding Agent extensions, custom tools, Pi Coding Agent-first workflows, plus an optional broader OpenRouter-backed model catalogue | Low |
 | **Claude Code** | Claude Agent SDK, `claude -p`, or channel-backed Claude Code | Profile-driven SDK integration (preferred), direct CLI fallback, or PTY/plugin path | Medium-high | SDK and channel modes offer good tool visibility; legacy direct is weaker | Claude Code-centric workflows, multi-provider access (GLM 5.2 / Z.ai, etc.), and users who want backend flexibility | Medium–higher |
 | **OpenCode** | `opencode serve` | Local server/API integration | Medium | Strong normalized streaming via SSE adaptation | OpenCode-backed workflows and OpenCode/Z.AI setups | Low-medium |
 | **Antigravity** | `agy -p` | Subprocess-per-turn wrapper | Medium | No true live streaming today; replay/log driven | Gemini/Antigravity access in the same UI | Higher |
@@ -45,11 +45,13 @@ That does not make Claude or Antigravity useless. It just means adopters should 
 - you want the deepest extension path
 - you want companion Pi Coding Agent extensions to matter
 - you want the most native Pi Coding Agent workflow behaviour
+- you want the option to surface a much broader OpenRouter-backed model catalogue into the Pi runtime later
 
 Read next:
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md)
 - [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md)
 - [`PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md)
+- [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md)
 
 ### Start with OpenCode if...
 - OpenCode is already in your workflow

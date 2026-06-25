@@ -74,10 +74,11 @@ Always start by asking the server what is available now and which contract versi
 - `GET /api/v1/capabilities` — includes `contract.name`, `contract.majorVersion`, and `contract.contractVersion`
 - `GET /api/v1/models`
 
-Useful debugging/introspection endpoints added in contract `1.3.0`:
+Useful debugging/introspection endpoints added in contract `1.3.0` and `1.4.0`:
 
 - `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off.
 - `GET /api/v1/events/types` — machine-readable catalogue of normalized event kinds on the `/events` stream.
+- `GET /api/v1/sessions/:id/transcript?view=screen` — a read-only “what the user sees” projection for a finished or in-progress session, without browser automation.
 
 These are especially helpful during orchestration setup or when a child session behaves unexpectedly, because they let you inspect the server without shell access.
 
@@ -166,6 +167,14 @@ Use this when:
 This gives you a runtime-agnostic output format and is usually the best way to
 consume child results.
 
+### UI-faithful alternative
+- `GET /api/v1/sessions/:id/transcript?view=screen`
+
+Use this when you want the fastest read-only answer to: **what does the user see
+right now?** It returns the same session in a screen-oriented projection with
+collapsed tool cards, grouped tools, summarized thinking, and a rendered markdown
+"text screenshot". Add `expand=tools,thinking` only when you need the extra detail.
+
 ### Lower-level alternative
 - `GET /api/v1/sessions/:id/history`
 
@@ -246,6 +255,7 @@ never the production instance by default.
 | Watch live progress | `/sessions/:id/events` |
 | Wait for completion safely | `/sessions/:id/wait` |
 | Read child output in one common format | `/sessions/:id/transcript` |
+| Read what the user sees by default | `/sessions/:id/transcript?view=screen` |
 | Get replay-like details | `/sessions/:id/history` |
 | Hand context into another session | `/sessions/:id/transfer` |
 | Sum usage/cost | `/sessions/usage` |
@@ -314,6 +324,15 @@ agents on other runtimes:
 
 That gives you broad functional coverage across all four runtime paths without
 assuming identical runtime behaviour where the backends are actually different.
+
+## Transcript vs screen view vs history
+
+| Need | Use |
+|---|---|
+| Runtime-agnostic result extraction | `/transcript` |
+| UI-faithful readback for operators/agents | `/transcript?view=screen` |
+| Tool/thinking detail only when needed | `/transcript?view=screen&expand=tools,thinking` |
+| Replay/debug reconstruction | `/history` |
 
 ## Related docs
 

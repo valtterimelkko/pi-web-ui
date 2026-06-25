@@ -6,6 +6,17 @@
 
 Follow this order unless you already know the exact failing subsystem:
 
+### Fastest API-first debugging for agents
+
+When you have Internal API access, start here before reaching for browser automation or host logs:
+
+1. `GET /api/v1/diagnostics` — recent secret-scrubbed server logs
+2. `GET /api/v1/sessions/:id/diagnostics` — same, scoped to one session
+3. `GET /api/v1/sessions/:id/transcript?view=screen` — read-only "what the user sees" projection
+4. `GET /api/v1/sessions/:id/history` — lower-level replay/debug detail only if needed
+
+This is often the most token-efficient route for LLM agents because it avoids driving the UI and avoids rediscovering log locations first.
+
 1. **Find the session entry quickly**
    ```bash
    npm run debug:where -- <session-id-or-runtime-session-id-or-path>
@@ -107,12 +118,21 @@ curl -s --unix-socket ~/.pi-web-ui/internal-api.sock \
 ### Recommended orchestration-debug flow
 
 1. `GET /api/v1/capabilities` — confirm runtime availability and feature flags
-2. `POST /api/v1/sessions` or `/sessions/batch` — create child sessions
-3. `POST /api/v1/sessions/:id/prompt` — dispatch work
-4. `GET /api/v1/sessions/:id/events` — monitor progress when the runtime supports stable SSE monitoring
-5. `GET /api/v1/sessions/:id/wait` — wait for completion without polling loops in your own code
-6. `GET /api/v1/sessions/:id/transcript` — extract child results in a runtime-agnostic form
-7. `POST /api/v1/sessions/:id/transfer` — hand child context back into another session
+2. `GET /api/v1/diagnostics` — fast sanity check before deeper digging
+3. `POST /api/v1/sessions` or `/sessions/batch` — create child sessions
+4. `POST /api/v1/sessions/:id/prompt` — dispatch work
+5. `GET /api/v1/sessions/:id/events` — monitor progress when the runtime supports stable SSE monitoring
+6. `GET /api/v1/sessions/:id/wait` — wait for completion without polling loops in your own code
+7. `GET /api/v1/sessions/:id/transcript` — extract child results in a runtime-agnostic form
+8. `GET /api/v1/sessions/:id/transcript?view=screen` — fetch the UI-faithful view when you need operator-visible state
+9. `POST /api/v1/sessions/:id/transfer` — hand child context back into another session
+
+### Which read path should you use?
+
+- `GET /api/v1/sessions/:id/transcript` — best default for runtime-agnostic result reading
+- `GET /api/v1/sessions/:id/transcript?view=screen` — best when you need what the user sees by default
+- `GET /api/v1/sessions/:id/history` — best for replay/debug reconstruction
+- `GET /api/v1/sessions/:id/diagnostics` — best for correlated backend/log context
 
 ### Important Claude caveat
 
