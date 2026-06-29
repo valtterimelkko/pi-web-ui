@@ -178,6 +178,14 @@ export interface ServerConfig {
   antigravityMaxSessions: number;
   antigravityMaxPinnedSessions: number;
   antigravityCleanupIntervalMs: number;
+  notificationsEnabled: boolean;
+  notificationsDir: string;
+  notificationsDebounceMs: number;
+  notificationsTailMaxChars: number;
+  notificationsPublicBaseUrl?: string;
+  notificationsMaxDeliveryAttempts: number;
+  telegramBotToken?: string;
+  telegramChatId?: string;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -276,4 +284,12 @@ export const config: ServerConfig = {
   antigravityMaxSessions: parseInt(process.env.ANTIGRAVITY_MAX_SESSIONS || '4', 10),
   antigravityMaxPinnedSessions: parseInt(process.env.ANTIGRAVITY_MAX_PINNED_SESSIONS || '2', 10),
   antigravityCleanupIntervalMs: parseInt(process.env.ANTIGRAVITY_CLEANUP_INTERVAL_MS || '60000', 10),
+  notificationsEnabled: process.env.NOTIFICATIONS_ENABLED === 'true',
+  notificationsDir: process.env.NOTIFICATIONS_DIR || path.join(os.homedir(), '.pi-web-ui', 'notifications'),
+  notificationsDebounceMs: parseInt(process.env.NOTIFICATIONS_DEBOUNCE_MS || '1500', 10),
+  notificationsTailMaxChars: parseInt(process.env.NOTIFICATIONS_TAIL_MAX_CHARS || '1200', 10),
+  notificationsPublicBaseUrl: process.env.NOTIFICATIONS_PUBLIC_BASE_URL || undefined,
+  notificationsMaxDeliveryAttempts: parseInt(process.env.NOTIFICATIONS_MAX_DELIVERY_ATTEMPTS || '5', 10),
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || undefined,
+  telegramChatId: process.env.TELEGRAM_CHAT_ID || undefined,
 };

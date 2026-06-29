@@ -141,4 +141,27 @@ describe('createAuthMiddleware', () => {
 
     expect(next).toHaveBeenCalled();
   });
+
+  it('rejects unauthenticated requests to the notifications endpoint', () => {
+    const req = createMockReq('/api/v1/notifications');
+    const res = createMockRes();
+    const next = vi.fn();
+
+    middleware(req, res as unknown as ServerResponse, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('rejects unauthenticated notification opt-in requests', () => {
+    const req = createMockReq('/api/v1/sessions/abc-123/notifications/opt-in');
+    (req as Record<string, unknown>).method = 'POST';
+    const res = createMockRes();
+    const next = vi.fn();
+
+    middleware(req, res as unknown as ServerResponse, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(401);
+  });
 });

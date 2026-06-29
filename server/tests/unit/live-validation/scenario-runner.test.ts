@@ -102,6 +102,8 @@ describe('runScenario', () => {
       controlSession: vi.fn(),
       getSessionHistory: vi.fn(),
       respondToApproval: vi.fn(),
+      optInNotifications: vi.fn().mockResolvedValue({}),
+      getNotificationState: vi.fn().mockResolvedValue({ optIn: null, deliveries: [] }),
       deleteSession: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -128,6 +130,8 @@ describe('runScenario', () => {
       controlSession: vi.fn(),
       getSessionHistory: vi.fn(),
       respondToApproval: vi.fn(),
+      optInNotifications: vi.fn(),
+      getNotificationState: vi.fn(),
       deleteSession: vi.fn(),
     } as any;
 
@@ -176,6 +180,8 @@ describe('runScenario', () => {
       controlSession: vi.fn(),
       getSessionHistory: vi.fn(),
       respondToApproval: vi.fn(),
+      optInNotifications: vi.fn(),
+      getNotificationState: vi.fn(),
       deleteSession: vi.fn(),
     } as any;
 
@@ -207,6 +213,8 @@ describe('runScenario', () => {
       controlSession: vi.fn().mockResolvedValue({ ok: true }),
       getSessionHistory: vi.fn(),
       respondToApproval: vi.fn(),
+      optInNotifications: vi.fn().mockResolvedValue({}),
+      getNotificationState: vi.fn().mockResolvedValue({ optIn: null, deliveries: [] }),
       deleteSession: vi.fn().mockResolvedValue(undefined),
     };
 

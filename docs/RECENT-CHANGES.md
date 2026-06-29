@@ -4,6 +4,11 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Notification layer (Telegram on `agent_end`)**
+  - One-way operator notifications when an agent session yields control, across all 4 runtimes (Pi/Claude/OpenCode/Antigravity)
+  - Opt-in per session (decoupled from pinning); durable outbox + retry; explicit `POST /api/v1/notifications`
+  - Canonical doc: [`NOTIFICATIONS.md`](./NOTIFICATIONS.md)
+
 - **Internal API contract `1.4.0`**
   - Added the read-only screen-view transcript projection:
     `GET /api/v1/sessions/:id/transcript?view=screen`

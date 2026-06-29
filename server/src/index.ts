@@ -16,13 +16,18 @@ import { SessionCleanupService } from './session-cleanup.js';
 import { getSessionRegistry } from './session-registry.js';
 import { createFatalErrorHandlers } from './fatal-error-handlers.js';
 
-const app = createApp();
-const server = createServer(app);
-
-// Initialize WebSocket connection manager
+// State used by createApp's lazy notification-router getters. Declared before
+// createApp() (which runs at module load) so the getters close over initialized
+// bindings; they are populated later in initialize() and resolved per request.
 let wsManager: WebSocketConnectionManager | null = null;
 let sessionCleanup: SessionCleanupService | null = null;
 let internalApiServer: import('./internal-api/index.js').InternalApiServer | null = null;
+let notificationsRegistry: ReturnType<typeof getSessionRegistry> | null = null;
+
+const app = createApp({
+  getManager: () => internalApiServer?.getNotificationManager() ?? null,
+});
+const server = createServer(app);
 
 // Initialize Pi service and WebSocket manager
 async function initialize(): Promise<void> {
@@ -142,6 +147,7 @@ async function initialize(): Promise<void> {
     if (config.internalApiEnabled) {
       try {
         const { InternalApiServer } = await import('./internal-api/index.js');
+        notificationsRegistry = getSessionRegistry(config.sessionRegistryPath);
         internalApiServer = new InternalApiServer({
           config: {
             socketPath: config.internalApiSocketPath,
@@ -178,7 +184,7 @@ async function initialize(): Promise<void> {
           opencodeService: wsManager.getOpenCodeService(),
           antigravityService: wsManager.getAntigravityService(),
           multiSessionManager: wsManager.getMultiSessionManager(),
-          sessionRegistry: getSessionRegistry(config.sessionRegistryPath),
+          sessionRegistry: notificationsRegistry,
           piService: getPiService(),
         });
         await internalApiServer.start();

@@ -84,6 +84,29 @@ function buildAssertions(summary: ReturnType<typeof collectValidationSummary>, e
   ];
 }
 
+/**
+ * Poll a session's notification state until an agent_end delivery appears (or
+ * timeout). The manager debounces after agent_end, so the record isn't instant.
+ */
+async function waitForNotificationDelivery(
+  client: { getNotificationState(sessionId: string): Promise<{ deliveries: unknown[] }> },
+  sessionId: string,
+  timeoutMs = 8000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await client
+      .getNotificationState(sessionId)
+      .catch(() => ({ deliveries: [] as unknown[] }));
+    const captured = (state.deliveries ?? []).some(
+      (d) => (d as { notification?: { kind?: string } }).notification?.kind === 'agent_end',
+    );
+    if (captured) return true;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}
+
 export const scenarioRegistry: Record<string, ValidationScenario> = {
   smoke: {
     id: 'smoke',
@@ -106,6 +129,58 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
       });
     },
   },
+  'notify-on-agent-end': {
+    id: 'notify-on-agent-end',
+    description:
+      'Opt a session into notifications, run a turn, and prove the NotificationManager captured agent_end (origin-independent, via the service observer) by observing a delivery record.',
+    async run(context) {
+      return withEphemeralSession(context, async (sessionId) => {
+        // Opt in — attaches the service-level observer (the origin-independent hook).
+        await context.client.optInNotifications(sessionId, 'notify-scenario');
+        // Drive a turn to completion (agent_end).
+        const events = await context.client.promptStream(sessionId, {
+          message: 'Reply with the exact text LIVE-VALIDATION-OK and nothing else.',
+          verbosity: 'full',
+          mode: 'prompt',
+        });
+        const summary = collectValidationSummary(events);
+        // The manager must have produced an agent_end delivery for this session.
+        const captured = await waitForNotificationDelivery(context.client, sessionId);
+        const finalState = await context.client
+          .getNotificationState(sessionId)
+          .catch(() => ({ deliveries: [] as unknown[] }));
+        const deliveries = (finalState.deliveries ?? []) as Array<{
+          notification?: { kind?: string; sessionId?: string };
+          delivery?: { status?: string };
+        }>;
+        const agentEnd = deliveries.find((d) => d.notification?.kind === 'agent_end');
+        const assertions: ValidationAssertion[] = [
+          {
+            name: 'agent_end_emitted',
+            passed: summary.sawAgentEnd,
+            details: summary.sawAgentEnd ? 'agent_end seen' : 'agent_end missing',
+          },
+          {
+            name: 'notification_captured',
+            passed: captured,
+            details: `${deliveries.length} delivery record(s); agent_end captured=${captured}`,
+          },
+          {
+            name: 'notification_session_match',
+            passed: agentEnd?.notification?.sessionId === sessionId,
+            details: agentEnd?.notification?.sessionId ?? 'no agent_end delivery',
+          },
+        ];
+        return {
+          scenarioId: 'notify-on-agent-end',
+          runtime: context.runtime,
+          passed: assertions.every((a) => a.passed),
+          assertions,
+        };
+      });
+    },
+  },
+
   'model-smoke': {
     id: 'model-smoke',
     description: 'Verify a specific model (via --model) is actually usable: minimal turn completes.',

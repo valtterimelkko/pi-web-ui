@@ -20,6 +20,8 @@ export interface InternalApiClientLike {
   getSessionHistory(sessionId: string): Promise<SessionHistoryResponse>;
   respondToApproval(sessionId: string, requestId: string, approved: boolean): Promise<unknown>;
   deleteSession(sessionId: string): Promise<void>;
+  optInNotifications(sessionId: string, label?: string): Promise<unknown>;
+  getNotificationState(sessionId: string): Promise<{ optIn: unknown; deliveries: unknown[] }>;
 }
 
 export interface ValidationAssertion {

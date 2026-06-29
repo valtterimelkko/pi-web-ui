@@ -49,6 +49,9 @@ export class ClaudeService {
   private sessionStore: ClaudeSessionStore;
   private registry: SessionRegistryManager;
   private sessionsWithHistory: Set<string> = new Set();
+
+  /** API observers — receive every normalized event for a session, regardless of which client prompted. */
+  private apiObservers: Map<string, Set<(event: NormalizedEvent) => void>> = new Map();
   private pinnedSessions: Set<string> = new Set();
   private static readonly MAX_PINNED_SESSIONS = 2;
   private channelService: ClaudeChannelService | null = null;
@@ -277,14 +280,22 @@ export class ClaudeService {
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
   ): Promise<void> {
+    // Fan every backend's normalized events out to API observers so subscribers
+    // (e.g. the notification layer) see agent_end regardless of which client
+    // started the prompt. Mirrors the OpenCode/Pi service-level observers.
+    const observedOnEvent = (event: NormalizedEvent): void => {
+      try { onEvent(event); } catch { /* non-fatal */ }
+      this.emitApiObserverEvent(sessionId, event);
+    };
+
     // Route to channel if this is a channel session
     if (this.hasChannelSession(sessionId)) {
-      return this.channelService!.sendPrompt(sessionId, prompt, onEvent, onComplete);
+      return this.channelService!.sendPrompt(sessionId, prompt, observedOnEvent, onComplete);
     }
 
     // Route to SDK if this is an SDK session
     if (this.sdkService?.hasSession(sessionId)) {
-      return this.sdkService.sendPrompt(sessionId, prompt, onEvent, onComplete);
+      return this.sdkService.sendPrompt(sessionId, prompt, observedOnEvent, onComplete);
     }
 
     // Check registry for profile backend
@@ -298,7 +309,7 @@ export class ClaudeService {
 
     // If the session was created with sdk-subscription backend, delegate to SDK
     if (entry.claudeProfileBackend === 'sdk-subscription' && this.sdkService) {
-      return this.sdkService.sendPrompt(sessionId, prompt, onEvent, onComplete);
+      return this.sdkService.sendPrompt(sessionId, prompt, observedOnEvent, onComplete);
     }
 
     // Persist the user prompt
@@ -316,7 +327,7 @@ export class ClaudeService {
       timestamp: Date.now(),
       data: { sessionId, claudeSessionId: entry.claudeSessionId },
     };
-    try { onEvent(agentStartEvent); } catch { /* non-fatal */ }
+    try { observedOnEvent(agentStartEvent); } catch { /* non-fatal */ }
 
     const claudeSessionFile = resolveClaudeSessionPath(entry.cwd, entry.claudeSessionId);
     const isFollowUp = this.sessionsWithHistory.has(sessionId)
@@ -364,7 +375,7 @@ export class ClaudeService {
           logger.warn('[ClaudeService] Failed to persist event:', persistErr);
         }
         try {
-          onEvent(event);
+          observedOnEvent(event);
         } catch { /* non-fatal */ }
       },
       // onComplete
@@ -386,7 +397,7 @@ export class ClaudeService {
           // the SDK backend uses), not just a silent stop. connection.ts maps
           // this to a session_event the client renders.
           try {
-            onEvent({
+            observedOnEvent({
               type: 'error', sessionId, timestamp: Date.now(),
               data: { error: error.message, message: error.message },
             });
@@ -407,6 +418,32 @@ export class ClaudeService {
         onComplete(error);
       },
     );
+  }
+
+  // ── API observers (origin-independent event fan-out) ──────────────────────
+
+  addApiObserver(sessionId: string, observer: (event: NormalizedEvent) => void): void {
+    let observers = this.apiObservers.get(sessionId);
+    if (!observers) {
+      observers = new Set();
+      this.apiObservers.set(sessionId, observers);
+    }
+    observers.add(observer);
+  }
+
+  removeApiObserver(sessionId: string, observer: (event: NormalizedEvent) => void): void {
+    const observers = this.apiObservers.get(sessionId);
+    if (!observers) return;
+    observers.delete(observer);
+    if (observers.size === 0) this.apiObservers.delete(sessionId);
+  }
+
+  private emitApiObserverEvent(sessionId: string, event: NormalizedEvent): void {
+    const observers = this.apiObservers.get(sessionId);
+    if (!observers || observers.size === 0) return;
+    for (const observer of observers) {
+      try { observer(event); } catch { /* non-fatal */ }
+    }
   }
 
   // ── Control ───────────────────────────────────────────────────────────────

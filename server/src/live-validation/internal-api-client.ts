@@ -187,6 +187,17 @@ export class InternalApiClient implements InternalApiClientLike {
     await this.request('DELETE', `/api/v1/sessions/${encodeURIComponent(sessionId)}`);
   }
 
+  async optInNotifications(sessionId: string, label?: string): Promise<unknown> {
+    return this.request('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/notifications/opt-in`, label ? { label } : {});
+  }
+
+  async getNotificationState(sessionId: string): Promise<{ optIn: unknown; deliveries: unknown[] }> {
+    return this.request<{ optIn: unknown; deliveries: unknown[] }>(
+      'GET',
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/notifications`,
+    );
+  }
+
   // ─── Long-horizon validation surface ──────────────────────────────────────
 
   async listSessions(): Promise<ListSessionsResponse> {

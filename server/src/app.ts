@@ -18,8 +18,21 @@ import { gitRouter } from './routes/git.js';
 import { terminalRouter } from './routes/terminal.js';
 import dictationRoutes from './routes/dictation.js';
 import ttsRoutes from './routes/tts.js';
+import { createNotificationsWebRouter } from './routes/notifications-web.js';
+import type { NotificationManager } from './notifications/notification-manager.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+
+/**
+ * Lazy wiring for the browser-facing notification opt-in router. createApp() runs
+ * at module load (before the InternalApiServer exists in initialize()), so the
+ * manager is resolved per-request via a getter. The router MUST be mounted before
+ * the GET-only SPA fallback (app.get('*')) or its GET /:id/notifications route is
+ * shadowed and serves index.html instead of JSON.
+ */
+export interface NotificationsWebMount {
+  getManager: () => NotificationManager | null;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -29,7 +42,7 @@ export interface AppWithWs {
   getWebSocketStats: () => { connectedClients: number } | null;
 }
 
-export function createApp(): express.Application {
+export function createApp(notifications?: NotificationsWebMount): express.Application {
   const app = express();
 
   // Trust proxy (required for rate limiting behind reverse proxy)
@@ -72,6 +85,16 @@ export function createApp(): express.Application {
 
   // Session management routes
   app.use('/api/sessions', sessionsRoutes);
+
+  // Browser-facing notification opt-in (cookie-auth). Mounted here — before the
+  // GET-only SPA fallback below — so its GET /:id/notifications returns JSON and
+  // is not shadowed by index.html. Deps resolve lazily per request.
+  if (notifications) {
+    app.use(
+      '/api/sessions',
+      createNotificationsWebRouter({ getManager: notifications.getManager }),
+    );
+  }
 
   // Model management routes
   app.use('/api/models', modelsRoutes);

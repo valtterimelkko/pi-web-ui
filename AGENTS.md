@@ -58,6 +58,7 @@ Core architectural themes:
 | Drive Mode | `client/src/components/DriveMode/*`, `client/src/store/driveModeStore.ts`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |
 | Internal API / orchestration / live validation | `server/src/internal-api/*`, `scripts/live-validate.ts`, [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md), [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md), [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) |
 | Long-horizon validation / durable watches | `server/src/internal-api/watch/*`, `server/src/live-validation/long-horizon-runner.ts`, `scripts/long-horizon-validate.ts`, [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md) |
+| Notifications (Telegram on `agent_end`) | `server/src/notifications/*`, `server/src/internal-api/routes/notifications.ts`, `server/src/live-validation/scenarios.ts`, [`docs/NOTIFICATIONS.md`](./docs/NOTIFICATIONS.md) |
 | Add a REST route | `server/src/routes/*.ts` and `cookieAuthMiddleware`; then read [`SECURITY.md`](./SECURITY.md) |
 | Auth / CSRF / prompt-injection / path validation | `server/src/security/*`, `server/src/middleware/auth.ts`, [`SECURITY.md`](./SECURITY.md) |
 | Config / env vars / ops | `server/src/config.ts`, `.env.example`, [`DEPLOYMENT.md`](./DEPLOYMENT.md) |

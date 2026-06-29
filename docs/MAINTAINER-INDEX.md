@@ -10,6 +10,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - **Internal API contract `1.4.0`** — adds the read-only screen-view transcript projection: `GET /api/v1/sessions/:id/transcript?view=screen`
 - **Observability/introspection endpoints (`1.3.0`)** — `GET /api/v1/diagnostics`, `GET /api/v1/sessions/:id/diagnostics`, and `GET /api/v1/events/types`
 - **Pi runtime OpenRouter model automation** — Pi can now surface a broader OpenRouter-backed model catalogue; see [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md)
+- **Notification layer (Telegram on `agent_end`)** — one-way operator notifications when an agent yields control, across all 4 runtimes, with a durable outbox; see [`NOTIFICATIONS.md`](./NOTIFICATIONS.md)
 - **Fast delta summary:** [`RECENT-CHANGES.md`](./RECENT-CHANGES.md)
 
 ## 1. Agent quick start

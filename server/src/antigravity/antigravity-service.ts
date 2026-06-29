@@ -179,6 +179,8 @@ export class AntigravityService {
     onEvent: (e: NormalizedEvent) => void;
     onComplete: (err?: Error) => void;
   }> = new Map();
+  /** API observers — receive every normalized event for a session, regardless of which client prompted. */
+  private apiObservers: Map<string, Set<(event: NormalizedEvent) => void>> = new Map();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private readonly idleTimeoutMs: number;
   private readonly maxSessions: number;
@@ -309,6 +311,7 @@ export class AntigravityService {
 
     const emit = (event: NormalizedEvent) => {
       try { onEvent(event); } catch { /* non-fatal */ }
+      this.emitApiObserverEvent(sessionId, event);
     };
 
     emit({ type: 'agent_start', sessionId, timestamp: ts, data: { sessionId } });
@@ -405,6 +408,32 @@ export class AntigravityService {
       this.promptCallbacks.delete(sessionId);
       await this.registry.updateStatus(sessionId, 'error');
       onComplete(error);
+    }
+  }
+
+  // ── API observers (origin-independent event fan-out) ──────────────────────
+
+  addApiObserver(sessionId: string, observer: (event: NormalizedEvent) => void): void {
+    let observers = this.apiObservers.get(sessionId);
+    if (!observers) {
+      observers = new Set();
+      this.apiObservers.set(sessionId, observers);
+    }
+    observers.add(observer);
+  }
+
+  removeApiObserver(sessionId: string, observer: (event: NormalizedEvent) => void): void {
+    const observers = this.apiObservers.get(sessionId);
+    if (!observers) return;
+    observers.delete(observer);
+    if (observers.size === 0) this.apiObservers.delete(sessionId);
+  }
+
+  private emitApiObserverEvent(sessionId: string, event: NormalizedEvent): void {
+    const observers = this.apiObservers.get(sessionId);
+    if (!observers || observers.size === 0) return;
+    for (const observer of observers) {
+      try { observer(event); } catch { /* non-fatal */ }
     }
   }
 

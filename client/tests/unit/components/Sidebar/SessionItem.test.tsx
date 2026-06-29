@@ -42,6 +42,8 @@ vi.mock('lucide-react', () => ({
   Loader2: () => <span data-testid="loader-icon">⏳</span>,
   Pin: () => <span data-testid="pin-icon">📌</span>,
   PinOff: () => <span data-testid="pin-off-icon">📍</span>,
+  Bell: () => <span data-testid="bell-icon">🔔</span>,
+  BellOff: () => <span data-testid="bell-off-icon">🔕</span>,
   GripVertical: () => <span data-testid="grip-icon">⠿</span>,
 }));
 

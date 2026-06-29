@@ -7,6 +7,7 @@ import { useTransferStore } from '../../store/transferStore';
 import { deleteSession } from '../../lib/api';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { WorkerStatusIndicator } from './WorkerStatusIndicator';
+import { SessionNotifyToggle } from './SessionNotifyToggle';
 
 interface SessionItemProps {
   session: Session;
@@ -455,6 +456,11 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
                       <Pin className="w-3 h-3 text-gray-400" />
                     )}
                   </button>
+                  <SessionNotifyToggle
+                    sessionId={session.id}
+                    sdkType={session.sdkType || 'pi'}
+                    sessionPath={session.path}
+                  />
                   {!isArchived && (
                     <button
                       onClick={handleStartEdit}

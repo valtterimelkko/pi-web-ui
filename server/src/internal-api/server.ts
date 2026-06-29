@@ -25,6 +25,11 @@ import { createHealthRoutes, type HealthRoutesDeps } from './routes/health.js';
 import { createCapabilitiesRoutes, type CapabilitiesRoutesDeps } from './routes/capabilities.js';
 import { createDiagnosticsRoutes } from './routes/diagnostics.js';
 import { createEventTypesRoutes } from './routes/event-types.js';
+import { createNotificationsRoutes } from './routes/notifications.js';
+import { NotificationManager } from '../notifications/notification-manager.js';
+import { NotificationStore } from '../notifications/notification-store.js';
+import { ChannelRouter } from '../notifications/channels/notification-channel.js';
+import { pickNotificationChannel } from '../notifications/channel-factory.js';
 import { createRequestLoggingMiddleware } from './request-logging.js';
 import { pushDiagnosticsRecord } from './diagnostics-buffer.js';
 import { setLogTap } from '../logging/logger.js';
@@ -71,6 +76,7 @@ const DEFAULT_SOCKET_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api.
 const DEFAULT_TOKEN_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api-token');
 const DEFAULT_WATCH_DIR = path.join(os.homedir(), '.pi-web-ui', 'watches');
 const DEFAULT_PIN_DIR = path.join(os.homedir(), '.pi-web-ui', 'pins');
+const DEFAULT_NOTIFICATIONS_DIR = path.join(os.homedir(), '.pi-web-ui', 'notifications');
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 
@@ -87,6 +93,7 @@ export class InternalApiServer {
   private multiSessionManager: MultiSessionManager;
   private sessionRegistry: SessionRegistryManager;
   private piService: PiService;
+  private notificationManager: NotificationManager | null = null;
 
   // Unique ID for this internal API's Pi SDK sessions
   private internalClientId: string;
@@ -171,6 +178,40 @@ export class InternalApiServer {
 
     const eventTypesRoutes = createEventTypesRoutes();
 
+    // Notification layer (Telegram on agent_end; explicit POST). Inert when
+    // NOTIFICATIONS_ENABLED is off: no observers are attached and the outbox is
+    // not drained. Credentials come from env only (never committed).
+    const notificationStore = new NotificationStore(config.notificationsDir || DEFAULT_NOTIFICATIONS_DIR);
+    const notificationRouter = new ChannelRouter();
+    notificationRouter.register(
+      pickNotificationChannel({
+        validationMode: config.validationMode,
+        telegramBotToken: config.telegramBotToken,
+        telegramChatId: config.telegramChatId,
+      }),
+    );
+    const notificationManager = new NotificationManager({
+      enabled: config.notificationsEnabled,
+      store: notificationStore,
+      router: notificationRouter,
+      services: {
+        pi: this.multiSessionManager,
+        claude: this.claudeService,
+        opencode: this.opencodeService,
+        antigravity: this.antigravityService,
+      },
+      tailMaxChars: config.notificationsTailMaxChars,
+      publicBaseUrl: config.notificationsPublicBaseUrl ?? config.allowedOrigins[0],
+      debounceMs: config.notificationsDebounceMs,
+      maxAttempts: config.notificationsMaxDeliveryAttempts,
+    });
+    await notificationManager.init();
+    this.notificationManager = notificationManager;
+    const notificationRoutes = createNotificationsRoutes({
+      manager: notificationManager,
+      sessionRegistry: this.sessionRegistry,
+    });
+
     // Capture recent structured logs into the diagnostics ring buffer so the
     // /diagnostics endpoints can self-serve them. The buffer scrubs secrets on
     // push, so the tap never persists tokens/credentials.
@@ -208,6 +249,7 @@ export class InternalApiServer {
             capabilitiesRoutes,
             diagnosticsRoutes,
             eventTypesRoutes,
+            notificationRoutes,
           });
         });
       });
@@ -223,7 +265,14 @@ export class InternalApiServer {
   /**
    * Stop the server and clean up the socket file.
    */
+  /** The notification manager (built in start()), or null. Exposed so the cookie-auth browser route can reach it. */
+  getNotificationManager(): NotificationManager | null {
+    return this.notificationManager;
+  }
+
   async stop(): Promise<void> {
+    this.notificationManager?.shutdown();
+    this.notificationManager = null;
     return new Promise((resolve) => {
       if (!this.server) {
         resolve();
@@ -252,6 +301,7 @@ export class InternalApiServer {
       capabilitiesRoutes: ReturnType<typeof createCapabilitiesRoutes>;
       diagnosticsRoutes: ReturnType<typeof createDiagnosticsRoutes>;
       eventTypesRoutes: ReturnType<typeof createEventTypesRoutes>;
+      notificationRoutes: ReturnType<typeof createNotificationsRoutes>;
     },
   ): Promise<void> {
     // Skip 'api' prefix if present: /api/v1/health → ['api', 'v1', 'health']
@@ -366,6 +416,28 @@ export class InternalApiServer {
             sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }
           return;
+        }
+
+        if (action === 'notifications') {
+          // /api/v1/sessions/:id/notifications[/opt-in]
+          if (subId === 'opt-in') {
+            if (req.method === 'POST') {
+              await deps.notificationRoutes.handleOptIn(req, res, sessionId);
+            } else if (req.method === 'DELETE') {
+              await deps.notificationRoutes.handleOptOut(req, res, sessionId);
+            } else {
+              sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+            }
+            return;
+          }
+          if (!subId) {
+            if (req.method === 'GET') {
+              await deps.notificationRoutes.handleGetSessionState(req, res, sessionId);
+            } else {
+              sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+            }
+            return;
+          }
         }
 
         if (action === 'wait') {
@@ -493,6 +565,19 @@ export class InternalApiServer {
           return;
         }
         sendJson(res, 404, { error: 'Unknown events endpoint', code: ErrorCode.NOT_FOUND });
+        return;
+      }
+
+      case 'notifications': {
+        // POST /api/v1/notifications — explicit emit (Agent OS / scripts)
+        // GET  /api/v1/notifications — recent delivery log (ops/debug)
+        if (req.method === 'POST') {
+          await deps.notificationRoutes.handleExplicitNotify(req, res);
+        } else if (req.method === 'GET') {
+          await deps.notificationRoutes.handleGetRecentDeliveries(req, res, parsed.query);
+        } else {
+          sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+        }
         return;
       }
 
