@@ -22,6 +22,43 @@ If you are tempted to skip a test, stub something "for now", or defer a gate —
 
 ---
 
+## 0.5 Resources you must use (read the relevant ones before the phase that needs them)
+
+### Skill
+- **`pi-web-ui-internal-api-orchestration`** — invoke this skill (by name) before doing the Internal API live-validation work in **Phase 6 / §8.3**. Your live validation drives the Internal API over the Unix socket (create sessions, prompt, stream/wait, read transcript, opt-in, watch), and this skill is the canonical guide for that surface. You have access to it the same way the planning agent does. Refer to it **by name only** — do not hardcode a path to it.
+
+### Canonical docs (read before the phase noted)
+| Path | Why / when |
+|---|---|
+| `/root/pi-web-ui/docs/EVENT-PIPELINE.md` | How all 4 runtimes normalize to one event stream and `agent_end`. Read before Phase 3–4. |
+| `/root/pi-web-ui/docs/ARCHITECTURE.md` | Overall layering, runtime services, registry. Read before Phase 1. |
+| `/root/pi-web-ui/docs/INTERNAL-API.md` | Endpoint reference for the Internal API. Read before Phase 5–6. |
+| `/root/pi-web-ui/docs/INTERNAL-API-ORCHESTRATION.md` | Orchestration patterns over the Internal API (companion to the skill). Read before Phase 6. |
+| `/root/pi-web-ui/docs/LIVE-VALIDATION.md` | The disposable-server safety contract + `validate:server` / `validate:live` mechanics + how to add a scenario. Read before Phase 6. |
+| `/root/pi-web-ui/docs/LONG-HORIZON-VALIDATION.md` | Durable-watch / restart-survival harness pattern. Read before Phase 6(d). |
+| `/root/pi-web-ui/CLAUDE.md` (== `AGENTS.md`) | Repo workflow, required validation commands, the AGENTS/CLAUDE sync rule, non-negotiable security rules. Read at Phase 0. |
+| `/root/pi-web-ui/docs/CODEBASE-MAP.md` | Discovery aid when an anchor below is not enough. |
+| `/root/pi-web-ui/SECURITY.md` | Auth/CSRF/path-validation/prompt-injection rules for any route you add. Read before Phase 5. |
+
+### Source anchors to mirror (exact patterns, not theory)
+| Path | Use |
+|---|---|
+| `/root/pi-web-ui/server/src/internal-api/event-broker.ts` | `InternalApiEventBroker.subscribe/publish` — the event source you attach to. |
+| `/root/pi-web-ui/server/src/internal-api/watch/watch-manager.ts` | Structural model for `NotificationManager` (broker subscription, restart rehydration). |
+| `/root/pi-web-ui/server/src/internal-api/watch/watch-store.ts` | Structural model for `notification-store.ts` (atomic write, reload, capping). |
+| `/root/pi-web-ui/server/src/internal-api/routes/sessions.ts` (`attachPiObserverIfNeeded` ~`:140`, `attachOpenCodeObserverIfNeeded` ~`:162`) | The observer-attach pattern you replicate for opted-in sessions. |
+| `/root/pi-web-ui/server/src/opencode/opencode-service.ts` (`addApiObserver` ~`:835`) and `/root/pi-web-ui/server/src/pi/multi-session-manager.ts` (~`:729`) | The exact `addApiObserver`/`removeApiObserver` shape to mirror onto Claude + Antigravity (Phase 3). |
+| `/root/pi-web-ui/server/src/claude/claude-session-subscribers.ts`, `/root/pi-web-ui/server/src/antigravity/antigravity-session-subscribers.ts` | The subscriber streams your new Claude/Antigravity observers tap. |
+| `/root/pi-web-ui/server/src/internal-api/server.ts` | Where to construct `NotificationManager` and mount routes (mirror watch wiring). |
+| `/root/pi-web-ui/server/src/internal-api/routes/capabilities.ts` | Smallest `createXRoutes(deps)` route template. |
+| `/root/pi-web-ui/server/src/config.ts` (~`:191–212`) | Env-config style to mirror for the notification vars. |
+| `/root/pi-web-ui/server/tests/unit/internal-api/watch-*.test.ts` | Test-style templates for store / manager / routes. |
+| `/root/pi-web-ui/server/src/live-validation/scenarios.ts` | Where to add the `notify-on-agent-end` validation scenario (Phase 6/§8.3b). |
+
+If an anchor's line number has drifted, search for the symbol name — the symbols are stable, the line numbers may not be.
+
+---
+
 ## 1. Intent (read this carefully — it governs every decision below)
 
 ### 1.1 What we are building
