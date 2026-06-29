@@ -4,6 +4,7 @@
 > **Author of plan:** Planning agent (Opus 4.8), 2026-06-29.
 > **Executing agent:** A capable long-horizon agent (1M context). Read this file **in full** before writing any code, and re-read the relevant phase before starting it.
 > **Final acceptance:** An independent validation pass is performed by the *planning agent*, not the executing agent (see [§13](#13-final-independent-validation-planner-owned)). You do not get to declare this done.
+> **First action on startup:** ask the operator for the dedicated Telegram bot credentials (see Phase 0). Do this before you start coding, not at Phase 6.
 
 ---
 
@@ -229,7 +230,7 @@ Add to `config.ts` (mirror existing `process.env.X || default` style) and docume
 | `TELEGRAM_CHAT_ID` | _(unset)_ | Operator's chat id |
 
 **Secret handling rules (non-negotiable):**
-- The dedicated Telegram bot is created during execution (sourcing credentials is part of execution, per the operator). Put real values **only** in the un-committed local `.env`. Confirm `.env` is git-ignored before writing anything to it.
+- The dedicated Telegram bot is created during execution. **Ask the operator for the bot token + chat id as your very first action (Phase 0), not at Phase 6.** Put real values **only** in the un-committed local `.env`. Confirm `.env` is git-ignored before writing anything to it.
 - **Never** print the token in logs (scrub it), test fixtures, commit messages, or this doc.
 - Tests **must** use an injected fake transport and fake creds. No test may make a real network call to Telegram.
 
@@ -240,8 +241,9 @@ Add to `config.ts` (mirror existing `process.env.X || default` style) and docume
 > For **every** phase: (1) write failing tests, (2) implement minimally, (3) run the phase gate (lint + typecheck + build + the relevant tests), (4) tick the Definition of Done. Do not start phase N+1 until phase N's DoD is fully green.
 
 ### Phase 0 — Baseline & safety
+- **VERY FIRST ACTION, before anything else: ask the operator for the dedicated Telegram bot credentials** — the bot token (`TELEGRAM_BOT_TOKEN`) and the operator's chat id (`TELEGRAM_CHAT_ID`). Do not wait until Phase 6 to discover you need them. If the operator has not created the dedicated bot yet, give them the quick steps (talk to `@BotFather` → `/newbot` → copy the token; get the chat id by messaging the bot and reading `https://api.telegram.org/bot<token>/getUpdates`, or via `@userinfobot`). Once received, write them **only** into the local un-committed `.env` (confirm `git check-ignore .env` first), never into any tracked file, log, or commit. If the operator prefers to defer, record that in `### PROGRESS` and proceed — but Phase 6(c) cannot pass without them, so flag it as a known blocker.
 - Confirm clean tree, on `master`, `npm ci` healthy. Run `npm run lint && npm run typecheck && npm run build && npm test` to capture a **green baseline** before touching anything. Record the baseline pass in your working notes.
-- **DoD:** baseline suite green; you can articulate the §4 gap in your own words.
+- **DoD:** Telegram credentials obtained (or explicitly deferred with operator acknowledgement) and, if obtained, stored safely in git-ignored `.env`; baseline suite green; you can articulate the §4 gap in your own words.
 
 ### Phase 1 — Contract & store (pure, no runtime coupling)
 - **Tests first:** `notification-store.test.ts` (mirror `watch-store.test.ts`): create/read/update opt-in records; enqueue/drain outbox; persistence round-trip; restart reload; log capping; atomic write. `types` compile-time contract.
