@@ -481,7 +481,7 @@ describe('ClaudeChannelProcessManager', () => {
         await tick(50);
 
         expect(authErrorSpy).toHaveBeenCalledWith(expect.objectContaining({
-          message: expect.stringContaining('Claude Code authentication expired'),
+          message: expect.stringContaining('claude auth login'),
         }));
       } finally {
         vi.useRealTimers();

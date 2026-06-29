@@ -73,23 +73,27 @@ describe('sessionStore', () => {
       expect(useSessionStore.getState().isLoading).toBe(false);
     });
 
-    it('should show a reauthentication toast for Claude auth expiry errors', () => {
+    it('surfaces the server-provided remediation message for Claude auth expiry errors', () => {
       const state = useSessionStore.getState();
       state.setStreaming(true);
       state.setLoading(true);
 
+      // The server (claude-auth-errors.ts) now sends a backend/profile-aware
+      // remediation message; the client displays it verbatim rather than a
+      // hardcoded "Claude Direct" string.
       state.handleServerMessage({
         type: 'error',
         code: 'CLAUDE_AUTH_EXPIRED',
-        message: 'Claude Code authentication expired. Please run /login.',
+        message: 'Claude Code authentication has expired. Run `claude auth login` (or `/login`) on the server, then retry.',
       });
 
       const toasts = useUIStore.getState().toasts;
       expect(toasts).toHaveLength(1);
       expect(toasts[0]).toMatchObject({
         type: 'error',
-        message: expect.stringContaining('re-authenticate'),
+        message: expect.stringContaining('claude auth login'),
       });
+      expect(toasts[0].message).not.toContain('Claude Direct');
       expect(useSessionStore.getState().isStreaming).toBe(false);
       expect(useSessionStore.getState().isLoading).toBe(false);
     });

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import pty from 'node-pty';
+import { buildReauthMessage } from './claude-auth-errors.js';
 import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('ClaudeChannel');
@@ -448,7 +449,7 @@ export class ClaudeChannelProcessManager extends EventEmitter {
     if (now - this.lastAuthErrorAt < AUTH_ERROR_COOLDOWN_MS) return;
     this.lastAuthErrorAt = now;
     this.emit('auth_error', {
-      message: 'Claude Code authentication expired. Please run /login or `claude auth login` on the server, then retry.',
+      message: buildReauthMessage(),
     });
   }
 

@@ -21,6 +21,12 @@ import {
   type ClaudeProfile,
   type ResolvedClaudeLaunch,
 } from './claude-profiles.js';
+import {
+  CLAUDE_AUTH_EXPIRED_CODE,
+  isClaudeAuthError,
+  buildReauthMessage,
+  reauthContextFromProfile,
+} from './claude-auth-errors.js';
 import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('ClaudeService');
@@ -336,10 +342,11 @@ export class ClaudeService {
 
     // Resolve profile for direct CLI if one is configured
     let resolvedLaunch: ResolvedClaudeLaunch | undefined;
+    let directProfile: ClaudeProfile | undefined;
     if (entry.claudeProfileId && this.profileManager) {
       try {
-        const profile = this.profileManager.requireProfile(entry.claudeProfileId);
-        resolvedLaunch = resolveProfile(profile);
+        directProfile = this.profileManager.requireProfile(entry.claudeProfileId);
+        resolvedLaunch = resolveProfile(directProfile);
       } catch (err) {
         logger.warn(`[ClaudeService] Failed to resolve profile '${entry.claudeProfileId}':`, err instanceof Error ? err.message : err);
       }
@@ -384,11 +391,26 @@ export class ClaudeService {
         if (!error) {
           this.sessionsWithHistory.add(sessionId);
         } else {
+          // Distinguish auth-expiry from other failures so the client can show
+          // a profile-aware "re-authenticate" affordance (native: `claude auth
+          // login`; provider profile: refresh token). See `claude-auth-errors.ts`.
+          const authExpired = isClaudeAuthError(error.message);
+          const clientMessage = authExpired
+            ? buildReauthMessage(reauthContextFromProfile(directProfile))
+            : error.message;
+          const errorCode = authExpired ? CLAUDE_AUTH_EXPIRED_CODE : undefined;
+          // Tagging the error lets connection.ts recognise it as already
+          // surfaced (it suppresses its own generic CLAUDE_ERROR) while still
+          // emitting the closing agent_end.
+          if (authExpired) (error as Error & { code?: string }).code = CLAUDE_AUTH_EXPIRED_CODE;
+
           // Leave a diagnostic trail in the session store for failed turns
           // (parity with the SDK backend; see `claude-sdk-opus-silent-fail`).
           try {
             await this.sessionStore.appendEntry(sessionId, {
-              type: 'error', content: error.message, isError: true, timestamp: Date.now(),
+              type: 'error', content: clientMessage, isError: true,
+              code: errorCode, reauthRequired: authExpired || undefined,
+              timestamp: Date.now(),
             });
           } catch (persistErr) {
             logger.warn('[ClaudeService] Failed to persist error entry:', persistErr);
@@ -399,7 +421,7 @@ export class ClaudeService {
           try {
             observedOnEvent({
               type: 'error', sessionId, timestamp: Date.now(),
-              data: { error: error.message, message: error.message },
+              data: { error: error.message, message: clientMessage, code: errorCode, reauthRequired: authExpired || undefined },
             });
           } catch { /* non-fatal */ }
         }

@@ -76,6 +76,12 @@ const throttledStorage = {
 // Holds current session + one recently-accessed session for fast switching.
 const MAX_CACHED_SESSIONS = 2;
 
+// Fallback shown if a Claude auth-expiry error reaches the client without a
+// server-provided remediation message. The server (see `claude-auth-errors.ts`)
+// normally sends a backend- and profile-aware message, which we display as-is.
+const REAUTH_FALLBACK_MESSAGE =
+  'Claude authentication has expired or is invalid. Re-authenticate on the server, then retry.';
+
 // Track the current message ID per session for the multi-session event path.
 // Raw Pi SDK events forwarded by multi-session-manager don't include message IDs,
 // so we track the ID assigned at message_start to match subsequent message_update events.
@@ -1457,7 +1463,7 @@ export const useSessionStore = create<SessionState>()(
             if (errorCode === 'CLAUDE_AUTH_EXPIRED') {
               useUIStore.getState().addToast({
                 type: 'error',
-                message: 'Claude Direct needs you to re-authenticate. Run /login or `claude auth login` on the server, then retry.',
+                message: (msg.message as string) || REAUTH_FALLBACK_MESSAGE,
               });
             }
             break;
@@ -2032,7 +2038,7 @@ export const useSessionStore = create<SessionState>()(
                   useUIStore.getState().addToast({
                     type: 'error',
                     message: errorCode === 'CLAUDE_AUTH_EXPIRED'
-                      ? 'Claude Direct needs you to re-authenticate. Run /login or `claude auth login` on the server, then retry.'
+                      ? (errorMessage || REAUTH_FALLBACK_MESSAGE)
                       : errorMessage,
                   });
                 }

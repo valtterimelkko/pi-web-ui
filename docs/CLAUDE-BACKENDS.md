@@ -217,6 +217,30 @@ claude auth status --json
 npm run debug:where -- <session-id-or-claudeSessionId-or-path>
 ```
 
+## Auth expiry (all backends)
+
+Auth-expiry detection and the user-facing "re-authenticate" message are
+**shared across all three backends** via `server/src/claude/claude-auth-errors.ts`.
+It used to live only in the channel path (PTY scraping); now the SDK and
+direct-CLI paths detect it too, so the primary backends get the same affordance.
+
+- **Detection:** `isClaudeAuthError()` matches real provider 401 / auth-error
+  output (e.g. `API Error: 401 ... authentication_error`, `Invalid authentication
+  credentials`, `Please run /login`).
+- **Surfacing:** the failing backend emits an `error` event with
+  `code: 'CLAUDE_AUTH_EXPIRED'` + `reauthRequired: true` plus a closing
+  `agent_end`. `connection.ts` recognises the code and does not double-surface it.
+- **Profile-aware remediation:** `buildReauthMessage()` tailors the text —
+  native subscription → run `claude auth login`; a provider profile (e.g.
+  GLM/Z.ai) → refresh that profile's auth token (it names the `authTokenEnv`).
+- **Replay:** the error entry persists `code` + `reauthRequired`, so the
+  affordance survives session reload (`claude-history-replay.ts`).
+- **Client:** `client/src/store/sessionStore.ts` displays the server-provided
+  message verbatim (with a generic fallback) — no hardcoded backend-specific
+  wording.
+
+For a quick health check, run `claude auth status --json`.
+
 ## Common Failure Modes
 
 ### Legacy direct mode
@@ -239,13 +263,10 @@ The PTY path no longer trusts a single visible prompt frame as "done". It uses a
 - PTY output lines in the main journal
 
 #### Auth expiry
-If Claude Code loses auth mid-turn, the channel path surfaces that separately and tries to recover stuck sessions cleanly. First run:
-
-```bash
-claude auth status --json
-```
-
-Then inspect channel-related journal lines and `claude-channel-service.ts` auth-expiry handling.
+See [Auth expiry (all backends)](#auth-expiry-all-backends) above. The channel
+path additionally detects auth loss from PTY output
+(`claude-channel-process-manager.ts`) and tries to recover stuck sessions
+cleanly in `claude-channel-service.ts`.
 
 #### Hook config drift
 The channel mode depends on managed entries in:

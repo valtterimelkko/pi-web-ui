@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -31,6 +31,7 @@ describe('ClaudeSdkService integration with mocked SDK', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'claude-sdk-integ-'));
     profilesPath = join(tmpDir, 'profiles.json');
 
+    process.env.TEST_GLM_TOKEN = 'test-token-value';
     writeFileSync(profilesPath, JSON.stringify({
       profiles: [{
         id: 'test-sdk-profile',
@@ -42,6 +43,21 @@ describe('ClaudeSdkService integration with mocked SDK', () => {
         skills: 'all',
         permissionMode: 'dontAsk',
         allowedTools: ['Read', 'Write', 'Bash'],
+        maxConcurrent: 2,
+        enabled: true,
+      }, {
+        id: 'test-glm-profile',
+        label: 'GLM 5.2',
+        backend: 'sdk-subscription',
+        launcherType: 'native-env',
+        baseUrl: 'https://api.z.ai/api/anthropic',
+        authTokenEnv: 'TEST_GLM_TOKEN',
+        model: 'sonnet',
+        modelAliases: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-4.6' },
+        settingSources: ['user', 'project'],
+        skills: 'all',
+        permissionMode: 'dontAsk',
+        allowedTools: ['Read'],
         maxConcurrent: 2,
         enabled: true,
       }],
@@ -138,6 +154,81 @@ describe('ClaudeSdkService integration with mocked SDK', () => {
     expect(completionError).toBeDefined();
     expect(completionError?.message).toContain('SDK connection failed');
     expect(events.some((e) => e.type === 'error')).toBe(true);
+  });
+
+  it('surfaces auth-expiry as a CLAUDE_AUTH_EXPIRED reauth error', async () => {
+    const { sessionId } = await svc.createSession(
+      join(tmpDir, 'cwd-auth'), 'sonnet', undefined, 'test-sdk-profile',
+    );
+
+    // Mock SDK to throw the real Anthropic wire-format 401 body.
+    mockQuery.mockImplementation(() => {
+      // eslint-disable-next-line require-yield -- intentional: throws before yielding
+      return (async function* () {
+        throw new Error('API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}');
+      })();
+    });
+
+    let completionError: (Error & { code?: string; sessionEventAlreadyEmitted?: boolean }) | undefined;
+    const events: any[] = [];
+
+    await new Promise<void>((resolve) => {
+      svc.sendPrompt(
+        sessionId,
+        'test',
+        (event) => events.push(event),
+        (error) => { completionError = error as typeof completionError; resolve(); },
+      ).catch(() => resolve());
+    });
+
+    // The completion error carries the auth code and the already-emitted flag so
+    // connection.ts does not double-surface it.
+    expect(completionError?.code).toBe('CLAUDE_AUTH_EXPIRED');
+    expect(completionError?.sessionEventAlreadyEmitted).toBe(true);
+
+    // A single error event with the reauth code + flag and a closing agent_end.
+    const errorEvent = events.find((e) => e.type === 'error');
+    expect(errorEvent).toBeDefined();
+    expect((errorEvent?.data as any)?.code).toBe('CLAUDE_AUTH_EXPIRED');
+    expect((errorEvent?.data as any)?.reauthRequired).toBe(true);
+    // Native profile (no baseUrl/token) → native remediation, not "Claude Direct".
+    expect((errorEvent?.data as any)?.message).toMatch(/claude auth login/i);
+    expect((errorEvent?.data as any)?.message).not.toMatch(/Claude Direct/i);
+    expect(events.some((e) => e.type === 'agent_end')).toBe(true);
+
+    // Persisted error entry retains the code + reauthRequired for replay.
+    const sessionFile = join(tmpDir, 'sessions', `${sessionId}.jsonl`);
+    const lines = readFileSync(sessionFile, 'utf-8').split('\n').filter((l) => l.trim());
+    const errorEntry = lines.map((l) => JSON.parse(l)).find((e) => e.type === 'error');
+    expect(errorEntry?.code).toBe('CLAUDE_AUTH_EXPIRED');
+    expect(errorEntry?.reauthRequired).toBe(true);
+  });
+
+  it('uses a token-refresh remediation message for token-backed (Z.ai) profiles', async () => {
+    const { sessionId } = await svc.createSession(
+      join(tmpDir, 'cwd-glm-auth'), 'sonnet', undefined, 'test-glm-profile',
+    );
+
+    mockQuery.mockImplementation(() => {
+      // eslint-disable-next-line require-yield -- intentional: throws before yielding
+      return (async function* () {
+        throw new Error('API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid token"}}');
+      })();
+    });
+
+    const events: any[] = [];
+    await new Promise<void>((resolve) => {
+      svc.sendPrompt(sessionId, 'test', (e) => events.push(e), () => resolve()).catch(() => resolve());
+    });
+
+    const errorEvent = events.find((e) => e.type === 'error');
+    const message = (errorEvent?.data as any)?.message as string;
+    expect((errorEvent?.data as any)?.code).toBe('CLAUDE_AUTH_EXPIRED');
+    expect(message).toMatch(/Z\.ai/);
+    expect(message).toMatch(/GLM 5\.2/);
+    expect(message).toMatch(/TEST_GLM_TOKEN/);
+    expect(message).toMatch(/refresh/i);
+    expect(message).not.toMatch(/claude auth login/i);
   });
 
   it('enforces maxConcurrent limit', async () => {

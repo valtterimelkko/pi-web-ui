@@ -36,6 +36,12 @@ import {
   computeBackoffMs,
 } from './claude-transient-errors.js';
 import { getSessionRegistry, type SessionRegistryManager } from '../session-registry.js';
+import {
+  CLAUDE_AUTH_EXPIRED_CODE,
+  isClaudeAuthError,
+  buildReauthMessage,
+  reauthContextFromProfile,
+} from './claude-auth-errors.js';
 import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('ClaudeSdkService');
@@ -339,11 +345,27 @@ export class ClaudeSdkService {
 
         // Surface as a real, persisted error.
         if (state) state.hasHistory = true; // partial history counts
-        const error = new Error(failMessage);
+
+        // Distinguish auth-expiry from other failures so the client can show a
+        // profile-aware "re-authenticate" affordance (native: `claude auth
+        // login`; provider profile: refresh token). See `claude-auth-errors.ts`.
+        const authExpired = isClaudeAuthError(failMessage);
+        const clientMessage = authExpired
+          ? buildReauthMessage(reauthContextFromProfile(profile))
+          : failMessage;
+        const errorCode = authExpired ? CLAUDE_AUTH_EXPIRED_CODE : undefined;
+
+        const error = new Error(failMessage) as Error & {
+          code?: string;
+          sessionEventAlreadyEmitted?: boolean;
+        };
+        if (authExpired) error.code = CLAUDE_AUTH_EXPIRED_CODE;
         await this.registry.updateStatus(sessionId, 'error');
         try {
           await this.sessionStore.appendEntry(sessionId, {
-            type: 'error', content: failMessage, isError: true, timestamp: Date.now(),
+            type: 'error', content: clientMessage, isError: true,
+            code: errorCode, reauthRequired: authExpired || undefined,
+            timestamp: Date.now(),
           });
         } catch (persistErr) {
           logger.warn('[ClaudeSdkService] Failed to persist error entry:', persistErr);
@@ -351,9 +373,18 @@ export class ClaudeSdkService {
         try {
           onEvent({
             type: 'error', sessionId, timestamp: Date.now(),
-            data: { error: failMessage, message: failMessage },
+            data: { error: failMessage, message: clientMessage, code: errorCode, reauthRequired: authExpired || undefined },
           });
         } catch { /* non-fatal */ }
+        // For auth-expiry, emit our own agent_end and mark the session event as
+        // already emitted so connection.ts does not also push a generic
+        // CLAUDE_ERROR or a duplicate agent_end on top.
+        if (authExpired) {
+          try {
+            onEvent({ type: 'agent_end', sessionId, timestamp: Date.now(), data: { reason: 'auth_expired' } });
+          } catch { /* non-fatal */ }
+          error.sessionEventAlreadyEmitted = true;
+        }
         onComplete(error);
         return;
       }

@@ -10,6 +10,7 @@ import type { ChannelEvent, ChannelClientRequest } from './claude-channel-ws-cli
 import { ClaudeChannelEventAdapter } from './claude-channel-event-adapter.js';
 import { ClaudeChannelHooksConfig } from './claude-channel-hooks-config.js';
 import { ClaudeSessionStore } from './claude-session-store.js';
+import { buildReauthMessage } from './claude-auth-errors.js';
 import { SessionRegistryManager, getSessionRegistry } from '../session-registry.js';
 import type { ClaudeAuthStatus } from './claude-service.js';
 import { createLogger } from '../logging/logger.js';
@@ -942,7 +943,7 @@ export class ClaudeChannelService {
   private handlePtyAuthError(message?: string): void {
     if (this.pendingPrompts.size === 0) return;
 
-    const errorMessage = message || 'Claude Code authentication expired. Please run /login or `claude auth login` on the server, then retry.';
+    const errorMessage = message || buildReauthMessage();
     logger.warn(`[ClaudeChannelService] Claude auth expired while ${this.pendingPrompts.size} prompt(s) pending`);
 
     for (const [sessionId, pending] of [...this.pendingPrompts.entries()]) {
