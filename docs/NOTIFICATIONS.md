@@ -116,6 +116,20 @@ Token-authed like every Internal API route (bearer token). Base path `/api/v1`.
 Validation uses Zod and returns stable `{ error, code }` shapes (e.g.
 `SESSION_NOT_FOUND`, `INVALID_REQUEST`) from the shared error-code catalog.
 
+### Browser-facing route
+
+Because the browser cannot reach the Internal API Unix socket directly, Pi Web UI
+also exposes a cookie-auth REST facade for the session toggle used in the sidebar:
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/sessions/:id/notifications` | read current opt-in state + recent deliveries |
+| `POST /api/sessions/:id/notifications/opt-in` | opt the session in |
+| `DELETE /api/sessions/:id/notifications/opt-in` | opt the session out |
+
+The browser route is intentionally thin: it forwards to the same
+`NotificationManager` and exists only so the UI can reuse normal browser auth.
+
 ---
 
 ## 5. Ops

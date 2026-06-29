@@ -4,6 +4,15 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Internal API contract `1.5.0`**
+  - Added notification endpoints:
+    - `POST /api/v1/sessions/:id/notifications/opt-in`
+    - `DELETE /api/v1/sessions/:id/notifications/opt-in`
+    - `GET /api/v1/sessions/:id/notifications`
+    - `POST /api/v1/notifications`
+    - `GET /api/v1/notifications`
+  - Canonical docs: [`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`NOTIFICATIONS.md`](./NOTIFICATIONS.md)
+
 - **Notification layer (Telegram on `agent_end`)**
   - One-way operator notifications when an agent session yields control, across all 4 runtimes (Pi/Claude/OpenCode/Antigravity)
   - Opt-in per session (decoupled from pinning); durable outbox + retry; explicit `POST /api/v1/notifications`

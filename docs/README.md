@@ -28,6 +28,7 @@ If you arrived here from the public GitHub repo, start with the **public/adopter
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — local automation API for live validation, integration, and orchestration experiments
 - [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) — compatibility/versioning rules for local consumers such as Agent OS style tooling
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — patterns for spawning and collecting child sessions across runtimes
+- [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) — optional per-session Telegram notifications and the related Internal API/browser routes
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — browserless single-turn runtime validation, including the dedicated Claude profile validation runner
 - [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watches + the headless runner for autonomous, long-running validation
 

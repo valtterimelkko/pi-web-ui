@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.4.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.5.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -300,7 +300,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.4.0",
+    "contractVersion": "1.5.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -728,7 +728,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.4.0",
+    "contractVersion": "1.5.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -856,6 +856,44 @@ GET /api/v1/events/types
 `category` is `agent | message | tool | control`. `verbosity` lists which stream
 levels include the event (`full` = every event; `tasks` = the status-headline
 subset). Authed like siblings.
+
+---
+
+### Notifications
+
+One-way operator notifications on `agent_end`, plus explicit emits for local
+consumers such as Agent OS or scripts. See [`NOTIFICATIONS.md`](./NOTIFICATIONS.md)
+for the subsystem design, delivery semantics, env vars, and browser route.
+
+```
+POST   /api/v1/sessions/:sessionId/notifications/opt-in
+DELETE /api/v1/sessions/:sessionId/notifications/opt-in
+GET    /api/v1/sessions/:sessionId/notifications
+POST   /api/v1/notifications
+GET    /api/v1/notifications
+```
+
+Use them like this:
+- opt a session in when you want a Telegram ping on the next `agent_end`
+- read session notification state/deliveries for ops/debug
+- emit an explicit notification deterministically from another local tool
+- inspect recent deliveries and failures without touching host logs
+
+**Examples**
+
+```json
+POST /api/v1/sessions/:id/notifications/opt-in
+{ "label": "Overnight refactor" }
+```
+
+```json
+POST /api/v1/notifications
+{ "title": "Agent OS", "body": "Review requested", "deepLink": "https://pi.example.com/?session=abc" }
+```
+
+`GET /api/v1/notifications` returns recent deliveries with `status`, `attempts`,
+and `lastError`; `GET /api/v1/sessions/:id/notifications` scopes that to one
+session and includes the current `optIn` record.
 
 ---
 

@@ -50,6 +50,7 @@ This is often the most token-efficient route for LLM agents because it avoids dr
 | **OpenCode** | Registry metadata in `~/.pi-web-ui/session-registry.json`; transcript storage is OpenCode-owned | `journalctl -u opencode-serve -f` if separate service, otherwise the main service log | Pi Web UI does not own the full OpenCode transcript. |
 | **Antigravity (agy)** | `~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl` (Pi-owned JSONL turn log) plus per-turn logs under `~/.pi-web-ui/antigravity-sessions/agy-logs/` | `journalctl -u pi-web-ui -f \| grep -i antigravity` | Each turn is one JSON line: prompt, response, model, conversationId, rawStdoutLength. The per-turn agy log records the actual `Print mode: conversation=<uuid>` target. |
 | **Antigravity conversation state** | `~/.gemini/antigravity-cli/conversations/<uuid>.db` (SQLite, agy-owned) | `agy --version`, `agy models` | The conversation UUID in the JSONL must match a `.db` file here for continuity to work. |
+| **Notification layer** | `~/.pi-web-ui/notifications/` | `journalctl -u pi-web-ui -f`, `GET /api/v1/notifications` | Contains opt-ins, durable outbox, and delivery log for Telegram notifications. |
 | **Unified registry** | `~/.pi-web-ui/session-registry.json` | `journalctl -u pi-web-ui -f` | Cross-runtime source of truth for sidebar metadata. |
 | **Internal API** | `~/.pi-web-ui/internal-api.sock`, `~/.pi-web-ui/internal-api-token` | `journalctl -u pi-web-ui -f` | Useful when debugging local consumers of the backend API. |
 
@@ -158,6 +159,25 @@ See also:
 - [`INTERNAL-API.md`](./INTERNAL-API.md)
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+
+## Notification layer
+
+### Useful checks
+
+```bash
+ls -la ~/.pi-web-ui/notifications
+TOKEN=$(cat ~/.pi-web-ui/internal-api-token)
+curl -s --unix-socket ~/.pi-web-ui/internal-api.sock \
+  -H "Authorization: Bearer $TOKEN" \
+  http://localhost/api/v1/notifications | python3 -m json.tool
+```
+
+### Typical symptoms
+
+- **Bell toggle missing or always off in browser** → check `server/src/routes/notifications-web.ts`, cookie auth, and whether the session row has valid `runtime` + `sessionPath`.
+- **Opt-in recorded but no Telegram message arrives** → verify `NOTIFICATIONS_ENABLED=true`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and inspect delivery status/`lastError` via `GET /api/v1/notifications`.
+- **Telegram message arrives but deep link is wrong** → verify `NOTIFICATIONS_PUBLIC_BASE_URL` matches the actual browser URL operators open.
+- **Pending deliveries never clear after restart** → inspect `~/.pi-web-ui/notifications/` plus startup logs to confirm outbox rehydration and channel configuration.
 
 ## Pi Coding Agent Path
 

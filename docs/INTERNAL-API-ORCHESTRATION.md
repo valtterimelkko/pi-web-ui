@@ -74,11 +74,13 @@ Always start by asking the server what is available now and which contract versi
 - `GET /api/v1/capabilities` — includes `contract.name`, `contract.majorVersion`, and `contract.contractVersion`
 - `GET /api/v1/models`
 
-Useful debugging/introspection endpoints added in contract `1.3.0` and `1.4.0`:
+Useful debugging/introspection endpoints added in contract `1.3.0`, `1.4.0`, and `1.5.0`:
 
 - `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off.
 - `GET /api/v1/events/types` — machine-readable catalogue of normalized event kinds on the `/events` stream.
 - `GET /api/v1/sessions/:id/transcript?view=screen` — a read-only “what the user sees” projection for a finished or in-progress session, without browser automation.
+- `POST /api/v1/notifications` and `GET /api/v1/notifications` — explicit operator notify + recent delivery log when your orchestrator wants a deterministic ping or wants to inspect notification failures.
+- `POST/DELETE/GET /api/v1/sessions/:id/notifications...` — opt a child session into `agent_end` notifications and verify the opt-in/delivery state.
 
 These are especially helpful during orchestration setup or when a child session behaves unexpectedly, because they let you inspect the server without shell access.
 

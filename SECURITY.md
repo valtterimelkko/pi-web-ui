@@ -68,7 +68,13 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
   - `server/src/internal-api/server.ts`
   - `server/src/internal-api/middleware/auth.ts`
 
-### 7. Rate limiting
+### 7. Notification secrets and browser route protection
+
+- `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are operational secrets/config values and must never be committed.
+- The browser-facing notification opt-in routes are protected with `cookieAuthMiddleware`; do not bypass that just because the deeper notification manager also exists behind the Internal API.
+- Notification/logging paths should preserve token redaction and must not leak Telegram credentials in thrown errors or diagnostics.
+
+### 8. Rate limiting
 
 - HTTP and WebSocket surfaces are rate-limited.
 - Relevant code:

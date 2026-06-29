@@ -200,6 +200,23 @@ Once logged in:
 
 If that works, you have a valid end-to-end setup.
 
+## 10b. Optional: enable Telegram notifications
+
+If you want a ping when a session yields control back to you, you can enable the notification layer.
+
+Add to `.env`:
+
+```bash
+NOTIFICATIONS_ENABLED=true
+NOTIFICATIONS_PUBLIC_BASE_URL=http://localhost:5173
+TELEGRAM_BOT_TOKEN=your-bot-token
+TELEGRAM_CHAT_ID=your-chat-id
+```
+
+Then restart the app. In the session list, use the bell icon on a session row to opt that session in.
+
+This is optional and per-session. Read [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) for the deeper operator details.
+
 ## 11. Useful first checks
 
 ### Base health

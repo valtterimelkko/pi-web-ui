@@ -40,6 +40,7 @@ Express server
   ├─ Internal API (Unix socket + token-auth local automation boundary)
   ├─ WebSocket connection router
   ├─ session registry
+  ├─ notification layer (cross-runtime observers + durable outbox + Telegram channel)
   ├─ Pi Coding Agent service + worker/session lifecycle
   ├─ Claude service + (SDK/profile backend, direct CLI backend, or channel-backed PTY/plugin backend)
   ├─ OpenCode service + process manager/client/SSE adapter
@@ -72,11 +73,13 @@ Key backend responsibilities:
 - route user actions to the correct runtime path
 - translate runtime-specific events into frontend-compatible events
 - persist runtime-neutral metadata in a unified registry
+- run cross-runtime observer-style subsystems such as per-session notifications without pushing runtime-specific logic into the frontend
 
 Important files:
 - `server/src/websocket/connection.ts`
 - `server/src/websocket/protocol.ts`
 - `server/src/internal-api/*`
+- `server/src/notifications/*`
 - `server/src/session-registry.ts`
 - `server/src/routes/*`
 

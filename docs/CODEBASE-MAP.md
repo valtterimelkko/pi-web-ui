@@ -17,7 +17,8 @@
 
 ### Session / Chat UI
 - `components/Session/NewSessionModal.tsx` — Runtime picker (Pi / Claude / OpenCode / Antigravity).
-- `components/Sidebar/SessionItem.tsx` — Sidebar session row (drag source, pin, archive, rename).
+- `components/Sidebar/SessionItem.tsx` — Sidebar session row (drag source, pin, archive, rename, notification toggle host).
+- `components/Sidebar/SessionNotifyToggle.tsx` — Per-session notification bell; cookie-auth browser calls to opt in/out of `agent_end` notifications.
 - `components/Sidebar/SessionList.tsx` — Sidebar container.
 - `components/Sidebar/TransferConfirmationModal.tsx` — Context transfer confirmation UX.
 - `components/Chat/ChatView.tsx` — Main chat surface.
@@ -106,6 +107,14 @@
 - `session-registry.ts` — Unified cross-runtime session index (`~/.pi-web-ui/session-registry.json`). Atomic tmp+rename writes.
 - `session-cleanup.ts` — Scheduled cleanup of archived/pinned sessions.
 
+### Notifications (`server/src/notifications/`)
+- `notifications/notification-manager.ts` — Cross-runtime notification orchestration: observer attach/detach, assistant-tail accumulation, debounce, durable outbox + retry, restart rehydration.
+- `notifications/notification-store.ts` — Durable JSON persistence for opt-ins, outbox, and delivery log.
+- `notifications/notification-formatter.ts` — Builds notification title/body/deep-link from session metadata + assistant tail.
+- `notifications/channels/notification-channel.ts` — `NotificationChannel` interface + router.
+- `notifications/channels/telegram-channel.ts` — Telegram Bot API sender with injectable transport + token redaction.
+- `notifications/channel-factory.ts` — Picks the real Telegram channel vs validation capture channel.
+
 ### Security
 - `security/auth.ts` — JWT cookie generation and verification.
 - `security/csrf.ts` — CSRF token generation and validation.
@@ -122,6 +131,7 @@
 - `routes/files.ts` — File browsing and reading (with path validation).
 - `routes/extensions.ts` — Extension listing and toggling.
 - `routes/preferences.ts` — User preferences (pins, archives, display names).
+- `routes/notifications-web.ts` — Cookie-auth browser REST facade for session notification opt-in/state.
 - `routes/config.ts` — Config validation endpoint.
 - `routes/terminal.ts` — Terminal session management.
 - `routes/git.ts` — Git operations.

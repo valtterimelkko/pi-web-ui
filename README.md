@@ -33,6 +33,7 @@ For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY
 - **Four runtime families behind one UI**
 - **Unified session list and replay model** across runtimes with very different backends
 - **Local automation API** for live validation, integrations, and orchestration experiments
+- **Optional per-session Telegram notifications** when an agent yields control back to you
 - **Companion extension/plugin ecosystem** for Pi Coding Agent and OpenCode workflows
 - **Honest documentation** about what is native, what is wrapper-like, and what is still evolving
 
@@ -182,6 +183,7 @@ Canonical architecture doc:
 - **Companion repos:** [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md)
 - **Automation API:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
 - **Automation API contract:** [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)
+- **Notifications:** [`docs/NOTIFICATIONS.md`](./docs/NOTIFICATIONS.md)
 - **Deployment:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 - **Security:** [`SECURITY.md`](./SECURITY.md)
 - **API index:** [`API.md`](./API.md)

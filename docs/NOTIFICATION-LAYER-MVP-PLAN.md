@@ -1,5 +1,7 @@
 # Notification Layer — MVP Execution Plan
 
+> Historical implementation plan. The canonical current-state docs are [`NOTIFICATIONS.md`](./NOTIFICATIONS.md), [`INTERNAL-API.md`](./INTERNAL-API.md), and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+>
 > **Status:** Ready for execution.
 > **Author of plan:** Planning agent (Opus 4.8), 2026-06-29.
 > **Executing agent:** A capable long-horizon agent (1M context). Read this file **in full** before writing any code, and re-read the relevant phase before starting it.

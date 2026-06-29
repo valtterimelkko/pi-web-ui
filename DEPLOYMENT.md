@@ -67,6 +67,7 @@ Nginx is also perfectly viable, and an example is included below.
 - [ ] Confirm `opencode` availability if using OpenCode
 - [ ] Confirm `agy` availability if using Antigravity
 - [ ] Configure logging / monitoring
+- [ ] If using Telegram notifications: set `NOTIFICATIONS_ENABLED=true`, `NOTIFICATIONS_PUBLIC_BASE_URL`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID`
 - [ ] Verify `npm run build` succeeds before restart
 
 ## Recommended Environment Variables
@@ -144,6 +145,21 @@ Prerequisites:
 | `OPENCODE_CLEANUP_INTERVAL_MS` | `60000` | cleanup loop interval |
 | `OPENCODE_MODEL_PROVIDERS` | `zai-coding-plan,kilo,opencode` | provider ids whose models appear in the picker, or `all`/`*` for every authenticated provider. Pi Web UI never reads provider keys — they stay in OpenCode's auth storage |
 | `OPENCODE_MODEL_SNAPSHOT_PATH` | `~/.pi-web-ui/opencode-model-snapshot.json` | host-side audit snapshot for the weekly model-refresh job (ids only) |
+
+### Notification layer (optional Telegram operator ping)
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `NOTIFICATIONS_ENABLED` | `false` | master switch; off keeps the manager inert |
+| `NOTIFICATIONS_DIR` | `~/.pi-web-ui/notifications` | persistence for opt-ins, durable outbox, and delivery log |
+| `NOTIFICATIONS_DEBOUNCE_MS` | `1500` | coalesce repeated `agent_end` notifications per session |
+| `NOTIFICATIONS_TAIL_MAX_CHARS` | `1200` | assistant-tail length before truncation |
+| `NOTIFICATIONS_PUBLIC_BASE_URL` | first `ALLOWED_ORIGINS` | base URL used for deep links back into the session |
+| `NOTIFICATIONS_MAX_DELIVERY_ATTEMPTS` | `5` | retry cap before a delivery is marked failed |
+| `TELEGRAM_BOT_TOKEN` | unset | Telegram bot token; secret, keep only in uncommitted env/config |
+| `TELEGRAM_CHAT_ID` | unset | operator chat id |
+
+If you enable notifications, make sure `NOTIFICATIONS_PUBLIC_BASE_URL` resolves to the browser URL operators actually open. Otherwise Telegram messages may deliver correctly but deep links will point at the wrong host/origin.
 
 ### Antigravity
 
@@ -369,6 +385,17 @@ agy models
 agy -p "Reply OK"
 curl "http://localhost:<port>/api/models?sdkType=antigravity"
 npm run debug:where -- <session-id-or-runtime-session-id-or-path>
+```
+
+### Notifications
+
+```bash
+curl http://localhost:<port>/api/sessions/<session-id>/notifications
+TOKEN=$(cat ~/.pi-web-ui/internal-api-token)
+curl --unix-socket ~/.pi-web-ui/internal-api.sock \
+  -H "Authorization: Bearer $TOKEN" \
+  http://localhost/api/v1/notifications
+ls -la ~/.pi-web-ui/notifications
 ```
 
 ## Troubleshooting

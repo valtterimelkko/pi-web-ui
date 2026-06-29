@@ -16,7 +16,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.4.0",
+  "contractVersion": "1.5.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -24,6 +24,13 @@ Current contract:
 
 ### Changelog
 
+- **1.5.0** (minor, additive) — added notification endpoints for one-way operator notifications and explicit emits:
+  - `POST /api/v1/sessions/:id/notifications/opt-in`
+  - `DELETE /api/v1/sessions/:id/notifications/opt-in`
+  - `GET /api/v1/sessions/:id/notifications`
+  - `POST /api/v1/notifications`
+  - `GET /api/v1/notifications`
+  These are additive endpoints and do not change existing session/prompt flows. Old clients can ignore them safely. See [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) and [`INTERNAL-API.md`](./INTERNAL-API.md).
 - **1.4.0** (minor, additive) — added the read-only screen-view projection to the
   transcript endpoint: `GET /sessions/:id/transcript?view=screen` (with optional
   `expand=tools,thinking`) returns a faithful "what the user sees by default"

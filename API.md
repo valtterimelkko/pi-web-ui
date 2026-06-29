@@ -113,7 +113,7 @@ Reference docs:
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
 
-`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.4.0`) for local consumers such as Agent OS style tooling.
+`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.5.0`) for local consumers such as Agent OS style tooling.
 
 Important endpoints include:
 - `GET /api/v1/capabilities`
@@ -137,6 +137,11 @@ Important endpoints include:
 - `GET /api/v1/sessions/:id/approvals/pending`
 - `POST /api/v1/sessions/:id/control` (including standalone pin/unpin)
 - `POST /api/v1/sessions/:id/approvals/:requestId/respond`
+- `POST /api/v1/sessions/:id/notifications/opt-in`
+- `DELETE /api/v1/sessions/:id/notifications/opt-in`
+- `GET /api/v1/sessions/:id/notifications`
+- `POST /api/v1/notifications`
+- `GET /api/v1/notifications`
 - `POST/GET/DELETE /api/v1/sessions/:id/watch`
 
 Use the session read paths like this:
@@ -238,6 +243,19 @@ List extensions.
 
 #### `POST /api/extensions/:name/toggle`
 Enable or disable an extension.
+
+### Notifications (browser cookie-auth surface)
+
+#### `GET /api/sessions/:id/notifications`
+Returns whether that session is opted in plus recent deliveries.
+
+#### `POST /api/sessions/:id/notifications/opt-in`
+Opts the session into `agent_end` notifications. The browser sends the server-sourced runtime + session path for the sidebar session row.
+
+#### `DELETE /api/sessions/:id/notifications/opt-in`
+Opts the session out.
+
+This browser-facing route group exists because the browser cannot reach the Internal API Unix socket directly. For the deeper subsystem/ops view, see [`docs/NOTIFICATIONS.md`](./docs/NOTIFICATIONS.md).
 
 ### Other route groups
 
