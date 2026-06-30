@@ -58,6 +58,14 @@ export interface NotificationManagerDeps {
   retryBackoffMs?: number;
   /** Injectable clock (ISO string) for deterministic tests. */
   now?: () => string;
+  /**
+   * Resolves the operator-facing session name live at flush time — the renamed
+   * display name persisted in web-ui-prefs.json. Injected so the manager stays
+   * decoupled from the preferences module and tests stay deterministic. When
+   * omitted, or when it returns nothing usable, the manager falls back to the
+   * opt-in record's snapshot `label`, then the runtime label.
+   */
+  resolveLabel?: (sessionPath: string) => Promise<string | undefined>;
 }
 
 interface ObservedSession {
@@ -277,11 +285,17 @@ export class NotificationManager {
     const obs = this.observed.get(sessionId);
     if (!obs) return;
     const tail = obs.assistantTail;
+    // Live-resolve the operator-facing session name (the renamed display name)
+    // so a rename after opt-in is reflected. Falls back to the opt-in snapshot
+    // label, then the formatter's runtime label. A resolver failure must never
+    // break a notification.
+    const liveLabel = await this.resolveLabelSafe(obs.record.sessionPath);
+    const label = (liveLabel && liveLabel.trim()) || obs.record.label;
     const formatted = formatNotification(
       {
         sessionId,
         runtime: obs.record.runtime,
-        label: obs.record.label,
+        label,
         kind: 'agent_end',
         tail,
       },
@@ -299,6 +313,16 @@ export class NotificationManager {
       createdAt: this.now(),
     };
     await this.enqueueAndDispatch(notification);
+  }
+
+  /** Runs the injected label resolver, swallowing errors (best-effort enrichment). */
+  private async resolveLabelSafe(sessionPath: string): Promise<string | undefined> {
+    if (!this.deps.resolveLabel) return undefined;
+    try {
+      return await this.deps.resolveLabel(sessionPath);
+    } catch {
+      return undefined;
+    }
   }
 
   private async enqueueAndDispatch(notification: Notification): Promise<void> {

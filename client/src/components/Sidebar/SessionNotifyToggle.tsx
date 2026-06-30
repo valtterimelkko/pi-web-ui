@@ -13,10 +13,18 @@ export function SessionNotifyToggle({
   sessionId,
   sdkType,
   sessionPath,
+  label,
 }: {
   sessionId: string;
   sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity';
   sessionPath: string;
+  /**
+   * The session's current display name (renamed name → runtime name → first
+   * message), sent as a snapshot label with the opt-in. The server live-resolves
+   * the renamed name at notification time, so this snapshot is only a fallback
+   * for un-renamed sessions (whose auto-name the server can't otherwise see).
+   */
+  label?: string;
 }): React.JSX.Element {
   const [on, setOn] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -49,7 +57,7 @@ export function SessionNotifyToggle({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ runtime: sdkType, sessionPath }),
+            body: JSON.stringify({ runtime: sdkType, sessionPath, label }),
           });
       if (res.ok) setOn(!on);
     } catch {

@@ -460,6 +460,7 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
                     sessionId={session.id}
                     sdkType={session.sdkType || 'pi'}
                     sessionPath={session.path}
+                    label={webUIDisplayName || session.name || session.firstMessage}
                   />
                   {!isArchived && (
                     <button

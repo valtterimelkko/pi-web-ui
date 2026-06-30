@@ -15,6 +15,7 @@ import { DriveModeOverlay } from './components/DriveMode';
 import { ToastContainer } from './components/common';
 import { useSessionStore } from './store/sessionStore';
 import { useUIStore } from './store/uiStore';
+import { useDeepLinkSession } from './hooks/useDeepLinkSession';
 
 function App() {
   const isAuthenticated = useAuth((state) => state.isAuthenticated);
@@ -70,6 +71,9 @@ function AuthenticatedApp() {
   useEffect(() => {
     initPreferences();
   }, [initPreferences]);
+
+  // Open the session named by a ?session=<id> deep link (e.g. Telegram notifications).
+  useDeepLinkSession();
 
   // Handle extension UI response
   const handleExtensionResponse = useCallback((response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean }) => {

@@ -78,6 +78,7 @@ function makeHarness(
     channelFail?: boolean;
     store?: NotificationStore;
     enabled?: boolean;
+    resolveLabel?: (sessionPath: string) => Promise<string | undefined>;
   } = {},
 ): Harness {
   const store = opts.store ?? new NotificationStore(dir);
@@ -97,6 +98,7 @@ function makeHarness(
     maxAttempts: 3,
     retryBackoffMs: 5000, // long: retries must NOT fire during test wait windows
     now: () => NOW,
+    resolveLabel: opts.resolveLabel,
   });
   return { mgr, store, pi, claude, channel };
 }
@@ -308,6 +310,88 @@ describe('NotificationManager', () => {
       expect(h.channel.received[0].kind).toBe('explicit');
       expect(h.channel.received[0].title).toBe('Deploy');
       expect(h.channel.received[0].sessionId).toBeUndefined();
+    });
+  });
+
+  describe('live session-name resolution (renamed sessions)', () => {
+    it('surfaces the live-resolved display name in the title, overriding the opt-in snapshot label', async () => {
+      const h = makeHarness(dir, { resolveLabel: async () => 'My Renamed Session' });
+      await h.mgr.init();
+      await h.mgr.optIn(piOptIn({ label: 'old snapshot label' }));
+      for (const e of assistantText('s1', 'done')) h.pi.emit('/sessions/s1', e);
+      h.pi.emit('/sessions/s1', agentEnd('s1'));
+      await wait(60);
+      await h.mgr.drain();
+      expect(h.channel.received).toHaveLength(1);
+      expect(h.channel.received[0].title).toBe('🤖 My Renamed Session · waiting for you');
+    });
+
+    it('passes the opt-in sessionPath to the resolver (prefs are keyed by path)', async () => {
+      const seen: string[] = [];
+      const h = makeHarness(dir, { resolveLabel: async (p) => (seen.push(p), 'x') });
+      await h.mgr.init();
+      await h.mgr.optIn(piOptIn({ sessionPath: '/sessions/abc' }));
+      for (const e of assistantText('s1', 'done')) h.pi.emit('/sessions/abc', e);
+      h.pi.emit('/sessions/abc', agentEnd('s1'));
+      await wait(60);
+      await h.mgr.drain();
+      expect(seen).toContain('/sessions/abc');
+    });
+
+    it('falls back to the opt-in snapshot label when the resolver returns nothing', async () => {
+      const h = makeHarness(dir, { resolveLabel: async () => undefined });
+      await h.mgr.init();
+      await h.mgr.optIn(piOptIn({ label: 'Snapshot name' }));
+      for (const e of assistantText('s1', 'done')) h.pi.emit('/sessions/s1', e);
+      h.pi.emit('/sessions/s1', agentEnd('s1'));
+      await wait(60);
+      await h.mgr.drain();
+      expect(h.channel.received[0].title).toBe('🤖 Snapshot name · waiting for you');
+    });
+
+    it('falls back to the runtime label when neither resolver nor snapshot provide a name', async () => {
+      const h = makeHarness(dir, { resolveLabel: async () => undefined });
+      await h.mgr.init();
+      await h.mgr.optIn(piOptIn({ label: undefined }));
+      for (const e of assistantText('s1', 'done')) h.pi.emit('/sessions/s1', e);
+      h.pi.emit('/sessions/s1', agentEnd('s1'));
+      await wait(60);
+      await h.mgr.drain();
+      expect(h.channel.received[0].title).toBe('🤖 Pi · waiting for you');
+    });
+
+    it('ignores a blank/whitespace resolver result and falls back', async () => {
+      const h = makeHarness(dir, { resolveLabel: async () => '   ' });
+      await h.mgr.init();
+      await h.mgr.optIn(piOptIn({ label: 'Snapshot name' }));
+      for (const e of assistantText('s1', 'done')) h.pi.emit('/sessions/s1', e);
+      h.pi.emit('/sessions/s1', agentEnd('s1'));
+      await wait(60);
+      await h.mgr.drain();
+      expect(h.channel.received[0].title).toBe('🤖 Snapshot name · waiting for you');
+    });
+
+    it('never lets a throwing resolver break the notification (falls back gracefully)', async () => {
+      const h = makeHarness(dir, { resolveLabel: async () => { throw new Error('prefs read failed'); } });
+      await h.mgr.init();
+      await h.mgr.optIn(piOptIn({ label: 'Snapshot name' }));
+      for (const e of assistantText('s1', 'done')) h.pi.emit('/sessions/s1', e);
+      h.pi.emit('/sessions/s1', agentEnd('s1'));
+      await wait(60);
+      await h.mgr.drain();
+      expect(h.channel.received).toHaveLength(1);
+      expect(h.channel.received[0].title).toBe('🤖 Snapshot name · waiting for you');
+    });
+
+    it('does not require a resolver — back-compat: uses the opt-in snapshot label', async () => {
+      const h = makeHarness(dir); // no resolveLabel injected
+      await h.mgr.init();
+      await h.mgr.optIn(piOptIn({ label: 'Snapshot name' }));
+      for (const e of assistantText('s1', 'done')) h.pi.emit('/sessions/s1', e);
+      h.pi.emit('/sessions/s1', agentEnd('s1'));
+      await wait(60);
+      await h.mgr.drain();
+      expect(h.channel.received[0].title).toBe('🤖 Snapshot name · waiting for you');
     });
   });
 });

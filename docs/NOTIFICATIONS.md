@@ -20,6 +20,13 @@ notifications later without a rewrite.
   event* with different *content*; the operator reads the tail and decides.
 - **No classification:** the message is **session identity + the truncated tail
   of what the agent last said + a deep link** (Option A). No heuristic/LLM label.
+- **Session name in the header:** the title shows the session's current display
+  name (the operator-renamed name if set, else the runtime/auto name). It is
+  resolved **live at flush time** from `web-ui-prefs.json` (`sessionDisplayNames`,
+  keyed by session path), with the opt-in snapshot `label` and the runtime label
+  as fallbacks — so renaming a session *after* opting in is reflected in later
+  notifications. The name is clamped in the title so an un-renamed session's long
+  first-message auto-name stays readable.
 - **Opt-in, decoupled from pinning:** notifications fire only for sessions the
   operator opted in. Opt-in is a persisted per-session flag, independent of the
   2-session pin limit.
@@ -52,8 +59,8 @@ notifications later without a rewrite.
 |---|---|
 | `types.ts` | Stable contract: `Notification`, `OptInRecord`, `DeliveryRecord`, `QueuedNotification`, `NotificationChannel`. |
 | `notification-store.ts` | Durable JSON persistence (atomic writes, reload, log capping). Mirrors `watch-store.ts`. |
-| `notification-formatter.ts` | Builds `{ title, body, deepLink }` from metadata + the agent's tail; truncation. |
-| `notification-manager.ts` | Orchestration: own broker, per-session observer attach/detach, debounce, durable outbox + retry, restart rehydration, explicit emit. |
+| `notification-formatter.ts` | Builds `{ title, body, deepLink }` from metadata + the agent's tail; truncation; clamps the session name in the title. |
+| `notification-manager.ts` | Orchestration: own broker, per-session observer attach/detach, debounce, durable outbox + retry, restart rehydration, explicit emit, **live session-name resolution** at flush time. |
 | `channels/notification-channel.ts` | `NotificationChannel` interface + `ChannelRouter`. |
 | `channels/telegram-channel.ts` | Telegram Bot API `sendMessage`; injectable transport; 4096 cap; token redaction. |
 | `../internal-api/routes/notifications.ts` | The REST handlers. |
@@ -129,6 +136,16 @@ also exposes a cookie-auth REST facade for the session toggle used in the sideba
 
 The browser route is intentionally thin: it forwards to the same
 `NotificationManager` and exists only so the UI can reuse normal browser auth.
+
+### Deep links (`?session=<id>`)
+
+The formatter emits `<base>?session=<sessionId>` links. The client honors them:
+`useDeepLinkSession` (`client/src/hooks/useDeepLinkSession.ts`), mounted in the
+authenticated app, reads the `?session` param on load, waits for the session list
++ WebSocket to be ready, then drives the same switch the sidebar uses (WS
+`switch_session` by path). The param is stripped after read so a refresh returns
+to the normal default view. Unknown ids are ignored silently. This is the
+minimal reader; the URL bar is not otherwise kept in sync with the active session.
 
 ---
 

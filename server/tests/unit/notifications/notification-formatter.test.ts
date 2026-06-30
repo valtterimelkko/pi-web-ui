@@ -43,6 +43,27 @@ describe('notification-formatter', () => {
       expect(out.body).toBe('shipped');
       expect(out.deepLink).toBeUndefined();
     });
+
+    it('clamps a long label (e.g. a first-message auto-name) so the title stays short', () => {
+      const longLabel = 'Fix the flaky billing test that times out on cold cache. '.repeat(6);
+      const out = formatNotification(
+        { sessionId: 's1', runtime: 'pi', label: longLabel, kind: 'agent_end', tail: 'done' },
+        { tailMaxChars: 1200, publicBaseUrl: 'https://app.example.com' },
+      );
+      expect(out.title).toMatch(/^🤖 .+… · waiting for you$/);
+      // Name portion (between the emoji prefix and the suffix) stays bounded.
+      const name = out.title.slice('🤖 '.length, out.title.length - ' · waiting for you'.length);
+      expect(name.length).toBeLessThanOrEqual(80);
+      expect(name.endsWith('…')).toBe(true);
+    });
+
+    it('leaves a short label unclamped', () => {
+      const out = formatNotification(
+        { sessionId: 's1', runtime: 'pi', label: 'Refactor job', kind: 'agent_end', tail: 'done' },
+        { tailMaxChars: 1200, publicBaseUrl: 'https://app.example.com' },
+      );
+      expect(out.title).toBe('🤖 Refactor job · waiting for you');
+    });
   });
 
   describe('truncation', () => {

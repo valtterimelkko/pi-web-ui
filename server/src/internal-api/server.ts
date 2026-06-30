@@ -30,6 +30,7 @@ import { NotificationManager } from '../notifications/notification-manager.js';
 import { NotificationStore } from '../notifications/notification-store.js';
 import { ChannelRouter } from '../notifications/channels/notification-channel.js';
 import { pickNotificationChannel } from '../notifications/channel-factory.js';
+import { readPreferences } from '../routes/preferences.js';
 import { createRequestLoggingMiddleware } from './request-logging.js';
 import { pushDiagnosticsRecord } from './diagnostics-buffer.js';
 import { setLogTap } from '../logging/logger.js';
@@ -204,6 +205,18 @@ export class InternalApiServer {
       publicBaseUrl: config.notificationsPublicBaseUrl ?? config.allowedOrigins[0],
       debounceMs: config.notificationsDebounceMs,
       maxAttempts: config.notificationsMaxDeliveryAttempts,
+      // Live-resolve the renamed display name (web-ui-prefs.json) so the
+      // notification header reflects a rename even after opt-in. Best-effort:
+      // a read failure falls back through the snapshot label → runtime label.
+      resolveLabel: async (sessionPath: string) => {
+        try {
+          const prefs = await readPreferences();
+          const name = prefs.sessionDisplayNames?.[sessionPath];
+          return typeof name === 'string' && name.trim() ? name.trim() : undefined;
+        } catch {
+          return undefined;
+        }
+      },
     });
     await notificationManager.init();
     this.notificationManager = notificationManager;

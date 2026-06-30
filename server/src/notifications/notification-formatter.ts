@@ -12,6 +12,16 @@ import type { NotificationKind, NotificationRuntime } from './types.js';
 
 const FALLBACK_BODY = '_(No message body — open the session to see what it said.)_';
 const TRUNCATION_MARKER = '\n…(truncated, open session)';
+/** Cap on the session name in the title — a renamed name is short, but an
+ *  un-renamed session's auto-name can be a full first message. */
+const LABEL_MAX_CHARS = 80;
+
+/** Trims and bounds a label for use in the title; leaves short labels intact. */
+function clampLabel(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= LABEL_MAX_CHARS) return trimmed;
+  return `${trimmed.slice(0, LABEL_MAX_CHARS - 1).trimEnd()}…`;
+}
 
 export function runtimeLabel(runtime?: NotificationRuntime): string {
   switch (runtime) {
@@ -61,7 +71,7 @@ function buildDeepLink(baseUrl: string, sessionId: string): string {
 }
 
 export function formatNotification(input: FormatterInput, opts: FormatterOptions): FormatterOutput {
-  const name = (input.label && input.label.trim()) || runtimeLabel(input.runtime);
+  const name = clampLabel((input.label && input.label.trim()) || runtimeLabel(input.runtime));
   const title =
     input.kind === 'agent_end' ? `🤖 ${name} · waiting for you` : `📢 ${name}`;
   const body = truncateTail(input.tail, opts.tailMaxChars);
