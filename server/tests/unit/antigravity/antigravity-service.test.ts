@@ -53,6 +53,7 @@ import {
   pickNewConversationId,
   getModelContextWindow,
   normalizeAgyModel,
+  buildAgyErrorBody,
   ANTIGRAVITY_CHARS_PER_TOKEN,
   AntigravityService,
   type ConversationFileInfo,
@@ -171,6 +172,36 @@ describe('normalizeAgyModel', () => {
 
   it('handles an empty string', () => {
     expect(normalizeAgyModel('')).toBe('');
+  });
+});
+
+describe('buildAgyErrorBody', () => {
+  it('returns the bare reason sentence when there is no partial stdout', () => {
+    const { body, partial } = buildAgyErrorBody('timeout', '', 0);
+    expect(partial).toBe('');
+    expect(body).toBe('The agent did not return a reply (timeout).');
+  });
+
+  it('appends first-turn partial output (priorLen 0) to the reason sentence', () => {
+    const { body, partial } = buildAgyErrorBody('timeout', 'half a reply', 0);
+    expect(partial).toBe('half a reply');
+    expect(body).toBe('The agent did not return a reply (timeout). Partial output:\nhalf a reply');
+  });
+
+  it('slices partial at priorLen so prior-turn replies are NOT presented as partial (multi-turn offset safety)', () => {
+    // agy --conversation replays all prior replies; stdout = prior + new. The
+    // new partial must be only the portion after the last done turn's offset.
+    const stdout = 'PRIORREPLYNEWPARTIAL'; // priorLen covers 'PRIORREPLY' (10 chars)
+    const { body, partial } = buildAgyErrorBody('timeout', stdout, 10);
+    expect(partial).toBe('NEWPARTIAL');
+    expect(body).toContain('NEWPARTIAL');
+    expect(body).not.toContain('PRIORREPLY');
+  });
+
+  it('treats whitespace-only stdout as no partial', () => {
+    const { body, partial } = buildAgyErrorBody('exit 2', '   \n  ', 0);
+    expect(partial).toBe('');
+    expect(body).toBe('The agent did not return a reply (exit 2).');
   });
 });
 
@@ -379,5 +410,19 @@ describe('AntigravityService — durable turn lifecycle', () => {
     expect(stats?.userMessages).toBe(2); // done + error; running excluded
     expect(stats?.assistantMessages).toBe(2);
     expect(stats?.totalMessages).toBe(4);
+  });
+
+  it('getContextUsage excludes a running turn from the token estimate (§5.3 consistency)', async () => {
+    const { sessionId } = await svc.createSession(tmp);
+    // done: prompt 4 + response 4 = 8 chars; running: prompt 4 + response 0 = 4 chars.
+    await store.appendTurn(sessionId, { prompt: 'aaaa', response: 'bbbb', model: 'Gemini 3.5 Flash (Medium)', conversationId: null, timestamp: 1, status: 'done', rawStdoutLength: 8 });
+    await store.startTurn(sessionId, { turnId: 'tr', prompt: 'cccc', model: 'Gemini 3.5 Flash (Medium)', conversationId: null, timestamp: 2 });
+
+    const ctx = await svc.getContextUsage(sessionId);
+    expect(ctx).not.toBeNull();
+    if (!ctx) return; // narrow after the null check (avoid non-null assertion)
+    // Only the done turn counts (8 chars / 4 = 2 tokens); the running turn is ignored.
+    expect(ctx.tokens).toBe(2);
+    expect(ctx.contextWindow).toBe(1_048_576); // Flash window
   });
 });

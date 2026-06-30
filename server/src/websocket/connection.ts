@@ -1118,6 +1118,10 @@ export class WebSocketConnectionManager {
     sessionId: string,
     prompt: string,
   ): Promise<void> {
+    // Durability now also comes from the store: sendPrompt persists the prompt
+    // as a `running` turn before returning, so a reconnecting subscriber (not
+    // just this client) sees it via replay even if it missed the live fan-out.
+    // See docs/plans/ANTIGRAVITY-TURN-DURABILITY-PLAN.md.
     try {
       await this.antigravityService.sendPrompt(
         sessionId,

@@ -50,6 +50,24 @@ export function normalizeAgyModel(model: string): string {
 }
 
 /**
+ * Build the user-facing body + storable partial text for a non-completing turn
+ * (timeout / non-zero exit with no usable stdout).
+ *
+ * `stdout` is the raw agy stdout; with `--conversation` it replays ALL prior
+ * assistant replies before the newest one, so we slice at `priorLen` (the last
+ * done turn's cumulative offset) to isolate only the new partial reply. The body
+ * is always the reason sentence, plus any partial output captured, so a failed
+ * turn is never blank and the notification layer always has a real body.
+ */
+export function buildAgyErrorBody(reason: string, stdout: string, priorLen: number): { body: string; partial: string } {
+  const partial = stdout.trimEnd().slice(priorLen).trimStart();
+  const body = partial
+    ? `The agent did not return a reply (${reason}). Partial output:\n${partial}`
+    : `The agent did not return a reply (${reason}).`;
+  return { body, partial };
+}
+
+/**
  * Returns the context window size (tokens) for the given agy model name.
  * Falls back to the Flash context window when the name is unrecognised.
  */
@@ -440,8 +458,7 @@ export class AntigravityService {
       // Non-completing turn (timeout / non-zero exit with no stdout): surface a
       // real, non-empty body and persist as error (RC2 — no more blank screen).
       const reason = result.reason ?? 'error';
-      const partial = result.stdout.trim();
-      const body = partial || `The agent did not return a reply (${reason}).`;
+      const { body, partial } = buildAgyErrorBody(reason, result.stdout, priorLen);
       await this.finalizeTurnError(sessionId, entry, turnId, prompt, isFirstMessage, partial, reason, conversationId, body, assistantId, emit, meta);
       this.runningSessions.delete(sessionId);
       this.promptCallbacks.delete(sessionId);
@@ -616,6 +633,10 @@ export class AntigravityService {
     if (this.sessionMeta.has(sessionId)) return true;
     const entry = await this.registry.get(sessionId);
     if (!entry || entry.sdkType !== 'antigravity') return false;
+    // Crash recovery (RC1/§4.3.5): a turn left `running` on disk by a crash
+    // mid-flight is intentionally NOT reconciled here. replayAntigravityHistory
+    // renders it as user-prompt-only (no agent_end) with isStreaming driving the
+    // spinner, which is the cheapest correct behavior — no heavy reconciliation.
     this.sessionMeta.set(sessionId, { lastActivity: Date.now(), pinned: false, status: 'idle' });
     return true;
   }
@@ -708,9 +729,13 @@ export class AntigravityService {
       const entry = await this.registry.get(sessionId).catch(() => null);
       if (!entry || entry.sdkType !== 'antigravity') return null;
       const history = await this.store.loadHistory(sessionId);
-      if (history.length === 0) return null;
+      // Consistent with getSessionStats: ignore an in-flight `running` turn. It
+      // has no assistant reply yet, and if orphaned by a crash it may not be in
+      // agy's conversation view, so it must not skew the context estimate.
+      const finalized = history.filter((t) => t.status !== 'running');
+      if (finalized.length === 0) return null;
 
-      const totalChars = history.reduce(
+      const totalChars = finalized.reduce(
         (acc, turn) => acc + turn.prompt.length + turn.response.length,
         0,
       );
