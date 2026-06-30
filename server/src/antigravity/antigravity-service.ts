@@ -144,6 +144,28 @@ export function applySentConversationId(
   return sentConversationId;
 }
 
+/**
+ * Detect a silent model downgrade from the per-run agy log.
+ *
+ * When agy does not recognise the requested model it logs a "not recognized"
+ * line and then propagates a *different* label to the backend — i.e. the user's
+ * chosen model is silently swapped (the RC3 incident: High → Medium). We strip
+ * the `antigravity/` prefix up front to prevent the common case, but agy can
+ * still fall back for any genuinely unknown label, so this surfaces it as an
+ * observable warning instead of letting it pass invisibly. Returns the label
+ * agy actually used (`fellBackTo`) when a downgrade is detected, else null.
+ */
+export function extractAgyModelDowngrade(logText: string): { fellBackTo: string } | null {
+  if (!/is not recognized as a known model/i.test(logText)) return null;
+  const re = /Propagating selected model override to backend: label="([^"]+)"/g;
+  let fellBackTo: string | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(logText)) !== null) {
+    fellBackTo = match[1];
+  }
+  return fellBackTo ? { fellBackTo } : null;
+}
+
 async function createAgyRunLogPath(sessionId: string): Promise<string> {
   const logDir = path.join(config.antigravitySessionDir, 'agy-logs');
   await mkdir(logDir, { recursive: true, mode: 0o700 });
@@ -238,6 +260,7 @@ export class AntigravityService {
   private readonly maxPinnedSessions: number;
   private readonly cleanupIntervalMs: number;
   private readonly promptTimeoutMs: number;
+  private readonly heartbeatIntervalMs: number;
 
   constructor(cfg: { registryPath: string }) {
     this.store = new AntigravitySessionStore(config.antigravitySessionDir);
@@ -249,6 +272,7 @@ export class AntigravityService {
     this.maxPinnedSessions = config.antigravityMaxPinnedSessions;
     this.cleanupIntervalMs = config.antigravityCleanupIntervalMs;
     this.promptTimeoutMs = config.antigravityPromptTimeoutMs;
+    this.heartbeatIntervalMs = config.antigravityHeartbeatIntervalMs;
 
     this.startCleanupInterval();
   }
@@ -363,6 +387,9 @@ export class AntigravityService {
     // Stored id is kept verbatim; normalization happens only at the agy boundary.
     const storedModel = entry.model || config.antigravityDefaultModel;
     const conversationIdHint = entry.antigravityConversationId ?? null;
+    // Per-turn logger: sessionId/turnId/runtime are bound so every line is
+    // correlatable and flows through the diagnostics ring buffer.
+    const tlog = logger.child({ sessionId, turnId, runtime: 'antigravity' });
 
     const emit = (event: NormalizedEvent) => {
       try { onEvent(event); } catch { /* non-fatal */ }
@@ -390,6 +417,10 @@ export class AntigravityService {
       messageCount: entry.messageCount ?? 0,
       status: 'running',
     });
+    tlog.info(
+      'turn start: model=%s conversationId=%s promptChars=%d firstMessage=%s',
+      storedModel, conversationIdHint ?? 'none', prompt.length, isFirstMessage,
+    );
 
     emit({ type: 'agent_start', sessionId, timestamp: ts, data: { sessionId } });
     emit({ type: 'message_start', sessionId, timestamp: ts, data: { id: userId, role: 'user' } });
@@ -422,6 +453,9 @@ export class AntigravityService {
       // Build agy args. Normalize the model id so the chosen label runs as
       // chosen (RC3: an "antigravity/" prefix otherwise silently downgrades).
       const model = normalizeAgyModel(storedModel);
+      if (model !== storedModel) {
+        tlog.warn('normalized model id for agy: "%s" -> "%s"', storedModel, model);
+      }
       const printTimeout = Math.ceil(this.promptTimeoutMs / 60000) + 'm';
       const args = ['--log-file', agyLogFile, '--dangerously-skip-permissions', '--print-timeout', printTimeout];
 
@@ -431,9 +465,33 @@ export class AntigravityService {
       }
       args.push('-p', prompt);
 
+      tlog.debug('spawning agy: model=%s conversation=%s printTimeout=%s', model, conversationId ?? 'new', printTimeout);
+
+      // ── Liveness heartbeat ──────────────────────────────────────────────
+      // agy is a batch subprocess with no native streaming, so emit a synthetic
+      // stream_activity ping on an interval while the turn is in flight. This
+      // keeps the UI heartbeat fresh during turns that can run for minutes.
+      // Live-only (never persisted); always cleared in the finally below.
+      const subprocessStartedAt = Date.now();
+      const heartbeat = setInterval(() => {
+        emit({
+          type: 'stream_activity',
+          sessionId,
+          timestamp: Date.now(),
+          data: { turnId, elapsedMs: Date.now() - subprocessStartedAt },
+        });
+      }, this.heartbeatIntervalMs);
+      if (heartbeat.unref) heartbeat.unref();
+
       // TODO: antigravityPromptTimeoutMs is configurable via ANTIGRAVITY_PROMPT_TIMEOUT_MS;
       // the fix here makes a timeout visible/durable rather than changing the value.
-      const result = await runAgy(args, entry.cwd, this.promptTimeoutMs);
+      let result: AgyResult;
+      try {
+        result = await runAgy(args, entry.cwd, this.promptTimeoutMs);
+      } finally {
+        clearInterval(heartbeat);
+      }
+      const durationMs = Date.now() - subprocessStartedAt;
 
       // agy may create transient conversations before the one that actually
       // receives the message. Its per-run log exposes the true target.
@@ -446,9 +504,17 @@ export class AntigravityService {
         conversationId = pickNewConversationId(beforeConversations, afterConversations);
       }
 
+      // Surface a silent agy model downgrade (RC3 residual: any unknown label,
+      // not just the prefixed case we now prevent) as an observable warning.
+      const downgrade = extractAgyModelDowngrade(`${agyLog}\n${result.stderr}`);
+      if (downgrade) {
+        tlog.warn('agy silently downgraded model: requested "%s", agy used "%s"', model, downgrade.fellBackTo);
+      }
+
       if (result.ok) {
         const response = extractNewReply(result.stdout, priorLen);
-        await this.finalizeTurnSuccess(sessionId, entry, turnId, prompt, isFirstMessage, response, conversationId, result.stdout, assistantId, emit, meta);
+        tlog.info('turn done in %dms: responseChars=%d conversationId=%s', durationMs, response.length, conversationId ?? 'none');
+        await this.finalizeTurnSuccess(sessionId, entry, turnId, prompt, isFirstMessage, response, conversationId, result.stdout, durationMs, assistantId, emit, meta);
         this.runningSessions.delete(sessionId);
         this.promptCallbacks.delete(sessionId);
         onComplete();
@@ -458,19 +524,20 @@ export class AntigravityService {
       // Non-completing turn (timeout / non-zero exit with no stdout): surface a
       // real, non-empty body and persist as error (RC2 — no more blank screen).
       const reason = result.reason ?? 'error';
+      tlog.warn('turn failed in %dms: reason=%s', durationMs, reason);
       const { body, partial } = buildAgyErrorBody(reason, result.stdout, priorLen);
-      await this.finalizeTurnError(sessionId, entry, turnId, prompt, isFirstMessage, partial, reason, conversationId, body, assistantId, emit, meta);
+      await this.finalizeTurnError(sessionId, entry, turnId, prompt, isFirstMessage, partial, reason, conversationId, body, durationMs, assistantId, emit, meta);
       this.runningSessions.delete(sessionId);
       this.promptCallbacks.delete(sessionId);
       onComplete(new Error(reason));
     } catch (err) {
       // Spawn-level failure or unexpected throw: same visible-failure treatment.
       const error = err instanceof Error ? err : new Error(String(err));
-      logger.error(`[AntigravityService] Prompt failed for ${sessionId}:`, error.message);
-
       const reason = error.message || 'error';
+      tlog.error('turn errored before completion: %s', reason);
+
       const body = `The agent run failed (${reason}).`;
-      await this.finalizeTurnError(sessionId, entry, turnId, prompt, isFirstMessage, '', reason, conversationIdHint, body, assistantId, emit, meta)
+      await this.finalizeTurnError(sessionId, entry, turnId, prompt, isFirstMessage, '', reason, conversationIdHint, body, undefined, assistantId, emit, meta)
         .catch(() => undefined);
       this.runningSessions.delete(sessionId);
       this.promptCallbacks.delete(sessionId);
@@ -491,6 +558,7 @@ export class AntigravityService {
     response: string,
     conversationId: string | null,
     rawStdout: string,
+    durationMs: number,
     assistantId: string,
     emit: (event: NormalizedEvent) => void,
     meta: ActiveSessionMeta,
@@ -509,6 +577,7 @@ export class AntigravityService {
       response,
       conversationId,
       rawStdoutLength: rawStdout.trimEnd().length,
+      turnDurationMs: durationMs,
     });
 
     await this.registry.upsert({
@@ -544,6 +613,7 @@ export class AntigravityService {
     reason: string,
     conversationId: string | null,
     body: string,
+    durationMs: number | undefined,
     assistantId: string,
     emit: (event: NormalizedEvent) => void,
     meta: ActiveSessionMeta,
@@ -564,6 +634,7 @@ export class AntigravityService {
       response: partial || reason,
       error: reason,
       conversationId,
+      ...(durationMs !== undefined ? { turnDurationMs: durationMs } : {}),
     });
 
     await this.registry.upsert({

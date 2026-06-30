@@ -14,6 +14,7 @@ export interface AntigravityTurn {
   status?: AntigravityTurnStatus; // undefined === legacy 'done' (back-compat)
   error?: string; // present when status === 'error'
   rawStdoutLength?: number; // only meaningful when status === 'done'
+  turnDurationMs?: number; // wall-clock time the agy subprocess took, set on finalize
 }
 
 /** Fields finalizeTurn may patch on an existing turn line. */
@@ -23,6 +24,7 @@ export interface AntigravityTurnPatch {
   error?: string;
   rawStdoutLength?: number;
   conversationId?: string | null;
+  turnDurationMs?: number;
 }
 
 /**

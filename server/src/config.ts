@@ -178,6 +178,7 @@ export interface ServerConfig {
   antigravityMaxSessions: number;
   antigravityMaxPinnedSessions: number;
   antigravityCleanupIntervalMs: number;
+  antigravityHeartbeatIntervalMs: number;
   notificationsEnabled: boolean;
   notificationsDir: string;
   notificationsDebounceMs: number;
@@ -284,6 +285,10 @@ export const config: ServerConfig = {
   antigravityMaxSessions: parseInt(process.env.ANTIGRAVITY_MAX_SESSIONS || '4', 10),
   antigravityMaxPinnedSessions: parseInt(process.env.ANTIGRAVITY_MAX_PINNED_SESSIONS || '2', 10),
   antigravityCleanupIntervalMs: parseInt(process.env.ANTIGRAVITY_CLEANUP_INTERVAL_MS || '60000', 10),
+  // Liveness heartbeat cadence during an in-flight Antigravity turn. agy is a
+  // batch subprocess (no native streaming), so the server emits a synthetic
+  // stream_activity ping on this interval to keep the UI heartbeat fresh.
+  antigravityHeartbeatIntervalMs: parseInt(process.env.ANTIGRAVITY_HEARTBEAT_INTERVAL_MS || '5000', 10),
   notificationsEnabled: process.env.NOTIFICATIONS_ENABLED === 'true',
   notificationsDir: process.env.NOTIFICATIONS_DIR || path.join(os.homedir(), '.pi-web-ui', 'notifications'),
   notificationsDebounceMs: parseInt(process.env.NOTIFICATIONS_DEBOUNCE_MS || '1500', 10),

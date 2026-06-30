@@ -81,7 +81,9 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsPinning: true,
           supportsReplayHistory: true,
           supportsApprovals: false,
-          supportsHeartbeat: false,
+          // Synthetic liveness heartbeat emitted during an in-flight turn (agy is
+          // a batch subprocess with no native streaming).
+          supportsHeartbeat: true,
         },
       },
     };

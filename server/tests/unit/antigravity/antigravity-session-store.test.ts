@@ -134,6 +134,13 @@ describe('AntigravitySessionStore', () => {
       const history = await store.loadHistory('sess');
       expect(history[0].conversationId).toBe('conv-1');
     });
+
+    it('finalizeTurn persists turnDurationMs (timing observability)', async () => {
+      await store.startTurn('sess', { turnId: 't1', prompt: 'p', model: 'm', conversationId: null, timestamp: 1 });
+      await store.finalizeTurn('sess', 't1', { status: 'done', response: 'r', rawStdoutLength: 1, turnDurationMs: 1234 });
+      const history = await store.loadHistory('sess');
+      expect(history[0].turnDurationMs).toBe(1234);
+    });
   });
 
   describe('legacy / back-compat', () => {

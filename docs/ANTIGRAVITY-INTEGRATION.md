@@ -100,6 +100,7 @@ All config lives in `server/src/config.ts`:
 | `antigravityMaxSessions` | `4` | `ANTIGRAVITY_MAX_SESSIONS` |
 | `antigravityMaxPinnedSessions` | `2` | `ANTIGRAVITY_MAX_PINNED_SESSIONS` |
 | `antigravityCleanupIntervalMs` | `60000` (1m) | `ANTIGRAVITY_CLEANUP_INTERVAL_MS` |
+| `antigravityHeartbeatIntervalMs` | `5000` (5s) | `ANTIGRAVITY_HEARTBEAT_INTERVAL_MS` |
 
 ## Capabilities
 
@@ -117,7 +118,7 @@ Reported via Internal API `/api/v1/capabilities`:
     "supportsPinning": true,
     "supportsReplayHistory": true,
     "supportsApprovals": false,
-    "supportsHeartbeat": false
+    "supportsHeartbeat": true
   }
 }
 ```
@@ -147,9 +148,18 @@ npm run validate:live -- --runtime antigravity --scenario session-info
 
 All generic scenarios (`smoke`, `follow-up`, `session-info`) work unchanged because the runtime reports capabilities correctly and emits standard normalized events.
 
+## Observability
+
+Because `agy -p` is a batch subprocess with no native streaming, the server adds its own observability so an in-flight turn is never a silent black box:
+
+- **Liveness heartbeat** (`supportsHeartbeat: true`): while the subprocess runs, the service emits a synthetic `stream_activity` event every `antigravityHeartbeatIntervalMs` (default 5s) carrying `{ turnId, elapsedMs }`. It flows through `/events` and the WebSocket exactly like the Claude channel heartbeat, keeps the UI heartbeat fresh during multi-minute turns, is **live-only** (never persisted), and is always cleared when the turn ends.
+- **Structured lifecycle logging**: each turn logs through a per-turn child logger bound with `sessionId` / `turnId` / `runtime=antigravity`, so lines are correlatable and land in the `/diagnostics` ring buffer. Emitted: `turn start` (model, conversationId, promptChars), `turn done in <ms>` (responseChars) or `turn failed in <ms>` (reason), a `warn` when the model id is normalized for agy, and a `warn` when agy is detected to have silently downgraded the model.
+- **Per-turn timing**: finalized turns persist `turnDurationMs` (wall-clock subprocess time) in the JSONL store.
+- **Silent-downgrade detection**: `extractAgyModelDowngrade()` parses the per-run agy log for the "not recognized → propagating override" pattern and surfaces it as a warning, so a fallback to a different model is observable even though the `antigravity/` prefix case is already prevented at the `--model` boundary.
+
 ## Known Limitations
 
-- **No streaming**: `agy -p` returns batch output. The entire response is emitted as a single `message_update` after the subprocess completes.
+- **No native streaming**: `agy -p` returns batch output. The entire response is emitted as a single `message_update` after the subprocess completes — but a synthetic `stream_activity` heartbeat (see [Observability](#observability)) provides liveness during the turn.
 - **No tool visibility**: agy tool calls are not surfaced as individual events.
 - **No approvals**: agy runs with `--dangerously-skip-permissions`.
 - **Resumed output accumulation**: if `rawStdoutLength` is missing or corrupted in the JSONL turn log, resumed output slicing can include old text or start mid-sentence.

@@ -54,10 +54,12 @@ import {
   getModelContextWindow,
   normalizeAgyModel,
   buildAgyErrorBody,
+  extractAgyModelDowngrade,
   ANTIGRAVITY_CHARS_PER_TOKEN,
   AntigravityService,
   type ConversationFileInfo,
 } from '../../../src/antigravity/antigravity-service.js';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 
 const PLACEHOLDER_CONVERSATION = '96ab5de0-2ac0-42b3-ba11-4ccaba820cbe';
 const ACTUAL_CONVERSATION = 'a1efeb45-ca4b-4350-a97e-7feb18776438';
@@ -96,6 +98,27 @@ describe('applySentConversationId', () => {
 
   it('throws when agy sends a follow-up to a different conversation than requested', () => {
     expect(() => applySentConversationId(PLACEHOLDER_CONVERSATION, ACTUAL_CONVERSATION)).toThrow(/refusing to rebind/i);
+  });
+});
+
+describe('extractAgyModelDowngrade', () => {
+  it('detects a silent downgrade and returns the label agy actually used', () => {
+    const log = `
+W0630 14:28:07 model_config_manager.go:54] Failed to resolve model flag antigravity/Gemini 3.5 Flash (High): model antigravity/Gemini 3.5 Flash (High) is not recognized as a known model or custom model in settings
+I0630 14:28:07 model_config_manager.go:157] Propagating selected model override to backend: label="Gemini 3.5 Flash (Medium)"
+`;
+    expect(extractAgyModelDowngrade(log)).toEqual({ fellBackTo: 'Gemini 3.5 Flash (Medium)' });
+  });
+
+  it('returns null when the model was resolved normally (no "not recognized" line)', () => {
+    const log = `
+I0630 14:28:07 model_config_manager.go:157] Propagating selected model override to backend: label="Gemini 3.5 Flash (High)"
+`;
+    expect(extractAgyModelDowngrade(log)).toBeNull();
+  });
+
+  it('returns null for an empty log', () => {
+    expect(extractAgyModelDowngrade('')).toBeNull();
   });
 });
 
@@ -250,11 +273,16 @@ describe('AntigravityService — durable turn lifecycle', () => {
   let svc: AntigravityService;
   let store: AntigravitySessionStore;
   let prevSessionDir: string;
+  let prevHeartbeat: number;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), 'antigravity-lifecycle-'));
     prevSessionDir = config.antigravitySessionDir;
     config.antigravitySessionDir = tmp;
+    // Fast heartbeat so an in-flight turn emits stream_activity quickly under
+    // test. The service reads this in its constructor, so set it before `new`.
+    prevHeartbeat = config.antigravityHeartbeatIntervalMs;
+    config.antigravityHeartbeatIntervalMs = 25;
     svc = new AntigravityService({ registryPath: join(tmp, 'registry.json') });
     store = new AntigravitySessionStore(tmp);
     ctrl.behavior = 'success';
@@ -266,6 +294,8 @@ describe('AntigravityService — durable turn lifecycle', () => {
 
   afterEach(() => {
     config.antigravitySessionDir = prevSessionDir;
+    config.antigravityHeartbeatIntervalMs = prevHeartbeat;
+    setLogTap(null);
     rmSync(tmp, { recursive: true, force: true });
   });
 
@@ -424,5 +454,57 @@ describe('AntigravityService — durable turn lifecycle', () => {
     // Only the done turn counts (8 chars / 4 = 2 tokens); the running turn is ignored.
     expect(ctx.tokens).toBe(2);
     expect(ctx.contextWindow).toBe(1_048_576); // Flash window
+  });
+
+  // ── Observability: heartbeat, timing, structured logging ───────────────────
+
+  it('emits stream_activity heartbeats while a turn is in flight (liveness)', async () => {
+    const { sessionId } = await svc.createSession(tmp);
+    // Hold the subprocess open so the 25ms heartbeat fires repeatedly.
+    ctrl.gatePromise = new Promise<void>((r) => { ctrl.gateResolve = r; });
+    ctrl.stdout = 'eventual reply';
+
+    const heartbeats: Array<{ elapsedMs?: number }> = [];
+    const done = prompt(sessionId, 'long running prompt', (e) => {
+      if (e.type === 'stream_activity') heartbeats.push((e.data as { elapsedMs?: number }) ?? {});
+    });
+
+    // Give the interval time to fire a few times.
+    await new Promise((r) => setTimeout(r, 120));
+    expect(heartbeats.length).toBeGreaterThanOrEqual(1);
+    expect(typeof heartbeats[0].elapsedMs).toBe('number');
+
+    // Release; once complete, heartbeats must stop (interval cleared).
+    ctrl.gateResolve?.();
+    await done;
+    const countAfterComplete = heartbeats.length;
+    await new Promise((r) => setTimeout(r, 80));
+    expect(heartbeats.length).toBe(countAfterComplete);
+  });
+
+  it('records turnDurationMs on a finalized turn (timing observability)', async () => {
+    const { sessionId } = await svc.createSession(tmp);
+    ctrl.stdout = 'answer';
+    await prompt(sessionId, 'hi');
+
+    const history = await store.loadHistory(sessionId);
+    expect(history).toHaveLength(1);
+    expect(typeof history[0].turnDurationMs).toBe('number');
+    expect(history[0].turnDurationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('logs a correlatable "turn start" record (structured lifecycle logging)', async () => {
+    const records: LogRecord[] = [];
+    setLogTap((r) => records.push(r));
+
+    const { sessionId } = await svc.createSession(tmp);
+    await prompt(sessionId, 'observe me');
+
+    const start = records.find((r) => r.component === 'AntigravityService' && r.msg.includes('turn start'));
+    expect(start).toBeDefined();
+    expect(start?.sessionId).toBe(sessionId);
+    expect(start?.runtime).toBe('antigravity');
+    // A completion line is logged too.
+    expect(records.some((r) => r.msg.includes('turn done'))).toBe(true);
   });
 });
