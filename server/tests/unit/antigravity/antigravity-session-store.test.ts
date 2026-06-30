@@ -71,6 +71,81 @@ describe('AntigravitySessionStore', () => {
     });
   });
 
+  describe('startTurn / finalizeTurn — durable turn lifecycle', () => {
+    it('startTurn writes a running line with an empty response', async () => {
+      const turn = await store.startTurn('sess', { turnId: 't1', prompt: 'hello', model: 'm', conversationId: null, timestamp: 1 });
+      expect(turn.status).toBe('running');
+      expect(turn.response).toBe('');
+
+      const history = await store.loadHistory('sess');
+      expect(history).toHaveLength(1);
+      expect(history[0].status).toBe('running');
+      expect(history[0].prompt).toBe('hello');
+      expect(history[0].response).toBe('');
+    });
+
+    it('finalizeTurn flips running → done with response + rawStdoutLength and keeps exactly one line for the turn', async () => {
+      const turn = await store.startTurn('sess', { turnId: 't1', prompt: 'hello', model: 'm', conversationId: null, timestamp: 1 });
+      await store.finalizeTurn('sess', 't1', { status: 'done', response: 'world', rawStdoutLength: 42 });
+
+      const history = await store.loadHistory('sess');
+      expect(history).toHaveLength(1); // no duplicate line
+      expect(history[0].turnId).toBe(turn.turnId);
+      expect(history[0].status).toBe('done');
+      expect(history[0].response).toBe('world');
+      expect(history[0].rawStdoutLength).toBe(42);
+    });
+
+    it('finalizeTurn → error sets status:error + error text and leaves rawStdoutLength unset', async () => {
+      await store.startTurn('sess', { turnId: 't1', prompt: 'hello', model: 'm', conversationId: null, timestamp: 1 });
+      await store.finalizeTurn('sess', 't1', { status: 'error', response: 'partial', error: 'timed out' });
+
+      const history = await store.loadHistory('sess');
+      expect(history).toHaveLength(1);
+      expect(history[0].status).toBe('error');
+      expect(history[0].error).toBe('timed out');
+      expect(history[0].response).toBe('partial');
+      expect(history[0].rawStdoutLength).toBeUndefined();
+    });
+
+    it('finalizeTurn preserves other turns when rewriting (atomic in-place update)', async () => {
+      await store.appendTurn('sess', { prompt: 'p0', response: 'r0', model: 'm', conversationId: null, timestamp: 0, rawStdoutLength: 10 });
+      await store.startTurn('sess', { turnId: 't1', prompt: 'p1', model: 'm', conversationId: null, timestamp: 1 });
+      await store.finalizeTurn('sess', 't1', { status: 'done', response: 'r1', rawStdoutLength: 20 });
+
+      const history = await store.loadHistory('sess');
+      expect(history).toHaveLength(2);
+      expect(history[0].response).toBe('r0');
+      expect(history[1].turnId).toBe('t1');
+      expect(history[1].status).toBe('done');
+    });
+
+    it('finalizeTurn on an unknown turnId appends a finalized line (defensive)', async () => {
+      await store.finalizeTurn('sess', 'never-started', { status: 'error', response: '', error: 'interrupted' });
+      const history = await store.loadHistory('sess');
+      expect(history).toHaveLength(1);
+      expect(history[0].turnId).toBe('never-started');
+      expect(history[0].status).toBe('error');
+    });
+
+    it('finalizeTurn can update conversationId on a previously-running turn', async () => {
+      await store.startTurn('sess', { turnId: 't1', prompt: 'p', model: 'm', conversationId: null, timestamp: 1 });
+      await store.finalizeTurn('sess', 't1', { status: 'done', response: 'r', conversationId: 'conv-1', rawStdoutLength: 5 });
+      const history = await store.loadHistory('sess');
+      expect(history[0].conversationId).toBe('conv-1');
+    });
+  });
+
+  describe('legacy / back-compat', () => {
+    it('a turn loaded with no status field is treated as done by isDone()', async () => {
+      await store.appendTurn('sess', { prompt: 'p', response: 'r', model: 'm', conversationId: null, timestamp: 1 });
+      const history = await store.loadHistory('sess');
+      expect(history[0].status).toBeUndefined();
+      // isDone must be true for a legacy (no-status) line.
+      expect(store.isDone(history[0])).toBe(true);
+    });
+  });
+
   describe('priorStdoutLength', () => {
     it('returns 0 for empty history', () => {
       expect(store.priorStdoutLength([])).toBe(0);
@@ -91,6 +166,40 @@ describe('AntigravitySessionStore', () => {
       await store.appendTurn(sessionId, { prompt: 'p2', response: 'defgh', model: 'm', conversationId: null, timestamp: 2 });
       const history = await store.loadHistory(sessionId);
       expect(store.priorStdoutLength(history)).toBe(8); // 'abc'.length + 'defgh'.length
+    });
+
+    it('ignores a trailing running turn and returns the offset of the last done turn', async () => {
+      // done turn (offset 30) followed by a still-running turn with no offset.
+      await store.appendTurn('sess', { prompt: 'p1', response: 'abc', model: 'm', conversationId: null, timestamp: 1, status: 'done', rawStdoutLength: 30 });
+      await store.startTurn('sess', { turnId: 't-running', prompt: 'p2', model: 'm', conversationId: null, timestamp: 2 });
+      const history = await store.loadHistory('sess');
+      expect(store.priorStdoutLength(history)).toBe(30);
+    });
+
+    it('ignores a trailing error turn (no rawStdoutLength) and returns the last done offset', async () => {
+      await store.appendTurn('sess', { prompt: 'p1', response: 'abc', model: 'm', conversationId: null, timestamp: 1, status: 'done', rawStdoutLength: 30 });
+      await store.appendTurn('sess', { prompt: 'p2', response: '', model: 'm', conversationId: null, timestamp: 2, status: 'error', error: 'boom' });
+      const history = await store.loadHistory('sess');
+      expect(store.priorStdoutLength(history)).toBe(30);
+    });
+
+    it('§5.1 regression: a done → error → done sequence yields the second done offset, not a corrupted one', async () => {
+      // Turn 1: done, cumulative offset 100.
+      await store.appendTurn('sess', { prompt: 'p1', response: 'abc', model: 'm', conversationId: null, timestamp: 1, status: 'done', rawStdoutLength: 100 });
+      // Turn 2: error — must contribute NO offset.
+      await store.appendTurn('sess', { prompt: 'p2', response: '', model: 'm', conversationId: null, timestamp: 2, status: 'error', error: 'timed out' });
+      // Turn 3: done, cumulative offset 250. The next turn's reply slice must start at 250,
+      // proving the intervening error turn did not corrupt the running offset.
+      await store.appendTurn('sess', { prompt: 'p3', response: 'def', model: 'm', conversationId: null, timestamp: 3, status: 'done', rawStdoutLength: 250 });
+      const history = await store.loadHistory('sess');
+      expect(store.priorStdoutLength(history)).toBe(250);
+    });
+
+    it('returns 0 when only running/error turns exist (no done turn to anchor on)', async () => {
+      await store.appendTurn('sess', { prompt: 'p1', response: '', model: 'm', conversationId: null, timestamp: 1, status: 'error', error: 'x' });
+      await store.startTurn('sess', { turnId: 'tr', prompt: 'p2', model: 'm', conversationId: null, timestamp: 2 });
+      const history = await store.loadHistory('sess');
+      expect(store.priorStdoutLength(history)).toBe(0);
     });
   });
 

@@ -1761,6 +1761,10 @@ export class WebSocketConnectionManager {
   }
 
   private async replayAntigravityHistory(clientId: string, sessionId: string): Promise<void> {
+    // Durability note: prompts are persisted as a `running` turn the instant they
+    // are accepted (see docs/plans/ANTIGRAVITY-TURN-DURABILITY-PLAN.md), so a
+    // refresh mid-flight replays the prompt instead of an empty screen. A running
+    // turn replays as user-prompt-only; isStreaming below drives the spinner.
     const registry = getSessionRegistry();
     const entry = await registry.get(sessionId);
     if (!entry) {

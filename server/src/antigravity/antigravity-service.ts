@@ -5,9 +5,11 @@ import * as os from 'node:os';
 import { spawn } from 'node:child_process';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { AntigravitySessionStore } from './antigravity-session-store.js';
+import { isTurnDone } from './antigravity-session-store.js';
 import { turnsToReplayEvents } from './antigravity-history-replay.js';
 import { AntigravitySessionSubscribers } from './antigravity-session-subscribers.js';
 import { getSessionRegistry } from '../session-registry.js';
+import type { RegistryEntry } from '../session-registry.js';
 import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
 
@@ -34,12 +36,27 @@ export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: ReadonlyArray<readonly [prefix: 
 const DEFAULT_CONTEXT_WINDOW = 1_048_576; // Flash is the default model
 
 /**
+ * Normalize a model id for the agy `--model` boundary.
+ *
+ * agy expects a bare label like "Gemini 3.5 Flash (High)". Some callers/model
+ * pickers attach a provider prefix (e.g. "antigravity/…"); passing that makes
+ * agy silently fall back to its default model (the user picks High, gets
+ * Medium). Strip a single leading `provider/` segment so the chosen label runs
+ * as chosen. The stored registry id is left untouched — normalize only here.
+ */
+export function normalizeAgyModel(model: string): string {
+  const slash = model.indexOf('/');
+  return slash >= 0 ? model.slice(slash + 1) : model;
+}
+
+/**
  * Returns the context window size (tokens) for the given agy model name.
  * Falls back to the Flash context window when the name is unrecognised.
  */
 export function getModelContextWindow(model: string): number {
+  const normalized = normalizeAgyModel(model);
   for (const [prefix, size] of ANTIGRAVITY_MODEL_CONTEXT_WINDOWS) {
-    if (model.startsWith(prefix)) return size;
+    if (normalized.startsWith(prefix)) return size;
   }
   return DEFAULT_CONTEXT_WINDOW;
 }
@@ -117,7 +134,20 @@ async function createAgyRunLogPath(sessionId: string): Promise<string> {
   return path.join(logDir, `${safeSessionId}-${Date.now()}-${randomUUID()}.log`);
 }
 
-function runAgy(args: string[], cwd: string, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+/**
+ * Structured outcome of an agy subprocess run. Never throws for a non-zero exit
+ * or a timeout — those resolve with `ok:false` and a `reason` so the caller can
+ * surface a real failure body instead of discarding partial output. Only a
+ * spawn-level failure (binary missing) still rejects.
+ */
+export interface AgyResult {
+  stdout: string;
+  stderr: string;
+  ok: boolean;
+  reason?: string; // e.g. 'timeout' | `exit ${code}`
+}
+
+function runAgy(args: string[], cwd: string, timeoutMs: number): Promise<AgyResult> {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, PATH: `/root/.local/bin:${process.env.PATH ?? ''}` };
     const proc = spawn(AGY_BINARY, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -129,21 +159,24 @@ function runAgy(args: string[], cwd: string, timeoutMs: number): Promise<{ stdou
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
 
     const timer = setTimeout(() => {
+      // Watchdog: return partial output + a timeout reason instead of throwing,
+      // so a 10-minute timeout becomes a visible, durable error turn.
       proc.kill('SIGTERM');
-      reject(new Error(`agy subprocess timed out after ${timeoutMs}ms`));
+      resolve({ stdout, stderr, ok: false, reason: 'timeout' });
     }, timeoutMs + 5000); // slightly longer than agy's own print-timeout
 
     proc.on('error', (err) => {
       clearTimeout(timer);
-      reject(err);
+      reject(err); // genuine spawn failure (binary missing, etc.)
     });
 
     proc.on('close', (code) => {
       clearTimeout(timer);
       if (code === 0 || stdout.trim()) {
-        resolve({ stdout, stderr });
+        // code 0, or non-zero but we still got a usable reply (lenient, preserved).
+        resolve({ stdout, stderr, ok: true });
       } else {
-        reject(new Error(`agy exited with code ${code}\nSTDERR: ${stderr.slice(0, 500)}`));
+        resolve({ stdout, stderr, ok: false, reason: `exit ${code}` });
       }
     });
   });
@@ -222,8 +255,8 @@ export class AntigravityService {
 
   async isAvailable(): Promise<boolean> {
     try {
-      const { stdout } = await runAgy(['--version'], process.cwd(), 5000);
-      return stdout.trim().length > 0;
+      const result = await runAgy(['--version'], process.cwd(), 5000);
+      return result.ok && result.stdout.trim().length > 0;
     } catch {
       return false;
     }
@@ -305,14 +338,40 @@ export class AntigravityService {
   ): Promise<void> {
     if (!entry) return;
 
+    const turnId = randomUUID();
     const userId = randomUUID();
     const assistantId = randomUUID();
     const ts = Date.now();
+    // Stored id is kept verbatim; normalization happens only at the agy boundary.
+    const storedModel = entry.model || config.antigravityDefaultModel;
+    const conversationIdHint = entry.antigravityConversationId ?? null;
 
     const emit = (event: NormalizedEvent) => {
       try { onEvent(event); } catch { /* non-fatal */ }
       this.emitApiObserverEvent(sessionId, event);
     };
+
+    // ── Persist the prompt the instant it is accepted (RC1 durability). ──
+    // A refresh mid-flight now reads a durable `running` turn instead of an
+    // empty store. Reflect the in-flight turn in the registry too (firstMessage
+    // + running status) so list views show it immediately.
+    const historyBefore = await this.store.loadHistory(sessionId);
+    const isFirstMessage = historyBefore.length === 0;
+    await this.store.startTurn(sessionId, {
+      turnId,
+      prompt,
+      model: storedModel,
+      conversationId: conversationIdHint,
+      timestamp: ts,
+    });
+    await this.registry.upsert({
+      ...entry,
+      id: sessionId,
+      sdkType: 'antigravity',
+      firstMessage: isFirstMessage ? prompt.slice(0, 200) : entry.firstMessage,
+      messageCount: entry.messageCount ?? 0,
+      status: 'running',
+    });
 
     emit({ type: 'agent_start', sessionId, timestamp: ts, data: { sessionId } });
     emit({ type: 'message_start', sessionId, timestamp: ts, data: { id: userId, role: 'user' } });
@@ -326,18 +385,25 @@ export class AntigravityService {
       const history = await this.store.loadHistory(sessionId);
       const priorLen = this.store.priorStdoutLength(history);
 
-      // Detect conversation ID from registry or prior history
+      // Detect conversation ID from registry or the last DONE turn. A running
+      // or error turn may carry a null/transient id, so skip those.
       let conversationId: string | null = entry.antigravityConversationId ?? null;
-      if (!conversationId && history.length > 0) {
-        conversationId = history[history.length - 1].conversationId;
+      if (!conversationId) {
+        for (let i = history.length - 1; i >= 0; i--) {
+          if (isTurnDone(history[i]) && history[i].conversationId) {
+            conversationId = history[i].conversationId;
+            break;
+          }
+        }
       }
 
       // Snapshot conversation dir before call (fallback for detecting new conv ID on first turn)
       const beforeConversations = conversationId ? new Map<string, ConversationFileInfo>() : await listConversationFiles();
       const agyLogFile = await createAgyRunLogPath(sessionId);
 
-      // Build agy args
-      const model = entry.model || config.antigravityDefaultModel;
+      // Build agy args. Normalize the model id so the chosen label runs as
+      // chosen (RC3: an "antigravity/" prefix otherwise silently downgrades).
+      const model = normalizeAgyModel(storedModel);
       const printTimeout = Math.ceil(this.promptTimeoutMs / 60000) + 'm';
       const args = ['--log-file', agyLogFile, '--dangerously-skip-permissions', '--print-timeout', printTimeout];
 
@@ -347,68 +413,157 @@ export class AntigravityService {
       }
       args.push('-p', prompt);
 
-      const { stdout, stderr } = await runAgy(args, entry.cwd, this.promptTimeoutMs);
+      // TODO: antigravityPromptTimeoutMs is configurable via ANTIGRAVITY_PROMPT_TIMEOUT_MS;
+      // the fix here makes a timeout visible/durable rather than changing the value.
+      const result = await runAgy(args, entry.cwd, this.promptTimeoutMs);
 
       // agy may create transient conversations before the one that actually
       // receives the message. Its per-run log exposes the true target.
       await chmod(agyLogFile, 0o600).catch(() => undefined);
       const agyLog = await readFile(agyLogFile, 'utf-8').catch(() => '');
-      const sentConversationId = extractSentConversationIdFromAgyLog(`${agyLog}\n${stderr}`);
+      const sentConversationId = extractSentConversationIdFromAgyLog(`${agyLog}\n${result.stderr}`);
       conversationId = applySentConversationId(conversationId, sentConversationId);
       if (!conversationId) {
         const afterConversations = await listConversationFiles();
         conversationId = pickNewConversationId(beforeConversations, afterConversations);
       }
 
-      const response = extractNewReply(stdout, priorLen);
-      const turnTs = Date.now();
+      if (result.ok) {
+        const response = extractNewReply(result.stdout, priorLen);
+        await this.finalizeTurnSuccess(sessionId, entry, turnId, prompt, isFirstMessage, response, conversationId, result.stdout, assistantId, emit, meta);
+        this.runningSessions.delete(sessionId);
+        this.promptCallbacks.delete(sessionId);
+        onComplete();
+        return;
+      }
 
-      emit({ type: 'message_start', sessionId, timestamp: turnTs, data: { id: assistantId, role: 'assistant' } });
-      emit({
-        type: 'message_update', sessionId, timestamp: turnTs,
-        data: {
-          id: assistantId,
-          assistantMessageEvent: { type: 'text_delta', delta: response },
-        },
-      });
-      emit({ type: 'message_end', sessionId, timestamp: turnTs, data: { id: assistantId } });
-
-      // Persist to store; rawStdoutLength is the cumulative offset for the next turn's extraction
-      const isFirstMessage = history.length === 0;
-      await this.store.appendTurn(sessionId, { prompt, response, model, conversationId, timestamp: turnTs, rawStdoutLength: stdout.trimEnd().length });
-
-      // Update registry
-      await this.registry.upsert({
-        ...entry,
-        id: sessionId,
-        sdkType: 'antigravity',
-        firstMessage: isFirstMessage ? prompt.slice(0, 200) : entry.firstMessage,
-        messageCount: (entry.messageCount || 0) + 1,
-        status: 'idle',
-        antigravityConversationId: conversationId ?? undefined,
-      });
-
-      emit({ type: 'agent_end', sessionId, timestamp: turnTs, data: { result: null, usage: {} } });
-
-      meta.status = 'idle';
-      meta.lastActivity = Date.now();
+      // Non-completing turn (timeout / non-zero exit with no stdout): surface a
+      // real, non-empty body and persist as error (RC2 — no more blank screen).
+      const reason = result.reason ?? 'error';
+      const partial = result.stdout.trim();
+      const body = partial || `The agent did not return a reply (${reason}).`;
+      await this.finalizeTurnError(sessionId, entry, turnId, prompt, isFirstMessage, partial, reason, conversationId, body, assistantId, emit, meta);
       this.runningSessions.delete(sessionId);
       this.promptCallbacks.delete(sessionId);
-      await this.registry.updateStatus(sessionId, 'idle');
-      onComplete();
+      onComplete(new Error(reason));
     } catch (err) {
+      // Spawn-level failure or unexpected throw: same visible-failure treatment.
       const error = err instanceof Error ? err : new Error(String(err));
       logger.error(`[AntigravityService] Prompt failed for ${sessionId}:`, error.message);
 
-      emit({ type: 'agent_end', sessionId, timestamp: Date.now(), data: { result: null, usage: {} } });
-
-      meta.status = 'error';
-      meta.lastActivity = Date.now();
+      const reason = error.message || 'error';
+      const body = `The agent run failed (${reason}).`;
+      await this.finalizeTurnError(sessionId, entry, turnId, prompt, isFirstMessage, '', reason, conversationIdHint, body, assistantId, emit, meta)
+        .catch(() => undefined);
       this.runningSessions.delete(sessionId);
       this.promptCallbacks.delete(sessionId);
-      await this.registry.updateStatus(sessionId, 'error');
       onComplete(error);
     }
+  }
+
+  /**
+   * Finalize an in-flight turn as done: emit the assistant reply + agent_end,
+   * persist the finalized turn, and update the registry (turn counted, idle).
+   */
+  private async finalizeTurnSuccess(
+    sessionId: string,
+    entry: RegistryEntry,
+    turnId: string,
+    prompt: string,
+    isFirstMessage: boolean,
+    response: string,
+    conversationId: string | null,
+    rawStdout: string,
+    assistantId: string,
+    emit: (event: NormalizedEvent) => void,
+    meta: ActiveSessionMeta,
+  ): Promise<void> {
+    const turnTs = Date.now();
+
+    emit({ type: 'message_start', sessionId, timestamp: turnTs, data: { id: assistantId, role: 'assistant' } });
+    emit({
+      type: 'message_update', sessionId, timestamp: turnTs,
+      data: { id: assistantId, assistantMessageEvent: { type: 'text_delta', delta: response } },
+    });
+    emit({ type: 'message_end', sessionId, timestamp: turnTs, data: { id: assistantId } });
+
+    await this.store.finalizeTurn(sessionId, turnId, {
+      status: 'done',
+      response,
+      conversationId,
+      rawStdoutLength: rawStdout.trimEnd().length,
+    });
+
+    await this.registry.upsert({
+      ...entry,
+      id: sessionId,
+      sdkType: 'antigravity',
+      firstMessage: isFirstMessage ? prompt.slice(0, 200) : entry.firstMessage,
+      messageCount: (entry.messageCount || 0) + 1,
+      status: 'idle',
+      antigravityConversationId: conversationId ?? undefined,
+    });
+
+    emit({ type: 'agent_end', sessionId, timestamp: turnTs, data: { result: null, usage: {} } });
+
+    meta.status = 'idle';
+    meta.lastActivity = Date.now();
+    await this.registry.updateStatus(sessionId, 'idle');
+  }
+
+  /**
+   * Finalize an in-flight turn as error: emit a non-empty assistant body +
+   * agent_end (so the failure is visible on replay and to notifications),
+   * persist the finalized error turn, and update the registry (turn still
+   * counted + firstMessage set, status error).
+   */
+  private async finalizeTurnError(
+    sessionId: string,
+    entry: RegistryEntry,
+    turnId: string,
+    prompt: string,
+    isFirstMessage: boolean,
+    partial: string,
+    reason: string,
+    conversationId: string | null,
+    body: string,
+    assistantId: string,
+    emit: (event: NormalizedEvent) => void,
+    meta: ActiveSessionMeta,
+  ): Promise<void> {
+    const turnTs = Date.now();
+
+    emit({ type: 'message_start', sessionId, timestamp: turnTs, data: { id: assistantId, role: 'assistant' } });
+    emit({
+      type: 'message_update', sessionId, timestamp: turnTs,
+      data: { id: assistantId, assistantMessageEvent: { type: 'text_delta', delta: body } },
+    });
+    emit({ type: 'message_end', sessionId, timestamp: turnTs, data: { id: assistantId } });
+
+    await this.store.finalizeTurn(sessionId, turnId, {
+      status: 'error',
+      // Per plan: response = partial text (if any) or the reason, so the stored
+      // turn is self-describing and replay surfaces a non-empty body.
+      response: partial || reason,
+      error: reason,
+      conversationId,
+    });
+
+    await this.registry.upsert({
+      ...entry,
+      id: sessionId,
+      sdkType: 'antigravity',
+      firstMessage: isFirstMessage ? prompt.slice(0, 200) : entry.firstMessage,
+      messageCount: (entry.messageCount || 0) + 1,
+      status: 'error',
+      antigravityConversationId: conversationId ?? undefined,
+    });
+
+    emit({ type: 'agent_end', sessionId, timestamp: turnTs, data: { result: null, usage: {} } });
+
+    meta.status = 'error';
+    meta.lastActivity = Date.now();
+    await this.registry.updateStatus(sessionId, 'error');
   }
 
   // ── API observers (origin-independent event fan-out) ──────────────────────
@@ -532,15 +687,18 @@ export class AntigravityService {
     const entry = await this.registry.get(sessionId);
     if (!entry || entry.sdkType !== 'antigravity') return null;
     const history = await this.store.loadHistory(sessionId);
+    // Count finalized turns (done + error + legacy) only; a `running` turn is an
+    // in-flight exchange with no assistant reply yet and must not inflate stats.
+    const finalized = history.filter((t) => t.status !== 'running').length;
     return {
       sessionId,
       cwd: entry.cwd,
       model: entry.model,
-      userMessages: history.length,
-      assistantMessages: history.length,
+      userMessages: finalized,
+      assistantMessages: finalized,
       toolCalls: 0,
       toolResults: 0,
-      totalMessages: history.length * 2,
+      totalMessages: finalized * 2,
       pinned: this.sessionMeta.get(sessionId)?.pinned ?? false,
     };
   }
@@ -567,8 +725,9 @@ export class AntigravityService {
 
   async getAvailableModels(): Promise<Array<{ id: string; name: string; provider: string }>> {
     try {
-      const { stdout } = await runAgy(['models'], process.cwd(), 10000);
-      return stdout
+      const result = await runAgy(['models'], process.cwd(), 10000);
+      if (!result.ok) throw new Error('agy models failed');
+      return result.stdout
         .split('\n')
         .map((l) => l.trim())
         .filter((l) => l.length > 0)
