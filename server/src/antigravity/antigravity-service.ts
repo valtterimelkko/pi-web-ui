@@ -54,13 +54,20 @@ export function normalizeAgyModel(model: string): string {
  * (timeout / non-zero exit with no usable stdout).
  *
  * `stdout` is the raw agy stdout; with `--conversation` it replays ALL prior
- * assistant replies before the newest one, so we slice at `priorLen` (the last
- * done turn's cumulative offset) to isolate only the new partial reply. The body
- * is always the reason sentence, plus any partial output captured, so a failed
- * turn is never blank and the notification layer always has a real body.
+ * assistant replies before the newest one, so we slice near `priorLen` (the
+ * last done turn's cumulative offset, verified against `priorResponseText`
+ * when supplied — see {@link sliceAfterPriorReply}) to isolate only the new
+ * partial reply. The body is always the reason sentence, plus any partial
+ * output captured, so a failed turn is never blank and the notification layer
+ * always has a real body.
  */
-export function buildAgyErrorBody(reason: string, stdout: string, priorLen: number): { body: string; partial: string } {
-  const partial = stdout.trimEnd().slice(priorLen).trimStart();
+export function buildAgyErrorBody(
+  reason: string,
+  stdout: string,
+  priorLen: number,
+  priorResponseText = '',
+): { body: string; partial: string } {
+  const partial = sliceAfterPriorReply(stdout, priorLen, priorResponseText);
   const body = partial
     ? `The agent did not return a reply (${reason}). Partial output:\n${partial}`
     : `The agent did not return a reply (${reason}).`;
@@ -222,18 +229,86 @@ function runAgy(args: string[], cwd: string, timeoutMs: number): Promise<AgyResu
   });
 }
 
+/** Progressively shorter suffixes of the prior reply tried as an anchor, longest first. */
+const ANCHOR_LENGTHS = [96, 48, 24, 12, 6];
+/** How far (chars) the true boundary may drift from the recorded offset before we give up anchoring. */
+const ANCHOR_SEARCH_TOLERANCE = 400;
+
+/**
+ * Find the occurrence of `needle` in `haystack` whose END position is closest
+ * to `targetPos` (rather than just the first occurrence) — a short/common
+ * anchor can appear more than once in a replayed transcript, and the
+ * occurrence nearest the recorded offset is overwhelmingly the real boundary.
+ */
+function findClosestMatchEnd(haystack: string, needle: string, targetPos: number): number | null {
+  let best: number | null = null;
+  let bestDist = Infinity;
+  let from = 0;
+  for (;;) {
+    const idx = haystack.indexOf(needle, from);
+    if (idx === -1) break;
+    const end = idx + needle.length;
+    const dist = Math.abs(end - targetPos);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = end;
+    }
+    from = idx + 1;
+  }
+  return best;
+}
+
+/**
+ * Locate where new content begins in `stdout` after any replayed prior reply.
+ *
+ * `expectedOffset` is the previous done turn's recorded stdout length — a
+ * byte-count heuristic that assumes agy replays prior turns byte-for-byte
+ * identically on every invocation. In practice agy's replay occasionally
+ * reflows by a handful of characters (observed in production: a run of blank
+ * lines collapsed on replay, dropping a markdown heading's first 10 chars
+ * from the new reply — "### Summary of Material Costs" became "y of Material
+ * Costs"). When `priorResponseText` (the prior turn's actual stored response)
+ * is available, verify/correct the offset by anchoring on a suffix of it near
+ * the expected position instead of trusting the byte count blindly. Falls
+ * back to the raw offset when no anchor matches within tolerance (agy
+ * replayed nothing, or replayed content differs too much to verify) — never
+ * worse than the byte-offset-only behavior this replaces.
+ */
+function sliceAfterPriorReply(stdout: string, expectedOffset: number, priorResponseText: string): string {
+  const trimmed = stdout.trimEnd();
+  if (expectedOffset === 0) return trimmed.trimStart();
+
+  if (priorResponseText) {
+    const searchStart = Math.max(0, expectedOffset - ANCHOR_SEARCH_TOLERANCE);
+    const searchEnd = Math.min(trimmed.length, expectedOffset + ANCHOR_SEARCH_TOLERANCE);
+    const window = trimmed.slice(searchStart, searchEnd);
+    const targetPos = expectedOffset - searchStart;
+    for (const len of ANCHOR_LENGTHS) {
+      if (priorResponseText.length < len) continue;
+      const anchor = priorResponseText.slice(-len);
+      const matchEnd = findClosestMatchEnd(window, anchor, targetPos);
+      if (matchEnd !== null) {
+        return trimmed.slice(searchStart + matchEnd).trimStart();
+      }
+    }
+  }
+
+  // No verified anchor — fall back to the raw byte-offset heuristic.
+  const naive = trimmed.slice(expectedOffset).trimStart();
+  return naive || trimmed;
+}
+
 /**
  * Extract only the newest reply from stdout.
  *
  * When --conversation <id> is used, agy prepends ALL prior assistant replies
  * before the newest one. We store the raw stdout length after each turn so
- * the next call can slice exactly at that offset.
+ * the next call can slice near that offset, verified against `priorResponseText`
+ * (see {@link sliceAfterPriorReply}) since agy's replay is not always
+ * byte-stable across invocations.
  */
-function extractNewReply(stdout: string, priorStdoutLength: number): string {
-  const trimmed = stdout.trimEnd();
-  if (priorStdoutLength === 0) return trimmed;
-  const slice = trimmed.slice(priorStdoutLength).trimStart();
-  return slice || trimmed;
+export function extractNewReply(stdout: string, priorStdoutLength: number, priorResponseText: string): string {
+  return sliceAfterPriorReply(stdout, priorStdoutLength, priorResponseText);
 }
 
 interface ActiveSessionMeta {
@@ -432,7 +507,7 @@ export class AntigravityService {
 
     try {
       const history = await this.store.loadHistory(sessionId);
-      const priorLen = this.store.priorStdoutLength(history);
+      const { offset: priorLen, text: priorText } = this.store.priorReplyAnchor(history);
 
       // Detect conversation ID from registry or the last DONE turn. A running
       // or error turn may carry a null/transient id, so skip those.
@@ -512,7 +587,7 @@ export class AntigravityService {
       }
 
       if (result.ok) {
-        const response = extractNewReply(result.stdout, priorLen);
+        const response = extractNewReply(result.stdout, priorLen, priorText);
         tlog.info('turn done in %dms: responseChars=%d conversationId=%s', durationMs, response.length, conversationId ?? 'none');
         await this.finalizeTurnSuccess(sessionId, entry, turnId, prompt, isFirstMessage, response, conversationId, result.stdout, durationMs, assistantId, emit, meta);
         this.runningSessions.delete(sessionId);
@@ -525,7 +600,7 @@ export class AntigravityService {
       // real, non-empty body and persist as error (RC2 — no more blank screen).
       const reason = result.reason ?? 'error';
       tlog.warn('turn failed in %dms: reason=%s', durationMs, reason);
-      const { body, partial } = buildAgyErrorBody(reason, result.stdout, priorLen);
+      const { body, partial } = buildAgyErrorBody(reason, result.stdout, priorLen, priorText);
       await this.finalizeTurnError(sessionId, entry, turnId, prompt, isFirstMessage, partial, reason, conversationId, body, durationMs, assistantId, emit, meta);
       this.runningSessions.delete(sessionId);
       this.promptCallbacks.delete(sessionId);

@@ -180,19 +180,33 @@ export class AntigravitySessionStore {
    * lengths (imprecise but better than 0).
    */
   priorStdoutLength(turns: AntigravityTurn[]): number {
-    if (turns.length === 0) return 0;
+    return this.priorReplyAnchor(turns).offset;
+  }
+
+  /**
+   * Same offset as {@link priorStdoutLength}, paired with the last done turn's
+   * actual response text. The offset alone assumes agy replays prior turns
+   * byte-for-byte identically on every invocation — an assumption that doesn't
+   * always hold (agy's replay occasionally reflows by a handful of characters,
+   * e.g. collapsing blank lines). The text lets the caller verify/correct the
+   * offset by anchoring on real content near the expected boundary instead of
+   * trusting the byte count blindly (see `extractNewReply` in
+   * antigravity-service.ts).
+   */
+  priorReplyAnchor(turns: AntigravityTurn[]): { offset: number; text: string } {
+    if (turns.length === 0) return { offset: 0, text: '' };
     for (let i = turns.length - 1; i >= 0; i--) {
       if (!isTurnDone(turns[i])) continue;
       const offset = turns[i].rawStdoutLength;
-      if (offset !== undefined) return offset;
+      if (offset !== undefined) return { offset, text: turns[i].response };
       // Legacy done turn without rawStdoutLength: imprecise fallback over done turns only.
       let sum = 0;
       for (let j = 0; j <= i; j++) {
         if (isTurnDone(turns[j])) sum += turns[j].response.length;
       }
-      return sum;
+      return { offset: sum, text: turns[i].response };
     }
     // No done turn to anchor on (e.g. only running/error turns): start at 0.
-    return 0;
+    return { offset: 0, text: '' };
   }
 }

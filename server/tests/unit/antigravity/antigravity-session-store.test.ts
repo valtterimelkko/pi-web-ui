@@ -210,6 +210,49 @@ describe('AntigravitySessionStore', () => {
     });
   });
 
+  describe('priorReplyAnchor', () => {
+    it('returns offset 0 and empty text for empty history', () => {
+      expect(store.priorReplyAnchor([])).toEqual({ offset: 0, text: '' });
+    });
+
+    it('pairs the last done turn\'s rawStdoutLength with its response text', async () => {
+      const sessionId = 'anchor-test';
+      await store.appendTurn(sessionId, { prompt: 'p1', response: 'abc', model: 'm', conversationId: null, timestamp: 1, rawStdoutLength: 30 });
+      await store.appendTurn(sessionId, { prompt: 'p2', response: 'defgh', model: 'm', conversationId: null, timestamp: 2, rawStdoutLength: 50 });
+      const history = await store.loadHistory(sessionId);
+      expect(store.priorReplyAnchor(history)).toEqual({ offset: 50, text: 'defgh' });
+    });
+
+    it('ignores a trailing running turn and anchors on the last done turn', async () => {
+      await store.appendTurn('sess', { prompt: 'p1', response: 'abc', model: 'm', conversationId: null, timestamp: 1, status: 'done', rawStdoutLength: 30 });
+      await store.startTurn('sess', { turnId: 't-running', prompt: 'p2', model: 'm', conversationId: null, timestamp: 2 });
+      const history = await store.loadHistory('sess');
+      expect(store.priorReplyAnchor(history)).toEqual({ offset: 30, text: 'abc' });
+    });
+
+    it('ignores a trailing error turn and anchors on the last done turn', async () => {
+      await store.appendTurn('sess', { prompt: 'p1', response: 'abc', model: 'm', conversationId: null, timestamp: 1, status: 'done', rawStdoutLength: 30 });
+      await store.appendTurn('sess', { prompt: 'p2', response: '', model: 'm', conversationId: null, timestamp: 2, status: 'error', error: 'boom' });
+      const history = await store.loadHistory('sess');
+      expect(store.priorReplyAnchor(history)).toEqual({ offset: 30, text: 'abc' });
+    });
+
+    it('falls back to the legacy summed offset for turns without rawStdoutLength, anchored on the last turn\'s text', async () => {
+      const sessionId = 'legacy-anchor-test';
+      await store.appendTurn(sessionId, { prompt: 'p1', response: 'abc', model: 'm', conversationId: null, timestamp: 1 });
+      await store.appendTurn(sessionId, { prompt: 'p2', response: 'defgh', model: 'm', conversationId: null, timestamp: 2 });
+      const history = await store.loadHistory(sessionId);
+      expect(store.priorReplyAnchor(history)).toEqual({ offset: 8, text: 'defgh' });
+    });
+
+    it('returns offset 0 and empty text when only running/error turns exist', async () => {
+      await store.appendTurn('sess', { prompt: 'p1', response: '', model: 'm', conversationId: null, timestamp: 1, status: 'error', error: 'x' });
+      await store.startTurn('sess', { turnId: 'tr', prompt: 'p2', model: 'm', conversationId: null, timestamp: 2 });
+      const history = await store.loadHistory('sess');
+      expect(store.priorReplyAnchor(history)).toEqual({ offset: 0, text: '' });
+    });
+  });
+
   describe('sessionExists', () => {
     it('returns false for nonexistent session', async () => {
       expect(await store.sessionExists('no-such')).toBe(false);

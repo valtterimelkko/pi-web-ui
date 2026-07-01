@@ -55,6 +55,7 @@ import {
   normalizeAgyModel,
   buildAgyErrorBody,
   extractAgyModelDowngrade,
+  extractNewReply,
   ANTIGRAVITY_CHARS_PER_TOKEN,
   AntigravityService,
   type ConversationFileInfo,
@@ -225,6 +226,76 @@ describe('buildAgyErrorBody', () => {
     const { body, partial } = buildAgyErrorBody('exit 2', '   \n  ', 0);
     expect(partial).toBe('');
     expect(body).toBe('The agent did not return a reply (exit 2).');
+  });
+
+  it('recovers a partial dropped by replay drift when the prior response text is supplied (anchor)', () => {
+    // Same drift shape as the extractNewReply regression below: the replayed
+    // prior section is 10 chars shorter than its recorded offset.
+    const priorResponseText = 'Retailer sourcing complete.\n\n\n\n\n\n\n\n\n\n\nFinal line of the prior reply.';
+    const replayedPrior = 'Retailer sourcing complete.\nFinal line of the prior reply.';
+    expect(priorResponseText.length - replayedPrior.length).toBe(10);
+    const stdout = replayedPrior + 'half of the new';
+    const naive = buildAgyErrorBody('timeout', stdout, priorResponseText.length);
+    expect(naive.partial).not.toBe('half of the new'); // proves the drift really corrupts the naive path
+    const anchored = buildAgyErrorBody('timeout', stdout, priorResponseText.length, priorResponseText);
+    expect(anchored.partial).toBe('half of the new');
+  });
+});
+
+describe('extractNewReply', () => {
+  it('returns the full trimmed stdout on the first turn (priorLen 0)', () => {
+    expect(extractNewReply('  hello world  \n', 0, '')).toBe('hello world');
+  });
+
+  it('slices exactly at the offset when the replay matches byte-for-byte (common case)', () => {
+    const stdout = 'PRIORREPLYNEWCONTENT';
+    expect(extractNewReply(stdout, 'PRIORREPLY'.length, 'PRIORREPLY')).toBe('NEWCONTENT');
+  });
+
+  it('falls back to the naive offset when no anchor text is available (back-compat)', () => {
+    const stdout = 'PRIORREPLYNEWCONTENT';
+    expect(extractNewReply(stdout, 'PRIORREPLY'.length, '')).toBe('NEWCONTENT');
+  });
+
+  it('falls back to the full trimmed stdout when the naive slice runs out of bounds and no anchor matches', () => {
+    // Simulates a turn where agy did not replay any prior content at all.
+    const stdout = 'FRESH RESPONSE, NO REPLAY';
+    expect(extractNewReply(stdout, 9999, 'some prior text that will never appear')).toBe(stdout);
+  });
+
+  it('production regression: recovers a heading dropped by 10-char replay drift instead of truncating mid-word', () => {
+    // Reproduces the real incident (session 2b9b983d, turn 6): agy's replay of
+    // the prior turn collapsed a run of blank lines, rendering 10 characters
+    // shorter than what was recorded as that turn's rawStdoutLength. The old
+    // naive offset slice therefore ate the first 10 characters of the new
+    // reply — "### Summary of Material Costs" became "y of Material Costs".
+    const priorResponseText = 'Retailer sourcing complete.\n\n\n\n\n\n\n\n\n\n\nFinal line of the prior reply.';
+    const replayedPrior = 'Retailer sourcing complete.\nFinal line of the prior reply.';
+    expect(priorResponseText.length - replayedPrior.length).toBe(10);
+
+    const trueNewContent = '### Summary of Material Costs (inc. VAT)\n\n* DIY On-site Mix: ~£390.00';
+    const stdout = replayedPrior + trueNewContent;
+    const recordedOffset = priorResponseText.length;
+
+    // Prove the old behavior really was broken for this exact shape.
+    const naive = stdout.trimEnd().slice(recordedOffset).trimStart();
+    expect(naive).not.toBe(trueNewContent);
+    expect(naive.startsWith('y of Material Costs')).toBe(true);
+
+    // The fix recovers the true boundary via the anchor.
+    expect(extractNewReply(stdout, recordedOffset, priorResponseText)).toBe(trueNewContent);
+  });
+
+  it('does not misfire when the anchor text coincidentally appears earlier in a long transcript', () => {
+    // A short/common anchor could false-positive-match far from the true
+    // boundary; the search window (bounded around the recorded offset) must
+    // prefer the match near the expected position.
+    const priorResponseText = 'the end.';
+    const decoy = 'the end. '.repeat(50); // 'the end.' appears many times, far before the true boundary
+    const replayedPrior = decoy + 'the end.';
+    const trueNewContent = 'brand new content that must not be truncated';
+    const stdout = replayedPrior + trueNewContent;
+    expect(extractNewReply(stdout, replayedPrior.length, priorResponseText)).toBe(trueNewContent);
   });
 });
 

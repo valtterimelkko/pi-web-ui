@@ -61,7 +61,7 @@ Antigravity conversations are tracked via the conversation UUID stored in:
 
 **Subsequent turns**: pass `--conversation <uuid>` to resume, and keep parsing the per-run log as a sanity check for the actual conversation used.
 
-**Output extraction quirk**: resumed calls include prior assistant replies before the newest reply in stdout. `extractNewReply()` strips the accumulated prior trimmed stdout length to isolate the new response.
+**Output extraction quirk**: resumed calls include prior assistant replies before the newest reply in stdout. `extractNewReply()` slices near the accumulated prior trimmed stdout length (`AntigravitySessionStore.priorReplyAnchor()`) to isolate the new response — but agy's replay of prior turns is **not always byte-stable** across invocations (observed: a run of blank lines collapsed on replay, 10 characters shorter than what the prior turn originally captured). Trusting the recorded byte offset blindly in that case truncates the start of the new reply. `extractNewReply()` therefore verifies/corrects the offset by anchoring on a suffix of the prior turn's actual stored response text (`priorReplyAnchor().text`) near the expected position, searching a ±400 char window and preferring the match closest to the recorded offset (guards against a short/common anchor false-matching earlier in a long transcript). It falls back to the raw offset when no anchor is found within tolerance (agy replayed nothing at all, or replayed content that differs too much to verify) — never worse than offset-only slicing. `buildAgyErrorBody()` (partial output on a timeout/error turn) uses the same shared `sliceAfterPriorReply()` helper.
 
 ## Event Format
 
@@ -162,7 +162,7 @@ Because `agy -p` is a batch subprocess with no native streaming, the server adds
 - **No native streaming**: `agy -p` returns batch output. The entire response is emitted as a single `message_update` after the subprocess completes — but a synthetic `stream_activity` heartbeat (see [Observability](#observability)) provides liveness during the turn.
 - **No tool visibility**: agy tool calls are not surfaced as individual events.
 - **No approvals**: agy runs with `--dangerously-skip-permissions`.
-- **Resumed output accumulation**: if `rawStdoutLength` is missing or corrupted in the JSONL turn log, resumed output slicing can include old text or start mid-sentence.
+- **Resumed output accumulation**: if `rawStdoutLength` is missing or corrupted in the JSONL turn log, `priorReplyAnchor()` falls back to summing done turns' response lengths (imprecise but non-zero). If a turn's *replay* of a prior reply also isn't byte-stable (see the output-extraction quirk above), `extractNewReply()`'s anchor search corrects for a bounded drift (±400 chars) using the prior turn's actual response text; a drift larger than that, or a prior response too short to anchor on (< 6 chars), still falls back to the raw offset and can start mid-sentence.
 - **Conversation DB ambiguity**: `agy` may create transient `.db` files during a first turn. Pi Web UI should trust the per-run log's `Print mode: conversation=...` line before falling back to filesystem detection.
 
 ## Authentication
