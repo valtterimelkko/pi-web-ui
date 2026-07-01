@@ -179,6 +179,8 @@ export interface ServerConfig {
   antigravityMaxPinnedSessions: number;
   antigravityCleanupIntervalMs: number;
   antigravityHeartbeatIntervalMs: number;
+  antigravityStallTimeoutMs: number;
+  antigravityMaxAttempts: number;
   notificationsEnabled: boolean;
   notificationsDir: string;
   notificationsDebounceMs: number;
@@ -289,6 +291,19 @@ export const config: ServerConfig = {
   // batch subprocess (no native streaming), so the server emits a synthetic
   // stream_activity ping on this interval to keep the UI heartbeat fresh.
   antigravityHeartbeatIntervalMs: parseInt(process.env.ANTIGRAVITY_HEARTBEAT_INTERVAL_MS || '5000', 10),
+  // Inactivity watchdog for the per-turn agy subprocess: if its --log-file
+  // hasn't grown for this long, the model is very likely stuck in a slow,
+  // self-inflicted local tool call rather than waiting on a live backend call
+  // (root-caused 2026-07-01: agy losing track of its own workspace root and
+  // falling back to a full-filesystem `find /` scan — see
+  // docs/ANTIGRAVITY-INTEGRATION.md), so the turn is killed and retried
+  // instead of waiting out the full print-timeout. Must stay below
+  // antigravityPromptTimeoutMs for the watchdog to ever preempt it.
+  antigravityStallTimeoutMs: parseInt(process.env.ANTIGRAVITY_STALL_TIMEOUT_MS || '300000', 10),
+  // Bounded attempt count (including the first try) for a turn that stalls or
+  // times out. A retry reuses whatever conversation state agy already
+  // resolved (or starts fresh on a first turn) — see runPromptAsync().
+  antigravityMaxAttempts: parseInt(process.env.ANTIGRAVITY_MAX_ATTEMPTS || '2', 10),
   notificationsEnabled: process.env.NOTIFICATIONS_ENABLED === 'true',
   notificationsDir: process.env.NOTIFICATIONS_DIR || path.join(os.homedir(), '.pi-web-ui', 'notifications'),
   notificationsDebounceMs: parseInt(process.env.NOTIFICATIONS_DEBOUNCE_MS || '1500', 10),

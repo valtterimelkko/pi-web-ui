@@ -194,7 +194,27 @@ export interface AgyResult {
   reason?: string; // e.g. 'timeout' | `exit ${code}`
 }
 
-function runAgy(args: string[], cwd: string, timeoutMs: number): Promise<AgyResult> {
+/**
+ * Run the agy subprocess with two independent watchdogs:
+ *
+ * 1. A **stall watchdog** polling `logFilePath`'s mtime. agy's `--log-file`
+ *    is written incrementally throughout a real turn (unlike stdout, which is
+ *    only flushed once at the end), so its mtime is a reliable liveness
+ *    signal. If it stops advancing for `stallTimeoutMs`, the model is very
+ *    likely stuck in a slow, self-inflicted local tool call rather than
+ *    waiting on a live backend call — root-caused 2026-07-01: agy losing
+ *    track of its own workspace root and falling back to a full-filesystem
+ *    `find /` scan (see docs/ANTIGRAVITY-INTEGRATION.md) — so there's no
+ *    reason to wait out the full print-timeout.
+ * 2. The original hard ceiling (`timeoutMs + 5000`) as a backstop in case the
+ *    log file keeps advancing (or can't be stat'd at all) yet the turn still
+ *    never completes.
+ *
+ * `stallTimeoutMs`/`logFilePath` are optional: quick auxiliary calls that
+ * don't pass `--log-file` (version check, model listing) skip the stall
+ * watchdog entirely and rely on the hard ceiling alone, same as before.
+ */
+function runAgy(args: string[], cwd: string, timeoutMs: number, stallTimeoutMs?: number, logFilePath?: string): Promise<AgyResult> {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, PATH: `/root/.local/bin:${process.env.PATH ?? ''}` };
     const proc = spawn(AGY_BINARY, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -205,20 +225,50 @@ function runAgy(args: string[], cwd: string, timeoutMs: number): Promise<AgyResu
     proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
 
+    const cleanup = () => {
+      clearTimeout(timer);
+      clearInterval(stallPoll);
+    };
+
     const timer = setTimeout(() => {
       // Watchdog: return partial output + a timeout reason instead of throwing,
       // so a 10-minute timeout becomes a visible, durable error turn.
       proc.kill('SIGTERM');
+      cleanup();
       resolve({ stdout, stderr, ok: false, reason: 'timeout' });
     }, timeoutMs + 5000); // slightly longer than agy's own print-timeout
 
+    let lastProgressAt = Date.now();
+    let lastLogMtimeMs = -1;
+    let stallPoll: ReturnType<typeof setInterval> | undefined;
+    if (stallTimeoutMs !== undefined && logFilePath !== undefined) {
+      const pollIntervalMs = Math.max(10, Math.min(5000, Math.floor(stallTimeoutMs / 4)));
+      stallPoll = setInterval(() => {
+        void stat(logFilePath)
+          .then((info) => {
+            if (info.mtimeMs > lastLogMtimeMs) {
+              lastLogMtimeMs = info.mtimeMs;
+              lastProgressAt = Date.now();
+            }
+          })
+          .catch(() => { /* log file not created yet — not progress, but not a stall signal either */ })
+          .finally(() => {
+            if (Date.now() - lastProgressAt >= stallTimeoutMs) {
+              proc.kill('SIGTERM');
+              cleanup();
+              resolve({ stdout, stderr, ok: false, reason: 'stall' });
+            }
+          });
+      }, pollIntervalMs);
+    }
+
     proc.on('error', (err) => {
-      clearTimeout(timer);
+      cleanup();
       reject(err); // genuine spawn failure (binary missing, etc.)
     });
 
     proc.on('close', (code) => {
-      clearTimeout(timer);
+      cleanup();
       if (code === 0 || stdout.trim()) {
         // code 0, or non-zero but we still got a usable reply (lenient, preserved).
         resolve({ stdout, stderr, ok: true });
@@ -336,6 +386,8 @@ export class AntigravityService {
   private readonly cleanupIntervalMs: number;
   private readonly promptTimeoutMs: number;
   private readonly heartbeatIntervalMs: number;
+  private readonly stallTimeoutMs: number;
+  private readonly maxAttempts: number;
 
   constructor(cfg: { registryPath: string }) {
     this.store = new AntigravitySessionStore(config.antigravitySessionDir);
@@ -348,6 +400,8 @@ export class AntigravityService {
     this.cleanupIntervalMs = config.antigravityCleanupIntervalMs;
     this.promptTimeoutMs = config.antigravityPromptTimeoutMs;
     this.heartbeatIntervalMs = config.antigravityHeartbeatIntervalMs;
+    this.stallTimeoutMs = config.antigravityStallTimeoutMs;
+    this.maxAttempts = config.antigravityMaxAttempts;
 
     this.startCleanupInterval();
   }
@@ -521,32 +575,21 @@ export class AntigravityService {
         }
       }
 
-      // Snapshot conversation dir before call (fallback for detecting new conv ID on first turn)
-      const beforeConversations = conversationId ? new Map<string, ConversationFileInfo>() : await listConversationFiles();
-      const agyLogFile = await createAgyRunLogPath(sessionId);
-
-      // Build agy args. Normalize the model id so the chosen label runs as
-      // chosen (RC3: an "antigravity/" prefix otherwise silently downgrades).
+      // Normalize the model id so the chosen label runs as chosen (RC3: an
+      // "antigravity/" prefix otherwise silently downgrades).
       const model = normalizeAgyModel(storedModel);
       if (model !== storedModel) {
         tlog.warn('normalized model id for agy: "%s" -> "%s"', storedModel, model);
       }
       const printTimeout = Math.ceil(this.promptTimeoutMs / 60000) + 'm';
-      const args = ['--log-file', agyLogFile, '--dangerously-skip-permissions', '--print-timeout', printTimeout];
-
-      if (model) args.push('--model', model);
-      if (conversationId) {
-        args.push('--conversation', conversationId);
-      }
-      args.push('-p', prompt);
-
-      tlog.debug('spawning agy: model=%s conversation=%s printTimeout=%s', model, conversationId ?? 'new', printTimeout);
 
       // ── Liveness heartbeat ──────────────────────────────────────────────
       // agy is a batch subprocess with no native streaming, so emit a synthetic
       // stream_activity ping on an interval while the turn is in flight. This
-      // keeps the UI heartbeat fresh during turns that can run for minutes.
-      // Live-only (never persisted); always cleared in the finally below.
+      // keeps the UI heartbeat fresh during turns that can run for minutes,
+      // spanning every attempt below (elapsedMs is measured from the very
+      // first attempt, not reset per retry). Live-only (never persisted);
+      // always cleared in the finally below.
       const subprocessStartedAt = Date.now();
       const heartbeat = setInterval(() => {
         emit({
@@ -558,33 +601,63 @@ export class AntigravityService {
       }, this.heartbeatIntervalMs);
       if (heartbeat.unref) heartbeat.unref();
 
-      // TODO: antigravityPromptTimeoutMs is configurable via ANTIGRAVITY_PROMPT_TIMEOUT_MS;
-      // the fix here makes a timeout visible/durable rather than changing the value.
+      // ── Bounded retry loop ───────────────────────────────────────────────
+      // A turn that stalls (agy stuck in a slow local tool call — see
+      // runAgy's stall watchdog) or hits the hard timeout is retried up to
+      // antigravityMaxAttempts times. Each attempt gets its own --log-file and
+      // conversation-id resolution; conversationId carries forward into the
+      // next attempt's args exactly as agy resolved it (a first turn stays
+      // fresh unless agy already registered one, a follow-up turn keeps
+      // resuming the same conversation) — no special-casing needed since the
+      // existing anchor logic already ignores non-done turns.
       let result: AgyResult;
+      let agyLog = '';
       try {
-        result = await runAgy(args, entry.cwd, this.promptTimeoutMs);
+        let attempt = 1;
+        for (;;) {
+          const beforeConversations = conversationId ? new Map<string, ConversationFileInfo>() : await listConversationFiles();
+          const agyLogFile = await createAgyRunLogPath(sessionId);
+          const args = ['--log-file', agyLogFile, '--dangerously-skip-permissions', '--print-timeout', printTimeout];
+          if (model) args.push('--model', model);
+          if (conversationId) args.push('--conversation', conversationId);
+          args.push('-p', prompt);
+
+          tlog.debug('spawning agy: model=%s conversation=%s printTimeout=%s attempt=%d/%d', model, conversationId ?? 'new', printTimeout, attempt, this.maxAttempts);
+
+          result = await runAgy(args, entry.cwd, this.promptTimeoutMs, this.stallTimeoutMs, agyLogFile);
+
+          // agy may create transient conversations before the one that
+          // actually receives the message. Its per-run log exposes the true
+          // target.
+          await chmod(agyLogFile, 0o600).catch(() => undefined);
+          agyLog = await readFile(agyLogFile, 'utf-8').catch(() => '');
+          const sentConversationId = extractSentConversationIdFromAgyLog(`${agyLog}\n${result.stderr}`);
+          conversationId = applySentConversationId(conversationId, sentConversationId);
+          if (!conversationId) {
+            const afterConversations = await listConversationFiles();
+            conversationId = pickNewConversationId(beforeConversations, afterConversations);
+          }
+
+          // Surface a silent agy model downgrade (RC3 residual: any unknown
+          // label, not just the prefixed case we now prevent) as an
+          // observable warning.
+          const downgrade = extractAgyModelDowngrade(`${agyLog}\n${result.stderr}`);
+          if (downgrade) {
+            tlog.warn('agy silently downgraded model: requested "%s", agy used "%s"', model, downgrade.fellBackTo);
+          }
+
+          if (result.ok) break;
+
+          const retryable = result.reason === 'timeout' || result.reason === 'stall';
+          if (!retryable || attempt >= this.maxAttempts) break;
+
+          tlog.warn('turn %s on attempt %d/%d, retrying: sessionId=%s', result.reason, attempt, this.maxAttempts, sessionId);
+          attempt++;
+        }
       } finally {
         clearInterval(heartbeat);
       }
       const durationMs = Date.now() - subprocessStartedAt;
-
-      // agy may create transient conversations before the one that actually
-      // receives the message. Its per-run log exposes the true target.
-      await chmod(agyLogFile, 0o600).catch(() => undefined);
-      const agyLog = await readFile(agyLogFile, 'utf-8').catch(() => '');
-      const sentConversationId = extractSentConversationIdFromAgyLog(`${agyLog}\n${result.stderr}`);
-      conversationId = applySentConversationId(conversationId, sentConversationId);
-      if (!conversationId) {
-        const afterConversations = await listConversationFiles();
-        conversationId = pickNewConversationId(beforeConversations, afterConversations);
-      }
-
-      // Surface a silent agy model downgrade (RC3 residual: any unknown label,
-      // not just the prefixed case we now prevent) as an observable warning.
-      const downgrade = extractAgyModelDowngrade(`${agyLog}\n${result.stderr}`);
-      if (downgrade) {
-        tlog.warn('agy silently downgraded model: requested "%s", agy used "%s"', model, downgrade.fellBackTo);
-      }
 
       if (result.ok) {
         const response = extractNewReply(result.stdout, priorLen, priorText);

@@ -10,10 +10,14 @@ import { EventEmitter } from 'node:events';
  * `ctrl.gatePromise` to observe a turn mid-flight (before runAgy resolves).
  */
 const ctrl = vi.hoisted(() => ({
-  behavior: 'success' as 'success' | 'error-empty',
+  behavior: 'success' as 'success' | 'error-empty' | 'hang',
+  // Optional per-call queue: each spawn pops the next entry before falling
+  // back to `behavior`. Lets a test script "attempt 1 stalls, attempt 2 succeeds".
+  behaviors: [] as Array<'success' | 'error-empty' | 'hang'>,
   stdout: '',
   args: [] as string[],
   cwd: '',
+  spawnCount: 0,
   gatePromise: Promise.resolve() as Promise<unknown>,
   gateResolve: null as null | (() => void),
 }));
@@ -23,15 +27,22 @@ vi.mock('node:child_process', async (importOriginal) => {
   return {
     ...actual,
     spawn: vi.fn((_cmd: string, args: string[], opts: { cwd?: string }) => {
+      ctrl.spawnCount++;
       ctrl.args = args;
       ctrl.cwd = opts?.cwd ?? '';
+      const behavior = ctrl.behaviors.length > 0 ? ctrl.behaviors.shift()! : ctrl.behavior;
       const child = new EventEmitter();
       (child as unknown as { stdout: EventEmitter }).stdout = new EventEmitter();
       (child as unknown as { stderr: EventEmitter }).stderr = new EventEmitter();
+      (child as unknown as { kill: () => void }).kill = vi.fn();
+      // A "hung" process never emits close — only runAgy's own stall/hard
+      // watchdog can resolve it (it calls the kill() stub above, which is a
+      // no-op here since there's no real process to terminate).
+      if (behavior === 'hang') return child;
       // Resolve the configured outcome only after the test's gate releases.
       void ctrl.gatePromise.then(() => {
         process.nextTick(() => {
-          if (ctrl.behavior === 'success') {
+          if (behavior === 'success') {
             (child as unknown as { stdout: EventEmitter }).stdout.emit('data', Buffer.from(ctrl.stdout));
             child.emit('close', 0);
           } else {
@@ -577,5 +588,108 @@ describe('AntigravityService — durable turn lifecycle', () => {
     expect(start?.runtime).toBe('antigravity');
     // A completion line is logged too.
     expect(records.some((r) => r.msg.includes('turn done'))).toBe(true);
+  });
+});
+
+describe('AntigravityService — stall detection + bounded retry', () => {
+  let tmp: string;
+  let svc: AntigravityService;
+  let store: AntigravitySessionStore;
+  let prevSessionDir: string;
+  let prevHeartbeat: number;
+  let prevStall: number;
+  let prevMaxAttempts: number;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'antigravity-stall-'));
+    prevSessionDir = config.antigravitySessionDir;
+    config.antigravitySessionDir = tmp;
+    prevHeartbeat = config.antigravityHeartbeatIntervalMs;
+    config.antigravityHeartbeatIntervalMs = 10;
+    // Small enough that a "hung" mocked subprocess (which never touches the
+    // real --log-file) is declared stalled quickly under test.
+    prevStall = config.antigravityStallTimeoutMs;
+    config.antigravityStallTimeoutMs = 30;
+    prevMaxAttempts = config.antigravityMaxAttempts;
+    config.antigravityMaxAttempts = 2;
+    svc = new AntigravityService({ registryPath: join(tmp, 'registry.json') });
+    store = new AntigravitySessionStore(tmp);
+    ctrl.behavior = 'success';
+    ctrl.behaviors = [];
+    ctrl.stdout = 'mocked reply';
+    ctrl.args = [];
+    ctrl.spawnCount = 0;
+    ctrl.gatePromise = Promise.resolve();
+    ctrl.gateResolve = null;
+  });
+
+  afterEach(() => {
+    config.antigravitySessionDir = prevSessionDir;
+    config.antigravityHeartbeatIntervalMs = prevHeartbeat;
+    config.antigravityStallTimeoutMs = prevStall;
+    config.antigravityMaxAttempts = prevMaxAttempts;
+    setLogTap(null);
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  function prompt(sessionId: string, text: string): Promise<Error | undefined> {
+    return new Promise((resolve) =>
+      svc.sendPrompt(sessionId, text, () => undefined, (err) => resolve(err)),
+    );
+  }
+
+  it('kills a stalled first attempt and retries, succeeding on the second attempt', async () => {
+    ctrl.behaviors = ['hang', 'success'];
+    ctrl.stdout = 'second attempt answer';
+    const { sessionId } = await svc.createSession(tmp);
+
+    const err = await prompt(sessionId, 'go through the repo');
+    expect(err).toBeUndefined();
+    expect(ctrl.spawnCount).toBe(2);
+
+    const history = await store.loadHistory(sessionId);
+    expect(history).toHaveLength(1);
+    expect(history[0].status).toBe('done');
+    expect(history[0].response).toBe('second attempt answer');
+  });
+
+  it('gives up after exhausting retries and finalizes as error with reason stall', async () => {
+    ctrl.behaviors = ['hang', 'hang'];
+    const { sessionId } = await svc.createSession(tmp);
+
+    const err = await prompt(sessionId, 'go through the repo');
+    expect(err).toBeDefined();
+    expect(ctrl.spawnCount).toBe(2); // bounded — did not retry a third time
+
+    const history = await store.loadHistory(sessionId);
+    expect(history).toHaveLength(1);
+    expect(history[0].status).toBe('error');
+    expect(history[0].error).toBe('stall');
+  });
+
+  it('does not retry a non-retryable failure (bad exit code)', async () => {
+    // If a retry were wrongly attempted, the second call would succeed —
+    // asserting spawnCount stays at 1 proves no retry happened.
+    ctrl.behaviors = ['error-empty', 'success'];
+    const { sessionId } = await svc.createSession(tmp);
+
+    const err = await prompt(sessionId, 'go through the repo');
+    expect(err).toBeDefined();
+    expect(ctrl.spawnCount).toBe(1);
+
+    const history = await store.loadHistory(sessionId);
+    expect(history[0].status).toBe('error');
+    expect(history[0].error).toMatch(/exit/);
+  });
+
+  it('logs a warning noting the retry when a stall triggers one', async () => {
+    ctrl.behaviors = ['hang', 'success'];
+    const records: LogRecord[] = [];
+    setLogTap((r) => records.push(r));
+    const { sessionId } = await svc.createSession(tmp);
+
+    await prompt(sessionId, 'go through the repo');
+
+    expect(records.some((r) => /stall/i.test(r.msg) && /retry/i.test(r.msg))).toBe(true);
   });
 });
