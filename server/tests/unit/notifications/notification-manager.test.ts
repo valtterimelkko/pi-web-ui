@@ -6,6 +6,7 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { NotificationStore } from '../../../src/notifications/notification-store.js';
 import { ChannelRouter } from '../../../src/notifications/channels/notification-channel.js';
 import { NotificationManager } from '../../../src/notifications/notification-manager.js';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 import type {
   Notification,
   NotificationChannel,
@@ -393,5 +394,148 @@ describe('NotificationManager', () => {
       await h.mgr.drain();
       expect(h.channel.received[0].title).toBe('🤖 Snapshot name · waiting for you');
     });
+  });
+});
+
+describe('NotificationManager — observability logging', () => {
+  let dir: string;
+  let records: LogRecord[];
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-notif-mgr-log-'));
+    records = [];
+    setLogTap((r) => records.push(r));
+  });
+
+  afterEach(async () => {
+    setLogTap(null);
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  const findLog = (level: 'info' | 'warn' | 'error', substr: string): LogRecord | undefined =>
+    records.find((r) => r.component === 'NotificationManager' && r.level === level && r.msg.includes(substr));
+
+  it('logs opt-in with sessionId + runtime attached', async () => {
+    const h = makeHarness(dir);
+    await h.mgr.init();
+    await h.mgr.optIn(piOptIn());
+    const rec = findLog('info', 'opted in');
+    expect(rec).toBeDefined();
+    expect(rec?.sessionId).toBe('s1');
+    expect(rec?.runtime).toBe('pi');
+  });
+
+  it('logs opt-out with sessionId attached', async () => {
+    const h = makeHarness(dir);
+    await h.mgr.init();
+    await h.mgr.optIn(piOptIn());
+    await h.mgr.optOut('s1');
+    const rec = findLog('info', 'opted out');
+    expect(rec).toBeDefined();
+    expect(rec?.sessionId).toBe('s1');
+  });
+
+  it('warns when attach cannot find a wired runtime service (silent-failure blind spot)', async () => {
+    const h = makeHarness(dir);
+    await h.mgr.init();
+    // 'opencode' has no service wired in this harness (only pi + claude).
+    await h.mgr.optIn({
+      sessionId: 'oc1',
+      runtime: 'opencode',
+      sessionPath: 'oc1',
+      optedInAt: NOW,
+      label: 'OC job',
+    });
+    const rec = findLog('warn', 'runtime service not wired');
+    expect(rec).toBeDefined();
+    expect(rec?.sessionId).toBe('oc1');
+    expect(rec?.runtime).toBe('opencode');
+  });
+
+  it('warns on init when notifications are enabled but no channel is configured', async () => {
+    const store = new NotificationStore(dir);
+    const router = new ChannelRouter(); // nothing registered
+    const mgr = new NotificationManager({
+      enabled: true,
+      store,
+      router,
+      services: {},
+      tailMaxChars: 1200,
+      debounceMs: 20,
+      maxAttempts: 3,
+      now: () => NOW,
+    });
+    await mgr.init();
+    expect(findLog('warn', 'no delivery channel is configured')).toBeDefined();
+  });
+
+  it('does not warn about missing channel when a channel is configured', async () => {
+    const h = makeHarness(dir);
+    await h.mgr.init();
+    expect(findLog('warn', 'no delivery channel is configured')).toBeUndefined();
+  });
+
+  it('logs a queued notification on agent_end with the notification id', async () => {
+    const h = makeHarness(dir);
+    await h.mgr.init();
+    await h.mgr.optIn(piOptIn());
+    for (const e of assistantText('s1', 'done')) h.pi.emit('/sessions/s1', e);
+    h.pi.emit('/sessions/s1', agentEnd('s1'));
+    await wait(60);
+    const rec = findLog('info', 'notification queued');
+    expect(rec).toBeDefined();
+    expect(rec?.sessionId).toBe('s1');
+    expect(rec?.runtime).toBe('pi');
+    expect(h.channel.received).toHaveLength(1);
+    expect(rec?.msg).toContain(h.channel.received[0].id);
+  });
+
+  it('logs successful delivery with the notification id', async () => {
+    const h = makeHarness(dir);
+    await h.mgr.init();
+    await h.mgr.optIn(piOptIn());
+    h.pi.emit('/sessions/s1', agentEnd('s1'));
+    await wait(60);
+    await h.mgr.drain();
+    const rec = findLog('info', 'notification delivered');
+    expect(rec).toBeDefined();
+    expect(rec?.sessionId).toBe('s1');
+  });
+
+  it('warns on a failed delivery attempt with the error and attempt count', async () => {
+    const h = makeHarness(dir, { channelFail: true });
+    await h.mgr.init();
+    await h.mgr.optIn(piOptIn());
+    h.pi.emit('/sessions/s1', agentEnd('s1'));
+    await wait(60);
+    await h.mgr.drain();
+    const rec = findLog('warn', 'delivery attempt');
+    expect(rec).toBeDefined();
+    expect(rec?.msg).toContain('send failed');
+    h.mgr.shutdown();
+  });
+
+  it('logs an explicit notification queue with its id', async () => {
+    const h = makeHarness(dir);
+    await h.mgr.init();
+    const n = await h.mgr.emitExplicit({ title: 'Deploy', body: 'shipped' });
+    const rec = findLog('info', 'explicit notification queued');
+    expect(rec).toBeDefined();
+    expect(rec?.msg).toContain(n.id);
+  });
+
+  it('logs rehydration count on init (restart observability)', async () => {
+    const a = makeHarness(dir);
+    await a.mgr.init();
+    await a.mgr.optIn(piOptIn());
+    a.mgr.shutdown();
+
+    records = []; // reset: only care about manager B's init log
+    const b = makeHarness(dir, { store: new NotificationStore(dir) });
+    await b.mgr.init();
+    const rec = findLog('info', 'rehydrated');
+    expect(rec).toBeDefined();
+    expect(rec?.msg).toContain('1');
+    b.mgr.shutdown();
   });
 });

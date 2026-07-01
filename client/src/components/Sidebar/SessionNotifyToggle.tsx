@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Bell, BellOff, Loader2 } from 'lucide-react';
+import { useSessionStore, useUIStore } from '../../store';
 
 /**
  * Per-session notification opt-in toggle.
@@ -28,6 +29,12 @@ export function SessionNotifyToggle({
 }): React.JSX.Element {
   const [on, setOn] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Opt-in only reacts to LIVE agent_end events (no replay of past turns —
+  // see docs/NOTIFICATIONS.md). If the session isn't actively generating right
+  // now, opting in won't retroactively notify for a turn that already ended;
+  // tell the operator so that isn't mistaken for a bug.
+  const liveStatus = useSessionStore((state) => state.sessionData[sessionId]?.status);
+  const addToast = useUIStore((state) => state.addToast);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +66,17 @@ export function SessionNotifyToggle({
             credentials: 'include',
             body: JSON.stringify({ runtime: sdkType, sessionPath, label }),
           });
-      if (res.ok) setOn(!on);
+      if (res.ok) {
+        const turningOn = !on;
+        setOn(turningOn);
+        const isActive = liveStatus === 'streaming' || liveStatus === 'busy';
+        if (turningOn && !isActive) {
+          addToast({
+            type: 'info',
+            message: "Notifications on — this session is idle, so you'll get notified starting with its next reply.",
+          });
+        }
+      }
     } catch {
       /* non-fatal */
     } finally {

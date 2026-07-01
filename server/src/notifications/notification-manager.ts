@@ -22,6 +22,7 @@ import { InternalApiEventBroker } from '../internal-api/event-broker.js';
 import { NotificationStore } from './notification-store.js';
 import { ChannelRouter } from './channels/notification-channel.js';
 import { formatNotification } from './notification-formatter.js';
+import { createLogger } from '../logging/logger.js';
 import type {
   DeliveryRecord,
   Notification,
@@ -29,6 +30,8 @@ import type {
   OptInRecord,
   QueuedNotification,
 } from './types.js';
+
+const logger = createLogger('NotificationManager');
 
 /** The observer-attach seam every runtime service exposes (Pi/OpenCode native; Claude/AG added in P3). */
 export interface NotificationServiceObserver {
@@ -96,8 +99,13 @@ export class NotificationManager {
     await this.deps.store.init();
     if (!this.deps.enabled) return;
     // Rehydration: re-attach observers for every still-opted-in session.
-    for (const record of this.deps.store.listOptIns()) {
+    const optIns = this.deps.store.listOptIns();
+    for (const record of optIns) {
       this.attach(record);
+    }
+    logger.info(`rehydrated ${optIns.length} opted-in session(s)`);
+    if (this.deps.router.listConfigured().length === 0) {
+      logger.warn('notifications enabled but no delivery channel is configured (queued notifications will never drain)');
     }
     // Resume draining anything left pending from before a restart.
     void this.drain();
@@ -105,12 +113,18 @@ export class NotificationManager {
 
   async optIn(record: OptInRecord): Promise<void> {
     await this.deps.store.setOptIn(record);
-    if (!this.deps.enabled) return;
+    const log = logger.child({ sessionId: record.sessionId, runtime: record.runtime });
+    log.info('opted in for agent_end notifications');
+    if (!this.deps.enabled) {
+      log.debug('notifications globally disabled; opt-in persisted but no observer attached');
+      return;
+    }
     this.attach(record); // idempotent: detaches any prior observation first
   }
 
   async optOut(sessionId: string): Promise<void> {
     await this.deps.store.removeOptIn(sessionId);
+    logger.child({ sessionId }).info('opted out of agent_end notifications');
     this.detach(sessionId);
   }
 
@@ -149,6 +163,7 @@ export class NotificationManager {
       createdAt: this.now(),
     };
     await this.enqueueAndDispatch(notification);
+    logger.info(`explicit notification queued: ${notification.id}`);
     return notification;
   }
 
@@ -182,13 +197,21 @@ export class NotificationManager {
   private async tryDeliver(item: QueuedNotification): Promise<void> {
     const results = await this.deps.router.route(item.notification);
     const ok = results.length > 0 && results.every((r) => r.ok);
+    const log = logger.child({
+      sessionId: item.notification.sessionId,
+      runtime: item.notification.runtime,
+    });
     if (ok) {
       await this.deps.store.markSent(item.notification.id, this.now());
+      log.info(`notification delivered: ${item.notification.id}`);
       return;
     }
     const attempts = item.delivery.attempts + 1;
     const terminal = attempts >= this.deps.maxAttempts;
     const error = results.find((r) => !r.ok)?.error ?? 'delivery failed';
+    log.warn(
+      `notification delivery attempt ${attempts} failed${terminal ? ' (terminal, giving up)' : ''}: ${item.notification.id} — ${error}`,
+    );
     await this.deps.store.recordFailure(item.notification.id, error, terminal);
   }
 
@@ -204,7 +227,14 @@ export class NotificationManager {
   private attach(record: OptInRecord): void {
     if (this.observed.has(record.sessionId)) this.detach(record.sessionId);
     const service = this.serviceFor(record.runtime);
-    if (!service) return; // runtime service not wired in this build
+    const log = logger.child({ sessionId: record.sessionId, runtime: record.runtime });
+    if (!service) {
+      // Silent-failure blind spot otherwise: the opt-in persists and the UI
+      // shows "on" forever, but no observer is ever attached.
+      log.warn('cannot attach observer: runtime service not wired for this build');
+      return;
+    }
+    log.debug('observer attached');
     const sessionId = record.sessionId;
     const observer = (event: unknown) => {
       try {
@@ -245,6 +275,7 @@ export class NotificationManager {
       /* non-fatal */
     }
     if (obs.debounceTimer) clearTimeout(obs.debounceTimer);
+    logger.child({ sessionId, runtime: obs.record.runtime }).debug('observer detached');
     this.observed.delete(sessionId);
   }
 
@@ -263,6 +294,9 @@ export class NotificationManager {
         break;
       }
       case 'agent_end':
+        logger
+          .child({ sessionId, runtime: obs.record.runtime })
+          .debug('agent_end observed; scheduling notification flush');
         this.scheduleFlush(sessionId);
         break;
       default:
@@ -275,8 +309,8 @@ export class NotificationManager {
     if (!obs) return;
     if (obs.debounceTimer) clearTimeout(obs.debounceTimer);
     obs.debounceTimer = setTimeout(() => {
-      void this.flush(sessionId).catch(() => {
-        /* non-fatal */
+      void this.flush(sessionId).catch((err) => {
+        logger.child({ sessionId }).errorObject('notification flush failed', err);
       });
     }, this.deps.debounceMs);
   }
@@ -313,6 +347,9 @@ export class NotificationManager {
       createdAt: this.now(),
     };
     await this.enqueueAndDispatch(notification);
+    logger
+      .child({ sessionId, runtime: obs.record.runtime })
+      .info(`agent_end notification queued: ${notification.id}`);
   }
 
   /** Runs the injected label resolver, swallowing errors (best-effort enrichment). */

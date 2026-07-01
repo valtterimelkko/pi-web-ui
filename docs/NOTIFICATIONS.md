@@ -30,6 +30,18 @@ notifications later without a rewrite.
 - **Opt-in, decoupled from pinning:** notifications fire only for sessions the
   operator opted in. Opt-in is a persisted per-session flag, independent of the
   2-session pin limit.
+- **Opt-in is not retroactive:** the manager only reacts to a *live* `agent_end`
+  arriving after its service observer attaches (`NotificationManager.attach()`
+  subscribes to its broker with `replay: false`). If a turn's `agent_end` fires
+  before the opt-in click lands, that turn's notification is permanently missed
+  — there is no catch-up/replay of past events. This was the root cause of a
+  real "I opted in but got no notification" report: the operator opted in ~5s
+  after the session's last turn had already completed. The sidebar bell toggle
+  (`SessionNotifyToggle.tsx`) mitigates the confusion: when opting into a
+  session that is not currently `streaming`/`busy` (`sessionData[id].status` in
+  the client store), it shows an inline toast — *"Notifications on — this
+  session is idle, so you'll get notified starting with its next reply."* — so
+  the non-retroactive behavior isn't mistaken for a bug.
 - **Explicit emit:** `POST /api/v1/notifications` lets Agent OS / scripts emit a
   notification directly (deterministic; additive, never load-bearing for the
   core feature).
@@ -192,3 +204,25 @@ npm run validate:live -- --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" \
   --runtime <pi|claude|opencode|antigravity> --scenario notify-on-agent-end --json
 ```
+
+---
+
+## 8. Observability
+
+The three server modules each use the central logger
+([`docs/OBSERVABILITY.md`](./OBSERVABILITY.md)) instead of the JSON delivery
+log alone, so the *reason* a notification did or didn't fire is greppable
+without reconstructing it from timestamps by hand:
+
+| Component | Emits |
+|---|---|
+| `NotificationManager` | `info`: opt-in/opt-out (sessionId+runtime bound), rehydration count on boot, an `agent_end` notification queued (with id), successful delivery (with id). `warn`: **attach failed because the runtime service isn't wired** (the silent-failure blind spot — before this, an opt-in could persist with the UI showing "on" while no observer was ever attached, forever, with zero signal), enabled-but-no-channel-configured on boot, a delivery attempt failure (with attempt count + error). `debug`: observer attach/detach, `agent_end` observed pre-debounce. |
+| `NotificationStore` | `warn`: a persisted file (`opt-ins.json`/`outbox.json`/`delivery-log.json`) failed to parse for a reason other than "missing" — previously silent, which meant a corrupt file reset state to empty with no trace of why. A missing file (normal on first boot) stays quiet. |
+| `NotificationsRoutes` | `warn`: opt-in requested for a session the registry doesn't know about, or one whose runtime isn't supported — both indicate a registry/UI mismatch worth investigating. |
+
+Every manager log line is bound with `sessionId` + `runtime` via
+`logger.child(...)`, so `DEBUG=NotificationManager` or a
+`grep sid=<sessionId>` reconstructs one session's whole notification
+lifecycle — opt-in → attach → agent_end observed → queued → delivered — in one
+pass. See [`docs/OBSERVABILITY.md`](./OBSERVABILITY.md) for `LOG_LEVEL`,
+`DEBUG` namespaces, and `LOG_FORMAT=json`.

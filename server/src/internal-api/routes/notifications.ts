@@ -13,8 +13,11 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { z } from 'zod';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
+import { createLogger } from '../../logging/logger.js';
 import type { NotificationManager } from '../../notifications/notification-manager.js';
 import type { NotificationRuntime, OptInRecord } from '../../notifications/types.js';
+
+const logger = createLogger('NotificationsRoutes');
 
 const NOTIFICATION_RUNTIMES: readonly NotificationRuntime[] = ['pi', 'claude', 'opencode', 'antigravity'];
 
@@ -51,11 +54,13 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
   async function handleOptIn(req: IncomingMessage, res: ServerResponse, sessionId: string): Promise<void> {
     const entry = await sessionRegistry.get(sessionId).catch(() => undefined);
     if (!entry) {
+      logger.warn(`opt-in requested for unknown session: ${sessionId} (registry/UI mismatch)`);
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Session not found: ${sessionId}`));
       return;
     }
     const runtime = entry.sdkType;
     if (!isNotificationRuntime(runtime)) {
+      logger.warn(`opt-in requested for session ${sessionId} with unsupported runtime: ${String(runtime)}`);
       sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, `Unsupported runtime: ${String(runtime)}`));
       return;
     }

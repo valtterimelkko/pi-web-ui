@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { NotificationStore } from '../../../src/notifications/notification-store.js';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 import type {
   OptInRecord,
   Notification,
@@ -215,5 +216,42 @@ describe('NotificationStore — durable persistence', () => {
       expect(fresh.getOptIn('good')).toBeDefined();
       expect(fresh.listPending()).toEqual([]);
     });
+  });
+});
+
+describe('NotificationStore — observability logging', () => {
+  let dir: string;
+  let records: LogRecord[];
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-notif-store-log-'));
+    records = [];
+    setLogTap((r) => records.push(r));
+  });
+
+  afterEach(async () => {
+    setLogTap(null);
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  it('warns (not silently swallows) when a persisted file is corrupt', async () => {
+    const store = new NotificationStore(dir);
+    await store.init();
+    await store.setOptIn(optIn('good'));
+    await fs.writeFile(path.join(dir, 'outbox.json'), '{ not valid json', 'utf8');
+
+    records = []; // only care about the fresh instance's init
+    const fresh = new NotificationStore(dir);
+    await fresh.init();
+    const rec = records.find(
+      (r) => r.component === 'NotificationStore' && r.level === 'warn' && r.msg.includes('outbox.json'),
+    );
+    expect(rec).toBeDefined();
+  });
+
+  it('does not warn when a file is simply absent (normal on first boot)', async () => {
+    const store = new NotificationStore(dir);
+    await store.init();
+    expect(records.find((r) => r.component === 'NotificationStore' && r.level === 'warn')).toBeUndefined();
   });
 });

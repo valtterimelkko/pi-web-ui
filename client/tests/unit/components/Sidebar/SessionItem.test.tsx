@@ -2,13 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SessionItem } from '../../../../src/components/Sidebar/SessionItem';
-import { useSessionStore } from '../../../../src/store';
+import { useSessionStore, useUIStore } from '../../../../src/store';
 import { useWebSocket } from '../../../../src/hooks/useWebSocket';
 import * as api from '../../../../src/lib/api';
 
 // Mock the dependencies
 vi.mock('../../../../src/store', () => ({
   useSessionStore: vi.fn(),
+  useUIStore: vi.fn(),
 }));
 
 vi.mock('../../../../src/hooks/useWebSocket', () => ({
@@ -105,6 +106,11 @@ describe('SessionItem', () => {
     (useSessionStore as any).getState = () => ({
       sessions: [mockSession],
       getSessionDisplayName: mockGetSessionDisplayName,
+    });
+
+    (useUIStore as any).mockImplementation((selector: any) => {
+      const state = { addToast: vi.fn() };
+      return selector ? selector(state) : state;
     });
 
     (api.deleteSession as any).mockImplementation(mockDeleteSession);

@@ -8,6 +8,7 @@ import { createNotificationsRoutes } from '../../../src/internal-api/routes/noti
 import { NotificationStore } from '../../../src/notifications/notification-store.js';
 import { ChannelRouter } from '../../../src/notifications/channels/notification-channel.js';
 import { NotificationManager } from '../../../src/notifications/notification-manager.js';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { Notification, NotificationChannel } from '../../../src/notifications/types.js';
 
@@ -167,6 +168,39 @@ describe('notifications routes', () => {
       await routes.handleOptIn(createJsonReq('POST', '/api/v1/sessions/none/notifications/opt-in'), res, 'none');
       expect(res.statusCode).toBe(404);
       expect((json(res) as { code: string }).code).toBe('SESSION_NOT_FOUND');
+    });
+
+    it('warns when opt-in targets an unknown session (registry/UI mismatch signal)', async () => {
+      const records: LogRecord[] = [];
+      setLogTap((r) => records.push(r));
+      try {
+        registry.get.mockResolvedValue(undefined);
+        const res = createMockRes();
+        await routes.handleOptIn(createJsonReq('POST', '/api/v1/sessions/none/notifications/opt-in'), res, 'none');
+        const rec = records.find(
+          (r) => r.component === 'NotificationsRoutes' && r.level === 'warn' && r.msg.includes('none'),
+        );
+        expect(rec).toBeDefined();
+      } finally {
+        setLogTap(null);
+      }
+    });
+
+    it('warns when opt-in targets a session whose runtime is unsupported', async () => {
+      const records: LogRecord[] = [];
+      setLogTap((r) => records.push(r));
+      try {
+        registry.get.mockResolvedValue(entry('opencli', 'weird1'));
+        const res = createMockRes();
+        await routes.handleOptIn(createJsonReq('POST', '/api/v1/sessions/weird1/notifications/opt-in'), res, 'weird1');
+        expect(res.statusCode).toBe(400);
+        const rec = records.find(
+          (r) => r.component === 'NotificationsRoutes' && r.level === 'warn' && r.msg.includes('opencli'),
+        );
+        expect(rec).toBeDefined();
+      } finally {
+        setLogTap(null);
+      }
     });
 
     it('returns 400 INVALID_REQUEST for a malformed body', async () => {

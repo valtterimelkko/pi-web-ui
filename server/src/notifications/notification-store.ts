@@ -16,11 +16,14 @@
 
 import { mkdir, readFile, writeFile, rename } from 'fs/promises';
 import path from 'path';
+import { createLogger } from '../logging/logger.js';
 import type {
   OptInRecord,
   QueuedNotification,
   DeliveryRecord,
 } from './types.js';
+
+const logger = createLogger('NotificationStore');
 
 const OPTINS_FILE = 'opt-ins.json';
 const OUTBOX_FILE = 'outbox.json';
@@ -166,9 +169,15 @@ export class NotificationStore {
       const raw = await readFile(path.join(this.dir, name), 'utf8');
       const parsed = JSON.parse(raw);
       return parsed ?? fallback;
-    } catch {
-      // Missing file or corrupt JSON — start empty. A corrupt file must not
-      // prevent the rest of the collections from loading.
+    } catch (err) {
+      // Missing file is normal on first boot — stay quiet. Anything else
+      // (corrupt JSON, permission error) must not prevent the rest of the
+      // collections from loading, but it must not be silent either: a
+      // corrupt opt-ins.json would otherwise reset every opt-in to nothing
+      // with zero trace of why.
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        logger.warn(`failed to read ${name}, starting from empty (previous content may be lost):`, err);
+      }
       return fallback;
     }
   }

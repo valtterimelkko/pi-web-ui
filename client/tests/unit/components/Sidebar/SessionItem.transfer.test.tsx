@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SessionItem } from '../../../../src/components/Sidebar/SessionItem';
-import { useSessionStore } from '../../../../src/store';
+import { useSessionStore, useUIStore } from '../../../../src/store';
 import { useWebSocket } from '../../../../src/hooks/useWebSocket';
 import { useTransferStore } from '../../../../src/store/transferStore';
 
 vi.mock('../../../../src/store', () => ({
   useSessionStore: vi.fn(),
+  useUIStore: vi.fn(),
 }));
 
 vi.mock('../../../../src/hooks/useWebSocket', () => ({
@@ -168,6 +169,11 @@ describe('SessionItem – drag-and-drop transfer', () => {
       selector ? selector(ssState) : ssState,
     );
     (useSessionStore as any).getState = () => ssState;
+
+    (useUIStore as any).mockImplementation((selector: any) => {
+      const state = { addToast: vi.fn() };
+      return selector ? selector(state) : state;
+    });
 
     vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
