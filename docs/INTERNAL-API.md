@@ -956,13 +956,50 @@ For a runtime-agnostic, easier-to-consume view, prefer
 POST /api/v1/sessions/:sessionId/approvals/:requestId/respond
 ```
 
-**Request:**
+**Request (permission response):**
 ```json
 { "approved": true }
 ```
 
 This is currently useful for Claude channel-backed permission requests and
 OpenCode permission flows.
+
+### Claude SDK `AskUserQuestion` responses
+
+The same `/approvals/:requestId/respond` endpoint resolves a pending Claude SDK
+`AskUserQuestion` request when the session's backend is the SDK backend. The
+body carries structured answers rather than a simple approval:
+
+**Request:**
+```json
+{
+  "approved": true,
+  "answers": {
+    "Which region?": "eu-west-1",
+    "What size?": "small"
+  },
+  "annotations": {
+    "Which region?": { "preview": "eu-west-1", "notes": "closest to users" }
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `approved` | boolean | **Yes** | Always `true` for a real answer; `false` is equivalent to `cancelled: true` |
+| `answers` | object (string→string) | when not cancelled | Map from exact question text to the selected/checked answer(s). For multi-select questions, answers are comma-separated. |
+| `annotations` | object | no | Optional per-question annotations (`preview`, `notes`). |
+| `cancelled` | boolean | no | Set `true` to dismiss the dialog without answering. |
+
+The SDK backend resolves the pending `canUseTool` callback with the answers and
+Claude's turn continues. If the request is no longer pending (e.g. it just
+timed out or the session disconnected), the endpoint returns:
+
+```json
+{ "error": "That question already closed, so the answer was not delivered to the assistant.", "code": "ASK_ALREADY_CLOSED" }
+```
+
+with HTTP `409`. This replaces the earlier silent-drop behavior.
 
 ---
 

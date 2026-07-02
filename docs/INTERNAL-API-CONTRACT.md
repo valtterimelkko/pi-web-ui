@@ -129,6 +129,7 @@ re-introduced.
 | `OPENCODE_UNAVAILABLE` | 503 | OpenCode backend unavailable | OpenCode not enabled, or recycle failed |
 | `RUNTIME_ERROR` | 500 | Runtime failed mid-prompt | Provider/model/tool/abort error |
 | `PROMPT_INJECTION` | 400 | Prompt blocked by safety filter | Injection-like text detected pre-runtime |
+| `ASK_ALREADY_CLOSED` | 409 | `AskUserQuestion` dialog already closed | Answer arrived after timeout/abort/turn-end/disconnect resolution |
 | `UNSUPPORTED_OPERATION` | 400 | Op not supported for this runtime/config | e.g. `steer` outside Pi |
 | `NOT_IMPLEMENTED` | 501 | Endpoint exists but runtime path unimplemented | e.g. replay history for unsupported runtime |
 | `INTERNAL_ERROR` | 500 | Unexpected internal error | Unhandled exception in a route |

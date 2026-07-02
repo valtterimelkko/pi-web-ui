@@ -6,6 +6,7 @@
 
 ### State
 - `store/sessionStore.ts` — Main frontend session state: messages, streaming, switching, LRU cache (2 sessions), pinning, archiving, worker status, Claude/OpenCode availability. Uses throttled persist storage and individual Zustand selectors for mobile runtime performance.
+- `store/filesStore.ts` — Files tab state: selected file, preview content, truncation signal, and file-tree metadata.
 - `store/transferStore.ts` — Session context transfer UI state.
 - `store/uiStore.ts` — UI chrome state (modals, toasts, navigation).
 - `store/chatStore.ts` — Chat input/draft state.
@@ -33,10 +34,15 @@
 - `store/driveModeStore.ts` — Drive Mode state machine.
 - `hooks/useDriveModeDictation.ts` — Drive Mode prompt-send flow.
 
+### Files
+- `components/Files/FilesTab.tsx` — Files tab: file tree, read-only preview, and (planned) Markdown editor overlay.
+- `components/Files/MarkdownEditor.tsx` *(planned)* — Markdown source editor with Edit ⇄ Preview toggle and explicit Save/Refresh. See [`docs/plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md`](../plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md).
+
 ### Tools / Extensions
 - `components/Tools/ToolCallCard.tsx` — Tool execution card.
 - `components/Tools/CollapsibleToolCard.tsx` — Collapsible tool display.
-- `components/Extensions/ExtensionDialog.tsx` — Approval/dialog UI for extensions and OpenCode permissions.
+- `components/Extensions/ExtensionDialog.tsx` — Approval/dialog UI dispatcher for Pi extensions, OpenCode permissions, and Claude SDK `AskUserQuestion` requests.
+- `components/Extensions/AskUserQuestionDialog.tsx` — Structured dialog for Claude SDK `AskUserQuestion`: 1–4 questions, single/multi-select, option descriptions, preview-safe markdown, and expiry handling.
 
 ## Backend (`server/src/`)
 
@@ -71,7 +77,7 @@
 - `claude/claude-session-store.ts` — JSONL persistence (`~/.pi-web-ui/claude-sessions/`).
 - `claude/claude-session-subscribers.ts` — Multi-viewer fanout for Claude sessions.
 - `claude/claude-profiles.ts` — Profile schema (Zod), validation, `ClaudeProfileManager`, `resolveProfile`. Loads and validates `claude-profiles.json` at startup; secrets (auth tokens) are resolved from env vars or secret files at session launch time, never stored in the profile.
-- `claude/claude-sdk-service.ts` — SDK backend service (`ClaudeSdkService`). Manages Claude sessions through `@anthropic-ai/claude-agent-sdk` `query()` with `canUseTool` permission callbacks, `AbortController` cancellation, and structured SDK messages.
+- `claude/claude-sdk-service.ts` — SDK backend service (`ClaudeSdkService`). Manages Claude sessions through `@anthropic-ai/claude-agent-sdk` `query()` with `canUseTool` permission callbacks, `AbortController` cancellation, structured SDK messages, and interactive `AskUserQuestion` handling. Emits `ask_user_question_request` / `ask_user_question_closed` normalized events; timeout configurable via `CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS`.
 - `claude/claude-sdk-event-adapter.ts` — Converts structured SDK messages into `NormalizedEvent` for the common event pipeline.
 - `claude/claude-channel-service.ts` — Channel-backed Claude session orchestration and event fanout.
 - `claude/claude-channel-process-manager.ts` — PTY-managed Claude Code process, busy-state tracking, auth-expiry detection.
@@ -89,7 +95,7 @@
 - `opencode/opencode-types.ts` — OpenCode-specific type definitions.
 
 ### Antigravity Path (`server/src/antigravity/`)
-- `antigravity/antigravity-service.ts` — Antigravity lifecycle, `agy -p` subprocess dispatch, conversation-id tracking, session cleanup, model listing.
+- `antigravity/antigravity-service.ts` — Antigravity lifecycle, `agy -p` subprocess dispatch, conversation-id tracking, session cleanup, model listing, liveness heartbeat, and inactivity stall watchdog (configurable via `ANTIGRAVITY_STALL_TIMEOUT_MS` and `ANTIGRAVITY_MAX_ATTEMPTS`).
 - `antigravity/antigravity-session-store.ts` — JSONL turn persistence at `~/.pi-web-ui/antigravity-sessions/`.
 - `antigravity/antigravity-history-replay.ts` — Converts stored Antigravity turns into replay events.
 - `antigravity/antigravity-session-subscribers.ts` — Multi-viewer fanout for Antigravity sessions.

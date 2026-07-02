@@ -1,5 +1,7 @@
 # Pi Web UI Docs
 
+> **What's new?** See [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) for a rolling summary of doc-relevant changes. Recent highlights include first-class Claude SDK `AskUserQuestion` support in the browser, an Antigravity inactivity stall watchdog with bounded retry, and a planned Markdown editor for the Files tab.
+
 This folder supports **two different reading paths**:
 
 1. **Public/adopter docs** — for people deciding whether to use, self-host, extend, or fork Pi Web UI

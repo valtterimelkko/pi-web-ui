@@ -40,6 +40,17 @@ This doc centralizes that.
 - **When to use:** when `CLAUDE_PROFILES_ENABLED=true` and the session's profile has `backend: 'sdk-subscription'`
 - **Main limitations:** requires `@anthropic-ai/claude-agent-sdk` dependency
 
+#### AskUserQuestion support (SDK backend only)
+
+Claude Code's built-in `AskUserQuestion` tool is supported first-class through the **SDK backend**:
+
+- **Flow:** Claude emits `AskUserQuestion` → SDK backend intercepts it via `canUseTool` → emits `ask_user_question_request` to the browser → the user answers in a structured dialog → the SDK backend resolves the callback with the answers → the turn continues.
+- **UI:** `client/src/components/Extensions/AskUserQuestionDialog.tsx` renders 1–4 questions with single-select, multi-select, option descriptions, and preview-safe markdown.
+- **Cancel/timeout:** if the request is not answered before the timeout, the session aborts, the turn ends, or all subscribers disconnect, the backend emits `ask_user_question_closed` (mapped to `extension_ui_cancel` for the browser) and resolves the callback as cancelled. This prevents zombie dialogs and silent drops of late answers.
+- **Configuration:** `CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS` (default 30 minutes, positive integer). A 5-minute default was the original cause of a production zombie-dialog bug; the current default is intentionally a long safety net.
+- **Internal API:** `POST /api/v1/sessions/:id/approvals/:requestId/respond` accepts structured `answers` / `annotations` / `cancelled` for a pending `AskUserQuestion`; returns `409 ASK_ALREADY_CLOSED` if the request already resolved.
+- **Not available on:** direct CLI (`claude -p`) or channel-backed backends in this release. Those backends do not wire the interactive callback.
+
 ### 2. Legacy direct mode
 
 - **How it runs:** `claude -p`

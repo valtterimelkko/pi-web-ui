@@ -163,6 +163,8 @@ These are the normalized event shapes the frontend usually sees inside `session_
 { type: 'tool_execution_update', toolCallId: string, toolName: string, args: unknown, partialResult: unknown }
 { type: 'tool_execution_end', toolCallId: string, toolName: string, result: unknown, isError: boolean }
 { type: 'stream_activity', timestamp?: number, detail?: string }
+{ type: 'ask_user_question_request', data: { requestId: string, questions: unknown[], timeout: number } }
+{ type: 'ask_user_question_closed', data: { requestId: string, reason: 'timeout' | 'aborted' | 'turn_end' | 'disconnected' } }
 { type: 'auto_compaction_start', reason: string }
 { type: 'auto_compaction_end', result: unknown, aborted: boolean, willRetry: boolean }
 { type: 'auto_retry_start', attempt: number, maxAttempts: number, delayMs: number, errorMessage: string }
@@ -172,7 +174,8 @@ These are the normalized event shapes the frontend usually sees inside `session_
 ### Extension / approval UI
 
 ```typescript
-{ type: 'extension_ui_request', request: { id: string, type: 'confirm' | 'select' | 'input' | 'editor', method: string, params: Record<string, unknown>, timeout: number } }
+{ type: 'extension_ui_request', request: { id: string, type: 'confirm' | 'select' | 'input' | 'editor' | 'ask_user_question', method: string, params: Record<string, unknown>, timeout: number } }
+{ type: 'extension_ui_cancel', request: { id: string, reason: 'timeout' | 'aborted' | 'turn_end' | 'disconnected' } }
 { type: 'extension_error', extensionPath: string, event: string, error: string }
 ```
 
@@ -198,6 +201,13 @@ Transfer error codes:
 
 ### Pi Coding Agent
 - Native Pi events are forwarded and wrapped for the frontend.
+
+### Claude runtime — SDK backend
+
+- The SDK backend intercepts Claude Code's built-in `AskUserQuestion` tool call and emits `ask_user_question_request` so the browser can render a structured dialog.
+- The user answers via `extension_ui_response`; the SDK backend resolves the `canUseTool` callback and the turn continues.
+- If the request times out, the session aborts, the turn ends, or the last subscriber disconnects, the backend emits `ask_user_question_closed` (mapped to `extension_ui_cancel` for the browser) and resolves the callback as cancelled.
+- The default timeout is 30 minutes and can be overridden with `CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS`.
 
 ### Claude runtime — legacy direct backend
 - Claude output is normalized into the common event model.

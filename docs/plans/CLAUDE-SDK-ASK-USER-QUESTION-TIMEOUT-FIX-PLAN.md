@@ -1,6 +1,7 @@
 # Claude SDK `AskUserQuestion` — Premature-Timeout / Zombie-Dialog Fix Plan
 
-Status: **planning only** — not executed in this session.
+Status: **Implemented** in commit `25eb290` (first-class AskUserQuestion support). This document is preserved as the implementation record and root-cause write-up. For the current runtime reference, see [`../CLAUDE-BACKENDS.md`](../CLAUDE-BACKENDS.md), [`../PROTOCOL.md`](../PROTOCOL.md), and [`../EVENT-PIPELINE.md`](../EVENT-PIPELINE.md).
+
 Audience: an execution agent implementing the fix with strict TDD and live validation.
 Primary runtime target: **Claude SDK backend only** (same scope as the original feature).
 

@@ -1,7 +1,8 @@
 # Claude SDK `AskUserQuestion` Web UI Support Plan
 
-Status: **planning only** — not executed in this session.  
-Audience: an execution agent implementing the feature with strict TDD and validation.  
+Status: **Implemented** in commit `25eb290` (first-class AskUserQuestion support). This document is preserved as the implementation record. For the current runtime reference, see [`../CLAUDE-BACKENDS.md`](../CLAUDE-BACKENDS.md), [`../PROTOCOL.md`](../PROTOCOL.md), and [`../EVENT-PIPELINE.md`](../EVENT-PIPELINE.md).
+
+Audience: an execution agent implementing the feature with strict TDD and validation.
 Primary runtime target: **Claude SDK backend only**.
 
 ## 1. Goal

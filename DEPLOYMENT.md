@@ -170,6 +170,9 @@ If you enable notifications, make sure `NOTIFICATIONS_PUBLIC_BASE_URL` resolves 
 | `ANTIGRAVITY_DEFAULT_MODEL` | `Gemini 3.5 Flash (Medium)` | default `agy` model |
 | `ANTIGRAVITY_PROMPT_TIMEOUT_MS` | `600000` | max prompt duration before timeout |
 | `ANTIGRAVITY_IDLE_TIMEOUT_MS` | `1800000` | idle timeout for unpinned inactive sessions |
+| `ANTIGRAVITY_HEARTBEAT_INTERVAL_MS` | `5000` | synthetic liveness heartbeat interval while a subprocess runs |
+| `ANTIGRAVITY_STALL_TIMEOUT_MS` | `300000` | kill a silent `agy -p` turn if the per-turn log file mtime stops advancing (default 5 min) |
+| `ANTIGRAVITY_MAX_ATTEMPTS` | `2` | total attempts for a stalled or timed-out `agy -p` turn |
 | `ANTIGRAVITY_MAX_SESSIONS` | `4` | max in-memory Antigravity sessions tracked |
 | `ANTIGRAVITY_MAX_PINNED_SESSIONS` | `2` | max pinned Antigravity sessions |
 | `ANTIGRAVITY_CLEANUP_INTERVAL_MS` | `60000` | cleanup loop interval |

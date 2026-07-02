@@ -119,7 +119,7 @@ on push (tokens/passwords/`Bearer …`/`sk-…`/sensitive keys → `[REDACTED]`;
 
 ```
 GET /api/v1/diagnostics                       # recent logs + errors + summary
-GET /api/v1/siagnostics?limit=200&minLevel=warn
+GET /api/v1/diagnostics?limit=200&minLevel=warn
 GET /api/v1/sessions/:sessionId/diagnostics   # scoped to one session
 ```
 

@@ -4,6 +4,26 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Claude SDK `AskUserQuestion` support**
+  - First-class interactive handling of Claude Code's built-in `AskUserQuestion` tool in the browser.
+  - The SDK backend emits `ask_user_question_request`, the UI renders a structured dialog for 1–4 questions, and answers are returned through the SDK permission callback so the turn continues.
+  - Cancel/timeout handling prevents zombie dialogs and silent drops of late answers; includes a disconnect grace timer and `extension_ui_cancel` to the browser.
+  - The tool result is persisted and replayed so the tool card no longer stays stuck in "Running".
+  - Configurable timeout via `CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS` (default 30 min).
+  - Canonical docs: [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md), [`PROTOCOL.md`](./PROTOCOL.md), [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
+
+- **Antigravity inactivity stall watchdog + bounded retry**
+  - Detects when an `agy -p` turn goes completely silent (e.g. due to an unscoped local filesystem scan) by polling the per-turn log-file mtime.
+  - Kills the subprocess after a configurable stall timeout and retries up to a bounded max.
+  - Configurable via `ANTIGRAVITY_STALL_TIMEOUT_MS` (default 5 min) and `ANTIGRAVITY_MAX_ATTEMPTS` (default 2).
+  - Canonical doc: [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
+
+- **Files tab Markdown editor (planned)**
+  - Execution plan in place for turning the read-only Files preview into a Markdown source editor with a toggleable GitHub-flavored live preview, saving through the existing `/api/files/write` endpoint.
+  - Plan: [`plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md`](./plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md)
+
+## Earlier highlights
+
 - **Internal API contract `1.5.0`**
   - Added notification endpoints:
     - `POST /api/v1/sessions/:id/notifications/opt-in`

@@ -49,6 +49,15 @@ Pi worker emits: { type: 'tool_execution', toolCallId: '123', toolName: 'Bash', 
   → connection.ts wraps as: { type: 'session_event', sessionId: '...', event: { type: 'tool_execution_start', ... } }
 ```
 
+### Claude runtime — SDK backend
+
+The SDK backend (`claude-sdk-service.ts`) intercepts Claude Code's built-in `AskUserQuestion` tool call. Instead of letting the SDK use its default prompt-in-terminal behavior, it emits normalized events:
+
+- `ask_user_question_request` — carries the question set and options to the browser so the user can answer in a structured dialog.
+- `ask_user_question_closed` — emitted when the request is resolved for a non-answer reason (timeout, abort, turn end, or disconnect), so the browser can close the dialog with an explanation.
+
+The browser answers via `extension_ui_response`; the SDK backend resolves the pending `canUseTool` callback with the user's answers and the turn continues. If the request times out or the session disconnects, the backend resolves the callback as cancelled and emits the closed event.
+
 ### Claude runtime — legacy direct backend
 
 The legacy direct backend runs `claude -p` and parses NDJSON lines from stdout. `claude-event-normalizer.ts` converts these into `NormalizedEvent`.
@@ -103,7 +112,8 @@ All paths converge in `client/src/store/sessionStore.ts` via `handleServerMessag
 - `session_event` → routed to the correct session, updates `sessionData`, `messages`, `streamingSessions`
 - `session_status` → updates session status (idle/busy/streaming/error)
 - `claude_available` / `opencode_available` / `antigravity_available` → sets runtime availability flags
-- `extension_ui_request` → surfaced as approval dialog (used by both Pi extensions and OpenCode permissions)
+- `extension_ui_request` → surfaced as approval/dialog UI (used by Pi extensions, OpenCode permissions, and **Claude SDK `AskUserQuestion` requests**)
+- `extension_ui_cancel` → closes an open dialog when the request was resolved for a non-answer reason (e.g. `AskUserQuestion` timeout/disconnect)
 
 ## Key Rule for New Runtimes
 

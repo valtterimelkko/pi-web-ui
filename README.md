@@ -1,5 +1,7 @@
 # Pi Web UI
 
+> **Latest work:** Claude SDK `AskUserQuestion` is now supported first-class in the browser, the Antigravity runtime has an inactivity stall watchdog with bounded retry, and a Markdown editor for the Files tab is planned. See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
+
 Built for a simple reality: **one agent runtime and one subscription is often not enough.**
 
 Pi Web UI is a self-hosted browser interface for running multiple coding-agent runtimes from one place. It works across mobile, desktop, and laptop browsers, so you can keep the same agent workspace available at a desk or on the go.
