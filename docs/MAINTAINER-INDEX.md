@@ -9,7 +9,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 ## Recent major doc-relevant changes
 - **Claude SDK `AskUserQuestion` support** — first-class browser dialog, cancel/timeout handling, and `extension_ui_cancel`. See [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md), [`PROTOCOL.md`](./PROTOCOL.md), and [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
 - **Antigravity inactivity stall watchdog + bounded retry** — configurable via `ANTIGRAVITY_STALL_TIMEOUT_MS` and `ANTIGRAVITY_MAX_ATTEMPTS`. See [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
-- **Files tab Markdown editor (planned)** — execution plan at [`plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md`](./plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md)
+- **Files tab Markdown editor** — shipped: source editor + GFM live preview for `.md`/`.mdx`/`.markdown`/`.txt`, explicit Save via `/api/files/write`, truncated files read-only. Plan (now delivered) at [`plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md`](./plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md)
 - **Internal API contract `1.5.0`** — adds notification endpoints for opt-in/out, state, explicit emit, and recent deliveries; previous `1.4.0` screen-view transcript projection remains current
 - **Observability/introspection endpoints (`1.3.0`)** — `GET /api/v1/diagnostics`, `GET /api/v1/sessions/:id/diagnostics`, and `GET /api/v1/events/types`
 - **Pi runtime OpenRouter model automation** — Pi can now surface a broader OpenRouter-backed model catalogue; see [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md)

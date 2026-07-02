@@ -1,6 +1,6 @@
 # Pi Web UI
 
-> **Latest work:** Claude SDK `AskUserQuestion` is now supported first-class in the browser, the Antigravity runtime has an inactivity stall watchdog with bounded retry, and a Markdown editor for the Files tab is planned. See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
+> **Latest work:** Claude SDK `AskUserQuestion` is now supported first-class in the browser, the Antigravity runtime has an inactivity stall watchdog with bounded retry, and the Files tab now has a Markdown source editor with a GFM live preview (explicit Save, truncated files stay read-only). See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
 
 Built for a simple reality: **one agent runtime and one subscription is often not enough.**
 

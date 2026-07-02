@@ -18,8 +18,10 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
   - Configurable via `ANTIGRAVITY_STALL_TIMEOUT_MS` (default 5 min) and `ANTIGRAVITY_MAX_ATTEMPTS` (default 2).
   - Canonical doc: [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
 
-- **Files tab Markdown editor (planned)**
-  - Execution plan in place for turning the read-only Files preview into a Markdown source editor with a toggleable GitHub-flavored live preview, saving through the existing `/api/files/write` endpoint.
+- **Files tab Markdown editor**
+  - The Files tab's read-only preview is now a Markdown source editor for `.md`/`.mdx`/`.markdown`/`.txt`: a plain `<textarea>` with an Edit ⇄ Preview toggle (GitHub-flavored live preview via `react-markdown` + `remark-gfm`, mirroring chat rendering), explicit Save through the existing `/api/files/write`, and manual Refresh. No new dependency, no backend change.
+  - Truncation safety: files loaded truncated (>200KB) are read-only — editing and Save are blocked at both the store and UI layers, so a partial copy can never overwrite a full file. Unsaved changes are guarded on close / refresh / file-switch.
+  - Client-only: `store/filesStore.ts`, `components/Files/MarkdownEditor.tsx`, `components/Files/FilesTab.tsx`.
   - Plan: [`plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md`](./plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md)
 
 ## Earlier highlights

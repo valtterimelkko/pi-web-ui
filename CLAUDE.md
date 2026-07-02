@@ -68,6 +68,7 @@ Core architectural themes:
 ## High-signal file map
 
 - `client/src/store/sessionStore.ts` — main session state and replay handling
+- `client/src/store/filesStore.ts` + `components/Files/MarkdownEditor.tsx` — Files tab: file tree + Markdown source editor with GFM live preview (explicit Save via `/api/files/write`; truncated files read-only)
 - `client/src/hooks/useWebSocket.ts` — browser WebSocket actions
 - `server/src/websocket/connection.ts` — main runtime-aware router
 - `server/src/session-registry.ts` — unified cross-runtime session index

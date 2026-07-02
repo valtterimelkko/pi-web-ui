@@ -6,7 +6,7 @@
 
 ### State
 - `store/sessionStore.ts` — Main frontend session state: messages, streaming, switching, LRU cache (2 sessions), pinning, archiving, worker status, Claude/OpenCode availability. Uses throttled persist storage and individual Zustand selectors for mobile runtime performance.
-- `store/filesStore.ts` — Files tab state: selected file, preview content, truncation signal, and file-tree metadata.
+- `store/filesStore.ts` — Files tab state: file-tree navigation, read preview + truncation signal, and Markdown edit/save state (edit buffer, dirty flag, Save through `/api/files/write`, truncation guard).
 - `store/transferStore.ts` — Session context transfer UI state.
 - `store/uiStore.ts` — UI chrome state (modals, toasts, navigation).
 - `store/chatStore.ts` — Chat input/draft state.
@@ -35,8 +35,8 @@
 - `hooks/useDriveModeDictation.ts` — Drive Mode prompt-send flow.
 
 ### Files
-- `components/Files/FilesTab.tsx` — Files tab: file tree, read-only preview, and (planned) Markdown editor overlay.
-- `components/Files/MarkdownEditor.tsx` *(planned)* — Markdown source editor with Edit ⇄ Preview toggle and explicit Save/Refresh. See [`docs/plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md`](../plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md).
+- `components/Files/FilesTab.tsx` — Files tab: file tree, read-only `<pre>` preview, and the full-screen Markdown editor overlay for editable (non-truncated) Markdown files.
+- `components/Files/MarkdownEditor.tsx` — Presentational Markdown source editor: plain `<textarea>` + Edit ⇄ Preview toggle (GFM via `react-markdown` + `remark-gfm`, mirroring chat), explicit Save/Refresh, dirty + save-error banners, unsaved-changes guard. Truncated files render a read-only notice instead.
 
 ### Tools / Extensions
 - `components/Tools/ToolCallCard.tsx` — Tool execution card.
