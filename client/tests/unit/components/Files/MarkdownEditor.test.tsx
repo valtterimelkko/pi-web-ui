@@ -159,4 +159,11 @@ describe('MarkdownEditor', () => {
     expect(container.querySelector('textarea')).toBeNull();
     expect(screen.getByText(/too large/i)).toBeInTheDocument();
   });
+
+  it('surfaces a save-error banner while keeping the editor usable', () => {
+    render(<MarkdownEditor {...baseProps} saveError="Save failed: disk full" />);
+    expect(screen.getByText(/disk full/i)).toBeInTheDocument();
+    // editor textarea still present alongside the error
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+  });
 });

@@ -253,4 +253,35 @@ describe('FilesTab', () => {
     expect(mockSelectFile).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
   });
+
+  it('prompts before selecting a different file while there are unsaved changes', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    mockSelectedFile = '/root/note.md';
+    mockPreviewContent = '# Hi';
+    mockEditBuffer = '# Hi changed';
+    mockIsDirty = true;
+    mockItems = [
+      { name: 'other.md', path: '/root/other.md', isDirectory: false, size: 0, modifiedAt: '' },
+    ];
+    render(<FilesTab />);
+    // Click a different file row (the file list sits behind the editor overlay).
+    fireEvent.click(screen.getByText('other.md'));
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringMatching(/unsaved/i));
+    expect(mockSelectFile).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('selects another file without prompting when there are no unsaved changes', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    mockSelectedFile = null;
+    mockIsDirty = false;
+    mockItems = [
+      { name: 'pick.md', path: '/root/pick.md', isDirectory: false, size: 0, modifiedAt: '' },
+    ];
+    render(<FilesTab />);
+    fireEvent.click(screen.getByText('pick.md'));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(mockSelectFile).toHaveBeenCalledWith('/root/pick.md');
+    confirmSpy.mockRestore();
+  });
 });
