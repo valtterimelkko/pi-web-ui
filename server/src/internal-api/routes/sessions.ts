@@ -1085,6 +1085,39 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  function validateStringRecord(value: unknown, fieldName: string): string | null {
+    if (value === undefined) return null;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return `${fieldName} must be an object`;
+    }
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof key !== 'string' || key.length === 0 || typeof item !== 'string') {
+        return `${fieldName} must be an object whose values are strings`;
+      }
+    }
+    return null;
+  }
+
+  function validateAskUserQuestionAnnotations(value: unknown): string | null {
+    if (value === undefined) return null;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return 'annotations must be an object';
+    }
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        return 'annotations values must be objects';
+      }
+      const annotation = item as Record<string, unknown>;
+      if (annotation.preview !== undefined && typeof annotation.preview !== 'string') {
+        return 'annotations preview values must be strings';
+      }
+      if (annotation.notes !== undefined && typeof annotation.notes !== 'string') {
+        return 'annotations notes values must be strings';
+      }
+    }
+    return null;
+  }
+
   async function handleRespondApproval(
     req: IncomingMessage,
     res: ServerResponse,
@@ -1105,6 +1138,33 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     try {
       if (entry.sdkType === 'claude') {
+        // SDK AskUserQuestion requests are resolved with structured answers
+        // (or a cancellation). Check this before the channel permission path
+        // so an answer is never misrouted to sendPermissionResponse.
+        if (typeof claudeService.isPendingAskUserQuestion === 'function'
+          && claudeService.isPendingAskUserQuestion(requestId)) {
+          const isCancel = body.cancelled === true;
+          const answersError = validateStringRecord(body.answers, 'answers');
+          const annotationsError = validateAskUserQuestionAnnotations(body.annotations);
+          if (!isCancel && (answersError || annotationsError)) {
+            sendJson(res, 400, { error: answersError ?? annotationsError, code: ErrorCode.INVALID_REQUEST });
+            return;
+          }
+          const resolution: { answers?: Record<string, string>; annotations?: Record<string, { preview?: string; notes?: string }>; cancelled?: boolean } = {};
+          if (isCancel) {
+            resolution.cancelled = true;
+          } else {
+            if (body.answers) resolution.answers = body.answers;
+            if (body.annotations) resolution.annotations = body.annotations;
+          }
+          const resolved = claudeService.respondToAskUserQuestion(requestId, resolution);
+          if (!resolved) logger.warn(`AskUserQuestion response ignored because request is no longer pending: ${requestId}`);
+          sendJson(res, 200, {
+            success: true,
+            approved: body.approved,
+          } satisfies ApprovalResponseResult);
+          return;
+        }
         claudeService.sendPermissionResponse(sessionId, requestId, body.approved);
       } else if (entry.sdkType === 'opencode') {
         await opencodeService.replyPermission(sessionId, requestId, body.approved);

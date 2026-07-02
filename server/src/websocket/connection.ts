@@ -960,6 +960,35 @@ export class WebSocketConnectionManager {
             return;
           }
 
+          if (normalizedEvent.type === 'ask_user_question_request') {
+            // Claude SDK AskUserQuestion: surface as a structured extension dialog.
+            // Not also forwarded as a session_event — the dialog IS the surface.
+            const auq = normalizedEvent.data as Record<string, unknown>;
+            const auqRequest = {
+              type: 'extension_ui_request' as const,
+              request: {
+                id: auq.requestId as string,
+                type: 'ask_user_question' as const,
+                method: 'claude.askUserQuestion',
+                params: {
+                  questions: auq.questions,
+                  toolCallId: auq.toolCallId,
+                  toolName: auq.toolName ?? 'AskUserQuestion',
+                },
+                timeout: (auq.timeoutMs as number) ?? 300000,
+              },
+            };
+            const auqSubs = this.claudeSubs.getSubscribers(sessionId);
+            if (auqSubs && auqSubs.size > 0) {
+              for (const subId of auqSubs) {
+                this.sendMessage(subId, auqRequest);
+              }
+            } else {
+              this.sendMessage(clientId, auqRequest);
+            }
+            return;
+          }
+
           const piEvent = normEventToPiFormat(normalizedEvent);
           const message = { type: 'session_event' as const, sessionId, event: piEvent };
           const subscribers = this.claudeSubs.getSubscribers(sessionId);
@@ -2367,11 +2396,62 @@ export class WebSocketConnectionManager {
     });
   }
 
+  private isStringRecord(value: unknown): value is Record<string, string> {
+    return !!value
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && Object.values(value as Record<string, unknown>).every((item) => typeof item === 'string');
+  }
+
+  private isAskUserQuestionAnnotations(value: unknown): value is Record<string, { preview?: string; notes?: string }> {
+    return !!value
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && Object.values(value as Record<string, unknown>).every((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+        const annotation = item as Record<string, unknown>;
+        return (annotation.preview === undefined || typeof annotation.preview === 'string')
+          && (annotation.notes === undefined || typeof annotation.notes === 'string');
+      });
+  }
+
   private async handleExtensionUiResponse(
     clientId: string,
     message: { type: 'extension_ui_response'; response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean } }
   ): Promise<void> {
     const { id, approved, cancelled } = message.response;
+
+    // Claude SDK AskUserQuestion answers are keyed by requestId and resolved
+    // through claudeService.respondToAskUserQuestion. Check this before the
+    // channel permission map so a structured answer is never misrouted.
+    if (this.claudeService.isPendingAskUserQuestion(id)) {
+      const value = message.response.value as
+        | { answers?: unknown; annotations?: unknown }
+        | undefined;
+      const isCancel = cancelled === true;
+      const resolution: { answers?: Record<string, string>; annotations?: Record<string, { preview?: string; notes?: string }>; cancelled?: boolean } = {};
+      if (isCancel) {
+        resolution.cancelled = true;
+      } else {
+        if (value?.answers !== undefined) {
+          if (!this.isStringRecord(value.answers)) {
+            logger.warn(`[handleExtensionUiResponse] Ignoring malformed AskUserQuestion answers for ${id}`);
+            return;
+          }
+          resolution.answers = value.answers;
+        }
+        if (value?.annotations !== undefined) {
+          if (!this.isAskUserQuestionAnnotations(value.annotations)) {
+            logger.warn(`[handleExtensionUiResponse] Ignoring malformed AskUserQuestion annotations for ${id}`);
+            return;
+          }
+          resolution.annotations = value.annotations;
+        }
+      }
+      const resolved = this.claudeService.respondToAskUserQuestion(id, resolution);
+      if (!resolved) logger.warn(`[handleExtensionUiResponse] AskUserQuestion response ignored because request is no longer pending: ${id}`);
+      return;
+    }
 
     if (this.pendingClaudePermissions.has(id)) {
       const sessionId = this.pendingClaudePermissions.get(id)!;

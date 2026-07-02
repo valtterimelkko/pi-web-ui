@@ -72,6 +72,39 @@ async function withEphemeralSession(
   }
 }
 
+/**
+ * Build deterministic answers for the `claude-ask-user-question` scenario,
+ * keyed by the EXACT question text Claude emitted (not guessed text).
+ *
+ * Selection rules (matched by keyword in question/header, label-agnostic):
+ *  - colour/color  → the option whose label contains "blue"
+ *  - size          → the option whose label contains "large"
+ *  - feature(s)    → multi-select: the options whose labels contain "search"
+ *                    or "export", comma-joined (excludes "attachments")
+ *  - otherwise     → the last option (so every question still gets an answer)
+ */
+export function buildAskUserAnswers(
+  questions: Array<{ question: string; header: string; multiSelect: boolean; options: Array<{ label: string }> }>,
+): Record<string, string> {
+  const answers: Record<string, string> = {};
+  for (const q of questions) {
+    const haystack = `${q.question} ${q.header}`.toLowerCase();
+    const labels = q.options.map((o) => o.label);
+
+    if (haystack.includes('colour') || haystack.includes('color')) {
+      answers[q.question] = labels.find((l) => /blue/i.test(l)) ?? labels[1] ?? labels[0];
+    } else if (haystack.includes('size')) {
+      answers[q.question] = labels.find((l) => /large/i.test(l)) ?? labels[1] ?? labels[0];
+    } else if (haystack.includes('feature')) {
+      const selected = labels.filter((l) => /search|export/i.test(l));
+      answers[q.question] = selected.length > 0 ? selected.join(', ') : labels.slice(0, 2).join(', ');
+    } else {
+      answers[q.question] = labels[labels.length - 1] ?? '';
+    }
+  }
+  return answers;
+}
+
 function buildAssertions(summary: ReturnType<typeof collectValidationSummary>, expectedText: string): ValidationAssertion[] {
   return [
     { name: 'agent_start', passed: summary.sawAgentStart, details: summary.sawAgentStart ? 'agent_start seen' : 'agent_start missing' },
@@ -304,6 +337,240 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
           scenarioId: 'session-info',
           runtime: context.runtime,
           passed: assertions.every((assertion) => assertion.passed),
+          assertions,
+        };
+      });
+    },
+  },
+  'claude-ask-user-question': {
+    id: 'claude-ask-user-question',
+    description:
+      'Verify the Claude SDK AskUserQuestion round trip: Claude emits ask_user_question_request, the Internal API answers it with structured answers, and Claude continues using the selected answers.',
+    async run(context) {
+      if (context.runtime !== 'claude') {
+        return {
+          scenarioId: 'claude-ask-user-question',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: 'claude-ask-user-question only applies to the claude runtime',
+          assertions: [],
+        };
+      }
+
+      return withEphemeralSession(context, async (sessionId) => {
+        const prompt = [
+          'Integration validation only. Use the AskUserQuestion tool exactly once to ask the user three questions in a single call:',
+          '1) Pick a colour: options Red, Blue.',
+          '2) Pick a size: options Small, Large.',
+          '3) Pick features (set multiSelect true): options Search, Attachments, Export.',
+          'After you receive the answers, reply with EXACTLY one line and nothing else, in this format:',
+          'ASK_VALIDATION_RESULT colour=<colour answer>; size=<size answer>; features=<features answer>',
+          'Echo the answer values verbatim. Do not use any other tools.',
+        ].join('\n');
+
+        const askRequests: Array<{ data: { requestId?: string; questions?: unknown[] } }> = [];
+        const events = await context.client.promptStreamLive(
+          sessionId,
+          { message: prompt, verbosity: 'full', mode: 'prompt' },
+          async (evt) => {
+            if (evt.type === 'ask_user_question_request') {
+              const data = evt.data as { requestId?: string; questions?: Array<{ question: string; header: string; multiSelect: boolean; options: Array<{ label: string }> }> };
+              askRequests.push({ data });
+              const answers = buildAskUserAnswers(data.questions ?? []);
+              try {
+                await context.client.respondToApproval(sessionId, data.requestId ?? '', {
+                  approved: true,
+                  answers,
+                });
+              } catch {
+                /* surfaced via assertions below */
+              }
+            }
+          },
+        );
+
+        const summary = collectValidationSummary(events);
+        const allQuestions = askRequests.flatMap((r) => (r.data.questions ?? []) as Array<{ multiSelect: boolean; question: string }>);
+        const hasMulti = allQuestions.some((q) => q.multiSelect === true);
+        const text = summary.assistantText;
+        const tail = text.slice(-240);
+
+        const assertions: ValidationAssertion[] = [
+          {
+            name: 'ask_user_question_request_emitted',
+            passed: askRequests.length > 0,
+            details: askRequests.length > 0 ? `requestId=${askRequests[0].data.requestId}` : 'no ask_user_question_request seen (model may have answered in plain text)',
+          },
+          {
+            name: 'three_questions',
+            passed: allQuestions.length === 3,
+            details: `total questions across ${askRequests.length} request(s) = ${allQuestions.length}`,
+          },
+          {
+            name: 'multiselect_present',
+            passed: hasMulti,
+            details: `multiselect question present=${hasMulti}`,
+          },
+          { name: 'agent_end', passed: summary.sawAgentEnd, details: summary.sawAgentEnd ? 'agent_end seen' : 'agent_end missing' },
+          { name: 'result_line', passed: /ASK_VALIDATION_RESULT/i.test(text), details: tail },
+          { name: 'colour_blue', passed: /colour\s*=\s*Blue/i.test(text), details: tail },
+          { name: 'size_large', passed: /size\s*=\s*Large/i.test(text), details: tail },
+          { name: 'features_search_export', passed: /features?\s*=\s*Search,?\s*Export/i.test(text), details: tail },
+        ];
+
+        return {
+          scenarioId: 'claude-ask-user-question',
+          runtime: context.runtime,
+          passed: assertions.every((a) => a.passed),
+          assertions,
+        };
+      });
+    },
+  },
+  'claude-ask-user-question-cancel': {
+    id: 'claude-ask-user-question-cancel',
+    description:
+      'Verify a CANCELLED AskUserQuestion is graceful: the Internal API answers with cancelled:true and the Claude turn still completes (agent_end) instead of hanging.',
+    async run(context) {
+      if (context.runtime !== 'claude') {
+        return {
+          scenarioId: 'claude-ask-user-question-cancel',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: 'claude-ask-user-question-cancel only applies to the claude runtime',
+          assertions: [],
+        };
+      }
+
+      return withEphemeralSession(context, async (sessionId) => {
+        const prompt = [
+          'Integration validation only. Use the AskUserQuestion tool exactly once to ask one question: "Pick a colour?" with options Red, Blue.',
+          'After you receive the tool result, reply with EXACTLY one line and nothing else:',
+          'ASK_CANCEL_RESULT status=<received|not_received>',
+          'Use status=not_received if the tool result says the user did not answer; otherwise status=received.',
+          'Do not use any other tools.',
+        ].join('\n');
+
+        let cancelledRequestId: string | null = null;
+        const events = await context.client.promptStreamLive(
+          sessionId,
+          { message: prompt, verbosity: 'full', mode: 'prompt' },
+          async (evt) => {
+            if (evt.type === 'ask_user_question_request' && cancelledRequestId === null) {
+              const data = evt.data as { requestId?: string };
+              cancelledRequestId = data.requestId ?? null;
+              try {
+                await context.client.respondToApproval(sessionId, data.requestId ?? '', {
+                  approved: true,
+                  cancelled: true,
+                });
+              } catch {
+                /* surfaced via assertions */
+              }
+            }
+          },
+        );
+
+        const summary = collectValidationSummary(events);
+        const text = summary.assistantText;
+        const tail = text.slice(-200);
+
+        const assertions: ValidationAssertion[] = [
+          {
+            name: 'ask_user_question_request_emitted',
+            passed: cancelledRequestId !== null,
+            details: cancelledRequestId ?? 'no ask_user_question_request seen',
+          },
+          {
+            name: 'agent_end_after_cancel',
+            passed: summary.sawAgentEnd,
+            details: summary.sawAgentEnd ? 'agent_end seen — cancel did not hang the session' : 'agent_end missing (session may have hung)',
+          },
+          { name: 'result_line', passed: /ASK_CANCEL_RESULT/i.test(text), details: tail },
+          {
+            name: 'model_saw_no_answer',
+            passed: /not_received/i.test(text),
+            details: tail,
+          },
+        ];
+
+        return {
+          scenarioId: 'claude-ask-user-question-cancel',
+          runtime: context.runtime,
+          passed: assertions.every((a) => a.passed),
+          assertions,
+        };
+      });
+    },
+  },
+  'claude-ask-user-question-timeout': {
+    id: 'claude-ask-user-question-timeout',
+    description:
+      'Verify an UNANSWERED AskUserQuestion times out gracefully: the server-side ask-user timeout resolves it and the Claude turn still completes (agent_end) instead of hanging. Requires the validation server to be booted with a short CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS.',
+    async run(context) {
+      if (context.runtime !== 'claude') {
+        return {
+          scenarioId: 'claude-ask-user-question-timeout',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: 'claude-ask-user-question-timeout only applies to the claude runtime',
+          assertions: [],
+        };
+      }
+
+      const configuredTimeoutMs = Number.parseInt(process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS ?? '', 10);
+      if (!Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs <= 0 || configuredTimeoutMs > 30_000) {
+        return {
+          scenarioId: 'claude-ask-user-question-timeout',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: 'claude-ask-user-question-timeout requires CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS to be set to 1..30000 on the validation server',
+          assertions: [],
+        };
+      }
+
+      return withEphemeralSession(context, async (sessionId) => {
+        const prompt = [
+          'Integration validation only. Use the AskUserQuestion tool exactly once to ask one question: "Pick a colour?" with options Red, Blue.',
+          'If the tool result says the user did not answer, reply with EXACTLY one line and nothing else: ASK_TIMEOUT_RESULT timed_out',
+          'Do not use any other tools.',
+        ].join('\n');
+
+        let sawAsk = false;
+        // Intentionally do NOT respond: the server-side ask-user timeout must fire.
+        const events = await context.client.promptStreamLive(
+          sessionId,
+          { message: prompt, verbosity: 'full', mode: 'prompt' },
+          async (evt) => {
+            if (evt.type === 'ask_user_question_request') sawAsk = true;
+          },
+        );
+
+        const summary = collectValidationSummary(events);
+        const text = summary.assistantText;
+
+        const assertions: ValidationAssertion[] = [
+          {
+            name: 'ask_user_question_request_emitted',
+            passed: sawAsk,
+            details: sawAsk ? 'seen, intentionally unanswered' : 'no ask_user_question_request seen',
+          },
+          {
+            name: 'agent_end_after_timeout',
+            passed: summary.sawAgentEnd,
+            details: summary.sawAgentEnd ? 'agent_end seen — timeout did not hang the session' : 'agent_end missing (session hung past the ask-user timeout)',
+          },
+          { name: 'model_saw_timeout', passed: /ASK_TIMEOUT_RESULT/i.test(text), details: text.slice(-200) },
+        ];
+
+        return {
+          scenarioId: 'claude-ask-user-question-timeout',
+          runtime: context.runtime,
+          passed: assertions.every((a) => a.passed),
           assertions,
         };
       });

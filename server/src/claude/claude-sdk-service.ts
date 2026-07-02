@@ -67,6 +67,33 @@ export interface ClaudeSdkServiceConfig {
   defaultProfileId?: string;
 }
 
+/**
+ * Structured resolution for an in-flight `AskUserQuestion` request.
+ * - `answers` (keyed by exact question text) is forwarded back into the SDK as
+ *   `updatedInput.answers`; multi-select answers are comma-separated labels.
+ * - `cancelled`/absent answers map to a graceful allow-with-no-answers so Claude
+ *   sees its own "user did not answer" behaviour instead of a permission denial.
+ */
+export interface AskUserQuestionResolution {
+  answers?: Record<string, string>;
+  annotations?: Record<string, { preview?: string; notes?: string }>;
+  cancelled?: boolean;
+}
+
+/** In-flight AskUserQuestion awaiting a browser/Internal API response. */
+interface PendingAskUserQuestion {
+  sessionId: string;
+  toolCallId: string;
+  originalInput: Record<string, unknown>;
+  resolve: (result: AskUserQuestionResolution) => void;
+  timeout: NodeJS.Timeout;
+  abortListener: () => void;
+  signal: AbortSignal;
+}
+
+/** Default grace period before an unanswered AskUserQuestion times out. */
+const DEFAULT_ASK_USER_QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
+
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 export class ClaudeSdkService {
@@ -77,6 +104,8 @@ export class ClaudeSdkService {
   private adapter = new ClaudeSdkEventAdapter();
   /** Active prompt count per profileId (for maxConcurrent enforcement). */
   private activePerProfile = new Map<string, number>();
+  /** In-flight AskUserQuestion requests keyed by their dialog requestId. */
+  private pendingAskUserQuestions = new Map<string, PendingAskUserQuestion>();
 
   constructor(cfg: ClaudeSdkServiceConfig) {
     this.sessionStore = new ClaudeSessionStore(cfg.claudeSessionDir);
@@ -243,6 +272,7 @@ export class ClaudeSdkService {
 
         const sdkOptions = this.buildSdkOptions({
           resolved, cwd, model, thinkingLevel, claudeSessionId, isFollowUp, abortController,
+          sessionId, onEvent,
         });
 
         let capturedClaudeSessionId: string | undefined;
@@ -389,6 +419,11 @@ export class ClaudeSdkService {
         return;
       }
     } finally {
+      // Resolve + remove any AskUserQuestion dialogs still awaiting an answer
+      // for this session. If the turn ended here (success, error, or abort),
+      // the SDK will not consume their result, so cancelling them now prevents
+      // a leak that would otherwise wait out the full ask-user timeout.
+      this.cleanupPendingAskUserQuestionsForSession(sessionId);
       if (state) {
         state.isRunning = false;
         state.abortController = undefined;
@@ -424,6 +459,24 @@ export class ClaudeSdkService {
     return this.sessions.get(sessionId);
   }
 
+  // ── AskUserQuestion bridge ─────────────────────────────────────────────
+
+  /** True iff an AskUserQuestion dialog with this requestId is still pending. */
+  isPendingAskUserQuestion(requestId: string): boolean {
+    return this.pendingAskUserQuestions.has(requestId);
+  }
+
+  /**
+   * Resolve a pending AskUserQuestion request with structured answers, a
+   * freeform response, annotations, or a cancellation. Returns false (no-op)
+   * if no pending request exists for `requestId` (e.g. already timed out or
+   * aborted).
+   */
+  respondToAskUserQuestion(requestId: string, response: AskUserQuestionResolution): boolean {
+    if (!this.pendingAskUserQuestions.has(requestId)) return false;
+    return this.resolvePendingAskUserQuestion(requestId, response);
+  }
+
   // ── Health ──────────────────────────────────────────────────────────────
 
   /**
@@ -454,8 +507,10 @@ export class ClaudeSdkService {
     claudeSessionId: string;
     isFollowUp: boolean;
     abortController: AbortController;
+    sessionId: string;
+    onEvent: (event: NormalizedEvent) => void;
   }): Options {
-    const { resolved, cwd, model, thinkingLevel, claudeSessionId, isFollowUp, abortController } = opts;
+    const { resolved, cwd, model, thinkingLevel, claudeSessionId, isFollowUp, abortController, sessionId, onEvent } = opts;
 
     // Map the Web UI thinking level to a Claude effort level. Applies to both
     // native Claude and GLM (Z.ai maps Claude-native effort levels itself).
@@ -465,6 +520,8 @@ export class ClaudeSdkService {
     // The SDK ships its own bundled binary, but it may not match the host's
     // libc (e.g. musl vs glibc).  Using the system-installed claude avoids this.
     const claudePath = this.resolveClaudeBinary();
+
+    const askUserTimeoutMs = this.getAskUserTimeoutMs();
 
     // If we have a resolved profile, use its env and settings
     if (resolved) {
@@ -477,13 +534,20 @@ export class ClaudeSdkService {
         pathToClaudeCodeExecutable: claudePath,
         settingSources: resolved.sdkOptions.settingSources as Array<'user' | 'project' | 'local'>,
         skills: resolved.sdkOptions.skills === 'all' ? 'all' : resolved.sdkOptions.skills,
-        permissionMode: resolved.sdkOptions.permissionMode as Options['permissionMode'],
-        allowedTools: resolved.sdkOptions.allowedTools,
+        // dontAsk would deny AskUserQuestion before canUseTool can answer it;
+        // default routes tool decisions through canUseTool (the real policy gate).
+        permissionMode: this.buildEffectivePermissionMode(resolved.sdkOptions.permissionMode),
+        allowedTools: this.withAskUserQuestionTool(resolved.sdkOptions.allowedTools),
         disallowedTools: resolved.sdkOptions.disallowedTools,
         ...(isFollowUp
           ? { resume: claudeSessionId }
           : {}),
-        canUseTool: this.createCanUseTool(resolved.sdkOptions.allowedTools),
+        canUseTool: this.createCanUseTool({
+          sessionId,
+          allowedTools: resolved.sdkOptions.allowedTools,
+          onEvent,
+          askUserTimeoutMs,
+        }),
         includePartialMessages: false,
       };
       return sdkOpts;
@@ -494,6 +558,8 @@ export class ClaudeSdkService {
     delete cleanEnv.ANTHROPIC_API_KEY;
     delete cleanEnv.ANTHROPIC_AUTH_TOKEN;
 
+    const nativeAllowedTools = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task', 'NotebookEdit', 'Skill', 'TodoWrite'];
+
     return {
       cwd,
       model,
@@ -503,12 +569,18 @@ export class ClaudeSdkService {
       pathToClaudeCodeExecutable: claudePath,
       settingSources: ['user', 'project'],
       skills: 'all',
-      permissionMode: 'dontAsk',
-      allowedTools: ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task', 'NotebookEdit', 'Skill', 'TodoWrite'],
+      // See buildEffectivePermissionMode: default lets AskUserQuestion reach canUseTool.
+      permissionMode: this.buildEffectivePermissionMode('dontAsk'),
+      allowedTools: this.withAskUserQuestionTool(nativeAllowedTools),
       ...(isFollowUp
         ? { resume: claudeSessionId }
         : {}),
-      canUseTool: this.createCanUseTool(['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task', 'NotebookEdit', 'Skill', 'TodoWrite']),
+      canUseTool: this.createCanUseTool({
+        sessionId,
+        allowedTools: nativeAllowedTools,
+        onEvent,
+        askUserTimeoutMs,
+      }),
       includePartialMessages: false,
     };
   }
@@ -528,21 +600,234 @@ export class ClaudeSdkService {
     return this._claudePath;
   }
 
+  /** Include AskUserQuestion in the SDK tool allowlist so Claude advertises it. */
+  private withAskUserQuestionTool(allowedTools: string[] | undefined): string[] | undefined {
+    if (!allowedTools) return allowedTools;
+    return allowedTools.includes('AskUserQuestion') ? allowedTools : [...allowedTools, 'AskUserQuestion'];
+  }
+
   /**
-   * Create a canUseTool callback that auto-allows tools in the allowlist
-   * and denies everything else (server-side, non-interactive).
+   * Resolve the effective SDK permission mode for a profile.
+   *
+   * `dontAsk` short-circuits `AskUserQuestion` to a permission denial before
+   * `canUseTool` can supply answers, so SDK sessions with AskUserQuestion
+   * support must NOT run in dontAsk. We prefer `default`, which routes every
+   * tool decision through `canUseTool` (the real server-side policy gate).
+   * Non-dontAsk profile modes (acceptEdits, plan, …) are passed through.
    */
-  private createCanUseTool(allowedTools?: string[]) {
+  private buildEffectivePermissionMode(profileMode: string | undefined): Options['permissionMode'] {
+    if (profileMode === 'dontAsk') return 'default';
+    return (profileMode ?? 'default') as Options['permissionMode'];
+  }
+
+  /** Read the configurable AskUserQuestion timeout (env-overridable for ops/tests). */
+  private getAskUserTimeoutMs(): number {
+    const raw = process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS;
+    if (raw) {
+      const parsed = Number.parseInt(raw, 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return DEFAULT_ASK_USER_QUESTION_TIMEOUT_MS;
+  }
+
+  /**
+   * Create a canUseTool callback that:
+   *  - intercepts `AskUserQuestion`, emits an `ask_user_question_request`, and
+   *    awaits a structured answer before returning `updatedInput.answers`;
+   *  - auto-allows allowlisted tools and denies everything else
+   *    (server-side, non-interactive).
+   *
+   * `AskUserQuestion` is also added to `options.allowedTools` so Claude Code
+   * advertises the tool to the model; this callback remains the place where the
+   * server supplies the structured answers via `updatedInput.answers`.
+   */
+  private createCanUseTool(params: {
+    sessionId: string;
+    allowedTools?: string[];
+    onEvent: (event: NormalizedEvent) => void;
+    askUserTimeoutMs: number;
+  }) {
+    const { sessionId, allowedTools, onEvent, askUserTimeoutMs } = params;
     const allowed = new Set(allowedTools ?? []);
-    return async (_toolName: string, input: Record<string, unknown>): Promise<PermissionResult> => {
-      if (allowed.size === 0 || allowed.has(_toolName)) {
+
+    return async (
+      toolName: string,
+      input: Record<string, unknown>,
+      options: { signal: AbortSignal; toolUseID: string },
+    ): Promise<PermissionResult> => {
+      if (toolName === 'AskUserQuestion') {
+        return this.handleAskUserQuestion({
+          sessionId,
+          input,
+          options,
+          onEvent,
+          askUserTimeoutMs,
+        });
+      }
+
+      if (allowed.size === 0 || allowed.has(toolName)) {
         return { behavior: 'allow' as const, updatedInput: input };
       }
       return {
         behavior: 'deny' as const,
-        message: `Tool '${_toolName}' is not in the allowed tools list for this profile`,
+        message: `Tool '${toolName}' is not in the allowed tools list for this profile`,
       };
     };
+  }
+
+  /**
+   * Drive a single AskUserQuestion tool call: validate the questions, emit a
+   * normalized request, await the browser/Internal API answer (or timeout /
+   * abort), and return the matching PermissionResult.
+   */
+  private async handleAskUserQuestion(params: {
+    sessionId: string;
+    input: Record<string, unknown>;
+    options: { signal: AbortSignal; toolUseID: string };
+    onEvent: (event: NormalizedEvent) => void;
+    askUserTimeoutMs: number;
+  }): Promise<PermissionResult> {
+    const { sessionId, input, options, onEvent, askUserTimeoutMs } = params;
+    const toolCallId = options.toolUseID;
+
+    // Defensively validate the questions payload before opening a pending
+    // browser/Internal API dialog. Invalid tool inputs should fail fast with a
+    // clear permission denial rather than leaving a modal that can never produce
+    // a valid SDK answer.
+    const validationError = this.validateAskUserQuestionInput(input);
+    if (validationError) {
+      logger.warn(
+        `[ClaudeSdkService] Invalid AskUserQuestion input ` +
+        `(toolCallId=${toolCallId}): ${validationError}`,
+      );
+      return {
+        behavior: 'deny' as const,
+        message: `Invalid AskUserQuestion input: ${validationError}`,
+      };
+    }
+    const questions = input.questions as unknown[];
+
+    const requestId = randomUUID();
+
+    // Register the pending entry BEFORE emitting so a fast responder is never
+    // racing an absent map entry.
+    const resolution = new Promise<AskUserQuestionResolution>((resolve) => {
+      const abortListener = () => {
+        logger.info(`[ClaudeSdkService] AskUserQuestion aborted by SDK signal (requestId=${requestId})`);
+        this.resolvePendingAskUserQuestion(requestId, { cancelled: true });
+      };
+      const timeout = setTimeout(() => {
+        logger.info(`[ClaudeSdkService] AskUserQuestion timed out (requestId=${requestId})`);
+        this.resolvePendingAskUserQuestion(requestId, { cancelled: true });
+      }, askUserTimeoutMs);
+
+      this.pendingAskUserQuestions.set(requestId, {
+        sessionId,
+        toolCallId,
+        originalInput: input,
+        resolve,
+        timeout,
+        abortListener,
+        signal: options.signal,
+      });
+
+      options.signal.addEventListener('abort', abortListener, { once: true });
+      if (options.signal.aborted) {
+        this.resolvePendingAskUserQuestion(requestId, { cancelled: true });
+      }
+    });
+
+    // Surface the request to the browser (WebSocket) and Internal API (broker).
+    try {
+      onEvent({
+        type: 'ask_user_question_request',
+        sessionId,
+        timestamp: Date.now(),
+        data: {
+          requestId,
+          toolCallId,
+          toolName: 'AskUserQuestion',
+          questions,
+          timeoutMs: askUserTimeoutMs,
+        },
+      });
+    } catch (err) {
+      logger.warn('[ClaudeSdkService] Failed to emit AskUserQuestion request; cancelling pending dialog:', err);
+      this.resolvePendingAskUserQuestion(requestId, { cancelled: true });
+    }
+
+    const result = await resolution;
+
+    // Cancelled / no-answer: allow with the original input so Claude receives
+    // its own graceful "user did not answer" tool result, not a denial.
+    if (result.cancelled || !result.answers) {
+      return { behavior: 'allow' as const, updatedInput: input };
+    }
+
+    return {
+      behavior: 'allow' as const,
+      updatedInput: {
+        ...input,
+        answers: result.answers,
+        ...(result.annotations ? { annotations: result.annotations } : {}),
+      },
+    };
+  }
+
+  /** Validate the subset of Claude SDK AskUserQuestionInput this UI supports. */
+  private validateAskUserQuestionInput(input: Record<string, unknown>): string | null {
+    const questions = input.questions;
+    if (!Array.isArray(questions)) return 'questions must be an array';
+    if (questions.length < 1 || questions.length > 4) return 'questions must contain 1 to 4 items';
+
+    for (let i = 0; i < questions.length; i += 1) {
+      const q = questions[i];
+      if (!q || typeof q !== 'object') return `questions[${i}] must be an object`;
+      const qr = q as Record<string, unknown>;
+      if (typeof qr.question !== 'string' || qr.question.trim().length === 0) return `questions[${i}].question must be a non-empty string`;
+      if (typeof qr.header !== 'string' || qr.header.trim().length === 0) return `questions[${i}].header must be a non-empty string`;
+      if (typeof qr.multiSelect !== 'boolean') return `questions[${i}].multiSelect must be a boolean`;
+      if (!Array.isArray(qr.options) || qr.options.length < 2 || qr.options.length > 4) {
+        return `questions[${i}].options must contain 2 to 4 items`;
+      }
+      for (let j = 0; j < qr.options.length; j += 1) {
+        const opt = qr.options[j];
+        if (!opt || typeof opt !== 'object') return `questions[${i}].options[${j}] must be an object`;
+        const or = opt as Record<string, unknown>;
+        if (typeof or.label !== 'string' || or.label.trim().length === 0) return `questions[${i}].options[${j}].label must be a non-empty string`;
+        if (typeof or.description !== 'string') return `questions[${i}].options[${j}].description must be a string`;
+        if (or.preview !== undefined && typeof or.preview !== 'string') return `questions[${i}].options[${j}].preview must be a string when provided`;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolve and clean up a pending AskUserQuestion. Idempotent: a second call
+   * for an already-resolved requestId is a no-op returning false.
+   */
+  private resolvePendingAskUserQuestion(requestId: string, result: AskUserQuestionResolution): boolean {
+    const pending = this.pendingAskUserQuestions.get(requestId);
+    if (!pending) return false;
+    clearTimeout(pending.timeout);
+    try { pending.signal.removeEventListener('abort', pending.abortListener); } catch { /* noop */ }
+    this.pendingAskUserQuestions.delete(requestId);
+    pending.resolve(result);
+    return true;
+  }
+
+  /**
+   * Resolve every still-pending AskUserQuestion for a session as cancelled and
+   * remove it. Used when a turn ends (normally or via error/abort) so no dialog
+   * is left dangling until the ask-user timeout.
+   */
+  private cleanupPendingAskUserQuestionsForSession(sessionId: string): void {
+    for (const [requestId, pending] of this.pendingAskUserQuestions) {
+      if (pending.sessionId === sessionId) {
+        this.resolvePendingAskUserQuestion(requestId, { cancelled: true });
+      }
+    }
   }
 
   /**

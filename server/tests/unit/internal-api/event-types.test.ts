@@ -42,6 +42,14 @@ describe('event-type registry (Task 12)', () => {
     expect(types).toContain('tool_execution_end');
   });
 
+  it('catalogues the Claude SDK AskUserQuestion request as a control event', () => {
+    expect(REGISTRY_EVENT_TYPES).toContain('ask_user_question_request');
+    const entry = EVENT_TYPE_REGISTRY.find((e) => e.type === 'ask_user_question_request');
+    expect(entry).toBeDefined();
+    expect(entry!.category).toBe('control');
+    expect(entry!.verbosity).toContain('full');
+  });
+
   it('GET /events/types returns the registry as JSON', async () => {
     const routes = createEventTypesRoutes();
     const res = mockRes();

@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react';
 import { AlertCircle, Check, X } from 'lucide-react';
+import {
+  AskUserQuestionDialog,
+  type AskUserQuestion,
+} from './AskUserQuestionDialog';
 
 export interface ExtensionUIRequest {
   id: string;
-  type: 'confirm' | 'select' | 'input' | 'editor';
+  type: 'confirm' | 'select' | 'input' | 'editor' | 'ask_user_question';
   method: string;
   params: Record<string, unknown>;
   timeout: number;
@@ -31,6 +35,19 @@ export function ExtensionDialog({ request, onResponse }: ExtensionDialogProps) {
   }, [request?.id]);
 
   if (!request) return null;
+
+  // AskUserQuestion has its own dedicated dialog (1–4 questions, multi-select,
+  // previews). Delegate to it instead of the legacy confirm/select chrome.
+  if (request.type === 'ask_user_question') {
+    const questions = (request.params.questions ?? []) as AskUserQuestion[];
+    return (
+      <AskUserQuestionDialog
+        questions={questions}
+        onSubmit={(value) => onResponse({ id: request.id, approved: true, value })}
+        onCancel={() => onResponse({ id: request.id, cancelled: true })}
+      />
+    );
+  }
 
   const handleApprove = () => {
     onResponse({

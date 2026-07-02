@@ -13,7 +13,7 @@ import { ClaudeSessionStore } from './claude-session-store.js';
 import { SessionRegistryManager, getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
 import { ClaudeChannelService } from './claude-channel-service.js';
-import { ClaudeSdkService } from './claude-sdk-service.js';
+import { ClaudeSdkService, type AskUserQuestionResolution } from './claude-sdk-service.js';
 import {
   ClaudeProfileManager,
   resolveProfile,
@@ -113,6 +113,26 @@ export class ClaudeService {
     if (this.channelService) {
       this.channelService.sendPermissionResponse(sessionId, requestId, allowed);
     }
+  }
+
+  /**
+   * True iff an SDK AskUserQuestion dialog with this requestId is pending.
+   * Returns false when the SDK backend is not enabled or no such request exists.
+   */
+  isPendingAskUserQuestion(requestId: string): boolean {
+    return this.sdkService?.isPendingAskUserQuestion(requestId) ?? false;
+  }
+
+  /**
+   * Resolve a pending SDK AskUserQuestion with structured answers / cancellation.
+   * Keyed by requestId (a globally-unique UUID), so the WebSocket path — which
+   * only carries the requestId — can resolve it without a sessionId.
+   * Returns the SDK service's success boolean (false when there is no SDK
+   * backend or the requestId is unknown/already resolved).
+   */
+  respondToAskUserQuestion(requestId: string, response: AskUserQuestionResolution): boolean {
+    if (!this.sdkService) return false;
+    return this.sdkService.respondToAskUserQuestion(requestId, response);
   }
 
   private hasChannelSession(sessionId: string): boolean {

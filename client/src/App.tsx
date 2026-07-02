@@ -16,6 +16,7 @@ import { ToastContainer } from './components/common';
 import { useSessionStore } from './store/sessionStore';
 import { useUIStore } from './store/uiStore';
 import { useDeepLinkSession } from './hooks/useDeepLinkSession';
+import { getWebSocketClient } from './lib/websocket';
 
 function App() {
   const isAuthenticated = useAuth((state) => state.isAuthenticated);
@@ -77,17 +78,12 @@ function AuthenticatedApp() {
 
   // Handle extension UI response
   const handleExtensionResponse = useCallback((response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean }) => {
-    // For extension UI responses, we still need to use the legacy sendMessage
-    // This is a temporary bridge until extensions are migrated to the new protocol
-    // The extension dialog is rare enough that this is acceptable
-    import('./lib/websocket.js').then(({ createWebSocketClient }) => {
-      const client = createWebSocketClient({
-        onMessage: () => {},
-        onStatusChange: () => {},
-        onError: () => {},
-      });
-      client.send({ type: 'extension_ui_response', response });
-    });
+    const client = getWebSocketClient();
+    const sent = client?.send({ type: 'extension_ui_response', response }) ?? false;
+    if (!sent) {
+      console.error('Failed to send extension UI response: WebSocket is not connected');
+      return;
+    }
     setExtensionUIRequest(null);
   }, [setExtensionUIRequest]);
 

@@ -1,5 +1,6 @@
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type {
+  ApprovalResponseRequest,
   CapabilitiesResponse,
   CreateSessionResponse,
   SendPromptRequest,
@@ -14,11 +15,19 @@ export type ValidationRuntime = keyof ValidationCapabilities['runtimes'];
 export interface InternalApiClientLike {
   createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; source?: string; scenarioId?: string; ephemeral?: boolean }): Promise<CreateSessionResponse>;
   promptStream(sessionId: string, input: SendPromptRequest): Promise<NormalizedEvent[]>;
+  /**
+   * Stream a prompt, invoking `onEvent` for each SSE event as it arrives
+   * (before the turn completes). Needed for mid-turn interactions such as
+   * answering an AskUserQuestion, which blocks the turn until answered.
+   * Resolves with the full event list once the stream ends.
+   */
+  promptStreamLive(sessionId: string, input: SendPromptRequest, onEvent: (event: NormalizedEvent) => void): Promise<NormalizedEvent[]>;
   getSessionInfo(sessionId: string): Promise<SessionDetail>;
   getCapabilities(): Promise<ValidationCapabilities>;
   controlSession(sessionId: string, input: SessionControlRequest): Promise<unknown>;
   getSessionHistory(sessionId: string): Promise<SessionHistoryResponse>;
-  respondToApproval(sessionId: string, requestId: string, approved: boolean): Promise<unknown>;
+  /** Answer an approval/permission/AskUserQuestion request. */
+  respondToApproval(sessionId: string, requestId: string, body: ApprovalResponseRequest): Promise<unknown>;
   deleteSession(sessionId: string): Promise<void>;
   optInNotifications(sessionId: string, label?: string): Promise<unknown>;
   getNotificationState(sessionId: string): Promise<{ optIn: unknown; deliveries: unknown[] }>;

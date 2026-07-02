@@ -306,6 +306,18 @@ export interface SessionControlRequest {
 
 export interface ApprovalResponseRequest {
   approved: boolean;
+  /**
+   * Structured answers for a Claude SDK `AskUserQuestion` request, keyed by
+   * exact question text (multi-select answers are comma-separated). Only
+   * meaningful when the requestId is a pending AskUserQuestion.
+   */
+  answers?: Record<string, string>;
+  /** Optional per-question annotations from the user. */
+  annotations?: Record<string, { preview?: string; notes?: string }>;
+  /** True when the user dismissed the AskUserQuestion without answering. */
+  cancelled?: boolean;
+  /** Reserved for future structured approval payloads. */
+  value?: unknown;
 }
 
 // ─── Response types ──────────────────────────────────────────────────────────

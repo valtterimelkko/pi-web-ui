@@ -30,7 +30,7 @@ export interface ExtensionUIRequestMessage {
   type: 'extension_ui_request';
   request: {
     id: string;
-    type: 'confirm' | 'select' | 'input' | 'editor' | 'notify';
+    type: 'confirm' | 'select' | 'input' | 'editor' | 'notify' | 'ask_user_question';
     method: string;
     params: Record<string, unknown>;
     timeout: number;

@@ -196,7 +196,7 @@ interface SessionCacheMeta {
 
 interface ExtensionUIRequest {
   id: string;
-  type: 'confirm' | 'select' | 'input' | 'editor';
+  type: 'confirm' | 'select' | 'input' | 'editor' | 'ask_user_question';
   method: string;
   params: Record<string, unknown>;
   timeout: number;

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type {
+  ApprovalResponseRequest,
   ApprovalResponseResult,
   CapabilitiesResponse,
   CreateSessionResponse,
@@ -32,31 +33,35 @@ function parseJsonResponse<T>(raw: string): T {
   return JSON.parse(raw) as T;
 }
 
+function parseSseEvent(chunk: string): NormalizedEvent | null {
+  const lines = chunk.split('\n');
+  let eventType = 'message';
+  const dataLines: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith('event:')) {
+      eventType = line.slice(6).trim();
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trim());
+    }
+  }
+  if (eventType === 'complete') return null;
+  const payload = dataLines.length > 0 ? JSON.parse(dataLines.join('\n')) : {};
+  if (payload?.type) {
+    return payload as NormalizedEvent;
+  }
+  return {
+    type: eventType,
+    timestamp: Date.now(),
+    data: payload,
+  } as NormalizedEvent;
+}
+
 function parseSse(raw: string): NormalizedEvent[] {
   const events: NormalizedEvent[] = [];
   const chunks = raw.split('\n\n').map((chunk) => chunk.trim()).filter(Boolean);
   for (const chunk of chunks) {
-    const lines = chunk.split('\n');
-    let eventType = 'message';
-    const dataLines: string[] = [];
-    for (const line of lines) {
-      if (line.startsWith('event:')) {
-        eventType = line.slice(6).trim();
-      } else if (line.startsWith('data:')) {
-        dataLines.push(line.slice(5).trim());
-      }
-    }
-    if (eventType === 'complete') continue;
-    const payload = dataLines.length > 0 ? JSON.parse(dataLines.join('\n')) : {};
-    if (payload?.type) {
-      events.push(payload as NormalizedEvent);
-    } else {
-      events.push({
-        type: eventType,
-        timestamp: Date.now(),
-        data: payload,
-      } as NormalizedEvent);
-    }
+    const parsed = parseSseEvent(chunk);
+    if (parsed) events.push(parsed);
   }
   return events;
 }
@@ -149,6 +154,59 @@ export class InternalApiClient implements InternalApiClientLike {
     return this.request<SessionDetail>('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/info`);
   }
 
+  /**
+   * Stream a prompt, invoking `onEvent` for each parsed SSE event as soon as it
+   * arrives. Required for mid-turn interactions (e.g. answering an
+   * AskUserQuestion) that block the turn until resolved: the buffered
+   * {@link promptStream} would deadlock waiting for the turn to end.
+   */
+  async promptStreamLive(
+    sessionId: string,
+    input: SendPromptRequest,
+    onEvent: (event: NormalizedEvent) => void,
+  ): Promise<NormalizedEvent[]> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest({
+        socketPath: this.socketPath,
+        path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`,
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          'Content-Type': 'application/json',
+          'X-Verbosity': input.verbosity ?? 'full',
+        },
+      }, (res) => {
+        if ((res.statusCode ?? 500) >= 400) {
+          let raw = '';
+          res.on('data', (chunk) => { raw += chunk.toString(); });
+          res.on('end', () => reject(new Error(raw || `Prompt stream failed: ${res.statusCode}`)));
+          return;
+        }
+        const events: NormalizedEvent[] = [];
+        let buffer = '';
+        res.on('data', (chunk) => {
+          buffer += chunk.toString();
+          // SSE events are separated by a blank line (\n\n). Emit each complete
+          // event immediately so a consumer can react mid-turn.
+          let sep: number;
+          while ((sep = buffer.indexOf('\n\n')) >= 0) {
+            const rawChunk = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            const parsed = parseSseEvent(rawChunk.trim());
+            if (parsed) {
+              events.push(parsed);
+              try { onEvent(parsed); } catch { /* consumer error is non-fatal to the stream */ }
+            }
+          }
+        });
+        res.on('end', () => resolve(events));
+      });
+      req.on('error', reject);
+      req.write(JSON.stringify({ ...input, verbosity: input.verbosity ?? 'full' }));
+      req.end();
+    });
+  }
+
   async getCapabilities(): Promise<CapabilitiesResponse> {
     return this.request<CapabilitiesResponse>('GET', '/api/v1/capabilities');
   }
@@ -179,8 +237,12 @@ export class InternalApiClient implements InternalApiClientLike {
     return this.request<SessionHistoryResponse>('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/history`);
   }
 
-  async respondToApproval(sessionId: string, requestId: string, approved: boolean): Promise<ApprovalResponseResult> {
-    return this.request<ApprovalResponseResult>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(requestId)}/respond`, { approved });
+  async respondToApproval(sessionId: string, requestId: string, body: ApprovalResponseRequest): Promise<ApprovalResponseResult> {
+    return this.request<ApprovalResponseResult>(
+      'POST',
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(requestId)}/respond`,
+      body,
+    );
   }
 
   async deleteSession(sessionId: string): Promise<void> {

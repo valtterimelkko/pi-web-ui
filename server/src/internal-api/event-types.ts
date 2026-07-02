@@ -43,6 +43,7 @@ export const EVENT_TYPE_REGISTRY: readonly EventTypeInfo[] = [
   { type: 'stream_activity', description: 'Liveness heartbeat during long-running Claude channel turns.', category: 'control', verbosity: FULL },
   { type: 'session_compaction', description: 'Context compaction event.', category: 'control', verbosity: FULL },
   { type: 'permission_request', description: 'A tool permission/approval request (Claude channel / OpenCode).', category: 'control', verbosity: FULL },
+  { type: 'ask_user_question_request', description: 'A Claude SDK AskUserQuestion dialog request awaiting a structured answer (answers/annotations or cancel).', category: 'control', verbosity: FULL },
 ];
 
 /** All registered event type names (drift-guard set). */
