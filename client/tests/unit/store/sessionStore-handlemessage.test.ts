@@ -270,7 +270,71 @@ describe('sessionStore', () => {
         type: 'extension_ui_request',
         request,
       });
-      expect(useSessionStore.getState().extensionUIRequest).toEqual(request);
+      const stored = useSessionStore.getState().extensionUIRequest;
+      expect(stored).toMatchObject(request);
+      // Arrival time is stamped so a near-expiry deadline can be computed.
+      expect(typeof stored?.receivedAt).toBe('number');
+    });
+
+    it('marks the open AskUserQuestion request expired on extension_ui_cancel (keeps it, with reason)', () => {
+      const state = useSessionStore.getState();
+      state.setExtensionUIRequest({
+        id: 'req-auq',
+        type: 'ask_user_question',
+        method: 'claude.askUserQuestion',
+        params: { questions: [] },
+        timeout: 30000,
+      });
+
+      state.handleServerMessage({
+        type: 'extension_ui_cancel',
+        request: { id: 'req-auq', reason: 'timeout' },
+      });
+
+      const req = useSessionStore.getState().extensionUIRequest;
+      // Not cleared — the dialog switches to an expired state so the user's
+      // draft is preserved, not silently removed.
+      expect(req).not.toBeNull();
+      expect(req?.id).toBe('req-auq');
+      expect(req?.expired).toBe(true);
+      expect(req?.expiredReason).toBe('timeout');
+    });
+
+    it('ignores extension_ui_cancel for a non-matching request id', () => {
+      const state = useSessionStore.getState();
+      state.setExtensionUIRequest({
+        id: 'req-auq',
+        type: 'ask_user_question',
+        method: 'claude.askUserQuestion',
+        params: { questions: [] },
+        timeout: 30000,
+      });
+
+      state.handleServerMessage({
+        type: 'extension_ui_cancel',
+        request: { id: 'req-other', reason: 'disconnected' },
+      });
+
+      const req = useSessionStore.getState().extensionUIRequest;
+      expect(req?.expired).toBeFalsy();
+    });
+
+    it('shows a non-blocking toast for an ASK_ALREADY_CLOSED error (no global error state)', () => {
+      const state = useSessionStore.getState();
+      state.setStreaming(true);
+
+      state.handleServerMessage({
+        type: 'error',
+        code: 'ASK_ALREADY_CLOSED',
+        message: 'That question already closed, so your answer wasn\'t delivered to the assistant.',
+      });
+
+      const toasts = useUIStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].message).toMatch(/already closed/i);
+      // Non-blocking: no global error banner, streaming state untouched.
+      expect(useSessionStore.getState().error).toBeNull();
+      expect(useSessionStore.getState().isStreaming).toBe(true);
     });
 
     it('should handle thinking_level_changed message', () => {

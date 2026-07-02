@@ -13,7 +13,7 @@ import { ClaudeSessionStore } from './claude-session-store.js';
 import { SessionRegistryManager, getSessionRegistry } from '../session-registry.js';
 import { config } from '../config.js';
 import { ClaudeChannelService } from './claude-channel-service.js';
-import { ClaudeSdkService, type AskUserQuestionResolution } from './claude-sdk-service.js';
+import { ClaudeSdkService, type AskUserQuestionResolution, type AskUserQuestionCloseReason } from './claude-sdk-service.js';
 import {
   ClaudeProfileManager,
   resolveProfile,
@@ -133,6 +133,27 @@ export class ClaudeService {
   respondToAskUserQuestion(requestId: string, response: AskUserQuestionResolution): boolean {
     if (!this.sdkService) return false;
     return this.sdkService.respondToAskUserQuestion(requestId, response);
+  }
+
+  /**
+   * Cancel every still-pending SDK AskUserQuestion for a session, emitting one
+   * `ask_user_question_closed` event per request with the given reason. Used by
+   * the connection layer's disconnect grace timer (reason `disconnected`).
+   * Harmless no-op when the SDK backend is not enabled or the session has
+   * nothing pending.
+   */
+  cancelPendingAskUserQuestionsForSession(sessionId: string, reason: AskUserQuestionCloseReason): void {
+    this.sdkService?.cancelPendingAskUserQuestionsForSession(sessionId, reason);
+  }
+
+  /** True iff any SDK AskUserQuestion is currently pending for `sessionId`. */
+  hasPendingAskUserQuestionForSession(sessionId: string): boolean {
+    return this.sdkService?.hasPendingAskUserQuestionForSession(sessionId) ?? false;
+  }
+
+  /** True iff `requestId` was an SDK AskUserQuestion that recently closed. */
+  wasRecentlyResolvedAskUserQuestion(requestId: string): boolean {
+    return this.sdkService?.wasRecentlyResolvedAskUserQuestion(requestId) ?? false;
   }
 
   private hasChannelSession(sessionId: string): boolean {

@@ -28,6 +28,14 @@ interface AskUserQuestionDialogProps {
   questions: AskUserQuestion[];
   onSubmit: (value: AskUserAnswerValue) => void;
   onCancel: () => void;
+  /** Epoch ms when the ask-user window ends (receivedAt + timeout). */
+  expiresAt?: number;
+  /** Server signalled the dialog closed for a non-answer reason (extension_ui_cancel). */
+  expired?: boolean;
+  /** Why the dialog closed ('timeout' | 'aborted' | 'turn_end' | 'disconnected'). */
+  expiredReason?: string;
+  /** Dismiss the expired dialog. The request is already dead — no server round-trip. */
+  onDismissExpired?: () => void;
 }
 
 /**
@@ -38,12 +46,26 @@ interface AskUserQuestionDialogProps {
  * - A freeform "Other" entry overrides the structured selection for that question.
  * - Previews are rendered as plain text (React-escaped); raw HTML is never used.
  * - Content scrolls internally so tall dialogs stay usable on narrow widths.
+ * - A soft deadline warning appears only in the final 60s (server drives expiry).
+ * - On `expired`, the dialog switches to an expired state that keeps the user's
+ *   draft visible and offers a dismiss (no submit) — the server already moved on.
  */
-export function AskUserQuestionDialog({ questions, onSubmit, onCancel }: AskUserQuestionDialogProps) {
+export function AskUserQuestionDialog({
+  questions,
+  onSubmit,
+  onCancel,
+  expiresAt,
+  expired,
+  expiredReason,
+  onDismissExpired,
+}: AskUserQuestionDialogProps) {
   const [selection, setSelection] = useState<Record<string, string[]>>({});
   const [freeform, setFreeform] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [previewFor, setPreviewFor] = useState<Record<string, string>>({});
+  // Ticking clock for the soft deadline indicator. Only runs while a deadline is
+  // known and the dialog is not already expired.
+  const [now, setNow] = useState<number>(() => Date.now());
 
   // Reset local state whenever a new request (new questions array) arrives.
   useEffect(() => {
@@ -52,6 +74,15 @@ export function AskUserQuestionDialog({ questions, onSubmit, onCancel }: AskUser
     setNotes({});
     setPreviewFor({});
   }, [questions]);
+
+  useEffect(() => {
+    if (!expiresAt || expired) return;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [expiresAt, expired]);
+
+  const remainingMs = expiresAt !== undefined ? Math.max(0, expiresAt - now) : null;
+  const nearExpiry = !expired && remainingMs !== null && remainingMs > 0 && remainingMs < 60_000;
 
   const selectedLabels = (question: string): string[] => selection[question] ?? [];
 
@@ -100,6 +131,21 @@ export function AskUserQuestionDialog({ questions, onSubmit, onCancel }: AskUser
             {questions.length > 1 ? `${questions.length} questions` : 'Claude has a question'}
           </h3>
         </div>
+
+        {/* Expired banner: the assistant already moved on. Keep the draft below. */}
+        {expired && (
+          <div role="status" className="mx-4 mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 text-sm text-amber-800 dark:text-amber-200">
+            This question {expiredReason ? `expired (${expiredReason})` : 'expired'} and the assistant moved on.
+            Your draft is kept below — copy it or send it as a normal message.
+          </div>
+        )}
+
+        {/* Soft near-expiry warning (final 60s only). The server still drives expiry. */}
+        {nearExpiry && remainingMs !== null && (
+          <div role="status" className="mx-4 mt-4 p-2 rounded-lg bg-amber-50 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 text-xs text-amber-800 dark:text-amber-200">
+            Closing in {Math.ceil(remainingMs / 1000)}s — answer soon or this will expire.
+          </div>
+        )}
 
         {/* Scrollable content */}
         <div className="p-4 overflow-y-auto flex-1 space-y-6">
@@ -181,21 +227,33 @@ export function AskUserQuestionDialog({ questions, onSubmit, onCancel }: AskUser
 
         {/* Actions */}
         <div className="flex justify-end gap-2 p-4 border-t border-gray-200 dark:border-gray-700">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-4 py-2 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!allAnswered}
-            className="px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:bg-gray-200 dark:disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
-          >
-            Submit
-          </button>
+          {expired ? (
+            <button
+              type="button"
+              onClick={() => onDismissExpired?.()}
+              className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white rounded-lg transition-colors"
+            >
+              Dismiss
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onCancel}
+                className="px-4 py-2 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={!allAnswered}
+                className="px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:bg-gray-200 dark:disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+              >
+                Submit
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

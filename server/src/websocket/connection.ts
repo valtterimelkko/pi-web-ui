@@ -34,6 +34,16 @@ import { withCorrelation, newRequestId } from '../logging/correlation.js';
 
 const logger = createLogger('WebUI');
 
+/**
+ * Default disconnect grace window before a pending AskUserQuestion whose session
+ * has lost all subscribers is cancelled. The grace absorbs brief network blips /
+ * mobile tab-backgrounding (which reconnect constantly) so a momentary disconnect
+ * never drops an in-flight dialog. Override with
+ * `CLAUDE_ASK_USER_QUESTION_DISCONNECT_GRACE_MS` (positive int, ms); invalid /
+ * zero / non-numeric values fall back to this default.
+ */
+const DEFAULT_ASK_USER_DISCONNECT_GRACE_MS = 120_000;
+
 
 // ============================================================================
 // NormalizedEvent → Pi-compatible format converter
@@ -215,6 +225,13 @@ export class WebSocketConnectionManager {
   private claudeSessionIds: Set<string> = new Set();
   /** Claude session subscribers: tracks which clients are viewing which Claude sessions */
   private claudeSubs = new ClaudeSessionSubscribers();
+  /**
+   * Per-session disconnect grace timers for pending AskUserQuestions. Armed when
+   * the last subscriber for a session with a pending question goes away; cleared
+   * on re-subscribe or when the question resolves. On fire (still zero
+   * subscribers) the pending question(s) are cancelled as `disconnected`.
+   */
+  private askUserDisconnectGraceTimers: Map<string, NodeJS.Timeout> = new Map();
   private opencodeService: OpenCodeService;
   private opencodeSessionIds: Set<string> = new Set();
   private opencodeSubs = new OpenCodeSessionSubscribers();
@@ -989,6 +1006,30 @@ export class WebSocketConnectionManager {
             return;
           }
 
+          if (normalizedEvent.type === 'ask_user_question_closed') {
+            // A pending AskUserQuestion closed for a NON-answer reason
+            // (timeout/abort/turn-end/disconnect). Tell every subscriber to
+            // retire the dialog so it does not linger as a zombie. Not also
+            // forwarded as a session_event — the cancel IS the surface.
+            const closed = normalizedEvent.data as Record<string, unknown>;
+            const cancel: ServerMessage = {
+              type: 'extension_ui_cancel',
+              request: {
+                id: closed.requestId as string,
+                reason: closed.reason as 'timeout' | 'aborted' | 'turn_end' | 'disconnected',
+              },
+            };
+            const closedSubs = this.claudeSubs.getSubscribers(sessionId);
+            if (closedSubs && closedSubs.size > 0) {
+              for (const subId of closedSubs) {
+                this.sendMessage(subId, cancel);
+              }
+            } else {
+              this.sendMessage(clientId, cancel);
+            }
+            return;
+          }
+
           const piEvent = normEventToPiFormat(normalizedEvent);
           const message = { type: 'session_event' as const, sessionId, event: piEvent };
           const subscribers = this.claudeSubs.getSubscribers(sessionId);
@@ -1466,6 +1507,8 @@ export class WebSocketConnectionManager {
         // Register the client as viewing this session
         this.clientViewingSession.set(clientId, sessionId);
         this.claudeSubs.subscribe(clientId, sessionId);
+        // A viewer is back — cancel any armed disconnect grace for this session.
+        this.clearAskUserDisconnectGrace(sessionId);
         this.clientCwd.set(clientId, cwd);
 
         logger.info(`[handleNewSession] Claude session created: ${sessionId} (model: ${createModel})`);
@@ -1540,6 +1583,7 @@ export class WebSocketConnectionManager {
       }
       this.clientViewingSession.set(clientId, sessionPath);
       this.claudeSubs.subscribe(clientId, sessionPath);
+      this.clearAskUserDisconnectGrace(sessionPath);
       await this.replayClaudeHistory(clientId, sessionPath);
       logger.info(`[handleSwitchSession] Client ${clientId} switched to Claude session ${sessionPath}`);
       return;
@@ -2449,7 +2493,20 @@ export class WebSocketConnectionManager {
         }
       }
       const resolved = this.claudeService.respondToAskUserQuestion(id, resolution);
-      if (!resolved) logger.warn(`[handleExtensionUiResponse] AskUserQuestion response ignored because request is no longer pending: ${id}`);
+      if (!resolved) {
+        // Race: the request was resolved between the pending check above and the
+        // call (e.g. it just timed out). Don't silently drop the user's effort.
+        logger.warn(`[handleExtensionUiResponse] AskUserQuestion response ignored because request is no longer pending: ${id}`);
+        this.notifyAskUserQuestionAlreadyClosed(clientId);
+      }
+      return;
+    }
+
+    // Late answer: the request was a Claude AskUserQuestion that already closed
+    // (timed out / aborted / turn ended / disconnected). Surface a clear notice
+    // to the user instead of silently dropping their answer (D3).
+    if (this.claudeService.wasRecentlyResolvedAskUserQuestion(id)) {
+      this.notifyAskUserQuestionAlreadyClosed(clientId);
       return;
     }
 
@@ -2478,6 +2535,22 @@ export class WebSocketConnectionManager {
     const { getExtensionUIHandler } = await import('../pi/extension-ui-handler.js');
     const handler = getExtensionUIHandler();
     handler.handleResponse(message.response);
+  }
+
+  /**
+   * Tell the requesting client their AskUserQuestion answer did not reach the
+   * assistant because the dialog already closed (timeout/abort/turn-end/
+   * disconnect, or a resolution race). Non-blocking: the client renders this as
+   * a toast, so the user's effort is never silently wasted (D3). The message
+   * shape reuses the existing `error` channel; the client keys the toast off the
+   * `ASK_ALREADY_CLOSED` code.
+   */
+  private notifyAskUserQuestionAlreadyClosed(clientId: string): void {
+    this.sendMessage(clientId, {
+      type: 'error',
+      message: 'That question already closed, so your answer wasn\'t delivered to the assistant. Send it as a normal message.',
+      code: 'ASK_ALREADY_CLOSED',
+    });
   }
 
   private async handleSetSessionName(
@@ -2546,6 +2619,7 @@ export class WebSocketConnectionManager {
     if (isClaudeSession) {
       this.clientViewingSession.set(clientId, sessionPath);
       this.claudeSubs.subscribe(clientId, sessionPath);
+      this.clearAskUserDisconnectGrace(sessionPath);
       await this.replayClaudeHistory(clientId, sessionPath);
       return;
     }
@@ -2737,15 +2811,76 @@ export class WebSocketConnectionManager {
         this.multiSessionManager.unsubscribeClient(clientId, sessionPath);
       }
 
+      // Capture which Claude sessions this client watched before removing it, so
+      // we can arm the disconnect grace timer for any that drop to zero
+      // subscribers AND have a pending AskUserQuestion.
+      const watchedClaudeSessions = this.claudeSubs.getSubscribedSessions(clientId);
+
       // Unsubscribe client from all Claude sessions
       this.claudeSubs.unsubscribeAll(clientId);
       this.opencodeSubs.unsubscribeAll(clientId);
       this.antigravitySubs.unsubscribeAll(clientId);
 
+      // Arm the grace timer for sessions that may now be unwatched + pending.
+      for (const sessionId of watchedClaudeSessions) {
+        this.maybeStartAskUserDisconnectGrace(sessionId);
+      }
+
       // Clean up client tracking data
       this.clientCwd.delete(clientId);
       this.clientViewingSession.delete(clientId);
       this.clients.delete(clientId);
+    }
+  }
+
+  /**
+   * Disconnect grace window for pending AskUserQuestions (env-overridable).
+   * Invalid/zero/non-numeric values fall back to the default.
+   */
+  private getAskUserDisconnectGraceMs(): number {
+    const raw = process.env.CLAUDE_ASK_USER_QUESTION_DISCONNECT_GRACE_MS;
+    if (raw) {
+      const parsed = Number.parseInt(raw, 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return DEFAULT_ASK_USER_DISCONNECT_GRACE_MS;
+  }
+
+  /**
+   * If `sessionId` currently has zero subscribers AND a pending AskUserQuestion,
+   * arm the disconnect grace timer (do not cancel immediately). No-op otherwise
+   * (someone is still watching, or nothing is pending, or a timer is already
+   * armed). A re-subscribe before the timer fires clears it (see subscribe sites).
+   */
+  private maybeStartAskUserDisconnectGrace(sessionId: string): void {
+    if (this.claudeSubs.getSubscriberCount(sessionId) > 0) return;
+    if (!this.claudeService.hasPendingAskUserQuestionForSession(sessionId)) return;
+    if (this.askUserDisconnectGraceTimers.has(sessionId)) return;
+
+    const graceMs = this.getAskUserDisconnectGraceMs();
+    const timer = setTimeout(() => {
+      this.askUserDisconnectGraceTimers.delete(sessionId);
+      // Re-check at fire time: a reconnect in the window should have cleared
+      // this, but guard against races regardless.
+      if (this.claudeSubs.getSubscriberCount(sessionId) === 0) {
+        logger.info(
+          `[Connection] AskUserQuestion disconnect grace expired for ${sessionId} ` +
+          `(${graceMs}ms with no subscribers) — cancelling pending question(s)`,
+        );
+        this.claudeService.cancelPendingAskUserQuestionsForSession(sessionId, 'disconnected');
+      }
+    }, graceMs);
+    // Don't keep the Node process alive just for a grace timer.
+    timer.unref?.();
+    this.askUserDisconnectGraceTimers.set(sessionId, timer);
+  }
+
+  /** Clear an armed disconnect grace timer (called on re-subscribe / resolution). */
+  private clearAskUserDisconnectGrace(sessionId: string): void {
+    const timer = this.askUserDisconnectGraceTimers.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.askUserDisconnectGraceTimers.delete(sessionId);
     }
   }
 
@@ -2861,6 +2996,12 @@ export class WebSocketConnectionManager {
   async close(): Promise<void> {
     // Dispose MultiSessionManager (which disposes all sessions)
     this.multiSessionManager.dispose();
+
+    // Clear any armed AskUserQuestion disconnect grace timers so nothing dangles.
+    for (const timer of this.askUserDisconnectGraceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.askUserDisconnectGraceTimers.clear();
 
     // Clean up all clients
     for (const client of this.clients.values()) {

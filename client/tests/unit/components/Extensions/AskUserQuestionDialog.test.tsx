@@ -263,4 +263,71 @@ describe('AskUserQuestionDialog', () => {
     // The raw markup is shown as inert, escaped text.
     expect(screen.getByText(/onerror=alert\(1\)/)).toBeInTheDocument();
   });
+
+  // ── Near-expiry deadline warning (§8.2) ─────────────────────────────────────
+
+  it('shows a near-expiry warning only when under 60 seconds remain', () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    try {
+      const questions: AskUserQuestion[] = [
+        { question: 'Q?', header: 'H', multiSelect: false, options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }] },
+      ];
+
+      // 5 minutes remain — no warning.
+      const { rerender } = render(
+        <AskUserQuestionDialog questions={questions} onSubmit={onSubmit} onCancel={onCancel} expiresAt={1_000_000 + 5 * 60_000} />,
+      );
+      expect(screen.queryByRole('status')).toBeNull();
+
+      // 30 seconds remain — warning appears.
+      rerender(
+        <AskUserQuestionDialog questions={questions} onSubmit={onSubmit} onCancel={onCancel} expiresAt={1_000_000 + 30_000} />,
+      );
+      const warning = screen.getByRole('status');
+      expect(warning.textContent).toMatch(/expire|closing|seconds/i);
+
+      // Submit still works normally while not expired.
+      fireEvent.click(screen.getByText('A'));
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }));
+      expect(onSubmit).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── Expired state (§8.3) ────────────────────────────────────────────────────
+
+  it('expired state shows an explanatory message, preserves the draft, and dismisses instead of submitting', () => {
+    const onDismissExpired = vi.fn();
+    const questions: AskUserQuestion[] = [
+      { question: 'Pick a colour?', header: 'Colour', multiSelect: false, options: [{ label: 'Red', description: 'r' }, { label: 'Blue', description: 'b' }] },
+    ];
+
+    const { rerender } = render(
+      <AskUserQuestionDialog questions={questions} onSubmit={onSubmit} onCancel={onCancel} />,
+    );
+    fireEvent.click(screen.getByText('Blue')); // create a draft selection
+
+    // Server signals the dialog closed mid-answer.
+    rerender(
+      <AskUserQuestionDialog
+        questions={questions}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+        expired
+        expiredReason="timeout"
+        onDismissExpired={onDismissExpired}
+      />,
+    );
+
+    expect(screen.getByText(/expired|moved on|closed/i)).toBeInTheDocument();
+    // Draft preserved: the selected option label is still visible.
+    expect(screen.getByText('Blue')).toBeInTheDocument();
+    // No submit path in the expired state.
+    expect(screen.queryByRole('button', { name: /^submit$/i })).toBeNull();
+    // Explicit dismiss.
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
+    expect(onDismissExpired).toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });

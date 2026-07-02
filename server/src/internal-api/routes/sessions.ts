@@ -1158,11 +1158,28 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             if (body.annotations) resolution.annotations = body.annotations;
           }
           const resolved = claudeService.respondToAskUserQuestion(requestId, resolution);
-          if (!resolved) logger.warn(`AskUserQuestion response ignored because request is no longer pending: ${requestId}`);
+          if (!resolved) {
+            // Race: the request resolved between the pending check above and the
+            // call (e.g. it just timed out). Return a clear conflict instead of
+            // a silent success so the caller knows the answer was not delivered.
+            logger.warn(`AskUserQuestion response ignored because request is no longer pending: ${requestId}`);
+            sendJson(res, 409, enrichedErrorBody(ErrorCode.ASK_ALREADY_CLOSED,
+              'That question already closed, so the answer was not delivered to the assistant.'));
+            return;
+          }
           sendJson(res, 200, {
             success: true,
             approved: body.approved,
           } satisfies ApprovalResponseResult);
+          return;
+        }
+        // Late answer: the request was an AskUserQuestion that already closed.
+        // Return a clear conflict instead of misrouting to the channel permission
+        // path or answering with a silent 200 (D3).
+        if (typeof claudeService.wasRecentlyResolvedAskUserQuestion === 'function'
+          && claudeService.wasRecentlyResolvedAskUserQuestion(requestId)) {
+          sendJson(res, 409, enrichedErrorBody(ErrorCode.ASK_ALREADY_CLOSED,
+            'That question already closed, so the answer was not delivered to the assistant.'));
           return;
         }
         claudeService.sendPermissionResponse(sessionId, requestId, body.approved);

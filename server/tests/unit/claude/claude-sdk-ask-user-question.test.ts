@@ -229,6 +229,92 @@ describe('ClaudeSdkService AskUserQuestion bridge', () => {
     expect(svc.isPendingAskUserQuestion(req.data.requestId)).toBe(false);
   });
 
+  // ── Timeout policy (D1): long finite safety net, env-overridable ────────────
+
+  it('uses a 30-minute safety-net default for the ask-user timeout when no env override is set', async () => {
+    // afterEach clears CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS; beforeEach does not
+    // set it, so a fresh test sees the built-in default.
+    const { options, events } = await captureOptions(svc, 'dontask-profile');
+    const canUseTool = options.canUseTool;
+
+    const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_default',
+      signal: new AbortController().signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'ask_user_question_request')).toBe(true);
+    });
+    const req = events.find((e) => e.type === 'ask_user_question_request');
+
+    // The wall clock is now a long safety net (abandonment is detected via
+    // disconnect, not the clock). 30 min, finite, not Infinity.
+    expect(req.data.timeoutMs).toBe(30 * 60 * 1000);
+
+    svc.respondToAskUserQuestion(req.data.requestId, { cancelled: true });
+    await pending;
+  });
+
+  it('honours CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS when it is a positive integer', async () => {
+    process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS = '7000';
+    const { options, events } = await captureOptions(svc, 'dontask-profile');
+    const canUseTool = options.canUseTool;
+
+    const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_env',
+      signal: new AbortController().signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'ask_user_question_request')).toBe(true);
+    });
+    const req = events.find((e) => e.type === 'ask_user_question_request');
+    expect(req.data.timeoutMs).toBe(7000);
+
+    svc.respondToAskUserQuestion(req.data.requestId, { cancelled: true });
+    await pending;
+  });
+
+  it('falls back to the 30-minute default when the timeout env is zero', async () => {
+    process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS = '0';
+    const { options, events } = await captureOptions(svc, 'dontask-profile');
+    const canUseTool = options.canUseTool;
+
+    const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_zero',
+      signal: new AbortController().signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'ask_user_question_request')).toBe(true);
+    });
+    const req = events.find((e) => e.type === 'ask_user_question_request');
+    expect(req.data.timeoutMs).toBe(30 * 60 * 1000);
+
+    svc.respondToAskUserQuestion(req.data.requestId, { cancelled: true });
+    await pending;
+  });
+
+  it('falls back to the 30-minute default when the timeout env is non-numeric', async () => {
+    process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS = 'not-a-number';
+    const { options, events } = await captureOptions(svc, 'dontask-profile');
+    const canUseTool = options.canUseTool;
+
+    const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_nan',
+      signal: new AbortController().signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'ask_user_question_request')).toBe(true);
+    });
+    const req = events.find((e) => e.type === 'ask_user_question_request');
+    expect(req.data.timeoutMs).toBe(30 * 60 * 1000);
+
+    svc.respondToAskUserQuestion(req.data.requestId, { cancelled: true });
+    await pending;
+  });
+
   // ── Abort resolves a pending ask as cancelled ───────────────────────────────
 
   it('resolves a pending ask as cancelled when the SDK abort signal fires', async () => {
@@ -252,6 +338,227 @@ describe('ClaudeSdkService AskUserQuestion bridge', () => {
     expect(result.behavior).toBe('allow');
     expect(result.updatedInput.answers).toBeUndefined();
     expect(svc.isPendingAskUserQuestion(req.data.requestId)).toBe(false);
+  });
+
+  // ── Resolution reason + single-fire close notification (D2) ────────────────
+
+  it('emits exactly one ask_user_question_closed with reason timeout on timeout', async () => {
+    process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS = '40';
+    const { options, events } = await captureOptions(svc, 'dontask-profile');
+    const canUseTool = options.canUseTool;
+
+    const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_to', signal: new AbortController().signal,
+    });
+    await pending;
+
+    const closed = events.filter((e) => e.type === 'ask_user_question_closed');
+    expect(closed).toHaveLength(1);
+    expect(closed[0].data.reason).toBe('timeout');
+    const req = events.find((e) => e.type === 'ask_user_question_request');
+    expect(closed[0].data.requestId).toBe(req.data.requestId);
+  });
+
+  it('emits exactly one ask_user_question_closed with reason aborted on SDK abort', async () => {
+    const { options, events } = await captureOptions(svc, 'dontask-profile');
+    const canUseTool = options.canUseTool;
+    const ac = new AbortController();
+
+    const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_ab', signal: ac.signal,
+    });
+    ac.abort();
+    await pending;
+
+    const closed = events.filter((e) => e.type === 'ask_user_question_closed');
+    expect(closed).toHaveLength(1);
+    expect(closed[0].data.reason).toBe('aborted');
+  });
+
+  it('does NOT emit ask_user_question_closed on the normal user-answer path', async () => {
+    const { options, events } = await captureOptions(svc, 'dontask-profile');
+    const canUseTool = options.canUseTool;
+
+    const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_ok', signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'ask_user_question_request')).toBe(true);
+    });
+    const req = events.find((e) => e.type === 'ask_user_question_request');
+    svc.respondToAskUserQuestion(req.data.requestId, {
+      answers: { 'Which library should we use?': 'B' },
+    });
+    await pending;
+
+    // The browser initiated this resolution — it must not receive a spurious
+    // "expired" notification (failure mode §13.3).
+    expect(events.filter((e) => e.type === 'ask_user_question_closed')).toHaveLength(0);
+  });
+
+  it('does NOT emit ask_user_question_closed on the user-cancel path', async () => {
+    const { options, events } = await captureOptions(svc, 'dontask-profile');
+    const canUseTool = options.canUseTool;
+
+    const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_cancel', signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'ask_user_question_request')).toBe(true);
+    });
+    const req = events.find((e) => e.type === 'ask_user_question_request');
+    svc.respondToAskUserQuestion(req.data.requestId, { cancelled: true });
+    await pending;
+
+    expect(events.filter((e) => e.type === 'ask_user_question_closed')).toHaveLength(0);
+  });
+
+  it('never notifies twice: a late answer after a timeout is a no-op (exactly one close)', async () => {
+    process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS = '40';
+    const { options, events } = await captureOptions(svc, 'dontask-profile');
+    const canUseTool = options.canUseTool;
+
+    const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_idem', signal: new AbortController().signal,
+    });
+    await pending;
+    const req = events.find((e) => e.type === 'ask_user_question_request');
+
+    // The timeout already resolved + notified. A late answer must be rejected
+    // and must NOT emit a second close event (failure mode §13.4).
+    const secondOk = svc.respondToAskUserQuestion(req.data.requestId, {
+      answers: { 'Which library should we use?': 'A' },
+    });
+    expect(secondOk).toBe(false);
+    // Let any deferred microtasks drain.
+    await vi.waitFor(() => {
+      expect(events.filter((e) => e.type === 'ask_user_question_closed')).toHaveLength(1);
+    });
+  });
+
+  it('clears the timeout after it fires (no duplicate close on later timer advance)', async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS = '1000';
+      const { options, events } = await captureOptions(svc, 'dontask-profile');
+      const canUseTool = options.canUseTool;
+
+      const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+        toolUseID: 'toolu_leak', signal: new AbortController().signal,
+      });
+
+      // Let the 1s safety-net timeout fire.
+      await vi.advanceTimersByTimeAsync(1500);
+      await pending;
+
+      const closed = events.filter((e) => e.type === 'ask_user_question_closed');
+      expect(closed).toHaveLength(1);
+      expect(closed[0].data.reason).toBe('timeout');
+
+      // The timer must have been cleared — advancing well past it fires nothing.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(events.filter((e) => e.type === 'ask_user_question_closed')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the timeout + removes the abort listener when answered (no late close)', async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS = '1000';
+      const { options, events } = await captureOptions(svc, 'dontask-profile');
+      const canUseTool = options.canUseTool;
+      const ac = new AbortController();
+
+      const pending = canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+        toolUseID: 'toolu_leak2', signal: ac.signal,
+      });
+      // The request event is emitted synchronously before the await.
+      const req = events.find((e) => e.type === 'ask_user_question_request');
+      expect(req).toBeDefined();
+
+      // Answer before the timeout fires — this must clear the timer + listener.
+      svc.respondToAskUserQuestion(req!.data.requestId, {
+        answers: { 'Which library should we use?': 'B' },
+      });
+      await pending;
+
+      // Advancing past the original timeout must not fire a late close.
+      await vi.advanceTimersByTimeAsync(5000);
+      // Aborting now must not trigger a removed listener.
+      ac.abort();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(events.filter((e) => e.type === 'ask_user_question_closed')).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── Session-level cancel API (B / disconnect) ───────────────────────────────
+
+  it('cancelPendingAskUserQuestionsForSession resolves all pending for a session with the given reason and leaves other sessions untouched', async () => {
+    const capA = await captureOptions(svc, 'dontask-profile');
+    const capB = await captureOptions(svc, 'dontask-profile');
+
+    const pendingA = capA.options.canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_a', signal: new AbortController().signal,
+    });
+    const pendingB = capB.options.canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_b', signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => {
+      expect(capA.events.some((e) => e.type === 'ask_user_question_request')).toBe(true);
+      expect(capB.events.some((e) => e.type === 'ask_user_question_request')).toBe(true);
+    });
+    const reqA = capA.events.find((e) => e.type === 'ask_user_question_request');
+    const reqB = capB.events.find((e) => e.type === 'ask_user_question_request');
+
+    // Cancel everything pending on session A as disconnected.
+    svc.cancelPendingAskUserQuestionsForSession(capA.sid, 'disconnected');
+
+    const resultA = await pendingA;
+    expect(resultA.behavior).toBe('allow');
+    expect(resultA.updatedInput.answers).toBeUndefined();
+
+    const closedA = capA.events.filter((e) => e.type === 'ask_user_question_closed');
+    expect(closedA).toHaveLength(1);
+    expect(closedA[0].data.reason).toBe('disconnected');
+    expect(closedA[0].data.requestId).toBe(reqA.data.requestId);
+    expect(svc.isPendingAskUserQuestion(reqA.data.requestId)).toBe(false);
+
+    // Session B is untouched: still pending, no close emitted.
+    expect(svc.isPendingAskUserQuestion(reqB.data.requestId)).toBe(true);
+    expect(capB.events.filter((e) => e.type === 'ask_user_question_closed')).toHaveLength(0);
+
+    // Tear down B so the test doesn't leave a dangling timer/entry.
+    svc.respondToAskUserQuestion(reqB.data.requestId, { cancelled: true });
+    await pendingB;
+  });
+
+  it('cancelPendingAskUserQuestionsForSession on a session with no pending questions is a harmless no-op', async () => {
+    // No AskUserQuestion is pending on this session; calling cancel must not throw.
+    expect(() => svc.cancelPendingAskUserQuestionsForSession('never-existed', 'disconnected')).not.toThrow();
+  });
+
+  it('hasPendingAskUserQuestionForSession reflects per-session pending state', async () => {
+    const capA = await captureOptions(svc, 'dontask-profile');
+    const capB = await captureOptions(svc, 'dontask-profile');
+
+    capA.options.canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_sess_a', signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => {
+      expect(capA.events.some((e) => e.type === 'ask_user_question_request')).toBe(true);
+    });
+
+    expect(svc.hasPendingAskUserQuestionForSession(capA.sid)).toBe(true);
+    expect(svc.hasPendingAskUserQuestionForSession(capB.sid)).toBe(false);
+    expect(svc.hasPendingAskUserQuestionForSession('never-existed')).toBe(false);
+
+    const reqA = capA.events.find((e) => e.type === 'ask_user_question_request');
+    svc.respondToAskUserQuestion(reqA.data.requestId, { cancelled: true });
   });
 
   // ── Non-AskUserQuestion tools still obey the allowlist ──────────────────────

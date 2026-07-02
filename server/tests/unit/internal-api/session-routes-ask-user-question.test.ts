@@ -81,6 +81,7 @@ describe('createSessionRoutes — AskUserQuestion approval responses', () => {
       sendPermissionResponse: vi.fn(),
       isPendingAskUserQuestion: vi.fn(() => false),
       respondToAskUserQuestion: vi.fn(() => true),
+      wasRecentlyResolvedAskUserQuestion: vi.fn(() => false),
     };
     opencodeService = {
       isAvailable: vi.fn().mockResolvedValue(true),
@@ -186,5 +187,34 @@ describe('createSessionRoutes — AskUserQuestion approval responses', () => {
 
     expect(claudeService.sendPermissionResponse).toHaveBeenCalledWith('sess-1', 'perm-1', true);
     expect(claudeService.respondToAskUserQuestion).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 ASK_ALREADY_CLOSED for an answer to an already-closed AskUserQuestion (not a silent 200)', async () => {
+    claudeService.isPendingAskUserQuestion.mockReturnValue(false);
+    claudeService.wasRecentlyResolvedAskUserQuestion.mockReturnValue(true);
+    const routes = makeRoutes();
+
+    const req = createJsonReq('POST', '/x', { approved: true, answers: { 'Pick a colour?': 'Blue' } });
+    const res = createMockRes();
+    await routes.handleRespondApproval(req, res, 'sess-1', 'req-stale');
+
+    expect(res.statusCode).toBe(409);
+    expect(json(res).code).toBe('ASK_ALREADY_CLOSED');
+    // Must NOT be misrouted to the channel permission path.
+    expect(claudeService.sendPermissionResponse).not.toHaveBeenCalled();
+    expect(claudeService.respondToAskUserQuestion).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 when a pending AskUserQuestion is resolved between check and respond (race)', async () => {
+    claudeService.isPendingAskUserQuestion.mockReturnValue(true);
+    claudeService.respondToAskUserQuestion.mockReturnValue(false); // resolved mid-flight
+    const routes = makeRoutes();
+
+    const req = createJsonReq('POST', '/x', { approved: true, answers: { 'Pick a colour?': 'Blue' } });
+    const res = createMockRes();
+    await routes.handleRespondApproval(req, res, 'sess-1', 'req-race');
+
+    expect(res.statusCode).toBe(409);
+    expect(json(res).code).toBe('ASK_ALREADY_CLOSED');
   });
 });

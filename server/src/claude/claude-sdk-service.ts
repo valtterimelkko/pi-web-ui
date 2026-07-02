@@ -80,6 +80,15 @@ export interface AskUserQuestionResolution {
   cancelled?: boolean;
 }
 
+/**
+ * Why a pending AskUserQuestion was resolved for a NON-answer reason. When a
+ * request closes for any of these reasons the server emits an
+ * `ask_user_question_closed` normalized event (→ `extension_ui_cancel` over
+ * WebSocket) so the browser dialog can switch to an expired state instead of
+ * hanging open as a zombie. The user's own answer/cancel NEVER triggers this.
+ */
+export type AskUserQuestionCloseReason = 'timeout' | 'aborted' | 'turn_end' | 'disconnected';
+
 /** In-flight AskUserQuestion awaiting a browser/Internal API response. */
 interface PendingAskUserQuestion {
   sessionId: string;
@@ -89,10 +98,33 @@ interface PendingAskUserQuestion {
   timeout: NodeJS.Timeout;
   abortListener: () => void;
   signal: AbortSignal;
+  /** Emit a normalized event to subscribers (WebSocket + Internal API broker). */
+  onEvent: (event: NormalizedEvent) => void;
 }
 
-/** Default grace period before an unanswered AskUserQuestion times out. */
-const DEFAULT_ASK_USER_QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * Wall-clock safety net before an unanswered AskUserQuestion gives up.
+ *
+ * This is NOT the primary abandonment signal — that is the disconnect grace
+ * timer (see `connection.ts`): when the last subscriber for a session goes away
+ * and does not come back, the pending question is cancelled for reason
+ * `disconnected`. The wall clock here only guards against a query that somehow
+ * kept a subscriber yet was never answered (e.g. a leaked/orphaned dialog), so
+ * it is deliberately long (30 min — comfortably longer than any realistic
+ * human answer time, yet finite so a leaked query cannot pin an SDK subprocess
+ * forever). Override with `CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS` (positive int,
+ * ms); an invalid/zero/non-numeric value falls back to this default.
+ */
+const DEFAULT_ASK_USER_QUESTION_TIMEOUT_MS = 30 * 60 * 1000;
+
+/**
+ * How long a resolved AskUserQuestion's requestId is remembered as "recently
+ * resolved", so a late browser/Internal-API answer arriving after the dialog
+ * closed can be recognized and surfaced to the user instead of silently dropped.
+ * Generous (matches the safety-net timeout) so any answer within the realistic
+ * ask-user window is recognized; entries are TTL-evicted so the set is bounded.
+ */
+const RESOLVED_ASK_USER_TRACKING_TTL_MS = 30 * 60 * 1000;
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
@@ -106,6 +138,9 @@ export class ClaudeSdkService {
   private activePerProfile = new Map<string, number>();
   /** In-flight AskUserQuestion requests keyed by their dialog requestId. */
   private pendingAskUserQuestions = new Map<string, PendingAskUserQuestion>();
+  /** Recently-resolved AskUserQuestion requestIds (TTL-evicted) so a late answer
+   * can be recognized and surfaced instead of silently dropped (D3). */
+  private resolvedAskUserQuestions = new Set<string>();
 
   constructor(cfg: ClaudeSdkServiceConfig) {
     this.sessionStore = new ClaudeSessionStore(cfg.claudeSessionDir);
@@ -421,9 +456,10 @@ export class ClaudeSdkService {
     } finally {
       // Resolve + remove any AskUserQuestion dialogs still awaiting an answer
       // for this session. If the turn ended here (success, error, or abort),
-      // the SDK will not consume their result, so cancelling them now prevents
-      // a leak that would otherwise wait out the full ask-user timeout.
-      this.cleanupPendingAskUserQuestionsForSession(sessionId);
+      // the SDK will not consume their result, so cancelling them now (reason
+      // `turn_end`) prevents a leak that would otherwise wait out the full
+      // ask-user timeout, and tells any open browser dialog to retire.
+      this.cancelPendingAskUserQuestionsForSession(sessionId, 'turn_end');
       if (state) {
         state.isRunning = false;
         state.abortController = undefined;
@@ -475,6 +511,47 @@ export class ClaudeSdkService {
   respondToAskUserQuestion(requestId: string, response: AskUserQuestionResolution): boolean {
     if (!this.pendingAskUserQuestions.has(requestId)) return false;
     return this.resolvePendingAskUserQuestion(requestId, response);
+  }
+
+  /**
+   * Resolve every still-pending AskUserQuestion for a session as cancelled,
+   * emitting one `ask_user_question_closed` event per request with the given
+   * reason. This is the abandonment surface used by the connection layer's
+   * disconnect grace timer (reason `disconnected`) and by turn-end cleanup
+   * (reason `turn_end`). Leaves other sessions' pending questions untouched.
+   * Harmless no-op when the session has nothing pending.
+   */
+  cancelPendingAskUserQuestionsForSession(sessionId: string, reason: AskUserQuestionCloseReason): void {
+    for (const [requestId, pending] of this.pendingAskUserQuestions) {
+      if (pending.sessionId === sessionId) {
+        this.resolvePendingAskUserQuestion(requestId, { cancelled: true }, { notifyClient: true, reason });
+      }
+    }
+  }
+
+  /** True iff any AskUserQuestion is currently pending for `sessionId`. */
+  hasPendingAskUserQuestionForSession(sessionId: string): boolean {
+    for (const pending of this.pendingAskUserQuestions.values()) {
+      if (pending.sessionId === sessionId) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Record a requestId as a recently-resolved AskUserQuestion (TTL-evicted), so
+   * a late answer arriving after the dialog closed can be recognized.
+   */
+  private markAskUserQuestionResolved(requestId: string): void {
+    this.resolvedAskUserQuestions.add(requestId);
+    const timer = setTimeout(() => {
+      this.resolvedAskUserQuestions.delete(requestId);
+    }, RESOLVED_ASK_USER_TRACKING_TTL_MS);
+    timer.unref?.();
+  }
+
+  /** True iff `requestId` was an AskUserQuestion that recently closed (not pending). */
+  wasRecentlyResolvedAskUserQuestion(requestId: string): boolean {
+    return this.resolvedAskUserQuestions.has(requestId);
   }
 
   // ── Health ──────────────────────────────────────────────────────────────
@@ -714,11 +791,11 @@ export class ClaudeSdkService {
     const resolution = new Promise<AskUserQuestionResolution>((resolve) => {
       const abortListener = () => {
         logger.info(`[ClaudeSdkService] AskUserQuestion aborted by SDK signal (requestId=${requestId})`);
-        this.resolvePendingAskUserQuestion(requestId, { cancelled: true });
+        this.resolvePendingAskUserQuestion(requestId, { cancelled: true }, { notifyClient: true, reason: 'aborted' });
       };
       const timeout = setTimeout(() => {
         logger.info(`[ClaudeSdkService] AskUserQuestion timed out (requestId=${requestId})`);
-        this.resolvePendingAskUserQuestion(requestId, { cancelled: true });
+        this.resolvePendingAskUserQuestion(requestId, { cancelled: true }, { notifyClient: true, reason: 'timeout' });
       }, askUserTimeoutMs);
 
       this.pendingAskUserQuestions.set(requestId, {
@@ -729,11 +806,12 @@ export class ClaudeSdkService {
         timeout,
         abortListener,
         signal: options.signal,
+        onEvent,
       });
 
       options.signal.addEventListener('abort', abortListener, { once: true });
       if (options.signal.aborted) {
-        this.resolvePendingAskUserQuestion(requestId, { cancelled: true });
+        this.resolvePendingAskUserQuestion(requestId, { cancelled: true }, { notifyClient: true, reason: 'aborted' });
       }
     });
 
@@ -806,28 +884,40 @@ export class ClaudeSdkService {
   /**
    * Resolve and clean up a pending AskUserQuestion. Idempotent: a second call
    * for an already-resolved requestId is a no-op returning false.
+   *
+   * `opts.notifyClient` (with a `reason`) emits an `ask_user_question_closed`
+   * normalized event so the browser can retire the dialog. Because the entry is
+   * deleted before the emit and this method is the single resolution path, the
+   * notification fires AT MOST ONCE per request — regardless of how many
+   * resolution signals (timeout, abort, turn-end, disconnect) race.
    */
-  private resolvePendingAskUserQuestion(requestId: string, result: AskUserQuestionResolution): boolean {
+  private resolvePendingAskUserQuestion(
+    requestId: string,
+    result: AskUserQuestionResolution,
+    opts?: { notifyClient?: boolean; reason?: AskUserQuestionCloseReason },
+  ): boolean {
     const pending = this.pendingAskUserQuestions.get(requestId);
     if (!pending) return false;
     clearTimeout(pending.timeout);
     try { pending.signal.removeEventListener('abort', pending.abortListener); } catch { /* noop */ }
     this.pendingAskUserQuestions.delete(requestId);
-    pending.resolve(result);
-    return true;
-  }
-
-  /**
-   * Resolve every still-pending AskUserQuestion for a session as cancelled and
-   * remove it. Used when a turn ends (normally or via error/abort) so no dialog
-   * is left dangling until the ask-user timeout.
-   */
-  private cleanupPendingAskUserQuestionsForSession(sessionId: string): void {
-    for (const [requestId, pending] of this.pendingAskUserQuestions) {
-      if (pending.sessionId === sessionId) {
-        this.resolvePendingAskUserQuestion(requestId, { cancelled: true });
+    // Remember this requestId was a (now-closed) AskUserQuestion so a late answer
+    // can be recognized and surfaced instead of silently dropped (D3).
+    this.markAskUserQuestionResolved(requestId);
+    if (opts?.notifyClient && opts.reason) {
+      try {
+        pending.onEvent({
+          type: 'ask_user_question_closed',
+          sessionId: pending.sessionId,
+          timestamp: Date.now(),
+          data: { requestId, reason: opts.reason },
+        });
+      } catch (err) {
+        logger.warn('[ClaudeSdkService] Failed to emit ask_user_question_closed:', err);
       }
     }
+    pending.resolve(result);
+    return true;
   }
 
   /**

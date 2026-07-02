@@ -42,6 +42,7 @@ describe('buildAskUserAnswers (claude-ask-user-question scenario helper)', () =>
 describe('AskUserQuestion live-validation scenarios', () => {
   afterEach(() => {
     delete process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS;
+    delete process.env.CLAUDE_ASK_USER_DELAYED_ANSWER_MS;
   });
 
   const event = (type: string, data: unknown = {}): NormalizedEvent => ({
@@ -113,5 +114,93 @@ describe('AskUserQuestion live-validation scenarios', () => {
     expect(result.skipped).toBe(true);
     expect(result.reason).toMatch(/CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS/i);
     expect(context.client.createSession).not.toHaveBeenCalled();
+  });
+
+  it('passes the timeout scenario when ask_user_question_closed(timeout) is emitted and the late answer is rejected', async () => {
+    process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS = '1000';
+    const scenario = scenarioRegistry['claude-ask-user-question-timeout'];
+    const context = makeContext([
+      event('ask_user_question_request', { requestId: 'req-1' }),
+      event('ask_user_question_closed', { requestId: 'req-1', reason: 'timeout' }),
+      textEvent('ASK_TIMEOUT_RESULT timed_out'),
+      event('agent_end'),
+    ]);
+    context.client.respondToApproval = vi.fn(async () => {
+      throw new Error('{"error":"That question already closed","code":"ASK_ALREADY_CLOSED"}');
+    });
+
+    const result = await scenario.run(context);
+
+    expect(result.passed).toBe(true);
+    expect(result.assertions.find((a) => a.name === 'ask_user_question_closed_emitted')?.passed).toBe(true);
+    expect(result.assertions.find((a) => a.name === 'late_answer_rejected')?.passed).toBe(true);
+    // The late answer must have targeted the ask requestId.
+    expect(context.client.respondToApproval).toHaveBeenCalledWith(
+      'sess-1', 'req-1', expect.objectContaining({ approved: true }),
+    );
+  });
+
+  it('fails the timeout scenario when no ask_user_question_closed is emitted (D2 regression guard)', async () => {
+    process.env.CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS = '1000';
+    const scenario = scenarioRegistry['claude-ask-user-question-timeout'];
+    const context = makeContext([
+      event('ask_user_question_request', { requestId: 'req-1' }),
+      textEvent('ASK_TIMEOUT_RESULT timed_out'),
+      event('agent_end'),
+    ]);
+
+    const result = await scenario.run(context);
+
+    expect(result.passed).toBe(false);
+    expect(result.assertions.find((a) => a.name === 'ask_user_question_closed_emitted')?.passed).toBe(false);
+  });
+
+  // ── delayed-answer scenario (§10 fix proof) ─────────────────────────────────
+
+  const colour = { question: 'Pick a colour', header: 'Colour', multiSelect: false, options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }] };
+  const size = { question: 'Pick a size', header: 'Size', multiSelect: false, options: [{ label: 'Small', description: '' }, { label: 'Large', description: '' }] };
+  const features = { question: 'Pick features', header: 'Features', multiSelect: true, options: [{ label: 'Search', description: '' }, { label: 'Attachments', description: '' }, { label: 'Export', description: '' }] };
+
+  it('passes the delayed-answer scenario when the delayed answer is accepted with no premature close', async () => {
+    process.env.CLAUDE_ASK_USER_DELAYED_ANSWER_MS = '5';
+    const scenario = scenarioRegistry['claude-ask-user-question-delayed-answer'];
+    const context = makeContext([
+      event('ask_user_question_request', { requestId: 'req-1', questions: [colour, size, features] }),
+      textEvent('ASK_VALIDATION_RESULT colour=Blue; size=Large; features=Search, Export'),
+      event('agent_end'),
+    ]);
+
+    const result = await scenario.run(context);
+
+    expect(result.passed).toBe(true);
+    expect(result.assertions.find((a) => a.name === 'no_premature_close')?.passed).toBe(true);
+    expect(result.assertions.find((a) => a.name === 'colour_blue')?.passed).toBe(true);
+    expect(result.assertions.find((a) => a.name === 'ask_user_question_request_emitted')?.passed).toBe(true);
+  });
+
+  it('fails the delayed-answer scenario when a premature close fires before the answer lands', async () => {
+    process.env.CLAUDE_ASK_USER_DELAYED_ANSWER_MS = '5';
+    const scenario = scenarioRegistry['claude-ask-user-question-delayed-answer'];
+    const context = makeContext([
+      event('ask_user_question_request', { requestId: 'req-1', questions: [colour, size, features] }),
+      event('ask_user_question_closed', { requestId: 'req-1', reason: 'timeout' }),
+      textEvent('ASK_VALIDATION_RESULT colour=Blue; size=Large; features=Search, Export'),
+      event('agent_end'),
+    ]);
+
+    const result = await scenario.run(context);
+
+    expect(result.passed).toBe(false);
+    expect(result.assertions.find((a) => a.name === 'no_premature_close')?.passed).toBe(false);
+  });
+
+  it('skips the delayed-answer scenario for non-claude runtimes', async () => {
+    const scenario = scenarioRegistry['claude-ask-user-question-delayed-answer'];
+    const context = makeContext([]);
+    context.runtime = 'opencode';
+
+    const result = await scenario.run(context);
+
+    expect(result.skipped).toBe(true);
   });
 });

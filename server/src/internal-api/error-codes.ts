@@ -40,6 +40,7 @@ export const ErrorCode = {
   WATCH_NOT_FOUND: 'WATCH_NOT_FOUND',
   TRANSFER_DISPATCH_FAILED: 'TRANSFER_DISPATCH_FAILED',
   EMPTY_TRANSCRIPT: 'EMPTY_TRANSCRIPT',
+  ASK_ALREADY_CLOSED: 'ASK_ALREADY_CLOSED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -188,6 +189,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'GET /transcript on a session before any turn produced visible content.',
     hint: 'Send a prompt first, or use GET /sessions/:id/history for raw replay events.',
     docs: 'docs/INTERNAL-API.md#universal-transcript',
+  },
+  [ErrorCode.ASK_ALREADY_CLOSED]: {
+    httpStatus: 409,
+    description: 'The AskUserQuestion dialog already closed before this answer arrived.',
+    cause: 'A /respond (or extension_ui_response) targeted an AskUserQuestion requestId that already resolved (timeout/abort/turn-end/disconnect, or a resolution race).',
+    hint: 'The answer was not delivered. Re-send the content as a normal user message if it is still relevant.',
+    docs: 'docs/INTERNAL-API.md#approvals',
   },
 };
 

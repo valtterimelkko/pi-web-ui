@@ -45,6 +45,19 @@ export class ClaudeSessionSubscribers {
     return this.subscribers.get(sessionId) ?? new Set<string>();
   }
 
+  /**
+   * Every session a client is currently subscribed to. Used by the disconnect
+   * grace path to find sessions whose subscriber count may have dropped to zero
+   * when a client goes away.
+   */
+  getSubscribedSessions(clientId: string): string[] {
+    const sessions: string[] = [];
+    for (const [sessionId, set] of this.subscribers) {
+      if (set.has(clientId)) sessions.push(sessionId);
+    }
+    return sessions;
+  }
+
   /** Number of subscribers for a session. */
   getSubscriberCount(sessionId: string): number {
     return this.subscribers.get(sessionId)?.size ?? 0;

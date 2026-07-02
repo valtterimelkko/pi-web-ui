@@ -50,6 +50,14 @@ describe('event-type registry (Task 12)', () => {
     expect(entry!.verbosity).toContain('full');
   });
 
+  it('catalogues the AskUserQuestion close event as a control event', () => {
+    expect(REGISTRY_EVENT_TYPES).toContain('ask_user_question_closed');
+    const entry = EVENT_TYPE_REGISTRY.find((e) => e.type === 'ask_user_question_closed');
+    expect(entry).toBeDefined();
+    expect(entry!.category).toBe('control');
+    expect(entry!.verbosity).toContain('full');
+  });
+
   it('GET /events/types returns the registry as JSON', async () => {
     const routes = createEventTypesRoutes();
     const res = mockRes();

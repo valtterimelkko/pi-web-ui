@@ -65,4 +65,32 @@ describe('ExtensionDialog — ask_user_question delegation', () => {
     fireEvent.click(screen.getByRole('button', { name: /^yes$/i }));
     expect(onResponse).toHaveBeenCalledWith(expect.objectContaining({ id: 'req-2', approved: true }));
   });
+
+  it('forwards the request timeout so a near-expiry deadline warning renders', () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    try {
+      const onResponse = vi.fn();
+      const request = makeAskRequest();
+      request.receivedAt = 1_000_000;
+      request.timeout = 30_000; // expires in 30s → under the 60s warning threshold
+      render(<ExtensionDialog request={request} onResponse={onResponse} />);
+      expect(screen.getByRole('status')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forwards the expired state to the AskUserQuestion dialog and calls onDismiss', () => {
+    const onResponse = vi.fn();
+    const onDismiss = vi.fn();
+    const request = makeAskRequest();
+    request.expired = true;
+    request.expiredReason = 'disconnected';
+    render(<ExtensionDialog request={request} onResponse={onResponse} onDismiss={onDismiss} />);
+
+    expect(screen.getByText(/expired|moved on|closed/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^submit$/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
+    expect(onDismiss).toHaveBeenCalled();
+  });
 });

@@ -138,6 +138,45 @@ describe('ClaudeService AskUserQuestion delegation', () => {
     expect(noSdk.respondToAskUserQuestion('any', { cancelled: true })).toBe(false);
   });
 
+  it('delegates cancelPendingAskUserQuestionsForSession to the SDK service', async () => {
+    const { sessionId } = await svc.createSession(join(tmpDir, 'cwd-cancel'), 'sonnet', undefined, 'sdk-profile');
+    const events: any[] = [];
+    const canUseTool = await captureCanUseTool(sessionId, events);
+
+    const pending = canUseTool('AskUserQuestion', { questions: QUESTIONS }, {
+      toolUseID: 'toolu_cancel_session',
+      signal: new AbortController().signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'ask_user_question_request')).toBe(true);
+    });
+    const req = events.find((e) => e.type === 'ask_user_question_request');
+    expect(svc.isPendingAskUserQuestion(req.data.requestId)).toBe(true);
+
+    // Delegated cancel surfaces as a disconnected close + cleans up the entry.
+    svc.cancelPendingAskUserQuestionsForSession(sessionId, 'disconnected');
+
+    const result = await pending;
+    expect(result.behavior).toBe('allow');
+    expect(result.updatedInput.answers).toBeUndefined();
+    expect(svc.isPendingAskUserQuestion(req.data.requestId)).toBe(false);
+
+    const closed = events.filter((e) => e.type === 'ask_user_question_closed');
+    expect(closed).toHaveLength(1);
+    expect(closed[0].data.reason).toBe('disconnected');
+  });
+
+  it('cancelPendingAskUserQuestionsForSession is a harmless no-op when the SDK backend is not enabled', async () => {
+    const noSdk = new ClaudeService({
+      claudeSessionDir: join(tmpDir, 'sessions-nosdk2'),
+      registryPath: join(tmpDir, 'registry-nosdk2.json'),
+      useChannel: false,
+      useSdk: false,
+    });
+    expect(() => noSdk.cancelPendingAskUserQuestionsForSession('any', 'disconnected')).not.toThrow();
+  });
+
   it('still routes channel permission responses via sendPermissionResponse (unchanged)', async () => {
     // sendPermissionResponse must remain a separate, untouched path. It should
     // not throw even with no channel service present.

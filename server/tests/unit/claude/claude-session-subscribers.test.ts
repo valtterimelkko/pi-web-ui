@@ -39,6 +39,28 @@ describe('ClaudeSessionSubscribers', () => {
     });
   });
 
+  // ─── getSubscribedSessions (disconnect grace support) ──────────────────────
+
+  describe('getSubscribedSessions', () => {
+    it('returns every session a client is currently subscribed to', () => {
+      tracker.subscribe('client-A', 'session-1');
+      tracker.subscribe('client-A', 'session-2');
+      tracker.subscribe('client-B', 'session-1');
+
+      expect(tracker.getSubscribedSessions('client-A').sort()).toEqual(['session-1', 'session-2']);
+      expect(tracker.getSubscribedSessions('client-B')).toEqual(['session-1']);
+    });
+
+    it('reflects unsubscription and returns an empty array for an unknown client', () => {
+      tracker.subscribe('client-A', 'session-1');
+      tracker.subscribe('client-A', 'session-2');
+      tracker.unsubscribe('client-A', 'session-1');
+
+      expect(tracker.getSubscribedSessions('client-A')).toEqual(['session-2']);
+      expect(tracker.getSubscribedSessions('nobody')).toEqual([]);
+    });
+  });
+
   // ─── Unsubscribe ───────────────────────────────────────────────────────────
 
   describe('unsubscribe', () => {

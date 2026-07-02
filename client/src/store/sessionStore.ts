@@ -200,6 +200,12 @@ interface ExtensionUIRequest {
   method: string;
   params: Record<string, unknown>;
   timeout: number;
+  /** Epoch ms the request arrived (for computing the near-expiry deadline). */
+  receivedAt?: number;
+  /** Set when the server signalled the dialog closed (extension_ui_cancel). */
+  expired?: boolean;
+  /** Why the dialog closed ('timeout' | 'aborted' | 'turn_end' | 'disconnected'). */
+  expiredReason?: string;
 }
 
 export interface SessionStats {
@@ -1455,7 +1461,14 @@ export const useSessionStore = create<SessionState>()(
           case 'error': {
             const errorMessage = (msg.message as string) || 'Unknown error';
             const errorCode = (msg as { code?: string }).code;
-            set({ 
+            // Late-answer notice: a non-blocking toast only. The AskUserQuestion
+            // dialog already closed; don't disrupt streaming or show an error
+            // banner — just tell the user their answer wasn't delivered.
+            if (errorCode === 'ASK_ALREADY_CLOSED') {
+              useUIStore.getState().addToast({ type: 'warning', message: errorMessage });
+              break;
+            }
+            set({
               error: errorMessage,
               isStreaming: false,
               isLoading: false,
@@ -1509,7 +1522,26 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'extension_ui_request': {
-            set({ extensionUIRequest: msg.request as ExtensionUIRequest });
+            const req = { ...(msg.request as ExtensionUIRequest), receivedAt: Date.now() };
+            set({ extensionUIRequest: req });
+            break;
+          }
+
+          case 'extension_ui_cancel': {
+            // A pending AskUserQuestion closed for a non-answer reason. If it is
+            // the currently-open dialog, mark it expired (keep it so the user's
+            // draft is preserved) rather than clearing it outright.
+            const cancel = (msg as { request?: { id?: string; reason?: string } }).request;
+            const current = get().extensionUIRequest;
+            if (cancel?.id && current?.id === cancel.id) {
+              set({
+                extensionUIRequest: {
+                  ...current,
+                  expired: true,
+                  expiredReason: cancel.reason,
+                },
+              });
+            }
             break;
           }
 

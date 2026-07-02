@@ -87,6 +87,12 @@ function AuthenticatedApp() {
     setExtensionUIRequest(null);
   }, [setExtensionUIRequest]);
 
+  // Dismiss an expired AskUserQuestion dialog. The server already moved on, so
+  // there is no response to send — just clear the local request.
+  const handleDismissExpired = useCallback(() => {
+    setExtensionUIRequest(null);
+  }, [setExtensionUIRequest]);
+
   return (
     <div className="h-screen flex flex-col bg-white dark:bg-gray-950 overflow-hidden">
       <div className="flex flex-1 overflow-hidden">
@@ -116,6 +122,7 @@ function AuthenticatedApp() {
       <ExtensionDialog
         request={extensionUIRequest}
         onResponse={handleExtensionResponse}
+        onDismiss={handleDismissExpired}
       />
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <DriveModeOverlay />

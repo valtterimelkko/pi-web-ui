@@ -9,6 +9,7 @@ import type {
   ValidationScenario,
   ValidationScenarioResult,
 } from './types.js';
+import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { collectValidationSummary } from './event-recorder.js';
 
 interface OpenCodeJsonConfig {
@@ -103,6 +104,22 @@ export function buildAskUserAnswers(
     }
   }
   return answers;
+}
+
+/**
+ * Default delay before the `claude-ask-user-question-delayed-answer` scenario
+ * answers, proving the dialog does not prematurely expire within a realistic
+ * window. Env-overridable via `CLAUDE_ASK_USER_DELAYED_ANSWER_MS` (>= 0).
+ */
+const DEFAULT_DELAYED_ANSWER_DELAY_MS = 1000;
+
+function readDelayedAnswerDelayMs(): number {
+  const raw = process.env.CLAUDE_ASK_USER_DELAYED_ANSWER_MS;
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return DEFAULT_DELAYED_ANSWER_DELAY_MS;
 }
 
 function buildAssertions(summary: ReturnType<typeof collectValidationSummary>, expectedText: string): ValidationAssertion[] {
@@ -540,24 +557,55 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
           'Do not use any other tools.',
         ].join('\n');
 
-        let sawAsk = false;
+        let askRequestId: string | null = null;
         // Intentionally do NOT respond: the server-side ask-user timeout must fire.
         const events = await context.client.promptStreamLive(
           sessionId,
           { message: prompt, verbosity: 'full', mode: 'prompt' },
           async (evt) => {
-            if (evt.type === 'ask_user_question_request') sawAsk = true;
+            if (evt.type === 'ask_user_question_request') {
+              const data = evt.data as { requestId?: string };
+              askRequestId = data.requestId ?? null;
+            }
           },
         );
 
+        // After the turn (the server-side timeout resolved the unanswered
+        // question), submit a LATE answer and assert it is clearly rejected
+        // rather than silently accepted (D3).
+        let lateAnswerRejected = false;
+        let lateAnswerDetail = 'late answer was accepted (expected a clear rejection)';
+        if (askRequestId) {
+          try {
+            await context.client.respondToApproval(sessionId, askRequestId, {
+              approved: true,
+              answers: { 'Pick a colour?': 'Blue' },
+            });
+          } catch (e) {
+            lateAnswerRejected = true;
+            lateAnswerDetail = e instanceof Error ? e.message : String(e);
+          }
+        } else {
+          lateAnswerDetail = 'no ask_user_question_request seen — late answer not attempted';
+        }
+
         const summary = collectValidationSummary(events);
         const text = summary.assistantText;
+        const closedEvents = events.filter((e) => e.type === 'ask_user_question_closed');
+        const timeoutClose = closedEvents.find((e) => (e.data as { reason?: string } | null)?.reason === 'timeout');
 
         const assertions: ValidationAssertion[] = [
           {
             name: 'ask_user_question_request_emitted',
-            passed: sawAsk,
-            details: sawAsk ? 'seen, intentionally unanswered' : 'no ask_user_question_request seen',
+            passed: askRequestId !== null,
+            details: askRequestId ?? 'no ask_user_question_request seen',
+          },
+          {
+            name: 'ask_user_question_closed_emitted',
+            passed: !!timeoutClose,
+            details: timeoutClose
+              ? 'ask_user_question_closed(reason=timeout) seen'
+              : `no ask_user_question_closed(timeout) seen (${closedEvents.length} close event(s))`,
           },
           {
             name: 'agent_end_after_timeout',
@@ -565,10 +613,112 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
             details: summary.sawAgentEnd ? 'agent_end seen — timeout did not hang the session' : 'agent_end missing (session hung past the ask-user timeout)',
           },
           { name: 'model_saw_timeout', passed: /ASK_TIMEOUT_RESULT/i.test(text), details: text.slice(-200) },
+          {
+            name: 'late_answer_rejected',
+            passed: lateAnswerRejected && /ASK_ALREADY_CLOSED|already closed|409/i.test(lateAnswerDetail),
+            details: lateAnswerDetail,
+          },
         ];
 
         return {
           scenarioId: 'claude-ask-user-question-timeout',
+          runtime: context.runtime,
+          passed: assertions.every((a) => a.passed),
+          assertions,
+        };
+      });
+    },
+  },
+  'claude-ask-user-question-delayed-answer': {
+    id: 'claude-ask-user-question-delayed-answer',
+    description:
+      'Verify a DELAYED answer to an AskUserQuestion is accepted (no premature expiry within the window): the answer reaches Claude, NO ask_user_question_closed fires, and the final transcript reflects the answers.',
+    async run(context) {
+      if (context.runtime !== 'claude') {
+        return {
+          scenarioId: 'claude-ask-user-question-delayed-answer',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: 'claude-ask-user-question-delayed-answer only applies to the claude runtime',
+          assertions: [],
+        };
+      }
+
+      return withEphemeralSession(context, async (sessionId) => {
+        const prompt = [
+          'Integration validation only. Use the AskUserQuestion tool exactly once to ask the user three questions in a single call:',
+          '1) Pick a colour: options Red, Blue.',
+          '2) Pick a size: options Small, Large.',
+          '3) Pick features (set multiSelect true): options Search, Attachments, Export.',
+          'After you receive the answers, reply with EXACTLY one line and nothing else, in this format:',
+          'ASK_VALIDATION_RESULT colour=<colour answer>; size=<size answer>; features=<features answer>',
+          'Echo the answer values verbatim. Do not use any other tools.',
+        ].join('\n');
+
+        const askRequests: Array<{ data: { requestId?: string; questions?: Array<{ question: string; header: string; multiSelect: boolean; options: Array<{ label: string }> }> } }> = [];
+        const closedSeen: NormalizedEvent[] = [];
+        const delayMs = readDelayedAnswerDelayMs();
+        const events = await context.client.promptStreamLive(
+          sessionId,
+          { message: prompt, verbosity: 'full', mode: 'prompt' },
+          async (evt) => {
+            if (evt.type === 'ask_user_question_request') {
+              const data = evt.data as { requestId?: string; questions?: Array<{ question: string; header: string; multiSelect: boolean; options: Array<{ label: string }> }> };
+              askRequests.push({ data });
+              const answers = buildAskUserAnswers(data.questions ?? []);
+              // Delay the answer to prove the dialog does not prematurely expire
+              // within a realistic window (the safety-net timeout is far longer).
+              await new Promise((r) => setTimeout(r, delayMs));
+              try {
+                await context.client.respondToApproval(sessionId, data.requestId ?? '', {
+                  approved: true,
+                  answers,
+                });
+              } catch {
+                /* surfaced via assertions below */
+              }
+            }
+            if (evt.type === 'ask_user_question_closed') {
+              closedSeen.push(evt);
+            }
+          },
+        );
+
+        const summary = collectValidationSummary(events);
+        const allQuestions = askRequests.flatMap((r) => r.data.questions ?? []);
+        const hasMulti = allQuestions.some((q) => q.multiSelect === true);
+        const text = summary.assistantText;
+        const tail = text.slice(-240);
+
+        const assertions: ValidationAssertion[] = [
+          {
+            name: 'ask_user_question_request_emitted',
+            passed: askRequests.length > 0,
+            details: askRequests.length > 0 ? `requestId=${askRequests[0].data.requestId}` : 'no ask_user_question_request seen',
+          },
+          {
+            name: 'no_premature_close',
+            passed: closedSeen.length === 0,
+            details: closedSeen.length === 0
+              ? 'no ask_user_question_closed fired before the delayed answer landed'
+              : `${closedSeen.length} ask_user_question_closed event(s) fired prematurely`,
+          },
+          {
+            name: 'three_questions',
+            passed: allQuestions.length === 3,
+            details: `total questions across ${askRequests.length} request(s) = ${allQuestions.length}`,
+          },
+          { name: 'multiselect_present', passed: hasMulti, details: `multiselect question present=${hasMulti}` },
+          { name: 'agent_end', passed: summary.sawAgentEnd, details: summary.sawAgentEnd ? 'agent_end seen' : 'agent_end missing' },
+          { name: 'result_line', passed: /ASK_VALIDATION_RESULT/i.test(text), details: tail },
+          { name: 'colour_blue', passed: /colour\s*=\s*Blue/i.test(text), details: tail },
+          { name: 'size_large', passed: /size\s*=\s*Large/i.test(text), details: tail },
+          { name: 'features_search_export', passed: /features?\s*=\s*Search,?\s*Export/i.test(text), details: tail },
+        ];
+
+        return {
+          scenarioId: 'claude-ask-user-question-delayed-answer',
           runtime: context.runtime,
           passed: assertions.every((a) => a.passed),
           assertions,

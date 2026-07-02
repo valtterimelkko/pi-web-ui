@@ -11,6 +11,12 @@ export interface ExtensionUIRequest {
   method: string;
   params: Record<string, unknown>;
   timeout: number;
+  /** Epoch ms the request arrived (for computing the near-expiry deadline). */
+  receivedAt?: number;
+  /** Set when the server signalled the dialog closed (extension_ui_cancel). */
+  expired?: boolean;
+  /** Why the dialog closed ('timeout' | 'aborted' | 'turn_end' | 'disconnected'). */
+  expiredReason?: string;
 }
 
 export interface ExtensionUIResponse {
@@ -23,9 +29,11 @@ export interface ExtensionUIResponse {
 interface ExtensionDialogProps {
   request: ExtensionUIRequest | null;
   onResponse: (response: ExtensionUIResponse) => void;
+  /** Dismiss an expired AskUserQuestion dialog (clears it; no server round-trip). */
+  onDismiss?: () => void;
 }
 
-export function ExtensionDialog({ request, onResponse }: ExtensionDialogProps) {
+export function ExtensionDialog({ request, onResponse, onDismiss }: ExtensionDialogProps) {
   const [inputValue, setInputValue] = useState('');
   const [selectedValue, setSelectedValue] = useState<unknown>(null);
 
@@ -40,9 +48,18 @@ export function ExtensionDialog({ request, onResponse }: ExtensionDialogProps) {
   // previews). Delegate to it instead of the legacy confirm/select chrome.
   if (request.type === 'ask_user_question') {
     const questions = (request.params.questions ?? []) as AskUserQuestion[];
+    // Absolute deadline from the stamped arrival time + the server's timeout.
+    const expiresAt =
+      typeof request.receivedAt === 'number' && typeof request.timeout === 'number'
+        ? request.receivedAt + request.timeout
+        : undefined;
     return (
       <AskUserQuestionDialog
         questions={questions}
+        expiresAt={expiresAt}
+        expired={request.expired}
+        expiredReason={request.expiredReason}
+        onDismissExpired={onDismiss}
         onSubmit={(value) => onResponse({ id: request.id, approved: true, value })}
         onCancel={() => onResponse({ id: request.id, cancelled: true })}
       />
