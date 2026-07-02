@@ -18,6 +18,7 @@ import {
 import { useFilesStore, type FileEntry } from '../../store/filesStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { copyToClipboard } from '../../lib/clipboard';
+import { MarkdownEditor } from './MarkdownEditor';
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,14 @@ function FileIcon({ entry }: { entry: FileEntry }) {
     : <File   size={14} className="text-gray-400 flex-shrink-0" />;
 }
 
+// Extensions offered the Markdown editor. Everything else keeps the read-only
+// <pre> preview.
+const MARKDOWN_EXTENSIONS = ['.md', '.mdx', '.markdown', '.txt'];
+function isMarkdownFile(path: string): boolean {
+  const lower = path.toLowerCase();
+  return MARKDOWN_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
 // ── component ─────────────────────────────────────────────────────────────
 
 export function FilesTab() {
@@ -52,8 +61,15 @@ export function FilesTab() {
     items,
     selectedFile,
     previewContent,
+    previewTruncated,
+    previewTotalSize,
     isLoading,
     error,
+    isEditing,
+    editBuffer,
+    isDirty,
+    isSaving,
+    saveError,
     navigate,
     refresh,
     selectFile,
@@ -61,6 +77,10 @@ export function FilesTab() {
     createDir,
     renameItem,
     deleteItem,
+    startEditing,
+    updateEditBuffer,
+    saveFile,
+    cancelEditing,
   } = useFilesStore();
 
   const [searchFilter, setSearchFilter] = useState('');
@@ -120,6 +140,20 @@ export function FilesTab() {
     navigate(startPath);
   }, [session?.cwd]);
 
+  // A Markdown file is edited in a full-screen overlay; every other file — and
+  // any file that was loaded truncated — keeps the read-only <pre> preview.
+  const isMarkdownSelected = selectedFile !== null && isMarkdownFile(selectedFile);
+  const showEditorOverlay = isMarkdownSelected && !previewTruncated;
+
+  // Auto-seed the edit buffer once a Markdown file's content has loaded.
+  useEffect(() => {
+    if (!isMarkdownSelected) return;
+    if (previewTruncated) return;
+    if (previewContent === null) return;
+    if (isEditing) return;
+    startEditing();
+  }, [isMarkdownSelected, previewTruncated, previewContent, isEditing, startEditing]);
+
   // ── derived ──────────────────────────────────────────────────────────────
 
   const parts = currentPath.split('/').filter(Boolean);
@@ -140,6 +174,10 @@ export function FilesTab() {
     if (item.isDirectory) {
       navigate(item.path);
     } else {
+      // Guard against silently dropping unsaved edits when switching files.
+      if (isDirty && selectedFile !== item.path) {
+        if (!window.confirm('Discard unsaved changes?')) return;
+      }
       selectFile(item.path);
     }
   };
@@ -190,6 +228,25 @@ export function FilesTab() {
 
   const handleClosePreview = () => {
     useFilesStore.setState({ selectedFile: null, previewContent: null });
+  };
+
+  // Close the Markdown editor overlay. The unsaved-changes prompt is handled
+  // inside MarkdownEditor; this just tears down selection + edit state.
+  const handleCloseEditor = () => {
+    cancelEditing();
+    useFilesStore.setState({
+      selectedFile: null,
+      previewContent: null,
+      previewTruncated: false,
+      previewTotalSize: 0,
+    });
+  };
+
+  // Re-read the current file from disk (manual refresh — no file-watching).
+  const handleRefreshFile = async () => {
+    if (isDirty && !window.confirm('Discard unsaved changes and reload from disk?')) return;
+    if (!selectedFile) return;
+    await selectFile(selectedFile);
   };
 
   // ── render ───────────────────────────────────────────────────────────────
@@ -420,8 +477,25 @@ export function FilesTab() {
           )}
         </div>
 
-        {/* Preview panel */}
-        {selectedFile && (
+        {/* Markdown editor overlay (full-screen) for editable Markdown files */}
+        {showEditorOverlay && (
+          <MarkdownEditor
+            content={editBuffer ?? previewContent ?? ''}
+            truncated={previewTruncated}
+            totalSize={previewTotalSize}
+            fileName={selectedFile ? selectedFile.split('/').pop() : undefined}
+            isDirty={isDirty}
+            isSaving={isSaving}
+            saveError={saveError}
+            onChange={updateEditBuffer}
+            onSave={saveFile}
+            onRefresh={handleRefreshFile}
+            onClose={handleCloseEditor}
+          />
+        )}
+
+        {/* Read-only preview panel for non-markdown / truncated files */}
+        {selectedFile && !showEditorOverlay && (
           <div className="flex-1 overflow-hidden flex flex-col min-w-0">
             <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
               <span className="text-xs text-gray-500 truncate">
@@ -435,6 +509,14 @@ export function FilesTab() {
                 <X size={14} />
               </button>
             </div>
+            {previewTruncated && (
+              <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800 flex-shrink-0">
+                <AlertCircle size={12} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                <span className="text-xs text-amber-700 dark:text-amber-400">
+                  This file is too large to edit safely and is shown read-only.
+                </span>
+              </div>
+            )}
             <div className="flex-1 overflow-auto p-3">
               {previewContent !== null ? (
                 <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-all">

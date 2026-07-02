@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { FilesTab } from '../../../../src/components/Files/FilesTab';
 
 // ── mocks ──────────────────────────────────────────────────────────────────
@@ -11,30 +11,62 @@ vi.mock('../../../../src/store/sessionStore', () => ({
 }));
 
 const mockNavigate = vi.fn();
+const mockSelectFile = vi.fn();
+const mockStartEditing = vi.fn(() => ({ ok: true }));
+const mockUpdateEditBuffer = vi.fn();
+const mockSaveFile = vi.fn();
+const mockCancelEditing = vi.fn();
+const mockSetState = vi.fn();
 let mockItems: any[] = [];
+// Mutable editor-relevant store slices (defaults match a fresh store).
+let mockSelectedFile: string | null = null;
+let mockPreviewContent: string | null = null;
+let mockPreviewTruncated = false;
+let mockPreviewTotalSize = 0;
+let mockEditBuffer: string | null = null;
+let mockIsEditing = false;
+let mockIsDirty = false;
+let mockIsSaving = false;
+let mockSaveError: string | null = null;
 
 vi.mock('../../../../src/store/filesStore', () => ({
-  useFilesStore: vi.fn((selector?: unknown) => {
-    const state = {
-      currentPath: '/root',
-      items: mockItems,
-      selectedFile: null,
-      previewContent: null,
-      isLoading: false,
-      error: null,
-      navigate: mockNavigate,
-      refresh: vi.fn(),
-      selectFile: vi.fn(),
-      createFile: vi.fn(),
-      createDir: vi.fn(),
-      renameItem: vi.fn(),
-      deleteItem: vi.fn(),
-      setCurrentPath: vi.fn(),
-    };
-    // Support both selector and direct call patterns
-    if (typeof selector === 'function') return selector(state);
-    return state;
-  }),
+  // Object.assign attaches `.setState` to the hook (like the real zustand hook)
+  // via a lazy wrapper, so the `mock`-prefixed var is accessed at call time only.
+  useFilesStore: Object.assign(
+    vi.fn((selector?: unknown) => {
+      const state = {
+        currentPath: '/root',
+        items: mockItems,
+        selectedFile: mockSelectedFile,
+        previewContent: mockPreviewContent,
+        previewTruncated: mockPreviewTruncated,
+        previewTotalSize: mockPreviewTotalSize,
+        isLoading: false,
+        error: null,
+        isEditing: mockIsEditing,
+        editBuffer: mockEditBuffer,
+        isDirty: mockIsDirty,
+        isSaving: mockIsSaving,
+        saveError: mockSaveError,
+        navigate: mockNavigate,
+        refresh: vi.fn(),
+        selectFile: mockSelectFile,
+        createFile: vi.fn(),
+        createDir: vi.fn(),
+        renameItem: vi.fn(),
+        deleteItem: vi.fn(),
+        setCurrentPath: vi.fn(),
+        startEditing: mockStartEditing,
+        updateEditBuffer: mockUpdateEditBuffer,
+        saveFile: mockSaveFile,
+        cancelEditing: mockCancelEditing,
+      };
+      // Support both selector and direct call patterns
+      if (typeof selector === 'function') return selector(state);
+      return state;
+    }),
+    { setState: (...args: unknown[]) => mockSetState(...args) },
+  ),
 }));
 
 const mockCopyToClipboard = vi.fn(() => Promise.resolve(true));
@@ -48,6 +80,15 @@ describe('FilesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockItems = [];
+    mockSelectedFile = null;
+    mockPreviewContent = null;
+    mockPreviewTruncated = false;
+    mockPreviewTotalSize = 0;
+    mockEditBuffer = null;
+    mockIsEditing = false;
+    mockIsDirty = false;
+    mockIsSaving = false;
+    mockSaveError = null;
   });
 
   it('renders without crashing', () => {
@@ -119,5 +160,97 @@ describe('FilesTab', () => {
       expect(mockCopyToClipboard).toHaveBeenCalledWith('/root/file1.txt', 'Path copied to clipboard');
     }
     vi.useRealTimers();
+  });
+
+  // ── Markdown editor wiring ────────────────────────────────────────────────
+
+  it('renders the Markdown editor (not the read-only pre) for a .md file', () => {
+    mockSelectedFile = '/root/note.md';
+    mockPreviewContent = '# Hello';
+    mockEditBuffer = '# Hello';
+    const { container } = render(<FilesTab />);
+    const textarea = container.querySelector('textarea');
+    expect(textarea).not.toBeNull();
+    expect((textarea as HTMLTextAreaElement).value).toBe('# Hello');
+    // The read-only <pre> preview is not used for an editable markdown file.
+    expect(container.querySelector('pre')).toBeNull();
+  });
+
+  it('renders the read-only pre preview for a non-markdown file', () => {
+    mockSelectedFile = '/root/data.json';
+    mockPreviewContent = '{"a":1}';
+    const { container } = render(<FilesTab />);
+    expect(container.querySelector('pre')).not.toBeNull();
+    expect(container.querySelector('textarea')).toBeNull();
+  });
+
+  it('renders the read-only pre and a notice (no editor) for a truncated markdown file', () => {
+    mockSelectedFile = '/root/huge.md';
+    mockPreviewContent = 'partial content…';
+    mockPreviewTruncated = true;
+    mockPreviewTotalSize = 300_000;
+    const { container } = render(<FilesTab />);
+    expect(container.querySelector('textarea')).toBeNull();
+    expect(container.querySelector('pre')).not.toBeNull();
+    expect(screen.getByText(/too large/i)).toBeInTheDocument();
+  });
+
+  it('wires the editor Save button to the store saveFile action', () => {
+    mockSelectedFile = '/root/note.md';
+    mockPreviewContent = '# Hi';
+    mockEditBuffer = '# Hi edited';
+    mockIsDirty = true;
+    render(<FilesTab />);
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    expect(mockSaveFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('wires the editor textarea changes to updateEditBuffer', () => {
+    mockSelectedFile = '/root/note.md';
+    mockPreviewContent = '# Hi';
+    mockEditBuffer = '# Hi';
+    const { container } = render(<FilesTab />);
+    const textareaEl = container.querySelector('textarea') as HTMLTextAreaElement;
+    fireEvent.change(textareaEl, { target: { value: '# Hi edited' } });
+    expect(mockUpdateEditBuffer).toHaveBeenCalledWith('# Hi edited');
+  });
+
+  it('closing the editor cancels editing and clears the selection', () => {
+    mockSelectedFile = '/root/note.md';
+    mockPreviewContent = '# Hi';
+    mockEditBuffer = '# Hi';
+    mockIsDirty = false; // no unsaved-changes prompt
+    render(<FilesTab />);
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(mockCancelEditing).toHaveBeenCalledTimes(1);
+    expect(mockSetState).toHaveBeenCalled();
+    const lastCall = mockSetState.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(lastCall.selectedFile).toBeNull();
+  });
+
+  it('refresh re-reads the file from disk via selectFile when there are no unsaved changes', () => {
+    mockSelectedFile = '/root/note.md';
+    mockPreviewContent = '# Hi';
+    mockEditBuffer = '# Hi';
+    mockIsDirty = false;
+    render(<FilesTab />);
+    // Scope to the editor dialog: the Files toolbar also has a Refresh button.
+    const editor = within(screen.getByRole('dialog'));
+    fireEvent.click(editor.getByRole('button', { name: /refresh/i }));
+    expect(mockSelectFile).toHaveBeenCalledWith('/root/note.md');
+  });
+
+  it('refresh prompts before discarding unsaved changes', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    mockSelectedFile = '/root/note.md';
+    mockPreviewContent = '# Hi';
+    mockEditBuffer = '# Hi changed';
+    mockIsDirty = true;
+    render(<FilesTab />);
+    const editor = within(screen.getByRole('dialog'));
+    fireEvent.click(editor.getByRole('button', { name: /refresh/i }));
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(mockSelectFile).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });
