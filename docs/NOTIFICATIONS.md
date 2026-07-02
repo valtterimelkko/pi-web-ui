@@ -129,7 +129,7 @@ Token-authed like every Internal API route (bearer token). Base path `/api/v1`.
 | `POST /sessions/:id/notifications/opt-in` | `{ label?: string }` | opt-in record (runtime + path resolved from the registry) |
 | `DELETE /sessions/:id/notifications/opt-in` | — | `{ optIn: null }` |
 | `GET /sessions/:id/notifications` | — | `{ optIn, deliveries }` (pending + recent, for this session) |
-| `POST /notifications` | `{ title, body, deepLink? }` | `{ notification: { id, createdAt } }` (explicit emit) |
+| `POST /notifications` | `{ title, body, deepLink? }` | `{ notification: { id, createdAt } }` (explicit emit; also what [`scripts/notify.sh`](#9-self-notification-from-a-terminal-cli-harness) calls from a terminal CLI — see §9) |
 | `GET /notifications[?limit=N]` | — | `{ deliveries }` (recent delivery log, ops/debug) |
 
 Validation uses Zod and returns stable `{ error, code }` shapes (e.g.
@@ -226,3 +226,101 @@ Every manager log line is bound with `sessionId` + `runtime` via
 lifecycle — opt-in → attach → agent_end observed → queued → delivered — in one
 pass. See [`docs/OBSERVABILITY.md`](./OBSERVABILITY.md) for `LOG_LEVEL`,
 `DEBUG` namespaces, and `LOG_FORMAT=json`.
+
+---
+
+## 9. Self-notification from a terminal CLI harness
+
+The `agent_end` trigger above only fires for sessions the **web UI manages**.
+When you run a coding agent directly from the terminal (`claude` / `glm` / `pi`
+/ `opencode` / `agy`) — e.g. to work on this repo and restart production — that
+session is not observed by the web UI, so it will never trigger an `agent_end`
+notification on its own.
+
+Instead, a terminal agent can **self-notify** through the same notification
+layer by calling a small helper script, which POSTs to the explicit-emit
+endpoint ([§4](#4-internal-api)) over the local Unix socket. The web UI server
+must be running on the host (it always is in the operator's setup); **no server
+restart or code change is needed**.
+
+### The helper: `scripts/notify.sh`
+
+```
+scripts/notify.sh <kind> <title> [body]
+```
+
+| Arg | Value |
+|---|---|
+| `kind` | `done` \| `question` \| `blocked` (any other value becomes a custom label) |
+| `title` | Short one-line summary — **no emoji**, the script adds the standard prefix |
+| `body` | Optional detail; omit or pass `-` to read from stdin (falls back to the title) |
+
+The script maps the kind to a standard title prefix so messages are consistent
+regardless of which harness or model wrote them:
+
+| `kind` | Resulting title |
+|---|---|
+| `done` | `✅ Done: <title>` |
+| `question` | `❓ Question: <title>` |
+| `blocked` | `⚠️ Blocked: <title>` |
+| (custom) | `📢 <kind>: <title>` |
+
+Examples:
+
+```bash
+scripts/notify.sh done "restarted prod" \
+  "Built client+server; typecheck+lint+tests green; restarted pi-web-ui.service."
+
+scripts/notify.sh question "which DB index?" \
+  "Should I add an index on sessions.userId before shipping the query change?"
+```
+
+It reads the bearer token from `~/.pi-web-ui/internal-api-token` (mode 0600) and
+the socket from `~/.pi-web-ui/internal-api.sock` — both overridable via
+`PI_WEB_UI_NOTIFY_TOKEN_FILE` / `PI_WEB_UI_NOTIFY_SOCKET` for non-default
+installs. The token is never printed. On any failure (server down, non-2xx) it
+exits non-zero with a stderr message but never blocks the caller's turn.
+
+### Activation — by prompt, not by config
+
+This is **deliberately not wired into `CLAUDE.md` / `AGENTS.md`**. Those files
+are read by *every* session in this repo, including ones the web UI manages —
+and an agent cannot reliably tell whether it was launched from a terminal or via
+the web UI. An unconditional "notify when done" instruction there would
+double-notify for web-UI-managed sessions (which already fire `agent_end`).
+
+So activation is **by the operator's opening prompt** to a terminal session,
+e.g.:
+
+> Inspect `docs/NOTIFICATIONS.md` § 9. When you finish the task, or if you have
+> a question for me, call `scripts/notify.sh` to ping me on Telegram with a
+> short summary.
+
+The agent reads this section and runs the script. This is **best-effort,
+agent-initiated** (~80–90% reliable depending on the model's
+instruction-following; for guaranteed delivery, run the session through the web
+UI and opt it in). It trades perfect reliability for zero sharp edges: no
+hooks, no per-harness plugins, no shared-config mutation, and the double-notify
+risk is entirely under the operator's control (only terminal sessions get the
+prompt).
+
+### What to put in the message
+
+Write a **semi-comprehensive** body: what you did, the outcome
+(tests/lint/build status), anything you changed that affects production, and —
+for `question` / `blocked` — exactly what decision or input you need from the
+operator. The title is the one-line headline; the body is the detail.
+
+### Works across all four harnesses
+
+`claude`, `glm`, `pi`, `opencode`, and `agy` each expose a Bash tool and
+operate at the repo root, so the same script and the same activation prompt
+work for all of them — one mechanism, not four. (`glm` is just `claude` run
+with GLM/Z.ai env, so it shares Claude Code's Bash tool entirely.)
+
+### Security
+
+No new REST route and no auth surface is added: the script reuses the existing
+token-authed explicit-emit endpoint. The bearer token is read from the 0600
+file at runtime; nothing secret is committed (the script contains no
+credentials and is safe in this public repo).
