@@ -10,6 +10,17 @@ export interface UploadedFile {
 }
 
 export interface WebUIPreferences {
+  version?: 2;
+  /** v2 keyed source of truth (`${runtime}:${id}` → record). Present from the v2
+   *  server; the client adopts it directly as sessionMeta. */
+  sessions?: Record<string, {
+    archived?: true;
+    pinned?: true;
+    displayName?: string;
+    updatedAt?: number;
+    legacyKey?: string;
+  }>;
+  // Derived legacy arrays/map (compat; also returned by the v2 server).
   archivedSessionPaths?: string[];
   pinnedSessionPaths?: string[];
   sessionDisplayNames?: Record<string, string>;
@@ -219,6 +230,36 @@ export async function unarchiveSessionPref(sessionPath: string): Promise<WebUIPr
  */
 export async function archiveAllSessionsPref(sessionPaths: string[]): Promise<WebUIPreferences> {
   return postPreferenceDelta('/api/preferences/archive-all', { sessionPaths }, false);
+}
+
+/**
+ * Pin a single session (delta write). One path → a few hundred bytes → keepalive
+ * stays under the 64 KiB quota and survives an immediate hard-refresh. Part of
+ * the unified per-item delta channel: pins, display names, and archive all write
+ * the same way now, instead of pins/display-names riding the whole-object PATCH.
+ */
+export async function pinSessionPref(sessionPath: string): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/pin', { sessionPath }, true);
+}
+
+/** Unpin a single session (delta write). See pinSessionPref. */
+export async function unpinSessionPref(sessionPath: string): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/unpin', { sessionPath }, true);
+}
+
+/**
+ * Set one session's display name (delta write). The body is a single key/value,
+ * so the (potentially large) rest of the display-name map is never re-sent —
+ * this is the fix for the keepalive landmine that silently dropped renames once
+ * the map grew past 64 KiB.
+ */
+export async function setDisplayNamePref(sessionPath: string, name: string): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/display-name', { sessionPath, name }, true);
+}
+
+/** Clear one session's display name (delta write; name: null deletes the key). */
+export async function clearDisplayNamePref(sessionPath: string): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/display-name', { sessionPath, name: null }, true);
 }
 
 async function postPreferenceDelta(

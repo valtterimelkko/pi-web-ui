@@ -122,6 +122,9 @@ describe('SessionItem – drag-and-drop transfer', () => {
       setSessions: mockSetSessions,
       archiveSession: mockArchiveSession,
       unarchiveSession: mockUnarchiveSession,
+      // SessionItem subscribes to the underlying value arrays (not the getters).
+      pinnedSessionPaths: [],
+      sessionDisplayNames: {},
       isSessionPinned: vi.fn().mockReturnValue(false),
       getSessionDisplayName: mockGetSessionDisplayName,
       setSessionDisplayName: mockSetSessionDisplayName,

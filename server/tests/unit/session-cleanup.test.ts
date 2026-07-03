@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { SessionCleanupService, DEFAULT_PIN_INACTIVITY_MS, DEFAULT_ARCHIVE_RETENTION_MS } from '../../src/session-cleanup.js';
+import { migrateV1ToV2, deriveLegacyArrays, isV2, type V1Preferences } from '../../src/routes/session-meta.js';
 
 const mockRegistryEntries: Map<string, any> = new Map();
 const mockRegistry = {
@@ -85,12 +86,20 @@ describe('SessionCleanupService', () => {
   });
 
   async function writePrefs(prefs: Record<string, any>): Promise<void> {
-    await fs.writeFile(prefsPath, JSON.stringify(prefs), 'utf-8');
+    // Mirror the real substrate: legacy v1 input is migrated to v2 on disk so
+    // the cleanup service (which reads v2) sees realistic data.
+    const onDisk = isV2(prefs)
+      ? prefs
+      : migrateV1ToV2(prefs as V1Preferences, () => null, Date.now());
+    await fs.writeFile(prefsPath, JSON.stringify(onDisk), 'utf-8');
   }
 
   async function readPrefs(): Promise<Record<string, any>> {
     try {
-      return JSON.parse(await fs.readFile(prefsPath, 'utf-8'));
+      const raw = JSON.parse(await fs.readFile(prefsPath, 'utf-8'));
+      // Return v2 plus the derived legacy arrays so existing v1-style assertions
+      // (pinnedSessionPaths / archivedSessionPaths) keep working.
+      return isV2(raw) ? { ...raw, ...deriveLegacyArrays(raw) } : raw;
     } catch {
       return {};
     }

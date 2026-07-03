@@ -91,6 +91,10 @@ describe('SessionItem', () => {
         setSessions: mockSetSessions,
         archiveSession: mockArchiveSession,
         unarchiveSession: mockUnarchiveSession,
+        // SessionItem now subscribes to the underlying value arrays (not the
+        // getter fns) so it re-renders on store-only metadata changes.
+        pinnedSessionPaths: [],
+        sessionDisplayNames: {},
         getSessionDisplayName: mockGetSessionDisplayName.mockReturnValue(undefined),
         setSessionDisplayName: mockSetSessionDisplayName,
         removeSessionDisplayName: mockRemoveSessionDisplayName,

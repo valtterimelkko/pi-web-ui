@@ -116,14 +116,15 @@ export class SessionCleanupService {
   ): Promise<void> {
     const toUnpin = await withPrefsLock(async (read, write) => {
       const prefs = await read();
-      const pinnedPaths = prefs.pinnedSessionPaths ?? [];
-      if (pinnedPaths.length === 0) return [];
+      const pinnedEntries = Object.entries(prefs.sessions).filter(([, rec]) => rec.pinned);
+      if (pinnedEntries.length === 0) return [] as Array<{ key: string; path: string }>;
 
       const registry = getSessionRegistry();
       const now = Date.now();
-      const expired: string[] = [];
+      const expired: Array<{ key: string; path: string }> = [];
 
-      for (const sessionPath of pinnedPaths) {
+      for (const [key, rec] of pinnedEntries) {
+        const sessionPath = rec.legacyKey ?? key;
         let lastActivity: number | undefined;
 
         const inMemory = this.getInMemoryLastActivity(sessionPath);
@@ -144,21 +145,28 @@ export class SessionCleanupService {
         if (lastActivity === undefined) continue;
 
         if (now - lastActivity > this.config.pinInactivityMs) {
-          expired.push(sessionPath);
+          expired.push({ key, path: sessionPath });
         }
       }
 
       if (expired.length === 0) return [];
 
-      prefs.pinnedSessionPaths = pinnedPaths.filter(p => !expired.includes(p));
+      // Clear the durable pin on expired records (v2 model: delete the field).
+      for (const { key } of expired) {
+        const rec = prefs.sessions[key];
+        if (rec) {
+          delete rec.pinned;
+          rec.updatedAt = now;
+        }
+      }
       await write(prefs);
       return expired;
     }, prefsPath ?? PREFS_FILE);
 
-    for (const sessionId of toUnpin) {
-      this.unpinInRuntimes(sessionId);
-      result.unpinned.push(sessionId);
-      logger.info(`[SessionCleanup] Auto-unpinned session after inactivity: ${sessionId}`);
+    for (const { path } of toUnpin) {
+      this.unpinInRuntimes(path);
+      result.unpinned.push(path);
+      logger.info(`[SessionCleanup] Auto-unpinned session after inactivity: ${path}`);
     }
   }
 
@@ -192,14 +200,15 @@ export class SessionCleanupService {
     const registry = getSessionRegistry();
     const now = Date.now();
 
-    const toDelete: string[] = [];
+    const toDelete: Array<{ key: string; path: string }> = [];
 
     await withPrefsLock(async (read) => {
       const prefs = await read();
-      const archivedPaths = prefs.archivedSessionPaths ?? [];
-      if (archivedPaths.length === 0) return;
+      const archivedEntries = Object.entries(prefs.sessions).filter(([, rec]) => rec.archived);
+      if (archivedEntries.length === 0) return;
 
-      for (const sessionPath of archivedPaths) {
+      for (const [key, rec] of archivedEntries) {
+        const sessionPath = rec.legacyKey ?? key;
         let entry = await registry.get(sessionPath)
           ?? await registry.getByPath(sessionPath)
           ?? await registry.getByClaudeSessionId(sessionPath)
@@ -214,28 +223,28 @@ export class SessionCleanupService {
           const fileMtime = await this.getRuntimeFileMtime(sessionPath);
           if (fileMtime === undefined) {
             // File is already gone — clean up the stale archived entry.
-            toDelete.push(sessionPath);
+            toDelete.push({ key, path: sessionPath });
           } else if (now - fileMtime > this.config.archiveRetentionMs) {
-            toDelete.push(sessionPath);
+            toDelete.push({ key, path: sessionPath });
           }
           continue;
         }
 
         const lastActivity = entry.lastActivity ? new Date(entry.lastActivity).getTime() : 0;
         if (now - lastActivity > this.config.archiveRetentionMs) {
-          toDelete.push(sessionPath);
+          toDelete.push({ key, path: sessionPath });
         }
       }
     }, filePath);
 
     if (toDelete.length === 0) return;
 
-    for (const sessionId of toDelete) {
+    for (const { key, path } of toDelete) {
       try {
-        const entry = await registry.get(sessionId)
-          ?? await registry.getByPath(sessionId)
-          ?? await registry.getByClaudeSessionId(sessionId)
-          ?? await registry.getByOpencodeSessionId(sessionId);
+        const entry = await registry.get(path)
+          ?? await registry.getByPath(path)
+          ?? await registry.getByClaudeSessionId(path)
+          ?? await registry.getByOpencodeSessionId(path);
 
         if (entry) {
           await this.deleteSessionFiles(entry);
@@ -246,26 +255,35 @@ export class SessionCleanupService {
         // handles Pi .jsonl file paths (where the registry entry may be the
         // parent directory) and orphan files that no longer have a registry
         // entry (e.g. Internal-API ephemeral deletes).
-        await this.deleteRuntimeFileByPath(sessionId);
+        await this.deleteRuntimeFileByPath(path);
 
-        this.unpinInRuntimes(sessionId);
-        result.deleted.push(sessionId);
-        logger.info(`[SessionCleanup] Deleted archived session: ${sessionId}`);
+        this.unpinInRuntimes(path);
+        result.deleted.push(path);
+        logger.info(`[SessionCleanup] Deleted archived session: ${path}`);
       } catch (err) {
         result.errors.push({
-          sessionId,
+          sessionId: path,
           error: err instanceof Error ? err.message : String(err),
         });
-        logger.error(`[SessionCleanup] Failed to delete session ${sessionId}:`, err instanceof Error ? err.message : String(err));
+        logger.error(`[SessionCleanup] Failed to delete session ${path}:`, err instanceof Error ? err.message : String(err));
       }
     }
 
-    const deletedSet = new Set(toDelete.filter(id => !result.errors.some(e => e.sessionId === id)));
-    if (deletedSet.size > 0) {
+    // Clear the durable archived/pinned fields on successfully-deleted records
+    // (v2 model: delete fields on the record rather than filter arrays).
+    const deletedKeys = new Set(
+      toDelete.filter(({ path }) => !result.errors.some(e => e.sessionId === path)).map(({ key }) => key),
+    );
+    if (deletedKeys.size > 0) {
       await withPrefsLock(async (read, write) => {
         const prefs = await read();
-        prefs.archivedSessionPaths = (prefs.archivedSessionPaths ?? []).filter(p => !deletedSet.has(p));
-        prefs.pinnedSessionPaths = (prefs.pinnedSessionPaths ?? []).filter(p => !deletedSet.has(p));
+        for (const key of deletedKeys) {
+          const rec = prefs.sessions[key];
+          if (!rec) continue;
+          delete rec.archived;
+          delete rec.pinned;
+          rec.updatedAt = now;
+        }
         await write(prefs);
       }, filePath);
     }

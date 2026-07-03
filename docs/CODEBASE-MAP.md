@@ -136,7 +136,7 @@
 - `routes/sessions.ts` — Session CRUD, export.
 - `routes/files.ts` — File browsing and reading (with path validation).
 - `routes/extensions.ts` — Extension listing and toggling.
-- `routes/preferences.ts` — User preferences (pins, archives, display names).
+- `routes/preferences.ts` — User preferences (pins, archives, display names) persisted to `web-ui-prefs.json`. All three fields mutate through one **unified per-item delta channel** (`POST /api/preferences/{archive,unarchive,archive-all,pin,unpin,display-name}`) guarded by a mutex; each delta sends a single key so a `keepalive` fetch stays under the browser's 64 KiB quota (the whole-object PATCH used to silently drop large archive/display-name writes). See [`docs/SESSION-METADATA.md`](./SESSION-METADATA.md).
 - `routes/notifications-web.ts` — Cookie-auth browser REST facade for session notification opt-in/state.
 - `routes/config.ts` — Config validation endpoint.
 - `routes/terminal.ts` — Terminal session management.

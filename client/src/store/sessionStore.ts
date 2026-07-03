@@ -1,7 +1,16 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { useUIStore } from './uiStore';
-import { getPreferences, patchPreferences, archiveSessionPref, unarchiveSessionPref, archiveAllSessionsPref } from '../lib/api';
+import {
+  getPreferences,
+  archiveSessionPref,
+  unarchiveSessionPref,
+  archiveAllSessionsPref,
+  pinSessionPref,
+  unpinSessionPref,
+  setDisplayNamePref,
+  clearDisplayNamePref,
+} from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
 
 import { useTransferStore } from './transferStore';
@@ -70,6 +79,37 @@ const throttledStorage = {
     localStorage.removeItem(name);
   },
 };
+
+/**
+ * Sync a small per-item preference delta to the server with bounded retry, and
+ * revert the optimistic local change on final failure.
+ *
+ * Write failures used to be swallowed by a `.catch(console.warn)`, leaving the UI
+ * permanently diverged from the server (the optimistic change stayed even though
+ * the write never landed). Retrying with backoff absorbs transient blips; on a
+ * final failure we revert so the client stays server-authoritative instead of
+ * silently desyncing. Every metadata mutation (archive, pin, display name) goes
+ * through this one helper — the unified write/sync rule.
+ */
+const DELTA_RETRY_DELAYS_MS = [500, 1500, 4000];
+async function syncPreferenceDelta(
+  attempt: () => Promise<unknown>,
+  onFinalFailure: () => void,
+): Promise<void> {
+  for (let attemptNum = 0; ; attemptNum++) {
+    try {
+      await attempt();
+      return;
+    } catch (e) {
+      if (attemptNum >= DELTA_RETRY_DELAYS_MS.length) {
+        console.warn('Preference delta write failed after retries; reverting optimistic change:', e);
+        onFinalFailure();
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, DELTA_RETRY_DELAYS_MS[attemptNum]));
+    }
+  }
+}
 
 // Maximum sessions to keep in memory (LRU cache limit)
 // Kept low (2) to reduce memory pressure on mobile devices.
@@ -141,6 +181,67 @@ export interface Session {
   model?: string;              // current model
   createdAt?: string;
   lastActivity?: string;
+}
+
+// ── v2 session metadata (keyed by stable `${sdkType}:${id}`) ────────────────
+// The single source of truth for archived / pinned / display name. The legacy
+// path-based arrays/map below are DERIVED projections of this map (so existing
+// path-based readers keep working unchanged) and are recomputed on every
+// mutation. Keys are immune to Pi .jsonl filename changes; `updatedAt` enables
+// last-writer-wins convergence (enforced server-side).
+export interface SessionMeta {
+  archived?: true;
+  pinned?: true;
+  displayName?: string;
+  updatedAt?: number;
+  /** Original path-based key — lets the legacy arrays be derived losslessly. */
+  legacyKey?: string;
+}
+
+/** Stable per-session key: `${sdkType}:${id}` (sdkType defaults to 'pi'). */
+export function sessionKeyOf(session: { sdkType?: string; id: string }): string {
+  return `${session.sdkType ?? 'pi'}:${session.id}`;
+}
+
+/** Derive the legacy path-based arrays/map from a keyed sessionMeta map. */
+function deriveLegacyFromMeta(meta: Record<string, SessionMeta>): {
+  archivedSessionPaths: string[];
+  pinnedSessionPaths: string[];
+  sessionDisplayNames: Record<string, string>;
+} {
+  const archivedSessionPaths: string[] = [];
+  const pinnedSessionPaths: string[] = [];
+  const sessionDisplayNames: Record<string, string> = {};
+  for (const [key, rec] of Object.entries(meta)) {
+    const legacy = rec.legacyKey ?? key.slice(key.indexOf(':') + 1);
+    if (rec.archived) archivedSessionPaths.push(legacy);
+    if (rec.pinned) pinnedSessionPaths.push(legacy);
+    if (rec.displayName !== undefined) sessionDisplayNames[legacy] = rec.displayName;
+  }
+  return { archivedSessionPaths, pinnedSessionPaths, sessionDisplayNames };
+}
+
+/** Resolve a session path/id to its stable v2 key (falls back to unknown:<path>). */
+function keyForPath(sessions: Session[], path: string): string {
+  const s = sessions.find((x) => x.path === path || x.id === path);
+  return s ? sessionKeyOf(s) : `unknown:${path}`;
+}
+
+/**
+ * Apply a change to one sessionMeta record and return the recomputed slice
+ * (sessionMeta + the derived legacy fields), so a single `set()` keeps the keyed
+ * source of truth and its path-based projection in sync.
+ */
+function commitMeta(
+  state: SessionState,
+  key: string,
+  build: (prev: SessionMeta | undefined) => SessionMeta | undefined,
+): { sessionMeta: Record<string, SessionMeta>; archivedSessionPaths: string[]; pinnedSessionPaths: string[]; sessionDisplayNames: Record<string, string> } {
+  const meta = { ...state.sessionMeta };
+  const next = build(meta[key]);
+  if (!next) delete meta[key];
+  else meta[key] = next;
+  return { sessionMeta: meta, ...deriveLegacyFromMeta(meta) };
 }
 
 export interface Message {
@@ -266,6 +367,12 @@ interface SessionState {
   archivedSessionPaths: string[];
   // Pinned sessions (persisted) - protected from idle/stale cleanup
   pinnedSessionPaths: string[];
+  // v2 keyed source of truth for archived/pinned/displayName. The three fields
+  // above (and sessionDisplayNames) are DERIVED from this on every mutation so
+  // existing path-based readers keep working; sessionMeta itself is keyed by
+  // `${sdkType}:${id}` (stable across Pi path changes) and carries `updatedAt`
+  // for last-writer-wins (enforced server-side).
+  sessionMeta: Record<string, SessionMeta>;
   // LRU cache for session messages
   sessionCache: Map<string, SessionCache>;
   // Session cache with metadata for intelligent invalidation
@@ -398,6 +505,7 @@ export const useSessionStore = create<SessionState>()(
       archivedSessionPaths: [],
       pinnedSessionPaths: [],
       sessionDisplayNames: {},
+      sessionMeta: {},
       // LRU cache for session messages
       sessionCache: new Map<string, SessionCache>(),
       // Session cache with metadata
@@ -750,55 +858,70 @@ export const useSessionStore = create<SessionState>()(
       },
 
       archiveSession: (sessionPath) => {
-        set((state) => {
-          const newArchived = state.archivedSessionPaths.includes(sessionPath)
-            ? state.archivedSessionPaths
-            : [...state.archivedSessionPaths, sessionPath];
-          // Auto-unpin when archiving — archived sessions shouldn't consume pin slots
-          const newPinned = state.pinnedSessionPaths.filter(p => p !== sessionPath);
-          return {
-            archivedSessionPaths: newArchived,
-            pinnedSessionPaths: newPinned,
-          };
-        });
-        // Delta write (single path) — keepalive-safe and race-free on the server,
-        // unlike the old whole-array PATCH which the browser's 64 KiB keepalive
-        // quota silently rejected once the archive grew large.
-        archiveSessionPref(sessionPath).catch((e) => {
-          console.warn('Failed to sync archive state to server:', e);
-        });
+        const key = keyForPath(get().sessions, sessionPath);
+        const prev = get().sessionMeta[key];
+        const now = Date.now();
+        set((state) => commitMeta(state, key, (p) => {
+          // Auto-unpin when archiving — archived sessions shouldn't consume pin slots.
+          const rec: SessionMeta = { ...(p ?? {}), archived: true, updatedAt: now, legacyKey: sessionPath };
+          delete rec.pinned;
+          return rec;
+        }));
+        // Delta write (single path) — keepalive-safe and race-free on the server.
+        // Reverts the optimistic archive (and restores the pin) if it can't land.
+        syncPreferenceDelta(
+          () => archiveSessionPref(sessionPath),
+          () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : undefined)),
+        );
       },
 
       unarchiveSession: (sessionPath) => {
-        set((state) => ({
-          archivedSessionPaths: state.archivedSessionPaths.filter(p => p !== sessionPath),
+        const key = keyForPath(get().sessions, sessionPath);
+        const prev = get().sessionMeta[key];
+        set((state) => commitMeta(state, key, (p) => {
+          if (!p) return undefined;
+          const rec: SessionMeta = { ...p, legacyKey: sessionPath };
+          delete rec.archived;
+          rec.updatedAt = Date.now();
+          return rec;
         }));
-        unarchiveSessionPref(sessionPath).catch((e) => {
-          console.warn('Failed to sync archive state to server:', e);
-        });
+        // Delta write; re-archive this path only if the write can't land.
+        syncPreferenceDelta(
+          () => unarchiveSessionPref(sessionPath),
+          () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : { archived: true, updatedAt: Date.now(), legacyKey: sessionPath })),
+        );
       },
 
       archiveAllSessions: async () => {
-        const paths = get().sessions.map((s) => s.path).filter((p): p is string => !!p);
-        // Optimistic union so the UI updates immediately.
+        const sessions = get().sessions;
+        const paths = sessions.map((s) => s.path).filter((p): p is string => !!p);
+        const prevMeta = { ...get().sessionMeta };
+        const now = Date.now();
+        // Optimistic: archive every current session key + auto-unpin them.
         set((state) => {
-          const archivedSet = new Set([...state.archivedSessionPaths, ...paths]);
-          return {
-            archivedSessionPaths: [...archivedSet],
-            pinnedSessionPaths: state.pinnedSessionPaths.filter((p) => !archivedSet.has(p)),
-          };
+          const meta = { ...state.sessionMeta };
+          for (const s of sessions) {
+            if (!s.path) continue;
+            const k = sessionKeyOf(s);
+            const rec: SessionMeta = { ...(meta[k] ?? {}), archived: true, updatedAt: now, legacyKey: s.path };
+            delete rec.pinned;
+            meta[k] = rec;
+          }
+          return { sessionMeta: meta, ...deriveLegacyFromMeta(meta) };
         });
         try {
           const prefs = await archiveAllSessionsPref(paths);
-          // Server is authoritative — adopt its merged result.
-          if (prefs.archivedSessionPaths !== undefined) {
+          // Server is authoritative — adopt its merged v2 map (with derived legacy).
+          const serverMeta = (prefs.sessions as Record<string, SessionMeta> | undefined);
+          if (serverMeta) {
+            set((state) => ({ sessionMeta: { ...serverMeta }, ...deriveLegacyFromMeta(serverMeta) }));
+          } else if (prefs.archivedSessionPaths !== undefined) {
             set({ archivedSessionPaths: prefs.archivedSessionPaths });
-          }
-          if (prefs.pinnedSessionPaths !== undefined) {
-            set({ pinnedSessionPaths: prefs.pinnedSessionPaths });
+            if (prefs.pinnedSessionPaths !== undefined) set({ pinnedSessionPaths: prefs.pinnedSessionPaths });
           }
         } catch (e) {
-          console.warn('Failed to archive all sessions on server:', e);
+          console.warn('Failed to archive all sessions on server; reverting:', e);
+          set((state) => ({ sessionMeta: { ...prevMeta }, ...deriveLegacyFromMeta(prevMeta) }));
         }
       },
 
@@ -807,8 +930,11 @@ export const useSessionStore = create<SessionState>()(
       },
 
       pinSession: (sessionPath) => {
+        const key = keyForPath(get().sessions, sessionPath);
+        const prev = get().sessionMeta[key]; // capture BEFORE the optimistic set
+        let added = false;
         set((state) => {
-          if (state.pinnedSessionPaths.includes(sessionPath)) return state;
+          if (state.sessionMeta[key]?.pinned) return state;
 
           const sessionRuntime = (path: string): Session['sdkType'] | undefined => {
             const session = state.sessions.find(s => s.path === path || s.id === path);
@@ -825,22 +951,38 @@ export const useSessionStore = create<SessionState>()(
 
           if (targetRuntime !== undefined && sameRuntimePinnedCount >= 2) return state;
           if (targetRuntime === undefined && state.pinnedSessionPaths.length >= 2) return state; // Backward-compatible fallback
-          return { pinnedSessionPaths: [...state.pinnedSessionPaths, sessionPath] };
+          added = true;
+          return commitMeta(state, key, (p) => ({ ...(p ?? {}), pinned: true, updatedAt: Date.now(), legacyKey: sessionPath }));
         });
-        // Fire-and-forget sync to server so all devices stay in sync
-        patchPreferences({ pinnedSessionPaths: get().pinnedSessionPaths }).catch((e) => {
-          console.warn('Failed to sync pin state to server:', e);
-        });
+        // Durable per-key delta. The WS runtime hop and the 2/runtime cap above
+        // are unchanged; only the durable prefs write moved to the unified delta
+        // channel. Reverts the pin if the write can't land.
+        if (added) {
+          syncPreferenceDelta(
+            () => pinSessionPref(sessionPath),
+            () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : undefined)),
+          );
+        }
       },
 
       unpinSession: (sessionPath) => {
-        set((state) => ({
-          pinnedSessionPaths: state.pinnedSessionPaths.filter(p => p !== sessionPath),
+        const key = keyForPath(get().sessions, sessionPath);
+        const wasPinned = !!get().sessionMeta[key]?.pinned;
+        const prev = get().sessionMeta[key];
+        set((state) => commitMeta(state, key, (p) => {
+          if (!p) return undefined;
+          const rec: SessionMeta = { ...p, legacyKey: sessionPath };
+          delete rec.pinned;
+          rec.updatedAt = Date.now();
+          return rec;
         }));
-        // Fire-and-forget sync to server so all devices stay in sync
-        patchPreferences({ pinnedSessionPaths: get().pinnedSessionPaths }).catch((e) => {
-          console.warn('Failed to sync unpin state to server:', e);
-        });
+        // Durable per-key delta; re-pins this path only if the write can't land.
+        if (wasPinned) {
+          syncPreferenceDelta(
+            () => unpinSessionPref(sessionPath),
+            () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : { pinned: true, updatedAt: Date.now(), legacyKey: sessionPath })),
+          );
+        }
       },
 
       isSessionPinned: (sessionPath) => {
@@ -848,16 +990,18 @@ export const useSessionStore = create<SessionState>()(
       },
 
       setSessionDisplayName: (sessionPath, displayName) => {
-        set((state) => ({
-          sessionDisplayNames: {
-            ...state.sessionDisplayNames,
-            [sessionPath]: displayName,
-          },
-        }));
-        // Fire-and-forget sync to server so all devices stay in sync
-        patchPreferences({ sessionDisplayNames: get().sessionDisplayNames }).catch((e) => {
-          console.warn('Failed to sync display name to server:', e);
-        });
+        const key = keyForPath(get().sessions, sessionPath);
+        const prev = get().sessionMeta[key];
+        set((state) => commitMeta(state, key, (p) => ({
+          ...(p ?? {}), displayName, updatedAt: Date.now(), legacyKey: sessionPath,
+        })));
+        // Durable per-key delta (replaces the whole-object PATCH that re-sent the
+        // entire — multi-KB — display-name map on every rename and tripped the
+        // 64 KiB keepalive quota). Reverts to the previous name on final failure.
+        syncPreferenceDelta(
+          () => setDisplayNamePref(sessionPath, displayName),
+          () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : undefined)),
+        );
       },
 
       getSessionDisplayName: (sessionPath) => {
@@ -865,67 +1009,39 @@ export const useSessionStore = create<SessionState>()(
       },
 
       removeSessionDisplayName: (sessionPath) => {
-        set((state) => {
-          const newDisplayNames = { ...state.sessionDisplayNames };
-          delete newDisplayNames[sessionPath];
-          return { sessionDisplayNames: newDisplayNames };
-        });
-        patchPreferences({ sessionDisplayNames: get().sessionDisplayNames }).catch((e) => {
-          console.warn('Failed to sync display name removal to server:', e);
-        });
+        const key = keyForPath(get().sessions, sessionPath);
+        const prev = get().sessionMeta[key];
+        set((state) => commitMeta(state, key, (p) => {
+          if (!p) return undefined;
+          const rec: SessionMeta = { ...p, legacyKey: sessionPath };
+          delete rec.displayName;
+          rec.updatedAt = Date.now();
+          return rec;
+        }));
+        // Durable per-key delta (name: null clears the key); restores the
+        // previous name if the write can't land.
+        syncPreferenceDelta(
+          () => clearDisplayNamePref(sessionPath),
+          () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : undefined)),
+        );
       },
 
       initPreferences: async () => {
         try {
           const serverPrefs = await getPreferences();
-          if (serverPrefs.archivedSessionPaths !== undefined) {
-            // Server is the single source of truth for archive state.
-            //
-            // We deliberately do NOT union with the local (localStorage) cache
-            // and do NOT write the result back here. An earlier version took
-            // server ∪ local and synced that union back; but a union can only
-            // grow, never shrink, which made archive state monotonic across
-            // devices: any device whose localStorage still held a path re-added
-            // it to the server on every load. That meant unarchiving on one
-            // device was always undone by another device's next reload, and the
-            // server list accumulated every session ever archived (it had grown
-            // to hundreds of entries). Server-wins makes archive state
-            // device-agnostic and lets unarchive actually stick.
-            //
-            // The race the union used to protect against — archive a session
-            // and hard-refresh before the PATCH lands — is instead covered by
-            // `keepalive: true` on patchPreferences, which keeps the write
-            // alive across page unload. If the server is unreachable,
-            // getPreferences rejects and we keep the local cache (catch below).
-            set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
+          // Adopt the server's v2 keyed model (sessionMeta) as the single source
+          // of truth; the path-based fields are derived from it. localStorage is a
+          // pure read-cache (never merged back) — the one rule that removes the
+          // whole "stale local resurrection" class across all three fields. The
+          // "archived must not consume a pin slot" invariant is enforced purely
+          // in-memory here (no write-back "pump").
+          const meta: Record<string, SessionMeta> = {
+            ...((serverPrefs.sessions as Record<string, SessionMeta> | undefined) ?? {}),
+          };
+          for (const rec of Object.values(meta)) {
+            if (rec.archived) delete rec.pinned;
           }
-          if (serverPrefs.pinnedSessionPaths !== undefined) {
-            // Use the server archive set (authoritative, set just above)
-            const archivedSet = new Set(get().archivedSessionPaths);
-            // Clean stale pins: remove any pinned sessions that are also archived
-            const cleanedPins = serverPrefs.pinnedSessionPaths.filter(p => !archivedSet.has(p));
-            if (cleanedPins.length !== serverPrefs.pinnedSessionPaths.length) {
-              console.log(`[initPreferences] Cleaned ${serverPrefs.pinnedSessionPaths.length - cleanedPins.length} stale pinned-also-archived session(s)`);
-            }
-            set({ pinnedSessionPaths: cleanedPins });
-            // Sync the cleaned state back to server if anything was removed
-            if (cleanedPins.length !== serverPrefs.pinnedSessionPaths.length) {
-              patchPreferences({ pinnedSessionPaths: cleanedPins }).catch((e) => {
-                console.warn('Failed to sync cleaned pin state to server:', e);
-              });
-            }
-          }
-          if (serverPrefs.sessionDisplayNames !== undefined) {
-            // Merge server display names with local ones.
-            // Local wins for conflicts so a rename that was mid-flight at page
-            // unload is not silently overwritten by the stale server value.
-            const currentDisplayNames = get().sessionDisplayNames;
-            const mergedDisplayNames = {
-              ...serverPrefs.sessionDisplayNames,
-              ...currentDisplayNames,
-            };
-            set({ sessionDisplayNames: mergedDisplayNames });
-          }
+          set({ sessionMeta: meta, ...deriveLegacyFromMeta(meta) });
         } catch (e) {
           // Non-fatal: fall back to whatever is already in localStorage
           console.warn('Failed to load preferences from server, using local cache:', e);
@@ -2412,8 +2528,12 @@ export const useSessionStore = create<SessionState>()(
     {
       name: STORAGE_KEY,
       storage: createJSONStorage(() => throttledStorage),
-      partialize: (state) => ({ 
+      partialize: (state) => ({
         sessions: state.sessions,
+        // sessionMeta is the v2 keyed source of truth; the three legacy fields
+        // are derived from it but cached too so the offline read-cache is
+        // immediately usable before the first GET resolves.
+        sessionMeta: state.sessionMeta,
         archivedSessionPaths: state.archivedSessionPaths,
         pinnedSessionPaths: state.pinnedSessionPaths,
         sessionDisplayNames: state.sessionDisplayNames,

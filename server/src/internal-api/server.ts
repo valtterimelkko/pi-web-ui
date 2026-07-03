@@ -30,7 +30,7 @@ import { NotificationManager } from '../notifications/notification-manager.js';
 import { NotificationStore } from '../notifications/notification-store.js';
 import { ChannelRouter } from '../notifications/channels/notification-channel.js';
 import { pickNotificationChannel } from '../notifications/channel-factory.js';
-import { readPreferences } from '../routes/preferences.js';
+import { readPreferences, deriveLegacyArrays } from '../routes/preferences.js';
 import { createRequestLoggingMiddleware } from './request-logging.js';
 import { pushDiagnosticsRecord } from './diagnostics-buffer.js';
 import { setLogTap } from '../logging/logger.js';
@@ -211,7 +211,7 @@ export class InternalApiServer {
       resolveLabel: async (sessionPath: string) => {
         try {
           const prefs = await readPreferences();
-          const name = prefs.sessionDisplayNames?.[sessionPath];
+          const name = deriveLegacyArrays(prefs).sessionDisplayNames[sessionPath];
           return typeof name === 'string' && name.trim() ? name.trim() : undefined;
         } catch {
           return undefined;

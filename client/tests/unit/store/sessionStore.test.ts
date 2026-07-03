@@ -14,8 +14,8 @@ describe('sessionStore', () => {
     state.setError(null);
     state.setExtensionUIRequest(null);
     // Clear session messages cache directly
-    useSessionStore.setState({ 
-      sessionMessages: {}, 
+    useSessionStore.setState({
+      sessionMessages: {},
       streamingSessions: {},
       currentSessionId: null,
       messages: [],
@@ -27,6 +27,8 @@ describe('sessionStore', () => {
       sessionCacheMeta: {},
       pinnedSessionPaths: [],
       archivedSessionPaths: [],
+      sessionDisplayNames: {},
+      sessionMeta: {},
     });
     useUIStore.setState({ toasts: [] });
   });
@@ -919,6 +921,10 @@ vi.mock('../../../src/lib/api', () => ({
   archiveSessionPref: vi.fn().mockResolvedValue({}),
   unarchiveSessionPref: vi.fn().mockResolvedValue({}),
   archiveAllSessionsPref: vi.fn().mockResolvedValue({}),
+  pinSessionPref: vi.fn().mockResolvedValue({}),
+  unpinSessionPref: vi.fn().mockResolvedValue({}),
+  setDisplayNamePref: vi.fn().mockResolvedValue({}),
+  clearDisplayNamePref: vi.fn().mockResolvedValue({}),
 }));
 
 describe('initPreferences — archive reconciliation (server-authoritative)', () => {
@@ -928,6 +934,10 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
   let archiveSessionPref: ReturnType<typeof vi.fn>;
   let unarchiveSessionPref: ReturnType<typeof vi.fn>;
   let archiveAllSessionsPref: ReturnType<typeof vi.fn>;
+  let pinSessionPref: ReturnType<typeof vi.fn>;
+  let unpinSessionPref: ReturnType<typeof vi.fn>;
+  let setDisplayNamePref: ReturnType<typeof vi.fn>;
+  let clearDisplayNamePref: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     const api = await import('../../../src/lib/api');
@@ -936,17 +946,27 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     archiveSessionPref = api.archiveSessionPref as ReturnType<typeof vi.fn>;
     unarchiveSessionPref = api.unarchiveSessionPref as ReturnType<typeof vi.fn>;
     archiveAllSessionsPref = api.archiveAllSessionsPref as ReturnType<typeof vi.fn>;
+    pinSessionPref = api.pinSessionPref as ReturnType<typeof vi.fn>;
+    unpinSessionPref = api.unpinSessionPref as ReturnType<typeof vi.fn>;
+    setDisplayNamePref = api.setDisplayNamePref as ReturnType<typeof vi.fn>;
+    clearDisplayNamePref = api.clearDisplayNamePref as ReturnType<typeof vi.fn>;
     vi.clearAllMocks();
     patchPreferences.mockResolvedValue({});
     archiveSessionPref.mockResolvedValue({});
     unarchiveSessionPref.mockResolvedValue({});
     archiveAllSessionsPref.mockResolvedValue({});
+    pinSessionPref.mockResolvedValue({});
+    unpinSessionPref.mockResolvedValue({});
+    setDisplayNamePref.mockResolvedValue({});
+    clearDisplayNamePref.mockResolvedValue({});
 
     // Reset relevant store slices
     useSessionStore.setState({
+      sessions: [],
       archivedSessionPaths: [],
       pinnedSessionPaths: [],
       sessionDisplayNames: {},
+      sessionMeta: {},
     });
   });
 
@@ -954,14 +974,26 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     vi.clearAllMocks();
   });
 
+  // Helper: build a v2 server response with the given per-field maps (keyed by a
+  // stable v2 key, each carrying the legacy path the client derives to).
+  function v2Server(opts: {
+    archived?: Record<string, string>;   // key → legacyKey(path)
+    pinned?: Record<string, string>;
+    displayNames?: Record<string, { legacyKey: string; name: string }>;
+  }) {
+    const sessions: Record<string, any> = {};
+    for (const [k, legacy] of Object.entries(opts.archived ?? {})) sessions[k] = { ...(sessions[k] ?? {}), archived: true, legacyKey: legacy };
+    for (const [k, legacy] of Object.entries(opts.pinned ?? {})) sessions[k] = { ...(sessions[k] ?? {}), pinned: true, legacyKey: legacy };
+    for (const [k, { legacy, name }] of Object.entries(opts.displayNames ?? {})) sessions[k] = { ...(sessions[k] ?? {}), displayName: name, legacyKey: legacy };
+    return { version: 2 as const, sessions };
+  }
+
   it('uses server archive list when local has no extras', async () => {
-    const serverPaths = ['/sessions/a.jsonl', '/sessions/b.jsonl'];
-    getPreferences.mockResolvedValue({ archivedSessionPaths: serverPaths });
+    getPreferences.mockResolvedValue(v2Server({ archived: { 'pi:a': '/sessions/a.jsonl', 'pi:b': '/sessions/b.jsonl' } }));
 
     await useSessionStore.getState().initPreferences();
 
-    expect(useSessionStore.getState().archivedSessionPaths).toEqual(serverPaths);
-    // No sync-back needed — server already up to date
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/a.jsonl', '/sessions/b.jsonl']);
     expect(patchPreferences).not.toHaveBeenCalled();
   });
 
@@ -971,9 +1003,8 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     // server. A union can only grow, so a path that left the server (because
     // another device unarchived it) was always re-added by any device whose
     // localStorage still held it. Server-wins + no write-back is the fix.
-    const localOnlyPath = '/sessions/b.jsonl';
-    useSessionStore.setState({ archivedSessionPaths: [localOnlyPath] });
-    getPreferences.mockResolvedValue({ archivedSessionPaths: [] }); // server: nothing archived
+    useSessionStore.setState({ sessionMeta: { 'unknown:/sessions/b.jsonl': { archived: true, legacyKey: '/sessions/b.jsonl' } } });
+    getPreferences.mockResolvedValue(v2Server({})); // server: nothing archived
 
     await useSessionStore.getState().initPreferences();
 
@@ -987,81 +1018,93 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     // Device A unarchived X (server no longer has it). Device B still has X
     // in localStorage from before. On B's reload it must adopt server truth
     // (X unarchived) and must NOT re-add X to the server.
-    const X = '/sessions/x.jsonl';
-    const keep = '/sessions/y.jsonl';
-    useSessionStore.setState({ archivedSessionPaths: [X, keep] }); // B's stale local
-    getPreferences.mockResolvedValue({ archivedSessionPaths: [keep] }); // server after A's unarchive
+    useSessionStore.setState({ sessionMeta: {
+      'unknown:/sessions/x.jsonl': { archived: true, legacyKey: '/sessions/x.jsonl' },
+      'pi:y': { archived: true, legacyKey: '/sessions/y.jsonl' },
+    } });
+    getPreferences.mockResolvedValue(v2Server({ archived: { 'pi:y': '/sessions/y.jsonl' } }));
 
     await useSessionStore.getState().initPreferences();
 
-    expect(useSessionStore.getState().archivedSessionPaths).toEqual([keep]);
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/y.jsonl']);
     expect(patchPreferences).not.toHaveBeenCalled(); // no write-back "pump"
   });
 
   it('does not duplicate paths already present on server', async () => {
-    const path = '/sessions/a.jsonl';
-    useSessionStore.setState({ archivedSessionPaths: [path] });
-    getPreferences.mockResolvedValue({ archivedSessionPaths: [path] });
+    useSessionStore.setState({ sessionMeta: { 'pi:a': { archived: true, legacyKey: '/sessions/a.jsonl' } } });
+    getPreferences.mockResolvedValue(v2Server({ archived: { 'pi:a': '/sessions/a.jsonl' } }));
 
     await useSessionStore.getState().initPreferences();
 
-    expect(useSessionStore.getState().archivedSessionPaths).toEqual([path]);
-    // No sync-back when server already has all local paths
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/a.jsonl']);
     expect(patchPreferences).not.toHaveBeenCalled();
   });
 
   it('preserves full server list even when local is empty', async () => {
-    const serverPaths = ['/sessions/a.jsonl', '/sessions/b.jsonl', '/sessions/c.jsonl'];
-    getPreferences.mockResolvedValue({ archivedSessionPaths: serverPaths });
+    getPreferences.mockResolvedValue(v2Server({
+      archived: { 'pi:a': '/sessions/a.jsonl', 'pi:b': '/sessions/b.jsonl', 'pi:c': '/sessions/c.jsonl' },
+    }));
 
     await useSessionStore.getState().initPreferences();
 
-    expect(useSessionStore.getState().archivedSessionPaths).toEqual(serverPaths);
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/a.jsonl', '/sessions/b.jsonl', '/sessions/c.jsonl']);
     expect(patchPreferences).not.toHaveBeenCalled();
   });
 
   it('falls back to local cache when server request fails', async () => {
-    const localPaths = ['/sessions/local-only.jsonl'];
-    useSessionStore.setState({ archivedSessionPaths: localPaths });
+    useSessionStore.setState({
+      sessionMeta: { 'unknown:/sessions/local-only.jsonl': { archived: true, legacyKey: '/sessions/local-only.jsonl' } },
+      archivedSessionPaths: ['/sessions/local-only.jsonl'],
+    });
     getPreferences.mockRejectedValue(new Error('Network error'));
 
     await useSessionStore.getState().initPreferences();
 
     // Local state must be preserved
-    expect(useSessionStore.getState().archivedSessionPaths).toEqual(localPaths);
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/local-only.jsonl']);
   });
 
-  it('local display name wins over stale server value on conflict', async () => {
-    useSessionStore.setState({ sessionDisplayNames: { '/sessions/a.jsonl': 'Local Name' } });
-    getPreferences.mockResolvedValue({
-      sessionDisplayNames: { '/sessions/a.jsonl': 'Stale Server Name', '/sessions/b.jsonl': 'Server Only' },
-    });
+  it('server display names are authoritative on load (no local-wins resurrection)', async () => {
+    // Unified sync rule: on load the server map is adopted as-is. The old
+    // local-wins merge could resurrect a stale name from this device's
+    // localStorage after another device renamed the session. Server-authoritative
+    // removes that entire class of cross-device resurrection bug.
+    useSessionStore.setState({ sessionMeta: { 'pi:a': { displayName: 'Stale Local Name', legacyKey: '/sessions/a.jsonl' } } });
+    getPreferences.mockResolvedValue(v2Server({
+      displayNames: {
+        'pi:a': { legacy: '/sessions/a.jsonl', name: 'Fresh Server Name' },
+        'pi:b': { legacy: '/sessions/b.jsonl', name: 'Server Only' },
+      },
+    }));
 
     await useSessionStore.getState().initPreferences();
 
     const names = useSessionStore.getState().sessionDisplayNames;
-    expect(names['/sessions/a.jsonl']).toBe('Local Name');
+    expect(names['/sessions/a.jsonl']).toBe('Fresh Server Name');
     expect(names['/sessions/b.jsonl']).toBe('Server Only');
+    // Nothing is written back on load — localStorage is a read-cache only.
+    expect(patchPreferences).not.toHaveBeenCalled();
+    expect(setDisplayNamePref).not.toHaveBeenCalled();
   });
 
-  it('cleans pins that are in the server archive set', async () => {
-    const archivedPath = '/sessions/a.jsonl';
-    const pinnedPath = '/sessions/b.jsonl';
-    useSessionStore.setState({ archivedSessionPaths: [] });
-    getPreferences.mockResolvedValue({
-      archivedSessionPaths: [archivedPath],
-      pinnedSessionPaths: [archivedPath, pinnedPath],
-    });
+  it('cleans pinned-also-archived sessions in memory without a write-back pump', async () => {
+    // The "archived must not consume a pin slot" invariant is still enforced on
+    // load, but it is now expressed purely in-memory (server-authoritative load,
+    // no write-back). The old code synced cleaned pins back to the server on
+    // every load — a pump that is removed under the unified rule.
+    getPreferences.mockResolvedValue(v2Server({
+      archived: { 'pi:a': '/sessions/a.jsonl' },
+      pinned: { 'pi:a': '/sessions/a.jsonl', 'pi:b': '/sessions/b.jsonl' },
+    }));
 
     await useSessionStore.getState().initPreferences();
 
     const pins = useSessionStore.getState().pinnedSessionPaths;
-    expect(pins).not.toContain(archivedPath);
-    expect(pins).toContain(pinnedPath);
-    // Should sync the cleaned pins back
-    expect(patchPreferences).toHaveBeenCalledWith(
-      expect.objectContaining({ pinnedSessionPaths: [pinnedPath] }),
-    );
+    expect(pins).not.toContain('/sessions/a.jsonl');
+    expect(pins).toContain('/sessions/b.jsonl');
+    // No write-back pump on load.
+    expect(patchPreferences).not.toHaveBeenCalled();
+    expect(unpinSessionPref).not.toHaveBeenCalled();
   });
 
   it('archiveSession uses the per-path delta endpoint, not the whole-array PATCH', async () => {
@@ -1080,7 +1123,10 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
   });
 
   it('unarchiveSession uses the per-path delta endpoint (the write that makes unarchive stick)', async () => {
-    useSessionStore.setState({ archivedSessionPaths: ['/sessions/a.jsonl', '/sessions/b.jsonl'] });
+    useSessionStore.setState({ sessionMeta: {
+      'unknown:/sessions/a.jsonl': { archived: true, legacyKey: '/sessions/a.jsonl' },
+      'unknown:/sessions/b.jsonl': { archived: true, legacyKey: '/sessions/b.jsonl' },
+    } });
 
     useSessionStore.getState().unarchiveSession('/sessions/a.jsonl');
 
@@ -1091,32 +1137,154 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
 
   it('archiveAllSessions archives every loaded session and adopts the server result', async () => {
     useSessionStore.setState({
-      // minimal Session shapes — only path is needed for archive-all
       sessions: [
-        { id: '1', path: '/sessions/a.jsonl' },
-        { id: '2', path: '/sessions/b.jsonl' },
-        { id: '3', path: 'claude-bare-id' },
+        { id: '1', path: '/sessions/a.jsonl', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'pi' },
+        { id: '2', path: '/sessions/b.jsonl', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'pi' },
+        { id: '3', path: 'claude-bare-id', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
       ] as never,
-      archivedSessionPaths: [],
-      pinnedSessionPaths: ['/sessions/a.jsonl'],
+      sessionMeta: { 'pi:1': { pinned: true, legacyKey: '/sessions/a.jsonl' } },
     });
     archiveAllSessionsPref.mockResolvedValue({
-      archivedSessionPaths: ['/sessions/a.jsonl', '/sessions/b.jsonl', 'claude-bare-id'],
-      pinnedSessionPaths: [],
+      version: 2 as const,
+      sessions: {
+        'pi:1': { archived: true, legacyKey: '/sessions/a.jsonl' },
+        'pi:2': { archived: true, legacyKey: '/sessions/b.jsonl' },
+        'claude:3': { archived: true, legacyKey: 'claude-bare-id' },
+      },
     });
 
     await useSessionStore.getState().archiveAllSessions();
 
-    expect(archiveAllSessionsPref).toHaveBeenCalledWith([
-      '/sessions/a.jsonl',
-      '/sessions/b.jsonl',
-      'claude-bare-id',
-    ]);
-    expect(useSessionStore.getState().archivedSessionPaths).toEqual([
-      '/sessions/a.jsonl',
-      '/sessions/b.jsonl',
-      'claude-bare-id',
-    ]);
+    expect(archiveAllSessionsPref).toHaveBeenCalledWith(['/sessions/a.jsonl', '/sessions/b.jsonl', 'claude-bare-id']);
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/a.jsonl', '/sessions/b.jsonl', 'claude-bare-id']);
     expect(useSessionStore.getState().pinnedSessionPaths).toEqual([]);
+  });
+
+  // ── Unified delta channel for pins & display names ────────────────────────
+
+  it('pinSession uses the per-key pin delta, not the whole-object PATCH', async () => {
+    useSessionStore.setState({
+      sessions: [{ id: 'a', path: '/s/a.jsonl', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'pi' }] as never,
+      pinnedSessionPaths: [],
+    });
+
+    useSessionStore.getState().pinSession('/s/a.jsonl');
+
+    expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['/s/a.jsonl']);
+    expect(pinSessionPref).toHaveBeenCalledWith('/s/a.jsonl');
+    // The fragile whole-object PATCH must NOT be used for pinning anymore.
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it('pinSession still enforces the 2/runtime cap before writing the delta', async () => {
+    useSessionStore.setState({
+      sessions: [
+        { id: 'c1', path: 'c1', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
+        { id: 'c2', path: 'c2', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
+        { id: 'c3', path: 'c3', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
+      ] as never,
+      pinnedSessionPaths: [],
+    });
+
+    useSessionStore.getState().pinSession('c1');
+    useSessionStore.getState().pinSession('c2');
+    useSessionStore.getState().pinSession('c3'); // blocked — 3rd claude pin
+
+    expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['c1', 'c2']);
+    expect(pinSessionPref).toHaveBeenCalledTimes(2);
+    expect(pinSessionPref).not.toHaveBeenCalledWith('c3');
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it('unpinSession uses the per-key unpin delta, not the whole-object PATCH', async () => {
+    useSessionStore.setState({ sessionMeta: {
+      'unknown:/s/a.jsonl': { pinned: true, legacyKey: '/s/a.jsonl' },
+      'unknown:/s/b.jsonl': { pinned: true, legacyKey: '/s/b.jsonl' },
+    } });
+
+    useSessionStore.getState().unpinSession('/s/a.jsonl');
+
+    expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['/s/b.jsonl']);
+    expect(unpinSessionPref).toHaveBeenCalledWith('/s/a.jsonl');
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it('setSessionDisplayName uses the per-key display-name delta, not the whole-object PATCH', async () => {
+    useSessionStore.getState().setSessionDisplayName('/s/a.jsonl', 'Refactor');
+
+    expect(useSessionStore.getState().sessionDisplayNames['/s/a.jsonl']).toBe('Refactor');
+    expect(setDisplayNamePref).toHaveBeenCalledWith('/s/a.jsonl', 'Refactor');
+    // The whole-object PATCH (which re-sent the entire display-name map and
+    // tripped the 64 KiB keepalive quota) must NOT be used anymore.
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it('removeSessionDisplayName uses the per-key clear delta, not the whole-object PATCH', async () => {
+    useSessionStore.setState({ sessionMeta: { 'unknown:/s/a.jsonl': { displayName: 'Old', legacyKey: '/s/a.jsonl' } } });
+
+    useSessionStore.getState().removeSessionDisplayName('/s/a.jsonl');
+
+    expect(useSessionStore.getState().sessionDisplayNames['/s/a.jsonl']).toBeUndefined();
+    expect(clearDisplayNamePref).toHaveBeenCalledWith('/s/a.jsonl');
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it('reverts the optimistic pin when the delta write fails after retries', async () => {
+    vi.useFakeTimers();
+    try {
+      useSessionStore.setState({
+        sessions: [{ id: 'a', path: '/s/a.jsonl', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'pi' }] as never,
+        pinnedSessionPaths: [],
+      });
+      pinSessionPref.mockRejectedValue(new Error('network down'));
+
+      useSessionStore.getState().pinSession('/s/a.jsonl');
+      // Optimistic pin applies immediately.
+      expect(useSessionStore.getState().pinnedSessionPaths).toContain('/s/a.jsonl');
+
+      // Drain the bounded retry/backoff chain.
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // Final failure → optimistic pin reverted (client stays server-authoritative).
+      expect(useSessionStore.getState().pinnedSessionPaths).not.toContain('/s/a.jsonl');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reverts the optimistic display name when the delta write fails after retries', async () => {
+    vi.useFakeTimers();
+    try {
+      useSessionStore.setState({ sessionMeta: { 'unknown:/s/a.jsonl': { displayName: 'Original', legacyKey: '/s/a.jsonl' } } });
+      setDisplayNamePref.mockRejectedValue(new Error('network down'));
+
+      useSessionStore.getState().setSessionDisplayName('/s/a.jsonl', 'New Name');
+      expect(useSessionStore.getState().sessionDisplayNames['/s/a.jsonl']).toBe('New Name');
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // Reverted to the previous name, not left at the failed optimistic value.
+      expect(useSessionStore.getState().sessionDisplayNames['/s/a.jsonl']).toBe('Original');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reverts a cleared display name when the clear delta write fails after retries', async () => {
+    vi.useFakeTimers();
+    try {
+      useSessionStore.setState({ sessionMeta: { 'unknown:/s/a.jsonl': { displayName: 'Keep Me', legacyKey: '/s/a.jsonl' } } });
+      clearDisplayNamePref.mockRejectedValue(new Error('network down'));
+
+      useSessionStore.getState().removeSessionDisplayName('/s/a.jsonl');
+      expect(useSessionStore.getState().sessionDisplayNames['/s/a.jsonl']).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // Name restored — the clear did not silently diverge.
+      expect(useSessionStore.getState().sessionDisplayNames['/s/a.jsonl']).toBe('Keep Me');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

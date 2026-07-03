@@ -27,8 +27,13 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
   const { switchSession, pinSession, unpinSession } = useWebSocket();
   const archiveSession = useSessionStore(state => state.archiveSession);
   const unarchiveSession = useSessionStore(state => state.unarchiveSession);
-  const isSessionPinned = useSessionStore(state => state.isSessionPinned);
-  const getSessionDisplayName = useSessionStore(state => state.getSessionDisplayName);
+  // Subscribe to the pinned/display-name VALUES (not the getters) so the item
+  // re-renders when the underlying maps change on a store-only update — most
+  // importantly when a failed delta write reverts an optimistic change. Selecting
+  // the getter by its (stable) function reference would never trigger a re-render
+  // and leave the UI showing a stale pin/name that no longer matches the store.
+  const isPinned = useSessionStore(state => state.pinnedSessionPaths.includes(session.path));
+  const webUIDisplayName = useSessionStore(state => state.sessionDisplayNames[session.path] as string | undefined);
   const setSessionDisplayName = useSessionStore(state => state.setSessionDisplayName);
   const removeSessionDisplayName = useSessionStore(state => state.removeSessionDisplayName);
   const setSwitchingSession = useSessionStore(state => state.setSwitchingSession);
@@ -58,8 +63,7 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
   const dragStartPos = useRef<{ x: number; y: number } | null>(null);
   const isDraggingRef = useRef(false);
   
-  // Use web UI display name if set, otherwise fall back to session name or first message
-  const webUIDisplayName = getSessionDisplayName(session.path);
+  // webUIDisplayName is subscribed above (value-based) so it stays live.
   const [editName, setEditName] = useState(webUIDisplayName || session.name || '');
 
   const isSelfDrop = transferSource?.sessionId === session.id;
@@ -246,7 +250,7 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
 
   const handleTogglePin = (e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (isSessionPinned(session.path)) {
+    if (isPinned) {
       unpinSession(session.path);
     } else {
       pinSession(session.path);
@@ -439,7 +443,7 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
 
             <div className="flex items-center gap-1 flex-shrink-0">
               {/* Pin indicator - always visible when pinned */}
-              {isSessionPinned(session.path) && !((showActions || isActive) && !contextMenu.visible) && (
+              {isPinned && !((showActions || isActive) && !contextMenu.visible) && (
                 <Pin className="w-3 h-3 text-amber-500 fill-amber-500" />
               )}
               {/* Actions: hover on desktop; always visible for active session */}
@@ -448,9 +452,9 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
                   <button
                     onClick={handleTogglePin}
                     className="p-1 hover:bg-gray-200 rounded transition-colors"
-                    title={isSessionPinned(session.path) ? 'Unpin session (allow idle cleanup)' : 'Pin session (protect from cleanup)'}
+                    title={isPinned ? 'Unpin session (allow idle cleanup)' : 'Pin session (protect from cleanup)'}
                   >
-                    {isSessionPinned(session.path) ? (
+                    {isPinned ? (
                       <Pin className="w-3 h-3 text-amber-500 fill-amber-500" />
                     ) : (
                       <Pin className="w-3 h-3 text-gray-400" />
@@ -620,7 +624,7 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
             onClick={handleTogglePin}
             className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
           >
-            {isSessionPinned(session.path) ? (
+            {isPinned ? (
               <>
                 <PinOff className="w-3.5 h-3.5 text-amber-500" />
                 <span className="text-amber-600">Unpin session</span>
