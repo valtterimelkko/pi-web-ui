@@ -916,19 +916,31 @@ describe('sessionStore', () => {
 vi.mock('../../../src/lib/api', () => ({
   getPreferences: vi.fn(),
   patchPreferences: vi.fn().mockResolvedValue({}),
+  archiveSessionPref: vi.fn().mockResolvedValue({}),
+  unarchiveSessionPref: vi.fn().mockResolvedValue({}),
+  archiveAllSessionsPref: vi.fn().mockResolvedValue({}),
 }));
 
 describe('initPreferences — archive reconciliation (server-authoritative)', () => {
   // Import the mocked api after vi.mock is hoisted
   let getPreferences: ReturnType<typeof vi.fn>;
   let patchPreferences: ReturnType<typeof vi.fn>;
+  let archiveSessionPref: ReturnType<typeof vi.fn>;
+  let unarchiveSessionPref: ReturnType<typeof vi.fn>;
+  let archiveAllSessionsPref: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     const api = await import('../../../src/lib/api');
     getPreferences = api.getPreferences as ReturnType<typeof vi.fn>;
     patchPreferences = api.patchPreferences as ReturnType<typeof vi.fn>;
+    archiveSessionPref = api.archiveSessionPref as ReturnType<typeof vi.fn>;
+    unarchiveSessionPref = api.unarchiveSessionPref as ReturnType<typeof vi.fn>;
+    archiveAllSessionsPref = api.archiveAllSessionsPref as ReturnType<typeof vi.fn>;
     vi.clearAllMocks();
     patchPreferences.mockResolvedValue({});
+    archiveSessionPref.mockResolvedValue({});
+    unarchiveSessionPref.mockResolvedValue({});
+    archiveAllSessionsPref.mockResolvedValue({});
 
     // Reset relevant store slices
     useSessionStore.setState({
@@ -1052,16 +1064,59 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     );
   });
 
-  it('unarchiveSession still syncs the filtered list to the server (the write that makes unarchive stick)', async () => {
-    // initPreferences no longer writes back, so the action-level PATCH is now
-    // the sole writer that removes a path from the server. Guard it.
+  it('archiveSession uses the per-path delta endpoint, not the whole-array PATCH', async () => {
+    // Regression guard for the archive-doesn't-stick bug. The whole-array PATCH
+    // was silently rejected by the browser's 64 KiB keepalive quota once the
+    // archive grew large. The delta endpoint sends a single path, keeping the
+    // body tiny and keepalive-safe.
+    useSessionStore.setState({ archivedSessionPaths: [] });
+
+    useSessionStore.getState().archiveSession('/sessions/a.jsonl');
+
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/a.jsonl']);
+    expect(archiveSessionPref).toHaveBeenCalledWith('/sessions/a.jsonl');
+    // The fragile whole-array PATCH must NOT be used for archiving anymore.
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it('unarchiveSession uses the per-path delta endpoint (the write that makes unarchive stick)', async () => {
     useSessionStore.setState({ archivedSessionPaths: ['/sessions/a.jsonl', '/sessions/b.jsonl'] });
 
     useSessionStore.getState().unarchiveSession('/sessions/a.jsonl');
 
     expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/b.jsonl']);
-    expect(patchPreferences).toHaveBeenCalledWith(
-      expect.objectContaining({ archivedSessionPaths: ['/sessions/b.jsonl'] }),
-    );
+    expect(unarchiveSessionPref).toHaveBeenCalledWith('/sessions/a.jsonl');
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it('archiveAllSessions archives every loaded session and adopts the server result', async () => {
+    useSessionStore.setState({
+      // minimal Session shapes — only path is needed for archive-all
+      sessions: [
+        { id: '1', path: '/sessions/a.jsonl' },
+        { id: '2', path: '/sessions/b.jsonl' },
+        { id: '3', path: 'claude-bare-id' },
+      ] as never,
+      archivedSessionPaths: [],
+      pinnedSessionPaths: ['/sessions/a.jsonl'],
+    });
+    archiveAllSessionsPref.mockResolvedValue({
+      archivedSessionPaths: ['/sessions/a.jsonl', '/sessions/b.jsonl', 'claude-bare-id'],
+      pinnedSessionPaths: [],
+    });
+
+    await useSessionStore.getState().archiveAllSessions();
+
+    expect(archiveAllSessionsPref).toHaveBeenCalledWith([
+      '/sessions/a.jsonl',
+      '/sessions/b.jsonl',
+      'claude-bare-id',
+    ]);
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual([
+      '/sessions/a.jsonl',
+      '/sessions/b.jsonl',
+      'claude-bare-id',
+    ]);
+    expect(useSessionStore.getState().pinnedSessionPaths).toEqual([]);
   });
 });

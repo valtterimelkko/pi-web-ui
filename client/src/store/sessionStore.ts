@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { useUIStore } from './uiStore';
-import { getPreferences, patchPreferences } from '../lib/api';
+import { getPreferences, patchPreferences, archiveSessionPref, unarchiveSessionPref, archiveAllSessionsPref } from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
 
 import { useTransferStore } from './transferStore';
@@ -319,6 +319,7 @@ interface SessionState {
   setSessionInfo: (info: SessionStats | null) => void;
   archiveSession: (sessionPath: string) => void;
   unarchiveSession: (sessionPath: string) => void;
+  archiveAllSessions: () => Promise<void>;
   isSessionArchived: (sessionPath: string) => boolean;
   pinSession: (sessionPath: string) => void;
   unpinSession: (sessionPath: string) => void;
@@ -760,11 +761,10 @@ export const useSessionStore = create<SessionState>()(
             pinnedSessionPaths: newPinned,
           };
         });
-        // Fire-and-forget sync to server so all devices stay in sync
-        patchPreferences({
-          archivedSessionPaths: get().archivedSessionPaths,
-          pinnedSessionPaths: get().pinnedSessionPaths,
-        }).catch((e) => {
+        // Delta write (single path) — keepalive-safe and race-free on the server,
+        // unlike the old whole-array PATCH which the browser's 64 KiB keepalive
+        // quota silently rejected once the archive grew large.
+        archiveSessionPref(sessionPath).catch((e) => {
           console.warn('Failed to sync archive state to server:', e);
         });
       },
@@ -773,9 +773,33 @@ export const useSessionStore = create<SessionState>()(
         set((state) => ({
           archivedSessionPaths: state.archivedSessionPaths.filter(p => p !== sessionPath),
         }));
-        patchPreferences({ archivedSessionPaths: get().archivedSessionPaths }).catch((e) => {
+        unarchiveSessionPref(sessionPath).catch((e) => {
           console.warn('Failed to sync archive state to server:', e);
         });
+      },
+
+      archiveAllSessions: async () => {
+        const paths = get().sessions.map((s) => s.path).filter((p): p is string => !!p);
+        // Optimistic union so the UI updates immediately.
+        set((state) => {
+          const archivedSet = new Set([...state.archivedSessionPaths, ...paths]);
+          return {
+            archivedSessionPaths: [...archivedSet],
+            pinnedSessionPaths: state.pinnedSessionPaths.filter((p) => !archivedSet.has(p)),
+          };
+        });
+        try {
+          const prefs = await archiveAllSessionsPref(paths);
+          // Server is authoritative — adopt its merged result.
+          if (prefs.archivedSessionPaths !== undefined) {
+            set({ archivedSessionPaths: prefs.archivedSessionPaths });
+          }
+          if (prefs.pinnedSessionPaths !== undefined) {
+            set({ pinnedSessionPaths: prefs.pinnedSessionPaths });
+          }
+        } catch (e) {
+          console.warn('Failed to archive all sessions on server:', e);
+        }
       },
 
       isSessionArchived: (sessionPath) => {

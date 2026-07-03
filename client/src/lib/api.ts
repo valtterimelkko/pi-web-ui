@@ -165,6 +165,14 @@ export async function getPreferences(): Promise<WebUIPreferences> {
 /**
  * Merge-patch web UI preferences on the server.
  * Only the supplied keys are updated; others are left unchanged.
+ *
+ * IMPORTANT: do NOT route archive/unarchive through here. This PATCH sends the
+ * whole preferences object, and the browser *rejects* a `keepalive` fetch whose
+ * combined in-flight body exceeds 64 KiB. With hundreds of archived sessions the
+ * archivedSessionPaths array alone crosses that limit, so archive writes silently
+ * failed to reach the server and reverted on reload. Archive mutations use the
+ * per-path delta endpoints below instead. This helper is kept for the small,
+ * bounded preferences (pins, display names) where the whole-object PATCH is safe.
  */
 export async function patchPreferences(updates: Partial<WebUIPreferences>): Promise<WebUIPreferences> {
   const body = JSON.stringify(updates);
@@ -174,10 +182,56 @@ export async function patchPreferences(updates: Partial<WebUIPreferences>): Prom
     headers: { 'Content-Type': 'application/json' },
     body,
     // keepalive lets the browser complete this request even if the page unloads
-    // (e.g. hard-refresh immediately after archiving a session).
-    // Browsers silently ignore keepalive when the body exceeds ~64 KB; the
-    // request is still sent, just without the keep-alive guarantee.
+    // (e.g. hard-refresh immediately after a change). Safe here because pins /
+    // display names stay well under the 64 KiB keepalive quota.
     keepalive: true,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+    throw new ApiError(response.status, error.error || `HTTP ${response.status}`);
+  }
+
+  return response.json() as Promise<WebUIPreferences>;
+}
+
+/**
+ * Archive a single session (delta write). The body is one path — a few hundred
+ * bytes — so `keepalive` stays far under the 64 KiB quota and survives an
+ * immediate hard-refresh. The server merges atomically, so this is device-
+ * agnostic and free of the last-write-wins races that plagued the whole-array
+ * PATCH.
+ */
+export async function archiveSessionPref(sessionPath: string): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/archive', { sessionPath }, true);
+}
+
+/** Unarchive a single session (delta write). See archiveSessionPref. */
+export async function unarchiveSessionPref(sessionPath: string): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/unarchive', { sessionPath }, true);
+}
+
+/**
+ * Archive many sessions in one call. This is a deliberate foreground action
+ * (never fires on page unload), so it uses a normal — non-keepalive — fetch;
+ * the 64 KiB keepalive limit does not apply and the (potentially large) list of
+ * paths is sent without issue.
+ */
+export async function archiveAllSessionsPref(sessionPaths: string[]): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/archive-all', { sessionPaths }, false);
+}
+
+async function postPreferenceDelta(
+  endpoint: string,
+  body: Record<string, unknown>,
+  keepalive: boolean,
+): Promise<WebUIPreferences> {
+  const response = await fetch(`${API_URL}${endpoint}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    ...(keepalive ? { keepalive: true } : {}),
   });
 
   if (!response.ok) {

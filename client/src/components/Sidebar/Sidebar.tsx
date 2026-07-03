@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PanelLeft, PanelRight, Plus, RefreshCw, Sun, Moon, ChevronRight, Coins } from 'lucide-react';
+import { PanelLeft, PanelRight, Plus, RefreshCw, Sun, Moon, ChevronRight, Coins, Archive } from 'lucide-react';
 import { useSessionStore, useUIStore } from '../../store';
 import { useChatStore } from '../../store/chatStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -24,6 +24,8 @@ export function Sidebar() {
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
   const [showUsageDashboard, setShowUsageDashboard] = useState(false);
+  const [archivingAll, setArchivingAll] = useState(false);
+  const archiveAllSessions = useSessionStore(s => s.archiveAllSessions);
 
   // Helper to get display name for a session
   const getDisplayName = (session: { path: string; name?: string; firstMessage?: string }) => {
@@ -57,6 +59,22 @@ export function Sidebar() {
 
   // Get unique CWDs for filter dropdown
   const uniqueCwds = Array.from(new Set(activeSessions.map(s => s.cwd)));
+
+  const handleArchiveAll = async () => {
+    if (activeSessions.length === 0 || archivingAll) return;
+    const confirmed = window.confirm(
+      `Archive all ${activeSessions.length} active session${activeSessions.length === 1 ? '' : 's'}? ` +
+      `You can restore any of them from the Archived section afterwards.`,
+    );
+    if (!confirmed) return;
+    setArchivingAll(true);
+    try {
+      await archiveAllSessions();
+      setArchiveExpanded(true);
+    } finally {
+      setArchivingAll(false);
+    }
+  };
 
   const handleCreateSession = (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity', model?: string, thinkingLevel?: string) => {
     createNewSession(cwd, sdkType, model, thinkingLevel);
@@ -130,6 +148,16 @@ export function Sidebar() {
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Sessions</span>
             <div className="flex items-center gap-1">
+              {activeSessions.length > 0 && (
+                <button
+                  onClick={handleArchiveAll}
+                  disabled={archivingAll}
+                  className="p-1.5 hover:bg-gray-200 rounded-md transition-colors disabled:opacity-50"
+                  title={`Archive all ${activeSessions.length} active sessions`}
+                >
+                  <Archive className={`w-3.5 h-3.5 text-gray-400 ${archivingAll ? 'animate-pulse' : ''}`} />
+                </button>
+              )}
               <button
                 onClick={() => getSessions?.()}
                 className="p-1.5 hover:bg-gray-200 rounded-md transition-colors"

@@ -268,6 +268,141 @@ describe('Preferences Route', () => {
   });
 });
 
+// ── Delta archive endpoints (real router) ─────────────────────────────────────
+//
+// These mount the *real* preferences router (not the re-implemented one above)
+// so the actual /archive, /unarchive and /archive-all handlers are exercised.
+// PREFS_FILE resolves to <piAgentDir>/web-ui-prefs.json, so we point config at a
+// fresh temp dir per test.
+
+describe('Delta archive endpoints', () => {
+  let tmpDir: string;
+  let prefsFile: string;
+  let app: express.Application;
+
+  async function buildRealApp(dir: string): Promise<express.Application> {
+    vi.doMock('../../../src/config.js', () => ({ config: { piAgentDir: dir } }));
+    vi.doMock('../../../src/middleware/auth.js', () => ({
+      cookieAuthMiddleware: (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
+    }));
+    vi.doMock('../../../src/security/rate-limit.js', () => ({
+      apiLimiter: (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
+    }));
+    const routerModule = await import('../../../src/routes/preferences.js');
+    const a = express();
+    a.use(express.json({ limit: '20mb' }));
+    a.use('/api/preferences', routerModule.default);
+    return a;
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    tmpDir = path.join(os.tmpdir(), `pi-prefs-delta-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(tmpDir, { recursive: true });
+    prefsFile = path.join(tmpDir, 'web-ui-prefs.json');
+    app = await buildRealApp(tmpDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    vi.restoreAllMocks();
+  });
+
+  describe('POST /api/preferences/archive', () => {
+    it('adds a path to an empty archive', async () => {
+      const res = await request(app).post('/api/preferences/archive').send({ sessionPath: '/s/a.jsonl' });
+      expect(res.status).toBe(200);
+      expect(res.body.archivedSessionPaths).toEqual(['/s/a.jsonl']);
+      const onDisk = JSON.parse(await fs.readFile(prefsFile, 'utf-8'));
+      expect(onDisk.archivedSessionPaths).toEqual(['/s/a.jsonl']);
+    });
+
+    it('appends without dropping existing entries', async () => {
+      await fs.writeFile(prefsFile, JSON.stringify({ archivedSessionPaths: ['/s/a.jsonl'] }), 'utf-8');
+      const res = await request(app).post('/api/preferences/archive').send({ sessionPath: '/s/b.jsonl' });
+      expect(res.status).toBe(200);
+      expect(res.body.archivedSessionPaths).toEqual(['/s/a.jsonl', '/s/b.jsonl']);
+    });
+
+    it('is idempotent (no duplicate on re-archive)', async () => {
+      await request(app).post('/api/preferences/archive').send({ sessionPath: '/s/a.jsonl' });
+      const res = await request(app).post('/api/preferences/archive').send({ sessionPath: '/s/a.jsonl' });
+      expect(res.body.archivedSessionPaths).toEqual(['/s/a.jsonl']);
+    });
+
+    it('auto-unpins the archived session', async () => {
+      await fs.writeFile(
+        prefsFile,
+        JSON.stringify({ archivedSessionPaths: [], pinnedSessionPaths: ['/s/a.jsonl', '/s/keep.jsonl'] }),
+        'utf-8',
+      );
+      const res = await request(app).post('/api/preferences/archive').send({ sessionPath: '/s/a.jsonl' });
+      expect(res.body.archivedSessionPaths).toEqual(['/s/a.jsonl']);
+      expect(res.body.pinnedSessionPaths).toEqual(['/s/keep.jsonl']);
+    });
+
+    it('rejects a missing sessionPath with 400', async () => {
+      const res = await request(app).post('/api/preferences/archive').send({});
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('POST /api/preferences/unarchive', () => {
+    it('removes the path and the removal persists (the reported un-archive bug)', async () => {
+      await fs.writeFile(prefsFile, JSON.stringify({ archivedSessionPaths: ['/s/a.jsonl', '/s/b.jsonl'] }), 'utf-8');
+      const res = await request(app).post('/api/preferences/unarchive').send({ sessionPath: '/s/a.jsonl' });
+      expect(res.status).toBe(200);
+      expect(res.body.archivedSessionPaths).toEqual(['/s/b.jsonl']);
+      const onDisk = JSON.parse(await fs.readFile(prefsFile, 'utf-8'));
+      expect(onDisk.archivedSessionPaths).toEqual(['/s/b.jsonl']);
+    });
+
+    it('is a no-op when the path is not archived', async () => {
+      await fs.writeFile(prefsFile, JSON.stringify({ archivedSessionPaths: ['/s/b.jsonl'] }), 'utf-8');
+      const res = await request(app).post('/api/preferences/unarchive').send({ sessionPath: '/s/missing.jsonl' });
+      expect(res.status).toBe(200);
+      expect(res.body.archivedSessionPaths).toEqual(['/s/b.jsonl']);
+    });
+  });
+
+  describe('POST /api/preferences/archive-all', () => {
+    it('unions the given paths with the existing archive and dedups', async () => {
+      await fs.writeFile(prefsFile, JSON.stringify({ archivedSessionPaths: ['/s/a.jsonl'] }), 'utf-8');
+      const res = await request(app)
+        .post('/api/preferences/archive-all')
+        .send({ sessionPaths: ['/s/a.jsonl', '/s/b.jsonl', '/s/c.jsonl'] });
+      expect(res.status).toBe(200);
+      expect([...res.body.archivedSessionPaths].sort()).toEqual(['/s/a.jsonl', '/s/b.jsonl', '/s/c.jsonl']);
+    });
+
+    it('auto-unpins every path it archives', async () => {
+      await fs.writeFile(
+        prefsFile,
+        JSON.stringify({ archivedSessionPaths: [], pinnedSessionPaths: ['/s/a.jsonl', '/s/b.jsonl'] }),
+        'utf-8',
+      );
+      const res = await request(app)
+        .post('/api/preferences/archive-all')
+        .send({ sessionPaths: ['/s/a.jsonl', '/s/b.jsonl'] });
+      expect(res.body.pinnedSessionPaths).toEqual([]);
+    });
+
+    it('persists a large batch (hundreds of sessions) in one call', async () => {
+      const many = Array.from({ length: 900 }, (_, i) => `/s/sess-${i}.jsonl`);
+      const res = await request(app).post('/api/preferences/archive-all').send({ sessionPaths: many });
+      expect(res.status).toBe(200);
+      expect(res.body.archivedSessionPaths).toHaveLength(900);
+      const onDisk = JSON.parse(await fs.readFile(prefsFile, 'utf-8'));
+      expect(onDisk.archivedSessionPaths).toHaveLength(900);
+    });
+
+    it('rejects a non-array payload with 400', async () => {
+      const res = await request(app).post('/api/preferences/archive-all').send({ sessionPaths: 'nope' });
+      expect(res.status).toBe(400);
+    });
+  });
+});
+
 // ── Robustness tests (atomic writes, corrupt file, mutex) ─────────────────────
 
 describe('Preferences Robustness', () => {
