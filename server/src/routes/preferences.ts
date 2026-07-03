@@ -57,20 +57,29 @@ const V1Schema = z.object({
 export type Preferences = PreferencesV2;
 export type { SessionMeta, SessionRuntime } from './session-meta.js';
 
-const SessionPathSchema = z.object({ sessionPath: z.string().min(1).max(4096) });
+const SessionPathSchema = z.object({
+  sessionPath: z.string().min(1).max(4096),
+  updatedAt: z.number().optional(),
+});
 const ArchiveAllSchema = z.object({
   sessionPaths: z.array(z.string().min(1).max(4096)).max(100000),
+  updatedAt: z.number().optional(),
 });
 // Single-key display-name delta: set a name, or clear it (name === null / empty).
 const DisplayNameSchema = z.object({
   sessionPath: z.string().min(1).max(4096),
   name: z.union([z.string().max(4096), z.null()]).optional(),
+  updatedAt: z.number().optional(),
 });
 // New key-based delta (Phase 2 clients send the stable runtime:id key directly).
-const SessionKeySchema = z.object({ key: z.string().min(1).max(4096) });
+const SessionKeySchema = z.object({
+  key: z.string().min(1).max(4096),
+  updatedAt: z.number().optional(),
+});
 const DisplayNameKeySchema = z.object({
   key: z.string().min(1).max(4096),
   name: z.union([z.string().max(4096), z.null()]).optional(),
+  updatedAt: z.number().optional(),
 });
 
 class PreferencesMutex {
@@ -226,7 +235,9 @@ function setField(
   sessions[key] = record;
 }
 
-/** Drop a field from a record (unarchive/unpin/clear-name). */
+/** Drop a field from a record (unarchive/unpin/clear-name). LWW-aware: a stale
+ *  `now` (older than the stored record) is rejected so an older device cannot
+ *  resurrect a field another device cleared. */
 function clearField(
   sessions: Record<string, SessionMeta>,
   key: string,
@@ -236,6 +247,7 @@ function clearField(
 ): void {
   const stored = sessions[key];
   if (!stored) return;
+  if (stored.updatedAt !== undefined && now < stored.updatedAt) return; // stale → reject (LWW)
   const next: SessionMeta = { ...stored };
   delete next[field];
   next.updatedAt = now;
@@ -247,11 +259,11 @@ function clearField(
  * Atomically add a single session path to the archive (delta, keepalive-safe).
  * Archiving auto-unpins: an archived session must not consume a pin slot.
  */
-export async function addArchivedPath(sessionPath: string, filePath = PREFS_FILE): Promise<Preferences> {
+export async function addArchivedPath(sessionPath: string, filePath = PREFS_FILE, updatedAt?: number): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
     const key = await pathToKey(sessionPath);
-    const now = Date.now();
+    const now = updatedAt ?? Date.now();
     setField(prefs.sessions, key, { archived: true }, sessionPath, now);
     // auto-unpin invariant
     if (prefs.sessions[key]?.pinned) clearField(prefs.sessions, key, 'pinned', sessionPath, now);
@@ -261,11 +273,11 @@ export async function addArchivedPath(sessionPath: string, filePath = PREFS_FILE
 }
 
 /** Atomically remove a single session path from the archive (delta unarchive). */
-export async function removeArchivedPath(sessionPath: string, filePath = PREFS_FILE): Promise<Preferences> {
+export async function removeArchivedPath(sessionPath: string, filePath = PREFS_FILE, updatedAt?: number): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
     const key = await pathToKey(sessionPath);
-    clearField(prefs.sessions, key, 'archived', sessionPath, Date.now());
+    clearField(prefs.sessions, key, 'archived', sessionPath, updatedAt ?? Date.now());
     await write(prefs);
     return prefs;
   }, filePath);
@@ -275,11 +287,11 @@ export async function removeArchivedPath(sessionPath: string, filePath = PREFS_F
  * Atomically archive many sessions at once (union with the existing archive).
  * Used by "Archive all" (a deliberate, foreground, non-keepalive request).
  */
-export async function addArchivedPaths(sessionPaths: string[], filePath = PREFS_FILE): Promise<Preferences> {
+export async function addArchivedPaths(sessionPaths: string[], filePath = PREFS_FILE, updatedAt?: number): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
     const resolver = await buildRegistryResolver();
-    const now = Date.now();
+    const now = updatedAt ?? Date.now();
     const archivedKeys = new Set<string>();
     for (const p of sessionPaths) {
       const key = toV2Key(p, resolver).key;
@@ -296,22 +308,22 @@ export async function addArchivedPaths(sessionPaths: string[], filePath = PREFS_
 }
 
 /** Atomically add a single session path to the pinned set (delta pin). */
-export async function addPinnedPath(sessionPath: string, filePath = PREFS_FILE): Promise<Preferences> {
+export async function addPinnedPath(sessionPath: string, filePath = PREFS_FILE, updatedAt?: number): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
     const key = await pathToKey(sessionPath);
-    setField(prefs.sessions, key, { pinned: true }, sessionPath, Date.now());
+    setField(prefs.sessions, key, { pinned: true }, sessionPath, updatedAt ?? Date.now());
     await write(prefs);
     return prefs;
   }, filePath);
 }
 
 /** Atomically remove a single session path from the pinned set (delta unpin). */
-export async function removePinnedPath(sessionPath: string, filePath = PREFS_FILE): Promise<Preferences> {
+export async function removePinnedPath(sessionPath: string, filePath = PREFS_FILE, updatedAt?: number): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
     const key = await pathToKey(sessionPath);
-    clearField(prefs.sessions, key, 'pinned', sessionPath, Date.now());
+    clearField(prefs.sessions, key, 'pinned', sessionPath, updatedAt ?? Date.now());
     await write(prefs);
     return prefs;
   }, filePath);
@@ -322,12 +334,13 @@ export async function setDisplayName(
   sessionPath: string,
   name: string | null,
   filePath = PREFS_FILE,
+  updatedAt?: number,
 ): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
     const key = await pathToKey(sessionPath);
     const trimmed = typeof name === 'string' ? name.trim() : '';
-    const now = Date.now();
+    const now = updatedAt ?? Date.now();
     if (trimmed) setField(prefs.sessions, key, { displayName: trimmed }, sessionPath, now);
     else clearField(prefs.sessions, key, 'displayName', sessionPath, now);
     await write(prefs);
@@ -337,10 +350,10 @@ export async function setDisplayName(
 
 // Key-based variants (Phase 2 clients send the stable runtime:id key directly,
 // avoiding the registry round-trip and staying immune to path changes).
-export async function addArchivedKey(key: string, filePath = PREFS_FILE): Promise<Preferences> {
+export async function addArchivedKey(key: string, filePath = PREFS_FILE, updatedAt?: number): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
-    const now = Date.now();
+    const now = updatedAt ?? Date.now();
     setField(prefs.sessions, key, { archived: true }, key, now);
     if (prefs.sessions[key]?.pinned) clearField(prefs.sessions, key, 'pinned', key, now);
     await write(prefs);
@@ -348,28 +361,28 @@ export async function addArchivedKey(key: string, filePath = PREFS_FILE): Promis
   }, filePath);
 }
 
-export async function removeArchivedKey(key: string, filePath = PREFS_FILE): Promise<Preferences> {
+export async function removeArchivedKey(key: string, filePath = PREFS_FILE, updatedAt?: number): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
-    clearField(prefs.sessions, key, 'archived', key, Date.now());
+    clearField(prefs.sessions, key, 'archived', key, updatedAt ?? Date.now());
     await write(prefs);
     return prefs;
   }, filePath);
 }
 
-export async function addPinnedKey(key: string, filePath = PREFS_FILE): Promise<Preferences> {
+export async function addPinnedKey(key: string, filePath = PREFS_FILE, updatedAt?: number): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
-    setField(prefs.sessions, key, { pinned: true }, key, Date.now());
+    setField(prefs.sessions, key, { pinned: true }, key, updatedAt ?? Date.now());
     await write(prefs);
     return prefs;
   }, filePath);
 }
 
-export async function removePinnedKey(key: string, filePath = PREFS_FILE): Promise<Preferences> {
+export async function removePinnedKey(key: string, filePath = PREFS_FILE, updatedAt?: number): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
-    clearField(prefs.sessions, key, 'pinned', key, Date.now());
+    clearField(prefs.sessions, key, 'pinned', key, updatedAt ?? Date.now());
     await write(prefs);
     return prefs;
   }, filePath);
@@ -379,11 +392,12 @@ export async function setDisplayNameKey(
   key: string,
   name: string | null,
   filePath = PREFS_FILE,
+  updatedAt?: number,
 ): Promise<Preferences> {
   return withPrefsLock(async (read, write) => {
     const prefs = await read();
     const trimmed = typeof name === 'string' ? name.trim() : '';
-    const now = Date.now();
+    const now = updatedAt ?? Date.now();
     if (trimmed) setField(prefs.sessions, key, { displayName: trimmed }, key, now);
     else clearField(prefs.sessions, key, 'displayName', key, now);
     await write(prefs);
@@ -434,10 +448,13 @@ router.patch('/', async (req: Request, res: Response) => {
 });
 
 // ── Delta endpoints (path-based, Phase 1 compat + keepalive-safe) ───────────
+// Each accepts an optional client `updatedAt` (epoch-ms) so the server's
+// last-writer-wins can reject a genuinely stale write; absent it, the server
+// stamps Date.now().
 router.post('/archive', async (req: Request, res: Response) => {
   try {
-    const { sessionPath } = SessionPathSchema.parse(req.body);
-    res.json(withLegacy(await addArchivedPath(sessionPath)));
+    const { sessionPath, updatedAt } = SessionPathSchema.parse(req.body);
+    res.json(withLegacy(await addArchivedPath(sessionPath, undefined, updatedAt)));
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid archive request', details: error.errors }); return; }
     logger.error('Error archiving session:', error);
@@ -447,8 +464,8 @@ router.post('/archive', async (req: Request, res: Response) => {
 
 router.post('/unarchive', async (req: Request, res: Response) => {
   try {
-    const { sessionPath } = SessionPathSchema.parse(req.body);
-    res.json(withLegacy(await removeArchivedPath(sessionPath)));
+    const { sessionPath, updatedAt } = SessionPathSchema.parse(req.body);
+    res.json(withLegacy(await removeArchivedPath(sessionPath, undefined, updatedAt)));
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid unarchive request', details: error.errors }); return; }
     logger.error('Error unarchiving session:', error);
@@ -458,8 +475,8 @@ router.post('/unarchive', async (req: Request, res: Response) => {
 
 router.post('/archive-all', async (req: Request, res: Response) => {
   try {
-    const { sessionPaths } = ArchiveAllSchema.parse(req.body);
-    res.json(withLegacy(await addArchivedPaths(sessionPaths)));
+    const { sessionPaths, updatedAt } = ArchiveAllSchema.parse(req.body);
+    res.json(withLegacy(await addArchivedPaths(sessionPaths, undefined, updatedAt)));
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid archive-all request', details: error.errors }); return; }
     logger.error('Error archiving all sessions:', error);
@@ -470,12 +487,12 @@ router.post('/archive-all', async (req: Request, res: Response) => {
 router.post('/pin', async (req: Request, res: Response) => {
   try {
     if (req.body && typeof req.body === 'object' && 'key' in req.body) {
-      const { key } = SessionKeySchema.parse(req.body);
-      res.json(withLegacy(await addPinnedKey(key)));
+      const { key, updatedAt } = SessionKeySchema.parse(req.body);
+      res.json(withLegacy(await addPinnedKey(key, undefined, updatedAt)));
       return;
     }
-    const { sessionPath } = SessionPathSchema.parse(req.body);
-    res.json(withLegacy(await addPinnedPath(sessionPath)));
+    const { sessionPath, updatedAt } = SessionPathSchema.parse(req.body);
+    res.json(withLegacy(await addPinnedPath(sessionPath, undefined, updatedAt)));
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid pin request', details: error.errors }); return; }
     logger.error('Error pinning session:', error);
@@ -486,12 +503,12 @@ router.post('/pin', async (req: Request, res: Response) => {
 router.post('/unpin', async (req: Request, res: Response) => {
   try {
     if (req.body && typeof req.body === 'object' && 'key' in req.body) {
-      const { key } = SessionKeySchema.parse(req.body);
-      res.json(withLegacy(await removePinnedKey(key)));
+      const { key, updatedAt } = SessionKeySchema.parse(req.body);
+      res.json(withLegacy(await removePinnedKey(key, undefined, updatedAt)));
       return;
     }
-    const { sessionPath } = SessionPathSchema.parse(req.body);
-    res.json(withLegacy(await removePinnedPath(sessionPath)));
+    const { sessionPath, updatedAt } = SessionPathSchema.parse(req.body);
+    res.json(withLegacy(await removePinnedPath(sessionPath, undefined, updatedAt)));
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid unpin request', details: error.errors }); return; }
     logger.error('Error unpinning session:', error);
@@ -502,12 +519,12 @@ router.post('/unpin', async (req: Request, res: Response) => {
 router.post('/display-name', async (req: Request, res: Response) => {
   try {
     if (req.body && typeof req.body === 'object' && 'key' in req.body) {
-      const { key, name } = DisplayNameKeySchema.parse(req.body);
-      res.json(withLegacy(await setDisplayNameKey(key, name ?? null)));
+      const { key, name, updatedAt } = DisplayNameKeySchema.parse(req.body);
+      res.json(withLegacy(await setDisplayNameKey(key, name ?? null, undefined, updatedAt)));
       return;
     }
-    const { sessionPath, name } = DisplayNameSchema.parse(req.body);
-    res.json(withLegacy(await setDisplayName(sessionPath, name ?? null)));
+    const { sessionPath, name, updatedAt } = DisplayNameSchema.parse(req.body);
+    res.json(withLegacy(await setDisplayName(sessionPath, name ?? null, undefined, updatedAt)));
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid display-name request', details: error.errors }); return; }
     logger.error('Error setting display name:', error);

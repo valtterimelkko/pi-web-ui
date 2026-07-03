@@ -213,13 +213,13 @@ export async function patchPreferences(updates: Partial<WebUIPreferences>): Prom
  * agnostic and free of the last-write-wins races that plagued the whole-array
  * PATCH.
  */
-export async function archiveSessionPref(sessionPath: string): Promise<WebUIPreferences> {
-  return postPreferenceDelta('/api/preferences/archive', { sessionPath }, true);
+export async function archiveSessionPref(sessionPath: string, updatedAt: number): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/archive', { sessionPath, updatedAt }, true);
 }
 
 /** Unarchive a single session (delta write). See archiveSessionPref. */
-export async function unarchiveSessionPref(sessionPath: string): Promise<WebUIPreferences> {
-  return postPreferenceDelta('/api/preferences/unarchive', { sessionPath }, true);
+export async function unarchiveSessionPref(sessionPath: string, updatedAt: number): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/unarchive', { sessionPath, updatedAt }, true);
 }
 
 /**
@@ -228,8 +228,8 @@ export async function unarchiveSessionPref(sessionPath: string): Promise<WebUIPr
  * the 64 KiB keepalive limit does not apply and the (potentially large) list of
  * paths is sent without issue.
  */
-export async function archiveAllSessionsPref(sessionPaths: string[]): Promise<WebUIPreferences> {
-  return postPreferenceDelta('/api/preferences/archive-all', { sessionPaths }, false);
+export async function archiveAllSessionsPref(sessionPaths: string[], updatedAt: number): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/archive-all', { sessionPaths, updatedAt }, false);
 }
 
 /**
@@ -237,14 +237,16 @@ export async function archiveAllSessionsPref(sessionPaths: string[]): Promise<We
  * stays under the 64 KiB quota and survives an immediate hard-refresh. Part of
  * the unified per-item delta channel: pins, display names, and archive all write
  * the same way now, instead of pins/display-names riding the whole-object PATCH.
+ * `updatedAt` (epoch-ms) is sent so the server's last-writer-wins can reject a
+ * genuinely stale write from a briefly-offline device.
  */
-export async function pinSessionPref(sessionPath: string): Promise<WebUIPreferences> {
-  return postPreferenceDelta('/api/preferences/pin', { sessionPath }, true);
+export async function pinSessionPref(sessionPath: string, updatedAt: number): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/pin', { sessionPath, updatedAt }, true);
 }
 
 /** Unpin a single session (delta write). See pinSessionPref. */
-export async function unpinSessionPref(sessionPath: string): Promise<WebUIPreferences> {
-  return postPreferenceDelta('/api/preferences/unpin', { sessionPath }, true);
+export async function unpinSessionPref(sessionPath: string, updatedAt: number): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/unpin', { sessionPath, updatedAt }, true);
 }
 
 /**
@@ -253,13 +255,13 @@ export async function unpinSessionPref(sessionPath: string): Promise<WebUIPrefer
  * this is the fix for the keepalive landmine that silently dropped renames once
  * the map grew past 64 KiB.
  */
-export async function setDisplayNamePref(sessionPath: string, name: string): Promise<WebUIPreferences> {
-  return postPreferenceDelta('/api/preferences/display-name', { sessionPath, name }, true);
+export async function setDisplayNamePref(sessionPath: string, name: string, updatedAt: number): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/display-name', { sessionPath, name, updatedAt }, true);
 }
 
 /** Clear one session's display name (delta write; name: null deletes the key). */
-export async function clearDisplayNamePref(sessionPath: string): Promise<WebUIPreferences> {
-  return postPreferenceDelta('/api/preferences/display-name', { sessionPath, name: null }, true);
+export async function clearDisplayNamePref(sessionPath: string, updatedAt: number): Promise<WebUIPreferences> {
+  return postPreferenceDelta('/api/preferences/display-name', { sessionPath, name: null, updatedAt }, true);
 }
 
 async function postPreferenceDelta(

@@ -1117,7 +1117,7 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     useSessionStore.getState().archiveSession('/sessions/a.jsonl');
 
     expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/a.jsonl']);
-    expect(archiveSessionPref).toHaveBeenCalledWith('/sessions/a.jsonl');
+    expect(archiveSessionPref).toHaveBeenCalledWith('/sessions/a.jsonl', expect.any(Number));
     // The fragile whole-array PATCH must NOT be used for archiving anymore.
     expect(patchPreferences).not.toHaveBeenCalled();
   });
@@ -1131,7 +1131,7 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     useSessionStore.getState().unarchiveSession('/sessions/a.jsonl');
 
     expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/b.jsonl']);
-    expect(unarchiveSessionPref).toHaveBeenCalledWith('/sessions/a.jsonl');
+    expect(unarchiveSessionPref).toHaveBeenCalledWith('/sessions/a.jsonl', expect.any(Number));
     expect(patchPreferences).not.toHaveBeenCalled();
   });
 
@@ -1155,7 +1155,7 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
 
     await useSessionStore.getState().archiveAllSessions();
 
-    expect(archiveAllSessionsPref).toHaveBeenCalledWith(['/sessions/a.jsonl', '/sessions/b.jsonl', 'claude-bare-id']);
+    expect(archiveAllSessionsPref).toHaveBeenCalledWith(['/sessions/a.jsonl', '/sessions/b.jsonl', 'claude-bare-id'], expect.any(Number));
     expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/a.jsonl', '/sessions/b.jsonl', 'claude-bare-id']);
     expect(useSessionStore.getState().pinnedSessionPaths).toEqual([]);
   });
@@ -1171,7 +1171,7 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     useSessionStore.getState().pinSession('/s/a.jsonl');
 
     expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['/s/a.jsonl']);
-    expect(pinSessionPref).toHaveBeenCalledWith('/s/a.jsonl');
+    expect(pinSessionPref).toHaveBeenCalledWith('/s/a.jsonl', expect.any(Number));
     // The fragile whole-object PATCH must NOT be used for pinning anymore.
     expect(patchPreferences).not.toHaveBeenCalled();
   });
@@ -1205,7 +1205,7 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     useSessionStore.getState().unpinSession('/s/a.jsonl');
 
     expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['/s/b.jsonl']);
-    expect(unpinSessionPref).toHaveBeenCalledWith('/s/a.jsonl');
+    expect(unpinSessionPref).toHaveBeenCalledWith('/s/a.jsonl', expect.any(Number));
     expect(patchPreferences).not.toHaveBeenCalled();
   });
 
@@ -1213,7 +1213,7 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     useSessionStore.getState().setSessionDisplayName('/s/a.jsonl', 'Refactor');
 
     expect(useSessionStore.getState().sessionDisplayNames['/s/a.jsonl']).toBe('Refactor');
-    expect(setDisplayNamePref).toHaveBeenCalledWith('/s/a.jsonl', 'Refactor');
+    expect(setDisplayNamePref).toHaveBeenCalledWith('/s/a.jsonl', 'Refactor', expect.any(Number));
     // The whole-object PATCH (which re-sent the entire display-name map and
     // tripped the 64 KiB keepalive quota) must NOT be used anymore.
     expect(patchPreferences).not.toHaveBeenCalled();
@@ -1225,7 +1225,7 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     useSessionStore.getState().removeSessionDisplayName('/s/a.jsonl');
 
     expect(useSessionStore.getState().sessionDisplayNames['/s/a.jsonl']).toBeUndefined();
-    expect(clearDisplayNamePref).toHaveBeenCalledWith('/s/a.jsonl');
+    expect(clearDisplayNamePref).toHaveBeenCalledWith('/s/a.jsonl', expect.any(Number));
     expect(patchPreferences).not.toHaveBeenCalled();
   });
 

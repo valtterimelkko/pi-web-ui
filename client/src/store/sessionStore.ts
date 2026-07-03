@@ -870,7 +870,7 @@ export const useSessionStore = create<SessionState>()(
         // Delta write (single path) — keepalive-safe and race-free on the server.
         // Reverts the optimistic archive (and restores the pin) if it can't land.
         syncPreferenceDelta(
-          () => archiveSessionPref(sessionPath),
+          () => archiveSessionPref(sessionPath, now),
           () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : undefined)),
         );
       },
@@ -878,17 +878,18 @@ export const useSessionStore = create<SessionState>()(
       unarchiveSession: (sessionPath) => {
         const key = keyForPath(get().sessions, sessionPath);
         const prev = get().sessionMeta[key];
+        const now = Date.now();
         set((state) => commitMeta(state, key, (p) => {
           if (!p) return undefined;
           const rec: SessionMeta = { ...p, legacyKey: sessionPath };
           delete rec.archived;
-          rec.updatedAt = Date.now();
+          rec.updatedAt = now;
           return rec;
         }));
         // Delta write; re-archive this path only if the write can't land.
         syncPreferenceDelta(
-          () => unarchiveSessionPref(sessionPath),
-          () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : { archived: true, updatedAt: Date.now(), legacyKey: sessionPath })),
+          () => unarchiveSessionPref(sessionPath, now),
+          () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : { archived: true, updatedAt: now, legacyKey: sessionPath })),
         );
       },
 
@@ -910,7 +911,7 @@ export const useSessionStore = create<SessionState>()(
           return { sessionMeta: meta, ...deriveLegacyFromMeta(meta) };
         });
         try {
-          const prefs = await archiveAllSessionsPref(paths);
+          const prefs = await archiveAllSessionsPref(paths, now);
           // Server is authoritative — adopt its merged v2 map (with derived legacy).
           const serverMeta = (prefs.sessions as Record<string, SessionMeta> | undefined);
           if (serverMeta) {
@@ -932,6 +933,7 @@ export const useSessionStore = create<SessionState>()(
       pinSession: (sessionPath) => {
         const key = keyForPath(get().sessions, sessionPath);
         const prev = get().sessionMeta[key]; // capture BEFORE the optimistic set
+        const now = Date.now();
         let added = false;
         set((state) => {
           if (state.sessionMeta[key]?.pinned) return state;
@@ -952,14 +954,14 @@ export const useSessionStore = create<SessionState>()(
           if (targetRuntime !== undefined && sameRuntimePinnedCount >= 2) return state;
           if (targetRuntime === undefined && state.pinnedSessionPaths.length >= 2) return state; // Backward-compatible fallback
           added = true;
-          return commitMeta(state, key, (p) => ({ ...(p ?? {}), pinned: true, updatedAt: Date.now(), legacyKey: sessionPath }));
+          return commitMeta(state, key, (p) => ({ ...(p ?? {}), pinned: true, updatedAt: now, legacyKey: sessionPath }));
         });
         // Durable per-key delta. The WS runtime hop and the 2/runtime cap above
         // are unchanged; only the durable prefs write moved to the unified delta
         // channel. Reverts the pin if the write can't land.
         if (added) {
           syncPreferenceDelta(
-            () => pinSessionPref(sessionPath),
+            () => pinSessionPref(sessionPath, now),
             () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : undefined)),
           );
         }
@@ -969,18 +971,19 @@ export const useSessionStore = create<SessionState>()(
         const key = keyForPath(get().sessions, sessionPath);
         const wasPinned = !!get().sessionMeta[key]?.pinned;
         const prev = get().sessionMeta[key];
+        const now = Date.now();
         set((state) => commitMeta(state, key, (p) => {
           if (!p) return undefined;
           const rec: SessionMeta = { ...p, legacyKey: sessionPath };
           delete rec.pinned;
-          rec.updatedAt = Date.now();
+          rec.updatedAt = now;
           return rec;
         }));
         // Durable per-key delta; re-pins this path only if the write can't land.
         if (wasPinned) {
           syncPreferenceDelta(
-            () => unpinSessionPref(sessionPath),
-            () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : { pinned: true, updatedAt: Date.now(), legacyKey: sessionPath })),
+            () => unpinSessionPref(sessionPath, now),
+            () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : { pinned: true, updatedAt: now, legacyKey: sessionPath })),
           );
         }
       },
@@ -992,14 +995,15 @@ export const useSessionStore = create<SessionState>()(
       setSessionDisplayName: (sessionPath, displayName) => {
         const key = keyForPath(get().sessions, sessionPath);
         const prev = get().sessionMeta[key];
+        const now = Date.now();
         set((state) => commitMeta(state, key, (p) => ({
-          ...(p ?? {}), displayName, updatedAt: Date.now(), legacyKey: sessionPath,
+          ...(p ?? {}), displayName, updatedAt: now, legacyKey: sessionPath,
         })));
         // Durable per-key delta (replaces the whole-object PATCH that re-sent the
         // entire — multi-KB — display-name map on every rename and tripped the
         // 64 KiB keepalive quota). Reverts to the previous name on final failure.
         syncPreferenceDelta(
-          () => setDisplayNamePref(sessionPath, displayName),
+          () => setDisplayNamePref(sessionPath, displayName, now),
           () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : undefined)),
         );
       },
@@ -1011,17 +1015,18 @@ export const useSessionStore = create<SessionState>()(
       removeSessionDisplayName: (sessionPath) => {
         const key = keyForPath(get().sessions, sessionPath);
         const prev = get().sessionMeta[key];
+        const now = Date.now();
         set((state) => commitMeta(state, key, (p) => {
           if (!p) return undefined;
           const rec: SessionMeta = { ...p, legacyKey: sessionPath };
           delete rec.displayName;
-          rec.updatedAt = Date.now();
+          rec.updatedAt = now;
           return rec;
         }));
         // Durable per-key delta (name: null clears the key); restores the
         // previous name if the write can't land.
         syncPreferenceDelta(
-          () => clearDisplayNamePref(sessionPath),
+          () => clearDisplayNamePref(sessionPath, now),
           () => set((state) => commitMeta(state, key, () => prev ? { ...prev, legacyKey: prev.legacyKey ?? sessionPath } : undefined)),
         );
       },

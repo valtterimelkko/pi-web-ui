@@ -178,17 +178,29 @@ describe('Preferences v2 — key-based deltas + LWW', () => {
   });
 
   it('LWW: a newer updatedAt write wins; an older one is rejected (no stale resurrection)', async () => {
-    // Seed a record at updatedAt=100 (archived).
-    await fs.writeFile(file, JSON.stringify({
-      version: 2, sessions: { 'claude:s1': { archived: true, updatedAt: 100, legacyKey: 's1' } },
-    }), 'utf-8');
-    // Older write (updatedAt=50) trying to clear archived → must be rejected.
-    // The key-based display-name endpoint with a newer field is accepted; but to
-    // test LWW rejection directly we use the PATCH compat path with a stale map.
-    // (Direct per-field LWW is unit-tested in session-meta.test.ts applyLWW.)
-    const res = await request(app).get('/api/preferences');
-    expect(res.body.sessions['claude:s1'].archived).toBe(true);
-    expect(res.body.sessions['claude:s1'].updatedAt).toBe(100);
+    // Device B writes a display name at updatedAt=200.
+    const r1 = await request(app).post('/api/preferences/display-name')
+      .send({ key: 'claude:s1', name: 'Fresh from B', updatedAt: 200 });
+    expect(r1.body.sessions['claude:s1'].displayName).toBe('Fresh from B');
+    expect(r1.body.sessions['claude:s1'].updatedAt).toBe(200);
+    // Device A (stale, briefly offline) tries to overwrite with updatedAt=100 → rejected.
+    const r2 = await request(app).post('/api/preferences/display-name')
+      .send({ key: 'claude:s1', name: 'Stale from A', updatedAt: 100 });
+    expect(r2.body.sessions['claude:s1'].displayName).toBe('Fresh from B'); // unchanged
+    expect(r2.body.sessions['claude:s1'].updatedAt).toBe(200);
+    // An equal-or-newer write (updatedAt=250) is accepted.
+    const r3 = await request(app).post('/api/preferences/display-name')
+      .send({ key: 'claude:s1', name: 'Newer from A', updatedAt: 250 });
+    expect(r3.body.sessions['claude:s1'].displayName).toBe('Newer from A');
+  });
+
+  it('LWW: a stale clear (unarchive/unpin/clear-name) is rejected too', async () => {
+    // Seed pinned at updatedAt=300.
+    await request(app).post('/api/preferences/pin').send({ key: 'claude:s2', updatedAt: 300 });
+    // Stale unpin at updatedAt=100 → rejected (still pinned).
+    const r = await request(app).post('/api/preferences/unpin').send({ key: 'claude:s2', updatedAt: 100 });
+    expect(r.body.sessions['claude:s2'].pinned).toBe(true);
+    expect(r.body.sessions['claude:s2'].updatedAt).toBe(300);
   });
 });
 
