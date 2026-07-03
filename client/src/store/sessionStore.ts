@@ -855,27 +855,28 @@ export const useSessionStore = create<SessionState>()(
         try {
           const serverPrefs = await getPreferences();
           if (serverPrefs.archivedSessionPaths !== undefined) {
-            // Merge: union of server + local archived paths.
-            // Local-only entries survive here when the patchPreferences call was
-            // in-flight at the moment of page unload (hard-refresh race) or when
-            // the server write failed silently.  Taking the union means we never
-            // silently un-archive a session the user deliberately archived.
-            const localArchived = get().archivedSessionPaths;
-            const serverSet = new Set(serverPrefs.archivedSessionPaths);
-            const localOnlyPaths = localArchived.filter(p => !serverSet.has(p));
-            if (localOnlyPaths.length > 0) {
-              const merged = [...serverPrefs.archivedSessionPaths, ...localOnlyPaths];
-              set({ archivedSessionPaths: merged });
-              // Catch the server up so the next reload doesn't need to repeat this
-              patchPreferences({ archivedSessionPaths: merged }).catch((e) => {
-                console.warn('[initPreferences] Failed to sync merged archive state to server:', e);
-              });
-            } else {
-              set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
-            }
+            // Server is the single source of truth for archive state.
+            //
+            // We deliberately do NOT union with the local (localStorage) cache
+            // and do NOT write the result back here. An earlier version took
+            // server ∪ local and synced that union back; but a union can only
+            // grow, never shrink, which made archive state monotonic across
+            // devices: any device whose localStorage still held a path re-added
+            // it to the server on every load. That meant unarchiving on one
+            // device was always undone by another device's next reload, and the
+            // server list accumulated every session ever archived (it had grown
+            // to hundreds of entries). Server-wins makes archive state
+            // device-agnostic and lets unarchive actually stick.
+            //
+            // The race the union used to protect against — archive a session
+            // and hard-refresh before the PATCH lands — is instead covered by
+            // `keepalive: true` on patchPreferences, which keeps the write
+            // alive across page unload. If the server is unreachable,
+            // getPreferences rejects and we keep the local cache (catch below).
+            set({ archivedSessionPaths: serverPrefs.archivedSessionPaths });
           }
           if (serverPrefs.pinnedSessionPaths !== undefined) {
-            // Use the current archivedSessionPaths (may have been merged above)
+            // Use the server archive set (authoritative, set just above)
             const archivedSet = new Set(get().archivedSessionPaths);
             // Clean stale pins: remove any pinned sessions that are also archived
             const cleanedPins = serverPrefs.pinnedSessionPaths.filter(p => !archivedSet.has(p));
