@@ -918,7 +918,7 @@ vi.mock('../../../src/lib/api', () => ({
   patchPreferences: vi.fn().mockResolvedValue({}),
 }));
 
-describe('initPreferences — archive merge', () => {
+describe('initPreferences — archive reconciliation (server-authoritative)', () => {
   // Import the mocked api after vi.mock is hoisted
   let getPreferences: ReturnType<typeof vi.fn>;
   let patchPreferences: ReturnType<typeof vi.fn>;
@@ -953,25 +953,37 @@ describe('initPreferences — archive merge', () => {
     expect(patchPreferences).not.toHaveBeenCalled();
   });
 
-  it('merges local-only paths into the archive and syncs back to server', async () => {
-    const serverPaths = ['/sessions/a.jsonl'];
+  it('server is authoritative: local-only paths are dropped, never merged or synced back', async () => {
+    // Regression guard for the cross-device archive bug. An earlier version
+    // took the UNION of server + local and wrote that union back to the
+    // server. A union can only grow, so a path that left the server (because
+    // another device unarchived it) was always re-added by any device whose
+    // localStorage still held it. Server-wins + no write-back is the fix.
     const localOnlyPath = '/sessions/b.jsonl';
-
-    // Pre-seed local state with a path not yet on the server
     useSessionStore.setState({ archivedSessionPaths: [localOnlyPath] });
-    getPreferences.mockResolvedValue({ archivedSessionPaths: serverPaths });
+    getPreferences.mockResolvedValue({ archivedSessionPaths: [] }); // server: nothing archived
 
     await useSessionStore.getState().initPreferences();
 
-    const merged = useSessionStore.getState().archivedSessionPaths;
-    expect(merged).toContain('/sessions/a.jsonl');
-    expect(merged).toContain('/sessions/b.jsonl');
-    expect(merged).toHaveLength(2);
+    // Local-only path is discarded in favour of server truth.
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual([]);
+    // Crucially, the dropped path is never pushed back to the server.
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
 
-    // Should push the merged list back to the server
-    expect(patchPreferences).toHaveBeenCalledWith(
-      expect.objectContaining({ archivedSessionPaths: expect.arrayContaining(['/sessions/a.jsonl', '/sessions/b.jsonl']) }),
-    );
+  it('unarchive on another device converges: stale local archive entry is discarded', async () => {
+    // Device A unarchived X (server no longer has it). Device B still has X
+    // in localStorage from before. On B's reload it must adopt server truth
+    // (X unarchived) and must NOT re-add X to the server.
+    const X = '/sessions/x.jsonl';
+    const keep = '/sessions/y.jsonl';
+    useSessionStore.setState({ archivedSessionPaths: [X, keep] }); // B's stale local
+    getPreferences.mockResolvedValue({ archivedSessionPaths: [keep] }); // server after A's unarchive
+
+    await useSessionStore.getState().initPreferences();
+
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual([keep]);
+    expect(patchPreferences).not.toHaveBeenCalled(); // no write-back "pump"
   });
 
   it('does not duplicate paths already present on server', async () => {
@@ -1020,7 +1032,7 @@ describe('initPreferences — archive merge', () => {
     expect(names['/sessions/b.jsonl']).toBe('Server Only');
   });
 
-  it('cleans pins that are in the merged archive set', async () => {
+  it('cleans pins that are in the server archive set', async () => {
     const archivedPath = '/sessions/a.jsonl';
     const pinnedPath = '/sessions/b.jsonl';
     useSessionStore.setState({ archivedSessionPaths: [] });
@@ -1037,6 +1049,19 @@ describe('initPreferences — archive merge', () => {
     // Should sync the cleaned pins back
     expect(patchPreferences).toHaveBeenCalledWith(
       expect.objectContaining({ pinnedSessionPaths: [pinnedPath] }),
+    );
+  });
+
+  it('unarchiveSession still syncs the filtered list to the server (the write that makes unarchive stick)', async () => {
+    // initPreferences no longer writes back, so the action-level PATCH is now
+    // the sole writer that removes a path from the server. Guard it.
+    useSessionStore.setState({ archivedSessionPaths: ['/sessions/a.jsonl', '/sessions/b.jsonl'] });
+
+    useSessionStore.getState().unarchiveSession('/sessions/a.jsonl');
+
+    expect(useSessionStore.getState().archivedSessionPaths).toEqual(['/sessions/b.jsonl']);
+    expect(patchPreferences).toHaveBeenCalledWith(
+      expect.objectContaining({ archivedSessionPaths: ['/sessions/b.jsonl'] }),
     );
   });
 });
