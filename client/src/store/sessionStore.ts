@@ -12,6 +12,7 @@ import {
   clearDisplayNamePref,
 } from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
+import type { SubagentToolSummary } from '@pi-web-ui/shared';
 
 import { useTransferStore } from './transferStore';
 
@@ -257,6 +258,10 @@ export interface Message {
   toolResult?: {
     output: string;
     isError: boolean;
+    // Compact subagent/evaluated_subagent summary (model + tool-usage), computed
+    // server-side and forwarded on `tool_execution_end`. Present only for Pi
+    // subagent-family tools; absent for every other tool/runtime.
+    summary?: SubagentToolSummary;
   };
   isComplete?: boolean; // Optional for backward compatibility with LiveMessage
   error?: {
@@ -1591,15 +1596,16 @@ export const useSessionStore = create<SessionState>()(
 
           case 'tool_execution_end': {
             set({ lastStreamEventAt: Date.now() });
-            const { toolCallId, result, isError } = msg as unknown as {
+            const { toolCallId, result, isError, resultSummary } = msg as unknown as {
               toolCallId: string;
               result?: unknown;
               isError: boolean;
+              resultSummary?: SubagentToolSummary;
             };
             const content = extractToolResultText(result);
             get().updateMessage(toolCallId, {
               content,
-              toolResult: { output: content, isError },
+              toolResult: { output: content, isError, summary: resultSummary },
             });
             break;
           }
@@ -2104,21 +2110,22 @@ export const useSessionStore = create<SessionState>()(
               }
               
               case 'tool_execution_end': {
-                const { toolCallId, result, isError } = event as unknown as {
+                const { toolCallId, result, isError, resultSummary } = event as unknown as {
                   toolCallId: string;
                   result?: unknown;
                   isError: boolean;
+                  resultSummary?: SubagentToolSummary;
                 };
                 const content = extractToolResultText(result);
                 get().updateMessageInSession(sessionId, toolCallId, {
                   content,
-                  toolResult: { output: content, isError },
+                  toolResult: { output: content, isError, summary: resultSummary },
                 });
                 // Also update current session if it matches
                 if (get().currentSessionId === sessionId) {
                   get().updateMessage(toolCallId, {
                     content,
-                    toolResult: { output: content, isError },
+                    toolResult: { output: content, isError, summary: resultSummary },
                   });
                 }
                 break;

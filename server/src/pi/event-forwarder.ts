@@ -1,9 +1,65 @@
 import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { SessionPool } from './session-pool.js';
-import type { JSONRPCNotification } from '@pi-web-ui/shared';
+import { summarizeSubagentDetails, type JSONRPCNotification, type SubagentToolSummary } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('EventForwarder');
+
+/**
+ * Tools whose `toolResult.details` carries a rich subagent transcript. Only
+ * these get a compact {@link SubagentToolSummary} attached on the wire.
+ */
+const SUBAGENT_TOOL_NAMES = new Set(['subagent', 'evaluated_subagent']);
+
+/**
+ * Strip the heavy inner transcript (`details.results[].messages`) from a
+ * subagent tool result before forwarding — the compact `resultSummary` already
+ * carries the derived counts/totals, so the raw inner messages (10s–100s KB
+ * each) must never cross the wire. Returns the result unchanged for any shape
+ * that does not match the `subagent` details structure.
+ */
+function stripSubagentInnerMessages(result: unknown): unknown {
+  if (!result || typeof result !== 'object') return result;
+  const r = result as { details?: unknown };
+  const details = r.details;
+  if (!details || typeof details !== 'object') return result;
+  const d = details as { results?: unknown };
+  if (!Array.isArray(d.results)) return result;
+  const cleanedResults = d.results.map((res) => {
+    if (!res || typeof res !== 'object') return res;
+    // Drop `messages`; keep every other field (agent/task/exitCode/usage/…).
+    const { messages: _messages, ...rest } = res as Record<string, unknown>;
+    return rest;
+  });
+  return { ...r, details: { ...d, results: cleanedResults } };
+}
+
+/**
+ * A Pi event optionally carrying a compact subagent summary (only present after
+ * {@link enrichSubagentEvent} enriched a subagent / evaluated_subagent tool end).
+ */
+export type MaybeEnrichedEvent = AgentSessionEvent & { resultSummary?: SubagentToolSummary };
+
+/**
+ * Enrich a raw Pi `tool_execution_end` event for subagent / evaluated_subagent
+ * tools: compute a compact {@link SubagentToolSummary} from `result.details` and
+ * strip the heavy inner `details.results[].messages` transcript so only
+ * counts/totals cross the wire. Every other event is returned unchanged.
+ *
+ * This is the single enrichment shared by BOTH forward paths to the browser:
+ * the single-client {@link EventForwarder} (via `mapEventToMessage`) and the
+ * multi-session path (`MultiSessionManager.handleAgentEvent`, which wraps the
+ * raw event directly).
+ */
+export function enrichSubagentEvent(event: AgentSessionEvent): MaybeEnrichedEvent {
+  if (event.type !== 'tool_execution_end') return event;
+  const toolName = event.toolName;
+  if (typeof toolName !== 'string' || !SUBAGENT_TOOL_NAMES.has(toolName)) return event;
+  const details = (event.result as { details?: unknown } | null | undefined)?.details;
+  const resultSummary = details !== undefined ? summarizeSubagentDetails(toolName, details) : null;
+  const sanitizedResult = stripSubagentInnerMessages(event.result);
+  return { ...event, result: sanitizedResult, ...(resultSummary ? { resultSummary } : {}) };
+}
 
 
 export type WebSocketSender = (clientId: string, message: unknown) => void;
@@ -275,15 +331,18 @@ export class EventForwarder {
           partialResult: event.partialResult,
         };
 
-      case 'tool_execution_end':
+      case 'tool_execution_end': {
+        const e = enrichSubagentEvent(event) as { result: unknown; resultSummary?: SubagentToolSummary };
         return {
           ...base,
           type: 'tool_execution_end',
           toolCallId: event.toolCallId,
           toolName: event.toolName,
-          result: event.result,
+          result: e.result,
           isError: event.isError,
+          ...(e.resultSummary ? { resultSummary: e.resultSummary } : {}),
         };
+      }
 
       case 'compaction_start':
         return {

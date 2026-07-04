@@ -408,6 +408,62 @@ describe('projectDefaultViewFromEvents — special-card serialization', () => {
     expect(view.items[0].collapsedByDefault).toBe(true);
   });
 
+  it('enriches a subagent tool with model + one-line summary when resultSummary is present', () => {
+    const summary = {
+      mode: 'single',
+      kind: 'subagent' as const,
+      agents: [
+        {
+          agent: 'codescout',
+          model: 'github-copilot/gpt-5.4-mini',
+          turns: 13,
+          toolCalls: 46,
+          toolBreakdown: [{ name: 'read', count: 26 }],
+          inputTokens: 100770,
+          outputTokens: 15350,
+        },
+      ],
+      totals: { agentCount: 1, toolCalls: 46, turns: 13, inputTokens: 100770, outputTokens: 15350 },
+    };
+    const events = [
+      { type: 'tool_execution_start', toolCallId: 't1', toolName: 'subagent', args: { agent: 'codescout' }, timestamp: 1000 },
+      { type: 'tool_execution_end', toolCallId: 't1', toolName: 'subagent', result: { content: [{ type: 'text', text: 'ans' }] }, resultSummary: summary, isError: false, timestamp: 1000 },
+    ];
+    const view = projectDefaultViewFromEvents(events);
+    const text = view.items[0].text;
+    expect(text).toContain('codescout');
+    expect(text).toContain('github-copilot/gpt-5.4-mini');
+    expect(text).toContain('46 tools · 13 turns · 116k tok');
+  });
+
+  it('computes the summary from raw result.details when resultSummary is absent', () => {
+    const details = {
+      mode: 'single',
+      results: [
+        {
+          agent: 'codescout',
+          messages: [
+            {
+              role: 'assistant',
+              provider: 'github-copilot',
+              model: 'gpt-5.4-mini',
+              usage: { input: 1000, output: 100, cost: { total: 0.01 } },
+              content: [{ type: 'toolCall', name: 'read' }],
+            },
+          ],
+        },
+      ],
+    };
+    const events = [
+      { type: 'tool_execution_start', toolCallId: 't1', toolName: 'subagent', args: {}, timestamp: 1000 },
+      { type: 'tool_execution_end', toolCallId: 't1', toolName: 'subagent', result: { content: [{ type: 'text', text: 'ans' }], details }, isError: false, timestamp: 1000 },
+    ];
+    const view = projectDefaultViewFromEvents(events);
+    const text = view.items[0].text;
+    expect(text).toContain('github-copilot/gpt-5.4-mini');
+    expect(text).toContain('1 tool · 1 turn · 1k tok');
+  });
+
   it('serializes a todo tool as a short checklist (☑ done / ☐ pending)', () => {
     const events = tool(
       't1',

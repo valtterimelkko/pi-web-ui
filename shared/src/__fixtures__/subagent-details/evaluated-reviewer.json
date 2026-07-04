@@ -1,0 +1,16 @@
+{
+  "run_id": "sa_1783118089791_dg6erf7",
+  "agent": "reviewer",
+  "round": 1,
+  "timedOut": false,
+  "hadFinalOutput": true,
+  "exitCode": 0,
+  "usage": {
+    "input": 203879,
+    "output": 7127,
+    "cacheRead": 882176,
+    "cacheWrite": 0,
+    "cost": 1.6742929999999998,
+    "turns": 19
+  }
+}

@@ -3,9 +3,18 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { EventForwarder, type ForwardedEvent, type PiEvent } from '../../../src/pi/event-forwarder.js';
 import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
-import type { JSONRPCNotification } from '@pi-web-ui/shared';
+import { summarizeSubagentDetails, type JSONRPCNotification, type SubagentToolSummary } from '@pi-web-ui/shared';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const FIX = join(__dirname, '..', '..', '..', '..', 'shared', 'src', '__fixtures__', 'subagent-details');
+function loadFixture(name: string): unknown {
+  return JSON.parse(readFileSync(join(FIX, name), 'utf-8'));
+}
 
 describe('EventForwarder', () => {
   let forwarder: EventForwarder;
@@ -431,6 +440,109 @@ describe('EventForwarder', () => {
       const payload = call[1] as ForwardedEvent;
       const content = (payload.message as { content?: Array<{ text?: string }> }).content;
       expect(content?.[0]?.text).toBe('Hello world');
+    });
+  });
+
+  // ── Subagent card enrichment (docs/SUBAGENT-CARD-ENRICHMENT-PLAN.md Phase 2) ──
+  // The live Pi forward point must attach a compact `resultSummary` for
+  // subagent / evaluated_subagent tools ONLY, and strip the heavy inner
+  // `details.results[].messages` transcript so it never crosses the wire.
+  // Other runtimes (Claude/OpenCode/Antigravity) use separate forwarders and
+  // are untouched by this change — the non-subagent cases below are the
+  // regression guard that no other tool is altered.
+  describe('Subagent card enrichment (tool_execution_end)', () => {
+    const codescoutDetails = loadFixture('subagent-codescout.json');
+    const evaluatedDetails = loadFixture('evaluated-reviewer.json');
+
+    function forwardToolEnd(toolName: string, result: unknown, isError = false): ForwardedEvent {
+      const event = {
+        type: 'tool_execution_end',
+        toolCallId: 'tool-1',
+        toolName,
+        result,
+        isError,
+      } as unknown as AgentSessionEvent;
+      forwarder.forwardEvent('client-1', event);
+      const call = mockSender.mock.calls[mockSender.mock.calls.length - 1];
+      return call[1] as ForwardedEvent;
+    }
+
+    it('2.1 subagent: attaches resultSummary computed from details (real codescout numbers)', () => {
+      const payload = forwardToolEnd('subagent', {
+        content: [{ type: 'text', text: 'codescout final answer' }],
+        details: codescoutDetails,
+        isError: false,
+      });
+
+      // resultSummary present with the exact §2c codescout numbers
+      expect(payload).toHaveProperty('resultSummary');
+      const summary = (payload as { resultSummary: SubagentToolSummary }).resultSummary;
+      expect(summary.kind).toBe('subagent');
+      expect(summary.mode).toBe('single');
+      expect(summary.agents[0].agent).toBe('codescout');
+      expect(summary.agents[0].model).toBe('github-copilot/gpt-5.4-mini');
+      expect(summary.agents[0].toolCalls).toBe(46);
+      expect(summary.agents[0].turns).toBe(13);
+      expect(summary.agents[0].inputTokens).toBe(100770);
+      expect(summary.agents[0].outputTokens).toBe(15350);
+      // matches the pure summarizer exactly
+      expect(summary).toEqual(summarizeSubagentDetails('subagent', codescoutDetails));
+    });
+
+    it('2.1 subagent: STRIPS inner details.results[].messages (bloat guard); keeps answer text', () => {
+      const payload = forwardToolEnd('subagent', {
+        content: [{ type: 'text', text: 'codescout final answer' }],
+        details: codescoutDetails,
+      });
+
+      const result = (payload as { result: { details?: { results?: Array<Record<string, unknown>> } } }).result;
+      // inner transcripts gone
+      expect(result.details?.results?.[0]?.messages).toBeUndefined();
+      const serialized = JSON.stringify(payload);
+      expect(serialized).not.toContain('"messages"');
+      // answer text preserved
+      expect(result).toHaveProperty('content');
+      const text = (result as { content: Array<{ text?: string }> }).content[0].text;
+      expect(text).toBe('codescout final answer');
+    });
+
+    it('2.1 evaluated_subagent: attaches resultSummary (no model/breakdown, turns/tokens/cost)', () => {
+      const payload = forwardToolEnd('evaluated_subagent', {
+        content: [{ type: 'text', text: 'reviewer verdict' }],
+        details: evaluatedDetails,
+      });
+
+      const summary = (payload as { resultSummary: SubagentToolSummary }).resultSummary;
+      expect(summary.kind).toBe('evaluated_subagent');
+      expect(summary.mode).toBe('evaluated');
+      expect(summary.agents[0].model).toBeUndefined();
+      expect(summary.agents[0].toolBreakdown).toEqual([]);
+      expect(summary.agents[0].turns).toBe(19);
+      expect(summary.agents[0].inputTokens).toBe(203879);
+      expect(summary.agents[0].costUsd).toBeCloseTo(1.674293, 5);
+    });
+
+    it('2.2 non-subagent tool: NO resultSummary, result forwarded unchanged', () => {
+      const readResult = {
+        content: [{ type: 'text', text: 'file contents here' }],
+        isError: false,
+      };
+      const payload = forwardToolEnd('read', readResult);
+
+      expect(payload).not.toHaveProperty('resultSummary');
+      // result object is the same reference / shape (unchanged)
+      expect((payload as { result: unknown }).result).toEqual(readResult);
+    });
+
+    it('2.2 bash tool: NO resultSummary (regression: feature scoped to subagent family)', () => {
+      const payload = forwardToolEnd('bash', { content: [{ type: 'text', text: 'ok' }] });
+      expect(payload).not.toHaveProperty('resultSummary');
+    });
+
+    it('2.3 subagent with no details: no resultSummary, no crash, result preserved', () => {
+      const payload = forwardToolEnd('subagent', { content: [{ type: 'text', text: 'ans' }] });
+      expect(payload).not.toHaveProperty('resultSummary');
+      expect((payload as { result: { content: Array<{ text: string }> } }).result.content[0].text).toBe('ans');
     });
   });
 });

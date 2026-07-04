@@ -19,6 +19,12 @@
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
+import {
+  summarizeSubagentDetails,
+  formatSubagentOneLine,
+  type SubagentToolSummary,
+} from './subagent-summary.js';
+
 export type ScreenItemKind = 'user' | 'assistant' | 'tool' | 'tool_group' | 'thinking';
 
 export interface ScreenItem {
@@ -262,12 +268,44 @@ function truncateForExpand(text: string): string {
     : text;
 }
 
+/**
+ * Extract a compact subagent/evaluated_subagent summary from a tool_execution_end
+ * event, if any. Prefers a pre-computed `resultSummary` (attached by the Pi
+ * live forwarder) and falls back to computing one from raw `result.details`
+ * (replay/raw events). Returns undefined for non-subagent tools or absent data.
+ */
+function subagentSummaryFromEvent(event: Record<string, unknown>): SubagentToolSummary | undefined {
+  const direct = event.resultSummary;
+  if (direct && typeof direct === 'object') return direct as SubagentToolSummary;
+  const toolName = event.toolName;
+  if (typeof toolName !== 'string') return undefined;
+  const result = event.result;
+  if (!result || typeof result !== 'object') return undefined;
+  const details = (result as { details?: unknown }).details;
+  if (details === undefined) return undefined;
+  return summarizeSubagentDetails(toolName, details) ?? undefined;
+}
+
 /** Build the default (header) text for a tool item, incl. special cards. */
-function buildToolHeaderText(toolName: string, args: unknown): { text: string; primaryArg?: string } {
+function buildToolHeaderText(
+  toolName: string,
+  args: unknown,
+  summary?: SubagentToolSummary,
+): { text: string; primaryArg?: string } {
   const primaryArg = toolPrimaryArg(toolName, args);
   const argsRecord = (args && typeof args === 'object') ? args as Record<string, unknown> : undefined;
 
   if (isSubagentToolName(toolName)) {
+    // Enriched Pi SDK summary (model + tool-usage one-line), faithful to the
+    // client card. Preferred over the legacy args-only task-count summary.
+    if (summary) {
+      const agent = summary.agents[0]?.agent ?? 'agent';
+      const model = summary.agents[0]?.model;
+      let text = `${toolName}: ${summary.mode} · ${agent}`;
+      if (model) text += ` · ${model}`;
+      text += ` · ${formatSubagentOneLine(summary)}`;
+      return { text, primaryArg };
+    }
     const mode = typeof argsRecord?.mode === 'string' ? argsRecord.mode : 'delegated';
     const tasks = argsRecord?.tasks;
     const count = Array.isArray(tasks) ? tasks.length : 0;
@@ -321,6 +359,8 @@ interface PendingTool {
   startTimestamp: number;
   result?: string;
   isError?: boolean;
+  /** Compact Pi subagent/evaluated_subagent summary, when the event carried one. */
+  summary?: SubagentToolSummary;
 }
 
 // ─── Event projection ──────────────────────────────────────────────────────────
@@ -345,7 +385,7 @@ export function projectDefaultViewFromEvents(
 
   const emitTool = (p: PendingTool): void => {
     if (!isVisibleTool(p.toolName)) return;
-    const { text, primaryArg } = buildToolHeaderText(p.toolName, p.args);
+    const { text, primaryArg } = buildToolHeaderText(p.toolName, p.args, p.summary);
     const item: ScreenItem = {
       kind: 'tool',
       text,
@@ -467,6 +507,8 @@ export function projectDefaultViewFromEvents(
       pendingTools.delete(toolCallId);
       pending.result = extractToolResultText(event.result);
       pending.isError = !!event.isError;
+      const summary = subagentSummaryFromEvent(event);
+      if (summary) pending.summary = summary;
       emitTool(pending);
     }
   }

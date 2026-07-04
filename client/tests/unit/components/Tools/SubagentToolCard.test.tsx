@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SubagentToolCard } from '../../../../src/components/Tools/SubagentToolCard';
+import type { SubagentToolSummary } from '@pi-web-ui/shared';
 
 describe('SubagentToolCard', () => {
   const mockSubagentResult = {
@@ -293,5 +294,165 @@ describe('SubagentToolCard', () => {
     fireEvent.click(header!);
 
     expect(screen.getByText(/single/i)).toBeInTheDocument();
+  });
+
+  // ── Enriched summary path (Pi SDK `subagent` / `evaluated_subagent`) ──
+  // docs/SUBAGENT-CARD-ENRICHMENT-PLAN.md Phase 3.2–3.5. Real shapes derived
+  // from the ground-truth session §2c (codescout / evaluated reviewer).
+  describe('enriched summary (Pi SDK)', () => {
+    const codescoutSummary: SubagentToolSummary = {
+      mode: 'single',
+      kind: 'subagent',
+      agents: [
+        {
+          agent: 'codescout',
+          model: 'github-copilot/gpt-5.4-mini',
+          task: 'Scout code paths',
+          exitCode: 0,
+          turns: 13,
+          toolCalls: 46,
+          toolBreakdown: [
+            { name: 'read', count: 26 },
+            { name: 'grep', count: 16 },
+            { name: 'find', count: 3 },
+            { name: 'ls', count: 1 },
+          ],
+          inputTokens: 100770,
+          outputTokens: 15350,
+          cacheReadTokens: 812544,
+          cacheWriteTokens: 0,
+          costUsd: 0.2055933,
+        },
+      ],
+      totals: {
+        agentCount: 1,
+        toolCalls: 46,
+        turns: 13,
+        inputTokens: 100770,
+        outputTokens: 15350,
+        cacheReadTokens: 812544,
+        cacheWriteTokens: 0,
+        costUsd: 0.2055933,
+      },
+    };
+
+    const evaluatedSummary: SubagentToolSummary = {
+      mode: 'evaluated',
+      kind: 'evaluated_subagent',
+      agents: [
+        {
+          agent: 'reviewer',
+          turns: 19,
+          toolCalls: 0,
+          toolBreakdown: [],
+          inputTokens: 203879,
+          outputTokens: 7127,
+          cacheReadTokens: 882176,
+          costUsd: 1.674293,
+          exitCode: 0,
+          timedOut: false,
+        },
+      ],
+      totals: {
+        agentCount: 1,
+        toolCalls: 0,
+        turns: 19,
+        inputTokens: 203879,
+        outputTokens: 7127,
+        cacheReadTokens: 882176,
+        costUsd: 1.674293,
+      },
+    };
+
+    it('3.2 collapsed: shows agent name, model string, one-line tool summary', () => {
+      render(
+        <SubagentToolCard
+          name="subagent"
+          args={{ agent: 'codescout', task: 'Scout' }}
+          result={{ output: 'final markdown answer', isError: false, summary: codescoutSummary }}
+        />
+      );
+
+      expect(screen.getByText('codescout')).toBeInTheDocument();
+      expect(screen.getByText('github-copilot/gpt-5.4-mini')).toBeInTheDocument();
+      expect(screen.getByText('46 tools · 13 turns · 116k tok')).toBeInTheDocument();
+    });
+
+    it('3.3 expanded: shows per-agent tool breakdown + model + tokens', () => {
+      render(
+        <SubagentToolCard
+          name="subagent"
+          args={{ agent: 'codescout', task: 'Scout' }}
+          result={{ output: 'final answer', isError: false, summary: codescoutSummary }}
+        />
+      );
+
+      fireEvent.click(screen.getByText('codescout').closest('button')!);
+
+      // per-tool breakdown
+      expect(screen.getByText('read ×26')).toBeInTheDocument();
+      expect(screen.getByText('grep ×16')).toBeInTheDocument();
+      expect(screen.getByText('find ×3')).toBeInTheDocument();
+      expect(screen.getByText('ls ×1')).toBeInTheDocument();
+      // model visible in expanded per-agent section too
+      expect(screen.getAllByText('github-copilot/gpt-5.4-mini').length).toBeGreaterThan(0);
+      // tokens (full numbers)
+      expect(screen.getByText(/100,770/)).toBeInTheDocument();
+      expect(screen.getByText(/15,350/)).toBeInTheDocument();
+    });
+
+    it('3.4 evaluated_subagent: omits model + breakdown, shows turns/tokens/cost, no crash', () => {
+      render(
+        <SubagentToolCard
+          name="evaluated_subagent"
+          args={{ agent: 'reviewer', task: 'Review' }}
+          result={{ output: 'reviewer verdict', isError: false, summary: evaluatedSummary }}
+        />
+      );
+
+      // no model, no per-tool breakdown chips
+      expect(screen.queryByText(/×\d+/)).not.toBeInTheDocument();
+      // turns + tokens + cost present (collapsed one-line)
+      expect(screen.getByText(/19 turns/)).toBeInTheDocument();
+      expect(screen.getByText(/\$1\.67/)).toBeInTheDocument();
+
+      // expands without crashing; tokens visible
+      fireEvent.click(screen.getByText('reviewer').closest('button')!);
+      expect(screen.getByText(/203,879/)).toBeInTheDocument();
+    });
+
+    it('3.5 fallback: summary absent AND legacy JSON absent → plain header, no model, no crash', () => {
+      render(
+        <SubagentToolCard
+          name="subagent"
+          args={{ agent: 'worker', task: 'Do' }}
+          result={{ output: 'just plain text, not JSON', isError: false }}
+        />
+      );
+
+      expect(screen.getByText('worker')).toBeInTheDocument();
+      // no enriched model/summary line
+      expect(screen.queryByText(/tok$/)).not.toBeInTheDocument();
+      // completed (no throw)
+      const checkmarks = document.querySelectorAll('.lucide-check-circle');
+      expect(checkmarks.length).toBeGreaterThan(0);
+    });
+
+    it('summary takes precedence over legacy JSON when both could apply', () => {
+      // result with a summary AND legacy-shaped JSON output → summary wins
+      render(
+        <SubagentToolCard
+          name="subagent"
+          args={{ agent: 'codescout' }}
+          result={{
+            output: JSON.stringify({ mode: 'parallel', tasks: [], summary: 'legacy' }),
+            isError: false,
+            summary: codescoutSummary,
+          }}
+        />
+      );
+      // enriched one-line present (summary path), legacy "parallel" mode label not shown
+      expect(screen.getByText('46 tools · 13 turns · 116k tok')).toBeInTheDocument();
+    });
   });
 });

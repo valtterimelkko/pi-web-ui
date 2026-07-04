@@ -1,6 +1,7 @@
 import type { PiService } from './pi-service.js';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { createLogger } from '../logging/logger.js';
+import { enrichSubagentEvent } from './event-forwarder.js';
 
 const logger = createLogger('MultiSessionManager');
 
@@ -988,6 +989,12 @@ export class MultiSessionManager {
         }
       }
     }
+
+    // Enrich subagent / evaluated_subagent tool end with a compact summary
+    // (model + tool-usage) and strip the heavy inner transcript, so the browser
+    // gets counts/totals — not 100s of KB of inner messages. Shared with the
+    // single-client EventForwarder path via enrichSubagentEvent.
+    event = enrichSubagentEvent(event);
 
     // Wrap the event in a session_event envelope with sessionId for proper client routing
     const sessionEvent = {

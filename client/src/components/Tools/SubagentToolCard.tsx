@@ -17,6 +17,7 @@ import {
   ChevronDown,
   Clock,
 } from 'lucide-react';
+import { formatSubagentOneLine, type SubagentToolSummary } from '@pi-web-ui/shared';
 
 /**
  * SubagentToolCard - Hierarchical display of subagent execution
@@ -34,6 +35,8 @@ interface SubagentToolCardProps {
   result?: {
     output: string;
     isError: boolean;
+    /** Compact Pi subagent/evaluated_subagent summary (model + tool-usage). */
+    summary?: SubagentToolSummary;
   } | null;
   startTime?: number; // Unix timestamp when tool started
 }
@@ -337,6 +340,60 @@ function formatElapsed(seconds: number): string {
   return `${mins}m ${secs}s`;
 }
 
+// Full number with thousands separators: 100770 -> "100,770"
+function formatNumber(n: number): string {
+  return n.toLocaleString();
+}
+
+// Expanded per-agent breakdown for the enriched summary path.
+const SubagentSummarySection = memo(function SubagentSummarySection({
+  summary,
+}: {
+  summary: SubagentToolSummary;
+}) {
+  return (
+    <div className="space-y-1">
+      {summary.agents.map((agent, idx) => (
+        <div key={idx} className="border-l-2 border-gray-200 ml-1 pl-2 py-1">
+          <div className="flex items-center gap-1.5">
+            <Bot className="w-3 h-3 text-gray-500 shrink-0" />
+            <span className="text-xs font-medium text-gray-700">{agent.agent}</span>
+            {agent.model && (
+              <span className="text-[10px] text-gray-400 font-mono truncate">{agent.model}</span>
+            )}
+          </div>
+
+          {agent.task && (
+            <div className="ml-5 text-[10px] text-gray-400 truncate" title={agent.task}>
+              {agent.task}
+            </div>
+          )}
+
+          {agent.toolBreakdown.length > 0 && (
+            <div className="ml-5 mt-1 flex flex-wrap gap-1">
+              {agent.toolBreakdown.map((b) => (
+                <span
+                  key={b.name}
+                  className="text-[10px] font-mono px-1.5 py-0.5 bg-gray-100 rounded text-gray-600"
+                >
+                  {b.name} ×{b.count}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="ml-5 mt-0.5 text-[10px] text-gray-400 font-mono">
+            {formatNumber(agent.inputTokens)} in / {formatNumber(agent.outputTokens)} out
+            {typeof agent.cacheReadTokens === 'number' && <> · {formatNumber(agent.cacheReadTokens)} cache</>}
+            {typeof agent.costUsd === 'number' && <> · ${agent.costUsd.toFixed(2)}</>}
+            {' · '}{agent.turns} turn{agent.turns !== 1 ? 's' : ''}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+});
+
 export const SubagentToolCard = memo(function SubagentToolCard({ 
   name, 
   args, 
@@ -366,15 +423,21 @@ export const SubagentToolCard = memo(function SubagentToolCard({
     return () => clearInterval(interval);
   }, [isPending, startTime]);
 
-  // Parse subagent result
+  // Parse subagent result (legacy orchestrator-JSON shape; other runtimes).
   const subagentData = useMemo(() => {
     if (!result?.output) return null;
     return parseSubagentResult(result.output);
   }, [result]);
 
+  // Enriched Pi SDK summary takes precedence over the legacy JSON shape when
+  // present (only subagent / evaluated_subagent tools carry it).
+  const summary = result?.summary;
+
   // Get tasks to display
   const tasks = subagentData?.tasks || subagentData?.chain || [];
   const mode = subagentData?.mode || (subagentData?.chain ? 'chain' : 'parallel');
+  const effectiveMode = summary ? summary.mode : mode;
+  const effectiveAgentCount = summary ? summary.agents.length : tasks.length;
 
   // Calculate stats
   const totalToolCalls = tasks.reduce((sum, task) => sum + (task.toolCalls?.length || 0), 0);
@@ -477,49 +540,60 @@ export const SubagentToolCard = memo(function SubagentToolCard({
       {isExpanded && (
         <div className="px-3 py-2 space-y-2">
           {/* Mode indicator */}
-          {mode && (
+          {effectiveMode && (
             <div className="text-xs text-gray-500">
-              Mode: <span className="font-mono text-gray-700">{mode}</span>
-              {tasks.length > 0 && (
-                <span className="ml-2">• {tasks.length} task{tasks.length !== 1 ? 's' : ''}</span>
+              Mode: <span className="font-mono text-gray-700">{effectiveMode}</span>
+              {effectiveAgentCount > 0 && (
+                <span className="ml-2">
+                  • {effectiveAgentCount} {summary
+                    ? `agent${effectiveAgentCount !== 1 ? 's' : ''}`
+                    : `task${effectiveAgentCount !== 1 ? 's' : ''}`}
+                </span>
               )}
             </div>
           )}
 
-          {/* Task sections */}
-          {tasks.length > 0 && (
-            <div className="space-y-1">
-              {tasks.map((task, index) => (
-                <TaskSection
-                  key={index}
-                  task={task}
-                  index={index}
-                  isExpanded={expandedTasks.has(index)}
-                  onToggle={() => toggleTask(index)}
-                />
-              ))}
-            </div>
-          )}
+          {summary ? (
+            /* Enriched per-agent breakdown (Pi SDK subagent / evaluated_subagent) */
+            <SubagentSummarySection summary={summary} />
+          ) : (
+            <>
+              {/* Task sections (legacy orchestrator-JSON shape) */}
+              {tasks.length > 0 && (
+                <div className="space-y-1">
+                  {tasks.map((task, index) => (
+                    <TaskSection
+                      key={index}
+                      task={task}
+                      index={index}
+                      isExpanded={expandedTasks.has(index)}
+                      onToggle={() => toggleTask(index)}
+                    />
+                  ))}
+                </div>
+              )}
 
-          {/* Summary from subagent */}
-          {subagentData?.summary && (
-            <div className="mt-2 p-2 bg-blue-50 rounded border border-blue-100">
-              <div className="text-xs font-medium text-blue-700 mb-1">Summary</div>
-              <div className="text-xs text-blue-600 whitespace-pre-wrap">
-                {subagentData.summary}
+              {/* Summary from subagent */}
+              {subagentData?.summary && (
+                <div className="mt-2 p-2 bg-blue-50 rounded border border-blue-100">
+                  <div className="text-xs font-medium text-blue-700 mb-1">Summary</div>
+                  <div className="text-xs text-blue-600 whitespace-pre-wrap">
+                    {subagentData.summary}
+                  </div>
+                </div>
+              )}
+
+              {/* Stats footer */}
+              <div className="flex items-center gap-3 text-[10px] text-gray-400 pt-1 border-t border-gray-100">
+                {totalToolCalls > 0 && (
+                  <span>{totalToolCalls} tool call{totalToolCalls !== 1 ? 's' : ''}</span>
+                )}
+                {totalTokens > 0 && (
+                  <span>{totalTokens.toLocaleString()} tokens</span>
+                )}
               </div>
-            </div>
+            </>
           )}
-
-          {/* Stats footer */}
-          <div className="flex items-center gap-3 text-[10px] text-gray-400 pt-1 border-t border-gray-100">
-            {totalToolCalls > 0 && (
-              <span>{totalToolCalls} tool call{totalToolCalls !== 1 ? 's' : ''}</span>
-            )}
-            {totalTokens > 0 && (
-              <span>{totalTokens.toLocaleString()} tokens</span>
-            )}
-          </div>
 
           {/* Raw output toggle */}
           {result?.output && (
@@ -531,7 +605,7 @@ export const SubagentToolCard = memo(function SubagentToolCard({
               >
                 {showRawOutput ? 'Hide raw output' : 'Show raw output'}
               </button>
-              
+
               {showRawOutput && (
                 <pre className="mt-1 p-2 bg-gray-50 rounded text-[10px] font-mono text-gray-600 overflow-x-auto max-h-40 overflow-y-auto">
                   {result.output}
@@ -542,8 +616,22 @@ export const SubagentToolCard = memo(function SubagentToolCard({
         </div>
       )}
 
-      {/* Collapsed summary */}
-      {!isExpanded && hasResult && subagentData && (
+      {/* Collapsed summary — enriched (Pi SDK) */}
+      {!isExpanded && hasResult && summary && (
+        <div className="px-3 py-1.5 bg-gray-50 border-t border-gray-100">
+          <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
+            {summary.agents[0]?.model && (
+              <span className="font-mono text-[10px] text-gray-400 truncate max-w-[55%]" title={summary.agents[0].model}>
+                {summary.agents[0].model}
+              </span>
+            )}
+            <span>{formatSubagentOneLine(summary)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Collapsed summary — legacy (orchestrator-JSON shape; other runtimes) */}
+      {!isExpanded && hasResult && !summary && subagentData && (
         <div className="px-3 py-1.5 bg-gray-50 border-t border-gray-100">
           <div className="flex items-center gap-3 text-xs text-gray-500">
             {tasks.length > 0 && (
