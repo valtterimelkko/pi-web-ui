@@ -30,6 +30,20 @@ notifications later without a rewrite.
 - **Opt-in, decoupled from pinning:** notifications fire only for sessions the
   operator opted in. Opt-in is a persisted per-session flag, independent of the
   2-session pin limit.
+- **Canonical Pi opt-in identity (bare UUID):** Pi sessions carry two ids — the
+  file basename (`<timestamp>_<uuid>`, the live sidebar `session.id` while
+  streaming) and the bare UUID (`<uuid>`, the `type:"session"` header id, which is
+  also the reloaded sidebar `session.id`). The opt-in is keyed on the **bare UUID**
+  derived deterministically from the session path (`canonicalOptInId` in
+  `@pi-web-ui/shared`, the same identity the v2 session-metadata layer's `pi:<uuid>`
+  is built on), so the bell stays in sync across a reload and turning it off truly
+  stops notifications. Both the browser route and the Internal-API route normalize
+  to this id; non-Pi runtimes key on the id unchanged (their id already equals
+  their path). A one-time, superset-preserving normalization runs in
+  `NotificationManager.init()` (before rehydration), re-keying any legacy
+  basename-keyed Pi opt-ins to the bare UUID and deduping records that collapse to
+  the same id (keeping the newest) — so existing broken opt-ins self-heal on the
+  next restart without losing any session.
 - **Opt-in is not retroactive:** the manager only reacts to a *live* `agent_end`
   arriving after its service observer attaches (`NotificationManager.attach()`
   subscribes to its broker with `replay: false`). If a turn's `agent_end` fires

@@ -158,6 +158,65 @@ describe('notification lifecycle (integration)', () => {
     expect(body.deliveries.some((d) => d.delivery.status === 'sent')).toBe(true);
   });
 
+  it('Pi desync lifecycle: basename opt-in normalizes to the bare uuid; cross-id read-back + opt-out stops notifications', async () => {
+    // Real prod-derived Pi dual-id shapes (plan §2): the live sidebar id is the
+    // basename; after reload it is the bare uuid. The fix makes both agree.
+    const UUID = '019f23d5-624d-7ca3-b34c-53b6732c2b44';
+    const BASENAME = `2026-07-02T17-16-54-733Z_${UUID}`;
+    const PATH = `/root/.pi/agent/sessions/--root-pi-web-ui--/${BASENAME}.jsonl`;
+    registry.get.mockResolvedValue({ id: BASENAME, path: PATH, sdkType: 'pi', cwd: '/tmp' });
+
+    // 1. Opt in via the LIVE basename id (what the sidebar shows while streaming).
+    const opt = createMockRes();
+    await routes.handleOptIn(
+      createJsonReq('POST', `/api/v1/sessions/${BASENAME}/notifications/opt-in`, { label: 'Desync job' }),
+      opt,
+      BASENAME,
+    );
+    expect(opt.statusCode).toBe(200);
+
+    // 2. agent_end fires on the path-keyed observer (origin-independent).
+    pi.emit(PATH, { type: 'agent_end', sessionId: BASENAME, timestamp: 1, data: {} });
+    await wait(50);
+    await manager.drain();
+    expect(channel.received).toHaveLength(1);
+    expect(channel.received[0].sessionId).toBe(UUID); // notification keyed on the canonical uuid
+
+    // 3. Read state back by the BARE UUID (the reloaded sidebar id) — pre-fix this
+    //    returned null because the record was keyed by the basename.
+    const state = createMockRes();
+    await routes.handleGetSessionState(
+      createJsonReq('GET', `/api/v1/sessions/${UUID}/notifications`),
+      state,
+      UUID,
+    );
+    const crossBody = json(state) as {
+      optIn: { label: string };
+      deliveries: { notification: { sessionId?: string; kind?: string }; delivery: { status: string } }[];
+    };
+    expect(crossBody.optIn.label).toBe('Desync job');
+    const agentEnd = crossBody.deliveries.find((d) => d.notification.kind === 'agent_end');
+    expect(agentEnd?.notification?.sessionId).toBe(UUID);
+    expect(agentEnd?.delivery.status).toBe('sent');
+
+    // 4. Opt out by the UUID (what the reloaded sidebar sends) — clears it.
+    const out = createMockRes();
+    await routes.handleOptOut(
+      createJsonReq('DELETE', `/api/v1/sessions/${UUID}/notifications/opt-in`),
+      out,
+      UUID,
+    );
+    expect(out.statusCode).toBe(200);
+    expect(manager.getOptIn(UUID)).toBeUndefined();
+
+    // 5. A subsequent agent_end produces NO further delivery (opt-out truly works,
+    //    and there is no stale husk still observing).
+    pi.emit(PATH, { type: 'agent_end', sessionId: BASENAME, timestamp: 2, data: {} });
+    await wait(50);
+    await manager.drain();
+    expect(channel.received).toHaveLength(1); // still only the first
+  });
+
   it('restart rehydration: a pending delivery is drained by a fresh manager on the same store', async () => {
     // Opt in + emit agent_end, but against a FAILING channel so the item stays pending.
     manager.shutdown();

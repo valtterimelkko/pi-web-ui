@@ -47,18 +47,12 @@ export interface V1Preferences {
 /** A runtime resolver: given an id/path, return its runtime or null if unknown. */
 export type RuntimeResolver = (id: string, path: string) => SessionRuntime | null;
 
-const PI_UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
-
-/**
- * Extract the Pi session id (uuid) from a Pi `.jsonl` path. The uuid in the
- * filename equals the `type:"session"` header id (verified against real files),
- * so deriving from the filename avoids reading every file during migration.
- * Returns null for non-Pi keys.
- */
-export function piSessionIdFromPath(sessionPath: string): string | null {
-  const m = sessionPath.match(PI_UUID_RE);
-  return m ? m[1] : null;
-}
+// The UUID extraction is shared with the notification layer's canonical opt-in
+// identity. `@pi-web-ui/shared` is the single source of truth for `PI_UUID_RE`
+// and `piSessionIdFromPath`; re-exported here so this module's existing public
+// API (consumed by preferences.ts) is unchanged. See shared/src/notification-identity.ts.
+import { piSessionIdFromPath } from '@pi-web-ui/shared';
+export { piSessionIdFromPath };
 
 /**
  * Resolve a v1 key (Pi path or bare id) to a stable v2 key `${runtime}:${id}`.

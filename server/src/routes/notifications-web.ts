@@ -9,6 +9,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
+import { canonicalOptInId } from '@pi-web-ui/shared';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import type { NotificationManager } from '../notifications/notification-manager.js';
 import type { NotificationRuntime, OptInRecord } from '../notifications/types.js';
@@ -30,7 +31,7 @@ export function createNotificationsWebRouter(deps: NotificationsWebDeps): Router
       res.status(503).json({ error: 'Notifications unavailable', code: 'NOTIFICATIONS_UNAVAILABLE' });
       return;
     }
-    const sessionId = req.params.id;
+    const rawId = req.params.id;
     // The session list (and thus the toggle) already carries each session's
     // runtime + path. The registry is NOT a reliable lookup key here: its ids
     // are generated UUIDs that do not match the sidebar's session id (notably
@@ -47,6 +48,13 @@ export function createNotificationsWebRouter(deps: NotificationsWebDeps): Router
       res.status(400).json({ error: 'Missing sessionPath', code: 'MISSING_SESSION_PATH' });
       return;
     }
+    // Normalize the opt-in key to the canonical identity (Pi: bare uuid from the
+    // path; others: the id unchanged). The sidebar's session.id is the basename
+    // while a Pi session is live but the bare uuid after reload; keying on the
+    // canonical id here (defense in depth — the client already sends it) keeps
+    // the persisted record findable by GET after a reload. The POST body still
+    // carries the real sessionPath for the Pi observer's serviceKey.
+    const sessionId = canonicalOptInId(runtime as NotificationRuntime, rawId, sessionPath);
     const label = typeof req.body?.label === 'string' ? req.body.label.slice(0, 200) : undefined;
     const record: OptInRecord = {
       sessionId,

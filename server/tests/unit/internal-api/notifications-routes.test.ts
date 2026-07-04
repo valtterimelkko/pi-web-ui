@@ -162,6 +162,27 @@ describe('notifications routes', () => {
       expect(antigravity.addCalls).toEqual(['id-antigravity']);
     });
 
+    it('normalizes a Pi opt-in to the canonical bare-uuid id (derived from entry.path)', async () => {
+      // Internal-API Pi sessions already surface the bare uuid as sessionId, but
+      // both entry points must agree: key the record on canonicalOptInId(path).
+      const UUID = '019f23d5-624d-7ca3-b34c-53b6732c2b44';
+      const BASENAME = `2026-07-02T17-16-54-733Z_${UUID}`;
+      const PATH = `/root/.pi/agent/sessions/--root-pi-web-ui--/${BASENAME}.jsonl`;
+      registry.get.mockResolvedValue({ id: BASENAME, path: PATH, sdkType: 'pi', cwd: '/tmp' });
+      const res = createMockRes();
+      await routes.handleOptIn(
+        createJsonReq('POST', `/api/v1/sessions/${BASENAME}/notifications/opt-in`),
+        res,
+        BASENAME,
+      );
+      expect(res.statusCode).toBe(200);
+      // Persisted under the bare uuid; observer attached on the real path.
+      expect(manager.getOptIn(UUID)?.sessionPath).toBe(PATH);
+      expect(pi.addCalls).toEqual([PATH]);
+      const body = json(res) as { optIn: { sessionId: string } };
+      expect(body.optIn.sessionId).toBe(UUID);
+    });
+
     it('returns 404 SESSION_NOT_FOUND for an unknown session', async () => {
       registry.get.mockResolvedValue(undefined);
       const res = createMockRes();

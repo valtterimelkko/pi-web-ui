@@ -152,4 +152,68 @@ describe('SessionNotifyToggle', () => {
       expect(addToast).not.toHaveBeenCalled();
     });
   });
+
+  describe('Pi canonical opt-in id (desync fix)', () => {
+    // Real prod-derived Pi dual-id shapes (plan §2): the live sidebar shows the
+    // basename; after reload it shows the bare uuid. Both must key the same URL.
+    const UUID = '019f23d5-624d-7ca3-b34c-53b6732c2b44';
+    const BASENAME = `2026-07-02T17-16-54-733Z_${UUID}`;
+    const PATH = `/root/.pi/agent/sessions/--root-pi-web-ui--/${BASENAME}.jsonl`;
+
+    it('keys every fetch on the bare uuid when the sidebar shows the live basename', async () => {
+      const fetchMock = makeFetch(null);
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(<SessionNotifyToggle sessionId={BASENAME} sdkType="pi" sessionPath={PATH} />);
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /enable notifications/i })).toBeInTheDocument(),
+      );
+      fireEvent.click(screen.getByRole('button', { name: /enable notifications/i }));
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /disable notifications/i })).toBeInTheDocument(),
+      );
+      fireEvent.click(screen.getByRole('button', { name: /disable notifications/i }));
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /enable notifications/i })).toBeInTheDocument(),
+      );
+
+      // Every fetch URL must be keyed on the bare uuid, NOT the basename
+      // (the basename contains the uuid as a substring, so check the path segment).
+      const urls = fetchMock.mock.calls.map((c) => c[0] as string);
+      expect(urls.length).toBeGreaterThanOrEqual(3); // GET + POST + DELETE
+      for (const url of urls) {
+        expect(url.startsWith(`/api/sessions/${UUID}/`)).toBe(true);
+      }
+      // The POST body still carries the real sessionPath (needed for the Pi observer key).
+      const postCall = fetchMock.mock.calls.find(
+        (c) => (c[1] as RequestInit | undefined)?.method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      expect(JSON.parse((postCall![1] as RequestInit).body as string)).toEqual({
+        runtime: 'pi',
+        sessionPath: PATH,
+      });
+    });
+
+    it('is idempotent: the reloaded bare-uuid id maps to the same url', async () => {
+      const fetchMock = makeFetch({ runtime: 'pi' });
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(<SessionNotifyToggle sessionId={UUID} sdkType="pi" sessionPath={PATH} />);
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /disable notifications/i })).toBeInTheDocument(),
+      );
+      expect(fetchMock.mock.calls[0][0]).toBe(`/api/sessions/${UUID}/notifications`);
+    });
+
+    it('leaves non-Pi ids unchanged in the url', async () => {
+      const fetchMock = makeFetch(null);
+      vi.stubGlobal('fetch', fetchMock);
+      render(<SessionNotifyToggle sessionId="c1" sdkType="claude" sessionPath="c1" />);
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /enable notifications/i })).toBeInTheDocument(),
+      );
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/sessions/c1/notifications');
+    });
+  });
 });

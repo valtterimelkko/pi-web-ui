@@ -16,6 +16,12 @@ import type {
 const NOW = '2026-06-29T00:00:00.000Z';
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// Real prod-derived Pi dual-id shapes (plan §2): basename (live sidebar id) and
+// bare uuid (reloaded sidebar id / canonical opt-in key), sharing one `.jsonl` path.
+const PI_UUID = '019f23d5-624d-7ca3-b34c-53b6732c2b44';
+const PI_BASENAME = `2026-07-02T17-16-54-733Z_${PI_UUID}`;
+const PI_PATH = `/root/.pi/agent/sessions/--root-pi-web-ui--/${PI_BASENAME}.jsonl`;
+
 /** Fake runtime service that records observer attach/detach and can emit events. */
 function fakeService() {
   const observers = new Map<string, Set<(e: NormalizedEvent) => void>>();
@@ -301,6 +307,126 @@ describe('NotificationManager', () => {
     });
   });
 
+  describe('canonical-id migration on init (desync self-heal)', () => {
+    it('re-keys a legacy basename-keyed Pi opt-in to the bare uuid', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      await store.setOptIn({
+        sessionId: PI_BASENAME,
+        runtime: 'pi',
+        sessionPath: PI_PATH,
+        optedInAt: NOW,
+        label: 'live basename opt-in',
+      });
+
+      const h = makeHarness(dir, { store });
+      await h.mgr.init();
+
+      // Now findable under the bare uuid (the reloaded sidebar id); the legacy
+      // basename key is gone.
+      expect(h.mgr.getOptIn(PI_UUID)?.label).toBe('live basename opt-in');
+      expect(h.mgr.getOptIn(PI_BASENAME)).toBeUndefined();
+      // Exactly one observer attached (on the real path) — no duplicate husk.
+      expect(h.pi.addCalls).toEqual([{ key: PI_PATH }]);
+      h.mgr.shutdown();
+    });
+
+    it('dedupes a basename record and a uuid record for the same session (no double-notify)', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      // Legacy live-sidebar opt-in keyed by basename (newer).
+      await store.setOptIn({
+        sessionId: PI_BASENAME,
+        runtime: 'pi',
+        sessionPath: PI_PATH,
+        optedInAt: '2026-07-02T17:20:00.000Z',
+        label: 'from basename',
+      });
+      // Earlier internal-API opt-in already keyed by uuid (older).
+      await store.setOptIn({
+        sessionId: PI_UUID,
+        runtime: 'pi',
+        sessionPath: PI_PATH,
+        optedInAt: '2026-07-02T17:00:00.000Z',
+        label: 'from uuid',
+      });
+
+      const h = makeHarness(dir, { store });
+      await h.mgr.init();
+
+      // Both collapse to the uuid; the newer (basename) record wins, the older
+      // uuid husk is replaced — so exactly one record + one observer remain.
+      const rec = h.mgr.getOptIn(PI_UUID);
+      expect(rec?.label).toBe('from basename');
+      expect(rec?.optedInAt).toBe('2026-07-02T17:20:00.000Z');
+      expect(h.mgr.listOptIns().filter((r) => r.sessionPath === PI_PATH)).toHaveLength(1);
+      expect(h.pi.addCalls).toEqual([{ key: PI_PATH }]);
+      h.mgr.shutdown();
+    });
+
+    it('keeps the uuid record when it is newer than the legacy basename one', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      await store.setOptIn({
+        sessionId: PI_BASENAME,
+        runtime: 'pi',
+        sessionPath: PI_PATH,
+        optedInAt: '2026-07-02T17:00:00.000Z',
+        label: 'older basename',
+      });
+      await store.setOptIn({
+        sessionId: PI_UUID,
+        runtime: 'pi',
+        sessionPath: PI_PATH,
+        optedInAt: '2026-07-02T17:20:00.000Z',
+        label: 'newer uuid',
+      });
+
+      const h = makeHarness(dir, { store });
+      await h.mgr.init();
+
+      expect(h.mgr.getOptIn(PI_UUID)?.label).toBe('newer uuid');
+      expect(h.mgr.getOptIn(PI_BASENAME)).toBeUndefined();
+      expect(h.pi.addCalls).toEqual([{ key: PI_PATH }]);
+      h.mgr.shutdown();
+    });
+
+    it('leaves non-Pi opt-ins untouched', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      await store.setOptIn(claudeOptIn());
+
+      const h = makeHarness(dir, { store });
+      await h.mgr.init();
+
+      expect(h.mgr.getOptIn('c1')?.runtime).toBe('claude');
+      expect(h.claude.addCalls).toEqual([{ key: 'c1' }]);
+      h.mgr.shutdown();
+    });
+
+    it('is idempotent: a second init does not duplicate or lose records', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      await store.setOptIn({
+        sessionId: PI_BASENAME,
+        runtime: 'pi',
+        sessionPath: PI_PATH,
+        optedInAt: NOW,
+        label: 'live',
+      });
+
+      const h = makeHarness(dir, { store });
+      await h.mgr.init();
+      const firstCount = h.mgr.listOptIns().length;
+      // Re-run init (simulating a second boot on the already-normalized store).
+      await h.mgr.init();
+      expect(h.mgr.listOptIns().length).toBe(firstCount);
+      expect(h.mgr.getOptIn(PI_UUID)?.label).toBe('live');
+      expect(h.mgr.getOptIn(PI_BASENAME)).toBeUndefined();
+      h.mgr.shutdown();
+    });
+  });
+
   describe('explicit notifications', () => {
     it('dispatches an explicit notification with no session required', async () => {
       const h = makeHarness(dir);
@@ -537,5 +663,24 @@ describe('NotificationManager — observability logging', () => {
     expect(rec).toBeDefined();
     expect(rec?.msg).toContain('1');
     b.mgr.shutdown();
+  });
+
+  it('logs the canonical-id migration count when legacy opt-ins are normalized', async () => {
+    const store = new NotificationStore(dir);
+    await store.init();
+    await store.setOptIn({
+      sessionId: PI_BASENAME,
+      runtime: 'pi',
+      sessionPath: PI_PATH,
+      optedInAt: NOW,
+      label: 'legacy',
+    });
+
+    const h = makeHarness(dir, { store });
+    await h.mgr.init();
+    const rec = findLog('info', 'normalized');
+    expect(rec).toBeDefined();
+    expect(rec?.msg).toContain('1');
+    h.mgr.shutdown();
   });
 });

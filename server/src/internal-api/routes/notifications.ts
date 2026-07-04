@@ -12,6 +12,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'http';
 import { z } from 'zod';
+import { canonicalOptInId } from '@pi-web-ui/shared';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
 import { createLogger } from '../../logging/logger.js';
 import type { NotificationManager } from '../../notifications/notification-manager.js';
@@ -69,17 +70,21 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, parsed.error.issues[0]?.message ?? 'invalid request body'));
       return;
     }
+    const sessionPath = entry.path ?? sessionId;
+    // Normalize to the canonical opt-in identity (Pi: bare uuid from the path)
+    // so Internal-API opt-ins and browser opt-ins land under the same key.
+    const canonicalId = canonicalOptInId(runtime, sessionId, sessionPath);
     const record: OptInRecord = {
-      sessionId,
+      sessionId: canonicalId,
       runtime,
-      sessionPath: entry.path ?? sessionId,
+      sessionPath,
       optedInAt: new Date().toISOString(),
       label: parsed.data.label,
     };
     await manager.optIn(record);
     sendJson(res, 200, {
       status: 'ok',
-      optIn: { sessionId, runtime: record.runtime, label: record.label, optedInAt: record.optedInAt },
+      optIn: { sessionId: canonicalId, runtime: record.runtime, label: record.label, optedInAt: record.optedInAt },
     });
   }
 

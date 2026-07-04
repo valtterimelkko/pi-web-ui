@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Bell, BellOff, Loader2 } from 'lucide-react';
+import { canonicalOptInId } from '@pi-web-ui/shared';
 import { useSessionStore, useUIStore } from '../../store';
 
 /**
@@ -27,6 +28,12 @@ export function SessionNotifyToggle({
    */
   label?: string;
 }): React.JSX.Element {
+  // Stable opt-in identity: Pi sessions are keyed by the bare uuid derived from
+  // the path (canonicalOptInId), not the sidebar's session.id — which is the
+  // basename while live and the bare uuid after reload. Keying on the canonical
+  // id keeps GET/POST/DELETE consistent across a reload (the desync fix). The
+  // POST body still carries the real sessionPath for the Pi observer's serviceKey.
+  const optInId = canonicalOptInId(sdkType, sessionId, sessionPath);
   const [on, setOn] = useState(false);
   const [loading, setLoading] = useState(false);
   // Opt-in only reacts to LIVE agent_end events (no replay of past turns —
@@ -38,7 +45,7 @@ export function SessionNotifyToggle({
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/notifications`, { credentials: 'include' })
+    fetch(`/api/sessions/${encodeURIComponent(optInId)}/notifications`, { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (!cancelled) setOn(Boolean(data?.optIn));
@@ -56,11 +63,11 @@ export function SessionNotifyToggle({
     setLoading(true);
     try {
       const res = on
-        ? await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/notifications/opt-in`, {
+        ? await fetch(`/api/sessions/${encodeURIComponent(optInId)}/notifications/opt-in`, {
             method: 'DELETE',
             credentials: 'include',
           })
-        : await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/notifications/opt-in`, {
+        : await fetch(`/api/sessions/${encodeURIComponent(optInId)}/notifications/opt-in`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',

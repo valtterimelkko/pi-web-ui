@@ -103,4 +103,53 @@ describe('notifications web router (cookie-auth browser surface)', () => {
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('NOTIFICATIONS_UNAVAILABLE');
   });
+
+  describe('Pi canonical opt-in id (desync fix)', () => {
+    // Real prod-derived Pi dual-id shapes (plan §2): the live sidebar posts the
+    // basename as `:id` but carries the real `.jsonl` path in the body.
+    const UUID = '019f23d5-624d-7ca3-b34c-53b6732c2b44';
+    const BASENAME = `2026-07-02T17-16-54-733Z_${UUID}`;
+    const PATH = `/root/.pi/agent/sessions/--root-pi-web-ui--/${BASENAME}.jsonl`;
+
+    it('POST opt-in with a Pi basename `:id` records + returns the bare uuid', async () => {
+      const mgr = fakeManager();
+      const app = buildApp(mgr);
+      const res = await request(app)
+        .post(`/api/sessions/${BASENAME}/notifications/opt-in`)
+        .send({ runtime: 'pi', sessionPath: PATH, label: 'Pi job' });
+
+      expect(res.status).toBe(200);
+      // Persisted under the canonical bare uuid, real path preserved.
+      expect(mgr.optIn).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: UUID, runtime: 'pi', sessionPath: PATH, label: 'Pi job' }),
+      );
+      // The response surfaces the normalized id the client should use henceforth.
+      expect(res.body.optIn.sessionId).toBe(UUID);
+      expect(res.body.optIn.runtime).toBe('pi');
+    });
+
+    it('POST opt-in with a bare-uuid `:id` is idempotent (stays the uuid)', async () => {
+      const mgr = fakeManager();
+      const app = buildApp(mgr);
+      const res = await request(app)
+        .post(`/api/sessions/${UUID}/notifications/opt-in`)
+        .send({ runtime: 'pi', sessionPath: PATH });
+
+      expect(res.status).toBe(200);
+      expect(mgr.optIn).toHaveBeenCalledWith(expect.objectContaining({ sessionId: UUID, sessionPath: PATH }));
+      expect(res.body.optIn.sessionId).toBe(UUID);
+    });
+
+    it('POST opt-in leaves a non-Pi runtime `:id` unchanged', async () => {
+      const mgr = fakeManager();
+      const app = buildApp(mgr);
+      const res = await request(app)
+        .post('/api/sessions/c1/notifications/opt-in')
+        .send({ runtime: 'claude', sessionPath: 'c1' });
+
+      expect(res.status).toBe(200);
+      expect(mgr.optIn).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'c1' }));
+      expect(res.body.optIn.sessionId).toBe('c1');
+    });
+  });
 });

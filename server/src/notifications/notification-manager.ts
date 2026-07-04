@@ -18,6 +18,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
+import { canonicalOptInId } from '@pi-web-ui/shared';
 import { InternalApiEventBroker } from '../internal-api/event-broker.js';
 import { NotificationStore } from './notification-store.js';
 import { ChannelRouter } from './channels/notification-channel.js';
@@ -98,6 +99,9 @@ export class NotificationManager {
   async init(): Promise<void> {
     await this.deps.store.init();
     if (!this.deps.enabled) return;
+    // One-time canonical-id normalization (desync self-heal) BEFORE rehydration,
+    // so observers attach from the normalized records only (no duplicate husk).
+    await this.migrateOptIns();
     // Rehydration: re-attach observers for every still-opted-in session.
     const optIns = this.deps.store.listOptIns();
     for (const record of optIns) {
@@ -109,6 +113,53 @@ export class NotificationManager {
     }
     // Resume draining anything left pending from before a restart.
     void this.drain();
+  }
+
+  /**
+   * Re-key legacy opt-ins to the stable canonical identity (Pi: bare uuid from
+   * the path), so the bell stays in sync after a reload and turning it off
+   * actually stops notifications. Dedupes records that collapse to the same
+   * canonical id, keeping the newest `optedInAt` — this removes the stale husk
+   * that would otherwise double-notify. Superset-preserving: every distinct
+   * session survives, only divergent/duplicate keys are reconciled. Idempotent.
+   */
+  private async migrateOptIns(): Promise<void> {
+    const optIns = this.deps.store.listOptIns();
+    if (optIns.length === 0) return;
+    const canonical = new Map<string, OptInRecord>();
+    let normalized = 0;
+    let deduped = 0;
+    for (const record of optIns) {
+      const id = canonicalOptInId(record.runtime, record.sessionId, record.sessionPath);
+      if (id !== record.sessionId) normalized++;
+      const incoming: OptInRecord = id === record.sessionId ? record : { ...record, sessionId: id };
+      const existing = canonical.get(id);
+      if (!existing) {
+        canonical.set(id, incoming);
+      } else {
+        // Two records collapse to the same canonical id (a basename + a uuid for
+        // the same session). Keep the newest optedInAt; the loser is the stale
+        // husk that would double-notify.
+        deduped++;
+        canonical.set(id, isNewer(incoming, existing) ? incoming : existing);
+      }
+    }
+    if (normalized === 0 && deduped === 0) return; // already canonical
+    const canonicalKeys = new Set(canonical.keys());
+    // Remove every old key that did not survive (re-keyed or deduped away), then
+    // (re)write each canonical record. setOptIn overwrites by key, so a surviving
+    // uuid key whose payload changed is replaced in place.
+    for (const record of optIns) {
+      if (!canonicalKeys.has(record.sessionId)) {
+        await this.deps.store.removeOptIn(record.sessionId);
+      }
+    }
+    for (const rec of canonical.values()) {
+      await this.deps.store.setOptIn(rec);
+    }
+    logger.info(
+      `normalized ${normalized} legacy opt-in id(s)${deduped > 0 ? `, deduped ${deduped} duplicate husk(s)` : ''}`,
+    );
   }
 
   async optIn(record: OptInRecord): Promise<void> {
@@ -393,4 +444,13 @@ function extractTextDelta(data: unknown): string | null {
   }
   if (typeof d.text === 'string') return d.text;
   return null;
+}
+
+/** Whether `a` is at least as recent as `b` by optedInAt (used to pick the survivor on dedupe). */
+function isNewer(a: OptInRecord, b: OptInRecord): boolean {
+  // Lexical comparison of the ISO optedInAt is chronological for the fixed-width
+  // UTC stamps the routes write (new Date().toISOString()), and stays correct
+  // for the hyphen-delimited variant — more robust than Date.parse, which would
+  // return NaN for the hyphen form and silently always keep the first-seen record.
+  return (a.optedInAt ?? '') >= (b.optedInAt ?? '');
 }
