@@ -269,8 +269,14 @@ export class SessionCleanupService {
       }
     }
 
-    // Clear the durable archived/pinned fields on successfully-deleted records
-    // (v2 model: delete fields on the record rather than filter arrays).
+    // Remove successfully-deleted sessions from the prefs map entirely. The
+    // session's files are permanently gone, so its metadata record serves no
+    // purpose — and keeping a cleared-but-present record (a `{updatedAt,
+    // legacyKey}` husk) would leak one dead entry per retention pass forever,
+    // bloating the prefs file unboundedly. Hard-delete is safe here (unlike a
+    // user unarchive, where a husk acts as an LWW tombstone): a permanently
+    // deleted session cannot be legitimately resurrected, and a stray stale
+    // write would only recreate an orphan that the next pass removes again.
     const deletedKeys = new Set(
       toDelete.filter(({ path }) => !result.errors.some(e => e.sessionId === path)).map(({ key }) => key),
     );
@@ -278,11 +284,7 @@ export class SessionCleanupService {
       await withPrefsLock(async (read, write) => {
         const prefs = await read();
         for (const key of deletedKeys) {
-          const rec = prefs.sessions[key];
-          if (!rec) continue;
-          delete rec.archived;
-          delete rec.pinned;
-          rec.updatedAt = now;
+          delete prefs.sessions[key];
         }
         await write(prefs);
       }, filePath);

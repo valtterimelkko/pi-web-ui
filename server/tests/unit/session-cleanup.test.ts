@@ -560,6 +560,33 @@ describe('SessionCleanupService', () => {
       expect(prefs.archivedSessionPaths).toEqual([recentId]);
     });
 
+    it('hard-deletes the metadata record of a purged session (no leaked husk)', async () => {
+      // Regression: a retention delete must remove the whole v2 record, not just
+      // clear its fields. A cleared-but-present `{updatedAt, legacyKey}` husk would
+      // leak one dead entry per pass forever and bloat the prefs file.
+      const oldId = 'husk-old';
+      const recentId = 'husk-recent';
+      await writePrefs({ archivedSessionPaths: [oldId, recentId], pinnedSessionPaths: [] });
+      mockRegistryEntries.set(oldId, {
+        id: oldId, sdkType: 'opencode', path: oldId,
+        lastActivity: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+      mockRegistryEntries.set(recentId, {
+        id: recentId, sdkType: 'opencode', path: recentId,
+        lastActivity: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+
+      const service = makeService();
+      bindAll(service);
+      await service.runCleanup(prefsPath);
+
+      const prefs = await readPrefs();
+      // The purged session's record is gone entirely — not a husk.
+      expect(prefs.sessions['unknown:husk-old']).toBeUndefined();
+      // The surviving session's record is untouched.
+      expect(prefs.sessions['unknown:husk-recent']?.archived).toBe(true);
+    });
+
     it('should not lose prefs data when a deletion errors mid-batch', async () => {
       const okId = 'batch-ok';
       const errId = 'batch-err';
