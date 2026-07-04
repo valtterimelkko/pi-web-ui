@@ -991,17 +991,18 @@ export class MultiSessionManager {
     }
 
     // Enrich subagent / evaluated_subagent tool end with a compact summary
-    // (model + tool-usage) and strip the heavy inner transcript, so the browser
-    // gets counts/totals — not 100s of KB of inner messages. Shared with the
-    // single-client EventForwarder path via enrichSubagentEvent.
-    event = enrichSubagentEvent(event);
+    // (model + tool-usage) and strip the heavy inner transcript FOR THE BROWSER
+    // — so the wire gets counts/totals, not 100s of KB of inner messages. Shared
+    // with the single-client EventForwarder path via enrichSubagentEvent.
+    // Internal-API observers below still receive the raw event unchanged.
+    const browserEvent = enrichSubagentEvent(event);
 
     // Wrap the event in a session_event envelope with sessionId for proper client routing
     const sessionEvent = {
       type: 'session_event',
       sessionId: activeSession.sessionId,
       sessionPath: activeSession.sessionPath,
-      event: event,
+      event: browserEvent,
     };
 
     // Broadcast the wrapped event to all subscribers

@@ -1810,8 +1810,106 @@ describe('MultiSessionManager', () => {
 
       const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
       await manager.subscribeClient('client-1', '/path/to/session.jsonl');
-      
+
       expect(manager.hasSession('/path/to/session.jsonl')).toBe(true);
+    });
+  });
+
+  // ── Subagent card enrichment (browser vs internal-API observer) ──
+  // docs/SUBAGENT-CARD-ENRICHMENT-PLAN.md: the browser-bound session_event must
+  // carry the compact resultSummary + stripped inner messages, while internal
+  // API observers (notifications/watch) keep receiving the raw event unchanged.
+  describe('handleAgentEvent — subagent enrichment', () => {
+    it('browser subscriber receives the enriched event (resultSummary, messages stripped)', async () => {
+      const mockSession = createMockAgentSession();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+      const details = {
+        mode: 'single',
+        results: [{
+          agent: 'codescout',
+          messages: [{
+            role: 'assistant',
+            provider: 'github-copilot',
+            model: 'gpt-5.4-mini',
+            usage: { input: 100, output: 10, cost: { total: 0.01 } },
+            content: [{ type: 'toolCall', name: 'read' }],
+          }],
+        }],
+      };
+      manager.handleAgentEvent('/path/to/session.jsonl', {
+        type: 'tool_execution_end',
+        toolCallId: 'tc1',
+        toolName: 'subagent',
+        result: { content: [{ type: 'text', text: 'ans' }], details },
+        isError: false,
+      });
+
+      expect(mockBroadcast).toHaveBeenCalledTimes(1);
+      const sent = mockBroadcast.mock.calls[0][1] as {
+        event: {
+          resultSummary?: { agents: Array<{ model?: string }>; totals: { toolCalls: number } };
+          result: { details?: { results?: Array<{ messages?: unknown[] }> } };
+        };
+      };
+      // enriched: summary attached with the derived model
+      expect(sent.event.resultSummary).toBeDefined();
+      expect(sent.event.resultSummary!.agents[0].model).toBe('github-copilot/gpt-5.4-mini');
+      expect(sent.event.resultSummary!.totals.toolCalls).toBe(1);
+      // bloat guard: inner transcript stripped from the wire payload
+      expect(sent.event.result.details?.results?.[0]?.messages).toBeUndefined();
+      expect(JSON.stringify(sent)).not.toContain('"messages"');
+    });
+
+    it('internal-API observer receives the RAW event (messages intact, no resultSummary)', async () => {
+      const mockSession = createMockAgentSession();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+      const observed: Array<Record<string, unknown>> = [];
+      manager.addApiObserver('/path/to/session.jsonl', (e) => observed.push(e as Record<string, unknown>));
+
+      const messages = [{ role: 'assistant', model: 'm', content: [] }];
+      const details = { mode: 'single', results: [{ agent: 'codescout', messages }] };
+      manager.handleAgentEvent('/path/to/session.jsonl', {
+        type: 'tool_execution_end',
+        toolCallId: 'tc1',
+        toolName: 'subagent',
+        result: { content: [{ type: 'text', text: 'ans' }], details },
+        isError: false,
+      });
+
+      expect(observed).toHaveLength(1);
+      const data = observed[0].data as Record<string, unknown>;
+      const result = data.result as { details?: { results?: Array<{ messages?: unknown[] }> } };
+      // raw event preserved: inner messages still present for observers
+      expect(result.details?.results?.[0]?.messages).toBe(messages);
+      // observer event is not enriched
+      expect(data.resultSummary).toBeUndefined();
+      expect(observed[0].resultSummary).toBeUndefined();
+    });
+
+    it('non-subagent tool end is forwarded unchanged (no enrichment)', async () => {
+      const mockSession = createMockAgentSession();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+      const result = { content: [{ type: 'text', text: 'file contents' }] };
+      manager.handleAgentEvent('/path/to/session.jsonl', {
+        type: 'tool_execution_end',
+        toolCallId: 'tc1',
+        toolName: 'read',
+        result,
+        isError: false,
+      });
+
+      const sent = mockBroadcast.mock.calls[0][1] as { event: { resultSummary?: unknown; result: unknown } };
+      expect(sent.event.resultSummary).toBeUndefined();
+      expect(sent.event.result).toBe(result); // unchanged, same reference
     });
   });
 

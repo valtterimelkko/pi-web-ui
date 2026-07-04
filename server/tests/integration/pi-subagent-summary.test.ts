@@ -164,4 +164,22 @@ describe('Pi subagent summary — deterministic server proof (source: ' + SOURCE
     expect(out.resultSummary).toBeUndefined();
     expect((out as AgentSessionEvent & { result: unknown }).result).toBe(readEvent.result);
   });
+
+  it('§2.3 regression — Claude/OpenCode subagent-family names (Task/Agent) are NOT enriched', () => {
+    // Enrichment is scoped to the Pi tool names `subagent`/`evaluated_subagent`
+    // only, so the Claude `Task` / OpenCode `Agent` paths are forwarded
+    // unchanged even if they happen to share the "subagent family" label.
+    for (const toolName of ['Task', 'Agent', 'task', 'agent']) {
+      const event = {
+        type: 'tool_execution_end',
+        toolCallId: 'tc',
+        toolName,
+        result: { content: [{ type: 'text', text: 'claude task output' }] },
+        isError: false,
+      } as unknown as AgentSessionEvent;
+      const out = enrichSubagentEvent(event);
+      expect(out.resultSummary, `${toolName} must not be enriched`).toBeUndefined();
+      expect((out as AgentSessionEvent & { result: unknown }).result).toBe(event.result);
+    }
+  });
 });
