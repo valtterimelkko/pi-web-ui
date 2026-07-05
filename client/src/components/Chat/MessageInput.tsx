@@ -9,6 +9,8 @@ import { ClaudeStreamHeartbeat } from './ClaudeStreamHeartbeat';
 import { ContextRing } from '../Usage/ContextRing';
 import { SlashPalette } from './SlashPalette';
 import { uploadFile } from '../../lib/api';
+import { buildPromptWithFiles, enforceFileCap } from '../../lib/fileAttachments';
+import { MAX_FILES_PER_MESSAGE } from '@pi-web-ui/shared';
 import { isPiSlashCommandAllowedWhileStreaming, shouldPauseGoalOnStop } from '../../lib/piExtensionControls';
 
 interface MessageInputProps {
@@ -80,20 +82,14 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
         return false;
       }
 
-      // Build message with file context
+      // Build message with file context. The exact "I've uploaded N files" note
+      // wording lives in the tested buildPromptWithFiles helper so it stays
+      // consistent for 1..MAX files and is unit-covered.
       const successfulUploads = useChatStore.getState().uploadedFiles.filter(f => f.serverPath && !f.error);
-      let promptMessage = content;
-      
-      if (successfulUploads.length > 0) {
-        const filePaths = successfulUploads.map(f => f.serverPath).join('\n');
-        const fileNote = successfulUploads.length === 1
-          ? `I've uploaded a file. Please read it at: ${filePaths}`
-          : `I've uploaded ${successfulUploads.length} files. Please read them at:\n${filePaths}`;
-        
-        promptMessage = content
-          ? `${fileNote}\n\n${content}`
-          : fileNote;
-      }
+      const promptMessage = buildPromptWithFiles(
+        content,
+        successfulUploads.map(f => f.serverPath),
+      );
 
       const images: unknown[] = [];
       const agent = useSessionStore.getState().currentSessionSdkType === 'opencode'
@@ -259,11 +255,28 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   };
 
   const handleFilesAdded = (files: File[]) => {
-    addFiles(files);
-    // Upload each file immediately
-    files.forEach((file) => {
+    // Enforce the per-message file cap (flexible 1..MAX); reject the overflow
+    // rather than silently dropping it or letting it grow unbounded.
+    const currentCount = useChatStore.getState().selectedFiles.length;
+    const { accepted, rejectedCount } = enforceFileCap(files, currentCount);
+
+    if (rejectedCount > 0) {
+      useUIStore.getState().addToast({
+        type: 'warning',
+        message:
+          rejectedCount === files.length
+            ? `Attachment limit reached (max ${MAX_FILES_PER_MESSAGE} files per prompt). Remove one to add another.`
+            : `You can attach up to ${MAX_FILES_PER_MESSAGE} files per prompt; ${rejectedCount} ${rejectedCount === 1 ? 'file was' : 'files were'} not added.`,
+      });
+    }
+
+    if (accepted.length === 0) return;
+
+    addFiles(accepted);
+    // Upload each accepted file immediately
+    accepted.forEach((file) => {
       addUploadedFile({ file, serverPath: '', uploading: true });
-      
+
       uploadFile(file)
         .then((result) => {
           // Find the index in the current state
@@ -285,6 +298,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
 
   const hasUploads = uploadedFiles.some(f => f.serverPath && !f.uploading);
   const isAnyUploading = uploadedFiles.some(f => f.uploading);
+  const atFileCap = selectedFiles.length >= MAX_FILES_PER_MESSAGE;
   const canSendWhileStreaming = isPiSlashCommandAllowedWhileStreaming(currentDraft, isStreaming, currentSessionSdkType);
   const canSend = (currentDraft.trim().length > 0 || hasUploads) && !disabled && (!isStreaming || canSendWhileStreaming) && !isAnyUploading;
   const pauseGoalOnStop = shouldPauseGoalOnStop(currentSessionSdkType, goalEngineStatus);
@@ -448,13 +462,25 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
             {/* File attach */}
             <button
               onClick={() => fileInputRef.current?.click()}
-              disabled={disabled}
-              className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+              disabled={disabled || atFileCap}
+              className={`p-1.5 rounded-md transition-colors ${
+                atFileCap
+                  ? 'text-gray-300 cursor-not-allowed'
+                  : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+              }`}
               type="button"
-              title="Attach files"
+              title={atFileCap ? `Attachment limit reached (max ${MAX_FILES_PER_MESSAGE} files per prompt)` : 'Attach files'}
             >
               <Paperclip className="w-4 h-4" />
             </button>
+            {selectedFiles.length > 0 && (
+              <span
+                className={`text-[10px] tabular-nums ${atFileCap ? 'text-amber-500 font-medium' : 'text-gray-400'}`}
+                title={`Up to ${MAX_FILES_PER_MESSAGE} files per prompt`}
+              >
+                {selectedFiles.length}/{MAX_FILES_PER_MESSAGE}
+              </span>
+            )}
             <input
               ref={fileInputRef}
               type="file"

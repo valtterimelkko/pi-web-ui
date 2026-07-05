@@ -65,7 +65,13 @@ export const IGNORED_PATTERNS = [
 
 export const MAX_MESSAGE_LENGTH = 100000;
 export const MAX_FILE_SIZE = 1024 * 1024; // 1MB
-export const MAX_FILES_PER_MESSAGE = 10;
+/**
+ * Maximum number of files a user can attach to a single prompt across all
+ * runtimes. Authoritative cap — imported and enforced by the chat composer
+ * (`client/src/lib/fileAttachments.ts` → `MessageInput.tsx`). Flexible from 1
+ * up to this many; the user is never required to attach exactly this many.
+ */
+export const MAX_FILES_PER_MESSAGE = 5;
 
 // Timeouts
 
