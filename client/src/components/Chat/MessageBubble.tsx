@@ -17,6 +17,7 @@ import { TodoToolCard } from '../Tools/TodoToolCard';
 import { copyToClipboard } from '../../lib/clipboard';
 import { normalizeToolName } from '../../lib/messageAdapter';
 import { ClaudeStreamHeartbeat } from './ClaudeStreamHeartbeat';
+import { CodeBlock } from './CodeBlock';
 
 interface MessageBubbleProps {
   message: LiveMessage;
@@ -308,9 +309,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
                 remarkPlugins={[remarkGfm]}
                 components={{
                   pre: ({ children }) => (
-                    <pre className="bg-slate-100 border border-slate-200 rounded-md p-2 overflow-x-auto my-1.5 text-xs text-slate-800">
-                      {children}
-                    </pre>
+                    <CodeBlock>{children}</CodeBlock>
                   ),
                   code: ({ className, children, ...props }: { className?: string; children?: React.ReactNode }) => {
                     const match = /language-(\w+)/.exec(className || '');
