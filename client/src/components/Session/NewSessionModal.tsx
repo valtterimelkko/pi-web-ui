@@ -16,6 +16,17 @@ interface DirectoryItem {
   path: string;
 }
 
+interface PiModelEntry {
+  id: string;
+  name?: string;
+  provider: string;
+}
+
+const piModelLabel = (model: PiModelEntry) => {
+  const name = model.name || model.id;
+  return model.provider === 'openai-codex' ? `Codex / ${name}` : `${model.provider} / ${name}`;
+};
+
 // ─── Claude provider/backend/model selection ──────────────────────────────────
 
 type ClaudeProvider = 'claude' | 'glm';
@@ -101,6 +112,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const [showRecentFolders, setShowRecentFolders] = useState(true);
   const [pathInput, setPathInput] = useState('/root');
   const [sdkType, setSdkType] = useState<'pi' | 'claude' | 'opencode' | 'antigravity'>('pi');
+  const [piModels, setPiModels] = useState<PiModelEntry[]>([]);
+  const [piModel, setPiModel] = useState('');
+  const [piModelsLoading, setPiModelsLoading] = useState(false);
   const [claudeModels, setClaudeModels] = useState<ClaudeModelEntry[]>([]);
   const [claudeModelsLoading, setClaudeModelsLoading] = useState(false);
   // Structured Claude selection: provider → backend → model.
@@ -169,6 +183,22 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Fetch the Pi SDK registry when its session type is selected. The registry
+  // uses the shared Pi agent OAuth auth storage; this UI only receives public
+  // model metadata and never handles credentials.
+  useEffect(() => {
+    if (!isOpen || sdkType !== 'pi' || piModels.length > 0) return;
+    let cancelled = false;
+    setPiModelsLoading(true);
+    api.get('/api/models')
+      .then((resp) => {
+        if (!cancelled) setPiModels((resp as { models?: PiModelEntry[] }).models || []);
+      })
+      .catch((err) => console.error('Failed to fetch Pi SDK models:', err))
+      .finally(() => setPiModelsLoading(false));
+    return () => { cancelled = true; };
+  }, [isOpen, sdkType, piModels.length]);
+
   // Fetch Claude models/profiles when the Claude session type is chosen so the
   // user can pick a backend/provider profile (e.g. GLM 5.2 via SDK) before the
   // session opens. Profiles surface as `profile:<id>` model entries.
@@ -229,6 +259,11 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     return resolveProfileId(claudeModels, claudeProvider, claudeBackend, claudeModel) || claudeModel;
   };
 
+  const selectedModelArg = () => {
+    if (sdkType === 'pi') return piModel || undefined;
+    return claudeModelArg();
+  };
+
   // Derived lists for the structured Claude selector.
   const providerList = providersOf(claudeModels);
   const backendList = backendsOf(claudeModels, claudeProvider);
@@ -255,7 +290,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(currentPath);
-    onCreateSession(currentPath, sdkType, claudeModelArg());
+    onCreateSession(currentPath, sdkType, selectedModelArg());
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -263,7 +298,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(path);
-    onCreateSession(path, sdkType, claudeModelArg());
+    onCreateSession(path, sdkType, selectedModelArg());
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -278,7 +313,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     e.stopPropagation();
     setIsCreating(true);
     addRecentFolder(path);
-    onCreateSession(path, sdkType, claudeModelArg());
+    onCreateSession(path, sdkType, selectedModelArg());
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -394,6 +429,32 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
               </span>
             </button>
           </div>
+
+          {/* Pi SDK model selector */}
+          {sdkType === 'pi' && (
+            <div className="mt-2" data-testid="pi-model-selector">
+              <p className="text-xs font-medium text-gray-500 mb-1.5">Model</p>
+              {piModelsLoading ? (
+                <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading Pi SDK models…
+                </div>
+              ) : (
+                <select
+                  value={piModel}
+                  onChange={(e) => setPiModel(e.target.value)}
+                  data-testid="pi-model-select"
+                  className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                >
+                  <option value="">Use Pi default model</option>
+                  {piModels.map((model) => (
+                    <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>
+                      {piModelLabel(model)}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
 
           {/* Claude provider / backend / model selector */}
           {sdkType === 'claude' && (

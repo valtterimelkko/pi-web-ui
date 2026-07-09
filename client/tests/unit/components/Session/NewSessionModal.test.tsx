@@ -16,6 +16,12 @@ const CLAUDE_PROFILE_MODELS = [
   { id: 'profile:glm52-cli-direct', displayName: 'GLM 5.2 via CLI direct', provider: 'zai', backend: 'cli-direct', claudeModel: 'glm-5.2[1m]' },
 ];
 
+const PI_MODELS = [
+  { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', provider: 'openai-codex' },
+  { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', provider: 'openai-codex' },
+  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', provider: 'openai-codex' },
+];
+
 const sessionState = {
   claudeAvailable: true,
   claudeAuthError: null,
@@ -38,6 +44,9 @@ vi.mock('../../../../src/lib/api', () => ({
     get: vi.fn(async (url: string) => {
       if (url.includes('/api/models') && url.includes('sdkType=claude')) {
         return { models: CLAUDE_PROFILE_MODELS };
+      }
+      if (url === '/api/models') {
+        return { models: PI_MODELS };
       }
       if (url.includes('/api/files/browse')) {
         return { path: '/root', parent: null, items: [] };
@@ -86,6 +95,21 @@ describe('NewSessionModal — Claude backend selector', () => {
     expect(sdk.className).toContain('border-amber-500');
     // Channel is never highlighted as selected.
     expect(channel.className).not.toContain('border-amber-500');
+  });
+
+  it('lists Codex GPT-5.6 models for Pi SDK sessions and creates with Luna selected', async () => {
+    const onCreateSession = vi.fn();
+    render(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={onCreateSession} />);
+
+    const selector = await screen.findByTestId('pi-model-select');
+    expect(screen.getByRole('option', { name: 'Codex / GPT-5.6 Terra' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Codex / GPT-5.6 Luna' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Codex / GPT-5.6 Sol' })).toBeInTheDocument();
+
+    fireEvent.change(selector, { target: { value: 'openai-codex/gpt-5.6-luna' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(onCreateSession).toHaveBeenCalledWith('/root', 'pi', 'openai-codex/gpt-5.6-luna');
   });
 
   it('clicking the locked Channel backend does not change the selection', async () => {
