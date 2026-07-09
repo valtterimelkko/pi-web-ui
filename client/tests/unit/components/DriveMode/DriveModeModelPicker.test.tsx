@@ -8,6 +8,9 @@ vi.mock('../../../../src/store/driveModeStore', () => ({
     { id: 'zai-coding-plan/glm-5.2', displayName: 'GLM-5.2', sdkType: 'opencode' },
     { id: 'openai-codex/gpt-5.4', displayName: 'Codex / GPT-5.4', sdkType: 'pi' },
     { id: 'openai-codex/gpt-5.5', displayName: 'Codex / GPT-5.5', sdkType: 'pi' },
+    { id: 'openai-codex/gpt-5.6-terra', displayName: 'Codex / GPT-5.6 Terra', sdkType: 'pi' },
+    { id: 'openai-codex/gpt-5.6-luna', displayName: 'Codex / GPT-5.6 Luna', sdkType: 'pi' },
+    { id: 'openai-codex/gpt-5.6-sol', displayName: 'Codex / GPT-5.6 Sol', sdkType: 'pi' },
   ],
 }));
 
@@ -19,12 +22,15 @@ describe('DriveModeModelPicker', () => {
     vi.clearAllMocks();
   });
 
-  it('renders all 4 models', () => {
+  it('renders all 7 models', () => {
     render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
     expect(screen.getByText('Kimi for Coding')).toBeInTheDocument();
     expect(screen.getByText('GLM-5.2')).toBeInTheDocument();
     expect(screen.getByText('Codex / GPT-5.4')).toBeInTheDocument();
     expect(screen.getByText('Codex / GPT-5.5')).toBeInTheDocument();
+    expect(screen.getByText('Codex / GPT-5.6 Terra')).toBeInTheDocument();
+    expect(screen.getByText('Codex / GPT-5.6 Luna')).toBeInTheDocument();
+    expect(screen.getByText('Codex / GPT-5.6 Sol')).toBeInTheDocument();
   });
 
   it('each model shows displayName', () => {
@@ -37,7 +43,7 @@ describe('DriveModeModelPicker', () => {
     render(<DriveModeModelPicker onSelect={mockOnSelect} onBack={mockOnBack} />);
     const piBadges = screen.getAllByText('Pi');
     const ocBadges = screen.getAllByText('OC');
-    expect(piBadges.length).toBe(3);
+    expect(piBadges.length).toBe(6);
     expect(ocBadges.length).toBe(1);
   });
 

@@ -69,8 +69,24 @@ describe('driveModeStore', () => {
     expect(state.selectedModelId).toBeNull();
   });
 
-  it('DRIVE_MODE_MODELS has 4 models', () => {
-    expect(DRIVE_MODE_MODELS).toHaveLength(4);
+  it('includes the three GPT-5.6 Codex models through the Pi runtime', () => {
+    expect(DRIVE_MODE_MODELS).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'openai-codex/gpt-5.6-terra',
+        displayName: 'Codex / GPT-5.6 Terra',
+        sdkType: 'pi',
+      }),
+      expect.objectContaining({
+        id: 'openai-codex/gpt-5.6-luna',
+        displayName: 'Codex / GPT-5.6 Luna',
+        sdkType: 'pi',
+      }),
+      expect.objectContaining({
+        id: 'openai-codex/gpt-5.6-sol',
+        displayName: 'Codex / GPT-5.6 Sol',
+        sdkType: 'pi',
+      }),
+    ]));
   });
 
   it('DRIVE_MODE_MODELS have required fields', () => {

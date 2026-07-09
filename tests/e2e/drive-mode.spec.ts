@@ -39,6 +39,9 @@ test.describe('Drive Mode', () => {
     await expect(page.locator('text=GLM-5.2')).toBeVisible();
     await expect(page.locator('text=Codex / GPT-5.4')).toBeVisible();
     await expect(page.locator('text=Codex / GPT-5.5')).toBeVisible();
+    await expect(page.locator('text=Codex / GPT-5.6 Terra')).toBeVisible();
+    await expect(page.locator('text=Codex / GPT-5.6 Luna')).toBeVisible();
+    await expect(page.locator('text=Codex / GPT-5.6 Sol')).toBeVisible();
   });
 
   test('Model picker → folder picker flow', async ({ page }) => {
