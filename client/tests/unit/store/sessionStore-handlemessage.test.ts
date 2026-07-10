@@ -98,6 +98,83 @@ describe('sessionStore', () => {
       expect(useSessionStore.getState().isLoading).toBe(false);
     });
 
+    it('surfaces Pi compaction and uses the SDK post-compaction estimate until a later usage update arrives', () => {
+      const state = useSessionStore.getState();
+      state.setCurrentSession('session-1');
+      useSessionStore.setState({
+        contextWindow: 372_000,
+        contextUsed: 279_474,
+        contextPercent: 75,
+        sessionInfo: {
+          sessionFile: undefined,
+          sessionId: 'session-1',
+          userMessages: 1,
+          assistantMessages: 1,
+          toolCalls: 0,
+          toolResults: 0,
+          totalMessages: 2,
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          cost: 0,
+          contextWindow: 372_000,
+          contextUsed: 279_474,
+          contextPercent: 75,
+        },
+      });
+
+      state.handleServerMessage({
+        type: 'session_event',
+        sessionId: 'session-1',
+        event: { type: 'compaction_start', reason: 'threshold' },
+      });
+
+      expect(useSessionStore.getState().isCompacting).toBe(true);
+      expect(useSessionStore.getState().compactionReason).toBe('threshold');
+      expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+        type: 'info',
+        message: expect.stringContaining('Auto-compacting'),
+      });
+
+      state.handleServerMessage({
+        type: 'session_event',
+        sessionId: 'session-1',
+        event: {
+          type: 'compaction_end',
+          reason: 'threshold',
+          result: { tokensBefore: 279_474, estimatedTokensAfter: 20_293 },
+          aborted: false,
+          willRetry: false,
+        },
+      });
+
+      expect(useSessionStore.getState()).toMatchObject({
+        isCompacting: false,
+        compactionReason: null,
+        contextUsed: 20_293,
+        contextPercent: 5,
+      });
+      expect(useSessionStore.getState().sessionInfo).toMatchObject({
+        contextUsed: 20_293,
+        contextPercent: 5,
+      });
+      expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+        type: 'success',
+        message: expect.stringContaining('estimated'),
+      });
+
+      state.handleServerMessage({
+        type: 'context_update',
+        sessionId: 'session-1',
+        contextWindow: 372_000,
+        contextUsed: 24_180,
+        contextPercent: 7,
+      });
+
+      expect(useSessionStore.getState()).toMatchObject({
+        contextUsed: 24_180,
+        contextPercent: 7,
+      });
+    });
+
     it('should handle session_event error for current session', () => {
       const state = useSessionStore.getState();
       state.setCurrentSession('session-1');

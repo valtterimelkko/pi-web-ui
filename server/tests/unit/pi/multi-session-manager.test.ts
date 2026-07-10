@@ -41,6 +41,7 @@ interface MockAgentSession {
   subscribe: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
   setModel: ReturnType<typeof vi.fn>;
+  getContextUsage: ReturnType<typeof vi.fn>;
 }
 
 interface MockPiService {
@@ -99,6 +100,7 @@ function createMockAgentSession(overrides: Partial<MockAgentSession> = {}): Mock
     subscribe: vi.fn(),
     dispose: vi.fn(),
     setModel: vi.fn(),
+    getContextUsage: vi.fn(() => undefined),
     ...overrides,
   };
 }
@@ -1295,6 +1297,27 @@ describe('MultiSessionManager', () => {
       
       const status = manager.getSessionStatus('/path/to/session.jsonl');
       expect(status?.status).toBe('idle');
+    });
+
+    it('broadcasts fresh Pi context usage after the first completed turn following compaction', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'compacted-session',
+        getContextUsage: vi.fn(() => ({ contextWindow: 372_000, tokens: 24_180, percent: 7 })),
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+      manager.handleAgentEvent('/path/to/session.jsonl', { type: 'agent_end', messages: [] });
+
+      expect(mockBroadcast).toHaveBeenCalledWith('client-1', expect.objectContaining({
+        type: 'context_update',
+        sessionId: 'compacted-session',
+        contextWindow: 372_000,
+        contextUsed: 24_180,
+        contextPercent: 7,
+      }));
     });
 
     it('should update message count on new messages', async () => {

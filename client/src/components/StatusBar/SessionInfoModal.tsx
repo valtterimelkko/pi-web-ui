@@ -242,11 +242,11 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                         sessionInfo.contextPercent > 90 ? 'text-red-500' :
                         sessionInfo.contextPercent > 70 ? 'text-amber-500' : 'text-blue-600'
                       }`}>
-                        {sessionInfo.contextPercent}%
+                        {sessionInfo.contextUsageEstimated ? '~' : ''}{sessionInfo.contextPercent}%
                       </span>
                     </div>
                     <p className="text-xs text-gray-400">
-                      {formatNumber(sessionInfo.contextUsed || 0)} / {formatNumber(sessionInfo.contextWindow || 0)} tokens
+                      {sessionInfo.contextUsageEstimated ? '~' : ''}{formatNumber(sessionInfo.contextUsed || 0)} / {formatNumber(sessionInfo.contextWindow || 0)} tokens{sessionInfo.contextUsageEstimated ? ' (estimated until the next response)' : ''}
                     </p>
                   </div>
                 </div>

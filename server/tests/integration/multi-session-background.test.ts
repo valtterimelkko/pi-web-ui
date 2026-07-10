@@ -12,6 +12,7 @@ export interface MockAgentSession {
   prompt: ReturnType<typeof vi.fn>;
   steer: ReturnType<typeof vi.fn>;
   abort: ReturnType<typeof vi.fn>;
+  getContextUsage: ReturnType<typeof vi.fn>;
 }
 
 export interface MockPiService {
@@ -71,6 +72,7 @@ function createMockAgentSession(overrides: Partial<MockAgentSession> = {}): Mock
     prompt: vi.fn().mockResolvedValue(undefined),
     steer: vi.fn().mockResolvedValue(undefined),
     abort: vi.fn().mockResolvedValue(undefined),
+    getContextUsage: vi.fn(() => undefined),
     ...overrides,
   };
 }

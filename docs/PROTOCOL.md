@@ -165,11 +165,13 @@ These are the normalized event shapes the frontend usually sees inside `session_
 { type: 'stream_activity', timestamp?: number, detail?: string }
 { type: 'ask_user_question_request', data: { requestId: string, questions: unknown[], timeout: number } }
 { type: 'ask_user_question_closed', data: { requestId: string, reason: 'timeout' | 'aborted' | 'turn_end' | 'disconnected' } }
-{ type: 'auto_compaction_start', reason: string }
-{ type: 'auto_compaction_end', result: unknown, aborted: boolean, willRetry: boolean }
+{ type: 'compaction_start', reason: 'manual' | 'threshold' | 'overflow' }
+{ type: 'compaction_end', reason: 'manual' | 'threshold' | 'overflow', result?: { tokensBefore: number, estimatedTokensAfter?: number }, aborted: boolean, willRetry: boolean, errorMessage?: string }
 { type: 'auto_retry_start', attempt: number, maxAttempts: number, delayMs: number, errorMessage: string }
 { type: 'auto_retry_end', success: boolean, attempt: number, finalError?: string }
 ```
+
+`compaction_start` / `compaction_end` are Pi Coding Agent's native events and cover both browser `/compact` and automatic compaction. During compaction, the UI deliberately clears the prior percentage because it represents the old context. On a successful end it may display `estimatedTokensAfter` with `~`; Pi reports exact usage only after the next completed assistant response, which arrives as an event-driven `context_update` (no polling).
 
 ### Extension / approval UI
 

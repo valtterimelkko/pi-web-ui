@@ -335,6 +335,8 @@ export interface SessionStats {
   contextWindow?: number;
   contextUsed?: number;
   contextPercent?: number;
+  /** True only while displaying Pi SDK's post-compaction token estimate. */
+  contextUsageEstimated?: boolean;
   lastActivityAt?: number;
 }
 
@@ -368,6 +370,8 @@ interface SessionState {
   contextPercent: number;
   contextUsed: number;
   contextWindow: number;
+  /** Pi cannot know exact usage until the first assistant response after compaction. */
+  contextUsageEstimated: boolean;
   // Archive state (persisted)
   archivedSessionPaths: string[];
   // Pinned sessions (persisted) - protected from idle/stale cleanup
@@ -507,6 +511,7 @@ export const useSessionStore = create<SessionState>()(
       contextPercent: 0,
       contextUsed: 0,
       contextWindow: 0,
+      contextUsageEstimated: false,
       archivedSessionPaths: [],
       pinnedSessionPaths: [],
       sessionDisplayNames: {},
@@ -1399,6 +1404,7 @@ export const useSessionStore = create<SessionState>()(
                 contextPercent: switchMsg.contextPercent ?? 0,
                 contextUsed: switchMsg.contextUsed ?? 0,
                 contextWindow: switchMsg.contextWindow ?? 0,
+                contextUsageEstimated: false,
                 sessions: updatedSessions,
                 sessionMessages: newSessionMessages,
                 sessionCacheMeta: newSessionCacheMeta,
@@ -1815,7 +1821,16 @@ export const useSessionStore = create<SessionState>()(
 
           case 'session_info': {
             const { stats } = msg as unknown as { stats: SessionStats };
-            set({ sessionInfo: stats });
+            const isCurrentSession = stats.sessionId === get().currentSessionId;
+            set({
+              sessionInfo: stats,
+              ...(isCurrentSession ? {
+                contextWindow: stats.contextWindow ?? get().contextWindow,
+                contextUsed: stats.contextUsed ?? 0,
+                contextPercent: stats.contextPercent ?? 0,
+                contextUsageEstimated: false,
+              } : {}),
+            });
             
             // Record usage for dashboard (fire-and-forget)
             if (stats && stats.tokens.total > 0) {
@@ -1837,22 +1852,23 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'compaction_result': {
-            const { tokensBefore, contextWindow, contextUsed, contextPercent } = msg as unknown as { 
-              summary: string; 
-              tokensBefore: number;
+            const { contextWindow, contextUsed, contextPercent } = msg as unknown as {
               contextWindow?: number;
               contextUsed?: number;
               contextPercent?: number;
             };
-            // Show toast notification, reset compaction state, and update context indicators
-            set({ 
-              isCompacting: false, 
+            // The SDK's compaction_end event is the canonical UI surface. This
+            // browser-native response only supplies a fallback context update.
+            set({
+              isCompacting: false,
               compactionReason: null,
               contextWindow: contextWindow ?? get().contextWindow,
               contextUsed: contextUsed ?? get().contextUsed,
               contextPercent: contextPercent ?? get().contextPercent,
+              contextUsageEstimated: contextUsed === undefined && contextPercent === undefined
+                ? get().contextUsageEstimated
+                : false,
             });
-            // Also update sessionInfo if it exists to keep it in sync
             if (get().sessionInfo) {
               set({
                 sessionInfo: {
@@ -1860,13 +1876,12 @@ export const useSessionStore = create<SessionState>()(
                   contextWindow: contextWindow ?? get().sessionInfo!.contextWindow,
                   contextUsed: contextUsed ?? get().sessionInfo!.contextUsed,
                   contextPercent: contextPercent ?? get().sessionInfo!.contextPercent,
+                  contextUsageEstimated: contextUsed === undefined && contextPercent === undefined
+                    ? get().sessionInfo!.contextUsageEstimated
+                    : false,
                 }
               });
             }
-            useUIStore.getState().addToast({
-              type: 'success',
-              message: `Context compacted successfully! ${tokensBefore} tokens summarized.`,
-            });
             break;
           }
 
@@ -1882,6 +1897,7 @@ export const useSessionStore = create<SessionState>()(
                 contextWindow: ctxMsg.contextWindow ?? get().contextWindow,
                 contextUsed: ctxMsg.contextUsed ?? get().contextUsed,
                 contextPercent: ctxMsg.contextPercent ?? get().contextPercent,
+                contextUsageEstimated: false,
               });
               if (get().sessionInfo) {
                 set({
@@ -1890,6 +1906,7 @@ export const useSessionStore = create<SessionState>()(
                     contextWindow: ctxMsg.contextWindow ?? get().sessionInfo!.contextWindow,
                     contextUsed: ctxMsg.contextUsed ?? get().sessionInfo!.contextUsed,
                     contextPercent: ctxMsg.contextPercent ?? get().sessionInfo!.contextPercent,
+                    contextUsageEstimated: false,
                   },
                 });
               }
@@ -1897,46 +1914,85 @@ export const useSessionStore = create<SessionState>()(
             break;
           }
 
+          case 'compaction_start':
           case 'auto_compaction_start': {
             const { reason } = msg as unknown as { reason: string };
-            set({ isCompacting: true, compactionReason: reason });
+            const automatic = reason !== 'manual';
+            // The previous percentage belongs to the pre-compaction context.
+            // Hide it while Pi is summarising rather than presenting it as live.
+            set({
+              isCompacting: true,
+              compactionReason: reason,
+              contextUsed: 0,
+              contextPercent: 0,
+              contextUsageEstimated: false,
+            });
+            if (get().sessionInfo) {
+              set({
+                sessionInfo: {
+                  ...get().sessionInfo!,
+                  contextUsed: undefined,
+                  contextPercent: undefined,
+                  contextUsageEstimated: false,
+                },
+              });
+            }
             useUIStore.getState().addToast({
               type: 'info',
-              message: `Auto-compacting context: ${reason}`,
+              message: automatic ? `Auto-compacting context: ${reason}` : 'Compacting context...',
             });
             break;
           }
 
+          case 'compaction_end':
           case 'auto_compaction_end': {
-            const { aborted, willRetry, errorMessage } = msg as unknown as {
-              result: unknown;
+            const { result, reason, aborted, willRetry, errorMessage } = msg as unknown as {
+              result?: { estimatedTokensAfter?: number };
+              reason?: string;
               aborted: boolean;
               willRetry: boolean;
               errorMessage?: string;
             };
-            set({ isCompacting: false, compactionReason: null });
-            
+            const estimatedTokens = result?.estimatedTokensAfter;
+            const contextWindow = get().contextWindow || get().sessionInfo?.contextWindow || 0;
+            const estimatedPercent = typeof estimatedTokens === 'number' && contextWindow > 0
+              ? Math.round((estimatedTokens / contextWindow) * 100)
+              : undefined;
+            const automatic = reason !== 'manual';
+            set({
+              isCompacting: false,
+              compactionReason: null,
+              ...(estimatedPercent !== undefined ? {
+                contextUsed: estimatedTokens!,
+                contextPercent: estimatedPercent,
+                contextUsageEstimated: true,
+              } : {}),
+            });
+            if (get().sessionInfo && estimatedPercent !== undefined) {
+              set({
+                sessionInfo: {
+                  ...get().sessionInfo!,
+                  contextUsed: estimatedTokens,
+                  contextPercent: estimatedPercent,
+                  contextUsageEstimated: true,
+                },
+              });
+            }
+
             if (aborted) {
-              if (willRetry) {
-                useUIStore.getState().addToast({
-                  type: 'info',
-                  message: 'Auto-compaction aborted, will retry...',
-                });
-              } else {
-                useUIStore.getState().addToast({
-                  type: 'warning',
-                  message: 'Auto-compaction aborted.',
-                });
-              }
+              useUIStore.getState().addToast({
+                type: willRetry ? 'info' : 'warning',
+                message: willRetry ? 'Compaction aborted, will retry...' : 'Compaction aborted.',
+              });
             } else if (errorMessage) {
               useUIStore.getState().addToast({
                 type: 'error',
-                message: `Auto-compaction failed: ${errorMessage}`,
+                message: `Compaction failed: ${errorMessage}`,
               });
             } else {
               useUIStore.getState().addToast({
                 type: 'success',
-                message: 'Auto-compaction completed successfully.',
+                message: `${automatic ? 'Auto-compaction' : 'Compaction'} completed${estimatedPercent !== undefined ? ` — ${estimatedPercent}% estimated until the next response.` : '.'}`,
               });
             }
             break;
@@ -2135,51 +2191,87 @@ export const useSessionStore = create<SessionState>()(
                 break;
               }
               
+              case 'compaction_start':
               case 'auto_compaction_start': {
                 const { reason } = event as unknown as { reason: string };
-                // Update current session if it matches
                 if (get().currentSessionId === sessionId) {
-                  set({ isCompacting: true, compactionReason: reason });
+                  const automatic = reason !== 'manual';
+                  // Pi reports the old usage until another assistant response
+                  // completes. Do not leave that stale number visible.
+                  set({
+                    isCompacting: true,
+                    compactionReason: reason,
+                    contextUsed: 0,
+                    contextPercent: 0,
+                    contextUsageEstimated: false,
+                  });
+                  if (get().sessionInfo) {
+                    set({
+                      sessionInfo: {
+                        ...get().sessionInfo!,
+                        contextUsed: undefined,
+                        contextPercent: undefined,
+                        contextUsageEstimated: false,
+                      },
+                    });
+                  }
                   useUIStore.getState().addToast({
                     type: 'info',
-                    message: `Auto-compacting context: ${reason}`,
+                    message: automatic ? `Auto-compacting context: ${reason}` : 'Compacting context...',
                   });
                 }
                 break;
               }
               
+              case 'compaction_end':
               case 'auto_compaction_end': {
-                const { aborted, willRetry, errorMessage } = event as unknown as {
-                  result: unknown;
+                const { result, reason, aborted, willRetry, errorMessage } = event as unknown as {
+                  result?: { estimatedTokensAfter?: number };
+                  reason?: string;
                   aborted: boolean;
                   willRetry: boolean;
                   errorMessage?: string;
                 };
-                // Update current session if it matches
                 if (get().currentSessionId === sessionId) {
-                  set({ isCompacting: false, compactionReason: null });
-                  
+                  const estimatedTokens = result?.estimatedTokensAfter;
+                  const contextWindow = get().contextWindow || get().sessionInfo?.contextWindow || 0;
+                  const estimatedPercent = typeof estimatedTokens === 'number' && contextWindow > 0
+                    ? Math.round((estimatedTokens / contextWindow) * 100)
+                    : undefined;
+                  const automatic = reason !== 'manual';
+                  set({
+                    isCompacting: false,
+                    compactionReason: null,
+                    ...(estimatedPercent !== undefined ? {
+                      contextUsed: estimatedTokens!,
+                      contextPercent: estimatedPercent,
+                      contextUsageEstimated: true,
+                    } : {}),
+                  });
+                  if (get().sessionInfo && estimatedPercent !== undefined) {
+                    set({
+                      sessionInfo: {
+                        ...get().sessionInfo!,
+                        contextUsed: estimatedTokens,
+                        contextPercent: estimatedPercent,
+                        contextUsageEstimated: true,
+                      },
+                    });
+                  }
                   if (aborted) {
-                    if (willRetry) {
-                      useUIStore.getState().addToast({
-                        type: 'info',
-                        message: 'Auto-compaction aborted, will retry...',
-                      });
-                    } else {
-                      useUIStore.getState().addToast({
-                        type: 'warning',
-                        message: 'Auto-compaction aborted.',
-                      });
-                    }
+                    useUIStore.getState().addToast({
+                      type: willRetry ? 'info' : 'warning',
+                      message: willRetry ? 'Compaction aborted, will retry...' : 'Compaction aborted.',
+                    });
                   } else if (errorMessage) {
                     useUIStore.getState().addToast({
                       type: 'error',
-                      message: `Auto-compaction failed: ${errorMessage}`,
+                      message: `Compaction failed: ${errorMessage}`,
                     });
                   } else {
                     useUIStore.getState().addToast({
                       type: 'success',
-                      message: 'Auto-compaction completed successfully.',
+                      message: `${automatic ? 'Auto-compaction' : 'Compaction'} completed${estimatedPercent !== undefined ? ` — ${estimatedPercent}% estimated until the next response.` : '.'}`,
                     });
                   }
                 }

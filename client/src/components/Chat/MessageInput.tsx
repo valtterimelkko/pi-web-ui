@@ -44,6 +44,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   const compactionReason = useSessionStore((state) => state.compactionReason);
   const currentModel = useSessionStore((state) => state.currentModel);
   const contextPercent = useSessionStore((state) => state.contextPercent);
+  const contextUsageEstimated = useSessionStore((state) => state.contextUsageEstimated);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   const goalEngineStatus = useSessionStore((state) => state.extensionStatuses['goal-engine']);
@@ -379,9 +380,9 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
                 percent={contextPercent}
                 size={20}
                 showLabel
-                label={`Context usage: ${contextPercent}%`}
+                label={`Context usage: ${contextUsageEstimated ? '~' : ''}${contextPercent}%${contextUsageEstimated ? ' (estimated until the next response)' : ''}`}
               />
-              <span className="text-xs text-gray-400">{contextPercent}%</span>
+              <span className="text-xs text-gray-400">{contextUsageEstimated ? '~' : ''}{contextPercent}%</span>
             </div>
           )}
         </div>

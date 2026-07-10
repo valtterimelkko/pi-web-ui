@@ -1553,8 +1553,10 @@ export class WebSocketConnectionManager {
 
     const sessionPath = status.sessionPath;
 
-    // Track that this client is viewing this session
+    // Keep browser-native Pi controls (for example `/compact`) pointed at the
+    // newly created session as well as normal prompt routing.
     this.clientViewingSession.set(clientId, sessionPath);
+    this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
 
     // Store the cwd for this client
     this.clientCwd.set(clientId, cwd);
@@ -1689,8 +1691,11 @@ export class WebSocketConnectionManager {
     // Subscribe to the new session via MultiSessionManager (creates if doesn't exist)
     const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath, cwd, this.getWebUIContext(clientId));
 
-    // Track that this client is now viewing this session
+    // Keep the connection's runtime-neutral view and the Pi session manager's
+    // view in sync. Browser-native controls such as `/compact` resolve through
+    // MultiSessionManager, unlike prompt routing which carries a session ID.
     this.clientViewingSession.set(clientId, sessionPath);
+    this.multiSessionManager.setClientViewingSession(clientId, sessionPath);
 
     // Get the agent session for model/context info
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);

@@ -1008,6 +1008,23 @@ export class MultiSessionManager {
     // Broadcast the wrapped event to all subscribers
     this.broadcastToSubscribers(sessionPath, sessionEvent);
 
+    // Pi intentionally reports unknown context usage between a compaction and
+    // the next completed assistant response. Refresh once that response ends;
+    // this is event-driven (not polling) and replaces the temporary SDK
+    // compaction estimate shown by the browser.
+    if (event.type === 'agent_end') {
+      const contextUsage = activeSession.agentSession.getContextUsage();
+      if (contextUsage?.tokens != null && contextUsage.percent != null) {
+        this.broadcastToSubscribers(sessionPath, {
+          type: 'context_update',
+          sessionId: activeSession.sessionId,
+          contextWindow: contextUsage.contextWindow,
+          contextUsed: contextUsage.tokens,
+          contextPercent: Math.round(contextUsage.percent),
+        });
+      }
+    }
+
     // Forward the raw event to internal API observers
     // Normalize Pi SDK events to the same shape as NormalizedEvent
     // (Claude/OpenCode already emit NormalizedEvent natively)

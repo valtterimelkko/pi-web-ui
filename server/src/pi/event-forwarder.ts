@@ -431,8 +431,8 @@ export class EventForwarder {
       'agent_start': 'agentStart',
       'agent_end': 'agentEnd',
       'turn_start': 'turnStart',
-      'auto_compaction_start': 'autoCompactionStart',
-      'auto_compaction_end': 'autoCompactionEnd',
+      'compaction_start': 'compactionStart',
+      'compaction_end': 'compactionEnd',
       'auto_retry_start': 'autoRetryStart',
       'auto_retry_end': 'autoRetryEnd',
     };

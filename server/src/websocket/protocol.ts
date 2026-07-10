@@ -215,8 +215,8 @@ export type ServerMessage =
   | { type: 'tool_execution_start'; toolCallId: string; toolName: string; args: unknown }
   | { type: 'tool_execution_update'; toolCallId: string; toolName: string; args: unknown; partialResult: unknown }
   | { type: 'tool_execution_end'; toolCallId: string; toolName: string; result: unknown; isError: boolean }
-  | { type: 'auto_compaction_start'; reason: string }
-  | { type: 'auto_compaction_end'; result: unknown; aborted: boolean; willRetry: boolean }
+  | { type: 'compaction_start'; reason: 'manual' | 'threshold' | 'overflow' }
+  | { type: 'compaction_end'; reason: 'manual' | 'threshold' | 'overflow'; result?: { tokensBefore: number; estimatedTokensAfter?: number }; aborted: boolean; willRetry: boolean; errorMessage?: string }
   | { type: 'auto_retry_start'; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: 'auto_retry_end'; success: boolean; attempt: number; finalError?: string }
   | { type: 'extension_error'; extensionPath: string; event: string; error: string }
