@@ -46,7 +46,9 @@ describe('buildTransferHeader', () => {
     });
 
     expect(header).toContain('Do not act on this yet');
-    expect(header).toContain('Wait for my next instruction');
+    expect(header).toContain('Do not use tools, inspect files, plan work, or make changes');
+    expect(header).toContain('Do not reply with an acknowledgement');
+    expect(header).toContain('Wait silently for my next instruction');
   });
 
   it('includes scope label for recent', () => {

@@ -33,6 +33,7 @@ const RUNTIME_LABELS: Record<string, string> = {
   pi: 'Pi SDK',
   claude: 'Claude Direct',
   opencode: 'OpenCode Direct',
+  antigravity: 'Antigravity',
 };
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -50,6 +51,7 @@ function SdkBadge({ sdkType }: { sdkType: string }) {
     pi: 'bg-blue-100 text-blue-700',
     claude: 'bg-amber-100 text-amber-700',
     opencode: 'bg-emerald-100 text-emerald-700',
+    antigravity: 'bg-violet-100 text-violet-700',
   };
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${colorMap[sdkType] ?? 'bg-gray-100 text-gray-700'}`}>
@@ -89,6 +91,8 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
   const claudeAuthError = useSessionStore(s => s.claudeAuthError);
   const opencodeAvailable = useSessionStore(s => s.opencodeAvailable);
   const opencodeAuthError = useSessionStore(s => s.opencodeAuthError);
+  const antigravityAvailable = useSessionStore(s => s.antigravityAvailable);
+  const antigravityAuthError = useSessionStore(s => s.antigravityAuthError);
   const localSwitchSession = useSessionStore((s) => s.switchSession);
   const { switchSession: wsSwitchSession } = useWebSocket();
   const recentFolders = useUIStore((s) => s.recentFolders);
@@ -238,7 +242,7 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
 
                 {/* Runtime Selector */}
                 <p className="text-xs font-medium text-gray-500 mb-1.5">Runtime</p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={() => setNewTargetRuntime('pi')}
                     className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
@@ -284,6 +288,24 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
                     <span className="text-sm font-medium">OpenCode Direct</span>
                     <span className="text-xs text-gray-500 mt-0.5">
                       {opencodeAvailable ? 'Z.AI GLM' : (opencodeAuthError || 'Not available')}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => antigravityAvailable && setNewTargetRuntime('antigravity')}
+                    disabled={!antigravityAvailable}
+                    title={antigravityAuthError || undefined}
+                    className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
+                      !antigravityAvailable
+                        ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                        : newTargetRuntime === 'antigravity'
+                        ? 'border-violet-500 bg-violet-50 text-gray-900'
+                        : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                    }`}
+                  >
+                    <span className="text-sm font-medium">Antigravity</span>
+                    <span className="text-xs text-gray-500 mt-0.5">
+                      {antigravityAvailable ? 'Gemini • Google' : (antigravityAuthError || 'Not available')}
                     </span>
                   </button>
                 </div>

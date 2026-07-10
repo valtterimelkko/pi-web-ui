@@ -41,7 +41,8 @@ function makeClaudeServiceMock() {
   return {
     isRunning: vi.fn().mockReturnValue(false),
     createSession: vi.fn().mockResolvedValue({ sessionId: 'new-claude-1', claudeSessionId: 'claude-abc' }),
-    sendPrompt: vi.fn((_sessionId, _prompt, _onEvent, onComplete) => {
+    sendPrompt: vi.fn((_sessionId, _prompt, onEvent, onComplete) => {
+      onEvent({ type: 'agent_start' });
       onComplete(undefined);
     }),
     loadSessionHistory: vi.fn().mockResolvedValue([
@@ -55,7 +56,8 @@ function makeOpenCodeServiceMock() {
   return {
     isRunning: vi.fn().mockReturnValue(false),
     createSession: vi.fn().mockResolvedValue({ sessionId: 'new-oc-1', opencodeSessionId: 'oc-abc' }),
-    sendPrompt: vi.fn((_sessionId, _prompt, _onEvent, onComplete) => {
+    sendPrompt: vi.fn((_sessionId, _prompt, onEvent, onComplete) => {
+      onEvent({ type: 'agent_start' });
       onComplete(undefined);
     }),
     getReplayEvents: vi.fn().mockResolvedValue([
@@ -225,6 +227,60 @@ describe('TransferService', () => {
 
       expect(result.success).toBe(true);
       expect(ocMock.sendPrompt).toHaveBeenCalledWith('tgt-1', expect.any(String), expect.any(Function), expect.any(Function));
+    });
+
+    it('completes the transfer once the target accepts it instead of waiting for the whole agent turn', async () => {
+      const config = makeConfig();
+      (config.registry.get as ReturnType<typeof vi.fn>)
+        .mockImplementation(async (id: string) => {
+          if (id === 'src-1') return makeRegistryEntry({ id: 'src-1' });
+          if (id === 'tgt-1') return makeRegistryEntry({ id: 'tgt-1' });
+          return undefined;
+        });
+
+      const claudeMock = makeClaudeServiceMock();
+      let completeTurn: ((error?: Error) => void) | undefined;
+      claudeMock.sendPrompt.mockImplementation((_sessionId, _prompt, onEvent, onComplete) => {
+        completeTurn = onComplete;
+        onEvent({ type: 'agent_start' });
+      });
+      config.claudeService = claudeMock as unknown as import('../../../src/claude/claude-service.js').ClaudeService;
+
+      const result = await Promise.race([
+        new TransferService(config).executeTransfer({
+          sourceSessionId: 'src-1',
+          targetSessionId: 'tgt-1',
+          scope: 'visible_full',
+        }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('transfer waited for target turn completion')), 50)),
+      ]);
+
+      expect(result.success).toBe(true);
+      expect(completeTurn).toBeDefined();
+    });
+
+    it('fails cleanly instead of loading indefinitely when a target never accepts the handoff', async () => {
+      const config = makeConfig();
+      config.acceptanceTimeoutMs = 5;
+      (config.registry.get as ReturnType<typeof vi.fn>)
+        .mockImplementation(async (id: string) => {
+          if (id === 'src-1') return makeRegistryEntry({ id: 'src-1' });
+          if (id === 'tgt-1') return makeRegistryEntry({ id: 'tgt-1' });
+          return undefined;
+        });
+      const claudeMock = makeClaudeServiceMock();
+      claudeMock.sendPrompt.mockImplementation(() => undefined);
+      config.claudeService = claudeMock as unknown as import('../../../src/claude/claude-service.js').ClaudeService;
+
+      const result = await new TransferService(config).executeTransfer({
+        sourceSessionId: 'src-1',
+        targetSessionId: 'tgt-1',
+        scope: 'visible_full',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe(TRANSFER_ERROR_CODES.DISPATCH_FAILED);
+      expect(result.error?.message).toContain('did not accept');
     });
 
     it('includes transfer framing in dispatched prompt', async () => {

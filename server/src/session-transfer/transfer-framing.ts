@@ -23,7 +23,8 @@ export function buildTransferHeader(metadata: {
     '',
     'The following reflects only the visible/default-rendered conversation context from the source session. Hidden reasoning, internal runtime details, and full tool internals may be omitted.',
     '',
-    'Do not act on this yet. Wait for my next instruction.',
+    'Do not act on this yet. Do not use tools, inspect files, plan work, or make changes.',
+    'Do not reply with an acknowledgement. Wait silently for my next instruction.',
   ].join('\n');
 }
 

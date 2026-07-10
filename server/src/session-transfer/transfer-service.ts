@@ -3,6 +3,7 @@ import path from 'path';
 import type { SessionRegistryManager, RegistryEntry } from '../session-registry.js';
 import type { ClaudeService } from '../claude/claude-service.js';
 import type { OpenCodeService } from '../opencode/opencode-service.js';
+import type { AntigravityService } from '../antigravity/antigravity-service.js';
 import { validateTransferRequest, type ValidationResult } from './transfer-validation.js';
 import { TRANSFER_ERROR_CODES } from './types.js';
 import type { TransferRequest, VisibleTranscriptSource } from './types.js';
@@ -21,9 +22,13 @@ export interface TransferServiceConfig {
   registry: SessionRegistryManager;
   claudeService: ClaudeService | null;
   opencodeService: OpenCodeService | null;
+  antigravityService?: AntigravityService | null;
+  /** Maximum time to observe target runtime acceptance before failing cleanly. */
+  acceptanceTimeoutMs?: number;
   piSessionDir?: string;
   createPiSession?: (cwd: string) => Promise<{ sessionId: string; sessionPath: string }>;
-  sendPiPrompt?: (sessionPath: string, message: string) => Promise<void>;
+  /** Starts a Pi prompt and forwards its raw/normalized events to `onEvent`. */
+  sendPiPrompt?: (sessionPath: string, message: string, onEvent: (event: unknown) => void) => Promise<void>;
 }
 
 export interface TransferResult {
@@ -262,6 +267,19 @@ export class TransferService {
           request.scope,
         );
 
+      case 'antigravity':
+        if (!this.config.antigravityService) {
+          return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: 'Antigravity service unavailable' };
+        }
+        // Antigravity and OpenCode both expose the normalised replay-event
+        // shape consumed by this adapter.
+        return extractOpenCodeTranscript(
+          this.config.antigravityService,
+          entry.id,
+          source,
+          request.scope,
+        );
+
       default:
         return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: `Unknown runtime: ${entry.sdkType}` };
     }
@@ -314,6 +332,28 @@ export class TransferService {
         }
       }
 
+      case 'antigravity': {
+        if (!this.config.antigravityService) {
+          return {
+            success: false,
+            sessionId: '',
+            error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Antigravity is not available' },
+          };
+        }
+        try {
+          const result = await this.config.antigravityService.createSession(cwd);
+          // Antigravity's registry path is its session id. Supplying it keeps
+          // the WebSocket/UI new-session flow consistent with other runtimes.
+          return { success: true, sessionId: result.sessionId, sessionPath: result.sessionId };
+        } catch (err) {
+          return {
+            success: false,
+            sessionId: '',
+            error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Failed to create Antigravity session: ${err instanceof Error ? err.message : String(err)}` },
+          };
+        }
+      }
+
       case 'pi': {
         if (!this.config.createPiSession) {
           return {
@@ -351,9 +391,55 @@ export class TransferService {
         return this.config.opencodeService?.isRunning(sessionId) ?? false;
       case 'pi':
         return false;
+      case 'antigravity':
+        return this.config.antigravityService?.isRunning(sessionId) ?? false;
       default:
         return false;
     }
+  }
+
+  /**
+   * A transfer is complete when the target runtime has accepted the handoff
+   * (`agent_start`), not when its entire response has finished. Waiting for
+   * `onComplete` held the browser modal open for the full target turn even
+   * though the context was already present (and could leave it stale forever
+   * after a missed end event).
+   */
+  private awaitTargetAcceptance(
+    start: (onEvent: (event: unknown) => void, onComplete: (error?: Error) => void) => Promise<void> | void,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timeoutMs = this.config.acceptanceTimeoutMs ?? 15_000;
+      const timeout = setTimeout(() => {
+        settle(new Error(`Target did not accept the transfer within ${timeoutMs}ms`));
+      }, timeoutMs);
+      const settle = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (error) reject(error);
+        else resolve();
+      };
+
+      const onEvent = (event: unknown) => {
+        if (typeof event === 'object' && event !== null && (event as { type?: unknown }).type === 'agent_start') {
+          settle();
+        }
+      };
+      const onComplete = (error?: Error) => {
+        if (error) settle(error);
+        else if (!settled) settle(new Error('Target completed before accepting the transfer'));
+      };
+
+      try {
+        Promise.resolve(start(onEvent, onComplete)).catch((error) => {
+          settle(error instanceof Error ? error : new Error(String(error)));
+        });
+      } catch (error) {
+        settle(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   }
 
   private async dispatchToTarget(
@@ -368,17 +454,9 @@ export class TransferService {
           return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Claude service unavailable' } };
         }
         try {
-          await new Promise<void>((resolve, reject) => {
-            this.config.claudeService!.sendPrompt(
-              targetSessionId,
-              handoffText,
-              () => {},
-              (err) => {
-                if (err) reject(err);
-                else resolve();
-              },
-            );
-          });
+          await this.awaitTargetAcceptance((onEvent, onComplete) =>
+            this.config.claudeService!.sendPrompt(targetSessionId, handoffText, onEvent, onComplete),
+          );
           return { success: true };
         } catch (err) {
           return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Claude dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
@@ -390,7 +468,7 @@ export class TransferService {
           return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'OpenCode service unavailable' } };
         }
         try {
-          await new Promise<void>((resolve, reject) => {
+          await this.awaitTargetAcceptance((onEvent, onComplete) =>
             this.config.opencodeService!.sendPrompt(
               targetSessionId,
               handoffText,
@@ -403,23 +481,37 @@ export class TransferService {
                     void this.config.opencodeService!.replyPermission(targetSessionId, permId, true);
                   }
                 }
+                onEvent(event);
               },
-              (err) => {
-                if (err) reject(err);
-                else resolve();
-              },
-            );
-          });
+              onComplete,
+            ),
+          );
           return { success: true };
         } catch (err) {
           return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `OpenCode dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
         }
       }
 
+      case 'antigravity': {
+        if (!this.config.antigravityService) {
+          return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Antigravity service unavailable' } };
+        }
+        try {
+          await this.awaitTargetAcceptance((onEvent, onComplete) =>
+            this.config.antigravityService!.sendPrompt(targetSessionId, handoffText, onEvent, onComplete),
+          );
+          return { success: true };
+        } catch (err) {
+          return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Antigravity dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
+        }
+      }
+
       case 'pi': {
         try {
           if (this.config.sendPiPrompt && directPath) {
-            await this.config.sendPiPrompt(directPath, handoffText);
+            await this.awaitTargetAcceptance((onEvent, onComplete) =>
+              this.config.sendPiPrompt!(directPath, handoffText, onEvent).then(() => onComplete(), onComplete),
+            );
             return { success: true };
           }
           let filePath = directPath;

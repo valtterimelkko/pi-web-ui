@@ -1271,7 +1271,7 @@ Transfers the visible transcript of the session into another session
 |---|---|---|---|
 | `targetSessionId` | string | one of targetSessionId/createNew | Existing target session |
 | `createNew` | boolean | one of targetSessionId/createNew | Create a fresh target |
-| `targetRuntime` | string | when `createNew` | `pi`, `claude`, `opencode` (creating a new Antigravity transfer target is not supported yet) |
+| `targetRuntime` | string | when `createNew` | `pi`, `claude`, `opencode`, or `antigravity` |
 | `targetCwd` | string | no | CWD for new session (defaults to source CWD) |
 | `scope` | string | no | `visible_recent` (default) or `visible_full` |
 | `sourceDisplayName` | string | no | Label for the source in the handoff header |
@@ -1287,6 +1287,11 @@ Transfers the visible transcript of the session into another session
   "targetRuntime": "claude"
 }
 ```
+
+A successful response means the target runtime has accepted the handoff; it
+does **not** wait for the target's whole agent turn to finish. The transfer
+framing explicitly makes the target wait silently for the next user
+instruction.
 
 On failure the response is HTTP 400 with `success: false` and an `error`
 object containing a transfer error code (e.g.

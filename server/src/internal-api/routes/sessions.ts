@@ -1708,13 +1708,29 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       registry: sessionRegistry,
       claudeService,
       opencodeService,
+      antigravityService,
       piSessionDir,
       createPiSession: async (cwd: string) => {
         const status = await multiSessionManager.createAndSubscribe(internalClientId, cwd);
         return { sessionId: status.sessionId, sessionPath: status.sessionPath };
       },
-      sendPiPrompt: async (sessionPath: string, message: string) => {
-        await multiSessionManager.prompt(sessionPath, message);
+      sendPiPrompt: async (sessionPath: string, message: string, onEvent: (event: unknown) => void) => {
+        let observing = true;
+        const transferObserver = (event: unknown) => {
+          onEvent(event);
+          if (typeof event === 'object' && event !== null && (event as { type?: unknown }).type === 'agent_start') {
+            // The transfer response is acceptance-based, so do not retain an
+            // observer for a later/stalled target turn.
+            multiSessionManager.removeApiObserver(sessionPath, transferObserver);
+            observing = false;
+          }
+        };
+        multiSessionManager.addApiObserver(sessionPath, transferObserver);
+        try {
+          await multiSessionManager.prompt(sessionPath, message);
+        } finally {
+          if (observing) multiSessionManager.removeApiObserver(sessionPath, transferObserver);
+        }
       },
     });
 

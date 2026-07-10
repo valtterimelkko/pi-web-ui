@@ -27,7 +27,10 @@ function makeClaudeService() {
     isRunning: vi.fn().mockReturnValue(false),
     isActive: vi.fn().mockReturnValue(false),
     createSession: vi.fn().mockResolvedValue({ sessionId: 'new-claude-1', claudeSessionId: 'claude-abc' }),
-    sendPrompt: vi.fn((_sid, _prompt, _onEvent, onComplete) => onComplete(undefined)),
+    sendPrompt: vi.fn((_sid, _prompt, onEvent, onComplete) => {
+      onEvent({ type: 'agent_start' });
+      onComplete(undefined);
+    }),
     loadSessionHistory: vi.fn().mockResolvedValue([
       { type: 'user', sessionId: 'src-1', content: 'Hello Claude', timestamp: 1700000000000 },
       { type: 'assistant', sessionId: 'src-1', content: 'Hi there!', timestamp: 1700000001000 },
@@ -39,7 +42,10 @@ function makeOpenCodeService() {
   return {
     isRunning: vi.fn().mockReturnValue(false),
     createSession: vi.fn().mockResolvedValue({ sessionId: 'new-oc-1', opencodeSessionId: 'oc-abc' }),
-    sendPrompt: vi.fn((_sid, _prompt, _onEvent, onComplete) => onComplete(undefined)),
+    sendPrompt: vi.fn((_sid, _prompt, onEvent, onComplete) => {
+      onEvent({ type: 'agent_start' });
+      onComplete(undefined);
+    }),
     getReplayEvents: vi.fn().mockResolvedValue([
       { type: 'message_start', message: { id: 'u1', role: 'user', content: 'Hello OC' }, timestamp: 1700000000000 },
       { type: 'message_end', message: { id: 'u1' } },
@@ -131,6 +137,39 @@ describe('Cross-runtime transfer integration', () => {
     expect(result.success).toBe(true);
     expect(result.targetSessionId).toBe('oc-tgt');
     expect(ocMock.sendPrompt).toHaveBeenCalledWith('oc-tgt', expect.any(String), expect.any(Function), expect.any(Function));
+  });
+
+  it('Antigravity → Pi transfer works end-to-end', async () => {
+    registry.get.mockImplementation(async (id: string) => {
+      if (id === 'agy-src') return makeEntry({ id: 'agy-src', sdkType: 'antigravity' });
+      if (id === 'pi-tgt') return makeEntry({ id: 'pi-tgt', sdkType: 'pi', path: path.join(tmpDir, 'pi-target.jsonl') });
+      return undefined;
+    });
+
+    const antigravityMock = {
+      isRunning: vi.fn().mockReturnValue(false),
+      getReplayEvents: vi.fn().mockResolvedValue([
+        { type: 'message_start', message: { id: 'u1', role: 'user' }, timestamp: 1700000000000 },
+        { type: 'message_update', message: { id: 'u1' }, assistantMessageEvent: { type: 'text_delta', delta: 'Hello from Antigravity' } },
+        { type: 'message_end', message: { id: 'u1' } },
+      ]),
+      sendPrompt: vi.fn((_sid, _prompt, onEvent) => onEvent({ type: 'agent_start' })),
+    };
+    const config = {
+      registry: registry as unknown as import('../../src/session-registry.js').SessionRegistryManager,
+      claudeService: null,
+      opencodeService: null,
+      antigravityService: antigravityMock,
+    } as unknown as TransferServiceConfig;
+
+    const result = await new TransferService(config).executeTransfer({
+      sourceSessionId: 'agy-src',
+      targetSessionId: 'pi-tgt',
+      scope: 'visible_full',
+    });
+
+    expect(result.success).toBe(true);
+    expect(antigravityMock.getReplayEvents).toHaveBeenCalledWith('agy-src');
   });
 
   it('OpenCode → new Claude session transfer works', async () => {

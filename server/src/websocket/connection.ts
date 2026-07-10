@@ -790,12 +790,28 @@ export class WebSocketConnectionManager {
       registry: getSessionRegistry(),
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
+      antigravityService: this.antigravityService,
       createPiSession: async (cwd: string) => {
         const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd, this.getWebUIContext(clientId));
         return { sessionId: status.sessionId, sessionPath: status.sessionPath };
       },
-      sendPiPrompt: async (sessionPath: string, message: string) => {
-        await this.multiSessionManager.prompt(sessionPath, message);
+      sendPiPrompt: async (sessionPath: string, message: string, onEvent: (event: unknown) => void) => {
+        let observing = true;
+        const transferObserver = (event: unknown) => {
+          onEvent(event);
+          if (typeof event === 'object' && event !== null && (event as { type?: unknown }).type === 'agent_start') {
+            // Transfer completion is acceptance-based. Do not retain an API
+            // observer for a target turn that may run or stall afterwards.
+            this.multiSessionManager.removeApiObserver(sessionPath, transferObserver);
+            observing = false;
+          }
+        };
+        this.multiSessionManager.addApiObserver(sessionPath, transferObserver);
+        try {
+          await this.multiSessionManager.prompt(sessionPath, message);
+        } finally {
+          if (observing) this.multiSessionManager.removeApiObserver(sessionPath, transferObserver);
+        }
       },
     });
 
