@@ -38,6 +38,8 @@ Two independent Pi installs need the fix, and each has its own repair mechanism:
 - **upstream ships its own sessionId propagation** → no-op success with a retirement notice (`npm install` is never blocked by upstream fixing the bug)
 - **unrecognised drift** → throws, `npm install` fails loudly, files untouched — this is intentional: a silent unpatched install would mean silent Codex compaction breakage later
 
+**Workspace caveat (observed on the 0.80.6 bump):** a *targeted* install such as `npm install @earendil-works/pi-coding-agent@<ver>` (with or without `--workspace=…`) does **not** reliably run the root postinstall in this workspace setup — the SDK was replaced but left unpatched. A plain full `npm install` does run it. After any SDK version bump: run `node scripts/patch-pi-codex-compaction-session-id.mjs` manually and then `npx vitest run server/tests/unit/pi-codex-compaction-session-id.test.ts` before restarting the service.
+
 Regression tests:
 
 - `server/tests/unit/pi-codex-compaction-session-id.test.ts` — asserts the *installed* SDK actually propagates the session ID. When upstream ships its own fix in a different shape, this test fails on the next dependency bump: that failure is the signal to retire the patch script, the postinstall hook, this doc's patch layers, and the extension's arity probe.

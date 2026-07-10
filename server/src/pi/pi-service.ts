@@ -327,7 +327,7 @@ export class PiService {
     await fs.unlink(sessionPath);
   }
 
-  async getAvailableModels() {
+  async getAvailableModels(): Promise<ReturnType<ModelRegistry['getAvailable']>> {
     const models = this.modelRegistry.getAvailable();
 
     // Log available providers for debugging
