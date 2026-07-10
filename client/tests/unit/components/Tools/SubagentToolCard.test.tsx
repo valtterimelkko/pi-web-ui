@@ -401,6 +401,19 @@ describe('SubagentToolCard', () => {
       expect(screen.getByText(/15,350/)).toBeInTheDocument();
     });
 
+    it('uses the summary agent name when evaluated_subagent arguments only carry a run id', () => {
+      render(
+        <SubagentToolCard
+          name="evaluated_subagent"
+          args={{ run_id: 'sa-1', questions: ['Review it'] }}
+          result={{ output: '', isError: false, summary: evaluatedSummary }}
+        />
+      );
+
+      expect(screen.getByText('reviewer')).toBeInTheDocument();
+      expect(screen.queryByText('subagent')).not.toBeInTheDocument();
+    });
+
     it('3.4 evaluated_subagent: omits model + breakdown, shows turns/tokens/cost, no crash', () => {
       render(
         <SubagentToolCard

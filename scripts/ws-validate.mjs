@@ -16,7 +16,7 @@
  * The validation server must be booted with a known AUTH_PASSWORD; when
  * NODE_ENV=production (common because of .env), it must be a bcrypt hash:
  *
- *   HASH=$(cd server && node -e "console.log(require('bcryptjs').hashSync('validation-pass',10))")
+ *   HASH=$(node -e "console.log(require('bcrypt').hashSync('validation-pass',10))")
  *   AUTH_PASSWORD="$HASH" npm run validate:server -- --dir /tmp/pi-vc --port 3093 \
  *     --claude-ws-port 43210 --claude-hook-port 43211 --opencode-port 44197
  *

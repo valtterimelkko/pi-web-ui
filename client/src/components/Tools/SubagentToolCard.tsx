@@ -510,7 +510,7 @@ export const SubagentToolCard = memo(function SubagentToolCard({
         {/* Subagent name and role */}
         <div className="flex items-baseline gap-2">
           <span className="font-mono text-sm font-medium text-gray-900">
-            {subagentName}
+            {summary?.agents[0]?.agent ?? subagentName}
           </span>
           <span className="text-xs text-gray-500 font-mono">
             {role}

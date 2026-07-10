@@ -1,6 +1,8 @@
 // WebSocket Protocol Types
 // Defines the message format for client-server communication
 
+import type { SubagentToolSummary } from '@pi-web-ui/shared';
+
 // ============================================================================
 // Multi-Session Protocol Types
 // ============================================================================
@@ -139,9 +141,11 @@ export interface SessionInfo {
 // Session message for loading chat history
 export interface SessionMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string | Array<{ type: string; text?: string; thinking?: string }>;
   timestamp: number;
+  toolCall?: { id: string; name: string; args: unknown };
+  toolResult?: { output: string; isError: boolean; summary?: SubagentToolSummary };
 }
 
 // Session statistics for get_session_info

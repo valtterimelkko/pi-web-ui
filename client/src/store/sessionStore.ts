@@ -1312,9 +1312,11 @@ export const useSessionStore = create<SessionState>()(
               contextPercent?: number;
               messages?: Array<{
                 id: string;
-                role: 'user' | 'assistant';
+                role: 'user' | 'assistant' | 'tool';
                 content: string | ContentPart[];
                 timestamp: number;
+                toolCall?: Message['toolCall'];
+                toolResult?: Message['toolResult'];
               }>;
               fileTimestamp?: number;
               isStreaming?: boolean;
@@ -1327,6 +1329,8 @@ export const useSessionStore = create<SessionState>()(
               role: serverMsg.role,
               content: serverMsg.content,
               timestamp: serverMsg.timestamp,
+              ...(serverMsg.toolCall ? { toolCall: serverMsg.toolCall } : {}),
+              ...(serverMsg.toolResult ? { toolResult: serverMsg.toolResult } : {}),
             }));
             
             // Save current session's messages before switching (if any)

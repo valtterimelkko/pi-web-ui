@@ -1,6 +1,8 @@
 # TDD Plan — Enrich Pi SDK Subagent Cards (model + tool-usage summary)
 
-> Status: ready for execution. Author: analysis session 2026-07-04.
+> Historical execution plan. The live-card work shipped in `f5fc841` / `61126aa`.
+>
+> **2026-07-10 follow-up:** the original live-only scope proved insufficient for reopened Pi sessions: `loadSessionMessages` discarded all persisted tool records. `pi/session-history.ts` now restores only compact `subagent` / `evaluated_subagent` cards during Pi history replay, using this plan's `SubagentToolSummary` contract. It never replays inner transcripts, commands, or final reports. `evaluated_subagent` is also routed through `SubagentToolCard` so its agent identity and aggregate usage are visible.
 > Executor: follow this **exactly**. Do **not** claim completion until every box in
 > [§9 Definition of Done](#9-definition-of-done-hard-gate) is checked with the
 > evidence named there. Marking work "done" without the named artifact = failure.
@@ -282,8 +284,9 @@ enforced by `client/tests/unit/components/Chat/screen-view-conformance.test.tsx`
 `subagent` + `evaluated_subagent`, plus screen-view sync.
 
 **Out of scope (do NOT do without a new plan):**
-- Fixing `loadSessionMessages` so subagent cards survive a **reload** (it currently drops ALL
-  tool cards — a separate, larger change touching every tool card). Document it; don't touch it.
+- General tool-card replay for every Pi tool. The 2026-07-10 follow-up deliberately restores
+  **only** compact `subagent` / `evaluated_subagent` cards; extending this to other tool families
+  remains a separate design task.
 - Shipping the raw inner transcript over the wire, or a deep "inner transcript" lazy endpoint.
 - Live per-tool streaming of the subagent's inner activity (would require bridging the SDK's
   nested event stream — large, higher-risk).

@@ -42,6 +42,8 @@ interface NormalizedEvent {
 
 Pi workers emit native Pi Coding Agent events. `event-forwarder.ts` wraps them and sends them through the WebSocket connection manager.
 
+When a persisted Pi session is reopened, `pi/session-history.ts` projects its JSONL into the `session_switched` payload. It restores ordinary user/assistant messages plus **only** compact `subagent` and `evaluated_subagent` tool cards: agent identity, model where persisted, and aggregate usage. Inner subagent transcripts, individual commands, and final reports are never replayed into the browser card. The live path uses the same `SubagentToolSummary` contract.
+
 **Example: tool execution**
 ```
 Pi worker emits: { type: 'tool_execution', toolCallId: '123', toolName: 'Bash', args: { command: 'ls' } }

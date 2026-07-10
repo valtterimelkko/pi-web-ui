@@ -455,6 +455,74 @@ describe('sessionStore', () => {
       expect(cached[0].content).toBe('Updated');
     });
 
+    it('preserves compact replayed subagent cards on session switch', () => {
+      const state = useSessionStore.getState();
+
+      state.handleServerMessage({
+        type: 'session_switched',
+        sessionId: 'session-with-subagent',
+        messages: [{
+          id: 'tool:subagent-1',
+          role: 'tool',
+          content: [],
+          timestamp: 2000,
+          toolCall: { id: 'subagent-1', name: 'subagent', args: { agent: 'codescout' } },
+          toolResult: {
+            output: '',
+            isError: false,
+            summary: {
+              mode: 'single',
+              kind: 'subagent',
+              agents: [{ agent: 'codescout', model: 'github-copilot/gpt-5.6-mini', turns: 2, toolCalls: 1, toolBreakdown: [{ name: 'read', count: 1 }], inputTokens: 10, outputTokens: 2 }],
+              totals: { agentCount: 1, turns: 2, toolCalls: 1, inputTokens: 10, outputTokens: 2 },
+            },
+          },
+        }],
+      });
+
+      expect(useSessionStore.getState().messages).toMatchObject([{
+        role: 'tool',
+        toolCall: { name: 'subagent' },
+        toolResult: { summary: { agents: [{ model: 'github-copilot/gpt-5.6-mini' }] } },
+      }]);
+    });
+
+    it('finishes a replayed in-flight subagent card when its live end event arrives', () => {
+      const state = useSessionStore.getState();
+      state.handleServerMessage({
+        type: 'session_switched',
+        sessionId: 'in-flight-subagent',
+        messages: [{
+          id: 'in-flight',
+          role: 'tool',
+          content: [],
+          timestamp: 2000,
+          toolCall: { id: 'in-flight', name: 'evaluated_subagent', args: { run_id: 'sa-1' } },
+        }],
+      });
+
+      state.handleServerMessage({
+        type: 'tool_execution_end',
+        toolCallId: 'in-flight',
+        result: 'done',
+        isError: false,
+        resultSummary: {
+          mode: 'evaluated',
+          kind: 'evaluated_subagent',
+          agents: [{ agent: 'codescout', turns: 2, toolCalls: 0, toolBreakdown: [], inputTokens: 10, outputTokens: 2 }],
+          totals: { agentCount: 1, turns: 2, toolCalls: 0, inputTokens: 10, outputTokens: 2 },
+        },
+      });
+
+      const cards = useSessionStore.getState().messages.filter((message) => message.id === 'in-flight');
+      expect(cards).toHaveLength(1);
+      expect(cards[0]?.toolResult).toMatchObject({
+        output: 'done',
+        isError: false,
+        summary: { agents: [{ agent: 'codescout' }] },
+      });
+    });
+
     it('should handle session_switched with message caching', () => {
       const state = useSessionStore.getState();
       

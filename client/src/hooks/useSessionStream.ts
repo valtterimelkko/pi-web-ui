@@ -23,6 +23,7 @@ import type {
   ToolResultEvent,
   Attachment,
   StatusEvent,
+  SubagentToolSummary,
 } from '@pi-web-ui/shared';
 
 // Use Vite proxy in development, or direct URL in production
@@ -72,6 +73,7 @@ export interface LiveMessage {
   toolResult?: {
     output: string;
     isError: boolean;
+    summary?: SubagentToolSummary;
   };
   timestamp: number;
   isComplete: boolean;

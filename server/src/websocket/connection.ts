@@ -11,6 +11,7 @@ import { detectPromptInjection } from '../security/prompt-injection.js';
 import { getPiService, type PiService } from '../pi/index.js';
 import { SessionPool } from '../pi/session-pool.js';
 import { readSessionCwd } from '../pi/session-cwd.js';
+import { parsePiSessionHistory } from '../pi/session-history.js';
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
@@ -1890,103 +1891,18 @@ export class WebSocketConnectionManager {
 
       // Read the session file
       const fileContent = await readFile(sessionPath, 'utf-8');
-      const lines = fileContent.split('\n').filter(line => line.trim());
-      
-      const messages: SessionMessage[] = [];
-
-      for (const line of lines) {
+      const entries: unknown[] = [];
+      for (const line of fileContent.split('\n')) {
+        if (!line.trim()) continue;
         try {
-          const entry = JSON.parse(line) as Record<string, unknown>;
-          
-          // Only process message entries
-          if (entry.type !== 'message') {
-            continue;
-          }
-
-          const messageData = entry.message as Record<string, unknown> | undefined;
-          if (!messageData) {
-            continue;
-          }
-
-          const role = messageData.role as string;
-          
-          // Only include user and assistant messages
-          if (role !== 'user' && role !== 'assistant') {
-            continue;
-          }
-
-          // Parse content
-          const content = messageData.content as Array<{ type: string; text?: string; thinking?: string }> | undefined;
-          const timestamp = messageData.timestamp as number | undefined;
-
-          // Transform content to client format
-          let transformedContent: SessionMessage['content'];
-          if (Array.isArray(content)) {
-            // Filter out signature fields from thinking blocks and map content
-            transformedContent = content
-              .filter(item => item.type === 'text' || item.type === 'thinking')
-              .map(item => {
-                if (item.type === 'thinking') {
-                  return { 
-                    type: 'thinking', 
-                    thinking: item.thinking || '' 
-                  };
-                }
-                return { 
-                  type: 'text', 
-                  text: item.text || '' 
-                };
-              });
-          } else {
-            transformedContent = '';
-          }
-
-          // Check if this is a skill content message (from /skill:name commands)
-          // Transform skill content to brief placeholder instead of filtering entirely
-          const contentText = Array.isArray(transformedContent) 
-            ? transformedContent.map(c => c.text || '').join('')
-            : '';
-          
-          // Check for skill content injection markers
-          // We require BOTH opening tag AND closing tag to be specific
-          const hasSkillOpenTag = contentText.includes('<skill name="');
-          const hasSkillCloseTag = contentText.includes('</skill>');
-          const hasFullSkillStructure = hasSkillOpenTag && hasSkillCloseTag;
-          
-          // Also check for lecture website builder header (actual skill content)
-          const hasLectureHeader = contentText.includes('# Lecture Website Builder');
-          
-          // Transform skill content to brief placeholder
-          if (hasFullSkillStructure || hasLectureHeader) {
-            // Extract skill name if available
-            const skillNameMatch = contentText.match(/<skill name="([^"]+)"/);
-            const skillName = skillNameMatch ? skillNameMatch[1] : null;
-            const placeholder = skillName 
-              ? `📚 **Skill loaded: ${skillName}**`
-              : '📚 **Skill loaded**';
-            
-            logger.info(`[loadSessionMessages] Transforming skill content: ${skillName || 'unknown'}`);
-            
-            messages.push({
-              id: (entry.id as string) || `msg_${timestamp || Date.now()}`,
-              role: role as 'user' | 'assistant',
-              content: [{ type: 'text', text: placeholder }],
-              timestamp: timestamp || Date.now(),
-            });
-            continue;
-          }
-
-          messages.push({
-            id: (entry.id as string) || `msg_${timestamp || Date.now()}`,
-            role: role as 'user' | 'assistant',
-            content: transformedContent,
-            timestamp: timestamp || Date.now(),
-          });
+          entries.push(JSON.parse(line));
         } catch (parseError) {
-          // Skip invalid lines but continue processing
+          // Skip invalid lines but continue processing.
           logger.warn(`Failed to parse session line: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
         }
       }
+
+      const messages: SessionMessage[] = parsePiSessionHistory(entries) as SessionMessage[];
 
       return { messages, fileTimestamp };
     } catch (error) {

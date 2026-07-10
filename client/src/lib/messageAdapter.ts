@@ -40,6 +40,7 @@ export function normalizeToolName(name: string): string {
     'WebFetch': 'web_fetch',
     'Agent': 'subagent',
     'Task': 'subagent',
+    'evaluated_subagent': 'subagent',
     'TodoWrite': 'todo',
     'TodoRead': 'todo',
     'EnterPlanMode': 'enter_plan_mode',
