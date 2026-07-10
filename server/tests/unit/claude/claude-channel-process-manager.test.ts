@@ -555,7 +555,7 @@ describe('ClaudeChannelProcessManager', () => {
   });
 
   describe('thinking-level effort mapping', () => {
-    it('should map xhigh to high (not low)', async () => {
+    it('should pass xhigh through to Claude Code', async () => {
       const ptyProc = makeDeferredPty();
       const writeSpy = vi.fn();
       (ptyProc as Record<string, unknown>).write = writeSpy;
@@ -564,7 +564,19 @@ describe('ClaudeChannelProcessManager', () => {
 
       manager.setThinkingLevel('xhigh');
 
-      expect(writeSpy).toHaveBeenCalledWith('/effort high\r');
+      expect(writeSpy).toHaveBeenCalledWith('/effort xhigh\r');
+    });
+
+    it('should pass max through to Claude Code', async () => {
+      const ptyProc = makeDeferredPty();
+      const writeSpy = vi.fn();
+      (ptyProc as Record<string, unknown>).write = writeSpy;
+      spawnMock.mockImplementationOnce(() => ptyProc);
+      await manager.start();
+
+      manager.setThinkingLevel('max');
+
+      expect(writeSpy).toHaveBeenCalledWith('/effort max\r');
     });
 
     it('should map off and minimal to low', async () => {

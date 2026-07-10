@@ -106,7 +106,7 @@ export class SessionRPCClient {
   async setThinkingLevel(level: string): Promise<void> {
     await this.worker.sendCommand({
       type: 'set_thinking_level',
-      level: level as 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh',
+      level: level as 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max',
     });
   }
 

@@ -111,7 +111,7 @@ export type ClientMessage =
   | { type: 'fork'; entryId: string }
   | { type: 'navigate_tree'; entryId: string; summarize?: boolean }
   | { type: 'set_model'; modelId: string }
-  | { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' }
+  | { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }
   | { type: 'compact'; customInstructions?: string }
   | { type: 'goal_control'; sessionId: string; action: 'pause' | 'resume' | 'clear' }
   | { type: 'extension_ui_response'; response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean } }

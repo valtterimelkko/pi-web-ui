@@ -19,7 +19,7 @@ import type { ThinkingLevel } from '../../../src/opencode/opencode-config-manage
 
 const MOCK_CONFIG_PATH = path.join(os.homedir(), '.config', 'opencode', 'opencode.json');
 
-const NON_OFF_LEVELS: Exclude<ThinkingLevel, 'off'>[] = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+const NON_OFF_LEVELS: Exclude<ThinkingLevel, 'off'>[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 // UI thinking level -> Z.AI reasoning_effort enum value. The UI's top level
 // ('xhigh', labelled "Maximum reasoning") maps to the API's true ceiling 'max'.
@@ -29,6 +29,7 @@ const EXPECTED_EFFORT: Record<Exclude<ThinkingLevel, 'off'>, string> = {
   medium: 'medium',
   high: 'high',
   xhigh: 'max',
+  max: 'max',
 };
 
 // Reset all mock state before every test so call counts don't bleed across describe blocks

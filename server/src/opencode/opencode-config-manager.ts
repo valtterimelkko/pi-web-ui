@@ -18,13 +18,14 @@
  *                             xhigh→max), so it is safe to write uniformly for
  *                             every zai-coding-plan model.
  *
- * We therefore map the six UI levels onto both controls:
+ * We therefore map the seven UI levels onto both controls:
  *   off     → thinking disabled, no reasoning_effort
  *   minimal → thinking enabled, reasoning_effort "minimal"
  *   low     → thinking enabled, reasoning_effort "low"
  *   medium  → thinking enabled, reasoning_effort "medium"
  *   high    → thinking enabled, reasoning_effort "high"
- *   xhigh   → thinking enabled, reasoning_effort "max"  (UI ceiling → API ceiling)
+ *   xhigh   → thinking enabled, reasoning_effort "max"
+ *   max     → thinking enabled, reasoning_effort "max"
  *
  * This control is Z.AI/GLM-specific, so it is only written for the
  * `zai-coding-plan` provider; see resolveReasoningStrategy for the generalized,
@@ -36,7 +37,7 @@ import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /**
  * How a model's reasoning depth is expressed in opencode.json:
@@ -58,8 +59,8 @@ interface ThinkingOption {
 }
 
 /**
- * UI thinking level -> Z.AI `reasoning_effort` enum value. The UI's top level
- * ('xhigh', labelled "Maximum reasoning") maps to the API's true ceiling 'max'.
+ * UI thinking level -> Z.AI `reasoning_effort` enum value. Both xhigh and max
+ * use the API's true ceiling, preserving the pre-existing xhigh behaviour.
  */
 const REASONING_EFFORT_BY_LEVEL: Record<Exclude<ThinkingLevel, 'off'>, string> = {
   minimal: 'minimal',
@@ -67,6 +68,7 @@ const REASONING_EFFORT_BY_LEVEL: Record<Exclude<ThinkingLevel, 'off'>, string> =
   medium: 'medium',
   high: 'high',
   xhigh: 'max',
+  max: 'max',
 };
 
 /**
@@ -80,6 +82,7 @@ const OPENAI_EFFORT_BY_LEVEL: Record<Exclude<ThinkingLevel, 'off'>, string> = {
   medium: 'medium',
   high: 'high',
   xhigh: 'high',
+  max: 'high',
 };
 
 interface OpenCodeJsonConfig {

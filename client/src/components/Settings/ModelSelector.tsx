@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Search, Check, ChevronDown, Github, Sparkles, Cpu, Brain, Zap, Triangle } from 'lucide-react';
+import type { ThinkingLevel } from './ThinkingLevelSelector';
 
 export interface Model {
   id: string;
@@ -8,6 +9,8 @@ export interface Model {
   contextWindow?: number;
   maxTokens?: number;
   description?: string;
+  /** Model-specific levels, resolved by the active runtime when available. */
+  thinkingLevels?: ThinkingLevel[];
 }
 
 interface ModelSelectorProps {

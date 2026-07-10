@@ -6,10 +6,20 @@ import { SettingsModal } from '../../../../src/components/Settings/SettingsModal
 const CLAUDE_PROFILES = [
   { id: 'profile:claude-sonnet-sdk', displayName: 'Claude Sonnet', provider: 'anthropic', backend: 'sdk-subscription', claudeModel: 'sonnet' },
   { id: 'profile:glm52-claude-sdk', displayName: 'GLM 5.2 via Claude SDK', provider: 'zai', backend: 'sdk-subscription', claudeModel: 'glm-5.2[1m]' },
+  { id: 'profile:claude-haiku-sdk', displayName: 'Claude Haiku', provider: 'anthropic', backend: 'sdk-subscription', claudeModel: 'haiku' },
 ];
 
 const OPENCODE_MODELS = [
   { id: 'glm-5.2', name: 'GLM 5.2', provider: 'zai', contextWindow: 200000 },
+];
+
+const PI_MODELS = [
+  {
+    id: 'gpt-5.4',
+    name: 'GPT-5.4',
+    provider: 'openai-codex',
+    thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+  },
 ];
 
 // Mutable per-test store state so each test can set the active runtime.
@@ -33,6 +43,7 @@ vi.mock('../../../../src/lib/api', () => ({
       if (url.includes('sdkType=claude')) return { models: CLAUDE_PROFILES };
       if (url.includes('sdkType=opencode')) return { models: OPENCODE_MODELS };
       if (url.includes('sdkType=antigravity')) return { models: [] };
+      if (url.includes('sdkType=pi')) return { models: PI_MODELS };
       return { models: [] };
     }),
   },
@@ -87,10 +98,40 @@ describe('SettingsModal', () => {
       expect(wsMocks.setModel).not.toHaveBeenCalled();
     });
 
+    it('does not expose Max for a Claude Haiku profile', async () => {
+      sessionState = {
+        currentSessionSdkType: 'claude',
+        currentModel: 'profile:claude-haiku-sdk',
+        currentThinkingLevel: 'high',
+        error: null,
+      };
+      render(<SettingsModal isOpen onClose={vi.fn()} />);
+
+      await screen.findByTestId('claude-model-locked');
+      expect(screen.queryByText('Max')).not.toBeInTheDocument();
+      expect(screen.getByText('Extra High')).toBeInTheDocument();
+    });
+
     it('shows the Claude Direct badge', async () => {
       render(<SettingsModal isOpen onClose={vi.fn()} />);
       await screen.findByTestId('claude-model-locked');
       expect(screen.getByText('Claude Direct')).toBeInTheDocument();
+    });
+  });
+
+  describe('Pi runtime — model-specific thinking limits', () => {
+    it('does not expose Max when the selected Pi SDK model does not support it', async () => {
+      sessionState = {
+        currentSessionSdkType: 'pi',
+        currentModel: 'openai-codex/gpt-5.4',
+        currentThinkingLevel: 'high',
+        error: null,
+      };
+      render(<SettingsModal isOpen onClose={vi.fn()} />);
+
+      await screen.findByTestId('model-selector-trigger');
+      expect(screen.queryByText('Max')).not.toBeInTheDocument();
+      expect(screen.getByText('Extra High')).toBeInTheDocument();
     });
   });
 

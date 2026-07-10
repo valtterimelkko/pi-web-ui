@@ -1,11 +1,17 @@
 import { Lightbulb } from 'lucide-react';
 
-export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 interface ThinkingLevelSelectorProps {
   value: ThinkingLevel;
+  /** Omit to expose all levels; supply model capabilities to hide unsupported levels. */
+  availableLevels?: readonly ThinkingLevel[];
   onChange: (level: ThinkingLevel) => void;
 }
+
+export const ALL_THINKING_LEVELS: readonly ThinkingLevel[] = [
+  'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+];
 
 const levels: { value: ThinkingLevel; label: string; description: string }[] = [
   { value: 'off', label: 'Off', description: 'No extended thinking' },
@@ -13,10 +19,12 @@ const levels: { value: ThinkingLevel; label: string; description: string }[] = [
   { value: 'low', label: 'Low', description: 'Quick thinking' },
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning' },
   { value: 'high', label: 'High', description: 'Deep analysis' },
-  { value: 'xhigh', label: 'Extra High', description: 'Maximum reasoning' },
+  { value: 'xhigh', label: 'Extra High', description: 'Extended reasoning' },
+  { value: 'max', label: 'Max', description: 'Absolute maximum reasoning' },
 ];
 
-export function ThinkingLevelSelector({ value, onChange }: ThinkingLevelSelectorProps) {
+export function ThinkingLevelSelector({ value, availableLevels = ALL_THINKING_LEVELS, onChange }: ThinkingLevelSelectorProps) {
+  const visibleLevels = levels.filter((level) => availableLevels.includes(level.value));
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 text-gray-700">
@@ -25,7 +33,7 @@ export function ThinkingLevelSelector({ value, onChange }: ThinkingLevelSelector
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        {levels.map((level) => (
+        {visibleLevels.map((level) => (
           <button
             key={level.value}
             onClick={() => onChange(level.value)}

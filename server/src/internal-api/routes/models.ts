@@ -12,6 +12,7 @@ import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import type { PiService } from '../../pi/pi-service.js';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { createLogger } from '../../logging/logger.js';
 
 const logger = createLogger('InternalAPI');
@@ -52,6 +53,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             provider: m.provider,
             contextWindow: m.contextWindow,
             reasoning: m.reasoning,
+            thinkingLevels: getSupportedThinkingLevels(m),
           }));
         } catch {
           // Pi SDK may not be available — return empty list

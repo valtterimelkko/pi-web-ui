@@ -4,7 +4,12 @@ import { api } from '../../lib/api';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { useSessionStore } from '../../store';
 import { ModelSelector, type Model } from './ModelSelector';
-import { ThinkingLevelSelector, type ThinkingLevel } from './ThinkingLevelSelector';
+import { ALL_THINKING_LEVELS, ThinkingLevelSelector, type ThinkingLevel } from './ThinkingLevelSelector';
+
+const LEGACY_THINKING_LEVELS: readonly ThinkingLevel[] = [
+  'off', 'minimal', 'low', 'medium', 'high', 'xhigh',
+];
+const CLAUDE_MAX_THINKING_ALIASES = new Set(['sonnet', 'opus']);
 
 // A Claude provider-profile model entry, as returned by GET /api/models?sdkType=claude.
 interface ClaudeProfileEntry {
@@ -145,6 +150,34 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       }
     }
   }, [errorMessage, isOpen]);
+
+  const availableThinkingLevels = useMemo<readonly ThinkingLevel[]>(() => {
+    // Claude Code's current SDK and direct CLI both accept `--effort max`, but
+    // the selected model still matters. Claude profiles deliberately avoid a
+    // runtime probe; native Sonnet/Opus and Z.ai profiles are known to support
+    // max, while Haiku stays on the legacy ceiling.
+    if (isClaudeSession) {
+      const selectedSessionModel = storeCurrentModel ?? '';
+      const profile = claudeProfiles.find((entry) => entry.id === selectedSessionModel);
+      const model = profile?.claudeModel ?? (selectedSessionModel.startsWith('profile:') ? undefined : selectedSessionModel);
+      if (profile?.provider === 'zai' || (model && CLAUDE_MAX_THINKING_ALIASES.has(model))) {
+        return ALL_THINKING_LEVELS;
+      }
+      return LEGACY_THINKING_LEVELS;
+    }
+    if (isOpenCodeSession || isAntigravitySession) return LEGACY_THINKING_LEVELS;
+
+    const selectedModel = models.find(
+      (model) => `${model.provider}/${model.id}` === currentModel,
+    );
+    return selectedModel?.thinkingLevels ?? LEGACY_THINKING_LEVELS;
+  }, [claudeProfiles, currentModel, isAntigravitySession, isClaudeSession, isOpenCodeSession, models, storeCurrentModel]);
+
+  useEffect(() => {
+    if (!availableThinkingLevels.includes(thinkingLevel)) {
+      setThinkingLevel(availableThinkingLevels.at(-1) ?? 'off');
+    }
+  }, [availableThinkingLevels, thinkingLevel]);
 
   const handleSave = () => {
     // Claude sessions lock the model at creation: never send a mid-session model
@@ -323,6 +356,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           <section>
             <ThinkingLevelSelector
               value={thinkingLevel}
+              availableLevels={availableThinkingLevels}
               onChange={setThinkingLevel}
             />
           </section>

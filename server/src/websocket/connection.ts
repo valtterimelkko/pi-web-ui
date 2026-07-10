@@ -2361,7 +2361,7 @@ export class WebSocketConnectionManager {
 
   private async handleSetThinkingLevel(
     clientId: string,
-    message: { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' }
+    message: { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }
   ): Promise<void> {
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {

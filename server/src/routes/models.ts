@@ -4,6 +4,7 @@ import { getPiService } from '../pi/index.js';
 import { getOpenCodeService } from '../opencode/index.js';
 import { getAntigravityService } from '../antigravity/index.js';
 import { getClaudeProfiles } from '../claude/index.js';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { apiLimiter } from '../security/rate-limit.js';
 import { createLogger } from '../logging/logger.js';
 
@@ -69,8 +70,16 @@ router.get('/', async (req: Request, res: Response) => {
 
     const piService = getPiService();
     const models = await piService.getAvailableModels();
-    
-    res.json({ models });
+
+    // Pi SDK owns the model-level capability contract. In particular, xhigh
+    // and max are opt-in in a model's thinkingLevelMap, so never infer either
+    // from the coarse `reasoning` flag.
+    res.json({
+      models: models.map((model) => ({
+        ...model,
+        thinkingLevels: getSupportedThinkingLevels(model),
+      })),
+    });
   } catch (error) {
     logger.error('Error listing models:', error);
     res.status(500).json({ error: 'Failed to list models' });

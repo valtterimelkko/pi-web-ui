@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { ThinkingLevelSelector } from '../../../../src/components/Settings/ThinkingLevelSelector';
 
 describe('ThinkingLevelSelector', () => {
-  it('renders all six thinking levels', () => {
+  it('renders all seven thinking levels by default, including Max', () => {
     render(<ThinkingLevelSelector value="medium" onChange={() => {}} />);
     expect(screen.getByText('Off')).toBeInTheDocument();
     expect(screen.getByText('Minimal')).toBeInTheDocument();
@@ -11,6 +11,7 @@ describe('ThinkingLevelSelector', () => {
     expect(screen.getByText('Medium')).toBeInTheDocument();
     expect(screen.getByText('High')).toBeInTheDocument();
     expect(screen.getByText('Extra High')).toBeInTheDocument();
+    expect(screen.getByText('Max')).toBeInTheDocument();
   });
 
   it('highlights the selected level', () => {
@@ -25,6 +26,24 @@ describe('ThinkingLevelSelector', () => {
 
     fireEvent.click(screen.getByText('Extra High'));
     expect(onChange).toHaveBeenCalledWith('xhigh');
+  });
+
+  it('only renders model-supported thinking levels when supplied', () => {
+    render(
+      <ThinkingLevelSelector
+        value="high"
+        availableLevels={['off', 'low', 'high']}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Off')).toBeInTheDocument();
+    expect(screen.getByText('Low')).toBeInTheDocument();
+    expect(screen.getByText('High')).toBeInTheDocument();
+    expect(screen.queryByText('Minimal')).not.toBeInTheDocument();
+    expect(screen.queryByText('Medium')).not.toBeInTheDocument();
+    expect(screen.queryByText('Extra High')).not.toBeInTheDocument();
+    expect(screen.queryByText('Max')).not.toBeInTheDocument();
   });
 
   it('does not highlight non-selected levels', () => {

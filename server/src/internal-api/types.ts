@@ -295,7 +295,7 @@ export interface ScreenViewResponse {
 export interface SessionControlRequest {
   action: 'set_model' | 'set_thinking_level' | 'pin' | 'unpin';
   modelId?: string;
-  level?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  level?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /**
    * Pin lifetime in seconds for the `pin` action. Defaults to 24h; clamped to a
    * hard max (7d). Re-pinning extends the deadline. The granted expiry is
@@ -426,6 +426,8 @@ export interface ModelInfo {
   aliases?: string[];
   /** Whether the model exposes a reasoning/thinking capability. */
   reasoning?: boolean;
+  /** Runtime-resolved model-specific levels. Pi populates this from its SDK catalogue. */
+  thinkingLevels?: string[];
   /** For Claude profile entries: the backend that drives this profile. */
   backend?: 'sdk-subscription' | 'cli-direct' | 'channel';
   /** For Claude profile entries: the underlying model alias (sonnet/opus/haiku). */
