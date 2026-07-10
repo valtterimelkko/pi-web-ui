@@ -7,6 +7,8 @@ Many docs below intentionally contain concrete paths, socket locations, service 
 If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` before reading deeper architecture docs.
 
 ## Recent major doc-relevant changes
+- **Pi Codex compaction session-ID patch + auto-heal** — the embedded Pi SDK is patched in postinstall so compaction summary requests carry the session ID (Codex Luna failed without it); layered repair + failure-mode runbook in [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md)
+- **Third live-validation option: browser-WebSocket path** — cookie auth + `/ws` without a browser, for extension slash commands, `notification` toasts, and browser-native messages; runbook + `scripts/ws-validate.mjs` in [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
 - **Claude SDK `AskUserQuestion` support** — first-class browser dialog, cancel/timeout handling, and `extension_ui_cancel`. See [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md), [`PROTOCOL.md`](./PROTOCOL.md), and [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
 - **Antigravity inactivity stall watchdog + bounded retry** — configurable via `ANTIGRAVITY_STALL_TIMEOUT_MS` and `ANTIGRAVITY_MAX_ATTEMPTS`. See [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
 - **Files tab Markdown editor** — shipped: source editor + GFM live preview for `.md`/`.mdx`/`.markdown`/`.txt`, explicit Save via `/api/files/write`, truncated files read-only. Plan (now delivered) at [`plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md`](./plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md)
@@ -42,12 +44,13 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md) — OpenCode architecture, provider auth storage, credential-safe model routing, and the provider allowlist
 - [`OPENCODE-MODEL-AUTOMATION.md`](./OPENCODE-MODEL-AUTOMATION.md) — analysis/proposal for keeping the OpenCode model list current (Kilo Gateway, OpenCode Zen) automatically
 - [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md) — keeping the Pi runtime model list current with the OpenRouter gateway automatically (weekly refresh, no secrets stored)
+- [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md) — why the embedded Pi SDK is patched in postinstall (Codex compaction session identity), every repair layer, failure modes, and the dispatched-agent runbook
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md) — Antigravity / `agy` architecture, logs, and failure modes
 
 ## 6. Internal API and orchestration
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API reference (including transcript vs screen-view vs history read paths)
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — task-oriented guide for spawning, monitoring, and collecting child sessions across runtimes
-- [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — browserless runtime validation runner built on top of the local automation API
+- [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — the three live-validation options (Internal API, Playwright E2E, browser-WebSocket path) with full runbooks; includes `scripts/ws-validate.mjs`
 - [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watches + headless `validate:long-horizon` runner for autonomous, restart-surviving, long-running validation
 
 ## 7. Integration & extension

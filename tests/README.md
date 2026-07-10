@@ -35,7 +35,9 @@ npm run validate:live -- --runtime antigravity --scenario smoke
 ```
 
 Use it when you need to confirm live server/runtime behaviour without opening
- the web UI. Canonical guide:
+ the web UI. Canonical guide (covers all **three** live-validation options —
+Internal API, Playwright E2E, and the browser-WebSocket path via
+`scripts/ws-validate.mjs`):
 - `docs/LIVE-VALIDATION.md`
 
 Typical uses:

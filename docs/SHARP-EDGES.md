@@ -113,6 +113,12 @@ Pinning protects from idle cleanup, but a 15-minute stale stream is still detect
 ### Skill content transformation requires both open and close tags
 `getSkillContentInfo()` checks for `<skill name="...">` **and** `</skill>`. Partial skill injection (missing close tag) is not transformed and will render raw markup.
 
+### The embedded Pi SDK is patched after install — do not "clean up" the postinstall hook
+`npm install` runs `scripts/patch-pi-codex-compaction-session-id.mjs`, which threads the session ID into the SDK's compaction summary requests. Without it, Codex compaction can fail (`Model not found gpt-5.6-luna-…`). The script is upstream-aware (no-ops once upstream ships its own fix) and fails loudly on unrecognised drift — a failing `npm install` here is a signal, not an annoyance. Full runbook: [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md).
+
+### `/compact` is a browser-side interception, not a prompt
+The frontend turns `/compact` into a `{type:'compact'}` WebSocket message. Sending the literal text `/compact` through the Internal API prompt endpoint reaches the LLM as plain text. Extension commands (like `/autocompact75`) execute on both paths.
+
 ## Session Registry
 
 ### Always use tmp+rename writes

@@ -1,6 +1,21 @@
 # Live Validation
 
-> Browserless runtime validation for Pi Web UI using the Internal API.
+> Live validation for Pi Web UI: the three supported methods, when to use each, and the full runbooks.
+
+## The three live-validation options
+
+All three run against a **disposable validation server** by default (production only with explicit user permission plus `--allow-production` / explicit instruction). Choose by what you need to observe:
+
+| # | Method | What it exercises | Use it for | Runbook |
+|---|--------|-------------------|------------|---------|
+| 1 | **Internal API** (Unix socket + bearer token) | Backend runtime behaviour, normalized events, transcripts | Runtime dispatch, event normalization, replay, session lifecycle, orchestration surfaces | This document (below) |
+| 2 | **Browser E2E via Playwright** | The full UI in a real browser | User-visible flows: login, session UI, chat rendering, model selector, cross-tab state | `tests/e2e/` + [`../tests/README.md`](../tests/README.md) |
+| 3 | **Browser WebSocket path** (cookie auth + `/ws`, no browser) | The exact protocol the browser speaks, without a browser | Extension slash commands + `notification` toasts, browser-native messages like `compact`, any `shared/src/protocol-types.ts` message; also the fallback when Playwright auth is a blocker | [Browser-WebSocket validation](#option-3-browser-websocket-validation-cookie-auth-no-browser) below |
+
+Two facts that decide between 1 and 3:
+
+- Extension `ctx.ui.notify(...)` output goes **only** to the browser WebSocket (`{type:'notification'}`); it never appears on the Internal API `/events` stream or in `/history`. To see it, use option 3 (or 2).
+- Typing `/compact` in the browser does **not** send a prompt — the frontend intercepts it and sends a dedicated `{type:'compact'}` WebSocket message. Sending the literal text `/compact` through the Internal API prompt endpoint reaches the LLM as plain text. Extension commands (e.g. `/autocompact75`) work on **both** paths because `AgentSession.prompt()` executes them server-side.
 
 ## Why this exists
 
@@ -195,6 +210,80 @@ What this is for:
 Two practical cautions:
 - use the proxy for **wire inspection**, not for throughput/latency measurement
 - for native Claude subscription sessions, prefer proving model identity from the runtime transcript plus the absence of `ANTHROPIC_API_KEY` in the validation-server environment rather than MITM-ing subscription auth traffic
+
+## Option 3: Browser-WebSocket validation (cookie auth, no browser)
+
+Drive a session over the **same authenticated WebSocket path the browser uses** — cookie login via `POST /api/auth/login`, then `ws://…/ws` — without launching a browser. Live-validated 2026-07-10 (extension command notifications and Pi compaction across three Codex models).
+
+Use this when:
+
+- you need to observe things only the browser path carries: extension command `notification` toasts, `extension_status`, browser-native `compact`, or any other message in `shared/src/protocol-types.ts`;
+- you are validating **extension slash commands** end-to-end in the Web UI;
+- Playwright-based validation is blocked (auth/bcrypt friction, no display) and you still need browser-path evidence.
+
+The repo ships a ready-made driver: [`../scripts/ws-validate.mjs`](../scripts/ws-validate.mjs). Follow the steps exactly; each pitfall listed below has actually happened.
+
+### Step 1 — boot a disposable validation server with a known password
+
+The browser path needs password login. The validation server inherits `.env`, which usually sets `NODE_ENV=production` — and in production the server **only accepts a bcrypt hash** in `AUTH_PASSWORD` (a plain-text value makes login fail with "Server configuration error").
+
+```bash
+cd /root/pi-web-ui
+# bcryptjs resolves from server/, not the repo root — keep the cd server
+HASH=$(cd server && node -e "console.log(require('bcryptjs').hashSync('validation-pass', 10))")
+[ -n "$HASH" ] || echo "hash generation failed — fix before booting"
+AUTH_PASSWORD="$HASH" npm run validate:server -- --dir /tmp/pi-vc --port 3093 \
+  --claude-ws-port 43210 --claude-hook-port 43211 --opencode-port 44197
+```
+
+Pitfalls:
+
+- **Short `--dir` only.** The Internal API Unix socket lives inside it; paths beyond ~100 chars make clients fail with "Unix socket path too long".
+- **Port conflicts.** If startup logs `EADDRINUSE`, another validation server holds the port. Find it with `ss -tlnp | grep <port>`; kill only processes whose command line shows `validation-server.ts` (someone else's may be legitimate — pick a different port instead).
+- **Orphaned children.** Stopping the `npm run` wrapper can leave the underlying `node …validation-server.ts` alive and holding the port. Verify with `ss -tln | grep <port>` after teardown and kill the pid it reports.
+
+### Step 2 — create a session (Internal API is easiest)
+
+```bash
+TOKEN=$(cat /tmp/pi-vc/internal-api-token)
+curl -s --unix-socket /tmp/pi-vc/internal-api.sock \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -X POST http://localhost/api/v1/sessions \
+  -d '{"runtime":"pi","model":"openai-codex/gpt-5.6-terra","cwd":"/tmp/some-cwd"}'
+# → note "sessionPath" in the response; the WS protocol addresses sessions by path
+```
+
+### Step 3 — drive the session over the WebSocket
+
+```bash
+# Extension slash command; succeeds on the first `notification` toast received
+# after the command is sent (no LLM turn). Other extensions can also emit
+# session-start notifications, so pin the assertion with --expect:
+node scripts/ws-validate.mjs --session "<sessionPath>" --step command \
+  --text "/autocompact75" --expect "SDK integrity"
+
+# Ordinary LLM prompt; succeeds on agent_end:
+node scripts/ws-validate.mjs --session "<sessionPath>" --step prompt --text "Reply with one word."
+
+# Browser-native compaction (what the UI sends when you type /compact):
+node scripts/ws-validate.mjs --session "<sessionPath>" --step compact
+```
+
+Each run prints a JSON verdict (`OK …` / `FAILED …` / `TIMEOUT`) plus the captured events — paste that JSON into the validation report as evidence.
+
+Flags when the defaults don't match: `--base http://localhost:<port>`, `--password <plain password>`, `--origin <allowed origin>` (must appear in the server startup log line `Allowed origins: …`; the default is the production origin from `.env`), `--timeout <ms>`.
+
+### What the script actually does (for writing your own variants)
+
+1. `POST /api/auth/login` with `{password}` and an allowed `Origin` header → take `accessToken` from `Set-Cookie`.
+2. Open `ws://<host>/ws` with that `Cookie` **and the same `Origin`** header (origin is enforced at upgrade).
+3. Wait for `{type:'authenticated'}`.
+4. Send `{type:'switch_session', sessionPath}` — prompts are routed by the client's *current* session, so this must come first.
+5. Send `{type:'prompt', sessionId: sessionPath, message}` (or `{type:'compact', …}`), then read `notification` / `session_event` / `compaction_result` messages.
+
+### Teardown
+
+Kill the validation server (and verify the port is really free — see orphan pitfall), then `rm -rf` the `--dir`. Pi-runtime session JSONLs land in the real `~/.pi/agent/sessions/<cwd-hash>/` (Pi keeps its real agent dir even under validation); leave them or note them in the report.
 
 ## Capability-driven behaviour
 
