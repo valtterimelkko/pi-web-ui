@@ -34,6 +34,12 @@
  *   prompt   Send --text as an LLM prompt; succeeds on `agent_end`.
  *   compact  Send the browser-native {type:'compact'} message; succeeds on a
  *            clean `compaction_end` / `compaction_result`.
+ *   resume   Send --text as an LLM prompt and require the auto-compact-75
+ *            resume chain: a compaction must fire during/after the run and the
+ *            agent must then continue on its own (an assistant message_end
+ *            after compaction_end, then agent_end). Fails fast if the run
+ *            completes with no compaction. Use a session seeded past the 75%
+ *            threshold and a prompt that forces tool use.
  *
  * Output: one JSON object with `verdict` ("OK ..." exit 0, otherwise exit 1)
  * and the captured `events` as evidence. Paste that JSON into your report.
@@ -57,13 +63,15 @@ const password = flag('password', process.env.WS_VALIDATE_PASSWORD ?? 'validatio
 // Origin must be in the server's allowed-origins list (see startup log line
 // "Allowed origins: ..."). The production .env value is the usual default.
 const origin = flag('origin', 'https://tmux.letsautomate.work');
-const timeoutMs = Number(flag('timeout', step === 'prompt' ? '120000' : '90000'));
+const timeoutMs = Number(
+  flag('timeout', step === 'prompt' ? '120000' : step === 'resume' ? '420000' : '90000'),
+);
 
-if (!sessionPath || !['command', 'prompt', 'compact'].includes(step ?? '')) {
-  console.error('Usage: ws-validate.mjs --session <sessionPath> --step command|prompt|compact [--text "..."]');
+if (!sessionPath || !['command', 'prompt', 'compact', 'resume'].includes(step ?? '')) {
+  console.error('Usage: ws-validate.mjs --session <sessionPath> --step command|prompt|compact|resume [--text "..."]');
   process.exit(2);
 }
-if ((step === 'command' || step === 'prompt') && !text) {
+if ((step === 'command' || step === 'prompt' || step === 'resume') && !text) {
   console.error(`--text is required for step "${step}"`);
   process.exit(2);
 }
@@ -85,6 +93,9 @@ const ws = new WebSocket(`${base.replace(/^http/, 'ws')}/ws`, { headers: { cooki
 const events = [];
 let done = false;
 let sent = false;
+let compactionStarted = false;
+let compactionEnded = false;
+let assistantAfterCompaction = false;
 
 function finish(verdict) {
   if (done) return;
@@ -108,6 +119,8 @@ ws.on('message', (raw) => {
       if (step === 'compact') {
         ws.send(JSON.stringify({ type: 'compact', sessionId: sessionPath }));
       } else {
+        // 'prompt' and 'resume' both send a normal prompt; they differ in
+        // what event sequence counts as success.
         ws.send(JSON.stringify({ type: 'prompt', sessionId: sessionPath, message: text }));
       }
       sent = true;
@@ -139,14 +152,68 @@ ws.on('message', (raw) => {
   }
 
   if (t === 'session_event') {
-    const et = msg.event?.type;
-    if (['compaction_start', 'compaction_end', 'agent_end', 'message_end', 'extension_error'].includes(et)) {
-      events.push({ event: et, data: msg.event?.data ?? null });
+    // Pi events are forwarded with their fields directly on `event`
+    // (see server/src/pi/event-forwarder.ts), not under `event.data`.
+    const e = msg.event ?? {};
+    const et = e.type;
+    if (['compaction_start', 'compaction_end', 'agent_end', 'extension_error'].includes(et)) {
+      events.push({
+        event: et,
+        ...(et === 'compaction_start' ? { reason: e.reason } : {}),
+        ...(et === 'compaction_end'
+          ? { aborted: e.aborted, errorMessage: e.errorMessage, tokensBefore: e.result?.tokensBefore }
+          : {}),
+      });
+    }
+    if (step === 'resume') {
+      // Success = compaction fired during the run AND the agent continued by
+      // itself afterwards (assistant output post-compaction, then agent_end).
+      if (et === 'turn_end') {
+        events.push({ event: et, stopReason: e.message?.stopReason });
+      }
+      if (et === 'message_start' && e.message?.role === 'custom') {
+        events.push({ event: et, role: 'custom', customType: e.message.customType });
+      }
+      if (et === 'compaction_start') compactionStarted = true;
+      if (et === 'compaction_end') {
+        if (e.errorMessage) finish(`FAILED compaction_end: ${e.errorMessage}`);
+        else compactionEnded = true;
+      }
+      if (et === 'message_start' && compactionEnded && e.message?.role === 'assistant') {
+        assistantAfterCompaction = true;
+      }
+      if (et === 'agent_end') {
+        const msgs = Array.isArray(e.messages) ? e.messages : [];
+        const lastAssistant = [...msgs].reverse().find((m) => m?.role === 'assistant');
+        const textOf = (m) => Array.isArray(m?.content)
+          ? m.content.filter((c) => c.type === 'text').map((c) => c.text).join(' ').slice(0, 300)
+          : undefined;
+        events.push({
+          event: et,
+          lastAssistantStopReason: lastAssistant?.stopReason,
+          lastAssistantText: textOf(lastAssistant),
+        });
+        if (compactionEnded && assistantAfterCompaction) {
+          finish('OK resumed after compaction: agent continued and completed the task');
+        } else if (!compactionStarted) {
+          // Give compaction_start a grace window: ctx.compact() aborts the
+          // run first, so this agent_end can race ahead of compaction_start.
+          setTimeout(() => {
+            if (!compactionStarted) {
+              finish('FAILED: agent run completed without any compaction — threshold never fired');
+            }
+          }, 20000);
+        }
+        // else: this agent_end belongs to the run the compaction aborted;
+        // keep waiting for the auto-resumed run.
+      }
+      return;
     }
     if (step === 'prompt' && et === 'agent_end') finish('OK agent_end');
     if (step === 'compact' && et === 'compaction_end') {
-      const d = msg.event?.data ?? {};
-      finish(d.errorMessage || d.aborted ? `FAILED compaction_end: ${JSON.stringify(d)}` : 'OK compaction_end');
+      finish(e.errorMessage || e.aborted
+        ? `FAILED compaction_end: ${JSON.stringify({ aborted: e.aborted, errorMessage: e.errorMessage })}`
+        : 'OK compaction_end');
     }
   }
 });

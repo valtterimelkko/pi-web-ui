@@ -51,7 +51,8 @@ Regression tests:
 
 - probes at `session_start` whether the running SDK propagates the session ID (arity check: exported `compact.length >= 10`);
 - if not, runs the pi-enhancement patcher against the SDK install resolved from `process.argv[1]` (works for the CLI and for this server) and emits a warning notification that the **already-running process still uses unpatched code** until restarted;
-- exposes `/autocompact75` (status: resolved SDK path, threshold, context usage, integrity verdict) and `/autocompact75 compact` (trigger compaction through the exact `ctx.compact()` path the 75% trigger uses — also the only way to compact a Pi session via the Internal API, since the browser's `/compact` is a client-side WebSocket message).
+- exposes `/autocompact75` (status: resolved SDK path, threshold, context usage, integrity verdict) and `/autocompact75 compact` (trigger compaction through the exact `ctx.compact()` path the 75% trigger uses — also the only way to compact a Pi session via the Internal API, since the browser's `/compact` is a client-side WebSocket message);
+- auto-resumes the agent after a mid-task 75% compaction: `ctx.compact()` aborts any in-flight run and never restarts it (unlike native auto-compaction, which continues via `agent.continue()`), so when the compacted turn ended with tool calls the extension queues a resume message (`pi.sendMessage(..., { triggerTurn: true })`) and the agent proceeds with the task on its own. Details + tests: `/root/pi-enhancement/auto-compact-75/README.md`. Live-validate with `scripts/ws-validate.mjs --step resume` ([`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)).
 
 ## Failure modes — none of them silent
 

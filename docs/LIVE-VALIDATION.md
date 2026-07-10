@@ -267,6 +267,18 @@ node scripts/ws-validate.mjs --session "<sessionPath>" --step prompt --text "Rep
 
 # Browser-native compaction (what the UI sends when you type /compact):
 node scripts/ws-validate.mjs --session "<sessionPath>" --step compact
+
+# auto-compact-75 resume chain: prompt a seeded-over-75% session with a
+# tool-forcing task and require compaction to fire mid-run AND the agent to
+# continue by itself afterwards (assistant message after compaction_end, then
+# agent_end). Fails if the run completes without compaction. Seed the session
+# past 75% of the model context window first (a cheap way: a flat-rate model
+# with filler messages; calibrate real token counts with a small session and
+# one tiny prompt before generating the big seed — the Web UI system prompt +
+# tools add a large fixed overhead, ~29k tokens as of 2026-07).
+node scripts/ws-validate.mjs --session "<sessionPath>" --step resume \
+  --text 'Use the bash tool to run exactly: echo "CHECK-$((21*2))". Then report its exact output.' \
+  --timeout 540000
 ```
 
 Each run prints a JSON verdict (`OK …` / `FAILED …` / `TIMEOUT`) plus the captured events — paste that JSON into the validation report as evidence.
