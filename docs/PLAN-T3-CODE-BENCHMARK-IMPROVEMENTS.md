@@ -84,6 +84,7 @@ All must pass before commit:
 
 - `npm run lint`, `npm run typecheck`, `npm run build`, `npm test` (server workspace at minimum), `npm run docs:check-agent-guides`.
 - Contract changelog bumped **additively** in `docs/INTERNAL-API-CONTRACT.md`; `docs/INTERNAL-API.md` and `docs/INTERNAL-API-ORCHESTRATION.md` updated (the "No async job id layer yet" limitation gets resolved/annotated).
+- **Contract mirror synced in the same working session:** the sibling repo's `/root/agent-os/docs/PI-WEB-UI-INTERNAL-API-CONTRACT.md` gets the same version bump, the new endpoints/fields, and a matching version-history entry, then is committed and pushed on that repo's current branch. This is the operator's standing workflow — a contract version bump here is never left unmirrored — and it is the one deliberate cross-repo touch this plan requires.
 - Grep-level check that no receipt/store code path can persist env values, auth material, or prompt/transcript bodies.
 - Restart test proves receipts survive process death.
 - The two live scenarios pass on an isolated validation server (`PI_AGENT_DIR` and prefs isolated — never against prod state).
