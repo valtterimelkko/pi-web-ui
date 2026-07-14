@@ -44,6 +44,7 @@ These are deeper technical reads once you already know you care about a given ru
 - [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md)
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
+- [`ANTIGRAVITY-CLIPROXYAPI-EXPERIMENT.md`](./ANTIGRAVITY-CLIPROXYAPI-EXPERIMENT.md) — exploratory note on routing Antigravity OAuth-backed models into the Pi runtime through [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
 
 Maintainer-only deeper internals such as Pi worker isolation live in the maintainer path.
 
