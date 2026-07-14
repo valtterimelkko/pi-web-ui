@@ -1,237 +1,128 @@
-# Plan: Improvements Borrowed from the T3 Code Benchmark
+# Plan: Run Receipts and Instance Identity (T3 Code Benchmark, Trimmed)
 
-_Status: proposed plan; no implementation in this document._
-_Date: 2026-07-14_
+_Status: revised plan; supersedes and replaces the 2026-07-14 original in place. No implementation in this document._
+_Date: 2026-07-14 (revision 2)_
 
-## Purpose
+## Purpose and intent
 
-This plan records the concrete improvements Pi Web UI may borrow from the benchmark of [T3 Code](https://t3.codes/) and [pingdotgg/t3code](https://github.com/pingdotgg/t3code).
+This plan records what Pi Web UI should actually build from the benchmark of [T3 Code](https://t3.codes/) ([pingdotgg/t3code](https://github.com/pingdotgg/t3code)).
 
-The conclusion of the benchmark is **not** to copy T3 Code or replace Pi Web UI's architecture. Pi Web UI already has a broader runtime surface: Pi Coding Agent, Claude, OpenCode, and Antigravity, with replay, transfer, pinning, Internal API orchestration, live validation, and runtime-specific security controls.
+Pi Web UI is **permanently single-operator personal tooling**. It will not gain users, and nothing here is product hardening. Every item must pass one test:
 
-The useful T3 ideas are control-plane mechanics:
+> Does this reduce the time the operator spends checking whether agents actually did the thing?
 
-1. configured runtime instances separate from runtime families;
-2. immutable session-to-runtime bindings and explicit continuation rules;
-3. a distinct run/dispatch identity with idempotent completion receipts;
-4. richer event correlation and replay cursors;
-5. typed asynchronous completion signals and deterministic worker drains.
+Three T3 ideas pass that test today, because they fix failures that have already happened here (silent empty sessions, duplicate-dispatch quota waste, ambiguous provider attribution):
 
-## Evidence and benchmark references
+1. **Run identity + idempotent dispatch** — one prompt execution gets a `runId`; a retried dispatch returns the existing run instead of burning quota twice.
+2. **Persisted run receipts** — every accepted run ends in an explicit, disk-persisted terminal state that survives server restarts.
+3. **Execution instance identity** — expose *which configured instance* (generalizing `claudeProfileId`) handled a session, not just the runtime family.
 
-### T3 Code
+Everything else from the benchmark is **deferred reference material**, not committed scope (see below).
 
-- Website positioning: [T3 Code](https://t3.codes/)
-- Runtime adapter boundary: [`ProviderAdapter.ts`](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/provider/Services/ProviderAdapter.ts)
-- Cross-provider routing and recovery: [`ProviderService.ts`](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/provider/Layers/ProviderService.ts)
-- Adapter lookup: [`ProviderAdapterRegistry.ts`](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/provider/Services/ProviderAdapterRegistry.ts)
-- Persisted runtime binding: [`ProviderSessionDirectory.ts`](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/provider/Services/ProviderSessionDirectory.ts)
+## What changed from the original plan, and why
+
+This revision intentionally replaces the original five-phase program. The changes and their intent:
+
+| Change | Intent |
+|---|---|
+| Five phases → one committed slice + a deferred-reference list | The full program's benefit-to-ceremony ratio only makes sense for a team product. For a single operator, only the items that cut supervision time are worth their maintenance cost. |
+| Added a hard persistence requirement for receipts | The original demanded "every accepted run has a terminal or recoverable state" but never said where receipts live. Prod restarts on every deploy (`systemctl restart pi-web-ui.service`); an in-memory registry fails the plan's own definition of done on the first redeploy. |
+| Added explicit reconciliation with the durable-watch layer | `server/src/internal-api/watch/` already provides disk-backed, restart-surviving session observation. Unreconciled, receipts would be a third overlapping notion of "did this finish" (watches, notification opt-ins, receipts) that can disagree. Receipts are built on the watch-store pattern and consume existing terminal signals. |
+| Dropped event cursors, `DrainableWorker`, and typed receipt buses from committed scope | No current consumer needs them. `DrainableWorker` is an Effect-TS deterministic-testing idiom; this repo's known test-flakiness problems are already resolved. Kept as deferred reference only. |
+| Dropped the full `ExecutionBinding` schema commitment | The slice needs three exposed fields, not a frozen interface. Committing a schema before Agent OS Step 7 exists to exercise it locks in speculation on an additively-versioned contract. |
+| Dropped resume/switch-compatibility checks in each runtime service | This one bullet hid perhaps half the original program's work (Antigravity replay is not byte-stable; the Claude channel path has no `/events`). Deferred until a real resume-through-wrong-instance incident justifies it. |
+| Decoupled sequencing from Agent OS | The slice is justified by consumers that exist today: long-horizon validation, orchestration-skill agent sessions, and the CLI notification bridge. The Opus-via-SDK silent failure happened with none of Agent OS involved. Ship independently; Agent OS adopts later through the versioned contract. |
+| Added a TDD plan, quality gates, and scope guardrails | Make the slice buildable by a focused agent in one to two sessions without ballooning. |
+
+## Benchmark evidence (retained)
+
+The T3 references remain the evidence base and were verified real and accurately characterized:
+
+- Persisted session binding: [`ProviderSessionDirectory.ts`](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/provider/Services/ProviderSessionDirectory.ts)
 - Driver-vs-instance distinction: [`providerInstance.ts`](https://github.com/pingdotgg/t3code/blob/main/packages/contracts/src/providerInstance.ts)
-- Typed runtime events: [`providerRuntime.ts`](https://github.com/pingdotgg/t3code/blob/main/packages/contracts/src/providerRuntime.ts)
-- Project/thread/turn contracts and sequence-aware subscriptions: [`orchestration.ts`](https://github.com/pingdotgg/t3code/blob/main/packages/contracts/src/orchestration.ts)
-- Ordered orchestration and command receipts: [`OrchestrationEngine.ts`](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/orchestration/Layers/OrchestrationEngine.ts)
-- Deterministic worker completion: [`DrainableWorker.ts`](https://github.com/pingdotgg/t3code/blob/main/packages/shared/src/DrainableWorker.ts)
-- Typed async receipts: [`RuntimeReceiptBus.ts`](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/orchestration/Services/RuntimeReceiptBus.ts)
-- Architecture overview: [`docs/architecture/overview.md`](https://github.com/pingdotgg/t3code/blob/main/docs/architecture/overview.md)
+- Ordered commands and receipts: [`OrchestrationEngine.ts`](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/orchestration/Layers/OrchestrationEngine.ts)
+- Deferred-only references: [`providerRuntime.ts`](https://github.com/pingdotgg/t3code/blob/main/packages/contracts/src/providerRuntime.ts) (typed event vocabulary), [`RuntimeReceiptBus.ts`](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/orchestration/Services/RuntimeReceiptBus.ts), [`DrainableWorker.ts`](https://github.com/pingdotgg/t3code/blob/main/packages/shared/src/DrainableWorker.ts)
 
-### Pi Web UI baseline
+Pi Web UI baseline: `docs/INTERNAL-API-ORCHESTRATION.md` ("No async job id layer yet" is this repo's own documented top limitation), `server/src/session-registry.ts` (`claudeProfileId` is today's only instance-like concept), `server/src/internal-api/watch/` (existing durable observation layer), `docs/INTERNAL-API-CONTRACT.md` (additive versioning rules).
 
-- Runtime boundary and current four-runtime architecture: `docs/ARCHITECTURE.md`
-- Event pipeline and current `NormalizedEvent` contract: `docs/EVENT-PIPELINE.md`, `shared/src/protocol-types.ts`
-- Unified registry: `server/src/session-registry.ts`
-- Claude configured profiles: `server/src/claude/claude-profiles.ts`, `server/src/claude/claude-service.ts`
-- Internal API contract and additive-versioning rules: `docs/INTERNAL-API-CONTRACT.md`
-- Internal API orchestration surface and current limitations: `docs/INTERNAL-API-ORCHESTRATION.md`
-- Worker/session isolation: `docs/PROCESS-ISOLATION-DESIGN.md`
+## Committed scope — the slice
 
-## Target boundary
+### 1. Run identity and idempotent dispatch
 
-```text
-Agent OS
-  work objects, context packets, routing policy, quota, approval, acceptance
-        |
-        | generic execution intent + idempotency key
-        v
-Pi Web UI Internal API
-  capabilities, runtime-instance resolution, session lifecycle,
-  native resume rules, events, receipts, transcripts, usage
-        |
-        v
-Pi / Claude / OpenCode / Antigravity adapters
-```
+- Internal API prompt dispatch accepts an optional `idempotencyKey` and returns a `runId` (additive response fields; old clients unaffected).
+- A duplicate dispatch (same key, within a documented scope and TTL) returns the existing run's receipt instead of starting a second prompt.
+- Key scoping and TTL must be explicit in the contract docs. **Failure-mode note:** wrong dedupe silently swallows a legitimate prompt, which is worse than the duplicate it prevents — tests must cover key-collision and TTL-expiry boundaries.
 
-Pi Web UI remains the runtime gateway. It must not import Agent OS memory or work-object ontology.
+### 2. Persisted run receipts
 
-## Proposed concepts
+- Lifecycle: `accepted → started → completed | failed | cancelled`.
+- A receipt records: `runId`, `sessionId`, runtime family, `executionInstanceId`, model where known, timestamps, terminal status, and an error code on failure. **No secrets, tokens, cookies, or transcript bodies.**
+- Storage is disk-backed, modeled on `watch-store.ts`, and must survive a server restart: a run that was in flight when the server died is marked recoverable/interrupted on reload, never silently lost.
+- Terminal detection **reuses existing signals** — the per-runtime turn-completion logic behind `/wait` and the `agent_end` events the notification layer already consumes. No new per-runtime plumbing.
+- Receipt lookup endpoint for detached/background work.
+- Retention: bounded (count- or age-pruned), documented, and covered by a test.
 
-### 1. Runtime family versus runtime instance
+### 3. Execution instance identity
 
-Keep the existing `sdkType` as the runtime-family discriminator:
+- Expose `executionInstanceId` in session info and receipts: Claude sessions map from `claudeProfileId`; other runtimes get one static default each (`pi-local-default`, `opencode-default`, `antigravity-default`).
+- `sdkType` remains the runtime-family discriminator. No configuration UI — instances are surfaced, not managed, until more than one real instance exists outside Claude.
 
-```text
-pi | claude | opencode | antigravity
-```
+## TDD plan
 
-Add an optional generic execution-instance identity. Initially, existing Claude profiles provide the first concrete implementation:
+Tests are written first, per repo policy. Order of work:
 
-```text
-claude-native-subscription
-claude-glm-sdk
-claude-channel
-opencode-zai-default
-pi-local-default
-antigravity-default
-```
+1. **Receipt store unit tests (failing first):** create/transition/terminal semantics; illegal transition rejection; persistence round-trip; restart reload marks in-flight runs recoverable; retention pruning; secret-field rejection.
+2. **Idempotency unit tests:** duplicate key returns same run; distinct keys dispatch independently; TTL expiry allows reuse; missing key preserves today's behavior exactly.
+3. **Terminal-detection fixture tests:** recorded event fixtures per runtime (Pi, Claude SDK, Claude channel, OpenCode, Antigravity) drive receipt completion — no live runtimes needed for the matrix.
+4. **Route tests:** dispatch response includes `runId`; receipt lookup; old-client request shapes still work byte-compatibly.
+5. **Implementation** to green, then docs.
+6. **Live validation, deliberately narrow:** one scenario on Pi and one on a Claude profile (see `docs/LIVE-VALIDATION.md`; use a disposable GLM profile for the SDK path per known sandbox constraints). The other runtimes are covered by fixtures only — Antigravity and Claude-channel live quirks are a known session sink and are not this feature's job to debug.
 
-A session binding should eventually record:
+## Quality gates
 
-```text
-sessionId
-runtimeFamily
-executionInstanceId
-adapter/backend kind
-model selection
-cwd/worktree
-native session/conversation id
-resume cursor or equivalent continuation state
-continuation capabilities
-```
+All must pass before commit:
 
-The instance is the stable owner of a continuation. A session must not silently resume through a different profile, provider, endpoint, or backend.
+- `npm run lint`, `npm run typecheck`, `npm run build`, `npm test` (server workspace at minimum), `npm run docs:check-agent-guides`.
+- Contract changelog bumped **additively** in `docs/INTERNAL-API-CONTRACT.md`; `docs/INTERNAL-API.md` and `docs/INTERNAL-API-ORCHESTRATION.md` updated (the "No async job id layer yet" limitation gets resolved/annotated).
+- Grep-level check that no receipt/store code path can persist env values, auth material, or prompt/transcript bodies.
+- Restart test proves receipts survive process death.
+- The two live scenarios pass on an isolated validation server (`PI_AGENT_DIR` and prefs isolated — never against prod state).
 
-### 2. Execution binding
+## Scope guardrails — explicitly out, do not drift in
 
-Introduce an internal, versioned binding model before changing public behaviour:
+- No unification of receipts with the watch layer or the notification layer into a grand completion abstraction. Receipts sit **on** the watch-store pattern; the other two are untouched.
+- No `ExecutionBinding` interface in code. It lives below as deferred reference only.
+- No changes to runtime services for resume/switch compatibility.
+- No event-stream envelope changes, sequence numbers, or cursor replay.
+- No live validation beyond Pi + one Claude profile.
+- No WebSocket protocol or client/frontend changes of any kind.
 
-```ts
-interface ExecutionBinding {
-  sessionId: string;
-  runtime: SdkType;
-  executionInstanceId: string;
-  adapterKind: string;
-  model?: string;
-  cwd: string;
-  nativeSessionId?: string;
-  resumeCursor?: unknown;
-  continuation: {
-    canResume: boolean;
-    canSwitchModel: boolean;
-    compatibleInstanceIds?: string[];
-    reasonIfDenied?: string;
-  };
-}
-```
+## Deferred reference (not committed; revisit only on evidence)
 
-The exact final schema should be decided through tests and compatibility review; this is a planning shape, not an implementation mandate.
+| Idea | Revisit when |
+|---|---|
+| Event cursors / snapshot-plus-events-after-cursor recovery | A real consumer demonstrably loses events it needed and the durable-watch layer cannot cover it. |
+| Full `ExecutionBinding` schema (`nativeSessionId`, `resumeCursor`, continuation capabilities) | Agent OS Step 7 is being implemented and needs specific fields — decide schema then, with the consumer in the room. |
+| Resume/switch compatibility enforcement per runtime | A real incident of a session resuming through the wrong instance. |
+| Typed async receipt channels (`turn.quiesced`, `transfer.completed`, …) / `DrainableWorker` helpers | A concrete race or polling problem is demonstrated in tests or orchestration. |
+| Instance configuration UI | More than one real configured instance exists for a non-Claude runtime. |
 
-### 3. Run identity and terminal receipt
+## Sequencing
 
-A long-lived session and one prompt execution are different objects. Add a distinct run identity for Internal API dispatch:
+- **Independent of Agent OS.** Build whenever convenient; the existing consumers justify it now. Expected effort: one to two focused agent sessions (calibrated against the notification layer and screen-view projection, both similar-shape additive Internal API features).
+- On ship, update the contract mirror in the sibling repo (`/root/agent-os/docs/PI-WEB-UI-INTERNAL-API-CONTRACT.md`) — the one deliberate cross-repo touch. Agent OS discovers the features at runtime via its capability-gated client and adopts them during Step 7 (owner expectation as of 2026-07-14: roughly two to four weeks out).
+- Implementation sessions on this slice should run the `agent-os-capture` skill: design decisions here are exactly the real-work memory the Agent OS Step 4C dogfooding loop needs.
 
-```text
-accepted -> started -> completed | failed | cancelled
-```
+## Definition of done
 
-A receipt should include the session binding, terminal timestamp, final status, error code if applicable, and a transcript/event cursor reference where available.
+For every Internal API dispatch, Pi Web UI can answer — including after a server restart:
 
-This addresses the current Internal API limitation that it is session-oriented and has no generic job/run registry.
+1. Was this prompt dispatched exactly once for its idempotency key?
+2. What is the run's terminal (or recoverable) state, and what receipt proves it?
+3. Which runtime family **and configured instance** (and model, where known) executed it?
 
-### 4. Event correlation and replay
+The original plan's remaining questions (resume safety, event-loss recovery) belong to the deferred items and are intentionally not part of this definition of done.
 
-Retain the existing `NormalizedEvent` shape for WebSocket compatibility, but add an additive internal/event-stream envelope with:
+## Non-goals (unchanged from the original)
 
-```text
-eventId
-sequence
-runId
-turnId
-requestId
-causation/correlation id
-runtime instance id
-terminal outcome where applicable
-```
-
-The Internal API should eventually support snapshot-plus-events-after-cursor recovery rather than relying only on a short in-memory event tail.
-
-### 5. Typed async receipts and drains
-
-Use narrow receipt channels for meaningful milestones, for example:
-
-```text
-turn.quiesced
-transcript.persisted
-session.recovered
-transfer.completed
-checkpoint.completed
-notification.delivered
-```
-
-Use drainable workers only around asynchronous side effects where tests or orchestration currently depend on timing, sleeps, or indirect status inference.
-
-## Phased implementation plan
-
-### Phase 0 — contract and evidence first
-
-- Write an ADR for runtime family, runtime instance, execution binding, run identity, and continuation compatibility.
-- Inventory every existing runtime-specific registry field and native resume path.
-- Define invariants and failure cases before implementation:
-  - no silent instance switching on resume;
-  - missing/disabled instance fails explicitly;
-  - no secrets in bindings, events, or receipts;
-  - old API clients continue to work;
-  - every accepted detached run has a terminal or recoverable state.
-- Add unit fixtures for native Claude, Claude profile, OpenCode, Pi, and Antigravity bindings.
-
-### Phase 1 — internal session binding
-
-- Add a generic binding representation behind the existing `SessionRegistryManager`.
-- Map `claudeProfileId` to `executionInstanceId` without removing legacy fields.
-- Give other runtimes one default instance ID initially; do not create a configuration UI until multiple real instances exist.
-- Add explicit resume/switch compatibility checks in each runtime service.
-
-### Phase 2 — run and receipt layer
-
-- Add optional `idempotencyKey` and returned `runId` to Internal API prompt dispatch.
-- Add receipt lookup for detached/background work.
-- Make duplicate dispatches return the existing run receipt rather than starting a second prompt.
-- Preserve `/wait`, `/transcript`, `/history`, and existing error-code semantics.
-- Update `docs/INTERNAL-API.md`, `docs/INTERNAL-API-ORCHESTRATION.md`, and the contract changelog additively.
-
-### Phase 3 — event cursor and deterministic completion
-
-- Add monotonic event sequence and run/session correlation fields.
-- Add snapshot-plus-cursor replay for reconnecting local consumers.
-- Introduce typed completion receipts for selected asynchronous flows.
-- Add `DrainableWorker`-style helpers only where a concrete race or polling problem is demonstrated.
-
-### Phase 4 — Agent OS integration
-
-- Extend the Agent OS client contract to consume run IDs, receipts, instance identity, and event/transcript evidence.
-- Add live and restart validation for:
-  - same-instance resume;
-  - disabled-instance failure;
-  - duplicate dispatch idempotency;
-  - reconnect after missed events;
-  - terminal receipt persistence.
-
-## Non-goals
-
-- No Effect-TS or T3 monorepo adoption.
-- No wholesale replacement of Express, Zustand, workers, or current runtime services.
-- No replacement of `sdkType`.
-- No import of Agent OS memory/work-object concepts into Pi Web UI.
-- No full SQL event-sourced rewrite unless real recovery evidence justifies it.
-- No assumption that every runtime supports the same resume, model-switch, approval, or streaming behaviour.
-
-## Definition of done for this plan
-
-The work is successful when Pi Web UI can answer, for every orchestrated execution:
-
-1. Which runtime family and configured instance handled it?
-2. Which model/backend/provider configuration was active?
-3. Can the native session be resumed safely, and why?
-4. Was this prompt dispatched exactly once?
-5. What reliable receipt proves completion or failure?
-6. Can a reconnecting consumer recover without losing or duplicating events?
-
-All additions must remain compatible with the existing local-only Internal API boundary and Agent OS's separate ownership of durable work state.
+- No Effect-TS or T3 monorepo adoption; no replacement of Express, Zustand, workers, or `sdkType`; no SQL event-sourced rewrite; no import of Agent OS memory/work-object ontology; no assumption of uniform resume/model-switch/approval behavior across runtimes.
