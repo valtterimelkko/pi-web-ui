@@ -46,7 +46,6 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md) — keeping the Pi runtime model list current with the OpenRouter gateway automatically (weekly refresh, no secrets stored)
 - [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md) — why the embedded Pi SDK is patched in postinstall (Codex compaction session identity), every repair layer, failure modes, and the dispatched-agent runbook
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md) — Antigravity / `agy` architecture, logs, and failure modes
-- [`ANTIGRAVITY-CLIPROXYAPI-EXPERIMENT.md`](./ANTIGRAVITY-CLIPROXYAPI-EXPERIMENT.md) — exploratory CLIProxyAPI-backed alternative for Antigravity models
 
 ## 6. Internal API and orchestration
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API reference (including transcript vs screen-view vs history read paths)
