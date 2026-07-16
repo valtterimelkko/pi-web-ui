@@ -82,13 +82,46 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     expect(otherKey.receipt.runId).not.toBe(first.receipt.runId);
   });
 
-  it('allows the same key to be reused after the idempotency TTL expires', async () => {
+  it('keeps a key live before the TTL boundary and expires it exactly at the boundary', async () => {
     const first = await manager.beginRun({ ...baseInput, idempotencyKey: 'request-1' });
-    now += 1_001;
-    const second = await manager.beginRun({ ...baseInput, idempotencyKey: 'request-1' });
+    now += 999;
+    const beforeBoundary = await manager.beginRun({ ...baseInput, idempotencyKey: 'request-1' });
+    now += 1;
+    const atBoundary = await manager.beginRun({ ...baseInput, idempotencyKey: 'request-1' });
 
-    expect(second.kind).toBe('created');
-    expect(second.receipt.runId).not.toBe(first.receipt.runId);
+    expect(beforeBoundary).toMatchObject({ kind: 'duplicate', receipt: { runId: first.receipt.runId } });
+    expect(atBoundary.kind).toBe('created');
+    expect(atBoundary.receipt.runId).not.toBe(first.receipt.runId);
+  });
+
+  it('releases a key when a reservation is rejected before runtime dispatch', async () => {
+    const first = await manager.beginRun({ ...baseInput, idempotencyKey: 'retryable-preflight' });
+    await manager.rejectBeforeDispatch(first.receipt.runId, {
+      status: 'cancelled',
+      errorCode: 'SESSION_BUSY',
+    });
+    const retry = await manager.beginRun({ ...baseInput, idempotencyKey: 'retryable-preflight' });
+
+    expect(manager.get(first.receipt.runId)).toMatchObject({
+      status: 'cancelled',
+      errorCode: 'SESSION_BUSY',
+    });
+    expect(manager.get(first.receipt.runId)).not.toHaveProperty('idempotencyExpiresAt');
+    expect(retry.kind).toBe('created');
+    expect(retry.receipt.runId).not.toBe(first.receipt.runId);
+  });
+
+  it('releases a pre-dispatch key even if concurrent cancellation reached terminal state first', async () => {
+    const first = await manager.beginRun({ ...baseInput, idempotencyKey: 'cancel-race' });
+    await manager.cancelSession(baseInput.sessionId);
+    await manager.rejectBeforeDispatch(first.receipt.runId, {
+      status: 'cancelled',
+      errorCode: 'SESSION_BUSY',
+    });
+    const retry = await manager.beginRun({ ...baseInput, idempotencyKey: 'cancel-race' });
+
+    expect(retry.kind).toBe('created');
+    expect(retry.receipt.runId).not.toBe(first.receipt.runId);
   });
 
   it('does not deduplicate requests that omit an idempotency key', async () => {

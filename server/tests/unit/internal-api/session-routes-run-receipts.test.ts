@@ -4,7 +4,7 @@ import { PassThrough, Writable } from 'node:stream';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
+import { createSessionRoutes, type SessionRoutesDeps } from '../../../src/internal-api/routes/sessions.js';
 import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 
@@ -44,6 +44,18 @@ function mockRes(): ServerResponse & { body: string; statusCode: number; headers
   return res;
 }
 
+function createMultiSessionManagerMock() {
+  return {
+    getAgentSession: vi.fn(() => null),
+    subscribeClient: vi.fn().mockResolvedValue(undefined),
+    addApiObserver: vi.fn(),
+    removeApiObserver: vi.fn(),
+    pinSession: vi.fn(() => true),
+    unpinSession: vi.fn(() => true),
+    isSessionPinned: vi.fn(() => false),
+  };
+}
+
 function entry(overrides: Record<string, unknown> = {}) {
   return {
     id: 'session-1',
@@ -65,6 +77,7 @@ describe('Internal API run receipt integration', () => {
   let dir: string;
   let registry: any;
   let claudeService: any;
+  let multiSessionManager: ReturnType<typeof createMultiSessionManagerMock>;
   let manager: RunReceiptManager;
   let routes: ReturnType<typeof createSessionRoutes>;
 
@@ -91,6 +104,7 @@ describe('Internal API run receipt integration', () => {
       unpinSession: vi.fn(() => true),
       abort: vi.fn(),
     };
+    multiSessionManager = createMultiSessionManagerMock();
     manager = new RunReceiptManager({ store: new RunReceiptStore(dir), idFactory: (() => {
       let n = 0;
       return () => `run-route-${++n}`;
@@ -100,7 +114,7 @@ describe('Internal API run receipt integration', () => {
       claudeService,
       opencodeService: { isRunning: vi.fn(() => false), abort: vi.fn() } as any,
       antigravityService: { isRunning: vi.fn(() => false), abort: vi.fn() } as any,
-      multiSessionManager: { getAgentSession: vi.fn(() => null), pinSession: vi.fn(() => true), unpinSession: vi.fn(() => true), isSessionPinned: vi.fn(() => false) } as any,
+      multiSessionManager: multiSessionManager as unknown as SessionRoutesDeps['multiSessionManager'],
       sessionRegistry: registry,
       piService: {} as any,
       internalClientId: 'test-client',
@@ -165,6 +179,64 @@ describe('Internal API run receipt integration', () => {
       receipt: { status: 'started' },
     });
     expect(claudeService.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('releases an idempotency key when a busy race cancels before runtime dispatch', async () => {
+    claudeService.isRunning
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+
+    const racedResponse = mockRes();
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'do it', idempotencyKey: 'retry-after-race' }),
+      racedResponse,
+      'session-1',
+    );
+    const raced = JSON.parse(racedResponse.body);
+
+    const retryResponse = mockRes();
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'do it', idempotencyKey: 'retry-after-race' }),
+      retryResponse,
+      'session-1',
+    );
+    const retry = JSON.parse(retryResponse.body);
+
+    expect(racedResponse.statusCode).toBe(409);
+    expect(raced).toMatchObject({ runId: 'run-route-1', code: 'SESSION_BUSY' });
+    expect(retryResponse.statusCode).toBe(200);
+    expect(retry).toMatchObject({ runId: 'run-route-2', turnComplete: true });
+    expect(claudeService.sendPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases an idempotency key when the post-reservation busy check throws', async () => {
+    claudeService.isRunning
+      .mockReturnValueOnce(false)
+      .mockImplementationOnce(() => { throw new Error('busy check unavailable'); })
+      .mockReturnValue(false);
+
+    const failedResponse = mockRes();
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'do it', idempotencyKey: 'retry-after-busy-error' }),
+      failedResponse,
+      'session-1',
+    );
+    const failed = JSON.parse(failedResponse.body);
+
+    const retryResponse = mockRes();
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'do it', idempotencyKey: 'retry-after-busy-error' }),
+      retryResponse,
+      'session-1',
+    );
+    const retry = JSON.parse(retryResponse.body);
+
+    expect(failedResponse.statusCode).toBe(500);
+    expect(failed).toMatchObject({ runId: 'run-route-1', code: 'INTERNAL_ERROR' });
+    expect(retryResponse.statusCode).toBe(200);
+    expect(retry).toMatchObject({ runId: 'run-route-2', turnComplete: true });
+    expect(claudeService.sendPrompt).toHaveBeenCalledTimes(1);
   });
 
   it('returns a conflict instead of swallowing a same-key different prompt', async () => {
@@ -246,6 +318,87 @@ describe('Internal API run receipt integration', () => {
     const lookup = mockRes();
     await routes.handleGetRunReceipt(jsonReq('GET', `/api/v1/runs/${body.runId}`), lookup, body.runId);
     expect(JSON.parse(lookup.body)).toMatchObject({ status: 'failed', errorCode: 'RUNTIME_ERROR' });
+  });
+
+  it('does not close a successful stream before its terminal receipt reaches durable storage', async () => {
+    let releaseTerminalWrite!: () => void;
+    const terminalWriteGate = new Promise<void>((resolve) => { releaseTerminalWrite = resolve; });
+    const delayedStore = new RunReceiptStore(path.join(dir, 'delayed'));
+    const transition = delayedStore.transition.bind(delayedStore);
+    let terminalWriteStarted = false;
+    vi.spyOn(delayedStore, 'transition').mockImplementation(async (runId, status, patch) => {
+      if (status === 'completed') {
+        terminalWriteStarted = true;
+        await terminalWriteGate;
+      }
+      return transition(runId, status, patch);
+    });
+    const delayedManager = new RunReceiptManager({ store: delayedStore });
+    await delayedManager.init();
+    const delayedRoutes = createSessionRoutes({
+      claudeService,
+      opencodeService: { isRunning: vi.fn(() => false), abort: vi.fn() } as unknown as SessionRoutesDeps['opencodeService'],
+      antigravityService: { isRunning: vi.fn(() => false), abort: vi.fn() } as unknown as SessionRoutesDeps['antigravityService'],
+      multiSessionManager: multiSessionManager as unknown as SessionRoutesDeps['multiSessionManager'],
+      sessionRegistry: registry,
+      piService: {} as any,
+      internalClientId: 'test-client',
+      watchDir: path.join(dir, 'watches-delayed'),
+      runReceiptManager: delayedManager,
+    });
+    const response = mockRes();
+
+    const pending = delayedRoutes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'stream it', verbosity: 'full' }),
+      response,
+      'session-1',
+    );
+    await vi.waitFor(() => expect(terminalWriteStarted).toBe(true));
+
+    expect(response.end).not.toHaveBeenCalled();
+    releaseTerminalWrite();
+    await pending;
+    expect(response.headers['X-Run-Id']).toEqual(expect.any(String));
+    expect(response.end).toHaveBeenCalledOnce();
+  });
+
+  it('terminalizes a started receipt when streaming transport setup fails before runtime dispatch', async () => {
+    const response = mockRes();
+    response.setHeader = vi.fn(() => { throw new Error('transport unavailable'); }) as typeof response.setHeader;
+
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'stream it', verbosity: 'full' }),
+      response,
+      'session-1',
+    );
+    const { runId } = JSON.parse(response.body);
+
+    expect(response.statusCode).toBe(500);
+    expect(manager.get(runId)).toMatchObject({ status: 'failed', errorCode: 'RUNTIME_ERROR' });
+    expect(claudeService.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('records the current Pi model even when registry metadata has not been patched', async () => {
+    registry.get.mockResolvedValue(entry({
+      sdkType: 'pi',
+      claudeProfileId: undefined,
+      model: undefined,
+      path: '/tmp/pi-session.jsonl',
+    }));
+    multiSessionManager.getAgentSession.mockReturnValue({
+      model: { provider: 'openai-codex', id: 'gpt-5.6-terra' },
+      prompt: vi.fn().mockRejectedValue(new Error('stop after dispatch')),
+    });
+
+    const response = mockRes();
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'capture model', detach: true }),
+      response,
+      'session-1',
+    );
+    const { runId } = JSON.parse(response.body);
+
+    expect(manager.get(runId)?.model).toBe('openai-codex/gpt-5.6-terra');
   });
 
   it('returns a runId for detached dispatches', async () => {

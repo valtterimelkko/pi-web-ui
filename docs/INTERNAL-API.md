@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.6.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.6.1`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -302,7 +302,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.6.0",
+    "contractVersion": "1.6.1",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -759,11 +759,16 @@ the same message/mode/verbosity/detach returns HTTP 200 with
 `{ sessionId, runId, duplicate: true, receipt }` (plus `detached: true` when
 applicable) and does not invoke the runtime again. A same-key request with a
 different fingerprint returns `409 IDEMPOTENCY_KEY_CONFLICT`; after the TTL, the key may be reused
-for a new run while the old receipt remains subject to bounded retention.
+for a new run while the old receipt remains subject to bounded retention. If a
+local busy, state-check, or receipt-persistence race rejects the reservation
+*before* runtime dispatch, its receipt remains as cancelled/failed evidence but
+the key is released so a later retry can perform the work.
 
 Receipts are persisted under `INTERNAL_API_RUN_RECEIPTS_DIR` (default
-`~/.pi-web-ui/run-receipts`). Terminal receipts are bounded by age and count;
-old receipts may return `RUN_NOT_FOUND` after retention.
+`~/.pi-web-ui/run-receipts`). Retention targets terminal receipts older than 30
+days and terminal receipts beyond the newest 1,000 (an unexpired 24-hour
+idempotency window is never pruned early). Pruning runs during receipt writes
+and server startup; old receipts may return `RUN_NOT_FOUND` after retention.
 
 `executionInstanceId` is the Claude profile id when recorded (or
 `claude-default` for older sessions without profile metadata). Pi, OpenCode,
@@ -790,7 +795,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.6.0",
+    "contractVersion": "1.6.1",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },

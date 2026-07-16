@@ -130,6 +130,7 @@ The runner queries runtime capabilities, creates an ephemeral session on the tar
 ## Current scenarios
 
 - `smoke` — create a session and verify a minimal turn completes
+- `run-receipt-idempotency` — verify `runId`, terminal receipt lookup, execution-instance attribution, and same-key deduplication
 - `tool-visibility` — verify tool execution is surfaced in the full stream
 - `session-info` — verify enriched internal-API session info is available
 - `follow-up` — verify the runtime accepts a follow-up turn when supported

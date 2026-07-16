@@ -16,7 +16,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.6.0",
+  "contractVersion": "1.6.1",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -24,6 +24,11 @@ Current contract:
 
 ### Changelog
 
+- **1.6.1** (patch) — hardened the `1.6.0` run-receipt contract:
+  - a reservation rejected before runtime dispatch releases its idempotency key, so retrying after a local busy/state-check/persistence race cannot silently swallow the prompt;
+  - streaming success is emitted only after the terminal receipt write completes, and response-transport setup failures terminalize an already-started receipt;
+  - Pi receipts capture the live session model when registry metadata is absent or stale;
+  - duplicate batch responses preserve the receipt's terminal error code instead of misreporting every non-completed run as `SESSION_BUSY`.
 - **1.6.0** (minor, additive) — added run identity, session-scoped idempotent prompt dispatch, persisted run receipts, and `executionInstanceId`:
   - `idempotencyKey` on prompt dispatch (including batch entries) with a 24-hour default replay TTL and `(sessionId, idempotencyKey)` scope.
   - `runId` on answers/detached dispatch responses, `X-Run-Id` on streaming responses, and `GET /api/v1/runs/:runId` for receipt lookup.

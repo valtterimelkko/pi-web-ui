@@ -263,6 +263,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     return ms ? new Date(ms).toISOString() : undefined;
   }
 
+  function currentRunModel(entry: RegistryEntry): string | undefined {
+    if (entry.sdkType !== 'pi') return entry.model;
+    const currentModel = multiSessionManager.getAgentSession(entry.path)?.model;
+    return currentModel ? `${currentModel.provider}/${currentModel.id}` : entry.model;
+  }
+
   function duplicatePromptResponse(
     sessionId: string,
     receipt: RunReceipt,
@@ -809,26 +815,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     onComplete: (error?: Error) => void,
   ): Promise<void> {
     let completed = false;
+    let completionError: Error | undefined;
     let persistence: Promise<unknown> = Promise.resolve();
     const eventPersistence: Promise<void>[] = [];
 
     const complete = (error?: Error): void => {
       if (completed) return;
       completed = true;
-      // Keep persistence in the turn's promise chain. A successful answer must
-      // not be reported as complete if its terminal receipt could not reach
-      // disk; detached callers observe the rejection in their fire-and-forget
-      // catch below.
+      completionError = error;
+      // Keep persistence in the turn's promise chain. The transport callback
+      // is deliberately deferred until this write completes, so even an SSE
+      // client cannot observe success before its terminal receipt is durable.
       persistence = runReceipts.finish(runId, error
         ? { status: 'failed', errorCode: ErrorCode.RUNTIME_ERROR }
         : {});
-      try {
-        onComplete(error);
-      } catch (callbackError) {
-        // A transport callback must not prevent the receipt from reaching its
-        // terminal state or leave executePrompt's promise unresolved.
-        logger.errorObject(`Prompt response callback failed for run ${runId}`, callbackError);
-      }
     };
 
     let executionError: Error | undefined;
@@ -856,10 +856,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // Wait for agent_end evidence as well as the terminal transition. This
     // handles runtimes whose completion callback wins the event-order race.
     await Promise.all(eventPersistence);
-    // Always await the terminal receipt write before propagating a runtime
-    // error. Otherwise a process crash in this small window could leave a
-    // failed run persisted as merely started.
-    await persistence;
+    // Always await the terminal receipt write before notifying any response
+    // transport. Otherwise a process crash in this small window could leave a
+    // run reported as complete but persisted as merely started.
+    let persistenceError: Error | undefined;
+    try {
+      await persistence;
+    } catch (error) {
+      persistenceError = error instanceof Error ? error : new Error(String(error));
+    }
+
+    try {
+      onComplete(persistenceError ?? completionError);
+    } catch (callbackError) {
+      // A transport callback must not hide the durable terminal outcome or
+      // leave executePrompt's promise unresolved.
+      logger.errorObject(`Prompt response callback failed for run ${runId}`, callbackError);
+    }
+
+    if (persistenceError) throw persistenceError;
     if (executionError) throw executionError;
   }
 
@@ -913,7 +928,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sessionId,
         runtime,
         executionInstanceId: resolveExecutionInstanceId(entry),
-        model: entry.model,
+        model: currentRunModel(entry),
         message: body.message,
         mode,
         verbosity,
@@ -989,13 +1004,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
 
       const runId = reservation.receipt.runId;
-      const busyAfterReservation = runtime === 'claude'
-        ? claudeService.isRunning(sessionId)
-        : runtime === 'opencode'
-          ? opencodeService.isRunning(sessionId)
-          : false;
+      let busyAfterReservation: boolean;
+      try {
+        busyAfterReservation = runtime === 'claude'
+          ? claudeService.isRunning(sessionId)
+          : runtime === 'opencode'
+            ? opencodeService.isRunning(sessionId)
+            : false;
+      } catch (error) {
+        await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
+        logger.errorObject(`Failed to re-check session state for run ${runId}`, error);
+        sendJson(res, 500, { error: 'Failed to verify session state', code: ErrorCode.INTERNAL_ERROR, runId });
+        return;
+      }
       if (busyAfterReservation && mode === 'prompt') {
-        await runReceipts.finish(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY });
+        await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY });
         sendJson(res, 409, {
           ...enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy'),
           runId,
@@ -1005,7 +1028,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       try {
         await runReceipts.markStarted(runId);
       } catch (error) {
-        await runReceipts.finish(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
+        await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
         logger.errorObject(`Failed to start run receipt ${runId}`, error);
         sendJson(res, 500, { error: 'Failed to start run', code: ErrorCode.INTERNAL_ERROR, runId });
         return;
@@ -1039,6 +1062,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
         await handleAnswersPrompt(res, sessionId, runtime, body.message, mode, runId);
       } catch (err) {
+        // executePromptWithReceipt normally terminalizes before rejecting. This
+        // defensive finalizer covers failures in response/stream setup that can
+        // occur after markStarted but before the runtime is invoked.
+        await runReceipts.finish(runId, { status: 'failed', errorCode: ErrorCode.RUNTIME_ERROR }).catch(() => undefined);
         logger.errorObject('Prompt failed', err);
         if (!res.headersSent) {
           sendJson(res, 500, {
@@ -2121,7 +2148,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           sessionId: entry.sessionId,
           runtime: reg.sdkType as SessionRuntime,
           executionInstanceId: resolveExecutionInstanceId(reg),
-          model: reg.model,
+          model: currentRunModel(reg),
           message: entry.message,
           mode: 'prompt' as const,
           verbosity: 'answers' as const,
@@ -2154,7 +2181,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
                 duplicate: true,
                 receipt: existing.receipt,
                 error: completed ? undefined : {
-                  code: ErrorCode.SESSION_BUSY,
+                  code: existing.receipt.errorCode ?? ErrorCode.SESSION_BUSY,
                   message: `Existing run is ${existing.receipt.status}`,
                 },
               };
@@ -2229,13 +2256,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
         const runId = reservation.receipt.runId;
         reservedRunId = runId;
-        const busyAfterReservation = reg.sdkType === 'claude'
-          ? claudeService.isRunning(entry.sessionId)
-          : reg.sdkType === 'opencode'
-            ? opencodeService.isRunning(entry.sessionId)
-            : false;
+        let busyAfterReservation: boolean;
+        try {
+          busyAfterReservation = reg.sdkType === 'claude'
+            ? claudeService.isRunning(entry.sessionId)
+            : reg.sdkType === 'opencode'
+              ? opencodeService.isRunning(entry.sessionId)
+              : false;
+        } catch (error) {
+          await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
+          logger.errorObject(`Failed to re-check session state for batch run ${runId}`, error);
+          return {
+            index,
+            sessionId: entry.sessionId,
+            success: false,
+            runId,
+            error: { code: ErrorCode.INTERNAL_ERROR, message: 'Failed to verify session state' },
+          };
+        }
         if (busyAfterReservation) {
-          await runReceipts.finish(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY });
+          await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY });
           return {
             index,
             sessionId: entry.sessionId,
@@ -2247,7 +2287,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         try {
           await runReceipts.markStarted(runId);
         } catch (error) {
-          await runReceipts.finish(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
+          await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
           logger.errorObject(`Failed to start batch run receipt ${runId}`, error);
           return {
             index,

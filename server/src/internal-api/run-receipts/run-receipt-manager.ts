@@ -211,6 +211,33 @@ export class RunReceiptManager {
     return this.finish(runId, { status: 'cancelled' });
   }
 
+  /**
+   * Finalize a reservation that never reached the runtime and release its key.
+   * Retrying the same operation must be allowed: deduplicating against a local
+   * busy/persistence pre-flight failure would silently swallow real work.
+   */
+  async rejectBeforeDispatch(
+    runId: string,
+    outcome: { status: 'failed' | 'cancelled'; errorCode: string },
+  ): Promise<RunReceipt | undefined> {
+    await this.init();
+    return this.withRunLock(runId, async () => {
+      const current = this.store.get(runId);
+      if (!current) return undefined;
+      if (isTerminal(current.status)) {
+        const released = await this.store.releaseIdempotency(runId);
+        return released ? toPublicReceipt(released) : undefined;
+      }
+      const terminal = await this.store.transition(runId, outcome.status, {
+        errorCode: outcome.errorCode,
+        terminalAt: new Date(this.now()).toISOString(),
+        clearIdempotency: true,
+      });
+      this.removeActive(terminal.sessionId, terminal.runId);
+      return toPublicReceipt(terminal);
+    });
+  }
+
   get(runId: string): RunReceipt | undefined {
     const record = this.store.get(runId);
     return record ? toPublicReceipt(record) : undefined;

@@ -147,7 +147,10 @@ export class RunReceiptStore {
   async transition(
     runId: string,
     status: RunReceiptStatus,
-    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason'>> = {},
+    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason'>> & {
+      /** Release a reservation that failed before runtime dispatch. */
+      clearIdempotency?: boolean;
+    } = {},
   ): Promise<PersistedRunReceipt> {
     await this.ensureReady();
     const current = this.cache.get(runId);
@@ -156,11 +159,17 @@ export class RunReceiptStore {
       throw new Error(`Invalid transition ${current.status} -> ${status} for run ${runId}`);
     }
 
+    const { clearIdempotency, ...recordPatch } = patch;
     const next: PersistedRunReceipt = {
       ...current,
-      ...patch,
+      ...recordPatch,
       status,
     };
+    if (clearIdempotency) {
+      delete next.idempotencyKeyDigest;
+      delete next.requestFingerprint;
+      delete next.idempotencyExpiresAt;
+    }
     if (TERMINAL_STATUSES.has(status) && !next.terminalAt) {
       next.terminalAt = new Date(this.now()).toISOString();
     }
@@ -168,6 +177,23 @@ export class RunReceiptStore {
     await this.persist(next);
     this.cache.set(runId, next);
     await this.prune();
+    return { ...next };
+  }
+
+  async releaseIdempotency(runId: string): Promise<PersistedRunReceipt | undefined> {
+    await this.ensureReady();
+    const current = this.cache.get(runId);
+    if (!current) return undefined;
+    if (!current.idempotencyKeyDigest && !current.requestFingerprint && !current.idempotencyExpiresAt) {
+      return { ...current };
+    }
+    const next = { ...current };
+    delete next.idempotencyKeyDigest;
+    delete next.requestFingerprint;
+    delete next.idempotencyExpiresAt;
+    this.validate(next);
+    await this.persist(next);
+    this.cache.set(runId, next);
     return { ...next };
   }
 

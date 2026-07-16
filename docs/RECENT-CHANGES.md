@@ -4,9 +4,10 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
-- **Internal API run receipts and execution instance identity (`1.6.0`)**
+- **Internal API run receipts and execution instance identity (`1.6.1`)**
   - Every accepted prompt dispatch receives a durable `runId`; optional session-scoped `idempotencyKey` retries reuse the existing run within a bounded TTL and reject same-key payload collisions.
   - Receipts persist accepted/started/completed/failed/cancelled/interrupted state, recover in-flight records after restart, and expose `GET /api/v1/runs/:runId`.
+  - The `1.6.1` hardening patch releases keys for reservations rejected before runtime dispatch, waits for terminal persistence before streaming success, captures the live Pi model, and preserves terminal error codes in duplicate batch results.
   - Session list/info and receipts expose `executionInstanceId` (Claude profile id or stable local runtime default).
   - Canonical docs: [`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
 

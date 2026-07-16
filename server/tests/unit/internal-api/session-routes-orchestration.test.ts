@@ -656,6 +656,62 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(claudeService.sendPrompt).toHaveBeenCalledTimes(1);
     });
 
+    it('replays the stored failure code for a failed idempotent batch entry', async () => {
+      registry.get.mockResolvedValue(claudeEntry('c1'));
+      claudeService.sendPrompt.mockImplementationOnce(async (
+        _sessionId: string,
+        _message: string,
+        _onEvent: (event: NormalizedEvent) => void,
+        onComplete: (error?: Error) => void,
+      ) => onComplete(new Error('provider failed')));
+      const routes = makeRoutes();
+      const request = { prompts: [{ sessionId: 'c1', message: 'fail once', idempotencyKey: 'batch-failure' }] };
+
+      const first = createMockRes();
+      await routes.handleBatchPrompt(createJsonReq('POST', '/api/v1/sessions/batch/prompt', request), first);
+      const duplicate = createMockRes();
+      await routes.handleBatchPrompt(createJsonReq('POST', '/api/v1/sessions/batch/prompt', request), duplicate);
+
+      expect(JSON.parse(first.body).results[0]).toMatchObject({
+        success: false,
+        error: { code: 'RUNTIME_ERROR' },
+      });
+      expect(JSON.parse(duplicate.body).results[0]).toMatchObject({
+        success: false,
+        duplicate: true,
+        receipt: { status: 'failed', errorCode: 'RUNTIME_ERROR' },
+        error: { code: 'RUNTIME_ERROR' },
+      });
+    });
+
+    it('releases a batch idempotency key when the post-reservation busy check throws', async () => {
+      registry.get.mockResolvedValue(claudeEntry('c1'));
+      claudeService.isRunning
+        .mockReturnValueOnce(false)
+        .mockImplementationOnce(() => { throw new Error('busy check unavailable'); })
+        .mockReturnValue(false);
+      const routes = makeRoutes();
+      const request = { prompts: [{ sessionId: 'c1', message: 'retry me', idempotencyKey: 'batch-busy-error' }] };
+
+      const failed = createMockRes();
+      await routes.handleBatchPrompt(createJsonReq('POST', '/api/v1/sessions/batch/prompt', request), failed);
+      const retry = createMockRes();
+      await routes.handleBatchPrompt(createJsonReq('POST', '/api/v1/sessions/batch/prompt', request), retry);
+
+      expect(JSON.parse(failed.body).results[0]).toMatchObject({
+        success: false,
+        runId: expect.any(String),
+        error: { code: 'INTERNAL_ERROR' },
+      });
+      expect(JSON.parse(retry.body).results[0]).toMatchObject({
+        success: true,
+        runId: expect.any(String),
+        content: 'hi',
+      });
+      expect(JSON.parse(retry.body).results[0]).not.toHaveProperty('duplicate');
+      expect(claudeService.sendPrompt).toHaveBeenCalledTimes(1);
+    });
+
     it('reports a busy runtime instead of dispatching another batch entry', async () => {
       registry.get.mockResolvedValue(claudeEntry('c1'));
       claudeService.isRunning.mockReturnValue(true);
@@ -680,7 +736,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         createdAt: '2026-05-01T00:00:00.000Z', lastActivity: '2026-05-01T00:10:00.000Z',
       };
       registry.get.mockResolvedValue(piEntry);
-      multiSessionManager.getAgentSession.mockReturnValueOnce(null);
+      multiSessionManager.getAgentSession.mockReturnValue(null);
       const routes = makeRoutes();
       const res = createMockRes();
       await routes.handleBatchPrompt(createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
