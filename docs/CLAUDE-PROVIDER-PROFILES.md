@@ -263,8 +263,8 @@ cp ~/.pi-web-ui/claude-profiles.json "$VAL_DIR/claude-profiles.json"
 CLAUDE_PROFILES_ENABLED=true \
 CLAUDE_SDK_ENABLED=true \
 CLAUDE_PROFILES_PATH="$VAL_DIR/claude-profiles.json" \
-GLM_CODING_PLAN_TOKEN="<your-token>" \
-npm run validate:server -- --dir "$VAL_DIR" --port 0
+npm run validate:server -- --env-file .env.production \
+  --env-key GLM_CODING_PLAN_TOKEN --dir "$VAL_DIR" --port 0
 
 # 2. Run the profile scenarios (in another terminal or background)
 npm run validate:claude-profiles -- \
@@ -274,6 +274,15 @@ npm run validate:claude-profiles -- \
   --native-profile "claude-sonnet-sdk" \
   --direct-profile "glm52-claude-cli-direct"
 ```
+
+`--env-file` is important when the normal service receives
+`GLM_CODING_PLAN_TOKEN` from systemd's `.env.production`: a terminal-launched
+validation process does not inherit that `EnvironmentFile`. The repeatable
+`--env-key` flag is an allowlist, so only the requested credential is imported from
+that file — not its unrelated production secrets or configuration. The loader never
+prints values and preserves explicit launching-shell overrides (including the copied profile path
+above). You can use another file path, or set `PI_WEB_UI_VALIDATION_ENV_FILE` plus
+comma-separated `PI_WEB_UI_VALIDATION_ENV_KEYS` instead.
 
 This validates:
 - SDK native Claude subscription returns correct model identity

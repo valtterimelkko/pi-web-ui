@@ -21,6 +21,7 @@
  * Usage:
  *   npm run validate:server                 # boots, prints socket + token, stays up
  *   npm run validate:server -- --port 3092  # override the port
+ *   npm run validate:server -- --env-file .env.production --env-key GLM_CODING_PLAN_TOKEN
  * Then point a validator at the printed socket/token, e.g.:
  *   npm run validate:long-horizon -- --socket <sock> --token-path <token> ...
  * Stop it with Ctrl-C (or kill the process); the socket is cleaned up on exit.
@@ -29,10 +30,24 @@
 import os from 'node:os';
 import path from 'node:path';
 import { mkdirSync } from 'node:fs';
+import {
+  buildValidationIsolationEnv,
+  loadValidationEnvFile,
+  resolveValidationEnvFile,
+  resolveValidationEnvKeys,
+} from '../server/src/live-validation/validation-server-env.js';
 
 function getFlag(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
   return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+const validationArgs = process.argv.slice(2);
+const validationEnvFile = resolveValidationEnvFile(validationArgs);
+const validationEnvKeys = resolveValidationEnvKeys(validationArgs);
+if (validationEnvFile) loadValidationEnvFile(validationEnvFile, validationEnvKeys);
+if (!validationEnvFile && validationEnvKeys.length > 0) {
+  throw new Error('--env-key requires --env-file (or PI_WEB_UI_VALIDATION_ENV_FILE).');
 }
 
 const validationDir = getFlag('--dir')
@@ -43,31 +58,30 @@ const claudeWsPort = getFlag('--claude-ws-port') ?? process.env.PI_WEB_UI_VALIDA
 const claudeHookPort = getFlag('--claude-hook-port') ?? process.env.PI_WEB_UI_VALIDATION_CLAUDE_HOOK_PORT ?? '43111';
 const opencodePort = getFlag('--opencode-port') ?? process.env.PI_WEB_UI_VALIDATION_OPENCODE_PORT ?? '44097';
 
-mkdirSync(path.join(validationDir, 'watches'), { recursive: true });
-mkdirSync(path.join(validationDir, 'pins'), { recursive: true });
-mkdirSync(path.join(validationDir, 'run-receipts'), { recursive: true });
-mkdirSync(path.join(validationDir, 'notifications'), { recursive: true });
+for (const dir of [
+  'watches',
+  'pins',
+  'run-receipts',
+  'notifications',
+  'pi-sessions',
+  'opencode-workspace',
+]) {
+  mkdirSync(path.join(validationDir, dir), { recursive: true });
+}
 
+const isolationEnv = buildValidationIsolationEnv({
+  validationDir,
+  port,
+  claudeWsPort,
+  claudeHookPort,
+  opencodePort,
+});
 const socketPath = path.join(validationDir, 'internal-api.sock');
 const tokenPath = path.join(validationDir, 'internal-api-token');
 
 // Set the isolation env BEFORE importing the server (config reads env at import).
-Object.assign(process.env, {
-  PI_WEB_UI_VALIDATION_MODE: 'true',
-  PORT: port,
-  INTERNAL_API_SOCKET_PATH: socketPath,
-  INTERNAL_API_TOKEN_PATH: tokenPath,
-  INTERNAL_API_WATCH_DIR: path.join(validationDir, 'watches'),
-  INTERNAL_API_RUN_RECEIPTS_DIR: path.join(validationDir, 'run-receipts'),
-  NOTIFICATIONS_DIR: path.join(validationDir, 'notifications'),
-  INTERNAL_API_PIN_DIR: path.join(validationDir, 'pins'),
-  SESSION_REGISTRY_PATH: path.join(validationDir, 'session-registry.json'),
-  CLAUDE_SESSION_DIR: path.join(validationDir, 'claude-sessions'),
-  ANTIGRAVITY_SESSION_DIR: path.join(validationDir, 'antigravity-sessions'),
-  CLAUDE_CHANNEL_WS_PORT: claudeWsPort,
-  CLAUDE_CHANNEL_HOOK_PORT: claudeHookPort,
-  OPENCODE_SERVER_PORT: opencodePort,
-});
+// These assignments intentionally win over the shell, .env, and --env-file.
+Object.assign(process.env, isolationEnv);
 
 console.error('────────────────────────────────────────────────────────');
 console.error(' Pi Web UI — EPHEMERAL VALIDATION SERVER');
@@ -77,6 +91,8 @@ console.error(` port        : ${port}`);
 console.error(` socket      : ${socketPath}`);
 console.error(` token       : ${tokenPath}`);
 console.error(` dir         : ${validationDir}`);
+console.error(` env file    : ${validationEnvFile ?? '(default .env only)'}`);
+console.error(` env keys    : ${validationEnvKeys.join(', ') || '(none)'}`);
 console.error(` claude ws   : ${claudeWsPort}`);
 console.error(` claude hook : ${claudeHookPort}`);
 console.error(` opencode    : ${opencodePort}`);

@@ -92,6 +92,25 @@ npm run validate:live -- \
   --runtime antigravity --scenario smoke
 ```
 
+If the running service gets provider credentials from a systemd `EnvironmentFile`
+(such as `.env.production`), a terminal-launched validation server does not inherit
+that file automatically. Load it explicitly without copying or printing secret values:
+
+```bash
+npm run validate:server -- --env-file .env.production \
+  --env-key GLM_CODING_PLAN_TOKEN --dir "$VALIDATION_DIR" --port 0
+```
+
+`--env-key` is a repeatable allowlist: only those named values are imported from
+that file, so this option does not pull in its unrelated production secrets or
+configuration.
+Launching-shell values take precedence over imported values, and the validation wrapper
+applies its isolation paths/ports afterwards. The equivalent script settings are
+`PI_WEB_UI_VALIDATION_ENV_FILE=/absolute/path/to/env` and
+`PI_WEB_UI_VALIDATION_ENV_KEYS=GLM_CODING_PLAN_TOKEN` (comma-separated for several
+keys). This reuses only the requested credential for real provider calls; it does
+**not** target, restart, or reconfigure the production Pi Web UI server.
+
 List available scenarios without connecting to a server:
 
 ```bash
@@ -146,8 +165,8 @@ VAL_DIR=$(mktemp -d)
 CLAUDE_PROFILES_ENABLED=true \
 CLAUDE_SDK_ENABLED=true \
 CLAUDE_PROFILES_PATH="$VAL_DIR/claude-profiles.json" \
-GLM_CODING_PLAN_TOKEN="<your-token>" \
-npm run validate:server -- --dir "$VAL_DIR" --port 0
+npm run validate:server -- --env-file .env.production \
+  --env-key GLM_CODING_PLAN_TOKEN --dir "$VAL_DIR" --port 0
 
 # 2. Run profile scenarios
 npm run validate:claude-profiles -- \

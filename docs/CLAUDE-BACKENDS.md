@@ -326,8 +326,8 @@ For **profile-specific validation** (SDK/direct backends, GLM profiles):
 CLAUDE_PROFILES_ENABLED=true \
 CLAUDE_SDK_ENABLED=true \
 CLAUDE_PROFILES_PATH="$VAL_DIR/claude-profiles.json" \
-GLM_CODING_PLAN_TOKEN="<token>" \
-npm run validate:server -- --dir "$VAL_DIR" --port 0
+npm run validate:server -- --env-file .env.production \
+  --env-key GLM_CODING_PLAN_TOKEN --dir "$VAL_DIR" --port 0
 
 # 2. Run the profile validation scenarios
 npm run validate:claude-profiles -- \
