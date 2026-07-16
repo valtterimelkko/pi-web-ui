@@ -59,6 +59,9 @@ export async function createOneSession(params: {
       if (entry.model) {
         await deps.opencodeService.setModel?.(sessionId, entry.model).catch(() => { /* non-fatal */ });
       }
+      if (entry.thinkingLevel) {
+        await deps.opencodeService.setThinkingLevel(sessionId, entry.thinkingLevel);
+      }
       return { sessionId, sessionPath: sessionId, runtime: 'opencode', model: entry.model, cwd };
     }
 
@@ -84,6 +87,13 @@ export async function createOneSession(params: {
       });
       if (entry.model) {
         await deps.piService.setModel(status.sessionId, entry.model).catch(() => { /* non-fatal */ });
+      }
+      if (entry.thinkingLevel) {
+        const agentSession = deps.multiSessionManager.getAgentSession(status.sessionPath);
+        if (!agentSession) {
+          throw new Error('Pi session not loaded');
+        }
+        agentSession.setThinkingLevel(entry.thinkingLevel);
       }
       return {
         sessionId: status.sessionId,

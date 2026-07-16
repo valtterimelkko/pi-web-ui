@@ -3,10 +3,14 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { Readable, Writable } from 'stream';
 import { createModelsRoutes } from '../../../src/internal-api/routes/models.js';
 
-function createMockReq(body?: unknown, method = 'POST'): IncomingMessage {
+function createMockReq(
+  body?: unknown,
+  method = 'POST',
+  url = '/api/v1/models/refresh',
+): IncomingMessage {
   const payload = body === undefined ? [] : [Buffer.from(JSON.stringify(body))];
   const req = Readable.from(payload) as unknown as IncomingMessage;
-  req.url = '/api/v1/models/refresh';
+  req.url = url;
   req.method = method;
   req.headers = {};
   return req;
@@ -47,6 +51,91 @@ function makeDeps(opencodeOverrides: Record<string, unknown>) {
     },
   } as any;
 }
+
+describe('createModelsRoutes — handleListModels', () => {
+  it('publishes Pi SDK thinking levels including max for GPT-5.6 models', async () => {
+    const routes = createModelsRoutes({
+      piService: {
+        getAvailableModels: vi.fn().mockResolvedValue([
+          {
+            id: 'openai-codex/gpt-5.6-luna',
+            name: 'GPT-5.6 Luna',
+            provider: 'openai-codex',
+            reasoning: true,
+            thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+          },
+        ]),
+      } as any,
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(
+      createMockReq(undefined, 'GET', '/api/v1/models?runtime=pi'),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).models.pi[0]).toMatchObject({
+      id: 'openai-codex/gpt-5.6-luna',
+      thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    });
+  });
+
+  it('publishes Claude model-specific thinking levels including max where supported', async () => {
+    const routes = createModelsRoutes({
+      piService: { getAvailableModels: vi.fn().mockResolvedValue([]) } as any,
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getProfiles: vi.fn().mockReturnValue([
+          {
+            id: 'native-sonnet',
+            label: 'Native Sonnet',
+            backend: 'sdk-subscription',
+            model: 'claude-sonnet-4-20250514',
+          },
+          {
+            id: 'native-haiku',
+            label: 'Native Haiku',
+            backend: 'cli-direct',
+            model: 'haiku',
+          },
+          {
+            id: 'glm-sonnet',
+            label: 'GLM Sonnet',
+            backend: 'sdk-subscription',
+            model: 'sonnet',
+            baseUrl: 'https://api.z.ai/api/anthropic',
+          },
+        ]),
+      } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(
+      createMockReq(undefined, 'GET', '/api/v1/models?runtime=claude'),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const models = JSON.parse(res.body).models.claude;
+    expect(models.find((model: any) => model.id === 'sonnet')).toMatchObject({
+      reasoning: true,
+      thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    });
+    expect(models.find((model: any) => model.id === 'haiku')).toMatchObject({
+      reasoning: true,
+      thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+    });
+    expect(models.find((model: any) => model.id === 'profile:native-sonnet').thinkingLevels).toContain('max');
+    expect(models.find((model: any) => model.id === 'profile:native-haiku').thinkingLevels).not.toContain('max');
+    expect(models.find((model: any) => model.id === 'profile:glm-sonnet').thinkingLevels).toContain('max');
+  });
+});
 
 describe('createModelsRoutes — handleRefreshModels', () => {
   const sampleResult = {

@@ -30,6 +30,22 @@ export type Verbosity = 'answers' | 'tasks' | 'full';
 
 export type PromptMode = 'prompt' | 'follow_up' | 'steer';
 
+/** Thinking levels accepted by the contracted Internal API. */
+export const THINKING_LEVELS = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === 'string' && (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
 // ─── Session runtime ─────────────────────────────────────────────────────────
 
 export type SessionRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity';
@@ -38,7 +54,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.6.1' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.7.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -70,7 +86,7 @@ export interface CreateSessionRequest {
   runtime: SessionRuntime;
   cwd?: string;
   model?: string;
-  thinkingLevel?: string;
+  thinkingLevel?: ThinkingLevel;
   source?: string;
   scenarioId?: string;
   ephemeral?: boolean;
@@ -145,7 +161,7 @@ export interface BatchCreateEntry {
   runtime: SessionRuntime;
   cwd?: string;
   model?: string;
-  thinkingLevel?: string;
+  thinkingLevel?: ThinkingLevel;
   /** Pin each created session at creation time (see CreateSessionRequest.pin). */
   pin?: boolean;
   pinTtlSeconds?: number;
@@ -305,7 +321,7 @@ export interface ScreenViewResponse {
 export interface SessionControlRequest {
   action: 'set_model' | 'set_thinking_level' | 'pin' | 'unpin';
   modelId?: string;
-  level?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  level?: ThinkingLevel;
   /**
    * Pin lifetime in seconds for the `pin` action. Defaults to 24h; clamped to a
    * hard max (7d). Re-pinning extends the deadline. The granted expiry is

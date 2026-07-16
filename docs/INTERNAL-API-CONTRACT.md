@@ -16,7 +16,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.6.1",
+  "contractVersion": "1.7.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -24,6 +24,13 @@ Current contract:
 
 ### Changelog
 
+- **1.7.0** (minor, additive) — completed model-aware max thinking-level support:
+  - `max` is accepted by create-time and control-time thinking-level requests for runtimes that support thinking control.
+  - Pi create-time requests apply the level after model selection, so GPT-5.6 models can be created directly at `max`.
+  - OpenCode create-time requests apply the level after model selection, matching its existing reasoning-effort bridge.
+  - `/api/v1/models` now advertises Claude model/profile thinking levels, including `max` for Sonnet, Opus, and Z.AI profiles while preserving Haiku's legacy ceiling.
+  - Pi model entries continue to advertise their SDK-provided `thinkingLevels` metadata.
+  Old clients can ignore the additive model metadata; clients that use `max` should capability-gate on `contractVersion >= 1.7.0`.
 - **1.6.1** (patch) — hardened the `1.6.0` run-receipt contract:
   - a reservation rejected before runtime dispatch releases its idempotency key, so retrying after a local busy/state-check/persistence race cannot silently swallow the prompt;
   - streaming success is emitted only after the terminal receipt write completes, and response-transport setup failures terminalize an already-started receipt;

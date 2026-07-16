@@ -337,6 +337,38 @@ describe('createSessionRoutes live-validation extensions', () => {
     });
   });
 
+  it('rejects an unknown thinking level at the Internal API boundary', async () => {
+    registry.get.mockResolvedValueOnce({
+      id: 'claude-session',
+      path: 'claude-session',
+      sdkType: 'claude',
+      cwd: '/root/pi-web-ui',
+    });
+
+    const routes = createSessionRoutes({
+      claudeService,
+      opencodeService,
+      multiSessionManager,
+      sessionRegistry: registry,
+      piService,
+      internalClientId: 'internal-test',
+    });
+
+    const res = createMockRes();
+    await routes.handleSessionControl(
+      createJsonReq('POST', '/api/v1/sessions/claude-session/control', {
+        action: 'set_thinking_level',
+        level: 'ultra',
+      }),
+      res,
+      'claude-session',
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'INVALID_REQUEST' });
+    expect(claudeService.setThinkingLevel).not.toHaveBeenCalled();
+  });
+
   it('supports session control actions and approval responses', async () => {
     registry.get
       .mockResolvedValueOnce({

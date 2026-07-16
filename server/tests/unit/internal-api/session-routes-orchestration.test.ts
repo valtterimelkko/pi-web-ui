@@ -200,6 +200,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       ]),
       replyPermission: vi.fn().mockResolvedValue(undefined),
       setModel: vi.fn().mockResolvedValue('glm-4.5'),
+      setThinkingLevel: vi.fn().mockResolvedValue(undefined),
       pinSession: vi.fn().mockResolvedValue(true),
       unpinSession: vi.fn(() => true),
       isSessionPinned: vi.fn(() => false),
@@ -553,9 +554,76 @@ describe('createSessionRoutes orchestration endpoints', () => {
     });
   });
 
+  // ─── Create-time thinking levels ─────────────────────────────────────────
+
+  describe('create-time thinking levels', () => {
+    it('passes max to Claude session creation', async () => {
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions', {
+        runtime: 'claude',
+        model: 'sonnet',
+        thinkingLevel: 'max',
+        cwd: '/tmp/claude-max',
+      });
+      const res = createMockRes();
+
+      await routes.handleCreateSession(req, res, 'internal-test');
+
+      expect(res.statusCode).toBe(201);
+      expect(claudeService.createSession).toHaveBeenCalledWith('/tmp/claude-max', 'sonnet', 'max', undefined);
+    });
+
+    it('applies max to a Pi session after selecting the requested model', async () => {
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions', {
+        runtime: 'pi',
+        model: 'openai-codex/gpt-5.6-luna',
+        thinkingLevel: 'max',
+      });
+      const res = createMockRes();
+
+      await routes.handleCreateSession(req, res, 'internal-test');
+
+      expect(res.statusCode).toBe(201);
+      expect(piService.setModel).toHaveBeenCalledWith('new-pi', 'openai-codex/gpt-5.6-luna');
+      expect(multiSessionManager.getAgentSession().setThinkingLevel).toHaveBeenCalledWith('max');
+    });
+
+    it('applies max to an OpenCode session after selecting the requested model', async () => {
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions', {
+        runtime: 'opencode',
+        model: 'zai-coding-plan/glm-5.2',
+        thinkingLevel: 'max',
+      });
+      const res = createMockRes();
+
+      await routes.handleCreateSession(req, res, 'internal-test');
+
+      expect(res.statusCode).toBe(201);
+      expect(opencodeService.setThinkingLevel).toHaveBeenCalledWith('new-oc', 'max');
+    });
+  });
+
   // ─── POST /sessions/batch ────────────────────────────────────────────────
 
   describe('POST /sessions/batch', () => {
+    it('applies max during batch creation of a Pi session', async () => {
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions/batch', {
+        sessions: [
+          { runtime: 'pi', model: 'openai-codex/gpt-5.6-luna', thinkingLevel: 'max' },
+        ],
+      });
+      const res = createMockRes();
+
+      await routes.handleBatchCreate(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toMatchObject({ createdCount: 1, failedCount: 0 });
+      expect(multiSessionManager.getAgentSession().setThinkingLevel).toHaveBeenCalledWith('max');
+    });
+
     it('rejects empty sessions array', async () => {
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions/batch', { sessions: [] });

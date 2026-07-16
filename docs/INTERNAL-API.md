@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.6.1`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.7.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -302,7 +302,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.6.1",
+    "contractVersion": "1.7.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -326,7 +326,9 @@ GET /api/v1/models?runtime=claude
 GET /api/v1/models?runtime=antigravity
 ```
 
-Models are always queried live — new models appear immediately.
+Models are always queried live — new models appear immediately. Each model may include `thinkingLevels`, the runtime-resolved levels accepted by that concrete model. Do not infer model-specific `max` support from the coarse `reasoning` flag.
+
+Pi model levels come from the Pi SDK catalogue. Claude's base `sonnet` and `opus` aliases and provider profiles that support the Claude/Z.AI effort ceiling advertise `max`; `haiku` keeps the legacy ceiling. A client should use the selected model's `thinkingLevels` before requesting `max`.
 
 **Query parameters:**
 
@@ -339,12 +341,12 @@ Models are always queried live — new models appear immediately.
 {
   "models": {
     "pi": [
-      { "id": "claude-sonnet-4-20250514", "displayName": "Claude Sonnet 4", "provider": "anthropic" }
+      { "id": "claude-sonnet-4-20250514", "displayName": "Claude Sonnet 4", "provider": "anthropic", "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh"] }
     ],
     "claude": [
-      { "id": "sonnet", "displayName": "Sonnet", "provider": "anthropic" },
-      { "id": "opus", "displayName": "Opus", "provider": "anthropic" },
-      { "id": "haiku", "displayName": "Haiku", "provider": "anthropic" },
+      { "id": "sonnet", "displayName": "Sonnet", "provider": "anthropic", "reasoning": true, "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+      { "id": "opus", "displayName": "Opus", "provider": "anthropic", "reasoning": true, "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+      { "id": "haiku", "displayName": "Haiku", "provider": "anthropic", "reasoning": true, "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh"] },
       {
         "id": "profile:glm52-claude-sdk",
         "displayName": "GLM 5.2 — Claude SDK",
@@ -444,6 +446,7 @@ POST /api/v1/sessions
 | `runtime` | string | **Yes** | — | `pi`, `claude`, `opencode`, or `antigravity` |
 | `cwd` | string | No | `process.cwd()` | Working directory |
 | `model` | string | No | runtime default | Model ID (from `/models`). For Claude, may be a base alias such as `sonnet` or a specific profile entry such as `profile:glm52-claude-sdk`. |
+| `thinkingLevel` | string | No | runtime default | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use the selected model's `thinkingLevels` from `/models` as the capability source. |
 | `pin` | boolean | No | `false` | Pin the session at creation so it survives idle/timeout cleanup. Time-bounded — see [Session Pinning](#session-pinning-persistent-time-bounded). |
 | `pinTtlSeconds` | number | No | `86400` (24h) | Pin lifetime in seconds when `pin:true`. Clamped to a hard max of 7 days. |
 | `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. |
@@ -795,7 +798,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.6.1",
+    "contractVersion": "1.7.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -974,6 +977,7 @@ Examples:
 ```json
 { "action": "set_model", "modelId": "opus" }
 { "action": "set_thinking_level", "level": "high" }
+{ "action": "set_thinking_level", "level": "max" }
 { "action": "pin" }
 { "action": "pin", "pinTtlSeconds": 7200 }
 { "action": "unpin" }
@@ -986,8 +990,12 @@ maximum pinned sessions (2), the response is `pinned: false` with
 `"pinReason": "PIN_LIMIT_REACHED"`. `unpin` revokes the pin and clears its expiry
 record. See [Session Pinning](#session-pinning-persistent-time-bounded).
 
-`set_thinking_level` accepts `off | minimal | low | medium | high | xhigh`. For
-the OpenCode runtime the level is translated, capability-aware, into the model's
+`set_thinking_level` accepts `off | minimal | low | medium | high | xhigh | max`.
+For Claude, `max` is forwarded to the SDK/direct CLI/channel effort control;
+for Pi it is clamped by the selected model's SDK capabilities; and for
+OpenCode it maps to that model's reasoning control. Clients should use the selected model's `thinkingLevels` from `/models` before requesting it.
+
+For the OpenCode runtime the level is translated, capability-aware, into the model's
 reasoning controls in `opencode.json` (GLM → `thinking` + `reasoning_effort`;
 other reasoning-capable gateway models → `reasoning_effort`; non-reasoning models
 → no-op) and the idle backend is recycled so the next prompt picks it up. See
@@ -1379,15 +1387,15 @@ parallel.
 ```json
 {
   "sessions": [
-    { "runtime": "claude", "cwd": "/root/a", "model": "sonnet", "pin": true },
+    { "runtime": "claude", "cwd": "/root/a", "model": "sonnet", "thinkingLevel": "max", "pin": true },
     { "runtime": "opencode", "cwd": "/root/b" },
     { "runtime": "antigravity", "model": "Gemini 3.5 Flash (Medium)" }
   ]
 }
 ```
 
-Each entry accepts the same fields as `POST /sessions`, including `pin` and
-`pinTtlSeconds` (see [Session Pinning](#session-pinning-persistent-time-bounded));
+Each entry accepts the same fields as `POST /sessions`, including
+`thinkingLevel`, `pin`, and `pinTtlSeconds` (see [Session Pinning](#session-pinning-persistent-time-bounded));
 each result item echoes `pinned` / `pinnedUntil` when pinned.
 
 **Response (200):**

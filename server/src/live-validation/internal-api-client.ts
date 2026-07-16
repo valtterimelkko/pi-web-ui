@@ -17,6 +17,7 @@ import type {
   SendPromptRequest,
   SessionControlRequest,
   SessionControlResponse,
+  ThinkingLevel,
   SessionDetail,
   SessionHistoryResponse,
   WaitResponse,
@@ -107,7 +108,7 @@ export class InternalApiClient implements InternalApiClientLike {
     });
   }
 
-  async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: string; source?: string; scenarioId?: string; ephemeral?: boolean; pin?: boolean; pinTtlSeconds?: number }): Promise<CreateSessionResponse> {
+  async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; source?: string; scenarioId?: string; ephemeral?: boolean; pin?: boolean; pinTtlSeconds?: number }): Promise<CreateSessionResponse> {
     return this.request<CreateSessionResponse>('POST', '/api/v1/sessions', input);
   }
 

@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Internal API model-aware max thinking levels (`1.7.0`)**
+  - `max` is now a documented, validated thinking level for Internal API create/control requests.
+  - Pi and OpenCode create-time requests apply the level after model selection; `/models` advertises Claude model/profile support and existing Pi SDK model metadata.
+  - Local consumers should capability-gate `max` on `contractVersion >= 1.7.0` and use the selected model's `thinkingLevels`.
+  - Canonical docs: [`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
+
 - **Internal API run receipts and execution instance identity (`1.6.1`)**
   - Every accepted prompt dispatch receives a durable `runId`; optional session-scoped `idempotencyKey` retries reuse the existing run within a bounded TTL and reject same-key payload collisions.
   - Receipts persist accepted/started/completed/failed/cancelled/interrupted state, recover in-flight records after restart, and expose `GET /api/v1/runs/:runId`.

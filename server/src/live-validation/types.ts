@@ -9,13 +9,14 @@ import type {
   SessionHistoryResponse,
   PromptDispatchResponse,
   RunReceipt,
+  ThinkingLevel,
 } from '../internal-api/types.js';
 
 export type ValidationCapabilities = CapabilitiesResponse;
 export type ValidationRuntime = keyof ValidationCapabilities['runtimes'];
 
 export interface InternalApiClientLike {
-  createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; source?: string; scenarioId?: string; ephemeral?: boolean }): Promise<CreateSessionResponse>;
+  createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; source?: string; scenarioId?: string; ephemeral?: boolean }): Promise<CreateSessionResponse>;
   promptStream(sessionId: string, input: SendPromptRequest): Promise<NormalizedEvent[]>;
   promptWithIdempotency(sessionId: string, input: SendPromptRequest): Promise<PromptDispatchResponse>;
   getRunReceipt(runId: string): Promise<RunReceipt>;

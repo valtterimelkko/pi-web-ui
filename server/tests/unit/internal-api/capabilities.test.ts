@@ -63,7 +63,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.6.1',
+        contractVersion: '1.7.0',
       },
       runtimes: {
         pi: {

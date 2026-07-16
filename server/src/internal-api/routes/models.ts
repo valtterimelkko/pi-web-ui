@@ -17,6 +17,16 @@ import { createLogger } from '../../logging/logger.js';
 
 const logger = createLogger('InternalAPI');
 
+const CLAUDE_LEGACY_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const CLAUDE_MAX_THINKING_LEVELS = [...CLAUDE_LEGACY_THINKING_LEVELS, 'max'];
+
+function claudeThinkingLevels(model?: string, provider?: string): string[] {
+  const normalizedModel = model?.toLowerCase() ?? '';
+  const maxSupported = provider === 'zai'
+    || normalizedModel.includes('sonnet')
+    || normalizedModel.includes('opus');
+  return maxSupported ? [...CLAUDE_MAX_THINKING_LEVELS] : [...CLAUDE_LEGACY_THINKING_LEVELS];
+}
 
 export interface ModelsRoutesDeps {
   piService: PiService;
@@ -65,19 +75,40 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
         if (await claudeService.isAvailable()) {
           // Always include the base alias models for backward compat
           result.claude = [
-            { id: 'sonnet', displayName: 'Claude Sonnet 4', provider: 'anthropic' },
-            { id: 'opus', displayName: 'Claude Opus 4', provider: 'anthropic' },
-            { id: 'haiku', displayName: 'Claude Haiku 3.5', provider: 'anthropic' },
+            {
+              id: 'sonnet',
+              displayName: 'Claude Sonnet 4',
+              provider: 'anthropic',
+              reasoning: true,
+              thinkingLevels: claudeThinkingLevels('sonnet', 'anthropic'),
+            },
+            {
+              id: 'opus',
+              displayName: 'Claude Opus 4',
+              provider: 'anthropic',
+              reasoning: true,
+              thinkingLevels: claudeThinkingLevels('opus', 'anthropic'),
+            },
+            {
+              id: 'haiku',
+              displayName: 'Claude Haiku 3.5',
+              provider: 'anthropic',
+              reasoning: true,
+              thinkingLevels: claudeThinkingLevels('haiku', 'anthropic'),
+            },
           ];
 
           // When profiles are enabled, add profile-backed model entries
           // with `profile:<id>` IDs so callers can select a specific profile.
           const profiles = claudeService.getProfiles();
           for (const profile of profiles) {
+            const provider = profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic';
             const profileModel: ModelInfo = {
               id: `profile:${profile.id}`,
               displayName: profile.label,
-              provider: profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic',
+              provider,
+              reasoning: true,
+              thinkingLevels: claudeThinkingLevels(profile.model, provider),
               backend: profile.backend,
               claudeModel: profile.model,
             };

@@ -51,6 +51,7 @@ import type {
   ScreenViewResponse,
   RegisterWatchRequest,
 } from '../types.js';
+import { isThinkingLevel } from '../types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
 import { WatchManager, WatchValidationError } from '../watch/watch-manager.js';
 import { PinExpiryManager, type ApplyPinResult } from '../pin-expiry-manager.js';
@@ -305,6 +306,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sendJson(res, 400, { error: 'runtime is required', code: ErrorCode.INVALID_REQUEST });
       return;
     }
+    if (body.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
+      sendJson(res, 400, { error: 'thinkingLevel is invalid', code: ErrorCode.INVALID_REQUEST });
+      return;
+    }
 
     const runtime: SessionRuntime = body.runtime;
     const cwd = body.cwd || process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd();
@@ -344,6 +349,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           const { sessionId } = await opencodeService.createSession(cwd);
           if (body.model) {
             await opencodeService.setModel?.(sessionId, body.model).catch(() => { /* non-fatal */ });
+          }
+          if (body.thinkingLevel) {
+            await opencodeService.setThinkingLevel(sessionId, body.thinkingLevel);
           }
           base = {
             sessionId,
@@ -387,6 +395,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           });
           if (body.model) {
             await piService.setModel(status.sessionId, body.model).catch(() => { /* non-fatal */ });
+          }
+          if (body.thinkingLevel) {
+            const agentSession = multiSessionManager.getAgentSession(status.sessionPath);
+            if (!agentSession) {
+              throw new Error('Pi session not loaded');
+            }
+            agentSession.setThinkingLevel(body.thinkingLevel);
           }
           base = {
             sessionId: status.sessionId,
@@ -1285,6 +1300,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sendJson(res, 400, { error: 'level is required for set_thinking_level', code: ErrorCode.INVALID_REQUEST });
             return;
           }
+          if (!isThinkingLevel(body.level)) {
+            sendJson(res, 400, { error: 'level is invalid for set_thinking_level', code: ErrorCode.INVALID_REQUEST });
+            return;
+          }
 
           if (entry.sdkType === 'claude') {
             claudeService.setThinkingLevel(sessionId, body.level);
@@ -2069,6 +2088,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const body = await readJsonBody<BatchCreateRequest>(req);
     if (!body || !Array.isArray(body.sessions) || body.sessions.length === 0) {
       sendJson(res, 400, { error: 'sessions[] is required and must be non-empty', code: ErrorCode.INVALID_REQUEST });
+      return;
+    }
+    if (body.sessions.some((entry) => entry.thinkingLevel !== undefined && !isThinkingLevel(entry.thinkingLevel))) {
+      sendJson(res, 400, { error: 'thinkingLevel is invalid', code: ErrorCode.INVALID_REQUEST });
       return;
     }
 
