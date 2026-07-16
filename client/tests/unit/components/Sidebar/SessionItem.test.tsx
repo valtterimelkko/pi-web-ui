@@ -459,4 +459,76 @@ describe('SessionItem', () => {
       expect(mockSwitchSession).not.toHaveBeenCalled();
     });
   });
+
+  describe('Active Session Highlight', () => {
+    // Helper to re-mock the store with a custom snapshot. The default
+    // beforeEach mock hard-codes isSwitchingSession:false; the pending-switch
+    // tests below need to flip it.
+    const mockStoreWith = (overrides: Record<string, unknown>) => {
+      (useSessionStore as any).mockImplementation((selector: any) => {
+        const state = {
+          sessions: [mockSession],
+          setSessions: mockSetSessions,
+          archiveSession: mockArchiveSession,
+          unarchiveSession: mockUnarchiveSession,
+          pinnedSessionPaths: [],
+          sessionDisplayNames: {},
+          getSessionDisplayName: mockGetSessionDisplayName.mockReturnValue(undefined),
+          setSessionDisplayName: mockSetSessionDisplayName,
+          removeSessionDisplayName: mockRemoveSessionDisplayName,
+          setSwitchingSession: mockSetSwitchingSession,
+          isSessionPinned: mockIsSessionPinned.mockReturnValue(false),
+          sessionData: {},
+          workerStatus: {},
+          isSwitchingSession: false,
+          switchingToSessionId: null,
+          ...overrides,
+        };
+        return selector ? selector(state) : state;
+      });
+    };
+
+    it('applies the active highlight class to the active (open) session', () => {
+      render(<SessionItem session={mockSession} isActive={true} />);
+      const item = screen.getByRole('listitem');
+      // Dedicated, unmistakable active class — see .session-item-active in index.css.
+      expect(item.className).toContain('session-item-active');
+    });
+
+    it('does NOT apply the active highlight to an inactive, idle session', () => {
+      render(<SessionItem session={mockSession} isActive={false} />);
+      const item = screen.getByRole('listitem');
+      expect(item.className).not.toContain('session-item-active');
+    });
+
+    it('highlights the session being switched to IMMEDIATELY — before the server confirms', () => {
+      // Right after a click: a switch to THIS session is in flight
+      // (isSwitchingSession=true, switchingToSessionId=this id), but the
+      // server hasn't replied yet so isActive (currentSessionId) is still
+      // false. The highlight must follow the click, not lag behind the
+      // server round-trip — otherwise navigating between sessions looks stale.
+      mockStoreWith({ isSwitchingSession: true, switchingToSessionId: mockSession.id });
+
+      render(<SessionItem session={mockSession} isActive={false} />);
+      const item = screen.getByRole('listitem');
+      expect(item.className).toContain('session-item-active');
+    });
+
+    it('does NOT highlight an unrelated session while a switch to a different one is in flight', () => {
+      mockStoreWith({ isSwitchingSession: true, switchingToSessionId: 'some-other-session-id' });
+
+      render(<SessionItem session={mockSession} isActive={false} />);
+      const item = screen.getByRole('listitem');
+      expect(item.className).not.toContain('session-item-active');
+    });
+
+    it('keeps the genuinely-open session highlighted while switching to another', () => {
+      // The open session (isActive) must never lose its highlight, even mid-switch.
+      mockStoreWith({ isSwitchingSession: true, switchingToSessionId: 'some-other-session-id' });
+
+      render(<SessionItem session={mockSession} isActive={true} />);
+      const item = screen.getByRole('listitem');
+      expect(item.className).toContain('session-item-active');
+    });
+  });
 });

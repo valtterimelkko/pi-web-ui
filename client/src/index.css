@@ -218,6 +218,23 @@ html {
 .dark .border-amber-200 { border-color: rgba(245, 158, 11, 0.3) !important; }
 .dark .border-red-200 { border-color: rgba(239, 68, 68, 0.3) !important; }
 
+/* ==========================================
+   Active session item (sidebar)
+   An unmistakable highlight for the session the user currently has open.
+   Replaces the old bg-blue-50 treatment, which was nearly the same shade as
+   the gray-50 sidebar in light mode and only ~20% alpha blue (reads as gray)
+   in dark mode. Kept as a dedicated class so it does NOT collide with the
+   shared .dark .bg-blue-* overrides used by drag/drop targets and toasts.
+   ========================================== */
+.session-item-active {
+  background-color: #dbeafe !important;    /* blue-100 — clearly blue over gray-50 */
+  border-left-color: #2563eb !important;   /* blue-600 accent bar (border-l-4 sets width) */
+}
+.dark .session-item-active {
+  background-color: rgba(59, 130, 246, 0.35) !important;  /* clear blue over the #1e293b panel */
+  border-left-color: #60a5fa !important;   /* blue-400 — bright, high-contrast bar on dark */
+}
+
 /* Hover states */
 .dark .hover\:bg-gray-100:hover { background-color: #334155 !important; }
 .dark .hover\:bg-gray-200:hover { background-color: #475569 !important; }

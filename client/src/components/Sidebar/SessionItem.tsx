@@ -167,6 +167,13 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
   // Check if this session is currently being switched to
   const isLoading = isSwitchingSession && switchingToSessionId === session.id;
 
+  // The row shows the "active/open" treatment when it is the confirmed open
+  // session OR the user just clicked it and the switch is in flight. Following
+  // the click immediately (rather than waiting for the server round-trip) is
+  // what keeps the highlight from looking stale when navigating between
+  // sessions. The genuinely-open session never loses its highlight this way.
+  const showActiveHighlight = isActive || isLoading;
+
   // Close context menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -372,10 +379,10 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
         role="listitem"
         tabIndex={0}
         className={`
-          group relative py-2 px-3 rounded-md cursor-pointer transition-all duration-150 outline-none select-none
-          ${isActive
-            ? 'bg-blue-50 border-l-2 border-blue-500'
-            : 'hover:bg-gray-100 border-l-2 border-transparent'
+          group relative py-2 px-3 rounded-md cursor-pointer transition-all duration-150 outline-none select-none border-l-4
+          ${showActiveHighlight
+            ? 'session-item-active'
+            : 'border-transparent hover:bg-gray-100'
           }
           ${isDeleting ? 'opacity-50 pointer-events-none' : ''}
           ${isHighlighted ? 'ring-2 ring-blue-400 bg-blue-50' : ''}
@@ -413,7 +420,7 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
         ) : (
           <div className="flex items-center justify-between gap-2">
             <GripVertical className="w-3 h-3 text-gray-300 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab" />
-            <p className="text-sm text-gray-900 truncate flex-1">
+            <p className={`text-sm text-gray-900 truncate flex-1 ${showActiveHighlight ? 'font-semibold' : ''}`}>
               {displayName}
             </p>
             {session.sdkType === 'claude' && (
