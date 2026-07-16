@@ -358,6 +358,32 @@ describe('MultiSessionManager', () => {
       );
     });
 
+    it('should deliver session_start UI messages during createAndSubscribe binding', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'startup-session',
+        sessionFile: '/path/to/startup-session.jsonl',
+      });
+      const webUIContext = { clientId: 'client-1', sendToClient: vi.fn() } as any;
+      mockPiService.createSession.mockImplementationOnce(async (options: any) => {
+        options.webUIContext.sessionId = mockSession.sessionId;
+        options.webUIContext.sendToClient({
+          type: 'notification',
+          notification: { message: 'Started', type: 'info' },
+        });
+        expect(webUIContext.sendToClient).toHaveBeenCalledOnce();
+        return mockSession;
+      });
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/work', webUIContext);
+
+      expect(webUIContext.sendToClient).toHaveBeenCalledWith({
+        type: 'notification',
+        sessionId: 'startup-session',
+        notification: { message: 'Started', type: 'info' },
+      });
+    });
+
     it('should tag extension UI messages with the owning session during createAndSubscribe', async () => {
       const mockSession = createMockAgentSession({
         sessionId: 'goal-session',
@@ -500,6 +526,30 @@ describe('MultiSessionManager', () => {
       expect(result2.sessionId).toBe(result1.sessionId);
     });
 
+    it('serializes concurrent rehydration for the same unloaded session', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'concurrent-session-id',
+        sessionPath: '/path/to/concurrent.jsonl',
+      });
+      let releaseCreate!: () => void;
+      const createGate = new Promise<void>((resolve) => { releaseCreate = resolve; });
+      mockPiService.createSession.mockImplementationOnce(async () => {
+        await createGate;
+        return mockSession;
+      });
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+
+      const first = manager.subscribeClient('client-1', '/path/to/concurrent.jsonl');
+      const second = manager.subscribeClient('client-2', '/path/to/concurrent.jsonl');
+      await new Promise((resolve) => setImmediate(resolve));
+      releaseCreate();
+      const [firstStatus, secondStatus] = await Promise.all([first, second]);
+
+      expect(mockPiService.createSession).toHaveBeenCalledTimes(1);
+      expect(firstStatus.sessionId).toBe('concurrent-session-id');
+      expect(secondStatus.sessionId).toBe('concurrent-session-id');
+    });
+
     it('should add client to subscribers list', async () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
@@ -551,6 +601,32 @@ describe('MultiSessionManager', () => {
           }),
         })
       );
+    });
+
+    it('should deliver session_start UI messages during rehydration binding', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'rehydrated-startup-session',
+        sessionPath: '/path/to/rehydrated-startup.jsonl',
+      });
+      const webUIContext = { clientId: 'client-1', sendToClient: vi.fn() } as any;
+      mockPiService.createSession.mockImplementationOnce(async (options: any) => {
+        options.webUIContext.sessionId = mockSession.sessionId;
+        options.webUIContext.sendToClient({
+          type: 'notification',
+          notification: { message: 'Restored during bind', type: 'info' },
+        });
+        expect(webUIContext.sendToClient).toHaveBeenCalledOnce();
+        return mockSession;
+      });
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/rehydrated-startup.jsonl', '/work', webUIContext);
+
+      expect(webUIContext.sendToClient).toHaveBeenCalledWith({
+        type: 'notification',
+        sessionId: 'rehydrated-startup-session',
+        notification: { message: 'Restored during bind', type: 'info' },
+      });
     });
 
     it('should tag extension UI messages with the owning session during rehydration', async () => {

@@ -1,4 +1,6 @@
 #!/usr/bin/env npx tsx
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { InternalApiClient } from '../server/src/live-validation/internal-api-client.js';
 import { listScenarioIds, runScenario, scenarioRegistry } from '../server/src/live-validation/scenarios.js';
 import { resolveValidationTarget } from '../server/src/live-validation/validation-safety.js';
@@ -13,7 +15,7 @@ function parseArgs(argv: string[]) {
   return {
     runtime: (get('--runtime') ?? 'claude') as ValidationRuntime | 'all',
     scenario: get('--scenario') ?? 'smoke',
-    cwd: get('--cwd') ?? process.cwd(),
+    cwd: get('--cwd'),
     model: get('--model'),
     json: argv.includes('--json'),
     list: argv.includes('--list'),
@@ -40,6 +42,10 @@ async function main() {
   if (target.usingProductionServer) {
     console.error('[live-validate] WARNING: using the running production Pi Web UI Internal API because --allow-production was supplied.');
   }
+  const cwd = args.cwd ?? (target.usingProductionServer
+    ? process.cwd()
+    : path.join(path.dirname(target.socketPath), 'workspace'));
+  if (!target.usingProductionServer) mkdirSync(cwd, { recursive: true });
 
   const client = new InternalApiClient({
     socketPath: target.socketPath,
@@ -64,7 +70,7 @@ async function main() {
         runtime,
         scenario,
         capabilities,
-        cwd: args.cwd,
+        cwd,
         model: args.model,
       });
       results.push(result);

@@ -159,6 +159,7 @@ export interface ServerConfig {
   internalApiPinExpiryIntervalMs: number;
   /** Ephemeral validation mode: isolated, disposable instance for live validation (no destructive cleanup). */
   validationMode: boolean;
+  validationDefaultCwd: string;
   dictationOpenaiApiKey: string;
   dictationVocabularyDbPath: string;
   ttsOpenaiApiKey: string;
@@ -269,6 +270,7 @@ export const config: ServerConfig = {
   internalApiPinMaxTtlMs: parseInt(process.env.INTERNAL_API_PIN_MAX_TTL_MS || String(7 * 24 * 60 * 60 * 1000), 10),
   internalApiPinExpiryIntervalMs: parseInt(process.env.INTERNAL_API_PIN_EXPIRY_INTERVAL_MS || String(5 * 60 * 1000), 10),
   validationMode: process.env.PI_WEB_UI_VALIDATION_MODE === 'true',
+  validationDefaultCwd: process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd(),
   dictationOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',
   dictationVocabularyDbPath: process.env.DICTATION_VOCABULARY_DB_PATH || '/root/voicenotebot/streaming-dictation/backend/data/transcripts.db',
   ttsOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.TTS_OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',

@@ -1,6 +1,11 @@
 import type { SdkType } from '@pi-web-ui/shared';
 import type { TransferHandoffPayload, TransferScope, VisibleTranscript } from './types.js';
 
+function untrustedMetadata(value: unknown): string {
+  const text = typeof value === 'string' ? value : '(invalid metadata)';
+  return JSON.stringify(text.slice(0, 4096));
+}
+
 export function buildTransferHeader(metadata: {
   sourceDisplayName: string;
   sourceSdkType: SdkType;
@@ -15,9 +20,9 @@ export function buildTransferHeader(metadata: {
   return [
     'Transferred context from another session.',
     '',
-    `Source session: ${metadata.sourceDisplayName}`,
-    `Source runtime: ${metadata.sourceSdkType}`,
-    `Source workspace: ${metadata.sourceCwd}`,
+    `Source session (untrusted metadata): ${untrustedMetadata(metadata.sourceDisplayName)}`,
+    `Source runtime (untrusted metadata): ${untrustedMetadata(metadata.sourceSdkType)}`,
+    `Source workspace (untrusted metadata): ${untrustedMetadata(metadata.sourceCwd)}`,
     `Transferred: ${timestamp}`,
     `Scope: ${scopeLabel}`,
     '',
@@ -28,21 +33,25 @@ export function buildTransferHeader(metadata: {
   ].join('\n');
 }
 
+function escapeTransferDelimiters(value: string): string {
+  return value.replace(/--- (BEGIN|END) TRANSFERRED CONTEXT ---/gu, '[escaped transferred-context delimiter]');
+}
+
 export function formatTranscriptBody(transcript: VisibleTranscript): string {
   const parts: string[] = [];
 
   for (const item of transcript.items) {
     switch (item.kind) {
       case 'user':
-        parts.push(`[User]: ${item.text}`);
+        parts.push(`[User]: ${escapeTransferDelimiters(item.text)}`);
         break;
       case 'assistant':
-        parts.push(`[Assistant]: ${item.text}`);
+        parts.push(`[Assistant]: ${escapeTransferDelimiters(item.text)}`);
         break;
       case 'tool': {
-        const label = item.toolName ?? 'tool';
-        const arg = item.toolPrimaryArg ? `: ${item.toolPrimaryArg}` : '';
-        const output = item.text ? `\n  Result: ${item.text}` : '';
+        const label = escapeTransferDelimiters(item.toolName ?? 'tool');
+        const arg = item.toolPrimaryArg ? `: ${escapeTransferDelimiters(item.toolPrimaryArg)}` : '';
+        const output = item.text ? `\n  Result: ${escapeTransferDelimiters(item.text)}` : '';
         parts.push(`[Tool ${label}${arg}]${output}`);
         break;
       }

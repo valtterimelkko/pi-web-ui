@@ -1167,17 +1167,11 @@ export const useSessionStore = create<SessionState>()(
                 },
               }
             : state.sessionCacheMeta;
-          let transferReadySessionIds = state.transferReadySessionIds;
-          if (sessionId && message.role === 'user' && state.transferReadySessionIds[sessionId]) {
-            transferReadySessionIds = { ...state.transferReadySessionIds };
-            delete transferReadySessionIds[sessionId];
-          }
           return { 
             messages: newMessages,
             sessionMessages: newSessionMessages,
             sessionCache: newCache,
             sessionCacheMeta: newSessionCacheMeta,
-            transferReadySessionIds,
           };
         });
       },
@@ -1237,12 +1231,15 @@ export const useSessionStore = create<SessionState>()(
         switchingToSessionId: isSwitching ? sessionId : null 
       }),
       setError: (error) => set({ error }),
-      markTransferReady: (sessionId) => set((state) => ({
-        transferReadySessionIds: {
-          ...state.transferReadySessionIds,
-          [sessionId]: true,
-        },
-      })),
+      markTransferReady: (sessionId) => {
+        if (!sessionId.trim()) return;
+        set((state) => ({
+          transferReadySessionIds: {
+            ...state.transferReadySessionIds,
+            [sessionId]: true,
+          },
+        }));
+      },
       clearTransferReady: (sessionId) => set((state) => {
         if (!state.transferReadySessionIds[sessionId]) return state;
         const transferReadySessionIds = { ...state.transferReadySessionIds };
@@ -1687,9 +1684,15 @@ export const useSessionStore = create<SessionState>()(
             
             if (type === 'unlink') {
               // Remove deleted session (use path for matching)
-              set((state) => ({
-                sessions: state.sessions.filter((s) => s.path !== info?.path && s.id !== sessionId),
-              }));
+              set((state) => {
+                const transferReadySessionIds = { ...state.transferReadySessionIds };
+                delete transferReadySessionIds[sessionId];
+                if (info?.id) delete transferReadySessionIds[info.id];
+                return {
+                  sessions: state.sessions.filter((s) => s.path !== info?.path && s.id !== sessionId),
+                  transferReadySessionIds,
+                };
+              });
             } else if (info) {
               // Add or update session (dedupe by path)
               set((state) => {
@@ -2633,10 +2636,18 @@ export const useSessionStore = create<SessionState>()(
 
           case 'session_transfer_completed': {
             const transferMsg = msg as unknown as {
-              sourceSessionId: string;
-              targetSessionId: string;
-              createdNewSession: boolean;
+              sourceSessionId?: unknown;
+              targetSessionId?: unknown;
+              createdNewSession?: unknown;
             };
+            if (
+              typeof transferMsg.sourceSessionId !== 'string' || !transferMsg.sourceSessionId.trim()
+              || typeof transferMsg.targetSessionId !== 'string' || !transferMsg.targetSessionId.trim()
+              || typeof transferMsg.createdNewSession !== 'boolean'
+            ) {
+              console.warn('[sessionStore] Ignoring malformed session_transfer_completed event');
+              break;
+            }
             console.log(`[sessionStore] Transfer completed: ${transferMsg.sourceSessionId} -> ${transferMsg.targetSessionId}`);
             get().markTransferReady(transferMsg.targetSessionId);
             useTransferStore.getState().setSucceeded(transferMsg.targetSessionId);
@@ -2649,11 +2660,20 @@ export const useSessionStore = create<SessionState>()(
 
           case 'session_transfer_failed': {
             const failMsg = msg as unknown as {
-              sourceSessionId: string;
-              targetSessionId?: string;
-              message: string;
-              code: string;
+              sourceSessionId?: unknown;
+              targetSessionId?: unknown;
+              message?: unknown;
+              code?: unknown;
             };
+            if (
+              typeof failMsg.sourceSessionId !== 'string' || !failMsg.sourceSessionId.trim()
+              || typeof failMsg.message !== 'string' || !failMsg.message.trim()
+              || typeof failMsg.code !== 'string' || !failMsg.code.trim()
+              || (failMsg.targetSessionId !== undefined && typeof failMsg.targetSessionId !== 'string')
+            ) {
+              console.warn('[sessionStore] Ignoring malformed session_transfer_failed event');
+              break;
+            }
             console.warn(`[sessionStore] Transfer failed: ${failMsg.code} - ${failMsg.message}`);
             useTransferStore.getState().setFailed(failMsg.code, failMsg.message);
             break;

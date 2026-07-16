@@ -25,7 +25,7 @@ import {
   writeSnapshot,
   type SnapshotDiff,
 } from './opencode-model-refresh.js';
-import { getSessionRegistry } from '../session-registry.js';
+import { getSessionRegistry, type RegistryEntry } from '../session-registry.js';
 import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
 
@@ -231,6 +231,7 @@ export class OpenCodeService {
   private subscribers: OpenCodeSessionSubscribers;
   private registry;
   private runningSessions: Set<string> = new Set();
+  private startingSessions: Set<string> = new Set();
   private pendingPermissions: Map<string, string> = new Map();
   private sseUnsubscribe: (() => void) | null = null;
   private sseStarted: boolean = false;
@@ -569,45 +570,45 @@ export class OpenCodeService {
     onComplete: (error?: Error) => void,
     agent?: string,
   ): Promise<void> {
-    const entry = await this.registry.get(sessionId);
-    if (!entry) {
-      throw new Error(`OpenCode session not found: ${sessionId}`);
+    if (this.runningSessions.has(sessionId) || this.startingSessions.has(sessionId)) {
+      throw new Error(`OpenCode session is already running: ${sessionId}`);
     }
-    const ocSessionId = await this.getOpencodeSessionId(sessionId);
-    if (!ocSessionId) {
-      throw new Error(`Registry entry for ${sessionId} is missing opencodeSessionId`);
-    }
-    await this.ensureServer();
-    await this.ensureSSESubscription();
+    this.startingSessions.add(sessionId);
+    let entry: RegistryEntry;
+    let ocSessionId: string;
+    try {
+      const found = await this.registry.get(sessionId);
+      if (!found) throw new Error(`OpenCode session not found: ${sessionId}`);
+      entry = found;
+      const resolvedId = await this.getOpencodeSessionId(sessionId);
+      if (!resolvedId) throw new Error(`Registry entry for ${sessionId} is missing opencodeSessionId`);
+      ocSessionId = resolvedId;
+      await this.ensureServer();
+      await this.ensureSSESubscription();
 
-    let meta = this.sessionMeta.get(sessionId);
-    if (!meta) {
-      meta = {
-        lastActivity: Date.now(),
-        lastEventTimestamp: Date.now(),
-        pinned: false,
-        status: 'idle',
-        contextUsed: 0,
-        contextWindow: 0,
-        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        cost: 0,
-        perMessageTokens: new Map(),
-      };
-      this.sessionMeta.set(sessionId, meta);
-    }
-    meta.status = 'streaming';
-    meta.lastActivity = Date.now();
-    meta.lastEventTimestamp = Date.now();
+      let meta = this.sessionMeta.get(sessionId);
+      if (!meta) {
+        meta = {
+          lastActivity: Date.now(), lastEventTimestamp: Date.now(), pinned: false, status: 'idle',
+          contextUsed: 0, contextWindow: 0,
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          cost: 0, perMessageTokens: new Map(),
+        };
+        this.sessionMeta.set(sessionId, meta);
+      }
+      meta.status = 'streaming';
+      meta.lastActivity = Date.now();
+      meta.lastEventTimestamp = Date.now();
 
-    await this.registry.updateStatus(sessionId, 'running');
-    this.runningSessions.add(sessionId);
-    this.promptCallbacks.set(sessionId, { onEvent, onComplete });
+      await this.registry.updateStatus(sessionId, 'running');
+      this.runningSessions.add(sessionId);
+      this.promptCallbacks.set(sessionId, { onEvent, onComplete });
+    } finally {
+      this.startingSessions.delete(sessionId);
+    }
 
     const agentStartEvent: NormalizedEvent = {
-      type: 'agent_start',
-      sessionId,
-      timestamp: Date.now(),
-      data: { sessionId, opencodeSessionId: ocSessionId },
+      type: 'agent_start', sessionId, timestamp: Date.now(), data: { sessionId, opencodeSessionId: ocSessionId },
     };
     try { onEvent(agentStartEvent); } catch { /* non-fatal */ }
 
@@ -656,7 +657,7 @@ export class OpenCodeService {
   }
 
   isRunning(sessionId: string): boolean {
-    return this.runningSessions.has(sessionId);
+    return this.runningSessions.has(sessionId) || this.startingSessions.has(sessionId);
   }
 
   async getReplayEvents(sessionId: string): Promise<Array<Record<string, unknown>>> {

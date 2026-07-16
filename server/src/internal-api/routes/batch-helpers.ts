@@ -14,6 +14,7 @@ import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
 import type { BatchCreateEntry, SessionRuntime } from '../types.js';
+import { config } from '../../config.js';
 
 export interface BatchCreateDeps {
   claudeService: ClaudeService;
@@ -39,7 +40,7 @@ export async function createOneSession(params: {
 }): Promise<CreatedSession> {
   const { entry, deps } = params;
   const runtime: SessionRuntime = entry.runtime;
-  const cwd = entry.cwd || process.cwd();
+  const cwd = entry.cwd || config.validationDefaultCwd;
 
   switch (runtime) {
     case 'claude': {

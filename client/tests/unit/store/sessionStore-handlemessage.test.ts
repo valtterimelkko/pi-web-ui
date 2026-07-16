@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useSessionStore, type Message, type Session } from '../../../src/store/sessionStore';
 import { useUIStore } from '../../../src/store/uiStore';
+import { useTransferStore } from '../../../src/store/transferStore';
 
 describe('sessionStore', () => {
   beforeEach(() => {
@@ -13,6 +14,7 @@ describe('sessionStore', () => {
     state.setLoading(false);
     state.setError(null);
     state.setExtensionUIRequest(null);
+    useTransferStore.getState().reset();
     // Clear session messages cache directly
     useSessionStore.setState({ 
       sessionMessages: {}, 
@@ -415,7 +417,7 @@ describe('sessionStore', () => {
       expect(useSessionStore.getState().isStreaming).toBe(true);
     });
 
-    it('marks the transfer target as ready and clears the marker on the next user message', () => {
+    it('does not let an incoming transferred user message clear the ready marker', () => {
       const state = useSessionStore.getState();
       state.setCurrentSession('target-1');
 
@@ -435,7 +437,54 @@ describe('sessionStore', () => {
         timestamp: Date.now(),
       });
 
+      expect(useSessionStore.getState().transferReadySessionIds['target-1']).toBe(true);
+      state.clearTransferReady('target-1');
       expect(useSessionStore.getState().transferReadySessionIds['target-1']).toBeUndefined();
+    });
+
+    it('ignores malformed transfer completion events', () => {
+      const state = useSessionStore.getState();
+      state.handleServerMessage({
+        type: 'session_transfer_completed',
+        sourceSessionId: 'source-1',
+        targetSessionId: '',
+        createdNewSession: 'false',
+      } as never);
+
+      expect(useSessionStore.getState().transferReadySessionIds).toEqual({});
+      expect(useUIStore.getState().toasts).toEqual([]);
+    });
+
+    it('preserves transfer readiness when cached session data is removed', () => {
+      const state = useSessionStore.getState();
+      state.markTransferReady('target-1');
+      state.clearSessionMessages('target-1');
+      expect(useSessionStore.getState().transferReadySessionIds['target-1']).toBe(true);
+    });
+
+    it('preserves transfer readiness across a potentially stale session list refresh', () => {
+      const state = useSessionStore.getState();
+      state.markTransferReady('deleted-session');
+      state.markTransferReady('kept-session');
+      state.handleServerMessage({
+        type: 'sessions_list',
+        sessions: [{ id: 'kept-session', path: '/tmp/kept.jsonl', cwd: '/tmp' }],
+      });
+
+      expect(useSessionStore.getState().transferReadySessionIds).toEqual({
+        'deleted-session': true,
+        'kept-session': true,
+      });
+    });
+
+    it('ignores malformed transfer failure events', () => {
+      useSessionStore.getState().handleServerMessage({
+        type: 'session_transfer_failed',
+        sourceSessionId: 'source-1',
+        code: '',
+        message: 42,
+      });
+      expect(useTransferStore.getState().error).toBeNull();
     });
 
     it('should handle thinking_level_changed message', () => {

@@ -83,7 +83,7 @@ async function initialize(): Promise<void> {
     });
 
     // Initialize CLI session watcher
-    const sessionWatcher = startSessionWatcher();
+    const sessionWatcher = startSessionWatcher(config.sessionDir || path.join(config.piAgentDir, 'sessions'));
     
     sessionWatcher.on('session_update', (event: SessionChangeEvent & { info?: SessionInfo }) => {
       // Broadcast to all connected WebSocket clients
@@ -120,7 +120,7 @@ async function initialize(): Promise<void> {
     } else {
       try {
         const registry = getSessionRegistry(config.sessionRegistryPath);
-        const piSessionDir = path.join(config.piAgentDir, 'sessions');
+        const piSessionDir = config.sessionDir || path.join(config.piAgentDir, 'sessions');
         await registry.rebuildFromPiSessions(piSessionDir);
       } catch (err) {
         logger.warn('[Startup] Failed to rebuild session registry from Pi sessions:', err instanceof Error ? err.message : String(err));

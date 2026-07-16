@@ -80,6 +80,7 @@ describe('Cross-runtime transfer integration', () => {
   it('Pi → Claude transfer works end-to-end', async () => {
     const piSessionFile = path.join(tmpDir, 'pi-session.jsonl');
     await fs.writeFile(piSessionFile, [
+      JSON.stringify({ type: 'session', id: 'pi-src', cwd: '/home/user/project' }),
       JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Pi user message' }] }, timestamp: 1700000000000 }),
       JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Pi assistant response' }] }, timestamp: 1700000001000 }),
     ].join('\n'));
@@ -95,6 +96,7 @@ describe('Cross-runtime transfer integration', () => {
       registry: registry as unknown as import('../../src/session-registry.js').SessionRegistryManager,
       claudeService: claudeMock as unknown as import('../../src/claude/claude-service.js').ClaudeService,
       opencodeService: null,
+      piSessionDir: tmpDir,
     };
 
     const service = new TransferService(config);
@@ -140,9 +142,11 @@ describe('Cross-runtime transfer integration', () => {
   });
 
   it('Antigravity → Pi transfer works end-to-end', async () => {
+    const piTargetPath = path.join(tmpDir, 'pi-target.jsonl');
+    await fs.writeFile(piTargetPath, JSON.stringify({ type: 'session', id: 'pi-tgt', cwd: '/home/user/project' }) + '\n');
     registry.get.mockImplementation(async (id: string) => {
       if (id === 'agy-src') return makeEntry({ id: 'agy-src', sdkType: 'antigravity' });
-      if (id === 'pi-tgt') return makeEntry({ id: 'pi-tgt', sdkType: 'pi', path: path.join(tmpDir, 'pi-target.jsonl') });
+      if (id === 'pi-tgt') return makeEntry({ id: 'pi-tgt', sdkType: 'pi', path: piTargetPath });
       return undefined;
     });
 
@@ -160,6 +164,10 @@ describe('Cross-runtime transfer integration', () => {
       claudeService: null,
       opencodeService: null,
       antigravityService: antigravityMock,
+      piSessionDir: tmpDir,
+      sendPiPrompt: vi.fn(async (_path: string, _message: string, onEvent: (event: unknown) => void) => {
+        onEvent({ type: 'agent_start' });
+      }),
     } as unknown as TransferServiceConfig;
 
     const result = await new TransferService(config).executeTransfer({

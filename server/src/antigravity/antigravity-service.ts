@@ -214,7 +214,7 @@ export interface AgyResult {
  * don't pass `--log-file` (version check, model listing) skip the stall
  * watchdog entirely and rely on the hard ceiling alone, same as before.
  */
-function runAgy(args: string[], cwd: string, timeoutMs: number, stallTimeoutMs?: number, logFilePath?: string): Promise<AgyResult> {
+function runAgy(args: string[], cwd: string, timeoutMs: number, stallTimeoutMs?: number, logFilePath?: string, signal?: AbortSignal): Promise<AgyResult> {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, PATH: `/root/.local/bin:${process.env.PATH ?? ''}` };
     const proc = spawn(AGY_BINARY, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -225,12 +225,20 @@ function runAgy(args: string[], cwd: string, timeoutMs: number, stallTimeoutMs?:
     proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stallPoll: ReturnType<typeof setInterval> | undefined;
+    const onAbort = () => {
+      proc.kill('SIGTERM');
+      cleanup();
+      resolve({ stdout, stderr, ok: false, reason: 'aborted' });
+    };
     const cleanup = () => {
-      clearTimeout(timer);
-      clearInterval(stallPoll);
+      if (timer) clearTimeout(timer);
+      if (stallPoll) clearInterval(stallPoll);
+      signal?.removeEventListener('abort', onAbort);
     };
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       // Watchdog: return partial output + a timeout reason instead of throwing,
       // so a 10-minute timeout becomes a visible, durable error turn.
       proc.kill('SIGTERM');
@@ -240,7 +248,6 @@ function runAgy(args: string[], cwd: string, timeoutMs: number, stallTimeoutMs?:
 
     let lastProgressAt = Date.now();
     let lastLogMtimeMs = -1;
-    let stallPoll: ReturnType<typeof setInterval> | undefined;
     if (stallTimeoutMs !== undefined && logFilePath !== undefined) {
       const pollIntervalMs = Math.max(10, Math.min(5000, Math.floor(stallTimeoutMs / 4)));
       stallPoll = setInterval(() => {
@@ -261,6 +268,9 @@ function runAgy(args: string[], cwd: string, timeoutMs: number, stallTimeoutMs?:
           });
       }, pollIntervalMs);
     }
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
 
     proc.on('error', (err) => {
       cleanup();
@@ -373,6 +383,8 @@ export class AntigravityService {
   private registry;
   private sessionMeta: Map<string, ActiveSessionMeta> = new Map();
   private runningSessions: Set<string> = new Set();
+  private startingSessions: Set<string> = new Set();
+  private promptAbortControllers = new Map<string, AbortController>();
   private promptCallbacks: Map<string, {
     onEvent: (e: NormalizedEvent) => void;
     onComplete: (err?: Error) => void;
@@ -388,6 +400,8 @@ export class AntigravityService {
   private readonly heartbeatIntervalMs: number;
   private readonly stallTimeoutMs: number;
   private readonly maxAttempts: number;
+  private modelCache: { expiresAt: number; models: Array<{ id: string; name: string; provider: string }> } | null = null;
+  private modelRequest: Promise<Array<{ id: string; name: string; provider: string }>> | null = null;
 
   constructor(cfg: { registryPath: string }) {
     this.store = new AntigravitySessionStore(config.antigravitySessionDir);
@@ -425,6 +439,7 @@ export class AntigravityService {
   }
 
   async isAvailable(): Promise<boolean> {
+    if (!config.antigravityEnabled) return false;
     try {
       const result = await runAgy(['--version'], process.cwd(), 5000);
       return result.ok && result.stdout.trim().length > 0;
@@ -442,6 +457,7 @@ export class AntigravityService {
   }
 
   async createSession(cwd: string, model?: string): Promise<{ sessionId: string }> {
+    if (!config.antigravityEnabled) throw new Error('Antigravity is disabled');
     if (this.sessionMeta.size >= this.maxSessions) {
       this.evictOldestIdleSession();
     }
@@ -481,22 +497,41 @@ export class AntigravityService {
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
   ): Promise<void> {
-    const entry = await this.registry.get(sessionId);
-    if (!entry) throw new Error(`Antigravity session not found: ${sessionId}`);
-
-    let meta = this.sessionMeta.get(sessionId);
-    if (!meta) {
-      meta = { lastActivity: Date.now(), pinned: false, status: 'idle' };
-      this.sessionMeta.set(sessionId, meta);
+    if (!config.antigravityEnabled) throw new Error('Antigravity is disabled');
+    if (this.runningSessions.has(sessionId) || this.startingSessions.has(sessionId)) {
+      throw new Error(`Antigravity session is already running: ${sessionId}`);
     }
+    this.startingSessions.add(sessionId);
+    try {
+      const entry = await this.registry.get(sessionId);
+      if (!entry) throw new Error(`Antigravity session not found: ${sessionId}`);
 
-    meta.status = 'running';
-    meta.lastActivity = Date.now();
-    this.runningSessions.add(sessionId);
-    this.promptCallbacks.set(sessionId, { onEvent, onComplete });
-    await this.registry.updateStatus(sessionId, 'running');
+      let meta = this.sessionMeta.get(sessionId);
+      if (!meta) {
+        meta = { lastActivity: Date.now(), pinned: false, status: 'idle' };
+        this.sessionMeta.set(sessionId, meta);
+      }
 
-    void this.runPromptAsync(sessionId, entry, prompt, meta, onEvent, onComplete);
+      meta.status = 'running';
+      meta.lastActivity = Date.now();
+      this.runningSessions.add(sessionId);
+      const abortController = new AbortController();
+      this.promptAbortControllers.set(sessionId, abortController);
+      this.promptCallbacks.set(sessionId, { onEvent, onComplete });
+      try {
+        await this.registry.updateStatus(sessionId, 'running');
+      } catch (error) {
+        this.runningSessions.delete(sessionId);
+        this.promptAbortControllers.delete(sessionId);
+        this.promptCallbacks.delete(sessionId);
+        meta.status = 'error';
+        throw error;
+      }
+
+      void this.runPromptAsync(sessionId, entry, prompt, meta, onEvent, onComplete, abortController);
+    } finally {
+      this.startingSessions.delete(sessionId);
+    }
   }
 
   private async runPromptAsync(
@@ -506,6 +541,7 @@ export class AntigravityService {
     meta: ActiveSessionMeta,
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
+    abortController: AbortController,
   ): Promise<void> {
     if (!entry) return;
 
@@ -624,7 +660,7 @@ export class AntigravityService {
 
           tlog.debug('spawning agy: model=%s conversation=%s printTimeout=%s attempt=%d/%d', model, conversationId ?? 'new', printTimeout, attempt, this.maxAttempts);
 
-          result = await runAgy(args, entry.cwd, this.promptTimeoutMs, this.stallTimeoutMs, agyLogFile);
+          result = await runAgy(args, entry.cwd, this.promptTimeoutMs, this.stallTimeoutMs, agyLogFile, abortController.signal);
 
           // agy may create transient conversations before the one that
           // actually receives the message. Its per-run log exposes the true
@@ -665,6 +701,7 @@ export class AntigravityService {
         await this.finalizeTurnSuccess(sessionId, entry, turnId, prompt, isFirstMessage, response, conversationId, result.stdout, durationMs, assistantId, emit, meta);
         this.runningSessions.delete(sessionId);
         this.promptCallbacks.delete(sessionId);
+        this.promptAbortControllers.delete(sessionId);
         onComplete();
         return;
       }
@@ -677,6 +714,7 @@ export class AntigravityService {
       await this.finalizeTurnError(sessionId, entry, turnId, prompt, isFirstMessage, partial, reason, conversationId, body, durationMs, assistantId, emit, meta);
       this.runningSessions.delete(sessionId);
       this.promptCallbacks.delete(sessionId);
+      this.promptAbortControllers.delete(sessionId);
       onComplete(new Error(reason));
     } catch (err) {
       // Spawn-level failure or unexpected throw: same visible-failure treatment.
@@ -689,6 +727,7 @@ export class AntigravityService {
         .catch(() => undefined);
       this.runningSessions.delete(sessionId);
       this.promptCallbacks.delete(sessionId);
+      this.promptAbortControllers.delete(sessionId);
       onComplete(error);
     }
   }
@@ -829,19 +868,14 @@ export class AntigravityService {
   }
 
   abort(sessionId: string): void {
-    const meta = this.sessionMeta.get(sessionId);
-    if (meta) meta.status = 'idle';
-    this.runningSessions.delete(sessionId);
-    const cb = this.promptCallbacks.get(sessionId);
-    if (cb) {
-      this.promptCallbacks.delete(sessionId);
-      cb.onComplete(new Error('Aborted by user'));
-    }
-    void this.registry.updateStatus(sessionId, 'idle');
+    // Keep the session marked running until the exact in-flight invocation
+    // observes the abort and finalises; this prevents a replacement turn from
+    // racing with a still-live agy subprocess.
+    this.promptAbortControllers.get(sessionId)?.abort();
   }
 
   isRunning(sessionId: string): boolean {
-    return this.runningSessions.has(sessionId);
+    return this.runningSessions.has(sessionId) || this.startingSessions.has(sessionId);
   }
 
   hasSession(sessionId: string): boolean {
@@ -968,24 +1002,33 @@ export class AntigravityService {
   }
 
   async getAvailableModels(): Promise<Array<{ id: string; name: string; provider: string }>> {
-    try {
-      const result = await runAgy(['models'], process.cwd(), 10000);
-      if (!result.ok) throw new Error('agy models failed');
-      return result.stdout
-        .split('\n')
-        .map((l) => l.trim())
-        .filter((l) => l.length > 0)
-        .map((name) => ({ id: name, name, provider: 'antigravity' }));
-    } catch {
-      // Fallback to known models from skill documentation
-      return [
-        { id: 'Gemini 3.5 Flash (Medium)', name: 'Gemini 3.5 Flash (Medium)', provider: 'antigravity' },
-        { id: 'Gemini 3.5 Flash (High)', name: 'Gemini 3.5 Flash (High)', provider: 'antigravity' },
-        { id: 'Gemini 3.5 Flash (Low)', name: 'Gemini 3.5 Flash (Low)', provider: 'antigravity' },
-        { id: 'Gemini 3.1 Pro (Low)', name: 'Gemini 3.1 Pro (Low)', provider: 'antigravity' },
-        { id: 'Gemini 3.1 Pro (High)', name: 'Gemini 3.1 Pro (High)', provider: 'antigravity' },
-      ];
-    }
+    if (!config.antigravityEnabled) return [];
+    if (this.modelCache && this.modelCache.expiresAt > Date.now()) return this.modelCache.models;
+    if (this.modelRequest) return this.modelRequest;
+
+    this.modelRequest = (async () => {
+      let models: Array<{ id: string; name: string; provider: string }>;
+      try {
+        const result = await runAgy(['models'], process.cwd(), 10000);
+        if (!result.ok) throw new Error('agy models failed');
+        models = result.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .map((name) => ({ id: name, name, provider: 'antigravity' }));
+      } catch {
+        models = [
+          { id: 'Gemini 3.5 Flash (Medium)', name: 'Gemini 3.5 Flash (Medium)', provider: 'antigravity' },
+          { id: 'Gemini 3.5 Flash (High)', name: 'Gemini 3.5 Flash (High)', provider: 'antigravity' },
+          { id: 'Gemini 3.5 Flash (Low)', name: 'Gemini 3.5 Flash (Low)', provider: 'antigravity' },
+          { id: 'Gemini 3.1 Pro (Low)', name: 'Gemini 3.1 Pro (Low)', provider: 'antigravity' },
+          { id: 'Gemini 3.1 Pro (High)', name: 'Gemini 3.1 Pro (High)', provider: 'antigravity' },
+        ];
+      }
+      this.modelCache = { expiresAt: Date.now() + 60_000, models };
+      return models;
+    })().finally(() => { this.modelRequest = null; });
+    return this.modelRequest;
   }
 
   async shutdown(): Promise<void> {

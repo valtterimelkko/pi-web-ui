@@ -19,6 +19,7 @@ import type { MultiSessionManager, SessionStatusInfo } from '../pi/multi-session
 import type { ServerMessage } from './protocol.js';
 import type { ImageContent } from '@earendil-works/pi-ai';
 import { createLogger } from '../logging/logger.js';
+import { getSessionRegistry } from '../session-registry.js';
 
 const logger = createLogger('SessionWebSocket');
 
@@ -639,7 +640,10 @@ export function handleSessionWebSocket(
 
   const initialize = async (): Promise<void> => {
     try {
-      const status = await multiSessionManager.subscribeClient(clientId, sessionId);
+      const registryEntry = await getSessionRegistry().get(sessionId);
+      const resolvedPath = registryEntry?.sdkType === 'pi' ? registryEntry.path : sessionId;
+      const resolvedCwd = registryEntry?.sdkType === 'pi' ? registryEntry.cwd : undefined;
+      const status = await multiSessionManager.subscribeClient(clientId, resolvedPath, resolvedCwd);
       client.sessionPath = status.sessionPath;
       client.sessionId = status.sessionId;
       log(`Subscribed to session: ${status.sessionPath}`);

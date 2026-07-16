@@ -175,6 +175,63 @@ describe('PiService', () => {
       });
       expect(session).toBeDefined();
     });
+
+    it('binds extensions even when the caller has no Web UI context', async () => {
+      const session = await service.createSession({ clientId: 'internal-api-client' });
+
+      expect(session.bindExtensions).toHaveBeenCalledOnce();
+      expect(session.bindExtensions).toHaveBeenCalledWith({});
+    });
+
+    it('waits for extension session_start handlers before returning the session', async () => {
+      const { createAgentSession } = await import('@earendil-works/pi-coding-agent');
+      let releaseBind!: () => void;
+      const bindPending = new Promise<void>((resolve) => { releaseBind = resolve; });
+      const mockSession = {
+        sessionId: 'bind-wait-session',
+        subscribe: vi.fn(),
+        setModel: vi.fn(),
+        dispose: vi.fn(),
+        bindExtensions: vi.fn().mockReturnValue(bindPending),
+        sessionManager: {},
+      };
+      (createAgentSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ session: mockSession });
+
+      let settled = false;
+      const creation = service.createSession({ clientId: 'bind-wait-client' }).then((session) => {
+        settled = true;
+        return session;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(mockSession.bindExtensions).toHaveBeenCalledWith({});
+      expect(settled).toBe(false);
+
+      releaseBind();
+      await expect(creation).resolves.toBe(mockSession);
+    });
+
+    it('cleans up the partially created session when extension binding fails', async () => {
+      const { createAgentSession } = await import('@earendil-works/pi-coding-agent');
+      const mockSession = {
+        sessionId: 'bind-failure-session',
+        subscribe: vi.fn(),
+        setModel: vi.fn(),
+        dispose: vi.fn(),
+        bindExtensions: vi.fn().mockRejectedValue(new Error('session_start failed')),
+        sessionManager: {},
+      };
+      (createAgentSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ session: mockSession });
+      const removeEventHandler = vi.spyOn(service, 'removeEventHandler');
+      service.setEventHandler('bind-failure-client', vi.fn());
+
+      await expect(service.createSession({ clientId: 'bind-failure-client' }))
+        .rejects.toThrow('session_start failed');
+
+      expect(mockSession.dispose).toHaveBeenCalledOnce();
+      expect(removeEventHandler).toHaveBeenCalledWith('bind-failure-client');
+      expect(service.getSessionByClientId('bind-failure-client')).toBeUndefined();
+      expect(service.getSession('bind-failure-session')).toBeUndefined();
+    });
   });
 
   describe('createSession — force-flush (EEXIST defence)', () => {

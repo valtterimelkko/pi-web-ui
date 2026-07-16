@@ -47,7 +47,7 @@ export class SessionCleanupService {
       pinInactivityMs: cleanupConfig?.pinInactivityMs ?? DEFAULT_PIN_INACTIVITY_MS,
       archiveRetentionMs: cleanupConfig?.archiveRetentionMs ?? DEFAULT_ARCHIVE_RETENTION_MS,
       cleanupIntervalMs: cleanupConfig?.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS,
-      piSessionDir: cleanupConfig?.piSessionDir ?? path.join(config.piAgentDir, 'sessions'),
+      piSessionDir: cleanupConfig?.piSessionDir ?? config.sessionDir ?? path.join(config.piAgentDir, 'sessions'),
       claudeSessionDir: cleanupConfig?.claudeSessionDir ?? config.claudeSessionDir,
       antigravitySessionDir: cleanupConfig?.antigravitySessionDir ?? config.antigravitySessionDir,
     };

@@ -33,11 +33,19 @@ describe('validation server env-file loading', () => {
       opencodePort: '44097',
     });
 
+    expect(isolation.INTERNAL_API_KEY).toBe('');
+    expect(isolation.PI_WEB_UI_VALIDATION_DEFAULT_CWD).toBe('/tmp/pi-validation/workspace');
     expect(isolation.SESSION_DIR).toBe('/tmp/pi-validation/pi-sessions');
     expect(isolation.PI_SESSIONS_DIR).toBe('/tmp/pi-validation/pi-sessions');
     expect(isolation.OPENCODE_WORKING_DIR).toBe('/tmp/pi-validation/opencode-workspace');
+    expect(isolation.PI_WEB_UI_VALIDATION_DEFAULT_CWD).toBe('/tmp/pi-validation/workspace');
     expect(isolation.CLAUDE_SESSION_DIR).toBe('/tmp/pi-validation/claude-sessions');
+    expect(isolation.CLAUDE_CONFIG_DIR).toBe('/tmp/pi-validation/claude-config');
+    expect(isolation.CLAUDE_CHANNEL_ENABLED).toBe('false');
+    expect(isolation.CLAUDE_CHANNEL_PLUGIN_DIR).toBe('/tmp/pi-validation/claude-channel-plugin');
+    expect(isolation.CLAUDE_PROFILES_PATH).toBe('/tmp/pi-validation/claude-profiles.json');
     expect(isolation.ANTIGRAVITY_SESSION_DIR).toBe('/tmp/pi-validation/antigravity-sessions');
+    expect(isolation.ANTIGRAVITY_ENABLED).toBe('false');
     expect(isolation.SESSION_REGISTRY_PATH).toBe('/tmp/pi-validation/session-registry.json');
   });
 

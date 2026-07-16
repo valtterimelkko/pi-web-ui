@@ -14,6 +14,8 @@ const logger = createLogger('ExtensionUiAdapter');
 export interface WebUIContext {
   sendToClient(message: unknown): void;
   clientId: string;
+  /** Populated by PiService before extension session_start handlers run. */
+  sessionId?: string;
 }
 
 export interface CommandActionContext {

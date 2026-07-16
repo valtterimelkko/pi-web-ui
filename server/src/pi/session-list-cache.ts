@@ -240,7 +240,7 @@ let piSessionListCacheSingleton: PiSessionListCache | null = null;
 
 export function getPiSessionListCache(): PiSessionListCache {
   if (!piSessionListCacheSingleton) {
-    piSessionListCacheSingleton = new PiSessionListCache(join(config.piAgentDir, 'sessions'));
+    piSessionListCacheSingleton = new PiSessionListCache(config.sessionDir || join(config.piAgentDir, 'sessions'));
   }
   return piSessionListCacheSingleton;
 }

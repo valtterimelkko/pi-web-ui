@@ -84,22 +84,28 @@ export function useWebSocket() {
       console.error('No active session');
       return false;
     }
-    return sendMessage({
+    const sent = sendMessage({
       type: 'prompt',
       sessionId: currentSessionId,
       message,
       images,
       agent,
     });
+    if (sent) useSessionStore.getState().clearTransferReady(currentSessionId);
+    return sent;
   }, [sendMessage, currentSessionId]);
 
   const sendSteer = useCallback((message: string) => {
-    return sendMessage({ type: 'steer', message });
-  }, [sendMessage]);
+    const sent = sendMessage({ type: 'steer', message });
+    if (sent && currentSessionId) useSessionStore.getState().clearTransferReady(currentSessionId);
+    return sent;
+  }, [sendMessage, currentSessionId]);
 
   const sendFollowUp = useCallback((message: string) => {
-    return sendMessage({ type: 'follow_up', message });
-  }, [sendMessage]);
+    const sent = sendMessage({ type: 'follow_up', message });
+    if (sent && currentSessionId) useSessionStore.getState().clearTransferReady(currentSessionId);
+    return sent;
+  }, [sendMessage, currentSessionId]);
 
   const abortGeneration = useCallback(() => {
     return sendMessage({ type: 'abort' });

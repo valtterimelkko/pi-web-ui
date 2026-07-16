@@ -17,8 +17,12 @@ export function buildValidationIsolationEnv(
 
   return {
     PI_WEB_UI_VALIDATION_MODE: 'true',
+    PI_WEB_UI_VALIDATION_DEFAULT_CWD: join(input.validationDir, 'workspace'),
     PORT: input.port,
     INTERNAL_API_ENABLED: 'true',
+    // Never inherit a production static key; force the disposable server to
+    // create and use its isolated token file instead.
+    INTERNAL_API_KEY: '',
     INTERNAL_API_SOCKET_PATH: join(input.validationDir, 'internal-api.sock'),
     INTERNAL_API_TOKEN_PATH: join(input.validationDir, 'internal-api-token'),
     INTERNAL_API_WATCH_DIR: join(input.validationDir, 'watches'),
@@ -29,7 +33,15 @@ export function buildValidationIsolationEnv(
     SESSION_DIR: piSessionsDir,
     PI_SESSIONS_DIR: piSessionsDir,
     CLAUDE_SESSION_DIR: join(input.validationDir, 'claude-sessions'),
+    CLAUDE_CONFIG_DIR: join(input.validationDir, 'claude-config'),
+    CLAUDE_CHANNEL_ENABLED: 'false',
+    CLAUDE_CHANNEL_PLUGIN_DIR: join(input.validationDir, 'claude-channel-plugin'),
+    CLAUDE_PROFILES_PATH: join(input.validationDir, 'claude-profiles.json'),
     ANTIGRAVITY_SESSION_DIR: join(input.validationDir, 'antigravity-sessions'),
+    // agy stores conversation DBs in the user's global ~/.gemini directory and
+    // exposes no supported data-dir override. Disable it in disposable mode so
+    // validation can never create or resume a production conversation.
+    ANTIGRAVITY_ENABLED: 'false',
     CLAUDE_CHANNEL_WS_PORT: input.claudeWsPort,
     CLAUDE_CHANNEL_HOOK_PORT: input.claudeHookPort,
     OPENCODE_SERVER_HOST: '127.0.0.1',

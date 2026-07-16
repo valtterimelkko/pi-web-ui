@@ -235,33 +235,49 @@ export class PiService {
       }
     });
 
-    // Bind extensions with Web UI context if provided
-    if (options.webUIContext) {
-      this.clientWebUIContexts.set(options.clientId, options.webUIContext);
-      
-      const uiContext = createWebUIContext(options.webUIContext);
-      const commandContext = createCommandContextActions({
-        clientId: options.clientId,
-        sessionId: session.sessionId,
-        piService: {
-          removeClient: this.removeClient.bind(this),
-          cleanup: this.cleanup.bind(this),
-        },
-        sessionPool: this.sessionPool || {
-          createClientSession: async () => ({ sessionId: '', session: {} }),
-          switchClientSession: async () => ({ sessionId: '', session: {} }),
-          removeClient: () => {},
-        },
-        getSessionManager: () => session.sessionManager,
-      });
+    // Always bind extensions before exposing the session. bindExtensions()
+    // emits session_start, which extension lifecycle guards rely on even for
+    // browserless/Internal API sessions that have no Web UI context.
+    try {
+      if (options.webUIContext) {
+        // Make the identity available to extension UI callbacks before
+        // session_start runs; interactive startup requests must not wait for
+        // bindExtensions() itself to return.
+        options.webUIContext.sessionId = session.sessionId;
+        this.clientWebUIContexts.set(options.clientId, options.webUIContext);
 
-      // Bind extensions asynchronously (don't block session creation)
-      void session.bindExtensions({
-        uiContext,
-        commandContextActions: commandContext,
-      }).catch((error) => {
-        logger.error('Failed to bind extensions:', error);
-      });
+        const uiContext = createWebUIContext(options.webUIContext);
+        const commandContext = createCommandContextActions({
+          clientId: options.clientId,
+          sessionId: session.sessionId,
+          piService: {
+            removeClient: this.removeClient.bind(this),
+            cleanup: this.cleanup.bind(this),
+          },
+          sessionPool: this.sessionPool || {
+            createClientSession: async () => ({ sessionId: '', session: {} }),
+            switchClientSession: async () => ({ sessionId: '', session: {} }),
+            removeClient: () => {},
+          },
+          getSessionManager: () => session.sessionManager,
+        });
+
+        await session.bindExtensions({
+          uiContext,
+          commandContextActions: commandContext,
+        });
+      } else {
+        await session.bindExtensions({});
+      }
+    } catch (error) {
+      // Do not erase a newer concurrent creation for the same client ID.
+      if (this.clientSessionMap.get(options.clientId) === session.sessionId) {
+        this.clientSessionMap.delete(options.clientId);
+        this.clientWebUIContexts.delete(options.clientId);
+        this.removeEventHandler(options.clientId);
+      }
+      session.dispose();
+      throw error;
     }
 
     this.sessions.set(session.sessionId, session);

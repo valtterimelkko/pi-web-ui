@@ -82,6 +82,15 @@ describe('VirtualizedMessageList', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Context transferred — ready for your next instruction');
   });
 
+  it('shows and removes the ready marker with populated transcript messages', () => {
+    const { rerender } = render(<VirtualizedMessageList {...defaultProps} transferReady />);
+    expect(screen.getByTestId('virtuoso-mock')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Context transferred — ready for your next instruction');
+
+    rerender(<VirtualizedMessageList {...defaultProps} transferReady={false} />);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('shows empty state when no messages', () => {
     render(<VirtualizedMessageList messages={[]} isStreaming={false} />);
     

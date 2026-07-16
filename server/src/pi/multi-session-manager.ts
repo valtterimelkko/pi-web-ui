@@ -14,6 +14,8 @@ export interface WebUIContext {
   clientId: string;
   /** Function to send extension UI events to the Web UI. */
   sendToClient: (message: unknown) => void;
+  /** Session ID populated before extension session_start handlers run. */
+  sessionId?: string;
   /** Session path this context belongs to, once known. */
   sessionPath?: string;
   /** Extension registry for accessing registered extensions */
@@ -116,6 +118,7 @@ export class MultiSessionManager {
   private sessions: Map<string, ActiveSession> = new Map(); // sessionPath -> ActiveSession
   private clientSubscriptions: Map<string, Set<string>> = new Map(); // clientId -> Set<sessionPath>
   private clientViewingSession: Map<string, string> = new Map(); // clientId -> sessionPath
+  private subscriptionQueues = new Map<string, Promise<void>>();
   private webUIContextProvider?: WebUIContextProvider;
 
   // Internal API event observers (sessionPath -> callback)
@@ -504,12 +507,18 @@ export class MultiSessionManager {
     });
 
     let resolvedWebUIContext: WebUIContext | undefined;
+    const pendingExtensionMessages: unknown[] = [];
     const extensionWebUIContext: WebUIContext | undefined = webUIContext
       ? {
           ...webUIContext,
           clientId,
           sendToClient: (message: unknown) => {
-            const sessionScopedMessage = attachSessionIdToWebUiMessage(message, agentSession.sessionId);
+            const sessionId = extensionWebUIContext?.sessionId;
+            if (!sessionId) {
+              pendingExtensionMessages.push(message);
+              return;
+            }
+            const sessionScopedMessage = attachSessionIdToWebUiMessage(message, sessionId);
             if (sessionPath && this.sessions.has(sessionPath)) {
               this.broadcastToSubscribers(sessionPath, sessionScopedMessage);
             } else {
@@ -534,7 +543,11 @@ export class MultiSessionManager {
     }
     sessionPath = resolvedSessionPath;
     if (resolvedWebUIContext) {
+      resolvedWebUIContext.sessionId ??= agentSession.sessionId;
       resolvedWebUIContext.sessionPath = sessionPath;
+      for (const message of pendingExtensionMessages.splice(0)) {
+        resolvedWebUIContext.sendToClient(message);
+      }
     }
 
     // Create the active session entry
@@ -576,6 +589,27 @@ export class MultiSessionManager {
     cwd?: string,
     webUIContext?: WebUIContext
   ): Promise<SessionStatusInfo> {
+    const key = sessionPath;
+    const previous = this.subscriptionQueues.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const queued = previous.catch(() => undefined).then(() => gate);
+    this.subscriptionQueues.set(key, queued);
+    await previous.catch(() => undefined);
+    try {
+      return await this.subscribeClientUnlocked(clientId, sessionPath, cwd, webUIContext);
+    } finally {
+      release();
+      if (this.subscriptionQueues.get(key) === queued) this.subscriptionQueues.delete(key);
+    }
+  }
+
+  private async subscribeClientUnlocked(
+    clientId: string,
+    sessionPath: string,
+    cwd?: string,
+    webUIContext?: WebUIContext
+  ): Promise<SessionStatusInfo> {
     // Validate inputs
     if (!sessionPath || sessionPath.trim() === '') {
       throw new Error('Invalid session path');
@@ -609,13 +643,19 @@ export class MultiSessionManager {
       }
       
       // Create/recreate the session
+      const pendingExtensionMessages: unknown[] = [];
       const extensionWebUIContext: WebUIContext | undefined = webUIContext
         ? {
             ...webUIContext,
             clientId,
             sessionPath,
             sendToClient: (message: unknown) => {
-              const sessionScopedMessage = attachSessionIdToWebUiMessage(message, agentSession.sessionId);
+              const sessionId = extensionWebUIContext?.sessionId;
+              if (!sessionId) {
+                pendingExtensionMessages.push(message);
+                return;
+              }
+              const sessionScopedMessage = attachSessionIdToWebUiMessage(message, sessionId);
               if (this.sessions.has(sessionPath)) {
                 this.broadcastToSubscribers(sessionPath, sessionScopedMessage);
               } else {
@@ -631,6 +671,13 @@ export class MultiSessionManager {
         cwd,
         webUIContext: extensionWebUIContext as any,
       });
+
+      if (extensionWebUIContext) {
+        extensionWebUIContext.sessionId ??= agentSession.sessionId;
+        for (const message of pendingExtensionMessages.splice(0)) {
+          extensionWebUIContext.sendToClient(message);
+        }
+      }
 
       // Set up event handler for this session
       this.piService.setEventHandler(`multi-${sessionPath}`, (event) => {
@@ -1251,7 +1298,12 @@ export class MultiSessionManager {
       throw new Error(`Session ${sessionPath} does not exist`);
     }
 
-    // Update status to busy while processing
+    if (activeSession.status === 'busy' || activeSession.status === 'streaming') {
+      throw new Error(`Session ${sessionPath} is already busy`);
+    }
+
+    // Update status synchronously before the first await so concurrent prompts
+    // cannot both enter the same AgentSession.
     activeSession.status = 'busy';
     activeSession.lastActivity = new Date();
 

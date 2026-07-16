@@ -1,6 +1,7 @@
 import chokidar, { type FSWatcher } from 'chokidar';
 import path from 'path';
 import fs from 'fs/promises';
+import { closeSync, openSync, readSync } from 'node:fs';
 import { EventEmitter } from 'events';
 import { createLogger } from '../logging/logger.js';
 
@@ -29,6 +30,8 @@ export class SessionWatcher extends EventEmitter {
   private watcher: FSWatcher | null = null;
   private sessionsDir: string;
   private debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private sessionIdsByPath = new Map<string, string>();
+  private pendingInfoByPath = new Map<string, Promise<SessionInfo | null>>();
   private debounceDelay = 500; // ms
 
   constructor(sessionsDir?: string) {
@@ -82,6 +85,8 @@ export class SessionWatcher extends EventEmitter {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+    this.sessionIdsByPath.clear();
+    this.pendingInfoByPath.clear();
     
     logger.info('SessionWatcher stopped');
   }
@@ -102,6 +107,33 @@ export class SessionWatcher extends EventEmitter {
       return;
     }
 
+    // Capture the header ID synchronously while chokidar still guarantees the
+    // path exists; this closes the add→unlink debounce race.
+    try {
+      const fd = openSync(filePath, 'r');
+      try {
+        const buffer = Buffer.alloc(16 * 1024);
+        const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+        const firstLine = buffer.subarray(0, bytes).toString('utf8').split('\n', 1)[0];
+        const header = JSON.parse(firstLine) as { type?: unknown; id?: unknown };
+        if (header.type === 'session' && typeof header.id === 'string' && header.id.trim()) {
+          this.sessionIdsByPath.set(filePath, header.id);
+        }
+      } finally {
+        closeSync(fd);
+      }
+    } catch { /* the async read below will report malformed/missing files */ }
+
+    // Begin reading canonical header metadata immediately. If an unlink follows
+    // before the debounce fires, the unlink handler can still await this read.
+    const pendingInfo = this.readSessionInfo(filePath)
+      .then((info) => {
+        this.sessionIdsByPath.set(filePath, info.id);
+        return info;
+      })
+      .catch(() => null);
+    this.pendingInfoByPath.set(filePath, pendingInfo);
+
     // Debounce add/change events
     const timer = setTimeout(() => {
       this.debounceTimers.delete(filePath);
@@ -115,7 +147,9 @@ export class SessionWatcher extends EventEmitter {
    * Emit the change event with parsed session info
    */
   private async emitChange(type: 'add' | 'change' | 'unlink', filePath: string): Promise<void> {
-    const sessionId = this.extractSessionId(filePath);
+    const pendingInfo = await this.pendingInfoByPath.get(filePath);
+    this.pendingInfoByPath.delete(filePath);
+    const sessionId = pendingInfo?.id ?? this.sessionIdsByPath.get(filePath) ?? this.extractSessionId(filePath);
     const cwd = this.extractCwd(filePath);
 
     const event: SessionChangeEvent = {
@@ -128,9 +162,10 @@ export class SessionWatcher extends EventEmitter {
     // For add/change, try to read session info
     if (type !== 'unlink') {
       try {
-        const info = await this.readSessionInfo(filePath);
+        const info = pendingInfo ?? await this.readSessionInfo(filePath);
         event.sessionId = info.id;
         event.cwd = info.cwd;
+        this.sessionIdsByPath.set(filePath, info.id);
         
         // Emit full session info
         this.emit('session_update', { ...event, info });
@@ -139,6 +174,7 @@ export class SessionWatcher extends EventEmitter {
         this.emit('session_update', event);
       }
     } else {
+      this.sessionIdsByPath.delete(filePath);
       this.emit('session_update', event);
     }
   }
@@ -185,6 +221,8 @@ export class SessionWatcher extends EventEmitter {
     let messageCount = 0;
     let createdAt: Date | null = null;
     let lastActivity: Date | null = null;
+    let canonicalId = this.extractSessionId(filePath);
+    let canonicalCwd = this.extractCwd(filePath);
 
     // Helper to check if content contains skill content
     const isSkillContent = (text: string): boolean => {
@@ -197,6 +235,11 @@ export class SessionWatcher extends EventEmitter {
       try {
         const entry = JSON.parse(line);
         
+        if (entry.type === 'session') {
+          if (typeof entry.id === 'string' && entry.id.trim()) canonicalId = entry.id;
+          if (typeof entry.cwd === 'string' && path.isAbsolute(entry.cwd)) canonicalCwd = path.normalize(entry.cwd);
+        }
+
         // Count messages
         if (entry.type === 'message') {
           messageCount++;
@@ -243,9 +286,9 @@ export class SessionWatcher extends EventEmitter {
     const metadata = await this.getSessionMetadata(filePath);
 
     return {
-      id: this.extractSessionId(filePath),
+      id: canonicalId,
       path: filePath,
-      cwd: this.extractCwd(filePath),
+      cwd: canonicalCwd,
       firstMessage: firstMessage || 'New session',
       messageCount,
       name: metadata.name,
@@ -338,15 +381,15 @@ export class SessionWatcher extends EventEmitter {
 // Singleton instance
 let sessionWatcher: SessionWatcher | null = null;
 
-export function getSessionWatcher(): SessionWatcher {
+export function getSessionWatcher(sessionsDir?: string): SessionWatcher {
   if (!sessionWatcher) {
-    sessionWatcher = new SessionWatcher();
+    sessionWatcher = new SessionWatcher(sessionsDir);
   }
   return sessionWatcher;
 }
 
-export function startSessionWatcher(): SessionWatcher {
-  const watcher = getSessionWatcher();
+export function startSessionWatcher(sessionsDir?: string): SessionWatcher {
+  const watcher = getSessionWatcher(sessionsDir);
   watcher.start();
   return watcher;
 }

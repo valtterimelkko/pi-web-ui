@@ -307,7 +307,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
 
     const runtime: SessionRuntime = body.runtime;
-    const cwd = body.cwd || process.cwd();
+    const cwd = body.cwd || process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd();
     let base: CreateSessionResponse | null = null;
 
     try {
@@ -969,7 +969,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         ? claudeService.isRunning(sessionId)
         : runtime === 'opencode'
           ? opencodeService.isRunning(sessionId)
-          : false;
+          : runtime === 'antigravity'
+            ? antigravityService.isRunning(sessionId)
+            : (() => {
+                const status = multiSessionManager.getSessionStatus?.(entry.path)?.status;
+                return status === 'busy' || status === 'streaming';
+              })();
       if (isBusy && mode === 'prompt') {
         sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy'));
         return;
@@ -1010,7 +1015,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           ? claudeService.isRunning(sessionId)
           : runtime === 'opencode'
             ? opencodeService.isRunning(sessionId)
-            : false;
+            : runtime === 'antigravity'
+              ? antigravityService.isRunning(sessionId)
+              : (() => {
+                  const status = multiSessionManager.getSessionStatus?.(entry.path)?.status;
+                  return status === 'busy' || status === 'streaming';
+                })();
       } catch (error) {
         await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
         logger.errorObject(`Failed to re-check session state for run ${runId}`, error);
@@ -1967,8 +1977,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     // Lazy-import the Pi session dir resolution. Default matches the
     // multi-session-manager's convention.
-    const piSessionDir = process.env.PI_SESSIONS_DIR ||
-      `${process.env.HOME || '/root'}/.pi/agent/sessions`;
+    const piSessionDir = config.sessionDir
+      || process.env.PI_SESSIONS_DIR
+      || `${config.piAgentDir}/sessions`;
 
     const transferService = new TransferService({
       registry: sessionRegistry,
@@ -1976,11 +1987,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       opencodeService,
       antigravityService,
       piSessionDir,
+      isPiSessionBusy: (sessionPath: string) => {
+        const status = multiSessionManager.getSessionStatus(sessionPath)?.status;
+        return status === 'busy' || status === 'streaming';
+      },
+      abortPiPrompt: (sessionPath: string) => multiSessionManager.abort(sessionPath),
       createPiSession: async (cwd: string) => {
         const status = await multiSessionManager.createAndSubscribe(internalClientId, cwd);
         return { sessionId: status.sessionId, sessionPath: status.sessionPath };
       },
-      sendPiPrompt: async (sessionPath: string, message: string, onEvent: (event: unknown) => void) => {
+      sendPiPrompt: async (sessionPath: string, message: string, onEvent: (event: unknown) => void, cwd?: string) => {
+        const transferClientId = `${internalClientId}-transfer`;
+        let hydrated = false;
+        if (!multiSessionManager.getSessionStatus(sessionPath)) {
+          await multiSessionManager.subscribeClient(transferClientId, sessionPath, cwd);
+          hydrated = true;
+        }
         let observing = true;
         const transferObserver = (event: unknown) => {
           onEvent(event);
@@ -1996,6 +2018,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           await multiSessionManager.prompt(sessionPath, message);
         } finally {
           if (observing) multiSessionManager.removeApiObserver(sessionPath, transferObserver);
+          if (hydrated) multiSessionManager.unsubscribeClient(transferClientId, sessionPath);
         }
       },
     });
@@ -2262,7 +2285,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             ? claudeService.isRunning(entry.sessionId)
             : reg.sdkType === 'opencode'
               ? opencodeService.isRunning(entry.sessionId)
-              : false;
+              : reg.sdkType === 'antigravity'
+                ? antigravityService.isRunning(entry.sessionId)
+                : (() => {
+                    const status = multiSessionManager.getSessionStatus?.(reg.path)?.status;
+                    return status === 'busy' || status === 'streaming';
+                  })();
         } catch (error) {
           await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
           logger.errorObject(`Failed to re-check session state for batch run ${runId}`, error);

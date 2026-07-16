@@ -55,6 +55,7 @@ export class ClaudeService {
   private sessionStore: ClaudeSessionStore;
   private registry: SessionRegistryManager;
   private sessionsWithHistory: Set<string> = new Set();
+  private promptReservations: Set<string> = new Set();
 
   /** API observers — receive every normalized event for a session, regardless of which client prompted. */
   private apiObservers: Map<string, Set<(event: NormalizedEvent) => void>> = new Map();
@@ -327,6 +328,28 @@ export class ClaudeService {
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
   ): Promise<void> {
+    if (this.promptReservations.has(sessionId) || this.isRunning(sessionId)) {
+      throw new Error(`Claude session is already running: ${sessionId}`);
+    }
+    this.promptReservations.add(sessionId);
+    const releaseAndComplete = (error?: Error) => {
+      this.promptReservations.delete(sessionId);
+      onComplete(error);
+    };
+    try {
+      await this.sendPromptReserved(sessionId, prompt, onEvent, releaseAndComplete);
+    } catch (error) {
+      this.promptReservations.delete(sessionId);
+      throw error;
+    }
+  }
+
+  private async sendPromptReserved(
+    sessionId: string,
+    prompt: string,
+    onEvent: (event: NormalizedEvent) => void,
+    onComplete: (error?: Error) => void,
+  ): Promise<void> {
     // Fan every backend's normalized events out to API observers so subscribers
     // (e.g. the notification layer) see agent_end regardless of which client
     // started the prompt. Mirrors the OpenCode/Pi service-level observers.
@@ -526,13 +549,14 @@ export class ClaudeService {
 
   /** Return true if a prompt is currently running for the session. */
   isRunning(sessionId: string): boolean {
+    if (this.promptReservations.has(sessionId)) return true;
     if (this.hasChannelSession(sessionId)) {
       return this.channelService?.isRunning(sessionId) ?? false;
     }
     if (this.sdkService?.hasSession(sessionId)) {
       return this.sdkService.isRunning(sessionId);
     }
-    return this.processPool.isActive(sessionId);
+    return this.processPool.isActive?.(sessionId) ?? false;
   }
 
   async loadSessionHistory(sessionId: string) {

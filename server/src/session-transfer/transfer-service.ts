@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import { constants as fsConstants } from 'fs';
 import path from 'path';
 import type { SessionRegistryManager, RegistryEntry } from '../session-registry.js';
 import type { ClaudeService } from '../claude/claude-service.js';
@@ -8,15 +9,41 @@ import { validateTransferRequest, type ValidationResult } from './transfer-valid
 import { TRANSFER_ERROR_CODES } from './types.js';
 import type { TransferRequest, VisibleTranscriptSource } from './types.js';
 import { buildHandoffPayload } from './transfer-framing.js';
-import { extractPiTranscript } from './pi-source-adapter.js';
+import { extractPiTranscriptFromRaw } from './pi-source-adapter.js';
 import { extractClaudeTranscript } from './claude-source-adapter.js';
 import { extractOpenCodeTranscript } from './opencode-source-adapter.js';
 import type { SourceAdapterResult } from './pi-source-adapter.js';
 import type { SdkType } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
+import { detectPromptInjection } from '../security/prompt-injection.js';
 
 const logger = createLogger('Transfer');
+const MAX_PI_HEADER_BYTES = 16 * 1024;
+const MAX_CWD_LENGTH = 4096;
+const MAX_PI_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_HANDOFF_BYTES = 1024 * 1024;
+const reservedTargetIds = new Set<string>();
 
+class TargetAcceptanceError extends Error {
+  constructor(message: string, readonly startRejected = false) {
+    super(message);
+    this.name = 'TargetAcceptanceError';
+  }
+}
+
+interface SafePiCandidate {
+  path: string;
+  stat: Awaited<ReturnType<typeof fs.stat>>;
+  header: { id?: unknown; cwd?: unknown } | null;
+}
+
+function safeHeaderCwd(value: unknown, fallback: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_CWD_LENGTH) return fallback;
+  // Deliberately reject ASCII control characters in filesystem metadata.
+  // eslint-disable-next-line no-control-regex
+  if (!path.isAbsolute(value) || /[\u0000-\u001f\u007f]/u.test(value)) return fallback;
+  return path.normalize(value);
+}
 
 export interface TransferServiceConfig {
   registry: SessionRegistryManager;
@@ -28,7 +55,11 @@ export interface TransferServiceConfig {
   piSessionDir?: string;
   createPiSession?: (cwd: string) => Promise<{ sessionId: string; sessionPath: string }>;
   /** Starts a Pi prompt and forwards its raw/normalized events to `onEvent`. */
-  sendPiPrompt?: (sessionPath: string, message: string, onEvent: (event: unknown) => void) => Promise<void>;
+  sendPiPrompt?: (sessionPath: string, message: string, onEvent: (event: unknown) => void, cwd?: string) => Promise<void>;
+  /** Reports whether a resolved Pi target is currently busy or streaming. */
+  isPiSessionBusy?: (sessionPath: string, sessionId: string) => boolean;
+  /** Cancels a Pi transfer prompt that failed before acceptance or timed out. */
+  abortPiPrompt?: (sessionPath: string) => Promise<void> | void;
 }
 
 export interface TransferResult {
@@ -66,15 +97,7 @@ export class TransferService {
       };
     }
 
-    let sourceEntry = await this.config.registry.get(request.sourceSessionId);
-
-    if (!sourceEntry) {
-      sourceEntry = await this.config.registry.getByPath(request.sourceSessionId);
-    }
-
-    if (!sourceEntry) {
-      sourceEntry = await this.resolvePiSessionFallback(request.sourceSessionId);
-    }
+    const sourceEntry = await this.resolveSessionEntry(request.sourceSessionId);
 
     if (!sourceEntry) {
       return {
@@ -97,8 +120,37 @@ export class TransferService {
         targetSessionId: '',
         createdNewSession: false,
         error: {
-          code: TRANSFER_ERROR_CODES.EMPTY_SOURCE,
+          code: sourceResult.error.includes('safety limit')
+            ? TRANSFER_ERROR_CODES.SOURCE_TOO_LARGE
+            : TRANSFER_ERROR_CODES.EMPTY_SOURCE,
           message: sourceResult.error,
+        },
+      };
+    }
+
+    const handoff = buildHandoffPayload(sourceResult.transcript);
+    if (Buffer.byteLength(handoff.fullText, 'utf8') > MAX_HANDOFF_BYTES) {
+      return {
+        success: false,
+        sourceSessionId: request.sourceSessionId,
+        targetSessionId: request.targetSessionId ?? '',
+        createdNewSession: false,
+        error: {
+          code: TRANSFER_ERROR_CODES.SOURCE_TOO_LARGE,
+          message: `Transferred context exceeds the ${MAX_HANDOFF_BYTES}-byte safety limit`,
+        },
+      };
+    }
+    const injection = detectPromptInjection(handoff.fullText);
+    if (injection.recommendation === 'block') {
+      return {
+        success: false,
+        sourceSessionId: request.sourceSessionId,
+        targetSessionId: request.targetSessionId ?? '',
+        createdNewSession: false,
+        error: {
+          code: TRANSFER_ERROR_CODES.PROMPT_INJECTION,
+          message: 'Transferred context was blocked by the prompt-injection safety filter',
         },
       };
     }
@@ -123,11 +175,7 @@ export class TransferService {
       targetSessionPath = createResult.sessionPath;
       createdNewSession = true;
     } else {
-      let targetEntry = await this.config.registry.get(targetSessionId)
-        || await this.config.registry.getByPath(targetSessionId);
-      if (!targetEntry) {
-        targetEntry = await this.resolvePiSessionFallback(targetSessionId);
-      }
+      const targetEntry = await this.resolveSessionEntry(targetSessionId);
       if (!targetEntry) {
         return {
           success: false,
@@ -141,7 +189,21 @@ export class TransferService {
         };
       }
 
-      if (this.isTargetBusy(targetSessionId, targetEntry.sdkType)) {
+      if (this.isSameResolvedSession(sourceEntry, targetEntry)) {
+        return {
+          success: false,
+          sourceSessionId: request.sourceSessionId,
+          targetSessionId: targetEntry.id,
+          createdNewSession: false,
+          error: {
+            code: TRANSFER_ERROR_CODES.SELF_TRANSFER,
+            message: 'Cannot transfer a session into itself',
+          },
+        };
+      }
+
+      targetSessionId = targetEntry.id;
+      if (this.isTargetBusy(targetSessionId, targetEntry.sdkType, targetEntry.path)) {
         return {
           success: false,
           sourceSessionId: request.sourceSessionId,
@@ -158,14 +220,33 @@ export class TransferService {
       targetSdkType = targetEntry.sdkType;
     }
 
-    const handoff = buildHandoffPayload(sourceResult.transcript);
+    const resolvedTargetType = request.createNew ? request.targetSdkType! : targetSdkType!;
+    if (reservedTargetIds.has(targetSessionId)
+      || (!createdNewSession && this.isTargetBusy(targetSessionId, resolvedTargetType, targetSessionPath))) {
+      return {
+        success: false,
+        sourceSessionId: request.sourceSessionId,
+        targetSessionId,
+        createdNewSession,
+        error: {
+          code: TRANSFER_ERROR_CODES.TARGET_BUSY,
+          message: 'Target session is busy/streaming. Cannot transfer into an active session.',
+        },
+      };
+    }
 
-    const dispatchResult = await this.dispatchToTarget(
-      targetSessionId,
-      request.createNew ? request.targetSdkType! : targetSdkType!,
-      handoff.fullText,
-      targetSessionPath,
-    );
+    reservedTargetIds.add(targetSessionId);
+    let dispatchResult: Awaited<ReturnType<TransferService['dispatchToTarget']>>;
+    try {
+      dispatchResult = await this.dispatchToTarget(
+        targetSessionId,
+        resolvedTargetType,
+        handoff.fullText,
+        targetSessionPath,
+      );
+    } finally {
+      reservedTargetIds.delete(targetSessionId);
+    }
 
     if (!dispatchResult.success) {
       return {
@@ -187,83 +268,159 @@ export class TransferService {
     };
   }
 
-  private async resolvePiSessionFallback(sessionIdOrPath: string): Promise<RegistryEntry | undefined> {
-    const piSessionDir = this.config.piSessionDir || path.join(process.env.HOME || '/root', '.pi/agent/sessions');
+  private async resolveSessionEntry(sessionIdOrPath: string): Promise<RegistryEntry | undefined> {
+    const registered = await this.config.registry.get(sessionIdOrPath)
+      || await this.config.registry.getByPath(sessionIdOrPath);
+    if (!registered) return this.resolvePiSessionFallback(sessionIdOrPath);
+    if (registered.sdkType !== 'pi') return registered;
+
+    const safe = await this.resolveSafePiCandidate(registered.path);
+    if (!safe) return undefined;
+    if (safe.header && Object.prototype.hasOwnProperty.call(safe.header, 'id')
+      && (typeof safe.header.id !== 'string' || !safe.header.id || safe.header.id !== registered.id)) return undefined;
+    const dirName = path.basename(path.dirname(safe.path));
+    const inner = dirName.replace(/^--/, '').replace(/--$/, '');
+    const fallbackCwd = '/' + inner.replace(/--/g, '/');
+    return {
+      ...registered,
+      id: registered.id,
+      path: safe.path,
+      cwd: safeHeaderCwd(safe.header?.cwd ?? registered.cwd, fallbackCwd),
+    };
+  }
+
+  private isSameResolvedSession(source: RegistryEntry, target: RegistryEntry): boolean {
+    if (source.sdkType !== target.sdkType) return false;
+    if (source.sdkType === 'pi') return source.path === target.path;
+    return source.id === target.id;
+  }
+
+  private piSessionDir(): string {
+    return this.config.piSessionDir || path.join(process.env.HOME || '/root', '.pi/agent/sessions');
+  }
+
+  private async resolveSafePiCandidate(candidatePath: string): Promise<SafePiCandidate | undefined> {
+    if (!path.isAbsolute(candidatePath) || !candidatePath.endsWith('.jsonl')) return undefined;
     try {
-      const candidates: string[] = [];
-      if (sessionIdOrPath.includes('/') && sessionIdOrPath.endsWith('.jsonl')) {
-        candidates.push(sessionIdOrPath);
+      const [root, candidate, lstat] = await Promise.all([
+        fs.realpath(this.piSessionDir()),
+        fs.realpath(candidatePath),
+        fs.lstat(candidatePath),
+      ]);
+      const relative = path.relative(root, candidate);
+      if (relative === '' || relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) return undefined;
+      if (lstat.isSymbolicLink()) return undefined;
+      const stat = await fs.stat(candidate);
+      if (!stat.isFile()) return undefined;
+
+      let header: SafePiCandidate['header'] = null;
+      const handle = await fs.open(candidate, 'r');
+      try {
+        const buffer = Buffer.alloc(MAX_PI_HEADER_BYTES);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        const text = buffer.toString('utf8', 0, bytesRead);
+        const newline = text.indexOf('\n');
+        if (newline >= 0 || bytesRead < buffer.length) {
+          const firstLine = newline >= 0 ? text.slice(0, newline) : text;
+          const parsed = JSON.parse(firstLine) as unknown;
+          if (typeof parsed === 'object' && parsed !== null) header = parsed as SafePiCandidate['header'];
+        }
+      } catch {
+        // Legacy or partial files can still be used when their filesystem path is safe.
+      } finally {
+        await handle.close();
       }
-      if (!sessionIdOrPath.includes('/')) {
-        const dirs = await fs.readdir(piSessionDir, { withFileTypes: true });
+      return { path: candidate, stat, header };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async resolvePiSessionFallback(sessionIdOrPath: string): Promise<RegistryEntry | undefined> {
+    try {
+      let matches: SafePiCandidate[] = [];
+      if (sessionIdOrPath.includes('/')) {
+        const direct = await this.resolveSafePiCandidate(sessionIdOrPath);
+        if (direct) matches = [direct];
+      } else {
+        const dirs = await fs.readdir(this.piSessionDir(), { withFileTypes: true });
+        const candidatePaths: string[] = [];
         for (const dir of dirs) {
-          if (!dir.isDirectory()) continue;
-          const subDir = path.join(piSessionDir, dir.name);
-          const files = await fs.readdir(subDir);
-          for (const f of files) {
-            if (f.endsWith('.jsonl') && f.includes(sessionIdOrPath)) {
-              candidates.push(path.join(subDir, f));
-            }
+          if (!dir.isDirectory() || dir.isSymbolicLink()) continue;
+          const subDir = path.join(this.piSessionDir(), dir.name);
+          const files = await fs.readdir(subDir, { withFileTypes: true });
+          for (const file of files) {
+            if (!file.isFile() || file.isSymbolicLink() || !file.name.endsWith('.jsonl') || !file.name.includes(sessionIdOrPath)) continue;
+            candidatePaths.push(path.join(subDir, file.name));
           }
         }
+        const resolved = await Promise.all(candidatePaths.map((candidate) => this.resolveSafePiCandidate(candidate)));
+        matches = resolved.filter((candidate): candidate is SafePiCandidate =>
+          candidate !== undefined && candidate.header?.id === sessionIdOrPath,
+        );
+        // A bare ID must resolve uniquely; filesystem ordering must never choose.
+        if (matches.length !== 1) return undefined;
       }
-      for (const candidate of candidates) {
-        try {
-          const stat = await fs.stat(candidate);
-          if (!stat.isFile()) continue;
-          const dirName = path.basename(path.dirname(candidate));
-          const inner = dirName.replace(/^--/, '').replace(/--$/, '');
-          // Pi session directory names are lossy for cwd reconstruction because
-          // hyphens can be either path separators or part of a directory name.
-          // Prefer the authoritative cwd stored in the session header and keep
-          // the directory-derived value only as a legacy fallback.
-          let cwd = '/' + inner.replace(/--/g, '/');
-          try {
-            const handle = await fs.open(candidate, 'r');
-            try {
-              const buffer = Buffer.alloc(4096);
-              const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-              const firstLine = buffer.toString('utf8', 0, bytesRead).split('\n', 1)[0];
-              const header = JSON.parse(firstLine) as { cwd?: unknown };
-              if (typeof header.cwd === 'string' && header.cwd.trim()) {
-                cwd = header.cwd;
-              }
-            } finally {
-              await handle.close();
-            }
-          } catch {
-            // Older or partial files may not have a readable session header.
-          }
-          return {
-            id: sessionIdOrPath,
-            sdkType: 'pi' as const,
-            path: candidate,
-            cwd,
-            firstMessage: '',
-            messageCount: 0,
-            createdAt: stat.birthtime.toISOString(),
-            lastActivity: stat.mtime.toISOString(),
-            status: 'idle' as const,
-          };
-        } catch { /* file not accessible */ }
-      }
-    } catch { /* session dir not readable */ }
-    return undefined;
+
+      const match = matches[0];
+      if (!match) return undefined;
+      const dirName = path.basename(path.dirname(match.path));
+      const inner = dirName.replace(/^--/, '').replace(/--$/, '');
+      const fallbackCwd = '/' + inner.replace(/--/g, '/');
+      const cwd = safeHeaderCwd(match.header?.cwd, fallbackCwd);
+      return {
+        id: typeof match.header?.id === 'string' ? match.header.id : sessionIdOrPath,
+        sdkType: 'pi',
+        path: match.path,
+        cwd,
+        firstMessage: '',
+        messageCount: 0,
+        createdAt: match.stat.birthtime.toISOString(),
+        lastActivity: match.stat.mtime.toISOString(),
+        status: 'idle',
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   private async extractSource(entry: RegistryEntry, request: TransferRequest): Promise<SourceAdapterResult> {
+    const entryId = typeof entry.id === 'string' && entry.id ? entry.id : request.sourceSessionId;
+    const firstMessage = typeof entry.firstMessage === 'string' ? entry.firstMessage.slice(0, 50) : '';
     const source: VisibleTranscriptSource = {
-      sessionId: entry.id,
-      displayName: request.sourceDisplayName ?? entry.firstMessage?.slice(0, 50) ?? entry.id,
+      sessionId: entryId,
+      displayName: (request.sourceDisplayName ?? firstMessage) || entryId,
       sdkType: entry.sdkType,
-      cwd: entry.cwd,
+      cwd: safeHeaderCwd(entry.cwd, process.cwd()),
       createdAt: entry.createdAt,
       lastActivity: entry.lastActivity,
     };
 
     switch (entry.sdkType) {
-      case 'pi':
-        return extractPiTranscript(entry.path, source, request.scope);
+      case 'pi': {
+        const candidate = await this.resolveSafePiCandidate(entry.path);
+        if (!candidate) {
+          return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: 'Unsafe Pi session file path' };
+        }
+        let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+        try {
+          const noFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
+          handle = await fs.open(candidate.path, fsConstants.O_RDONLY | noFollow);
+          const opened = await handle.stat();
+          if (!opened.isFile() || opened.dev !== candidate.stat.dev || opened.ino !== candidate.stat.ino) {
+            return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: 'Pi session file changed during validation' };
+          }
+          if (opened.size > MAX_PI_SOURCE_FILE_BYTES) {
+            return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: `Pi session file exceeds the ${MAX_PI_SOURCE_FILE_BYTES}-byte safety limit` };
+          }
+          const raw = await handle.readFile({ encoding: 'utf8' });
+          return extractPiTranscriptFromRaw(raw, source, request.scope);
+        } catch {
+          return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: 'Failed to read Pi session file safely' };
+        } finally {
+          await handle?.close().catch(() => undefined);
+        }
+      }
 
       case 'claude':
         if (!this.config.claudeService) {
@@ -403,14 +560,14 @@ export class TransferService {
     }
   }
 
-  private isTargetBusy(sessionId: string, sdkType: SdkType): boolean {
+  private isTargetBusy(sessionId: string, sdkType: SdkType, sessionPath?: string): boolean {
     switch (sdkType) {
       case 'claude':
         return this.config.claudeService?.isRunning(sessionId) ?? false;
       case 'opencode':
         return this.config.opencodeService?.isRunning(sessionId) ?? false;
       case 'pi':
-        return false;
+        return sessionPath ? (this.config.isPiSessionBusy?.(sessionPath, sessionId) ?? false) : false;
       case 'antigravity':
         return this.config.antigravityService?.isRunning(sessionId) ?? false;
       default:
@@ -432,7 +589,7 @@ export class TransferService {
       let settled = false;
       const timeoutMs = this.config.acceptanceTimeoutMs ?? 15_000;
       const timeout = setTimeout(() => {
-        settle(new Error(`Target did not accept the transfer within ${timeoutMs}ms`));
+        settle(new TargetAcceptanceError(`Target did not accept the transfer within ${timeoutMs}ms`));
       }, timeoutMs);
       const settle = (error?: Error) => {
         if (settled) return;
@@ -454,10 +611,10 @@ export class TransferService {
 
       try {
         Promise.resolve(start(onEvent, onComplete)).catch((error) => {
-          settle(error instanceof Error ? error : new Error(String(error)));
+          settle(new TargetAcceptanceError(error instanceof Error ? error.message : String(error), true));
         });
       } catch (error) {
-        settle(error instanceof Error ? error : new Error(String(error)));
+        settle(new TargetAcceptanceError(error instanceof Error ? error.message : String(error), true));
       }
     });
   }
@@ -466,7 +623,7 @@ export class TransferService {
     targetSessionId: string,
     sdkType: SdkType,
     handoffText: string,
-    directPath?: string,
+    directPath: string | undefined,
   ): Promise<{ success: true } | { success: false; error: { code: string; message: string } }> {
     switch (sdkType) {
       case 'claude': {
@@ -479,6 +636,7 @@ export class TransferService {
           );
           return { success: true };
         } catch (err) {
+          if (!(err instanceof TargetAcceptanceError && err.startRejected)) this.config.claudeService.abort?.(targetSessionId);
           return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Claude dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
         }
       }
@@ -508,6 +666,7 @@ export class TransferService {
           );
           return { success: true };
         } catch (err) {
+          if (!(err instanceof TargetAcceptanceError && err.startRejected)) this.config.opencodeService.abort?.(targetSessionId);
           return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `OpenCode dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
         }
       }
@@ -522,6 +681,7 @@ export class TransferService {
           );
           return { success: true };
         } catch (err) {
+          if (!(err instanceof TargetAcceptanceError && err.startRejected)) this.config.antigravityService.abort?.(targetSessionId);
           return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Antigravity dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
         }
       }
@@ -529,30 +689,25 @@ export class TransferService {
       case 'pi': {
         try {
           if (this.config.sendPiPrompt && directPath) {
+            const safeTarget = await this.resolveSafePiCandidate(directPath);
+            if (!safeTarget) {
+              return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: 'Pi dispatch failed: unsafe session file path' } };
+            }
+            const targetCwd = safeHeaderCwd(safeTarget.header?.cwd, path.dirname(safeTarget.path));
             await this.awaitTargetAcceptance((onEvent, onComplete) =>
-              this.config.sendPiPrompt!(directPath, handoffText, onEvent).then(() => onComplete(), onComplete),
+              this.config.sendPiPrompt!(safeTarget.path, handoffText, onEvent, targetCwd).then(() => onComplete(), onComplete),
             );
             return { success: true };
           }
-          let filePath = directPath;
-          if (!filePath) {
-            const entry = await this.config.registry.get(targetSessionId)
-              || await this.config.registry.getByPath(targetSessionId)
-              || await this.resolvePiSessionFallback(targetSessionId);
-            filePath = entry?.path;
-          }
-          if (filePath) {
-            const record = JSON.stringify({
-              type: 'message',
-              role: 'user',
-              content: handoffText,
-              timestamp: Date.now(),
-            }) + '\n';
-            await fs.appendFile(filePath, record, 'utf-8');
-            return { success: true };
-          }
-          return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: 'Pi dispatch failed: could not resolve session file path' } };
+          return {
+            success: false,
+            error: {
+              code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE,
+              message: 'Pi dispatch failed: active runtime prompt integration is unavailable',
+            },
+          };
         } catch (err) {
+          if (!(err instanceof TargetAcceptanceError && err.startRejected) && directPath) await this.config.abortPiPrompt?.(directPath);
           return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Pi dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
         }
       }

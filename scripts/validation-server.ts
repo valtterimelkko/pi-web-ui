@@ -64,7 +64,10 @@ for (const dir of [
   'run-receipts',
   'notifications',
   'pi-sessions',
+  'workspace',
   'opencode-workspace',
+  'claude-config',
+  'claude-channel-plugin',
 ]) {
   mkdirSync(path.join(validationDir, dir), { recursive: true });
 }

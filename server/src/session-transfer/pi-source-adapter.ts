@@ -4,7 +4,7 @@ import { replayEventsToVisibleItems, buildVisibleTranscript } from './visible-tr
 import type { VisibleTranscript, VisibleTranscriptSource, TransferScope } from './types.js';
 import type { SdkType } from '@pi-web-ui/shared';
 import { isToolVisible, extractToolPrimaryArg } from './transfer-validation.js';
-import { MAX_TOOL_OUTPUT_LENGTH } from './types.js';
+import { MAX_TOOL_OUTPUT_LENGTH, RECENT_ITEM_COUNT } from './types.js';
 import type { VisibleTranscriptItem } from './types.js';
 
 export interface SourceAdapterResult {
@@ -106,10 +106,25 @@ export async function extractPiTranscript(
     return { transcript: emptyTranscript(source, scope), error: 'Failed to read session file' };
   }
 
-  const lines = raw.split('\n').filter(l => l.trim());
-  const items: VisibleTranscriptItem[] = [];
+  return extractPiTranscriptFromRaw(raw, source, scope);
+}
 
-  for (const line of lines) {
+export function extractPiTranscriptFromRaw(
+  raw: string,
+  source: VisibleTranscriptSource,
+  scope: TransferScope,
+): SourceAdapterResult {
+  const items: VisibleTranscriptItem[] = [];
+  let omittedRecentItems = false;
+  const addItem = (item: VisibleTranscriptItem) => {
+    items.push(item);
+    if (scope === 'visible_recent' && items.length > RECENT_ITEM_COUNT) {
+      items.shift();
+      omittedRecentItems = true;
+    }
+  };
+
+  for (const line of iterateNonEmptyLines(raw)) {
     let entry: PiSessionEntry;
     try {
       entry = JSON.parse(line) as PiSessionEntry;
@@ -124,7 +139,7 @@ export async function extractPiTranscript(
       if (role === 'user' || role === 'assistant') {
         const text = extractTextFromContent(entry.message.content);
         if (text.trim()) {
-          items.push({
+          addItem({
             kind: role,
             text: transformSkillContent(text),
             timestamp,
@@ -134,7 +149,7 @@ export async function extractPiTranscript(
     } else if (entry.type === 'tool_execution_start') {
       const toolName = (entry as Record<string, unknown>).toolName as string | undefined;
       if (toolName && isToolVisible(toolName)) {
-        items.push({
+        addItem({
           kind: 'tool',
           text: '',
           timestamp: entry.timestamp ?? Date.now(),
@@ -149,7 +164,7 @@ export async function extractPiTranscript(
         const truncated = resultText.length > MAX_TOOL_OUTPUT_LENGTH
           ? resultText.slice(0, MAX_TOOL_OUTPUT_LENGTH) + '...'
           : resultText;
-        items.push({
+        addItem({
           kind: 'tool',
           text: truncated,
           timestamp: entry.timestamp ?? Date.now(),
@@ -164,7 +179,20 @@ export async function extractPiTranscript(
     return { transcript: emptyTranscript(source, scope), error: 'Nothing visible to transfer' };
   }
 
-  return { transcript: buildVisibleTranscript(items, source, scope) };
+  const transcript = buildVisibleTranscript(items, source, scope);
+  transcript.truncated ||= omittedRecentItems;
+  return { transcript };
+}
+
+function* iterateNonEmptyLines(raw: string): Generator<string> {
+  let start = 0;
+  for (;;) {
+    const end = raw.indexOf('\n', start);
+    const line = end === -1 ? raw.slice(start) : raw.slice(start, end);
+    if (line.trim()) yield line;
+    if (end === -1) return;
+    start = end + 1;
+  }
 }
 
 function extractReplayContentParts(

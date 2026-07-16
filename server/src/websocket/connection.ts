@@ -782,7 +782,14 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    logger.info(`[Transfer] Request: source=${message.sourceSessionId}, target=${message.targetSessionId || 'new'}, createNew=${message.createNew}, sdk=${message.targetSdkType}, cwd=${message.targetCwd}, scope=${message.scope}`);
+    logger.info(`[Transfer] Request ${JSON.stringify({
+      source: message.sourceSessionId,
+      target: message.targetSessionId || 'new',
+      createNew: message.createNew,
+      sdk: message.targetSdkType,
+      cwd: message.targetCwd,
+      scope: message.scope,
+    })}`);
 
     const { TransferService } = await import('../session-transfer/transfer-service.js');
 
@@ -791,11 +798,23 @@ export class WebSocketConnectionManager {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      piSessionDir: config.sessionDir || process.env.PI_SESSIONS_DIR || `${config.piAgentDir}/sessions`,
+      isPiSessionBusy: (sessionPath: string) => {
+        const status = this.multiSessionManager.getSessionStatus(sessionPath)?.status;
+        return status === 'busy' || status === 'streaming';
+      },
+      abortPiPrompt: (sessionPath: string) => this.multiSessionManager.abort(sessionPath),
       createPiSession: async (cwd: string) => {
         const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd, this.getWebUIContext(clientId));
         return { sessionId: status.sessionId, sessionPath: status.sessionPath };
       },
-      sendPiPrompt: async (sessionPath: string, message: string, onEvent: (event: unknown) => void) => {
+      sendPiPrompt: async (sessionPath: string, message: string, onEvent: (event: unknown) => void, cwd?: string) => {
+        const transferClientId = `${clientId}-transfer`;
+        let hydrated = false;
+        if (!this.multiSessionManager.getSessionStatus(sessionPath)) {
+          await this.multiSessionManager.subscribeClient(transferClientId, sessionPath, cwd, this.getWebUIContext(clientId));
+          hydrated = true;
+        }
         let observing = true;
         const transferObserver = (event: unknown) => {
           onEvent(event);
@@ -811,6 +830,7 @@ export class WebSocketConnectionManager {
           await this.multiSessionManager.prompt(sessionPath, message);
         } finally {
           if (observing) this.multiSessionManager.removeApiObserver(sessionPath, transferObserver);
+          if (hydrated) this.multiSessionManager.unsubscribeClient(transferClientId, sessionPath);
         }
       },
     });
@@ -1443,7 +1463,7 @@ export class WebSocketConnectionManager {
   ): Promise<void> {
     logger.info(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}, sdkType=${message.sdkType || 'pi'}, model=${message.model || 'default'}, thinkingLevel=${message.thinkingLevel || 'default'}`);
 
-    const cwd = message.cwd || process.cwd();
+    const cwd = message.cwd || config.validationDefaultCwd;
     const sdkType = message.sdkType || 'pi';
 
     if (sdkType === 'antigravity') {

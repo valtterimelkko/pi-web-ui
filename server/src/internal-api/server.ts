@@ -165,7 +165,7 @@ export class InternalApiServer {
       pinMaxTtlMs: this.config.pinMaxTtlMs,
       pinExpiryIntervalMs: this.config.pinExpiryIntervalMs,
       onSessionCreated: this.config.onSessionCreated,
-      piSessionDir: path.join(config.piAgentDir, 'sessions'),
+      piSessionDir: config.sessionDir || path.join(config.piAgentDir, 'sessions'),
       claudeSessionDir: config.claudeSessionDir,
       antigravitySessionDir: config.antigravitySessionDir,
     });

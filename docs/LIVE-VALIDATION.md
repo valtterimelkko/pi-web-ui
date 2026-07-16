@@ -89,7 +89,7 @@ npm run validate:server -- --dir "$VALIDATION_DIR" --port 0
 npm run validate:live -- \
   --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" \
-  --runtime antigravity --scenario smoke
+  --runtime pi --scenario smoke
 ```
 
 If the running service gets provider credentials from a systemd `EnvironmentFile`
@@ -100,6 +100,14 @@ that file automatically. Load it explicitly without copying or printing secret v
 npm run validate:server -- --env-file .env.production \
   --env-key GLM_CODING_PLAN_TOKEN --dir "$VALIDATION_DIR" --port 0
 ```
+
+Disposable servers force their Pi session watcher/cache, OpenCode workspace,
+registry, sockets, tokens, and runtime metadata under the validation directory.
+They also clear any ambient `INTERNAL_API_KEY`, so the printed isolated token file
+is always authoritative. Antigravity is disabled in disposable mode because the
+`agy` CLI has no supported conversation-data directory override and would otherwise
+write to the user's real `~/.gemini` conversation store; validate Antigravity only
+through a separately authorised workflow that explicitly accepts that limitation.
 
 `--env-key` is a repeatable allowlist: only those named values are imported from
 that file, so this option does not pull in its unrelated production secrets or
@@ -300,6 +308,20 @@ node scripts/ws-validate.mjs --session "<sessionPath>" --step resume \
   --text 'Use the bash tool to run exactly: echo "CHECK-$((21*2))". Then report its exact output.' \
   --timeout 540000
 ```
+
+For repeated recovery-path checks, avoid paying the 300k-token setup cost on
+every iteration. In the same authenticated WebSocket connection, send
+`{type:"prompt", message:"/autocompact75 validate-next 5"}` and then send the
+tool-use prompt after the command has returned. Internal-API-created sessions
+have no toast UI, so a custom sequence driver should not wait for a
+`notification` acknowledgement; the subsequent `compaction_start` is the
+proof that the one-shot arm was consumed.
+
+The command is rejected unless `PI_WEB_UI_VALIDATION_MODE=true`, is consumed by
+the next eligible compaction, and never changes the production 75% threshold.
+The session must still contain enough compactable history (more than Pi's
+`keepRecentTokens`) for a real summary. Use this fast path while iterating, then
+retain one calibrated real-75% run as final evidence.
 
 Each run prints a JSON verdict (`OK …` / `FAILED …` / `TIMEOUT`) plus the captured events — paste that JSON into the validation report as evidence.
 

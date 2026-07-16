@@ -28,6 +28,7 @@
  *   npm run validate:long-horizon -- --session <id> --mode once --state run.json
  */
 
+import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -122,12 +123,16 @@ async function main(): Promise<void> {
 
   const statePath = getFlag(argv, '--state')
     ?? path.join(homedir(), '.pi-web-ui', 'long-horizon-runs', `${randomUUID()}.json`);
+  const cwd = getFlag(argv, '--cwd') ?? (target.usingProductionServer
+    ? process.cwd()
+    : path.join(path.dirname(target.socketPath), 'workspace'));
+  if (!target.usingProductionServer) mkdirSync(cwd, { recursive: true });
 
   const config: LongHorizonConfig = {
     client,
     subjectRuntime: getFlag(argv, '--session') ? undefined : (getFlag(argv, '--subject') ?? 'pi') as ValidationRuntime,
     existingSessionId: getFlag(argv, '--session'),
-    cwd: getFlag(argv, '--cwd') ?? process.cwd(),
+    cwd,
     model: getFlag(argv, '--model'),
     seedPrompt: getFlag(argv, '--seed'),
     conditions,

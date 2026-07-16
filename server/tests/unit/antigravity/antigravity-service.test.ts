@@ -409,6 +409,31 @@ describe('AntigravityService — durable turn lifecycle', () => {
     );
   }
 
+  it('aborts the exact in-flight subprocess before allowing a replacement turn', async () => {
+    const { sessionId } = await svc.createSession(tmp);
+    ctrl.gatePromise = new Promise<void>((resolve) => { ctrl.gateResolve = resolve; });
+
+    const first = prompt(sessionId, 'abort me');
+    await flush();
+    svc.abort(sessionId);
+
+    await expect(first).resolves.toMatchObject({ message: 'aborted' });
+    expect(svc.isRunning(sessionId)).toBe(false);
+  });
+
+  it('rejects a concurrent prompt without replacing the active turn callbacks', async () => {
+    const { sessionId } = await svc.createSession(tmp);
+    ctrl.gatePromise = new Promise<void>((resolve) => { ctrl.gateResolve = resolve; });
+
+    const first = prompt(sessionId, 'first prompt');
+
+    await expect(svc.sendPrompt(sessionId, 'second prompt', () => undefined, () => undefined))
+      .rejects.toThrow('already running');
+
+    ctrl.gateResolve?.();
+    expect(await first).toBeUndefined();
+  });
+
   it('persists a running turn with the prompt before the subprocess resolves (RC1 mid-flight durability)', async () => {
     const { sessionId } = await svc.createSession(tmp);
     // Hold the subprocess open so we can inspect the store mid-flight.
