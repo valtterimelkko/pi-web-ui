@@ -55,6 +55,7 @@ Nginx is also perfectly viable, and an example is included below.
 
 ## Production Checklist
 
+- [ ] Use Node.js 22.19+ (Pi SDK 0.80.10 requirement)
 - [ ] Set strong `JWT_SECRET` and `CSRF_SECRET`
 - [ ] Set a real `AUTH_PASSWORD` / hash
 - [ ] Set `ALLOWED_ORIGINS` correctly
@@ -447,7 +448,7 @@ lifetime, rejects unsafe lock paths, and preserves the command exit status:
 
 ```bash
 npm run production:lock -- bash -lc '
-  npm install &&
+  npm ci --include=dev &&
   npm run lint &&
   npm run typecheck &&
   npm test &&

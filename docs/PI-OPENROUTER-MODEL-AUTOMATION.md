@@ -51,7 +51,7 @@ search box; new models simply flow in.
 
 - **Model surfacing is automatic.** Pi Web UI fetches OpenRouter's public
   `/api/v1/models` endpoint, transforms it into a Pi SDK provider config, caches
-  it host-side, and registers it into the running `ModelRegistry`. New models
+  it host-side, and registers it into the running `ModelRuntime`. New models
   within OpenRouter appear with **zero** config after a refresh.
 - **No secrets are stored anywhere in this repo or in Pi Web UI's files.**
   OpenRouter is a *built-in* Pi SDK provider. The **preferred** auth path is to
@@ -67,9 +67,9 @@ search box; new models simply flow in.
   catalogue, cache + register it, and diff what changed. Fail-closed: a failed
   fetch never clobbers the existing cache/snapshot with an empty result.
 - **The one prerequisite is authenticating OpenRouter (non-secret action):**
-  `pi auth login` (or an SDK `AuthStorage.set('openrouter', …)`), which writes
-  the key to the gitignored `auth.json`. Registration is gated on
-  `AuthStorage.hasAuth('openrouter')`, so models surface only once auth exists.
+  `pi auth login`, which writes the key to the gitignored `auth.json`.
+  Registration is gated on `ModelRuntime.hasConfiguredAuth('openrouter')`, so
+  models surface only once auth exists.
 
 ## The refresh chain (where models actually come from)
 
@@ -77,7 +77,7 @@ search box; new models simply flow in.
 LLM lab ships model
   -> OpenRouter lists it in GET https://openrouter.ai/api/v1/models  (public)
     -> pi:refresh-models fetches + transforms + caches it
-      -> PiService.refreshOpenRouterModels() registers it into the ModelRegistry
+      -> PiService.refreshOpenRouterModels() registers it into the ModelRuntime
         -> GET /api/models?runtime=pi
           -> browser model picker (fetched when the picker opens)
             -> setModel("openrouter/<model-id>") routes via the Pi SDK
@@ -88,7 +88,7 @@ Grounding facts:
 | Fact | Evidence |
 |---|---|
 | OpenRouter is a built-in Pi SDK provider | `provider-attribution.js` adds OpenRouter headers for `provider === "openrouter"`; `env-api-keys.js` maps `openrouter → OPENROUTER_API_KEY` |
-| Auth lives in auth.json (preferred) | `pi auth login` writes the key to `~/.pi/agent/auth.json`; `AuthStorage.hasAuth('openrouter')` is then true and `getApiKeyAndHeaders` resolves it. `OPENROUTER_API_KEY` env var is an optional fallback |
+| Auth lives in auth.json (preferred) | `pi auth login` writes the key to `~/.pi/agent/auth.json`; `ModelRuntime.hasConfiguredAuth('openrouter')` is then true and `ModelRuntime.getAuth()` resolves it. `OPENROUTER_API_KEY` env var is an optional fallback |
 | Pi Web UI holds only a public-metadata cache | `~/.pi-web-ui/pi-openrouter-models.json` (model ids, names, context windows, pricing, capabilities) |
 | Routing uses the SDK's built-in OpenRouter path | registered config sets `baseUrl=https://openrouter.ai/api/v1`, `api=openai-completions`; the SDK adds `HTTP-Referer` / `X-OpenRouter-Title` attribution |
 | Slash/colon-bearing ids round-trip | e.g. `openrouter/openai/gpt-4o:extended` → picker value `openrouter/openai/gpt-4o:extended` → `setModel` splits on the first `/` → `find("openrouter", "openai/gpt-4o:extended")` |
@@ -133,7 +133,7 @@ function (`isOpenRouterChatModel`) — loosen or tighten it there.
 2. fetch the public OpenRouter /api/v1/models catalogue (throws on failure)
 3. transform → filter → dedupe → sort into a Pi SDK provider config
 4. write the cache (PI_OPENROUTER_MODELS_CACHE_PATH) — public metadata only
-5. register the provider into the live ModelRegistry (iff `hasAuth('openrouter')`)
+5. register the provider into the live ModelRuntime (iff `hasConfiguredAuth('openrouter')`)
 6. build a snapshot {openrouter: [ids]}, diff against the previous snapshot
 7. persist the snapshot; return { counts, registered, diff, ... }
 ```

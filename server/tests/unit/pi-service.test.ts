@@ -5,7 +5,7 @@ import { PiService, getPiService, initializePiService } from '../../src/pi/pi-se
 // Top-level mocks referenced inside vi.mock() factories must be created with
 // vi.hoisted() so they exist when the (hoisted) factories run during module
 // load — pi-service now imports fs/promises eagerly via its refresh module.
-const { resourceLoaderInstances, accessMock } = vi.hoisted(() => ({
+const { resourceLoaderInstances, accessMock, modelRuntime } = vi.hoisted(() => ({
   // Track DefaultResourceLoader constructor calls
   resourceLoaderInstances: [] as Array<{ cwd: string; agentDir: string }>,
   // fs.access is non-configurable on Node's fs/promises module, so we mock the
@@ -13,6 +13,21 @@ const { resourceLoaderInstances, accessMock } = vi.hoisted(() => ({
   accessMock: vi.fn().mockRejectedValue(
     Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
   ),
+  // The Pi SDK 0.80.8+ integration boundary: one shared asynchronous runtime
+  // owns model discovery and credential resolution for every AgentSession.
+  modelRuntime: {
+    setRuntimeApiKey: vi.fn().mockResolvedValue(undefined),
+    getError: vi.fn().mockReturnValue(undefined),
+    getModels: vi.fn().mockReturnValue([
+      { id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' },
+    ]),
+    getAvailable: vi.fn().mockResolvedValue([
+      { id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' },
+    ]),
+    getModel: vi.fn().mockReturnValue({ id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' }),
+    hasConfiguredAuth: vi.fn().mockReturnValue(false),
+    registerProvider: vi.fn(),
+  },
 }));
 
 // Factory that builds a mock SessionManager whose `flushed` flag and
@@ -77,25 +92,8 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
       },
     ]),
   },
-  AuthStorage: {
-    create: vi.fn().mockReturnValue({
-      getAll: vi.fn().mockReturnValue([]),
-      setRuntimeApiKey: vi.fn(),
-      has: vi.fn().mockReturnValue(false),
-      set: vi.fn(),
-    }),
-  },
-  ModelRegistry: {
-    create: vi.fn().mockReturnValue({
-      getAvailable: vi.fn().mockReturnValue([
-        { id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' },
-      ]),
-      getAll: vi.fn().mockReturnValue([
-        { id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' },
-      ]),
-      find: vi.fn().mockReturnValue({ id: 'openai/gpt-4', name: 'GPT-4' }),
-      getError: vi.fn().mockReturnValue(null),
-    }),
+  ModelRuntime: {
+    create: vi.fn().mockResolvedValue(modelRuntime),
   },
   DefaultResourceLoader: vi.fn().mockImplementation((opts: { cwd: string; agentDir: string }) => {
     resourceLoaderInstances.push({ cwd: opts.cwd, agentDir: opts.agentDir });
@@ -154,6 +152,20 @@ describe('PiService', () => {
   });
 
   describe('createSession', () => {
+    it('creates one configured ModelRuntime and passes it to AgentSession creation', async () => {
+      const { createAgentSession, ModelRuntime } = await import('@earendil-works/pi-coding-agent');
+
+      await service.createSession({ clientId: 'model-runtime-client' });
+
+      expect(ModelRuntime.create).toHaveBeenCalledWith({
+        authPath: '/tmp/pi-agent/auth.json',
+        modelsPath: '/tmp/pi-agent/models.json',
+      });
+      expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
+        modelRuntime,
+      }));
+    });
+
     it('should create a session with default options', async () => {
       const session = await service.createSession({ clientId: 'client-1' });
       expect(session).toBeDefined();

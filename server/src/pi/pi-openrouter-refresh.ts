@@ -15,7 +15,7 @@
  *   SDK at request time.
  * - The fetched catalogue (model ids + public metadata only) is cached under
  *   ~/.pi-web-ui/pi-openrouter-models.json and registered into the running
- *   ModelRegistry via registerProvider(). The snapshot/diff helpers are shared
+ *   ModelRuntime via registerProvider(). The snapshot/diff helpers are shared
  *   with the OpenCode automation (they are provider-agnostic).
  * - The cache and snapshot contain model ids and public pricing/capability data
  *   only — never credentials.
@@ -86,7 +86,7 @@ export interface PiModelDef {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
-/** Provider block ready for ModelRegistry.registerProvider('openrouter', ...). */
+/** Provider block ready for ModelRuntime.registerProvider('openrouter', ...). */
 export interface OpenRouterProviderConfig {
   baseUrl: string;
   api: 'openai-completions';

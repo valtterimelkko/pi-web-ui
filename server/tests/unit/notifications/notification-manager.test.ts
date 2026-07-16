@@ -17,6 +17,14 @@ import type {
 const NOW = '2026-06-29T00:00:00.000Z';
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+async function waitFor(condition: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for notification delivery');
+    await wait(10);
+  }
+}
+
 // Real prod-derived Pi dual-id shapes (plan §2): basename (live sidebar id) and
 // bare uuid (reloaded sidebar id / canonical opt-in key), sharing one `.jsonl` path.
 const PI_UUID = '019f23d5-624d-7ca3-b34c-53b6732c2b44';
@@ -291,7 +299,12 @@ describe('NotificationManager', () => {
       await h.mgr.init();
       await h.mgr.optIn(piOptIn());
       h.pi.emit('/sessions/s1', agentEnd('s1'));
-      await wait(60); // debounce flush → drain #1 (attempt 1, non-terminal)
+      // Wait for the asynchronous debounce + first drain rather than assuming
+      // the event loop will run it within a fixed wall-clock window.
+      await waitFor(() => h.store.listPending()[0]?.delivery.attempts === 1);
+      // drain() coalesces concurrent callers, so first join any in-flight
+      // debounce-triggered drain before forcing attempts two and three.
+      await h.mgr.drain();
       await h.mgr.drain(); // drain #2 (attempt 2, non-terminal)
       await h.mgr.drain(); // drain #3 (attempt 3 → terminal → failed)
       expect(h.store.listPending()).toHaveLength(0);

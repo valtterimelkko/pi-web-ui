@@ -42,7 +42,7 @@ Good first choices:
 ## 4. Install base prerequisites
 
 ### Linux or macOS
-- Node.js 20+
+- Node.js 22.19+
 - npm
 - git
 
@@ -83,7 +83,7 @@ For runtime trade-offs, read [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md).
 ```bash
 git clone git@github.com:valtterimelkko/pi-web-ui.git
 cd pi-web-ui
-npm install
+npm ci --include=dev
 ```
 
 ## 7. Create your local config

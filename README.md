@@ -114,7 +114,7 @@ Best if you already use several of these tools and want Pi Web UI to become your
 2. Choose one runtime from [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md)
 3. Copy `.env.example` to `.env`
 4. Set your login password and other minimum config
-5. Run `npm install` and `npm run dev`
+5. Run `npm ci --include=dev` and `npm run dev`
 6. Open the local UI and create your first session
 
 ## Companion ecosystem

@@ -1,8 +1,7 @@
 import {
   createAgentSession,
   SessionManager,
-  AuthStorage,
-  ModelRegistry,
+  ModelRuntime,
   DefaultResourceLoader,
   type AgentSession,
   type AgentSessionEvent,
@@ -79,8 +78,8 @@ export interface CreateSessionOptions {
 }
 
 export class PiService {
-  private authStorage: AuthStorage;
-  private modelRegistry: ModelRegistry;
+  private modelRuntime: ModelRuntime | null = null;
+  private initialization: Promise<void> | null = null;
   private resourceLoader: DefaultResourceLoader;
   private sessions: Map<string, AgentSession> = new Map();
   private clientSessionMap: Map<string, string> = new Map(); // clientId -> sessionId
@@ -93,42 +92,6 @@ export class PiService {
   }
 
   constructor() {
-    this.authStorage = AuthStorage.create(config.piAgentDir
-      ? `${config.piAgentDir}/auth.json`
-      : undefined);
-    
-    // Explicitly register DeepSeek API key from environment if available.
-    // The Pi SDK auto-detects env vars, but the web UI server may run in a
-    // non-interactive context (systemd, npm scripts) that doesn't source
-    // shell profiles like ~/.bashrc where the key might be exported.
-    const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
-    if (deepseekApiKey) {
-      this.authStorage.setRuntimeApiKey('deepseek', deepseekApiKey);
-      // Persist to auth.json so future restarts don't depend on the env var.
-      // This matches how GitHub Copilot and other OAuth providers work:
-      // once authenticated, the credential lives in auth.json and is
-      // available to both CLI and web UI regardless of shell environment.
-      if (!this.authStorage.has('deepseek')) {
-        this.authStorage.set('deepseek', { type: 'api_key', key: deepseekApiKey });
-      }
-    }
-    
-    this.modelRegistry = ModelRegistry.create(this.authStorage);
-    
-    // Log any ModelRegistry errors (e.g., models.json issues)
-    const modelError = this.modelRegistry.getError();
-    if (modelError) {
-      logger.error('[PiService] ModelRegistry error:', modelError);
-    }
-    
-    // Log loaded providers at startup
-    const allModels = this.modelRegistry.getAll();
-    const availableModels = this.modelRegistry.getAvailable();
-    const allProviders = [...new Set(allModels.map(m => m.provider))];
-    const availableProviders = [...new Set(availableModels.map(m => m.provider))];
-    logger.info('[PiService] All providers loaded:', allProviders.join(', '));
-    logger.info('[PiService] Available providers (with auth):', availableProviders.join(', '));
-    
     this.resourceLoader = new DefaultResourceLoader({
       cwd: process.cwd(),
       agentDir: config.piAgentDir || `${process.cwd()}/.pi/agent`,
@@ -136,13 +99,52 @@ export class PiService {
   }
 
   async initialize(): Promise<void> {
-    await this.resourceLoader.reload();
+    if (!this.initialization) {
+      this.initialization = this.initializeOnce();
+    }
+    await this.initialization;
+  }
 
+  private async initializeOnce(): Promise<void> {
+    const agentDir = config.piAgentDir || `${process.cwd()}/.pi/agent`;
+    const modelRuntime = await ModelRuntime.create({
+      authPath: `${agentDir}/auth.json`,
+      modelsPath: `${agentDir}/models.json`,
+    });
+    this.modelRuntime = modelRuntime;
+
+    // Keep the explicit service-environment override. ModelRuntime owns
+    // credential resolution and deliberately keeps runtime keys in memory.
+    const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
+    if (deepseekApiKey) {
+      await modelRuntime.setRuntimeApiKey('deepseek', deepseekApiKey);
+    }
+
+    const modelError = modelRuntime.getError();
+    if (modelError) {
+      logger.error('[PiService] ModelRuntime error:', modelError);
+    }
+
+    const allModels = modelRuntime.getModels();
+    const availableModels = await modelRuntime.getAvailable();
+    const allProviders = [...new Set(allModels.map(m => m.provider))];
+    const availableProviders = [...new Set(availableModels.map(m => m.provider))];
+    logger.info('[PiService] All providers loaded:', allProviders.join(', '));
+    logger.info('[PiService] Available providers (with auth):', availableProviders.join(', '));
+
+    await this.resourceLoader.reload();
     this.logExtensions(this.resourceLoader.getExtensions());
 
     // Surface the cached OpenRouter catalogue (if any) so models survive a
     // server restart without a network fetch. See refreshOpenRouterModels().
     await this.loadOpenRouterCache();
+  }
+
+  private getModelRuntime(): ModelRuntime {
+    if (!this.modelRuntime) {
+      throw new Error('PiService has not been initialized');
+    }
+    return this.modelRuntime;
   }
 
   private logExtensions(extensions: ReturnType<DefaultResourceLoader['getExtensions']>): void {
@@ -173,6 +175,8 @@ export class PiService {
   }
 
   async createSession(options: CreateSessionOptions): Promise<AgentSession> {
+    await this.initialize();
+    const modelRuntime = this.getModelRuntime();
     const cwd = options.cwd || process.cwd();
     
     // Create session manager based on options
@@ -218,8 +222,7 @@ export class PiService {
 
     const { session } = await createAgentSession({
       sessionManager,
-      authStorage: this.authStorage,
-      modelRegistry: this.modelRegistry,
+      modelRuntime,
       resourceLoader: sessionResourceLoader,
       cwd,
     });
@@ -352,8 +355,9 @@ export class PiService {
     await fs.unlink(sessionPath);
   }
 
-  async getAvailableModels(): Promise<ReturnType<ModelRegistry['getAvailable']>> {
-    const models = this.modelRegistry.getAvailable();
+  async getAvailableModels() {
+    await this.initialize();
+    const models = await this.getModelRuntime().getAvailable();
 
     // Log available providers for debugging
     const providers = [...new Set(models.map(m => m.provider))];
@@ -364,13 +368,13 @@ export class PiService {
   }
 
   /**
-   * Register an OpenRouter provider config into the live ModelRegistry so its
+   * Register an OpenRouter provider config into the live ModelRuntime so its
    * models appear in the picker and route via the Pi SDK's built-in OpenRouter
    * support (env-detected key + attribution headers). No literal secret is
    * stored: the config uses an env-reference resolved lazily by the SDK.
    */
   registerOpenRouterProvider(providerConfig: OpenRouterProviderConfig): void {
-    this.modelRegistry.registerProvider(OPENROUTER_PROVIDER, {
+    this.getModelRuntime().registerProvider(OPENROUTER_PROVIDER, {
       name: 'OpenRouter',
       baseUrl: providerConfig.baseUrl,
       api: providerConfig.api,
@@ -391,7 +395,7 @@ export class PiService {
     if (!config.piOpenrouterModelsEnabled) return;
     const cached = await readOpenRouterCache(config.piOpenrouterModelsCachePath);
     if (!cached || cached.models.length === 0) return;
-    if (!this.authStorage.hasAuth(OPENROUTER_PROVIDER)) {
+    if (!this.getModelRuntime().hasConfiguredAuth(OPENROUTER_PROVIDER)) {
       logger.info(
         '[PiService] OpenRouter catalogue cached but provider not authenticated (no key in auth.json or OPENROUTER_API_KEY); skipping registration',
       );
@@ -439,7 +443,8 @@ export class PiService {
     // Registration only matters when the provider is authenticated (key in
     // auth.json or OPENROUTER_API_KEY); otherwise the models are cached and
     // ready, and will appear once auth is configured.
-    const registered = this.authStorage.hasAuth(OPENROUTER_PROVIDER);
+    await this.initialize();
+    const registered = this.getModelRuntime().hasConfiguredAuth(OPENROUTER_PROVIDER);
     if (registered) {
       this.registerOpenRouterProvider(providerConfig);
     } else {
@@ -520,6 +525,7 @@ export class PiService {
   }
 
   async setModel(sessionId: string, modelId: string): Promise<void> {
+    await this.initialize();
     logger.info(`[PiService.setModel] Setting model for session ${sessionId} to ${modelId}`);
     
     const session = this.sessions.get(sessionId);
@@ -542,9 +548,9 @@ export class PiService {
     
     logger.info(`[PiService.setModel] Looking up model: provider=${provider}, name=${modelName}`);
     
-    const model = this.modelRegistry.find(provider, modelName);
+    const model = this.getModelRuntime().getModel(provider, modelName);
     if (!model) {
-      logger.error(`[PiService.setModel] Model not found in registry: ${modelId}`);
+      logger.error(`[PiService.setModel] Model not found in runtime: ${modelId}`);
       logger.info(`[PiService.setModel] Available models will be logged on next getAvailableModels call`);
       throw new Error(`Model not found: ${modelId}`);
     }

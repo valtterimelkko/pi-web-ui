@@ -21,6 +21,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
       - name: Verify AGENTS.md and CLAUDE.md stay byte-identical
         run: node scripts/check-agent-guides.mjs
