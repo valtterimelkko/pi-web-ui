@@ -13,12 +13,15 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
+import type { Socket } from 'net';
 import { randomBytes } from 'crypto';
-import { writeFile, readFile, mkdir, unlink } from 'fs/promises';
+import { writeFile, readFile, mkdir } from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { ErrorCode } from './error-codes.js';
+import { RequestBodyTooLargeError } from './request-body.js';
+import { closeServerWithGrace } from './server-shutdown.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createModelsRoutes, type ModelsRoutesDeps } from './routes/models.js';
 import { createHealthRoutes, type HealthRoutesDeps } from './routes/health.js';
@@ -30,6 +33,7 @@ import { RunReceiptManager } from './run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from './run-receipts/run-receipt-store.js';
 import { NotificationManager } from '../notifications/notification-manager.js';
 import { NotificationStore } from '../notifications/notification-store.js';
+import { NotificationIngressSpool } from '../notifications/notification-ingress-spool.js';
 import { ChannelRouter } from '../notifications/channels/notification-channel.js';
 import { pickNotificationChannel } from '../notifications/channel-factory.js';
 import { readPreferences, deriveLegacyArrays } from '../routes/preferences.js';
@@ -44,6 +48,7 @@ import type { SessionRegistryManager } from '../session-registry.js';
 import type { PiService } from '../pi/pi-service.js';
 import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
+import { bindOwnerOnlyUnixSocket, UnixSocketOwner } from './unix-socket-owner.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -75,6 +80,8 @@ export interface InternalApiConfig {
   pinExpiryIntervalMs?: number;
   /** Enable the API (default: true if config present) */
   enabled?: boolean;
+  /** Maximum graceful shutdown wait before persistent clients are closed. */
+  shutdownGraceMs?: number;
   /** Callback invoked when a session is created via the API */
   onSessionCreated?: (sessionId: string, sessionPath: string, runtime: string) => void;
 }
@@ -103,6 +110,10 @@ export class InternalApiServer {
   private piService: PiService;
   private runReceiptManager: RunReceiptManager | null = null;
   private notificationManager: NotificationManager | null = null;
+  private socketOwner: UnixSocketOwner | null = null;
+  private sessionRoutesShutdown: (() => Promise<void>) | null = null;
+  private stopPromise: Promise<void> | null = null;
+  private readonly connections = new Set<Socket>();
 
   // Unique ID for this internal API's Pi SDK sessions
   private internalClientId: string;
@@ -134,7 +145,10 @@ export class InternalApiServer {
   async start(): Promise<void> {
     const socketPath = this.config.socketPath || DEFAULT_SOCKET_PATH;
     const tokenPath = this.config.tokenPath || DEFAULT_TOKEN_PATH;
+    const socketOwner = new UnixSocketOwner(socketPath);
+    await socketOwner.prepareForBind();
 
+    try {
     // Generate or load API key
     if (!this.apiKey) {
       this.apiKey = await this.resolveApiKey(tokenPath);
@@ -169,6 +183,8 @@ export class InternalApiServer {
       claudeSessionDir: config.claudeSessionDir,
       antigravitySessionDir: config.antigravitySessionDir,
     });
+    this.sessionRoutesShutdown = sessionRoutes.shutdown;
+    await sessionRoutes.ready;
 
     const modelsDeps: ModelsRoutesDeps = {
       piService: this.piService,
@@ -200,13 +216,15 @@ export class InternalApiServer {
     // Notification layer (Telegram on agent_end; explicit POST). Inert when
     // NOTIFICATIONS_ENABLED is off: no observers are attached and the outbox is
     // not drained. Credentials come from env only (never committed).
-    const notificationStore = new NotificationStore(config.notificationsDir || DEFAULT_NOTIFICATIONS_DIR);
+    const notificationsDir = config.notificationsDir || DEFAULT_NOTIFICATIONS_DIR;
+    const notificationStore = new NotificationStore(notificationsDir);
     const notificationRouter = new ChannelRouter();
     notificationRouter.register(
       pickNotificationChannel({
         validationMode: config.validationMode,
         telegramBotToken: config.telegramBotToken,
         telegramChatId: config.telegramChatId,
+        timeoutMs: config.notificationsChannelTimeoutMs,
       }),
     );
     const notificationManager = new NotificationManager({
@@ -223,6 +241,8 @@ export class InternalApiServer {
       publicBaseUrl: config.notificationsPublicBaseUrl ?? config.allowedOrigins[0],
       debounceMs: config.notificationsDebounceMs,
       maxAttempts: config.notificationsMaxDeliveryAttempts,
+      ingressSpool: new NotificationIngressSpool(path.join(notificationsDir, 'ingress')),
+      ingressPollMs: config.notificationsIngressPollMs,
       // Live-resolve the renamed display name (web-ui-prefs.json) so the
       // notification header reflects a rename even after opt-in. Best-effort:
       // a read failure falls back through the snapshot label → runtime label.
@@ -256,7 +276,7 @@ export class InternalApiServer {
       // CORS for local development (permissive because local-only)
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, PATCH, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Verbosity');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Verbosity, Idempotency-Key');
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -281,16 +301,59 @@ export class InternalApiServer {
             diagnosticsRoutes,
             eventTypesRoutes,
             notificationRoutes,
+          }).catch((error) => {
+            const tooLarge = error instanceof RequestBodyTooLargeError;
+            const malformedPath = error instanceof URIError;
+            if (tooLarge || malformedPath) {
+              logger.warn(`Internal API request rejected: ${error instanceof Error ? error.message : String(error)}`);
+            } else {
+              logger.errorObject('Internal API request failed', error);
+            }
+            if (res.headersSent) {
+              res.destroy(error instanceof Error ? error : undefined);
+              return;
+            }
+            sendJson(res, tooLarge ? 413 : malformedPath ? 400 : 500, {
+              error: tooLarge ? error.message : malformedPath ? 'Malformed URL path encoding.' : 'Internal API request failed.',
+              code: tooLarge
+                ? ErrorCode.PAYLOAD_TOO_LARGE
+                : malformedPath ? ErrorCode.INVALID_REQUEST : ErrorCode.INTERNAL_ERROR,
+            });
           });
         });
       });
     });
+    this.server.on('connection', (socket) => {
+      this.connections.add(socket);
+      socket.once('close', () => this.connections.delete(socket));
+    });
 
-    // Bind to Unix socket
+    // Bind under the process-lifetime ownership lock. Node removes its own Unix
+    // socket on close; the lock prevents a cooperative successor from binding
+    // the pathname until shutdown has completed.
     await this.bindToSocket(socketPath);
+    await socketOwner.captureOwnership();
+    this.socketOwner = socketOwner;
 
     logger.info(`[InternalAPI] Listening on Unix socket: ${socketPath}`);
     logger.info(`[InternalAPI] API token ready at: ${tokenPath}`);
+    } catch (error) {
+      const notificationManager = this.notificationManager;
+      notificationManager?.shutdown();
+      await notificationManager?.waitForIdle();
+      this.notificationManager = null;
+      if (this.sessionRoutesShutdown) {
+        await this.sessionRoutesShutdown().catch(() => { /* preserve startup error */ });
+        this.sessionRoutesShutdown = null;
+      }
+      if (this.runReceiptManager) {
+        await this.runReceiptManager.shutdown().catch(() => { /* preserve startup error */ });
+        this.runReceiptManager = null;
+      }
+      await this.closeHttpServer().catch(() => { /* preserve startup error */ });
+      await socketOwner.release().catch(() => { /* preserve startup error */ });
+      throw error;
+    }
   }
 
   /**
@@ -302,25 +365,39 @@ export class InternalApiServer {
   }
 
   async stop(): Promise<void> {
-    this.notificationManager?.shutdown();
-    this.notificationManager = null;
-    if (this.runReceiptManager) {
-      await this.runReceiptManager.shutdown();
-      this.runReceiptManager = null;
-    }
-    return new Promise((resolve) => {
-      if (!this.server) {
-        resolve();
-        return;
-      }
+    if (!this.stopPromise) this.stopPromise = this.stopInternal();
+    return this.stopPromise;
+  }
 
-      this.server.close(() => {
-        const socketPath = this.config.socketPath || DEFAULT_SOCKET_PATH;
-        unlink(socketPath).catch(() => { /* socket may not exist */ });
-        logger.info('[InternalAPI] Server stopped');
-        resolve();
-      });
-    });
+  private async stopInternal(): Promise<void> {
+    const failures: unknown[] = [];
+    try {
+      const notificationManager = this.notificationManager;
+      notificationManager?.shutdown();
+      await notificationManager?.waitForIdle().catch((error) => failures.push(error));
+      this.notificationManager = null;
+      if (this.sessionRoutesShutdown) {
+        await this.sessionRoutesShutdown().catch((error) => failures.push(error));
+        this.sessionRoutesShutdown = null;
+      }
+      if (this.runReceiptManager) {
+        await this.runReceiptManager.shutdown().catch((error) => failures.push(error));
+        this.runReceiptManager = null;
+      }
+      await this.closeHttpServer().catch((error) => failures.push(error));
+    } finally {
+      await this.socketOwner?.release().catch((error) => failures.push(error));
+      this.socketOwner = null;
+    }
+    logger.info('[InternalAPI] Server stopped');
+    if (failures.length > 0) throw new AggregateError(failures, 'Internal API shutdown encountered errors');
+  }
+
+  private async closeHttpServer(): Promise<void> {
+    const server = this.server;
+    this.server = null;
+    if (!server?.listening) return;
+    await closeServerWithGrace(server, this.connections, this.config.shutdownGraceMs ?? 2000);
   }
 
   // ── Routing ──────────────────────────────────────────────────────────────
@@ -616,9 +693,16 @@ export class InternalApiServer {
       }
 
       case 'notifications': {
-        // POST /api/v1/notifications — explicit emit (Agent OS / scripts)
-        // GET  /api/v1/notifications — recent delivery log (ops/debug)
-        if (req.method === 'POST') {
+        // POST /api/v1/notifications — explicit durable acceptance
+        // GET  /api/v1/notifications — recent delivery log
+        // GET  /api/v1/notifications/:id — one delivery status
+        if (id) {
+          if (req.method === 'GET') {
+            await deps.notificationRoutes.handleGetDeliveryStatus(req, res, decodeURIComponent(id));
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+        } else if (req.method === 'POST') {
           await deps.notificationRoutes.handleExplicitNotify(req, res);
         } else if (req.method === 'GET') {
           await deps.notificationRoutes.handleGetRecentDeliveries(req, res, parsed.query);
@@ -641,28 +725,9 @@ export class InternalApiServer {
     const dir = path.dirname(socketPath);
     await mkdir(dir, { recursive: true, mode: 0o700 });
 
-    // Remove existing socket if stale
-    try {
-      await unlink(socketPath);
-    } catch {
-      // Doesn't exist, fine
-    }
-
-    return new Promise((resolve, reject) => {
-      this.server!.listen(socketPath, () => {
-        // Set restrictive permissions
-        import('fs').then((fs) => {
-          fs.chmod(socketPath, 0o600, (err) => {
-            if (err) logger.warn(`[InternalAPI] Failed to set socket permissions:`, err.message);
-          });
-        });
-        resolve();
-      });
-
-      this.server!.on('error', (err) => {
-        reject(err);
-      });
-    });
+    // Do not advertise readiness until owner-only permissions are confirmed.
+    if (!this.server) throw new Error('Internal API HTTP server was not initialized.');
+    await bindOwnerOnlyUnixSocket(this.server, socketPath);
   }
 
   // ── API key management ───────────────────────────────────────────────────

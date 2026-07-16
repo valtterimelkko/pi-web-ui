@@ -2,118 +2,146 @@
 /**
  * Ephemeral validation server.
  *
- * Boots a fully isolated, disposable Pi Web UI server for live validation so an
- * agent can validate changes against a real runtime **without touching the
- * user's running server, web UI, or real session data**.
- *
- * Isolation:
- *  - separate port, Unix socket, API token, and runtime companion ports
- *  - separate session registry, watch/pin/run-receipt/notification dirs, and
- *    Claude/Antigravity session dirs (all under a throwaway validation directory)
- *  - validation mode ON → session cleanup disabled and the real-session
- *    registry rebuild skipped, so booting can never delete real data
- *
- * Pi keeps its real agent dir (for auth/models); any Pi sessions created during
- * validation are ephemeral and should be deleted by the validator. Because
- * cleanup is disabled, nothing else is ever removed. Notification opt-ins and
- * run receipts are isolated so validation cannot rehydrate production state.
- *
- * Usage:
- *   npm run validate:server                 # boots, prints socket + token, stays up
- *   npm run validate:server -- --port 3092  # override the port
- *   npm run validate:server -- --env-file .env.production --env-key GLM_CODING_PLAN_TOKEN
- * Then point a validator at the printed socket/token, e.g.:
- *   npm run validate:long-horizon -- --socket <sock> --token-path <token> ...
- * Stop it with Ctrl-C (or kill the process); the socket is cleaned up on exit.
+ * Boots a disposable Pi Web UI server with its own socket, token, state dirs,
+ * and runtime companion ports. A no-argument launch now creates a short unique
+ * directory and selects available ports so concurrent agents cannot collide.
  */
 
 import os from 'node:os';
 import path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import {
   buildValidationIsolationEnv,
   loadValidationEnvFile,
   resolveValidationEnvFile,
   resolveValidationEnvKeys,
 } from '../server/src/live-validation/validation-server-env.js';
+import {
+  acquireValidationDirectoryLock,
+  assertSafeValidationDirectory,
+  createDefaultValidationDirectory,
+  reserveValidationPorts,
+} from '../server/src/live-validation/validation-server-options.js';
 
-function getFlag(flag: string): string | undefined {
-  const i = process.argv.indexOf(flag);
-  return i >= 0 ? process.argv[i + 1] : undefined;
+function getFlag(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : undefined;
 }
 
-const validationArgs = process.argv.slice(2);
-const validationEnvFile = resolveValidationEnvFile(validationArgs);
-const validationEnvKeys = resolveValidationEnvKeys(validationArgs);
-if (validationEnvFile) loadValidationEnvFile(validationEnvFile, validationEnvKeys);
-if (!validationEnvFile && validationEnvKeys.length > 0) {
-  throw new Error('--env-key requires --env-file (or PI_WEB_UI_VALIDATION_ENV_FILE).');
+function explicitPort(args: string[], flag: string, envName: string): number | undefined {
+  const value = getFlag(args, flag) ?? process.env[envName];
+  if (!value || value === '0') return undefined;
+  if (!/^\d+$/.test(value)) throw new Error(`${flag} must be a whole-number port.`);
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error(`${flag} must be an integer between 0 and 65535.`);
+  }
+  return parsed;
 }
 
-const validationDir = getFlag('--dir')
-  ?? process.env.PI_WEB_UI_VALIDATION_DIR
-  ?? path.join(os.homedir(), '.pi-web-ui', 'validation');
-const port = getFlag('--port') ?? process.env.PI_WEB_UI_VALIDATION_PORT ?? '3091';
-const claudeWsPort = getFlag('--claude-ws-port') ?? process.env.PI_WEB_UI_VALIDATION_CLAUDE_WS_PORT ?? '43110';
-const claudeHookPort = getFlag('--claude-hook-port') ?? process.env.PI_WEB_UI_VALIDATION_CLAUDE_HOOK_PORT ?? '43111';
-const opencodePort = getFlag('--opencode-port') ?? process.env.PI_WEB_UI_VALIDATION_OPENCODE_PORT ?? '44097';
+async function main(): Promise<void> {
+  const validationArgs = process.argv.slice(2);
+  const validationEnvFile = resolveValidationEnvFile(validationArgs);
+  const validationEnvKeys = resolveValidationEnvKeys(validationArgs);
+  if (validationEnvFile) loadValidationEnvFile(validationEnvFile, validationEnvKeys);
+  if (!validationEnvFile && validationEnvKeys.length > 0) {
+    throw new Error('--env-key requires --env-file (or PI_WEB_UI_VALIDATION_ENV_FILE).');
+  }
 
-for (const dir of [
-  'watches',
-  'pins',
-  'run-receipts',
-  'notifications',
-  'pi-sessions',
-  'workspace',
-  'opencode-workspace',
-  'claude-config',
-  'claude-channel-plugin',
-]) {
-  mkdirSync(path.join(validationDir, dir), { recursive: true });
+  const explicitDir = getFlag(validationArgs, '--dir') ?? process.env.PI_WEB_UI_VALIDATION_DIR;
+  const validationDir = explicitDir
+    ? path.resolve(explicitDir)
+    : createDefaultValidationDirectory(path.join(os.tmpdir(), 'pi-web-ui-validation'));
+  const defaultStateRoot = path.join(os.homedir(), '.pi-web-ui');
+  const productionFiles = [
+    process.env.INTERNAL_API_SOCKET_PATH ?? path.join(defaultStateRoot, 'internal-api.sock'),
+    process.env.INTERNAL_API_TOKEN_PATH ?? path.join(defaultStateRoot, 'internal-api-token'),
+    process.env.SESSION_REGISTRY_PATH ?? path.join(defaultStateRoot, 'session-registry.json'),
+  ];
+  const productionDirs = [
+    process.env.INTERNAL_API_WATCH_DIR ?? path.join(defaultStateRoot, 'watches'),
+    process.env.INTERNAL_API_RUN_RECEIPTS_DIR ?? path.join(defaultStateRoot, 'run-receipts'),
+    process.env.INTERNAL_API_PIN_DIR ?? path.join(defaultStateRoot, 'pins'),
+    process.env.NOTIFICATIONS_DIR ?? path.join(defaultStateRoot, 'notifications'),
+    process.env.CLAUDE_SESSION_DIR ?? path.join(defaultStateRoot, 'claude-sessions'),
+    process.env.ANTIGRAVITY_SESSION_DIR ?? path.join(defaultStateRoot, 'antigravity-sessions'),
+  ];
+  assertSafeValidationDirectory(validationDir, [
+    ...productionFiles,
+    ...productionDirs.map((dir) => path.join(dir, '.production-state-marker')),
+  ]);
+  const directoryLock = acquireValidationDirectoryLock(validationDir);
+  process.once('exit', () => directoryLock.release());
+  if (!explicitDir) {
+    process.once('exit', () => rmSync(validationDir, { recursive: true, force: true }));
+  }
+
+  try {
+    const portReservation = await reserveValidationPorts([
+      explicitPort(validationArgs, '--port', 'PI_WEB_UI_VALIDATION_PORT'),
+      explicitPort(validationArgs, '--claude-ws-port', 'PI_WEB_UI_VALIDATION_CLAUDE_WS_PORT'),
+      explicitPort(validationArgs, '--claude-hook-port', 'PI_WEB_UI_VALIDATION_CLAUDE_HOOK_PORT'),
+      explicitPort(validationArgs, '--opencode-port', 'PI_WEB_UI_VALIDATION_OPENCODE_PORT'),
+    ], path.join(os.tmpdir(), 'pi-web-ui-validation-port-locks'));
+    process.once('exit', () => portReservation.release());
+    const [port, claudeWsPort, claudeHookPort, opencodePort] = portReservation.ports.map(String);
+
+    for (const dir of [
+      'watches',
+      'pins',
+      'run-receipts',
+      'notifications',
+      'pi-sessions',
+      'workspace',
+      'opencode-workspace',
+      'claude-config',
+      'claude-channel-plugin',
+    ]) {
+      mkdirSync(path.join(validationDir, dir), { recursive: true, mode: 0o700 });
+    }
+
+    const isolationEnv = buildValidationIsolationEnv({
+      validationDir,
+      port,
+      claudeWsPort,
+      claudeHookPort,
+      opencodePort,
+    });
+    const socketPath = path.join(validationDir, 'internal-api.sock');
+    const tokenPath = path.join(validationDir, 'internal-api-token');
+
+    // Set isolation before importing the server: config reads env at import time.
+    Object.assign(process.env, isolationEnv);
+
+    console.error('────────────────────────────────────────────────────────');
+    console.error(' Pi Web UI — EPHEMERAL VALIDATION SERVER');
+    console.error(' (isolated & disposable; your real server is untouched)');
+    console.error('────────────────────────────────────────────────────────');
+    console.error(` port        : ${port}`);
+    console.error(` socket      : ${socketPath}`);
+    console.error(` token       : ${tokenPath}`);
+    console.error(` dir         : ${validationDir}`);
+    console.error(` env file    : ${validationEnvFile ?? '(default .env only)'}`);
+    console.error(` env keys    : ${validationEnvKeys.join(', ') || '(none)'}`);
+    console.error(` claude ws   : ${claudeWsPort}`);
+    console.error(` claude hook : ${claudeHookPort}`);
+    console.error(` opencode    : ${opencodePort}`);
+    console.error('');
+    console.error(' Point a validator at it, e.g.:');
+    console.error(`   npm run validate:long-horizon -- --socket ${socketPath} --token-path ${tokenPath} ...`);
+    console.error(' Stop with Ctrl-C.');
+    console.error('────────────────────────────────────────────────────────');
+
+    // Imported native dependencies must not see this wrapper's flags.
+    process.argv = process.argv.slice(0, 2);
+    await import('../server/src/index.js');
+  } catch (error) {
+    directoryLock.release();
+    throw error;
+  }
 }
 
-const isolationEnv = buildValidationIsolationEnv({
-  validationDir,
-  port,
-  claudeWsPort,
-  claudeHookPort,
-  opencodePort,
-});
-const socketPath = path.join(validationDir, 'internal-api.sock');
-const tokenPath = path.join(validationDir, 'internal-api-token');
-
-// Set the isolation env BEFORE importing the server (config reads env at import).
-// These assignments intentionally win over the shell, .env, and --env-file.
-Object.assign(process.env, isolationEnv);
-
-console.error('────────────────────────────────────────────────────────');
-console.error(' Pi Web UI — EPHEMERAL VALIDATION SERVER');
-console.error(' (isolated & disposable; your real server is untouched)');
-console.error('────────────────────────────────────────────────────────');
-console.error(` port        : ${port}`);
-console.error(` socket      : ${socketPath}`);
-console.error(` token       : ${tokenPath}`);
-console.error(` dir         : ${validationDir}`);
-console.error(` env file    : ${validationEnvFile ?? '(default .env only)'}`);
-console.error(` env keys    : ${validationEnvKeys.join(', ') || '(none)'}`);
-console.error(` claude ws   : ${claudeWsPort}`);
-console.error(` claude hook : ${claudeHookPort}`);
-console.error(` opencode    : ${opencodePort}`);
-console.error('');
-console.error(' Point a validator at it, e.g.:');
-console.error(`   npm run validate:long-horizon -- --socket ${socketPath} --token-path ${tokenPath} ...`);
-console.error(' Stop with Ctrl-C.');
-console.error('────────────────────────────────────────────────────────');
-
-// Some native dependencies inspect process.argv at import time. Keep validation
-// server flags local to this wrapper so imported server modules don't interpret
-// flags like --dir as their own options.
-process.argv = process.argv.slice(0, 2);
-
-// Booting the server entry runs start() and registers its own SIGINT/SIGTERM
-// shutdown (which unlinks the socket). Importing after env is set is what makes
-// the isolation take effect. (No top-level await — tsx transforms to CJS.)
-import('../server/src/index.js').catch((err) => {
-  console.error('[validation-server] Failed to boot:', err instanceof Error ? (err.stack ?? err.message) : String(err));
+main().catch((error) => {
+  console.error('[validation-server] Failed to boot:', error instanceof Error ? (error.stack ?? error.message) : String(error));
   process.exit(1);
 });

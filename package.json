@@ -26,9 +26,11 @@
     "opencode:refresh-models": "npx tsx scripts/opencode-refresh-models.ts",
     "pi:refresh-models": "npx tsx scripts/pi-refresh-openrouter-models.ts",
     "debug:where": "node scripts/debug-where.mjs",
+    "internal-api:wait": "node scripts/wait-for-internal-api.mjs",
+    "production:lock": "bash scripts/with-production-lock.sh",
     "docs:sync-agent-guides": "node scripts/sync-agent-guides.mjs",
     "docs:check-agent-guides": "node scripts/check-agent-guides.mjs",
-    "lint": "eslint . --ext .ts,.tsx",
+    "lint": "eslint . --ext .ts,.tsx && eslint scripts/notify-client.mjs scripts/wait-for-internal-api.mjs",
     "typecheck": "npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared",
     "validate:proxy": "npx tsx scripts/validation-logging-proxy.ts",
     "postinstall": "node scripts/patch-pi-codex-compaction-session-id.mjs"

@@ -77,18 +77,23 @@ Always start by asking the server what is available now and which contract versi
 - `GET /api/v1/capabilities` — includes `contract.name`, `contract.majorVersion`, and `contract.contractVersion`
 - `GET /api/v1/models`
 
-Useful debugging/introspection and model-control additions landed in contract `1.3.0`, `1.4.0`, `1.5.0`, `1.6.0`, and `1.7.0`:
+Useful debugging/introspection, notification, and model-control additions landed in contract `1.3.0` through `1.8.0`:
 
 - `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off.
 - `GET /api/v1/events/types` — machine-readable catalogue of normalized event kinds on the `/events` stream.
 - `GET /api/v1/sessions/:id/transcript?view=screen` — a read-only “what the user sees” projection for a finished or in-progress session, without browser automation.
-- `POST /api/v1/notifications` and `GET /api/v1/notifications` — explicit operator notify + recent delivery log when your orchestrator wants a deterministic ping or wants to inspect notification failures.
+- `POST /api/v1/notifications`, `GET /api/v1/notifications/:id`, and `GET /api/v1/notifications` — durable explicit acceptance, pollable delivery status, and recent delivery history. Reuse one `Idempotency-Key` across retries (contract `1.8.0+`).
 - `POST/DELETE/GET /api/v1/sessions/:id/notifications...` — opt a child session into `agent_end` notifications and verify the opt-in/delivery state.
 - `GET /api/v1/runs/:runId` — durable run receipt lookup for accepted, detached, or retried dispatches.
 - `GET /api/v1/models` — model-specific `thinkingLevels`; use this before requesting `max` for Claude or Pi sessions.
 - `POST /api/v1/sessions/:id/control` with `{action:"set_thinking_level",level:"max"}` — available when the selected model advertises `max` (contract `1.7.0+`).
 
 These are especially helpful during orchestration setup or when a child session behaves unexpectedly, because they let you inspect the server without shell access.
+
+This is a trusted same-host multi-client API, not a multi-tenant boundary: every
+client with the shared bearer token can inspect and control every session. Keep
+per-orchestration ownership in your caller state rather than assuming server-side
+RBAC.
 
 This lets you decide:
 - which runtimes are installed and healthy

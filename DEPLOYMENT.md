@@ -156,6 +156,8 @@ Prerequisites:
 | `NOTIFICATIONS_TAIL_MAX_CHARS` | `1200` | assistant-tail length before truncation |
 | `NOTIFICATIONS_PUBLIC_BASE_URL` | first `ALLOWED_ORIGINS` | base URL used for deep links back into the session |
 | `NOTIFICATIONS_MAX_DELIVERY_ATTEMPTS` | `5` | retry cap before a delivery is marked failed |
+| `NOTIFICATIONS_INGRESS_POLL_MS` | `5000` | positive interval for draining terminal-client spool records |
+| `NOTIFICATIONS_CHANNEL_TIMEOUT_MS` | `10000` | positive per-attempt Telegram request timeout, including body read |
 | `TELEGRAM_BOT_TOKEN` | unset | Telegram bot token; secret, keep only in uncommitted env/config |
 | `TELEGRAM_CHAT_ID` | unset | operator chat id |
 
@@ -438,19 +440,35 @@ npm run build
 
 ## Deploy / Redeploy Flow
 
+Serialize the entire build/restart operation so two trusted local agents cannot
+interleave production control. The wrapper takes an argument vector (never an
+`eval` string), holds `~/.pi-web-ui/production-control.lock` for the command
+lifetime, rejects unsafe lock paths, and preserves the command exit status:
+
 ```bash
-npm install
-npm run build
-sudo systemctl restart pi-web-ui
-sudo systemctl status pi-web-ui
+npm run production:lock -- bash -lc '
+  npm install &&
+  npm run lint &&
+  npm run typecheck &&
+  npm test &&
+  npm run build &&
+  sudo systemctl restart pi-web-ui &&
+  sudo systemctl status pi-web-ui --no-pager &&
+  npm run internal-api:wait
+'
 ```
 
-Recommended post-redeploy validation:
+`internal-api:wait` verifies the expected `pi-web-ui-internal-api` identity on
+the Unix socket, not merely the public HTTP listener. Its default deadline is
+60 seconds. Override `PI_WEB_UI_WAIT_SOCKET`, `PI_WEB_UI_WAIT_TIMEOUT_MS`,
+`PI_WEB_UI_WAIT_INTERVAL_MS`, or `PI_WEB_UI_WAIT_REQUEST_TIMEOUT_MS` for a
+non-default install.
+
+The helpers do not deploy or restart anything by themselves. Production control
+still requires explicit operator authorization. A public readiness check can be
+run in addition after the Internal API is ready:
 
 ```bash
-npm run lint
-npm run typecheck
-npm test
 curl http://localhost:<port>/api/health/ready
 ```
 

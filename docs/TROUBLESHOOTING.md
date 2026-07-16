@@ -50,7 +50,7 @@ This is often the most token-efficient route for LLM agents because it avoids dr
 | **OpenCode** | Registry metadata in `~/.pi-web-ui/session-registry.json`; transcript storage is OpenCode-owned | `journalctl -u opencode-serve -f` if separate service, otherwise the main service log | Pi Web UI does not own the full OpenCode transcript. |
 | **Antigravity (agy)** | `~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl` (Pi-owned JSONL turn log) plus per-turn logs under `~/.pi-web-ui/antigravity-sessions/agy-logs/` | `journalctl -u pi-web-ui -f \| grep -i antigravity` | Each turn is one JSON line: prompt, response, model, conversationId, rawStdoutLength. The per-turn agy log records the actual `Print mode: conversation=<uuid>` target. |
 | **Antigravity conversation state** | `~/.gemini/antigravity-cli/conversations/<uuid>.db` (SQLite, agy-owned) | `agy --version`, `agy models` | The conversation UUID in the JSONL must match a `.db` file here for continuity to work. |
-| **Notification layer** | `~/.pi-web-ui/notifications/` | `journalctl -u pi-web-ui -f`, `GET /api/v1/notifications` | Contains opt-ins, durable outbox, and delivery log for Telegram notifications. |
+| **Notification layer** | `~/.pi-web-ui/notifications/` | `journalctl -u pi-web-ui -f`, `GET /api/v1/notifications` | Contains opt-ins, durable outbox/status ledger, and `ingress/` terminal-client spool. |
 | **Unified registry** | `~/.pi-web-ui/session-registry.json` | `journalctl -u pi-web-ui -f` | Cross-runtime source of truth for sidebar metadata. |
 | **Internal API** | `~/.pi-web-ui/internal-api.sock`, `~/.pi-web-ui/internal-api-token` | `journalctl -u pi-web-ui -f` | Useful when debugging local consumers of the backend API. |
 
@@ -106,7 +106,13 @@ socket rather than through the browser.
 ls -l ~/.pi-web-ui/internal-api.sock
 ls -l ~/.pi-web-ui/internal-api-token
 TOKEN=$(cat ~/.pi-web-ui/internal-api-token)
+npm run internal-api:wait
 ```
+
+A missing socket for a few seconds during restart is normal. The readiness helper
+waits for the expected API identity. If the enabled server remains up without an
+Internal API, treat startup as failed and inspect the journal for socket ownership,
+permission, or binding errors.
 
 ### Check runtime capabilities before dispatch
 
@@ -178,6 +184,9 @@ curl -s --unix-socket ~/.pi-web-ui/internal-api.sock \
 - **Opt-in recorded but no Telegram message arrives** → verify `NOTIFICATIONS_ENABLED=true`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and inspect delivery status/`lastError` via `GET /api/v1/notifications`.
 - **Telegram message arrives but deep link is wrong** → verify `NOTIFICATIONS_PUBLIC_BASE_URL` matches the actual browser URL operators open.
 - **Pending deliveries never clear after restart** → inspect `~/.pi-web-ui/notifications/` plus startup logs to confirm outbox rehydration and channel configuration.
+- **`scripts/notify.sh` says `queued locally`** → the API did not become ready within its bounded wait; inspect `~/.pi-web-ui/notifications/ingress/` (directory `0700`, records `0600`) and wait for the next startup/periodic drain.
+- **Explicit emit accepted but Telegram is absent** → `202` means durably queued, not delivered. Poll the response `statusUrl`/`Location`; check `lastError` and `NOTIFICATIONS_CHANNEL_TIMEOUT_MS`.
+- **Two deploys/restarts overlap** → run the complete authorized operation under `npm run production:lock -- <command> [args...]`; lock contention exits `75` rather than interleaving.
 
 ## Pi Coding Agent Path
 

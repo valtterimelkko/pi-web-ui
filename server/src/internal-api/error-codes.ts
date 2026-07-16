@@ -27,6 +27,7 @@ export const ErrorCode = {
   METHOD_NOT_ALLOWED: 'METHOD_NOT_ALLOWED',
   NOT_FOUND: 'NOT_FOUND',
   INVALID_REQUEST: 'INVALID_REQUEST',
+  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   SESSION_BUSY: 'SESSION_BUSY',
   SESSION_CREATE_FAILED: 'SESSION_CREATE_FAILED',
@@ -100,6 +101,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'e.g. POST /sessions without `runtime`, or detach:true with a streaming verbosity.',
     hint: 'Re-read the endpoint schema and resend with the required field(s).',
     docs: 'docs/INTERNAL-API.md',
+  },
+  [ErrorCode.PAYLOAD_TOO_LARGE]: {
+    httpStatus: 413,
+    description: 'The request body exceeds the endpoint limit.',
+    cause: 'A local client sent more data than the bounded Internal API parser accepts.',
+    hint: 'Reduce the payload or split batch work into smaller requests.',
+    docs: 'docs/INTERNAL-API-CONTRACT.md#error-code-catalog',
   },
   [ErrorCode.SESSION_NOT_FOUND]: {
     httpStatus: 404,
@@ -208,10 +216,10 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
   },
   [ErrorCode.IDEMPOTENCY_KEY_CONFLICT]: {
     httpStatus: 409,
-    description: 'An idempotency key was reused for a different prompt request.',
-    cause: 'The same key is scoped to a session and remains reserved during its replay TTL.',
-    hint: 'Retry the original request with the same payload, or choose a new key for a new prompt.',
-    docs: 'docs/INTERNAL-API.md#send-prompt',
+    description: 'An idempotency key was reused for a different request payload.',
+    cause: 'The same key remains reserved within the endpoint-specific scope and retention window.',
+    hint: 'Retry the original request with the same payload, or choose a new key for new work.',
+    docs: 'docs/INTERNAL-API-CONTRACT.md#error-code-catalog',
   },
 };
 

@@ -39,9 +39,11 @@ function queued(
   id: string,
   sessionId?: string,
   status: DeliveryRecord['status'] = 'pending',
+  ingress?: QueuedNotification['ingress'],
 ): QueuedNotification {
   return {
     notification: notification(id, sessionId),
+    ingress,
     delivery: {
       notificationId: id,
       channel: 'telegram',
@@ -116,13 +118,14 @@ describe('NotificationStore — durable persistence', () => {
     it('records a non-terminal failure (increments attempts, stays pending)', async () => {
       const store = new NotificationStore(dir);
       await store.init();
-      await store.enqueue(queued('n2', 's1'));
+      await store.enqueue(queued('n2', 's1', 'pending', { keyHash: 'retry-key', fingerprint: 'retry-body' }));
       await store.recordFailure('n2', 'boom', false);
       const pending = store.listPending();
       expect(pending).toHaveLength(1);
       expect(pending[0].delivery.attempts).toBe(1);
       expect(pending[0].delivery.lastError).toBe('boom');
       expect(pending[0].delivery.status).toBe('pending');
+      expect(store.getByIngressKeyHash('retry-key')?.notification.id).toBe('n2');
     });
 
     it('records a terminal failure → moves to the log as failed', async () => {
@@ -142,6 +145,56 @@ describe('NotificationStore — durable persistence', () => {
       await store.init();
       await expect(store.markSent('nope', '2026-06-29T00:00:00.000Z')).resolves.toBeUndefined();
       await expect(store.recordFailure('nope', 'x', true)).resolves.toBeUndefined();
+    });
+
+    it('finds a notification by server id or hashed ingress key across pending and terminal state', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      const ingress = { keyHash: 'key-hash', fingerprint: 'payload-hash' };
+      await store.enqueue(queued('lookup', undefined, 'pending', ingress));
+
+      expect(store.getById('lookup')?.delivery.status).toBe('pending');
+      expect(store.getByIngressKeyHash('key-hash')?.notification.id).toBe('lookup');
+
+      await store.markSent('lookup', '2026-06-29T00:00:10.000Z');
+      expect(store.getById('lookup')?.delivery.status).toBe('sent');
+      expect(store.getByIngressKeyHash('key-hash')?.delivery.status).toBe('sent');
+    });
+
+    it('atomically joins concurrent ingress reservations before reporting a duplicate', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      const item = queued('atomic', undefined, 'pending', { keyHash: 'atomic-key', fingerprint: 'same' });
+
+      const [first, second] = await Promise.all([
+        store.enqueueIdempotent(item),
+        store.enqueueIdempotent({ ...item, notification: { ...item.notification, id: 'other' } }),
+      ]);
+
+      expect([first.duplicate, second.duplicate].sort()).toEqual([false, true]);
+      expect(first.item.notification.id).toBe(second.item.notification.id);
+      const fresh = new NotificationStore(dir);
+      await fresh.init();
+      expect(fresh.listPending()).toHaveLength(1);
+    });
+
+    it('reconciles a crash snapshot where a terminal log write preceded outbox removal', async () => {
+      const duplicate = queued('transition', 's1');
+      const terminal = {
+        ...duplicate,
+        delivery: { ...duplicate.delivery, status: 'sent' as const, deliveredAt: '2026-06-29T00:00:10.000Z' },
+      };
+      await fs.writeFile(path.join(dir, 'outbox.json'), JSON.stringify([duplicate]));
+      await fs.writeFile(path.join(dir, 'delivery-log.json'), JSON.stringify([terminal]));
+
+      const store = new NotificationStore(dir);
+      await store.init();
+
+      expect(store.listPending()).toEqual([]);
+      expect(store.getById('transition')?.delivery.status).toBe('sent');
+      const fresh = new NotificationStore(dir);
+      await fresh.init();
+      expect(fresh.listPending()).toEqual([]);
     });
 
     it('survives a restart with a pending item still in the outbox', async () => {
@@ -165,7 +218,7 @@ describe('NotificationStore — durable persistence', () => {
 
   describe('delivery log', () => {
     it('caps the delivery log to the configured maximum (most-recent first)', async () => {
-      const store = new NotificationStore(dir, { maxDeliveryLog: 3 });
+      const store = new NotificationStore(dir, { maxDeliveryLog: 3, maxDeliveryRecords: 20 });
       await store.init();
       for (let i = 0; i < 6; i++) {
         await store.enqueue(queued(`n${i}`, 's1'));
@@ -175,6 +228,8 @@ describe('NotificationStore — durable persistence', () => {
       expect(log).toHaveLength(3);
       expect(log[0].notification.id).toBe('n5');
       expect(log[2].notification.id).toBe('n3');
+      // Pollable status/idempotency retention is wider than the recent-list view.
+      expect(store.getById('n0')?.delivery.status).toBe('sent');
     });
 
     it('listForSession returns pending + recent deliveries for that session only', async () => {
@@ -191,6 +246,21 @@ describe('NotificationStore — durable persistence', () => {
   });
 
   describe('atomicity & resilience', () => {
+    it('enforces a private state directory and refuses symlinked ledger files', async () => {
+      await fs.chmod(dir, 0o777);
+      const outside = path.join(os.tmpdir(), `pi-notification-outside-${process.pid}-${Date.now()}.json`);
+      await fs.writeFile(outside, JSON.stringify([queued('outside')]));
+      await fs.symlink(outside, path.join(dir, 'delivery-log.json'));
+
+      const store = new NotificationStore(dir);
+      await store.init();
+
+      expect((await fs.stat(dir)).mode & 0o777).toBe(0o700);
+      expect(store.listLog()).toEqual([]);
+      expect(await fs.readFile(outside, 'utf8')).toContain('outside');
+      await fs.rm(outside, { force: true });
+    });
+
     it('serializes concurrent writes without corrupting files', async () => {
       const store = new NotificationStore(dir);
       await store.init();

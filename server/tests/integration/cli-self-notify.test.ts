@@ -36,6 +36,11 @@ function buildServer(
   status: number,
 ): http.Server {
   const server = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/api/v1/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', contract: { name: 'pi-web-ui-internal-api' } }));
+      return;
+    }
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
@@ -43,7 +48,11 @@ function buildServer(
     req.on('end', () => {
       captured.push({ method: req.method, url: req.url, headers: req.headers, body });
       res.writeHead(status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', notification: { id: 'fake-id', createdAt: 'now' } }));
+      res.end(JSON.stringify({
+        status: 'accepted',
+        notification: { id: 'fake-id', createdAt: 'now' },
+        statusUrl: '/api/v1/notifications/fake-id',
+      }));
     });
   });
   return server;
@@ -92,7 +101,7 @@ describe('scripts/notify.sh — CLI self-notification helper', () => {
     tokenPath = path.join(dir, 'internal-api-token');
     await fs.writeFile(tokenPath, FAKE_TOKEN, { mode: 0o600 });
     captured = [];
-    server = buildServer(socketPath, captured, 200);
+    server = buildServer(socketPath, captured, 202);
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));
   });
 
@@ -105,18 +114,23 @@ describe('scripts/notify.sh — CLI self-notification helper', () => {
     return {
       PI_WEB_UI_NOTIFY_SOCKET: socketPath,
       PI_WEB_UI_NOTIFY_TOKEN_FILE: tokenPath,
+      PI_WEB_UI_NOTIFY_WAIT_MS: '1000',
+      PI_WEB_UI_NOTIFY_RETRY_MS: '20',
+      PI_WEB_UI_NOTIFY_SPOOL_DIR: path.join(dir, 'ingress'),
     };
   }
 
   it('POSTs a well-formed done notification to the explicit-emit endpoint', async () => {
     const res = await runScript(['done', 'restarted prod', 'all green; service restarted.'], env());
     expect(res.code).toBe(0);
+    expect(res.stderr).toContain('/api/v1/notifications/fake-id');
     expect(captured).toHaveLength(1);
     const req = captured[0];
     expect(req.method).toBe('POST');
     expect(req.url).toBe('/api/v1/notifications');
     expect(req.headers['authorization']).toBe(`Bearer ${FAKE_TOKEN}`);
     expect(req.headers['content-type']).toBe('application/json');
+    expect(req.headers['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/);
     expect(JSON.parse(req.body)).toEqual({
       title: '✅ Done: restarted prod',
       body: 'all green; service restarted.',
@@ -156,13 +170,82 @@ describe('scripts/notify.sh — CLI self-notification helper', () => {
     expect(JSON.parse(captured[0].body).body).toBe(tricky);
   });
 
-  it('exits non-zero with a helpful message when the socket is missing', async () => {
+  it('durably spools and exits successfully when the restart wait expires', async () => {
+    const spoolDir = path.join(dir, 'offline-ingress');
     const res = await runScript(
       ['done', 'x', 'y'],
-      { ...env(), PI_WEB_UI_NOTIFY_SOCKET: path.join(dir, 'does-not-exist.sock') },
+      {
+        ...env(),
+        PI_WEB_UI_NOTIFY_SOCKET: path.join(dir, 'does-not-exist.sock'),
+        PI_WEB_UI_NOTIFY_WAIT_MS: '0',
+        PI_WEB_UI_NOTIFY_SPOOL_DIR: spoolDir,
+      },
     );
-    expect(res.code).not.toBe(0);
-    expect(res.stderr).toContain('socket not found');
+    expect(res.code).toBe(0);
+    expect(res.stderr).toContain('queued locally');
+    const files = await fs.readdir(spoolDir);
+    expect(files).toHaveLength(1);
+    const queued = JSON.parse(await fs.readFile(path.join(spoolDir, files[0]), 'utf8')) as {
+      idempotencyKey: string;
+      title: string;
+    };
+    expect(queued.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(queued.title).toBe('✅ Done: x');
+  });
+
+  it('keeps an existing same-key spool record and refuses a conflicting overwrite', async () => {
+    const spoolDir = path.join(dir, 'collision-ingress');
+    const offlineEnv = {
+      ...env(),
+      PI_WEB_UI_NOTIFY_SOCKET: path.join(dir, 'offline.sock'),
+      PI_WEB_UI_NOTIFY_WAIT_MS: '0',
+      PI_WEB_UI_NOTIFY_SPOOL_DIR: spoolDir,
+      PI_WEB_UI_NOTIFY_IDEMPOTENCY_KEY: 'stable-key',
+    };
+
+    expect((await runScript(['done', 'same', 'payload'], offlineEnv)).code).toBe(0);
+    expect((await runScript(['done', 'same', 'payload'], offlineEnv)).code).toBe(0);
+    const [fileName] = await fs.readdir(spoolDir);
+    const recordPath = path.join(spoolDir, fileName);
+    const before = await fs.readFile(recordPath, 'utf8');
+
+    const conflict = await runScript(['done', 'same', 'different'], offlineEnv);
+    expect(conflict.code).not.toBe(0);
+    expect(conflict.stderr).toContain('conflict');
+    expect(await fs.readFile(recordPath, 'utf8')).toBe(before);
+  });
+
+  it('waits for a restarting server and submits once using the same durable key', async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const pending = runScript(['done', 'waited', 'ready now'], {
+      ...env(),
+      PI_WEB_UI_NOTIFY_WAIT_MS: '2000',
+      PI_WEB_UI_NOTIFY_RETRY_MS: '20',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    server = buildServer(socketPath, captured, 202);
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+
+    const res = await pending;
+    expect(res.code).toBe(0);
+    expect(captured).toHaveLength(1);
+  });
+
+  it('treats HTTP 429 as retryable and spools after the bounded wait', async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = buildServer(socketPath, captured, 429);
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const spoolDir = path.join(dir, 'rate-limited-ingress');
+
+    const res = await runScript(['done', 'x', 'y'], {
+      ...env(),
+      PI_WEB_UI_NOTIFY_WAIT_MS: '0',
+      PI_WEB_UI_NOTIFY_SPOOL_DIR: spoolDir,
+    });
+
+    expect(res.code).toBe(0);
+    expect(res.stderr).toContain('queued locally');
+    expect(await fs.readdir(spoolDir)).toHaveLength(1);
   });
 
   it('exits non-zero and surfaces the status when the server rejects (HTTP 4xx)', async () => {
@@ -174,5 +257,6 @@ describe('scripts/notify.sh — CLI self-notification helper', () => {
     const res = await runScript(['done', 'x', 'y'], env());
     expect(res.code).not.toBe(0);
     expect(res.stderr).toContain('HTTP 400');
+    await expect(fs.readdir(path.join(dir, 'ingress'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

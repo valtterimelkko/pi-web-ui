@@ -111,6 +111,39 @@ describe('TelegramChannel', () => {
       ).rejects.toThrow();
     });
 
+    it('bounds a hanging transport with the configured timeout', async () => {
+      const transport = makeTransport({
+        async post(_url, _body, signal) {
+          await new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          });
+          return { status: 200, ok: true, bodyText: '' };
+        },
+      });
+      const ch = new TelegramChannel({
+        botToken: FAKE_TOKEN,
+        chatId: FAKE_CHAT,
+        transport,
+        timeoutMs: 20,
+      });
+
+      await expect(ch.send(agentEndNotification())).rejects.toThrow(/timed out/i);
+    });
+
+    it('redacts the bot token from thrown transport errors', async () => {
+      const transport = makeTransport({
+        async post() {
+          throw new Error(`request to https://api.telegram.org/bot${FAKE_TOKEN}/sendMessage failed`);
+        },
+      });
+      const ch = new TelegramChannel({ botToken: FAKE_TOKEN, chatId: FAKE_CHAT, transport });
+
+      await expect(ch.send(agentEndNotification()).catch((error: Error) => {
+        expect(error.message).not.toContain(FAKE_TOKEN);
+        throw error;
+      })).rejects.toThrow(/<redacted>/);
+    });
+
     it('throws when used while not configured', async () => {
       const ch = new TelegramChannel({ botToken: undefined, chatId: undefined });
       await expect(ch.send(agentEndNotification())).rejects.toThrow(/not configured/i);

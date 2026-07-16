@@ -192,7 +192,8 @@ async function initialize(): Promise<void> {
         await internalApiServer.start();
         logger.info(`[InternalAPI] Started on Unix socket: ${config.internalApiSocketPath}`);
       } catch (err) {
-        logger.errorObject('Failed to start internal API', err);
+        logger.errorObject('Failed to start enabled internal API', err);
+        throw err;
       }
     }
   } catch (error) {

@@ -21,15 +21,16 @@ const TEXT_ELLIPSIS = '…';
  * fake that records the URL/body and returns a controlled response.
  */
 export interface TelegramTransport {
-  post(url: string, body: string): Promise<{ status: number; ok: boolean; bodyText: string }>;
+  post(url: string, body: string, signal?: AbortSignal): Promise<{ status: number; ok: boolean; bodyText: string }>;
 }
 
 export const defaultTelegramTransport: TelegramTransport = {
-  async post(url, body) {
+  async post(url, body, signal) {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
+      signal,
     });
     return { status: res.status, ok: res.ok, bodyText: await res.text() };
   },
@@ -39,6 +40,7 @@ export interface TelegramChannelOptions {
   botToken?: string;
   chatId?: string;
   transport?: TelegramTransport;
+  timeoutMs?: number;
 }
 
 export class TelegramChannel implements NotificationChannel {
@@ -46,11 +48,13 @@ export class TelegramChannel implements NotificationChannel {
   private readonly botToken?: string;
   private readonly chatId?: string;
   private readonly transport: TelegramTransport;
+  private readonly timeoutMs: number;
 
   constructor(opts: TelegramChannelOptions = {}) {
     this.botToken = opts.botToken;
     this.chatId = opts.chatId;
     this.transport = opts.transport ?? defaultTelegramTransport;
+    this.timeoutMs = opts.timeoutMs ?? 10_000;
   }
 
   isConfigured(): boolean {
@@ -70,12 +74,28 @@ export class TelegramChannel implements NotificationChannel {
       text,
       disable_web_page_preview: true,
     });
-    const res = await this.transport.post(url, body);
-    if (!res.ok || res.status < 200 || res.status >= 300) {
-      // The URL carries the token and the body could echo it; redact before
-      // any detail reaches a thrown error (and thus a log).
-      const detail = redact(res.bodyText, this.botToken).slice(0, 300);
-      throw new Error(`Telegram sendMessage failed: HTTP ${res.status}: ${detail}`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort(new Error(`Telegram sendMessage timed out after ${this.timeoutMs}ms`));
+    }, this.timeoutMs);
+    timer.unref?.();
+    try {
+      const res = await this.transport.post(url, body, controller.signal);
+      if (!res.ok || res.status < 200 || res.status >= 300) {
+        // The URL carries the token and the body could echo it; redact before
+        // any detail reaches a thrown error (and thus a log).
+        const detail = redact(res.bodyText, this.botToken).slice(0, 300);
+        throw new Error(`Telegram sendMessage failed: HTTP ${res.status}: ${detail}`);
+      }
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      const safe = redact(raw, this.botToken).slice(0, 500);
+      if (controller.signal.aborted) {
+        throw new Error(`Telegram sendMessage timed out after ${this.timeoutMs}ms`);
+      }
+      throw new Error(`Telegram sendMessage transport failed: ${safe}`);
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

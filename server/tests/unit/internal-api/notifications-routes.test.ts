@@ -14,11 +14,16 @@ import type { Notification, NotificationChannel } from '../../../src/notificatio
 
 // ── mock req/res (same shape as watch-routes.test.ts) ───────────────────────
 
-function createJsonReq(method: string, url: string, body?: unknown): IncomingMessage {
+function createJsonReq(
+  method: string,
+  url: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): IncomingMessage {
   const req = new PassThrough() as unknown as IncomingMessage;
   (req as { method?: string }).method = method;
   (req as { url?: string }).url = url;
-  (req as { headers?: Record<string, string> }).headers = { 'content-type': 'application/json' };
+  (req as { headers?: Record<string, string> }).headers = { 'content-type': 'application/json', ...headers };
   process.nextTick(() => {
     if (body !== undefined) (req as PassThrough).emit('data', Buffer.from(JSON.stringify(body)));
     (req as PassThrough).emit('end');
@@ -270,18 +275,79 @@ describe('notifications routes', () => {
   });
 
   describe('POST /notifications (explicit)', () => {
-    it('emits and delivers an explicit notification, returning its id', async () => {
+    it('durably accepts an explicit notification and returns a pollable status URL', async () => {
       const res = createMockRes();
       await routes.handleExplicitNotify(
         createJsonReq('POST', '/api/v1/notifications', { title: 'Deploy', body: 'shipped' }),
         res,
       );
-      expect(res.statusCode).toBe(200);
-      const body = json(res) as { notification: { id: string } };
+      expect(res.statusCode).toBe(202);
+      const body = json(res) as {
+        status: string;
+        duplicate: boolean;
+        notification: { id: string };
+        statusUrl: string;
+      };
+      expect(body.status).toBe('accepted');
+      expect(body.duplicate).toBe(false);
       expect(body.notification.id).toBeTruthy();
-      expect(channel.received).toHaveLength(1);
+      expect(body.statusUrl).toBe(`/api/v1/notifications/${body.notification.id}`);
+      await manager.drain();
       expect(channel.received[0].title).toBe('Deploy');
       expect(channel.received[0].kind).toBe('explicit');
+    });
+
+    it('deduplicates an identical Idempotency-Key and rejects a conflicting payload', async () => {
+      const key = '019f23d5-624d-7ca3-b34c-53b6732c2b44';
+      const first = createMockRes();
+      await routes.handleExplicitNotify(
+        createJsonReq('POST', '/api/v1/notifications', { title: 'Deploy', body: 'shipped' }, { 'idempotency-key': key }),
+        first,
+      );
+      const firstBody = json(first) as { notification: { id: string } };
+
+      const duplicate = createMockRes();
+      await routes.handleExplicitNotify(
+        createJsonReq('POST', '/api/v1/notifications', { title: 'Deploy', body: 'shipped' }, { 'idempotency-key': key }),
+        duplicate,
+      );
+      const duplicateBody = json(duplicate) as { duplicate: boolean; notification: { id: string } };
+      expect(duplicate.statusCode).toBe(202);
+      expect(duplicateBody.duplicate).toBe(true);
+      expect(duplicateBody.notification.id).toBe(firstBody.notification.id);
+
+      const conflict = createMockRes();
+      await routes.handleExplicitNotify(
+        createJsonReq('POST', '/api/v1/notifications', { title: 'Deploy', body: 'different' }, { 'idempotency-key': key }),
+        conflict,
+      );
+      expect(conflict.statusCode).toBe(409);
+      expect((json(conflict) as { code: string }).code).toBe('IDEMPOTENCY_KEY_CONFLICT');
+    });
+
+    it('returns one notification delivery by server notification id', async () => {
+      const accepted = createMockRes();
+      await routes.handleExplicitNotify(
+        createJsonReq('POST', '/api/v1/notifications', { title: 'Status', body: 'check' }),
+        accepted,
+      );
+      const id = (json(accepted) as { notification: { id: string } }).notification.id;
+      await manager.drain();
+
+      const status = createMockRes();
+      await routes.handleGetDeliveryStatus(
+        createJsonReq('GET', `/api/v1/notifications/${id}`),
+        status,
+        id,
+      );
+      expect(status.statusCode).toBe(200);
+      const statusBody = json(status) as { delivery: { notification: { id: string }; delivery: { status: string } } };
+      expect(statusBody.delivery.notification.id).toBe(id);
+      expect(statusBody.delivery.delivery.status).toBe('sent');
+
+      const missing = createMockRes();
+      await routes.handleGetDeliveryStatus(createJsonReq('GET', '/api/v1/notifications/missing'), missing, 'missing');
+      expect(missing.statusCode).toBe(404);
     });
 
     it('returns 400 INVALID_REQUEST when the body is missing required fields', async () => {
@@ -300,6 +366,7 @@ describe('notifications routes', () => {
         createJsonReq('POST', '/api/v1/notifications', { title: 'A', body: 'b' }),
         res_void(),
       );
+      await manager.drain();
       const res = createMockRes();
       await routes.handleGetRecentDeliveries(createJsonReq('GET', '/api/v1/notifications'), res, new URLSearchParams());
       expect(res.statusCode).toBe(200);

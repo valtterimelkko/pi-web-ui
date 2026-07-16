@@ -632,6 +632,19 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it('rejects more than 50 session creations in one batch', async () => {
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions/batch', {
+        sessions: Array.from({ length: 51 }, () => ({ runtime: 'pi' })),
+      });
+      const res = createMockRes();
+
+      await routes.handleBatchCreate(req, res);
+
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error).toMatch(/at most 50/i);
+    });
+
     it('creates multiple sessions in parallel and reports per-item results', async () => {
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions/batch', {
@@ -679,6 +692,19 @@ describe('createSessionRoutes orchestration endpoints', () => {
       const res = createMockRes();
       await routes.handleBatchPrompt(req, res);
       expect(res.statusCode).toBe(400);
+    });
+
+    it('rejects more than 50 prompts in one batch', async () => {
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
+        prompts: Array.from({ length: 51 }, (_, index) => ({ sessionId: `s${index}`, message: 'hello' })),
+      });
+      const res = createMockRes();
+
+      await routes.handleBatchPrompt(req, res);
+
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error).toMatch(/at most 50/i);
     });
 
     it('runs prompts and returns per-session content', async () => {

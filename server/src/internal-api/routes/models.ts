@@ -12,6 +12,7 @@ import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import type { PiService } from '../../pi/pi-service.js';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
+import { readBoundedJsonBody } from '../request-body.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { createLogger } from '../../logging/logger.js';
 
@@ -174,7 +175,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
   ): Promise<void> {
     try {
       const url = new URL(req.url || '/', 'http://localhost');
-      const body = await readJsonBody(req);
+      const body = (await readBoundedJsonBody<Record<string, unknown>>(req)) ?? {};
       const runtime =
         (typeof body.runtime === 'string' && body.runtime) ||
         url.searchParams.get('runtime') ||
@@ -204,26 +205,6 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
   }
 
   return { handleListModels, handleRefreshModels };
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => {
-      if (chunks.length === 0) {
-        resolve({});
-        return;
-      }
-      try {
-        const parsed = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
-        resolve(parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {});
-      } catch {
-        resolve({});
-      }
-    });
-    req.on('error', () => resolve({}));
-  });
 }
 
 function sendJson(res: ServerResponse, statusCode: number, data: unknown): void {

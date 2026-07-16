@@ -72,7 +72,8 @@ notifications later without a rewrite.
                                        ├─ enqueues to durable outbox
                                        └─ ChannelRouter ─▶ TelegramChannel
    Internal API routes:
-     POST   /api/v1/notifications                       ← explicit emit
+     POST   /api/v1/notifications                       ← durable/idempotent explicit acceptance
+     GET    /api/v1/notifications/:id                   ← poll delivery status
      POST   /api/v1/sessions/:id/notifications/opt-in   ← opt a session in
      DELETE /api/v1/sessions/:id/notifications/opt-in   ← opt out
      GET    /api/v1/sessions/:id/notifications          ← opt-in state + deliveries
@@ -84,7 +85,8 @@ notifications later without a rewrite.
 | File | Responsibility |
 |---|---|
 | `types.ts` | Stable contract: `Notification`, `OptInRecord`, `DeliveryRecord`, `QueuedNotification`, `NotificationChannel`. |
-| `notification-store.ts` | Durable JSON persistence (atomic writes, reload, log capping). Mirrors `watch-store.ts`. |
+| `notification-store.ts` | Durable JSON persistence (atomic writes, restart reconciliation, recent-list and wider status-ledger caps). Mirrors `watch-store.ts`. |
+| `notification-ingress-spool.ts` | Bounded, schema-validating local spool drainer for terminal clients that outlive a server restart window. |
 | `notification-formatter.ts` | Builds `{ title, body, deepLink }` from metadata + the agent's tail; truncation; clamps the session name in the title. |
 | `notification-manager.ts` | Orchestration: own broker, per-session observer attach/detach, debounce, durable outbox + retry, restart rehydration, explicit emit, **live session-name resolution** at flush time. |
 | `channels/notification-channel.ts` | `NotificationChannel` interface + `ChannelRouter`. |
@@ -122,6 +124,8 @@ All vars are documented in [`.env.example`](../.env.example) (names only).
 | `NOTIFICATIONS_TAIL_MAX_CHARS` | `1200` | Tail length before truncation (well under Telegram's 4096). |
 | `NOTIFICATIONS_PUBLIC_BASE_URL` | first `ALLOWED_ORIGIN` | Base for deep links (`<base>?session=<id>`). |
 | `NOTIFICATIONS_MAX_DELIVERY_ATTEMPTS` | `5` | Outbox retry cap before a delivery is marked `failed`. |
+| `NOTIFICATIONS_INGRESS_POLL_MS` | `5000` | Poll interval for locally spooled explicit notifications. Must be positive. |
+| `NOTIFICATIONS_CHANNEL_TIMEOUT_MS` | `10000` | Per-attempt Telegram request timeout, including response-body read. Must be positive. |
 | `TELEGRAM_BOT_TOKEN` | _(unset)_ | Dedicated bot token. Unset → Telegram reports not configured. |
 | `TELEGRAM_CHAT_ID` | _(unset)_ | Operator's chat id. |
 
@@ -143,11 +147,17 @@ Token-authed like every Internal API route (bearer token). Base path `/api/v1`.
 | `POST /sessions/:id/notifications/opt-in` | `{ label?: string }` | opt-in record (runtime + path resolved from the registry) |
 | `DELETE /sessions/:id/notifications/opt-in` | — | `{ optIn: null }` |
 | `GET /sessions/:id/notifications` | — | `{ optIn, deliveries }` (pending + recent, for this session) |
-| `POST /notifications` | `{ title, body, deepLink? }` | `{ notification: { id, createdAt } }` (explicit emit; also what [`scripts/notify.sh`](#9-self-notification-from-a-terminal-cli-harness) calls from a terminal CLI — see §9) |
+| `POST /notifications` | `{ title, body, deepLink? }`; optional `Idempotency-Key` header | `202` + `{ notification, duplicate, statusUrl }` after durable acceptance; `Location` points to status |
+| `GET /notifications/:notificationId` | — | `{ status: "ok", delivery: { notification, delivery } }` (`pending`, `sent`, or `failed`) |
 | `GET /notifications[?limit=N]` | — | `{ deliveries }` (recent delivery log, ops/debug) |
 
 Validation uses Zod and returns stable `{ error, code }` shapes (e.g.
 `SESSION_NOT_FOUND`, `INVALID_REQUEST`) from the shared error-code catalog.
+Status/idempotency lookup is bounded to pending items plus the newest 1000
+terminal records; recent-list responses default to the newest 200.
+An identical retry with the same `Idempotency-Key` joins the original durable
+record. Reusing that key with another payload returns `409
+IDEMPOTENCY_KEY_CONFLICT`. Raw keys are hashed in the delivery store.
 
 ### Browser-facing route
 
@@ -179,13 +189,18 @@ minimal reader; the URL bar is not otherwise kept in sync with the active sessio
 
 - **Delivery log:** `GET /api/v1/notifications` shows recent deliveries with
   `status` (`pending` / `sent` / `failed`), `attempts`, and `lastError`.
-- **Durable outbox:** a notification is persisted *before* dispatch; on crash or
-  restart the manager reloads pending items and resumes draining (idempotent
-  notification ids prevent double-sends).
+- **Durable outbox:** a notification is persisted *before* `202 Accepted`; on
+  crash or restart the manager reloads pending items and resumes draining.
+- **Delivery semantics:** ingress retries are idempotent when callers reuse a key.
+  Telegram delivery is **at least once**: a process crash after Telegram accepts
+  but before local `sent` persistence can still produce a duplicate on retry.
 - **Retry/backoff:** a failed delivery is retried with backoff up to
   `NOTIFICATIONS_MAX_DELIVERY_ATTEMPTS`, then marked `failed` (kept in the log).
 - **Graceful degradation:** a Telegram outage never breaks a session or the
   broker — delivery failures are captured in the outbox, not propagated.
+- **Graceful shutdown:** a pending debounced `agent_end` is forced into the
+  durable outbox before observer teardown; in-flight delivery/ingress work is
+  joined before socket ownership is released.
 - **Rehydration:** on boot the manager re-attaches service observers for every
   still-opted-in session and resumes the outbox.
 
@@ -252,10 +267,11 @@ session is not observed by the web UI, so it will never trigger an `agent_end`
 notification on its own.
 
 Instead, a terminal agent can **self-notify** through the same notification
-layer by calling a small helper script, which POSTs to the explicit-emit
-endpoint ([§4](#4-internal-api)) over the local Unix socket. The web UI server
-must be running on the host (it always is in the operator's setup); **no server
-restart or code change is needed**.
+layer by calling a small helper script, which submits to the explicit-emit
+endpoint ([§4](#4-internal-api)) over the local Unix socket. The helper waits
+through short restart windows and, if the API remains unavailable, atomically
+queues the record under the notification ingress directory for the next server
+drain. **No production restart or code change is performed by the helper.**
 
 ### The helper: `scripts/notify.sh`
 
@@ -292,8 +308,22 @@ scripts/notify.sh question "which DB index?" \
 It reads the bearer token from `~/.pi-web-ui/internal-api-token` (mode 0600) and
 the socket from `~/.pi-web-ui/internal-api.sock` — both overridable via
 `PI_WEB_UI_NOTIFY_TOKEN_FILE` / `PI_WEB_UI_NOTIFY_SOCKET` for non-default
-installs. The token is never printed. On any failure (server down, non-2xx) it
-exits non-zero with a stderr message but never blocks the caller's turn.
+installs. One UUID is reused across ambiguous retries. By default it health-waits
+for up to 30 seconds, then writes a `0600` atomic record under
+`~/.pi-web-ui/notifications/ingress/` (`0700`) and exits successfully. The
+server drains that bounded queue at startup and periodically. Override with:
+
+- `PI_WEB_UI_NOTIFY_WAIT_MS`, `PI_WEB_UI_NOTIFY_RETRY_MS`, and
+  `PI_WEB_UI_NOTIFY_REQUEST_TIMEOUT_MS` for timing;
+- `PI_WEB_UI_NOTIFY_SPOOL_DIR` for an isolated/non-default server;
+- `PI_WEB_UI_NOTIFY_IDEMPOTENCY_KEY` only when a caller deliberately owns a
+  stable retry key.
+
+On direct acceptance, stderr includes the pollable `statusUrl` returned by the
+server. Validation/auth/client errors (`400`-class except retryable `408`/`429`) are not
+spooled and exit non-zero. Queue expiry is seven days; malformed, oversized,
+expired, or symbolic-link entries are rejected. The bearer token is never
+printed or placed in the spool.
 
 ### Activation — by prompt, not by config
 
@@ -334,7 +364,9 @@ with GLM/Z.ai env, so it shares Claude Code's Bash tool entirely.)
 
 ### Security
 
-No new REST route and no auth surface is added: the script reuses the existing
-token-authed explicit-emit endpoint. The bearer token is read from the 0600
-file at runtime; nothing secret is committed (the script contains no
-credentials and is safe in this public repo).
+The script adds no network listener or authentication surface: it reuses the
+existing token-authed explicit-emit endpoint. The bearer token is read from the
+`0600` file at runtime and is never queued. Spool records do contain the
+notification title/body and caller idempotency key, so their directory is
+forced to `0700` and each file to `0600`. Nothing secret is embedded in the
+tracked script.

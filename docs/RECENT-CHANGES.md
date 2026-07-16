@@ -4,6 +4,13 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Internal API multi-client and notification-ingress hardening (`1.8.0`)**
+  - Disposable validation launches now default to unique locked state directories and cooperatively reserved dynamic companion ports.
+  - Unix-socket ownership is fail-closed; owner-only mode is applied before readiness, and an enabled Internal API startup failure is fatal.
+  - Explicit notifications support durable `202` acceptance, caller idempotency, payload-conflict detection, pollable status, restart-aware terminal spooling, and bounded Telegram requests.
+  - Production-control locking and Internal API readiness helpers are available without performing deployment actions themselves.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md), [`NOTIFICATIONS.md`](./NOTIFICATIONS.md), [`DEPLOYMENT.md`](../DEPLOYMENT.md)
+
 - **Internal API model-aware max thinking levels (`1.7.0`)**
   - `max` is now a documented, validated thinking level for Internal API create/control requests.
   - Pi and OpenCode create-time requests apply the level after model selection; `/models` advertises Claude model/profile support and existing Pi SDK model metadata.

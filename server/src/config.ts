@@ -26,6 +26,14 @@ export const LOG_LEVELS: readonly LogLevel[] = ['error', 'warn', 'info', 'debug'
  * Extracted as a pure function so the resolution is unit-testable without
  * manipulating process.env at import time.
  */
+export function parsePositiveInteger(raw: string | undefined, fallback: number, name: string): number {
+  if (raw === undefined) return fallback;
+  if (!/^[1-9]\d*$/.test(raw.trim())) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return Number(raw);
+}
+
 export function parseLogLevel(raw: string | undefined, fallback: LogLevel = 'info'): LogLevel {
   if (!raw) return fallback;
   const value = raw.trim().toLowerCase();
@@ -192,6 +200,8 @@ export interface ServerConfig {
   notificationsTailMaxChars: number;
   notificationsPublicBaseUrl?: string;
   notificationsMaxDeliveryAttempts: number;
+  notificationsIngressPollMs: number;
+  notificationsChannelTimeoutMs: number;
   telegramBotToken?: string;
   telegramChatId?: string;
 }
@@ -318,6 +328,8 @@ export const config: ServerConfig = {
   notificationsTailMaxChars: parseInt(process.env.NOTIFICATIONS_TAIL_MAX_CHARS || '1200', 10),
   notificationsPublicBaseUrl: process.env.NOTIFICATIONS_PUBLIC_BASE_URL || undefined,
   notificationsMaxDeliveryAttempts: parseInt(process.env.NOTIFICATIONS_MAX_DELIVERY_ATTEMPTS || '5', 10),
+  notificationsIngressPollMs: parsePositiveInteger(process.env.NOTIFICATIONS_INGRESS_POLL_MS, 5000, 'NOTIFICATIONS_INGRESS_POLL_MS'),
+  notificationsChannelTimeoutMs: parsePositiveInteger(process.env.NOTIFICATIONS_CHANNEL_TIMEOUT_MS, 10000, 'NOTIFICATIONS_CHANNEL_TIMEOUT_MS'),
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || undefined,
   telegramChatId: process.env.TELEGRAM_CHAT_ID || undefined,
 };

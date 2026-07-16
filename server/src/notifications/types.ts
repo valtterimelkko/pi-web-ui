@@ -24,7 +24,7 @@ export interface OptInRecord {
 
 /** A single, already-formatted (Telegram-ready) notification. */
 export interface Notification {
-  /** Stable id (uuid). Retries reuse it so a send never duplicates. */
+  /** Stable server id. Retries reuse it for at-least-once delivery accounting. */
   id: string;
   /** Absent for purely-explicit notifications (POST /api/v1/notifications). */
   sessionId?: string;
@@ -59,9 +59,18 @@ export interface DeliveryRecord {
  * A notification paired with its delivery state — the atomic unit stored in
  * the outbox (while pending) and the delivery log (once terminal).
  */
+export interface NotificationIngressIdentity {
+  /** SHA-256 of the caller's Idempotency-Key; the raw key is never persisted. */
+  keyHash: string;
+  /** SHA-256 of the normalized explicit-notification payload. */
+  fingerprint: string;
+}
+
 export interface QueuedNotification {
   notification: Notification;
   delivery: DeliveryRecord;
+  /** Present only for idempotent explicit-notification submissions. */
+  ingress?: NotificationIngressIdentity;
 }
 
 /**

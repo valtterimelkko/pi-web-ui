@@ -1,3 +1,7 @@
+import { existsSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
+
 export const PRODUCTION_VALIDATION_ERROR =
   'Refusing to run live validation against the default production Pi Web UI Internal API. ' +
   'Start a disposable validation server with `npm run validate:server` and pass both ' +
@@ -7,6 +11,9 @@ export interface ValidationTargetInput {
   socketPath?: string;
   tokenPath?: string;
   allowProduction?: boolean;
+  /** Configured production paths; defaults to env/default locations. */
+  productionSocketPath?: string;
+  productionTokenPath?: string;
 }
 
 export interface ValidationTarget {
@@ -24,10 +31,23 @@ export function resolveValidationTarget(input: ValidationTargetInput): Validatio
   }
 
   if (hasSocket && hasTokenPath) {
+    const productionSocket = canonicalPath(input.productionSocketPath
+      ?? process.env.INTERNAL_API_SOCKET_PATH
+      ?? resolve(homedir(), '.pi-web-ui', 'internal-api.sock'));
+    const productionToken = canonicalPath(input.productionTokenPath
+      ?? process.env.INTERNAL_API_TOKEN_PATH
+      ?? resolve(homedir(), '.pi-web-ui', 'internal-api-token'));
+    const targetsProduction = canonicalPath(input.socketPath!) === productionSocket
+      || canonicalPath(input.tokenPath!) === productionToken;
+
+    if (targetsProduction && !input.allowProduction) {
+      throw new Error(PRODUCTION_VALIDATION_ERROR);
+    }
+
     return {
       socketPath: input.socketPath,
       tokenPath: input.tokenPath,
-      usingProductionServer: false,
+      usingProductionServer: targetsProduction,
     };
   }
 
@@ -38,4 +58,9 @@ export function resolveValidationTarget(input: ValidationTargetInput): Validatio
   }
 
   throw new Error(PRODUCTION_VALIDATION_ERROR);
+}
+
+function canonicalPath(input: string): string {
+  const absolute = resolve(input);
+  return existsSync(absolute) ? realpathSync(absolute) : absolute;
 }

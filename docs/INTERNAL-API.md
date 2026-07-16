@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.7.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.8.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -106,6 +106,9 @@ the same ones the web UI uses.
 - **Unified sessions:** Sessions appear in both the API and the web UI. You
   can create a session via the API, then open it in the web UI.
 - **Auth:** A shared API key stored at `~/.pi-web-ui/internal-api-token`.
+- **Trusted multi-client, not multi-tenant:** concurrent local agents may share this
+  token, but any holder can inspect/control all sessions; there is no per-client
+  RBAC or tenant isolation.
 - **Broader than live validation:** the repo-owned `npm run validate:live`
   runner is one consumer of this API, but the same surface also exists for
   local automation and multi-agent orchestration.
@@ -302,7 +305,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.7.0",
+    "contractVersion": "1.8.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -798,7 +801,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.7.0",
+    "contractVersion": "1.8.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -941,6 +944,7 @@ DELETE /api/v1/sessions/:sessionId/notifications/opt-in
 GET    /api/v1/sessions/:sessionId/notifications
 POST   /api/v1/notifications
 GET    /api/v1/notifications
+GET    /api/v1/notifications/:notificationId
 ```
 
 Use them like this:
@@ -956,14 +960,25 @@ POST /api/v1/sessions/:id/notifications/opt-in
 { "label": "Overnight refactor" }
 ```
 
-```json
+```http
 POST /api/v1/notifications
+Idempotency-Key: 6d395ccb-7927-4cf3-83f5-8f333c849592
+Content-Type: application/json
+
 { "title": "Agent OS", "body": "Review requested", "deepLink": "https://pi.example.com/?session=abc" }
 ```
 
+A durable acceptance returns `202 Accepted`, `Location: /api/v1/notifications/<id>`,
+and `{ notification, duplicate, statusUrl }`. Repeating the same key and payload
+returns the original notification; reusing the key for another payload returns
+`409 IDEMPOTENCY_KEY_CONFLICT`. The key is optional, but callers that retry after
+an ambiguous response should always provide and reuse one.
+
+`GET /api/v1/notifications/:notificationId` returns its current delivery record.
 `GET /api/v1/notifications` returns recent deliveries with `status`, `attempts`,
 and `lastError`; `GET /api/v1/sessions/:id/notifications` scopes that to one
-session and includes the current `optIn` record.
+session and includes the current `optIn` record. Acceptance is durable, not proof
+of Telegram delivery; external delivery is at least once.
 
 ---
 
@@ -1380,7 +1395,7 @@ object containing a transfer error code (e.g.
 POST /api/v1/sessions/batch
 ```
 
-Creates multiple sessions in one call. All entries are dispatched in
+Creates up to 50 sessions in one call. All entries are dispatched in
 parallel.
 
 **Request:**
@@ -1418,7 +1433,7 @@ each result item echoes `pinned` / `pinnedUntil` when pinned.
 POST /api/v1/sessions/batch/prompt
 ```
 
-Sends a prompt to each of several sessions in one call. Each entry
+Sends a prompt to up to 50 sessions in one call. Each entry
 runs in `answers` mode (final text only). By default all prompts run
 in parallel; set `parallel: false` to run them sequentially.
 

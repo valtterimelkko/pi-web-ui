@@ -16,7 +16,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.7.0",
+  "contractVersion": "1.8.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -24,6 +24,13 @@ Current contract:
 
 ### Changelog
 
+- **1.8.0** (minor, additive with a corrected acceptance status) — hardened trusted multi-client operation and notification ingress:
+  - `POST /api/v1/notifications` accepts an optional `Idempotency-Key`, durably queues before responding, returns `202 Accepted` plus `Location`/`statusUrl`, and returns `409 IDEMPOTENCY_KEY_CONFLICT` if a key is reused with a different payload.
+  - `GET /api/v1/notifications/:notificationId` exposes pollable `pending | sent | failed` delivery state.
+  - identical concurrent notification submissions join one durable enqueue; keys are hashed in the notification store.
+  - enabled Internal API startup is now fail-closed when socket ownership/binding fails, owner-only socket mode is applied before readiness, and shutdown bounds persistent-connection grace before releasing ownership.
+  - JSON request buffering is capped (1 MiB generally, 32 KiB for notification bodies), batch create/prompt calls are capped at 50 entries, and malformed path encoding returns a structured client error.
+  Existing notification clients should accept any 2xx response; clients needing retry safety should reuse one idempotency key and poll the returned status URL. External Telegram delivery remains at least once.
 - **1.7.0** (minor, additive) — completed model-aware max thinking-level support:
   - `max` is accepted by create-time and control-time thinking-level requests for runtimes that support thinking control.
   - Pi create-time requests apply the level after model selection, so GPT-5.6 models can be created directly at `max`.
@@ -120,6 +127,7 @@ For `/api/v1`, preserve these rules:
 5. **Completion must be machine-detectable.** If an orchestration flow can run work, it must expose a reliable completion path via `/wait`, `/transcript`, or documented SSE events.
 6. **Claude channel event caveats stay documented.** Do not imply all runtimes have identical event reliability.
 7. **Local-only security boundary stays intact.** Keep Unix-socket + bearer-token assumptions unless a separate public API is intentionally designed.
+8. **Trusted multi-client, not multi-tenant.** Every process holding the shared token can inspect and control every API session. Concurrency safety does not provide tenant isolation or per-client authorization.
 
 ## Error code catalog
 
@@ -139,7 +147,8 @@ re-introduced.
 | `UNAUTHORIZED` | 401 | Missing/invalid bearer token | No/wrong `Authorization: Bearer <token>` |
 | `METHOD_NOT_ALLOWED` | 405 | HTTP method unsupported for endpoint | e.g. `PUT` on a GET-only route |
 | `NOT_FOUND` | 404 | Unknown endpoint / API version | Path not matched, or version ≠ `/api/v1` |
-| `INVALID_REQUEST` | 400 | Missing/malformed required field | e.g. no `runtime`; `detach:true` with streaming verbosity |
+| `INVALID_REQUEST` | 400 | Missing/malformed required field or URL encoding | e.g. no `runtime`; malformed path escape; `detach:true` with streaming verbosity |
+| `PAYLOAD_TOO_LARGE` | 413 | Request exceeds bounded parser limit | More than 1 MiB generally or 32 KiB on notification endpoints |
 | `SESSION_NOT_FOUND` | 404 | No session with that id | Wrong/expired id, or session deleted |
 | `SESSION_BUSY` | 409 | Session already processing a prompt | A session runs one prompt at a time |
 | `SESSION_CREATE_FAILED` | 500 | Session creation failed | Runtime threw while provisioning |
@@ -155,7 +164,7 @@ re-introduced.
 | `TRANSFER_DISPATCH_FAILED` | 500 | Transfer could not be dispatched | Target creation / injection / IO failure |
 | `EMPTY_TRANSCRIPT` | 404 | No visible transcript yet | `/transcript` before any turn produced content |
 | `RUN_NOT_FOUND` | 404 | No persisted run receipt exists | Unknown or retention-pruned `runId` |
-| `IDEMPOTENCY_KEY_CONFLICT` | 409 | Key reused for a different request | Same session-scoped key has a different message/mode/verbosity/detach fingerprint |
+| `IDEMPOTENCY_KEY_CONFLICT` | 409 | Key reused for a different request | Same endpoint-scoped key has a different request fingerprint (prompt dispatch or explicit notification payload) |
 
 ### Additive error enrichment (`hint`, `docs`)
 

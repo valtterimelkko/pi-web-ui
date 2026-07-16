@@ -72,25 +72,30 @@ Start an isolated validation server in one terminal/background task:
 npm run validate:server
 ```
 
-It prints a socket, token path, and isolated runtime companion ports. Point `validate:live` at those paths:
+Every no-argument launch creates a short private directory under the platform
+temporary root (normally `/tmp/pi-web-ui-validation/run-*`), reserves distinct
+available web/Claude/OpenCode ports, and removes that auto-created directory on
+normal process exit. The startup banner prints the exact socket, token path,
+ports, and a ready-to-copy validator command; use those printed paths rather
+than assuming a stable default directory.
+
+Concurrent no-argument launches are isolated automatically. When you provide
+`--dir` explicitly, that directory is process-locked for the server lifetime;
+a second owner fails safely. Explicit companion ports are validated as distinct
+and available. Example with a caller-owned directory:
 
 ```bash
-npm run validate:live -- \
-  --socket ~/.pi-web-ui/validation/internal-api.sock \
-  --token-path ~/.pi-web-ui/validation/internal-api-token \
-  --runtime claude --scenario smoke
-```
-
-For a concurrent or throwaway run, prefer a unique directory. If you run multiple validation servers concurrently, also pass unique `--claude-ws-port`, `--claude-hook-port`, and `--opencode-port` values:
-
-```bash
-VALIDATION_DIR=~/.pi-web-ui/validation/$(date +%s)
+VALIDATION_DIR="$(mktemp -d /tmp/pi-validation-XXXXXX)"
 npm run validate:server -- --dir "$VALIDATION_DIR" --port 0
 npm run validate:live -- \
   --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" \
   --runtime pi --scenario smoke
 ```
+
+The launcher canonicalises existing path ancestors and refuses a validation
+directory that aliases the production state root. Explicit production socket,
+token, or state paths still require `--allow-production`.
 
 If the running service gets provider credentials from a systemd `EnvironmentFile`
 (such as `.env.production`), a terminal-launched validation server does not inherit
@@ -161,6 +166,7 @@ The runner queries runtime capabilities, creates an ephemeral session on the tar
 - `tool-visibility` — verify tool execution is surfaced in the full stream
 - `session-info` — verify enriched internal-API session info is available
 - `follow-up` — verify the runtime accepts a follow-up turn when supported
+- `notify-on-agent-end` — opt in, run a real turn, and verify the disposable capture channel records the delivery without contacting Telegram
 - `channel-heartbeat` — verify Claude channel-backed sessions emit `stream_activity`
 
 ## Claude profile validation runner

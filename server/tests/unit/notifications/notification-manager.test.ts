@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -6,6 +6,7 @@ import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { NotificationStore } from '../../../src/notifications/notification-store.js';
 import { ChannelRouter } from '../../../src/notifications/channels/notification-channel.js';
 import { NotificationManager } from '../../../src/notifications/notification-manager.js';
+import { NotificationIngressSpool } from '../../../src/notifications/notification-ingress-spool.js';
 import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 import type {
   Notification,
@@ -86,6 +87,7 @@ function makeHarness(
     store?: NotificationStore;
     enabled?: boolean;
     resolveLabel?: (sessionPath: string) => Promise<string | undefined>;
+    ingressSpool?: NotificationIngressSpool;
   } = {},
 ): Harness {
   const store = opts.store ?? new NotificationStore(dir);
@@ -106,6 +108,8 @@ function makeHarness(
     retryBackoffMs: 5000, // long: retries must NOT fire during test wait windows
     now: () => NOW,
     resolveLabel: opts.resolveLabel,
+    ingressSpool: opts.ingressSpool,
+    ingressPollMs: 60_000,
   });
   return { mgr, store, pi, claude, channel };
 }
@@ -237,6 +241,23 @@ describe('NotificationManager', () => {
   });
 
   describe('debounce', () => {
+    it('durably flushes a pending agent_end when shutdown starts inside the debounce window', async () => {
+      const h = makeHarness(dir, { debounceMs: 5000 });
+      await h.mgr.init();
+      await h.mgr.optIn(piOptIn());
+      for (const event of assistantText('s1', 'last words')) h.pi.emit('/sessions/s1', event);
+      h.pi.emit('/sessions/s1', agentEnd('s1'));
+
+      h.mgr.shutdown();
+      await h.mgr.waitForIdle();
+
+      const fresh = new NotificationStore(dir);
+      await fresh.init();
+      expect(fresh.listPending()).toHaveLength(1);
+      expect(fresh.listPending()[0].notification.body).toContain('last words');
+      expect(h.channel.received).toHaveLength(0);
+    });
+
     it('coalesces two agent_ends within the window into one notification', async () => {
       const h = makeHarness(dir, { debounceMs: 50 });
       await h.mgr.init();
@@ -428,6 +449,87 @@ describe('NotificationManager', () => {
   });
 
   describe('explicit notifications', () => {
+    it('ingests a durable terminal spool record and deletes it after durable acceptance', async () => {
+      const ingressDir = path.join(dir, 'ingress');
+      await fs.mkdir(ingressDir, { recursive: true });
+      await fs.writeFile(path.join(ingressDir, 'queued.json'), JSON.stringify({
+        version: 1,
+        idempotencyKey: 'spooled-key',
+        title: 'Offline completion',
+        body: 'Recovered after restart.',
+        createdAt: '2026-06-28T23:59:00.000Z',
+        expiresAt: '2026-06-30T00:00:00.000Z',
+      }));
+      const ingressSpool = new NotificationIngressSpool(ingressDir, {
+        now: () => Date.parse(NOW),
+      });
+      const h = makeHarness(dir, { ingressSpool });
+
+      await h.mgr.init();
+      await h.mgr.drain();
+
+      expect(h.channel.received).toHaveLength(1);
+      expect(h.channel.received[0].title).toBe('Offline completion');
+      expect(await fs.readdir(ingressDir)).toEqual([]);
+    });
+
+    it('restores every unprocessed claim when one spool acceptance fails transiently', async () => {
+      const ingressDir = path.join(dir, 'ingress-failure');
+      const ingressSpool = new NotificationIngressSpool(ingressDir, { now: () => Date.parse(NOW) });
+      const h = makeHarness(dir, { ingressSpool });
+      await h.mgr.init();
+      for (let index = 0; index < 3; index += 1) {
+        await fs.writeFile(path.join(ingressDir, `${index}.json`), JSON.stringify({
+          version: 1,
+          idempotencyKey: `spool-${index}`,
+          title: `Spool ${index}`,
+          body: 'body',
+          createdAt: '2026-06-28T23:59:00.000Z',
+          expiresAt: '2026-06-30T00:00:00.000Z',
+        }));
+      }
+      const original = h.mgr.acceptExplicit.bind(h.mgr);
+      let calls = 0;
+      vi.spyOn(h.mgr, 'acceptExplicit').mockImplementation(async (...args) => {
+        calls += 1;
+        if (calls === 2) throw new Error('transient store failure');
+        return original(...args);
+      });
+
+      await expect(h.mgr.drainIngress()).rejects.toThrow(/transient/);
+
+      const files = await fs.readdir(ingressDir);
+      expect(files.some((name) => name.startsWith('.processing-'))).toBe(false);
+      expect(files.filter((name) => name.endsWith('.json'))).toHaveLength(2);
+    });
+
+    it('deduplicates concurrent identical ingress keys and detects payload conflicts', async () => {
+      const h = makeHarness(dir);
+      await h.mgr.init();
+      const input = { title: 'Deploy', body: 'shipped', deepLink: 'https://x' };
+      const [first, second] = await Promise.all([
+        h.mgr.acceptExplicit(input, 'same-caller-key'),
+        h.mgr.acceptExplicit(input, 'same-caller-key'),
+      ]);
+
+      expect(first.notification.id).toBe(second.notification.id);
+      expect([first.duplicate, second.duplicate].sort()).toEqual([false, true]);
+      await expect(h.mgr.acceptExplicit({ ...input, body: 'different' }, 'same-caller-key'))
+        .rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT' });
+      await h.mgr.drain();
+      expect(h.channel.received).toHaveLength(1);
+    });
+
+    it('persists but does not send explicit notifications while the master switch is disabled', async () => {
+      const h = makeHarness(dir, { enabled: false });
+      await h.mgr.init();
+      const accepted = await h.mgr.acceptExplicit({ title: 'Disabled', body: 'queued' }, 'disabled-key');
+      await h.mgr.drain();
+
+      expect(h.channel.received).toHaveLength(0);
+      expect(h.store.getById(accepted.notification.id)?.delivery.status).toBe('pending');
+    });
+
     it('dispatches an explicit notification with no session required', async () => {
       const h = makeHarness(dir);
       await h.mgr.init();

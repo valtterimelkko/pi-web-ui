@@ -14,8 +14,12 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { z } from 'zod';
 import { canonicalOptInId } from '@pi-web-ui/shared';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
+import { readBoundedJsonBody } from '../request-body.js';
 import { createLogger } from '../../logging/logger.js';
-import type { NotificationManager } from '../../notifications/notification-manager.js';
+import {
+  NotificationIdempotencyConflictError,
+  type NotificationManager,
+} from '../../notifications/notification-manager.js';
 import type { NotificationRuntime, OptInRecord } from '../../notifications/types.js';
 
 const logger = createLogger('NotificationsRoutes');
@@ -65,7 +69,7 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, `Unsupported runtime: ${String(runtime)}`));
       return;
     }
-    const parsed = optInBodySchema.safeParse(await readJsonBody(req));
+    const parsed = optInBodySchema.safeParse((await readBoundedJsonBody(req, { maxBytes: 32 * 1024 })) ?? {});
     if (!parsed.success) {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, parsed.error.issues[0]?.message ?? 'invalid request body'));
       return;
@@ -105,13 +109,53 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
 
   /** POST /api/v1/notifications */
   async function handleExplicitNotify(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const parsed = explicitBodySchema.safeParse(await readJsonBody(req));
+    const parsed = explicitBodySchema.safeParse((await readBoundedJsonBody(req, { maxBytes: 32 * 1024 })) ?? {});
     if (!parsed.success) {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, parsed.error.issues[0]?.message ?? 'invalid request body'));
       return;
     }
-    const notification = await manager.emitExplicit(parsed.data);
-    sendJson(res, 200, { status: 'ok', notification: { id: notification.id, createdAt: notification.createdAt } });
+    const rawKey = req.headers['idempotency-key'];
+    const idempotencyKey = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+    if (idempotencyKey !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'Idempotency-Key must be 1-128 safe ASCII characters.'));
+      return;
+    }
+
+    try {
+      const accepted = await manager.acceptExplicit(parsed.data, idempotencyKey);
+      const statusUrl = `/api/v1/notifications/${accepted.notification.id}`;
+      res.setHeader('Location', statusUrl);
+      sendJson(res, 202, {
+        status: 'accepted',
+        duplicate: accepted.duplicate,
+        notification: {
+          id: accepted.notification.id,
+          createdAt: accepted.notification.createdAt,
+        },
+        statusUrl,
+      });
+    } catch (error) {
+      if (error instanceof NotificationIdempotencyConflictError) {
+        sendJson(res, 409, enrichedErrorBody(ErrorCode.IDEMPOTENCY_KEY_CONFLICT, error.message));
+        return;
+      }
+      logger.errorObject('explicit notification acceptance failed', error);
+      sendJson(res, 500, enrichedErrorBody(ErrorCode.INTERNAL_ERROR, 'Failed to persist notification.'));
+    }
+  }
+
+  /** GET /api/v1/notifications/:notificationId */
+  async function handleGetDeliveryStatus(
+    _req: IncomingMessage,
+    res: ServerResponse,
+    notificationId: string,
+  ): Promise<void> {
+    const delivery = manager.getDeliveryStatus(notificationId);
+    if (!delivery) {
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.NOT_FOUND, `Notification not found: ${notificationId}`));
+      return;
+    }
+    sendJson(res, 200, { status: 'ok', delivery });
   }
 
   /** GET /api/v1/notifications[?limit=N] */
@@ -125,27 +169,14 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
     sendJson(res, 200, { status: 'ok', deliveries: manager.listRecentDeliveries(limit) });
   }
 
-  return { handleOptIn, handleOptOut, handleGetSessionState, handleExplicitNotify, handleGetRecentDeliveries };
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => {
-      if (chunks.length === 0) {
-        resolve({});
-        return;
-      }
-      try {
-        const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        resolve(parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {});
-      } catch {
-        resolve({});
-      }
-    });
-    req.on('error', () => resolve({}));
-  });
+  return {
+    handleOptIn,
+    handleOptOut,
+    handleGetSessionState,
+    handleExplicitNotify,
+    handleGetDeliveryStatus,
+    handleGetRecentDeliveries,
+  };
 }
 
 function sendJson(res: ServerResponse, statusCode: number, data: unknown): void {

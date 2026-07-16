@@ -69,6 +69,7 @@ import {
 } from '../event-filter.js';
 import { createSSEStream } from '../sse-stream.js';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
+import { readBoundedJsonBody as readJsonBody } from '../request-body.js';
 import { withCorrelation, newRequestId, getCorrelationContext } from '../../logging/correlation.js';
 import { TransferService } from '../../session-transfer/transfer-service.js';
 import {
@@ -78,6 +79,8 @@ import {
   piSessionToReplayEvents,
 } from '../../session-transfer/index.js';
 import { stat, readdir, unlink, rm } from 'fs/promises';
+
+const MAX_BATCH_ITEMS = 50;
 import path from 'path';
 import { config } from '../../config.js';
 import { createLogger } from '../../logging/logger.js';
@@ -245,11 +248,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         logger: (message) => logger.info(`[InternalAPI/PinExpiry] ${message}`),
       })
     : undefined;
-  if (pinExpiry) {
-    // init() is async; kick it off without blocking route construction. On
-    // resolve it re-applies non-expired pins from the ledger (restart safety)
-    // and the periodic expiry sweep starts.
-    void pinExpiry.init().then(() => pinExpiry.start());
+  const ready = pinExpiry
+    ? pinExpiry.init().then(() => pinExpiry.start())
+    : Promise.resolve();
+
+  async function shutdown(): Promise<void> {
+    await ready.catch(() => { /* startup surfaces the original initialization error */ });
+    pinExpiry?.stop();
   }
 
   /** Pin without TTL tracking — the fallback when no PinExpiryManager exists. */
@@ -2090,6 +2095,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sendJson(res, 400, { error: 'sessions[] is required and must be non-empty', code: ErrorCode.INVALID_REQUEST });
       return;
     }
+    if (body.sessions.length > MAX_BATCH_ITEMS) {
+      sendJson(res, 400, { error: `sessions[] accepts at most ${MAX_BATCH_ITEMS} entries`, code: ErrorCode.INVALID_REQUEST });
+      return;
+    }
     if (body.sessions.some((entry) => entry.thinkingLevel !== undefined && !isThinkingLevel(entry.thinkingLevel))) {
       sendJson(res, 400, { error: 'thinkingLevel is invalid', code: ErrorCode.INVALID_REQUEST });
       return;
@@ -2163,6 +2172,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const body = await readJsonBody<BatchPromptRequest>(req);
     if (!body || !Array.isArray(body.prompts) || body.prompts.length === 0) {
       sendJson(res, 400, { error: 'prompts[] is required and must be non-empty', code: ErrorCode.INVALID_REQUEST });
+      return;
+    }
+
+    if (body.prompts.length > MAX_BATCH_ITEMS) {
+      sendJson(res, 400, { error: `prompts[] accepts at most ${MAX_BATCH_ITEMS} entries`, code: ErrorCode.INVALID_REQUEST });
       return;
     }
 
@@ -2573,6 +2587,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   return {
+    ready,
+    shutdown,
     handleCreateSession,
     handleListSessions,
     handleGetSession,
@@ -2607,26 +2623,6 @@ function parseVerbosityHeader(header: string | undefined): Verbosity | undefined
     return v;
   }
   return undefined;
-}
-
-async function readJsonBody<T>(req: IncomingMessage): Promise<T | null> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => {
-      try {
-        const raw = Buffer.concat(chunks).toString();
-        if (!raw.trim()) {
-          resolve(null);
-          return;
-        }
-        resolve(JSON.parse(raw) as T);
-      } catch {
-        resolve(null);
-      }
-    });
-    req.on('error', reject);
-  });
 }
 
 function sendJson(res: ServerResponse, statusCode: number, data: unknown): void {

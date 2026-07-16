@@ -16,6 +16,7 @@
  * the method). Self-contained: no reference to routes/sessions.ts or its broker.
  */
 
+import { createHash } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { canonicalOptInId } from '@pi-web-ui/shared';
@@ -24,6 +25,7 @@ import { NotificationStore } from './notification-store.js';
 import { ChannelRouter } from './channels/notification-channel.js';
 import { formatNotification } from './notification-formatter.js';
 import { createLogger } from '../logging/logger.js';
+import type { NotificationIngressSpool } from './notification-ingress-spool.js';
 import type {
   DeliveryRecord,
   Notification,
@@ -70,6 +72,23 @@ export interface NotificationManagerDeps {
    * opt-in record's snapshot `label`, then the runtime label.
    */
   resolveLabel?: (sessionPath: string) => Promise<string | undefined>;
+  /** Optional durable terminal-ingress spool, isolated per server instance. */
+  ingressSpool?: NotificationIngressSpool;
+  ingressPollMs?: number;
+}
+
+export class NotificationIdempotencyConflictError extends Error {
+  readonly code = 'IDEMPOTENCY_KEY_CONFLICT' as const;
+
+  constructor() {
+    super('The Idempotency-Key was already used for a different notification payload.');
+    this.name = 'NotificationIdempotencyConflictError';
+  }
+}
+
+export interface ExplicitNotificationAcceptance {
+  notification: Notification;
+  duplicate: boolean;
 }
 
 interface ObservedSession {
@@ -86,8 +105,12 @@ export class NotificationManager {
   private readonly broker: InternalApiEventBroker;
   private readonly now: () => string;
   private readonly observed = new Map<string, ObservedSession>();
-  private draining = false;
+  private drainPromise: Promise<void> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private ingressTimer: ReturnType<typeof setInterval> | null = null;
+  private ingressDrainPromise: Promise<void> | null = null;
+  private shutdownFlushPromise: Promise<void> | null = null;
+  private shutdownFlushError: unknown = null;
   private shutDown = false;
 
   constructor(deps: NotificationManagerDeps) {
@@ -98,6 +121,14 @@ export class NotificationManager {
 
   async init(): Promise<void> {
     await this.deps.store.init();
+    if (this.deps.ingressSpool) {
+      await this.deps.ingressSpool.init();
+      await this.drainIngress();
+      this.ingressTimer = setInterval(() => {
+        void this.drainIngress().catch((error) => logger.errorObject('notification ingress drain failed', error));
+      }, this.deps.ingressPollMs ?? 5000);
+      this.ingressTimer.unref?.();
+    }
     if (!this.deps.enabled) return;
     // One-time canonical-id normalization (desync self-heal) BEFORE rehydration,
     // so observers attach from the normalized records only (no duplicate husk).
@@ -205,6 +236,24 @@ export class NotificationManager {
     body: string;
     deepLink?: string;
   }): Promise<Notification> {
+    return (await this.acceptExplicit(input)).notification;
+  }
+
+  async acceptExplicit(
+    input: { title: string; body: string; deepLink?: string },
+    idempotencyKey?: string,
+  ): Promise<ExplicitNotificationAcceptance> {
+    const ingress = idempotencyKey
+      ? {
+          keyHash: sha256(idempotencyKey),
+          fingerprint: sha256(JSON.stringify({
+            title: input.title,
+            body: input.body,
+            deepLink: input.deepLink ?? null,
+          })),
+        }
+      : undefined;
+
     const notification: Notification = {
       id: uuidv4(),
       kind: 'explicit',
@@ -213,34 +262,131 @@ export class NotificationManager {
       deepLink: input.deepLink,
       createdAt: this.now(),
     };
-    await this.enqueueAndDispatch(notification);
+
+    if (ingress) {
+      const delivery: DeliveryRecord = {
+        notificationId: notification.id,
+        channel: 'telegram',
+        status: 'pending',
+        attempts: 0,
+        firstQueuedAt: this.now(),
+      };
+      const accepted = await this.deps.store.enqueueIdempotent({ notification, delivery, ingress });
+      if (accepted.conflict) throw new NotificationIdempotencyConflictError();
+      this.kickDrain();
+      if (!accepted.duplicate) logger.info(`explicit notification queued: ${accepted.item.notification.id}`);
+      return { notification: accepted.item.notification, duplicate: accepted.duplicate };
+    }
+
+    await this.enqueue(notification);
     logger.info(`explicit notification queued: ${notification.id}`);
-    return notification;
+    return { notification, duplicate: false };
+  }
+
+  getDeliveryStatus(notificationId: string): QueuedNotification | undefined {
+    return this.deps.store.getById(notificationId);
   }
 
   shutdown(): void {
+    if (this.shutDown) return;
     this.shutDown = true;
+    const pendingFlushes: Promise<void>[] = [];
+    for (const [sessionId, observed] of this.observed) {
+      if (observed.debounceTimer) {
+        clearTimeout(observed.debounceTimer);
+        observed.debounceTimer = null;
+        // Start the flush while the observed record is still available. Because
+        // shutDown is already true it is persisted but not sent during teardown.
+        pendingFlushes.push(this.flush(sessionId));
+      }
+    }
+    this.shutdownFlushPromise = Promise.allSettled(pendingFlushes).then((results) => {
+      const failures = results.filter((result) => result.status === 'rejected');
+      if (failures.length > 0) {
+        this.shutdownFlushError = new AggregateError(
+          failures.map((result) => (result as PromiseRejectedResult).reason),
+          'Failed to persist pending notification flushes during shutdown',
+        );
+      }
+    });
     for (const sessionId of [...this.observed.keys()]) this.detach(sessionId);
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    if (this.ingressTimer) {
+      clearInterval(this.ingressTimer);
+      this.ingressTimer = null;
+    }
   }
 
-  /** Process pending outbox items. Idempotent / re-entrant-safe. Public for tests. */
-  async drain(): Promise<void> {
-    if (this.shutDown || this.draining) return;
-    this.draining = true;
-    try {
-      if (this.deps.router.listConfigured().length === 0) return;
-      const pending = this.deps.store.listPending();
-      for (const item of pending) {
-        await this.tryDeliver(item);
+  /** Await already-started disk/network work after shutdown has stopped new work. */
+  async waitForIdle(): Promise<void> {
+    if (this.shutdownFlushPromise) await this.shutdownFlushPromise;
+    if (this.shutdownFlushError) throw this.shutdownFlushError;
+    await Promise.allSettled([
+      this.drainPromise ?? Promise.resolve(),
+      this.ingressDrainPromise ?? Promise.resolve(),
+    ]);
+  }
+
+  async drainIngress(): Promise<void> {
+    if (!this.deps.ingressSpool || this.shutDown) return;
+    if (this.ingressDrainPromise) return this.ingressDrainPromise;
+    this.ingressDrainPromise = this.drainIngressBatch().finally(() => {
+      this.ingressDrainPromise = null;
+    });
+    return this.ingressDrainPromise;
+  }
+
+  private async drainIngressBatch(): Promise<void> {
+    const spool = this.deps.ingressSpool;
+    if (!spool) return;
+    const claims = await spool.claimBatch();
+    for (let index = 0; index < claims.length; index += 1) {
+      const claim = claims[index];
+      try {
+        await this.acceptExplicit({
+          title: claim.record.title,
+          body: claim.record.body,
+          deepLink: claim.record.deepLink,
+        }, claim.record.idempotencyKey);
+        await spool.complete(claim);
+      } catch (error) {
+        if (error instanceof NotificationIdempotencyConflictError) {
+          logger.warn(`discarded conflicting notification ingress key hash: ${sha256(claim.record.idempotencyKey).slice(0, 12)}`);
+          await spool.complete(claim);
+        } else {
+          const retryFailures: unknown[] = [];
+          // Every claim was renamed before processing began. Restore the current
+          // and all later claims so one transient failure cannot strand them.
+          for (const unprocessed of claims.slice(index)) {
+            await spool.retry(unprocessed).catch((retryError) => retryFailures.push(retryError));
+          }
+          if (retryFailures.length > 0) {
+            throw new AggregateError([error, ...retryFailures], 'Notification ingress recovery failed');
+          }
+          throw error;
+        }
       }
-      if (this.deps.store.listPending().length > 0) this.scheduleRetry();
-    } finally {
-      this.draining = false;
     }
+  }
+
+  /** Process pending outbox items. Concurrent callers join one drain operation. */
+  async drain(): Promise<void> {
+    if (this.shutDown || !this.deps.enabled) return;
+    if (this.drainPromise) return this.drainPromise;
+    this.drainPromise = this.drainPending().finally(() => {
+      this.drainPromise = null;
+    });
+    return this.drainPromise;
+  }
+
+  private async drainPending(): Promise<void> {
+    if (this.deps.router.listConfigured().length === 0) return;
+    const pending = this.deps.store.listPending();
+    for (const item of pending) await this.tryDeliver(item);
+    if (this.deps.store.listPending().length > 0) this.scheduleRetry();
   }
 
   // ── Internals ─────────────────────────────────────────────────────
@@ -414,6 +560,13 @@ export class NotificationManager {
   }
 
   private async enqueueAndDispatch(notification: Notification): Promise<void> {
+    await this.enqueue(notification);
+  }
+
+  private async enqueue(
+    notification: Notification,
+    ingress?: QueuedNotification['ingress'],
+  ): Promise<void> {
     const delivery: DeliveryRecord = {
       notificationId: notification.id,
       channel: 'telegram',
@@ -421,8 +574,12 @@ export class NotificationManager {
       attempts: 0,
       firstQueuedAt: this.now(),
     };
-    await this.deps.store.enqueue({ notification, delivery });
-    await this.drain();
+    await this.deps.store.enqueue({ notification, delivery, ingress });
+    this.kickDrain();
+  }
+
+  private kickDrain(): void {
+    void this.drain().catch((error) => logger.errorObject('notification drain failed', error));
   }
 
   private scheduleRetry(): void {
@@ -447,10 +604,12 @@ function extractTextDelta(data: unknown): string | null {
 }
 
 /** Whether `a` is at least as recent as `b` by optedInAt (used to pick the survivor on dedupe). */
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 function isNewer(a: OptInRecord, b: OptInRecord): boolean {
-  // Lexical comparison of the ISO optedInAt is chronological for the fixed-width
-  // UTC stamps the routes write (new Date().toISOString()), and stays correct
-  // for the hyphen-delimited variant — more robust than Date.parse, which would
-  // return NaN for the hyphen form and silently always keep the first-seen record.
+  // Routes persist fixed-width UTC ISO stamps from Date#toISOString, for which
+  // lexical ordering is chronological. Legacy missing values sort oldest.
   return (a.optedInAt ?? '') >= (b.optedInAt ?? '');
 }

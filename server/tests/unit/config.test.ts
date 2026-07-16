@@ -5,10 +5,21 @@ import {
   LOG_LEVELS,
   parseDebugNamespaces,
   parseLogFormat,
+  parsePositiveInteger,
   LOG_FORMATS,
   type LogLevel,
   type LogFormat,
 } from '../../src/config.js';
+
+describe('positive integer parsing', () => {
+  it('accepts positive integers and rejects zero, negatives, fractions, and junk', () => {
+    expect(parsePositiveInteger(undefined, 50, 'TEST')).toBe(50);
+    expect(parsePositiveInteger('25', 50, 'TEST')).toBe(25);
+    for (const invalid of ['0', '-1', '1.5', 'NaN', '']) {
+      expect(() => parsePositiveInteger(invalid, 50, 'TEST')).toThrow(/TEST.*positive integer/i);
+    }
+  });
+});
 
 describe('LOG_LEVEL parsing (Task 2)', () => {
   it('defaults to info when unset', () => {

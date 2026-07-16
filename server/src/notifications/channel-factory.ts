@@ -15,6 +15,7 @@ export interface NotificationChannelConfig {
   validationMode: boolean;
   telegramBotToken?: string;
   telegramChatId?: string;
+  timeoutMs?: number;
 }
 
 export function pickNotificationChannel(cfg: NotificationChannelConfig): NotificationChannel {
@@ -27,5 +28,9 @@ export function pickNotificationChannel(cfg: NotificationChannelConfig): Notific
       },
     };
   }
-  return new TelegramChannel({ botToken: cfg.telegramBotToken, chatId: cfg.telegramChatId });
+  return new TelegramChannel({
+    botToken: cfg.telegramBotToken,
+    chatId: cfg.telegramChatId,
+    timeoutMs: cfg.timeoutMs,
+  });
 }
