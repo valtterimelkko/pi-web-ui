@@ -10,9 +10,10 @@ import type {
   DeleteWatchResponse,
   ListSessionsResponse,
   ModelsResponse,
-  PromptResponse,
+  PromptDispatchResponse,
   RefreshModelsResponse,
   RegisterWatchRequest,
+  RunReceipt,
   SendPromptRequest,
   SessionControlRequest,
   SessionControlResponse,
@@ -266,12 +267,26 @@ export class InternalApiClient implements InternalApiClientLike {
     return this.request<ListSessionsResponse>('GET', '/api/v1/sessions');
   }
 
-  /** Answers-mode prompt (non-streaming): returns the final assistant text. */
-  async prompt(sessionId: string, input: SendPromptRequest): Promise<PromptResponse> {
-    return this.request<PromptResponse>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`, {
+  /** Answers-mode prompt (non-streaming), including idempotent replay responses. */
+  async prompt(sessionId: string, input: SendPromptRequest): Promise<PromptDispatchResponse> {
+    return this.request<PromptDispatchResponse>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`, {
       ...input,
       verbosity: input.verbosity ?? 'answers',
     });
+  }
+
+  async promptWithIdempotency(
+    sessionId: string,
+    input: SendPromptRequest,
+  ): Promise<PromptDispatchResponse> {
+    return this.request<PromptDispatchResponse>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`, {
+      ...input,
+      verbosity: input.verbosity ?? 'answers',
+    });
+  }
+
+  async getRunReceipt(runId: string): Promise<RunReceipt> {
+    return this.request<RunReceipt>('GET', `/api/v1/runs/${encodeURIComponent(runId)}`);
   }
 
   async pinSession(sessionId: string): Promise<SessionControlResponse> {

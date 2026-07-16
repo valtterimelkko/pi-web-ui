@@ -92,6 +92,7 @@ export class ClaudeChannelWsClient extends EventEmitter {
   private heartbeatTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
   private _connected = false;
   private _intentionalDisconnect = false;
+  private pendingConnectReject: ((reason?: unknown) => void) | null = null;
 
   constructor(url: string, options?: ClaudeChannelWsClientOptions) {
     super();
@@ -107,16 +108,19 @@ export class ClaudeChannelWsClient extends EventEmitter {
   async connect(): Promise<void> {
     this._intentionalDisconnect = false;
     return new Promise<void>((resolve, reject) => {
+      this.pendingConnectReject = reject;
       const ws = new WebSocket(this.url);
       this.ws = ws;
 
       const onError = (err: Error) => {
         ws.removeListener('open', onOpen);
+        if (this.pendingConnectReject === reject) this.pendingConnectReject = null;
         reject(err);
       };
 
       const onOpen = () => {
         ws.removeListener('error', onError);
+        if (this.pendingConnectReject === reject) this.pendingConnectReject = null;
         this._connected = true;
         this.reconnectAttempts = 0;
         this.startHeartbeat();
@@ -151,11 +155,21 @@ export class ClaudeChannelWsClient extends EventEmitter {
     this.stopHeartbeat();
     this.clearReconnectTimer();
 
+    if (this.pendingConnectReject) {
+      const reject = this.pendingConnectReject;
+      this.pendingConnectReject = null;
+      reject(new Error('WebSocket connection cancelled'));
+    }
+
     if (this.ws) {
       const ws = this.ws;
       this.ws = null;
       try {
         ws.removeAllListeners();
+        // ws emits an error when terminate() is called during CONNECTING;
+        // retain a sink after detaching the normal handlers so shutdown never
+        // becomes an uncaught process-level exception.
+        ws.once('error', () => { });
         if (ws.readyState === WebSocket.OPEN) {
           ws.close();
         } else if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.CLOSING) {

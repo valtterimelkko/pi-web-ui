@@ -38,7 +38,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.5.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.6.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -91,6 +91,11 @@ export interface SendPromptRequest {
   message: string;
   verbosity?: Verbosity;
   mode?: PromptMode;
+  /**
+   * Optional session-scoped idempotency key. A matching key and request
+   * fingerprint reuses the existing run receipt within the documented TTL.
+   */
+  idempotencyKey?: string;
   /**
    * Fire-and-forget dispatch: run the pre-flight checks, kick off the turn, and
    * return `202 Accepted` immediately without waiting for it to complete. The
@@ -173,6 +178,8 @@ export interface BatchCreateResponse {
 export interface BatchPromptEntry {
   sessionId: string;
   message: string;
+  /** Optional session-scoped idempotency key for this batch item. */
+  idempotencyKey?: string;
 }
 
 export interface BatchPromptRequest {
@@ -187,6 +194,9 @@ export interface BatchPromptResultItem {
   success: boolean;
   content?: string;
   tokens?: { input: number; output: number; total: number };
+  runId?: string;
+  duplicate?: boolean;
+  receipt?: RunReceipt;
   error?: { code: string; message: string };
 }
 
@@ -341,6 +351,8 @@ export interface SessionInfo {
   sessionId: string;
   sessionPath: string;
   runtime: SessionRuntime;
+  /** Configured runtime instance that handled this session. */
+  executionInstanceId: string;
   cwd: string;
   model?: string;
   status: 'idle' | 'running' | 'error';
@@ -407,6 +419,8 @@ export interface ListSessionsResponse {
 
 export interface PromptResponse {
   sessionId: string;
+  /** Run identity for this prompt dispatch. */
+  runId: string;
   messageId?: string;
   content: string;
   tokens?: {
@@ -417,6 +431,50 @@ export interface PromptResponse {
   cost?: number;
   turnComplete: boolean;
 }
+
+export type RunReceiptStatus =
+  | 'accepted'
+  | 'started'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted';
+
+export interface RunReceipt {
+  runId: string;
+  sessionId: string;
+  runtime: SessionRuntime;
+  executionInstanceId: string;
+  model?: string;
+  status: RunReceiptStatus;
+  acceptedAt: string;
+  startedAt?: string;
+  agentEndAt?: string;
+  terminalAt?: string;
+  /** Stable wire error code for failed or restart-interrupted runs. */
+  errorCode?: string;
+  interruptionReason?: 'server_restart';
+  /** End of the idempotency replay window, when a key was supplied. */
+  idempotencyExpiresAt?: string;
+}
+
+export interface DetachedPromptResponse {
+  sessionId: string;
+  runId: string;
+  detached: true;
+  status: 'accepted';
+}
+
+/** Response returned when a prompt retry reuses an existing idempotent run. */
+export interface DuplicatePromptResponse {
+  sessionId: string;
+  runId: string;
+  duplicate: true;
+  receipt: RunReceipt;
+  detached?: true;
+}
+
+export type PromptDispatchResponse = PromptResponse | DuplicatePromptResponse;
 
 export interface ModelInfo {
   id: string;

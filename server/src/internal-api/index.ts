@@ -24,6 +24,11 @@ export type {
   ApprovalResponseResult,
   ListSessionsResponse,
   PromptResponse,
+  PromptDispatchResponse,
+  DuplicatePromptResponse,
+  DetachedPromptResponse,
+  RunReceiptStatus,
+  RunReceipt,
   ModelInfo,
   ModelsResponse,
   RuntimeCapabilities,
@@ -62,3 +67,8 @@ export type { EventBrokerSubscriber, EventBrokerOptions } from './event-broker.j
 export { WatchManager, WatchValidationError } from './watch/watch-manager.js';
 export { WatchStore } from './watch/watch-store.js';
 export { ConditionEngine } from './watch/condition-evaluator.js';
+export { RunReceiptManager, IdempotencyKeyValidationError } from './run-receipts/run-receipt-manager.js';
+export type { BeginRunInput, BeginRunResult, ExistingRunResult, RunFinishOutcome } from './run-receipts/run-receipt-manager.js';
+export { RunReceiptStore } from './run-receipts/run-receipt-store.js';
+export type { PersistedRunReceipt, RunReceiptStoreOptions } from './run-receipts/run-receipt-store.js';
+export { resolveExecutionInstanceId } from './execution-instance.js';

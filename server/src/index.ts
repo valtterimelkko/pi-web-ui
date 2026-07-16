@@ -154,6 +154,8 @@ async function initialize(): Promise<void> {
             apiKey: config.internalApiKey || undefined,
             tokenPath: config.internalApiTokenPath,
             watchDir: config.internalApiWatchDir,
+            runReceiptDir: config.internalApiRunReceiptDir,
+            runReceiptIdempotencyTtlMs: config.internalApiRunIdempotencyTtlMs,
             pinDir: config.internalApiPinDir,
             pinDefaultTtlMs: config.internalApiPinDefaultTtlMs,
             pinMaxTtlMs: config.internalApiPinMaxTtlMs,

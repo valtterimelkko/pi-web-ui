@@ -179,6 +179,53 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
       });
     },
   },
+  'run-receipt-idempotency': {
+    id: 'run-receipt-idempotency',
+    description: 'Verify a prompt receives a durable runId and a same-key retry reuses the completed receipt without a second runtime turn.',
+    async run(context) {
+      return withEphemeralSession(context, async (sessionId) => {
+        const idempotencyKey = `live-${context.runtime}-${Date.now()}`;
+        const input = {
+          message: 'Reply with the exact text RUN-RECEIPT-LIVE-OK and nothing else.',
+          verbosity: 'answers' as const,
+          mode: 'prompt' as const,
+          idempotencyKey,
+        };
+        const first = await context.client.promptWithIdempotency(sessionId, input);
+        const duplicate = await context.client.promptWithIdempotency(sessionId, input);
+        const receipt = await context.client.getRunReceipt(first.runId);
+        const firstContent = 'content' in first ? first.content : undefined;
+        const expectedInstance = context.runtime === 'pi'
+          ? 'pi-local-default'
+          : context.runtime === 'opencode'
+            ? 'opencode-default'
+            : context.runtime === 'antigravity'
+              ? 'antigravity-default'
+              : undefined;
+        const assertions: ValidationAssertion[] = [
+          { name: 'run_id_returned', passed: typeof first.runId === 'string' && first.runId.length > 0, details: first.runId },
+          { name: 'first_response_text', passed: firstContent?.includes('RUN-RECEIPT-LIVE-OK') === true, details: firstContent ?? '' },
+          {
+            name: 'duplicate_reused_run',
+            passed: 'duplicate' in duplicate && duplicate.duplicate === true && duplicate.runId === first.runId,
+            details: duplicate.runId,
+          },
+          { name: 'receipt_completed', passed: receipt.status === 'completed', details: receipt.status },
+          {
+            name: 'receipt_instance_identity',
+            passed: expectedInstance ? receipt.executionInstanceId === expectedInstance : Boolean(receipt.executionInstanceId),
+            details: receipt.executionInstanceId,
+          },
+        ];
+        return {
+          scenarioId: 'run-receipt-idempotency',
+          runtime: context.runtime,
+          passed: assertions.every((a) => a.passed),
+          assertions,
+        };
+      });
+    },
+  },
   'notify-on-agent-end': {
     id: 'notify-on-agent-end',
     description:

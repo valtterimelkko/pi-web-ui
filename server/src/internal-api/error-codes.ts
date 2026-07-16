@@ -41,6 +41,8 @@ export const ErrorCode = {
   TRANSFER_DISPATCH_FAILED: 'TRANSFER_DISPATCH_FAILED',
   EMPTY_TRANSCRIPT: 'EMPTY_TRANSCRIPT',
   ASK_ALREADY_CLOSED: 'ASK_ALREADY_CLOSED',
+  RUN_NOT_FOUND: 'RUN_NOT_FOUND',
+  IDEMPOTENCY_KEY_CONFLICT: 'IDEMPOTENCY_KEY_CONFLICT',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -196,6 +198,20 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'A /respond (or extension_ui_response) targeted an AskUserQuestion requestId that already resolved (timeout/abort/turn-end/disconnect, or a resolution race).',
     hint: 'The answer was not delivered. Re-send the content as a normal user message if it is still relevant.',
     docs: 'docs/INTERNAL-API.md#approvals',
+  },
+  [ErrorCode.RUN_NOT_FOUND]: {
+    httpStatus: 404,
+    description: 'No persisted run receipt exists with the given runId.',
+    cause: 'The run id is unknown or its bounded receipt retention window has elapsed.',
+    hint: 'Use the runId returned by prompt dispatch and query it before retention pruning.',
+    docs: 'docs/INTERNAL-API.md#run-identity-and-receipts',
+  },
+  [ErrorCode.IDEMPOTENCY_KEY_CONFLICT]: {
+    httpStatus: 409,
+    description: 'An idempotency key was reused for a different prompt request.',
+    cause: 'The same key is scoped to a session and remains reserved during its replay TTL.',
+    hint: 'Retry the original request with the same payload, or choose a new key for a new prompt.',
+    docs: 'docs/INTERNAL-API.md#send-prompt',
   },
 };
 

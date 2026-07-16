@@ -16,6 +16,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - **Observability/introspection endpoints (`1.3.0`)** — `GET /api/v1/diagnostics`, `GET /api/v1/sessions/:id/diagnostics`, and `GET /api/v1/events/types`
 - **Pi runtime OpenRouter model automation** — Pi can now surface a broader OpenRouter-backed model catalogue; see [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md)
 - **Notification layer (Telegram on `agent_end`)** — one-way operator notifications when an agent yields control, across all 4 runtimes, with a durable outbox; see [`NOTIFICATIONS.md`](./NOTIFICATIONS.md)
+- **Run receipts and execution instance identity** — durable Internal-API dispatch identity, session-scoped idempotency, restart recovery, and configured runtime-instance projection; see [`INTERNAL-API.md`](./INTERNAL-API.md) and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md)
 - **Fast delta summary:** [`RECENT-CHANGES.md`](./RECENT-CHANGES.md)
 
 ## 1. Agent quick start
@@ -49,7 +50,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 
 ## 6. Internal API and orchestration
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API reference (including transcript vs screen-view vs history read paths)
-- [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — task-oriented guide for spawning, monitoring, and collecting child sessions across runtimes
+- [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — task-oriented guide for spawning, monitoring, and collecting child sessions across runtimes (including run receipts)
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — the three live-validation options (Internal API, Playwright E2E, browser-WebSocket path) with full runbooks; includes `scripts/ws-validate.mjs`
 - [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watches + headless `validate:long-horizon` runner for autonomous, restart-surviving, long-running validation
 

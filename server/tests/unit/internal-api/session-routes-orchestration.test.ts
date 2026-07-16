@@ -636,6 +636,65 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(body.results[0].content).toBe('hi');
     });
 
+    it('replays a completed idempotent entry without returning a misleading empty answer', async () => {
+      registry.get.mockResolvedValue(claudeEntry('c1'));
+      const routes = makeRoutes();
+      const request = { prompts: [{ sessionId: 'c1', message: 'hi', idempotencyKey: 'batch-1' }] };
+
+      const first = createMockRes();
+      await routes.handleBatchPrompt(createJsonReq('POST', '/api/v1/sessions/batch/prompt', request), first);
+      const second = createMockRes();
+      await routes.handleBatchPrompt(createJsonReq('POST', '/api/v1/sessions/batch/prompt', request), second);
+
+      const body = JSON.parse(second.body);
+      expect(body.results[0]).toMatchObject({
+        success: true,
+        duplicate: true,
+        receipt: { status: 'completed' },
+      });
+      expect(body.results[0]).not.toHaveProperty('content');
+      expect(claudeService.sendPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a busy runtime instead of dispatching another batch entry', async () => {
+      registry.get.mockResolvedValue(claudeEntry('c1'));
+      claudeService.isRunning.mockReturnValue(true);
+      const routes = makeRoutes();
+      const res = createMockRes();
+      await routes.handleBatchPrompt(createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
+        prompts: [{ sessionId: 'c1', message: 'wait' }],
+      }), res);
+
+      const body = JSON.parse(res.body);
+      expect(body.results[0]).toMatchObject({
+        success: false,
+        error: { code: 'SESSION_BUSY' },
+      });
+      expect(claudeService.sendPrompt).not.toHaveBeenCalled();
+    });
+
+    it('keeps the accepted runId when a batch runtime throws before producing an answer', async () => {
+      const piEntry = {
+        id: 'pi-fail', path: '/tmp/pi-fail', sdkType: 'pi', cwd: '/root/proj', model: 'pi-model',
+        firstMessage: 'pi', messageCount: 0, status: 'idle',
+        createdAt: '2026-05-01T00:00:00.000Z', lastActivity: '2026-05-01T00:10:00.000Z',
+      };
+      registry.get.mockResolvedValue(piEntry);
+      multiSessionManager.getAgentSession.mockReturnValueOnce(null);
+      const routes = makeRoutes();
+      const res = createMockRes();
+      await routes.handleBatchPrompt(createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
+        prompts: [{ sessionId: 'pi-fail', message: 'run it' }],
+      }), res);
+
+      const body = JSON.parse(res.body);
+      expect(body.results[0]).toMatchObject({
+        success: false,
+        runId: expect.any(String),
+        error: { code: 'RUNTIME_ERROR' },
+      });
+    });
+
     it('reports missing sessions as failures without aborting the batch', async () => {
       registry.get.mockImplementation(async (id: string) => {
         if (id === 'c1') return claudeEntry('c1');

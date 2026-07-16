@@ -16,7 +16,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.5.0",
+  "contractVersion": "1.6.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -24,6 +24,12 @@ Current contract:
 
 ### Changelog
 
+- **1.6.0** (minor, additive) — added run identity, session-scoped idempotent prompt dispatch, persisted run receipts, and `executionInstanceId`:
+  - `idempotencyKey` on prompt dispatch (including batch entries) with a 24-hour default replay TTL and `(sessionId, idempotencyKey)` scope.
+  - `runId` on answers/detached dispatch responses, `X-Run-Id` on streaming responses, and `GET /api/v1/runs/:runId` for receipt lookup.
+  - `executionInstanceId` on session list/info projections and receipts (`claudeProfileId` for Claude, stable local defaults for the other runtimes).
+  - receipts persist accepted/started/terminal lifecycle state; server restarts recover in-flight records as `interrupted` with `SERVER_RESTART`, and bounded retention prunes old terminal records.
+  - reusing a key for a different request returns `IDEMPOTENCY_KEY_CONFLICT` rather than silently swallowing a legitimate prompt. Old clients can ignore the additive fields/endpoints. See [`INTERNAL-API.md`](./INTERNAL-API.md).
 - **1.5.0** (minor, additive) — added notification endpoints for one-way operator notifications and explicit emits:
   - `POST /api/v1/sessions/:id/notifications/opt-in`
   - `DELETE /api/v1/sessions/:id/notifications/opt-in`
@@ -136,6 +142,8 @@ re-introduced.
 | `WATCH_NOT_FOUND` | 404 | No long-horizon watch for session | GET/DELETE `/watch` before POST, or post-restart |
 | `TRANSFER_DISPATCH_FAILED` | 500 | Transfer could not be dispatched | Target creation / injection / IO failure |
 | `EMPTY_TRANSCRIPT` | 404 | No visible transcript yet | `/transcript` before any turn produced content |
+| `RUN_NOT_FOUND` | 404 | No persisted run receipt exists | Unknown or retention-pruned `runId` |
+| `IDEMPOTENCY_KEY_CONFLICT` | 409 | Key reused for a different request | Same session-scoped key has a different message/mode/verbosity/detach fingerprint |
 
 ### Additive error enrichment (`hint`, `docs`)
 

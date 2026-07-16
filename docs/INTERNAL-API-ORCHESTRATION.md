@@ -46,8 +46,8 @@ full Tier-1 orchestration loop:
 1. **Discover** — `GET /capabilities`, `GET /models`
 2. **Provision** — `POST /sessions`, `POST /sessions/batch`
 3. **Prepare** — `POST /sessions/:id/control`
-4. **Dispatch** — `POST /sessions/:id/prompt`, `POST /sessions/batch/prompt`
-5. **Monitor** — `GET /sessions/:id/events`, `GET /sessions/:id/wait`
+4. **Dispatch** — `POST /sessions/:id/prompt`, `POST /sessions/batch/prompt` (optional `idempotencyKey`, always returns a `runId`)
+5. **Monitor** — `GET /sessions/:id/events`, `GET /sessions/:id/wait`, `GET /runs/:runId`
 6. **Extract** — `GET /sessions/:id/transcript`, `GET /sessions/:id/history`
 7. **Transfer** — `POST /sessions/:id/transfer`
 8. **Aggregate** — `POST /sessions/usage`
@@ -60,7 +60,10 @@ These are the main limitations to keep in mind when designing orchestrators:
 - **No parent/child metadata model yet** — the API does not expose
   `parentSessionId`, `orchestrationId`, or `GET /sessions?parent=...`.
   You must track those relationships yourself.
-- **No async job id layer yet** — the API is session-oriented, not job-oriented.
+- **Run receipts are dispatch-scoped, not a queue:** every accepted Internal-API
+  prompt has a durable `runId` and receipt, but there is still no general job
+  queue or scheduler. Use `GET /sessions/:id/wait` for live status and
+  `GET /runs/:runId` for durable dispatch evidence.
 - **No true pending-approvals list yet** — use `/events` to observe permission
   requests live; `GET /approvals/pending` is currently informational.
 - **Claude channel `/events` caveat** — see below.
@@ -74,13 +77,14 @@ Always start by asking the server what is available now and which contract versi
 - `GET /api/v1/capabilities` — includes `contract.name`, `contract.majorVersion`, and `contract.contractVersion`
 - `GET /api/v1/models`
 
-Useful debugging/introspection endpoints added in contract `1.3.0`, `1.4.0`, and `1.5.0`:
+Useful debugging/introspection endpoints added in contract `1.3.0`, `1.4.0`, `1.5.0`, and `1.6.0`:
 
 - `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off.
 - `GET /api/v1/events/types` — machine-readable catalogue of normalized event kinds on the `/events` stream.
 - `GET /api/v1/sessions/:id/transcript?view=screen` — a read-only “what the user sees” projection for a finished or in-progress session, without browser automation.
 - `POST /api/v1/notifications` and `GET /api/v1/notifications` — explicit operator notify + recent delivery log when your orchestrator wants a deterministic ping or wants to inspect notification failures.
 - `POST/DELETE/GET /api/v1/sessions/:id/notifications...` — opt a child session into `agent_end` notifications and verify the opt-in/delivery state.
+- `GET /api/v1/runs/:runId` — durable run receipt lookup for accepted, detached, or retried dispatches.
 
 These are especially helpful during orchestration setup or when a child session behaves unexpectedly, because they let you inspect the server without shell access.
 

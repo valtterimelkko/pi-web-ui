@@ -128,6 +128,17 @@ describe('ClaudeChannelWsClient', () => {
     disconnectedClient.disconnect();
   });
 
+  it('should safely disconnect while the WebSocket is still connecting', async () => {
+    const connectingClient = new ClaudeChannelWsClient('ws://127.0.0.1:1', {
+      reconnect: false,
+      reconnectDelay: 50,
+    });
+    const pending = connectingClient.connect().catch(() => undefined);
+
+    connectingClient.disconnect();
+    await pending;
+  });
+
   it('should flush queue on reconnect', async () => {
     const noReconnectClient = new ClaudeChannelWsClient(clientUrl, {
       reconnect: false,

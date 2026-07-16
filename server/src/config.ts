@@ -145,6 +145,10 @@ export interface ServerConfig {
   internalApiKey: string;
   internalApiTokenPath: string;
   internalApiWatchDir: string;
+  /** Directory for persisted Internal-API run receipts. */
+  internalApiRunReceiptDir: string;
+  /** Idempotency replay window for accepted runs. */
+  internalApiRunIdempotencyTtlMs: number;
   /** Directory for the durable API-pin expiry ledger. */
   internalApiPinDir: string;
   /** Default API-pin lifetime (ms). */
@@ -258,6 +262,8 @@ export const config: ServerConfig = {
   internalApiKey: process.env.INTERNAL_API_KEY || '',
   internalApiTokenPath: process.env.INTERNAL_API_TOKEN_PATH || path.join(os.homedir(), '.pi-web-ui', 'internal-api-token'),
   internalApiWatchDir: process.env.INTERNAL_API_WATCH_DIR || path.join(os.homedir(), '.pi-web-ui', 'watches'),
+  internalApiRunReceiptDir: process.env.INTERNAL_API_RUN_RECEIPTS_DIR || path.join(os.homedir(), '.pi-web-ui', 'run-receipts'),
+  internalApiRunIdempotencyTtlMs: parseInt(process.env.INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS || String(24 * 60 * 60 * 1000), 10),
   internalApiPinDir: process.env.INTERNAL_API_PIN_DIR || path.join(os.homedir(), '.pi-web-ui', 'pins'),
   internalApiPinDefaultTtlMs: parseInt(process.env.INTERNAL_API_PIN_DEFAULT_TTL_MS || String(24 * 60 * 60 * 1000), 10),
   internalApiPinMaxTtlMs: parseInt(process.env.INTERNAL_API_PIN_MAX_TTL_MS || String(7 * 24 * 60 * 60 * 1000), 10),

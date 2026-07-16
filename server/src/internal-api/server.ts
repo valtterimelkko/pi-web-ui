@@ -26,6 +26,8 @@ import { createCapabilitiesRoutes, type CapabilitiesRoutesDeps } from './routes/
 import { createDiagnosticsRoutes } from './routes/diagnostics.js';
 import { createEventTypesRoutes } from './routes/event-types.js';
 import { createNotificationsRoutes } from './routes/notifications.js';
+import { RunReceiptManager } from './run-receipts/run-receipt-manager.js';
+import { RunReceiptStore } from './run-receipts/run-receipt-store.js';
 import { NotificationManager } from '../notifications/notification-manager.js';
 import { NotificationStore } from '../notifications/notification-store.js';
 import { ChannelRouter } from '../notifications/channels/notification-channel.js';
@@ -61,6 +63,10 @@ export interface InternalApiConfig {
   watchDir?: string;
   /** Directory for the durable API-pin expiry ledger */
   pinDir?: string;
+  /** Directory for persisted Internal-API run receipts. */
+  runReceiptDir?: string;
+  /** Idempotency replay window for accepted runs. */
+  runReceiptIdempotencyTtlMs?: number;
   /** Default API-pin lifetime (ms) */
   pinDefaultTtlMs?: number;
   /** Hard maximum API-pin lifetime (ms) */
@@ -77,6 +83,7 @@ const DEFAULT_SOCKET_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api.
 const DEFAULT_TOKEN_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api-token');
 const DEFAULT_WATCH_DIR = path.join(os.homedir(), '.pi-web-ui', 'watches');
 const DEFAULT_PIN_DIR = path.join(os.homedir(), '.pi-web-ui', 'pins');
+const DEFAULT_RUN_RECEIPT_DIR = path.join(os.homedir(), '.pi-web-ui', 'run-receipts');
 const DEFAULT_NOTIFICATIONS_DIR = path.join(os.homedir(), '.pi-web-ui', 'notifications');
 
 // ─── Server ──────────────────────────────────────────────────────────────────
@@ -94,6 +101,7 @@ export class InternalApiServer {
   private multiSessionManager: MultiSessionManager;
   private sessionRegistry: SessionRegistryManager;
   private piService: PiService;
+  private runReceiptManager: RunReceiptManager | null = null;
   private notificationManager: NotificationManager | null = null;
 
   // Unique ID for this internal API's Pi SDK sessions
@@ -132,6 +140,15 @@ export class InternalApiServer {
       this.apiKey = await this.resolveApiKey(tokenPath);
     }
 
+    // Load durable run receipts before binding the socket. A restart must
+    // recover in-flight records before a caller can retry an idempotent key.
+    const runReceiptManager = new RunReceiptManager({
+      store: new RunReceiptStore(this.config.runReceiptDir || DEFAULT_RUN_RECEIPT_DIR),
+      idempotencyTtlMs: this.config.runReceiptIdempotencyTtlMs ?? config.internalApiRunIdempotencyTtlMs,
+    });
+    await runReceiptManager.init();
+    this.runReceiptManager = runReceiptManager;
+
     // Create routes
     const sessionRoutes = createSessionRoutes({
       claudeService: this.claudeService,
@@ -142,6 +159,7 @@ export class InternalApiServer {
       piService: this.piService,
       internalClientId: this.internalClientId,
       watchDir: this.config.watchDir || DEFAULT_WATCH_DIR,
+      runReceiptManager,
       pinDir: this.config.pinDir || DEFAULT_PIN_DIR,
       pinDefaultTtlMs: this.config.pinDefaultTtlMs,
       pinMaxTtlMs: this.config.pinMaxTtlMs,
@@ -286,6 +304,10 @@ export class InternalApiServer {
   async stop(): Promise<void> {
     this.notificationManager?.shutdown();
     this.notificationManager = null;
+    if (this.runReceiptManager) {
+      await this.runReceiptManager.shutdown();
+      this.runReceiptManager = null;
+    }
     return new Promise((resolve) => {
       if (!this.server) {
         resolve();
@@ -523,6 +545,18 @@ export class InternalApiServer {
           await deps.sessionRoutes.handleDeleteSession(req, res, sessionId);
         } else {
           sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+        }
+        return;
+      }
+
+      case 'runs': {
+        if (id && req.method === 'GET') {
+          await deps.sessionRoutes.handleGetRunReceipt(req, res, decodeURIComponent(id));
+        } else {
+          sendJson(res, id ? 405 : 404, {
+            error: id ? 'Method not allowed' : 'Run id is required',
+            code: id ? ErrorCode.METHOD_NOT_ALLOWED : ErrorCode.NOT_FOUND,
+          });
         }
         return;
       }

@@ -8,14 +8,15 @@
  *
  * Isolation:
  *  - separate port, Unix socket, API token, and runtime companion ports
- *  - separate session registry, watch dir, and Claude/Antigravity session dirs
- *    (all under a throwaway validation directory)
+ *  - separate session registry, watch/pin/run-receipt/notification dirs, and
+ *    Claude/Antigravity session dirs (all under a throwaway validation directory)
  *  - validation mode ON → session cleanup disabled and the real-session
  *    registry rebuild skipped, so booting can never delete real data
  *
  * Pi keeps its real agent dir (for auth/models); any Pi sessions created during
  * validation are ephemeral and should be deleted by the validator. Because
- * cleanup is disabled, nothing else is ever removed.
+ * cleanup is disabled, nothing else is ever removed. Notification opt-ins and
+ * run receipts are isolated so validation cannot rehydrate production state.
  *
  * Usage:
  *   npm run validate:server                 # boots, prints socket + token, stays up
@@ -44,6 +45,8 @@ const opencodePort = getFlag('--opencode-port') ?? process.env.PI_WEB_UI_VALIDAT
 
 mkdirSync(path.join(validationDir, 'watches'), { recursive: true });
 mkdirSync(path.join(validationDir, 'pins'), { recursive: true });
+mkdirSync(path.join(validationDir, 'run-receipts'), { recursive: true });
+mkdirSync(path.join(validationDir, 'notifications'), { recursive: true });
 
 const socketPath = path.join(validationDir, 'internal-api.sock');
 const tokenPath = path.join(validationDir, 'internal-api-token');
@@ -55,6 +58,8 @@ Object.assign(process.env, {
   INTERNAL_API_SOCKET_PATH: socketPath,
   INTERNAL_API_TOKEN_PATH: tokenPath,
   INTERNAL_API_WATCH_DIR: path.join(validationDir, 'watches'),
+  INTERNAL_API_RUN_RECEIPTS_DIR: path.join(validationDir, 'run-receipts'),
+  NOTIFICATIONS_DIR: path.join(validationDir, 'notifications'),
   INTERNAL_API_PIN_DIR: path.join(validationDir, 'pins'),
   SESSION_REGISTRY_PATH: path.join(validationDir, 'session-registry.json'),
   CLAUDE_SESSION_DIR: path.join(validationDir, 'claude-sessions'),

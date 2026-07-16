@@ -164,4 +164,15 @@ describe('createAuthMiddleware', () => {
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(401);
   });
+
+  it('rejects unauthenticated run receipt lookups', () => {
+    const req = createMockReq('/api/v1/runs/run-123');
+    const res = createMockRes();
+    const next = vi.fn();
+
+    middleware(req, res as unknown as ServerResponse, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(401);
+  });
 });

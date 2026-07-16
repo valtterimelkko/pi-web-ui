@@ -113,6 +113,11 @@
 - `session-registry.ts` — Unified cross-runtime session index (`~/.pi-web-ui/session-registry.json`). Atomic tmp+rename writes.
 - `session-cleanup.ts` — Scheduled cleanup of archived/pinned sessions.
 
+### Internal API run receipts (`server/src/internal-api/run-receipts/`)
+- `run-receipt-store.ts` — atomic, disk-backed run ledger with restart interruption recovery and bounded retention.
+- `run-receipt-manager.ts` — session-scoped idempotent reservation, terminal lifecycle, and normalized `agent_end` evidence.
+- `execution-instance.ts` — additive projection of configured runtime instance identity.
+
 ### Notifications (`server/src/notifications/`)
 - `notifications/notification-manager.ts` — Cross-runtime notification orchestration: observer attach/detach, assistant-tail accumulation, debounce, durable outbox + retry, restart rehydration.
 - `notifications/notification-store.ts` — Durable JSON persistence for opt-ins, outbox, and delivery log.

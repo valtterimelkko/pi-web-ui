@@ -27,6 +27,9 @@ import type {
   ApprovalResponseResult,
   ListSessionsResponse,
   PromptResponse,
+  DuplicatePromptResponse,
+  DetachedPromptResponse,
+  RunReceipt,
   Verbosity,
   PromptMode,
   SessionRuntime,
@@ -39,6 +42,7 @@ import type {
   BatchCreateResultItem,
   BatchPromptRequest,
   BatchPromptResponse,
+  BatchPromptResultItem,
   AggregateUsageRequest,
   AggregateUsageResponse,
   PendingApprovalsResponse,
@@ -50,6 +54,12 @@ import type {
 import { InternalApiEventBroker } from '../event-broker.js';
 import { WatchManager, WatchValidationError } from '../watch/watch-manager.js';
 import { PinExpiryManager, type ApplyPinResult } from '../pin-expiry-manager.js';
+import {
+  IdempotencyKeyValidationError,
+  RunReceiptManager,
+} from '../run-receipts/run-receipt-manager.js';
+import { RunReceiptStore } from '../run-receipts/run-receipt-store.js';
+import { resolveExecutionInstanceId } from '../execution-instance.js';
 import {
   createEventCollector,
   collectAnswerEvent,
@@ -85,6 +95,12 @@ export interface SessionRoutesDeps {
   internalClientId: string;
   /** Directory for durable watch ledgers (long-horizon validation). */
   watchDir: string;
+  /** Optional durable run-receipt manager. Direct route tests use an in-memory fallback. */
+  runReceiptManager?: RunReceiptManager;
+  /** Directory for durable run receipts when no manager is injected. */
+  runReceiptDir?: string;
+  /** Idempotency replay window for a newly accepted run. */
+  runReceiptIdempotencyTtlMs?: number;
   /** Directory for the durable API-pin expiry ledger. Optional: when absent, pin
    * requests still pin in-memory but are not time-bounded/tracked (used by some unit tests). */
   pinDir?: string;
@@ -119,6 +135,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   const piSessionDir = deps.piSessionDir ?? path.join(config.piAgentDir, 'sessions');
   const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
   const antigravitySessionDir = deps.antigravitySessionDir ?? config.antigravitySessionDir;
+  const runReceipts = deps.runReceiptManager ?? new RunReceiptManager({
+    store: new RunReceiptStore(deps.runReceiptDir),
+    idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
+  });
 
   /**
    * Per-session event broker. Long-lived: subscribers added via
@@ -241,6 +261,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   function apiPinDeadline(sessionId: string): string | undefined {
     const ms = pinExpiry?.getPinnedUntil(sessionId);
     return ms ? new Date(ms).toISOString() : undefined;
+  }
+
+  function duplicatePromptResponse(
+    sessionId: string,
+    receipt: RunReceipt,
+    detached: boolean,
+  ): DuplicatePromptResponse {
+    return {
+      sessionId,
+      runId: receipt.runId,
+      duplicate: true,
+      receipt,
+      ...(detached ? { detached: true } : {}),
+    } satisfies DuplicatePromptResponse;
   }
 
   /** Merge an ApplyPinResult into the pin fields of a response object. */
@@ -400,6 +434,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sessionId: entry.id,
         sessionPath: entry.path,
         runtime: entry.sdkType as SessionRuntime,
+        executionInstanceId: resolveExecutionInstanceId(entry),
         cwd: entry.cwd,
         model: entry.model,
         status: entry.status,
@@ -424,6 +459,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sessionId: entry.id,
       sessionPath: entry.path,
       runtime: entry.sdkType as SessionRuntime,
+      executionInstanceId: resolveExecutionInstanceId(entry),
       cwd: entry.cwd,
       model: entry.model,
       status: entry.status === 'error' ? 'error' : 'idle',
@@ -592,6 +628,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  async function handleGetRunReceipt(
+    _req: IncomingMessage,
+    res: ServerResponse,
+    runId: string,
+  ): Promise<void> {
+    await runReceipts.init();
+    const receipt = runReceipts.get(runId);
+    if (!receipt) {
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.RUN_NOT_FOUND, 'Run receipt not found'));
+      return;
+    }
+    sendJson(res, 200, receipt);
+  }
+
   async function handleGetSessionHistory(
     _req: IncomingMessage,
     res: ServerResponse,
@@ -711,6 +761,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
+      // Mark the accepted run cancelled before asking the runtime to abort.
+      // Late runtime callbacks cannot overwrite an explicit user deletion.
+      await runReceipts.cancelSession(sessionId);
+
       if (entry.sdkType === 'claude') {
         claudeService.abort(sessionId);
       } else if (entry.sdkType === 'opencode') {
@@ -745,6 +799,70 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  async function executePromptWithReceipt(
+    runId: string,
+    sessionId: string,
+    runtime: SessionRuntime,
+    message: string,
+    mode: PromptMode,
+    onEvent: (event: NormalizedEvent) => void,
+    onComplete: (error?: Error) => void,
+  ): Promise<void> {
+    let completed = false;
+    let persistence: Promise<unknown> = Promise.resolve();
+    const eventPersistence: Promise<void>[] = [];
+
+    const complete = (error?: Error): void => {
+      if (completed) return;
+      completed = true;
+      // Keep persistence in the turn's promise chain. A successful answer must
+      // not be reported as complete if its terminal receipt could not reach
+      // disk; detached callers observe the rejection in their fire-and-forget
+      // catch below.
+      persistence = runReceipts.finish(runId, error
+        ? { status: 'failed', errorCode: ErrorCode.RUNTIME_ERROR }
+        : {});
+      try {
+        onComplete(error);
+      } catch (callbackError) {
+        // A transport callback must not prevent the receipt from reaching its
+        // terminal state or leave executePrompt's promise unresolved.
+        logger.errorObject(`Prompt response callback failed for run ${runId}`, callbackError);
+      }
+    };
+
+    let executionError: Error | undefined;
+    try {
+      await executePrompt(
+        sessionId,
+        runtime,
+        message,
+        mode,
+        (event) => {
+          eventPersistence.push(runReceipts.observeEvent(runId, event));
+          onEvent(event);
+        },
+        complete,
+      );
+      // Existing runtimes normally call onComplete at their turn boundary. The
+      // fallback keeps the receipt explicit if a runtime returns without doing
+      // so, without inventing a new runtime-specific completion hook.
+      if (!completed) complete();
+    } catch (error) {
+      executionError = error instanceof Error ? error : new Error(String(error));
+      complete(executionError);
+    }
+
+    // Wait for agent_end evidence as well as the terminal transition. This
+    // handles runtimes whose completion callback wins the event-order race.
+    await Promise.all(eventPersistence);
+    // Always await the terminal receipt write before propagating a runtime
+    // error. Otherwise a process crash in this small window could leave a
+    // failed run persisted as merely started.
+    await persistence;
+    if (executionError) throw executionError;
+  }
+
   async function handleSendPrompt(
     req: IncomingMessage,
     res: ServerResponse,
@@ -777,71 +895,156 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
 
     const runtime = entry.sdkType;
-    const isBusy = runtime === 'claude'
-      ? claudeService.isRunning(sessionId)
-      : runtime === 'opencode'
-        ? opencodeService.isRunning(sessionId)
-        : false;
-
-    if (isBusy && mode === 'prompt') {
-      sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy'));
-      return;
-    }
 
     // Stamp a per-prompt correlation id on every log line emitted during this
     // prompt's lifecycle (requestId + sessionId + runtime), so an agent can
     // `grep <requestId>` to reconstruct the whole causal chain in one pass.
-    // AsyncLocalStorage propagates the context across the await boundaries inside
-    // executePrompt → runtime sendPrompt → logger calls.
     const requestId = getCorrelationContext()?.requestId ?? newRequestId();
     await withCorrelation({ requestId, sessionId, runtime: entry.sdkType }, async () => {
-      logger.info(`[InternalAPI] Prompt dispatched: runtime=${runtime} verbosity=${verbosity} mode=${mode}`);
+      if (body.detach && (verbosity === 'full' || verbosity === 'tasks')) {
+        sendJson(res, 400, {
+          error: 'detach=true requires verbosity=answers (non-streaming)',
+          code: ErrorCode.INVALID_REQUEST,
+        });
+        return;
+      }
 
-      // Detached / fire-and-forget dispatch: run the same pre-flight checks, kick
-      // the turn off without awaiting it, and return 202 immediately. The turn
-      // keeps running server-side (a disconnected request does not abort it), and
-      // every event still flows into the broker so /events and /transcript observe
-      // progress. Combine with create-time pin for a "long task that won't be
-      // cleaned up and needs no polling" workflow.
-      if (body.detach) {
-        if (verbosity === 'full' || verbosity === 'tasks') {
-          sendJson(res, 400, {
-            error: 'detach=true requires verbosity=answers (non-streaming)',
-            code: ErrorCode.INVALID_REQUEST,
-          });
+      const beginInput = {
+        sessionId,
+        runtime,
+        executionInstanceId: resolveExecutionInstanceId(entry),
+        model: entry.model,
+        message: body.message,
+        mode,
+        verbosity,
+        detach: body.detach === true,
+        idempotencyKey: body.idempotencyKey,
+      } as const;
+
+      // A retry of an accepted detached/streaming run must be replayable even
+      // while the runtime reports the session busy. Peek before the busy check;
+      // beginRun repeats the check under its key lock for the race where two
+      // callers arrive together.
+      if (body.idempotencyKey !== undefined) {
+        try {
+          const existing = await runReceipts.findExistingRun(beginInput);
+          if (existing?.kind === 'conflict') {
+            sendJson(res, 409, {
+              ...enrichedErrorBody(ErrorCode.IDEMPOTENCY_KEY_CONFLICT, 'Idempotency key was already used for a different prompt'),
+              runId: existing.receipt.runId,
+            });
+            return;
+          }
+          if (existing?.kind === 'duplicate') {
+            sendJson(res, 200, duplicatePromptResponse(sessionId, existing.receipt, body.detach === true));
+            return;
+          }
+        } catch (error) {
+          if (error instanceof IdempotencyKeyValidationError) {
+            sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, error.message));
+            return;
+          }
+          logger.errorObject('Failed to inspect run receipt', error);
+          sendJson(res, 500, { error: 'Failed to inspect run receipt', code: ErrorCode.INTERNAL_ERROR });
           return;
         }
-        void executePrompt(
+      }
+
+      const isBusy = runtime === 'claude'
+        ? claudeService.isRunning(sessionId)
+        : runtime === 'opencode'
+          ? opencodeService.isRunning(sessionId)
+          : false;
+      if (isBusy && mode === 'prompt') {
+        sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy'));
+        return;
+      }
+
+      let reservation;
+      try {
+        reservation = await runReceipts.beginRun(beginInput);
+      } catch (error) {
+        if (error instanceof IdempotencyKeyValidationError) {
+          sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, error.message));
+          return;
+        }
+        logger.errorObject('Failed to reserve run receipt', error);
+        sendJson(res, 500, { error: 'Failed to reserve run receipt', code: ErrorCode.INTERNAL_ERROR });
+        return;
+      }
+
+      if (reservation.kind === 'conflict') {
+        sendJson(res, 409, {
+          ...enrichedErrorBody(ErrorCode.IDEMPOTENCY_KEY_CONFLICT, 'Idempotency key was already used for a different prompt'),
+          runId: reservation.receipt.runId,
+        });
+        return;
+      }
+
+      if (reservation.kind === 'duplicate') {
+        // A replay is a JSON receipt response even when the original request
+        // was detached; its nested receipt carries the real current status.
+        sendJson(res, 200, duplicatePromptResponse(sessionId, reservation.receipt, body.detach === true));
+        return;
+      }
+
+      const runId = reservation.receipt.runId;
+      const busyAfterReservation = runtime === 'claude'
+        ? claudeService.isRunning(sessionId)
+        : runtime === 'opencode'
+          ? opencodeService.isRunning(sessionId)
+          : false;
+      if (busyAfterReservation && mode === 'prompt') {
+        await runReceipts.finish(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY });
+        sendJson(res, 409, {
+          ...enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy'),
+          runId,
+        });
+        return;
+      }
+      try {
+        await runReceipts.markStarted(runId);
+      } catch (error) {
+        await runReceipts.finish(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
+        logger.errorObject(`Failed to start run receipt ${runId}`, error);
+        sendJson(res, 500, { error: 'Failed to start run', code: ErrorCode.INTERNAL_ERROR, runId });
+        return;
+      }
+
+      logger.info(`[InternalAPI] Prompt dispatched: runtime=${runtime} verbosity=${verbosity} mode=${mode} runId=${runId}`);
+
+      if (body.detach) {
+        void executePromptWithReceipt(
+          runId,
           sessionId,
           runtime,
           body.message,
           mode,
           () => { /* progress events flow to the broker inside executePrompt */ },
           (err) => {
-            if (err) {
-              logger.errorObject(`Detached prompt failed for ${sessionId}`, err);
-            }
+            if (err) logger.errorObject(`Detached prompt failed for ${sessionId} run=${runId}`, err);
           },
-        ).catch((err) => {
-          logger.errorObject('Detached prompt error', err);
+        ).catch((error) => {
+          logger.errorObject(`Detached prompt error for ${sessionId} run=${runId}`, error);
         });
-        sendJson(res, 202, { sessionId, detached: true, status: 'accepted' });
+        sendJson(res, 202, { sessionId, runId, detached: true, status: 'accepted' } satisfies DetachedPromptResponse);
         return;
       }
 
       try {
         if (verbosity === 'full' || verbosity === 'tasks') {
-          await handleStreamingPrompt(req, res, sessionId, runtime, body.message, verbosity, mode);
+          await handleStreamingPrompt(req, res, sessionId, runtime, body.message, verbosity, mode, runId);
           return;
         }
 
-        await handleAnswersPrompt(res, sessionId, runtime, body.message, mode);
+        await handleAnswersPrompt(res, sessionId, runtime, body.message, mode, runId);
       } catch (err) {
         logger.errorObject('Prompt failed', err);
         if (!res.headersSent) {
           sendJson(res, 500, {
             error: err instanceof Error ? err.message : 'Prompt execution failed',
             code: ErrorCode.RUNTIME_ERROR,
+            runId,
           });
         }
       }
@@ -854,10 +1057,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     runtime: SessionRuntime,
     message: string,
     mode: PromptMode,
+    runId: string,
   ): Promise<void> {
     const collector = createEventCollector();
 
-    await executePrompt(
+    await executePromptWithReceipt(
+      runId,
       sessionId,
       runtime,
       message,
@@ -866,9 +1071,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         collectAnswerEvent(collector, event);
       },
       (error) => {
-        if (error) {
-          collector.error = error;
-        }
+        if (error) collector.error = error;
         collector.complete = true;
       },
     );
@@ -877,14 +1080,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sendJson(res, 500, {
         error: collector.error.message,
         code: ErrorCode.RUNTIME_ERROR,
+        runId,
       });
       return;
     }
 
-    logger.info(`[InternalAPI] Prompt turn complete: runtime=${runtime} chars=${collector.textParts.join('').length}`);
+    logger.info(`[InternalAPI] Prompt turn complete: runtime=${runtime} runId=${runId} chars=${collector.textParts.join('').length}`);
 
     sendJson(res, 200, {
       sessionId,
+      runId,
       messageId: collector.lastMessageId,
       content: collector.textParts.join(''),
       tokens: collector.usage,
@@ -900,15 +1105,46 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     message: string,
     verbosity: Verbosity,
     mode: PromptMode,
+    runId: string,
   ): Promise<void> {
+    res.setHeader('X-Run-Id', runId);
     const sse = createSSEStream(res);
+    let turnCompleted = false;
+    let disconnectHandled = false;
 
-    req.on('close', () => {
-      if (runtime === 'claude') claudeService.abort(sessionId);
-      else if (runtime === 'opencode') opencodeService.abort(sessionId);
-    });
+    const handleClientDisconnect = (): void => {
+      // A normal SSE completion also closes the response. Only cancel/abort
+      // when the turn has not delivered its terminal callback yet.
+      if (turnCompleted || res.writableEnded || disconnectHandled) return;
+      disconnectHandled = true;
+      void (async () => {
+        try {
+          const cancelled = await runReceipts.cancelRun(runId);
+          // Completion may win the race while the client connection closes.
+          // Never abort a runtime after its receipt became terminal.
+          if (cancelled?.status !== 'cancelled') return;
+          if (runtime === 'claude') {
+            claudeService.abort(sessionId);
+          } else if (runtime === 'opencode') {
+            opencodeService.abort(sessionId);
+          } else if (runtime === 'antigravity') {
+            antigravityService.abort(sessionId);
+          } else {
+            const entry = await sessionRegistry.get(sessionId);
+            const agentSession = entry ? multiSessionManager.getAgentSession(entry.path) : undefined;
+            await agentSession?.abort().catch(() => { /* non-fatal */ });
+          }
+        } catch (error) {
+          logger.warn(`Streaming disconnect cleanup failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      })();
+    };
 
-    await executePrompt(
+    res.on('close', handleClientDisconnect);
+    req.on('aborted', handleClientDisconnect);
+
+    await executePromptWithReceipt(
+      runId,
       sessionId,
       runtime,
       message,
@@ -921,6 +1157,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
       },
       (error) => {
+        turnCompleted = true;
         if (error) {
           sse.error(error.message);
         } else {
@@ -941,6 +1178,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
       }
+
+      await runReceipts.cancelSession(sessionId);
 
       if (entry.sdkType === 'claude') {
         claudeService.abort(sessionId);
@@ -1856,7 +2095,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const parallel = body.parallel !== false;
 
-    const runOne = async (entry: { sessionId: string; message: string }, index: number) => {
+    const runOne = async (entry: BatchPromptRequest['prompts'][number], index: number): Promise<BatchPromptResultItem> => {
       const injection = detectPromptInjection(entry.message);
       if (injection.recommendation === 'block') {
         return {
@@ -1866,6 +2105,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           error: { code: ErrorCode.PROMPT_INJECTION, message: 'Prompt blocked by safety filter' },
         };
       }
+      let reservedRunId: string | undefined;
       try {
         const reg = await sessionRegistry.get(entry.sessionId);
         if (!reg) {
@@ -1876,8 +2116,150 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             error: { code: ErrorCode.SESSION_NOT_FOUND, message: 'Session not found' },
           };
         }
+
+        const beginInput = {
+          sessionId: entry.sessionId,
+          runtime: reg.sdkType as SessionRuntime,
+          executionInstanceId: resolveExecutionInstanceId(reg),
+          model: reg.model,
+          message: entry.message,
+          mode: 'prompt' as const,
+          verbosity: 'answers' as const,
+          detach: false,
+          idempotencyKey: entry.idempotencyKey,
+        };
+
+        // As with the single-prompt route, an idempotent retry must be
+        // replayable while the runtime is still busy.
+        try {
+          if (entry.idempotencyKey !== undefined) {
+            const existing = await runReceipts.findExistingRun(beginInput);
+            if (existing?.kind === 'conflict') {
+              return {
+                index,
+                sessionId: entry.sessionId,
+                success: false,
+                runId: existing.receipt.runId,
+                receipt: existing.receipt,
+                error: { code: ErrorCode.IDEMPOTENCY_KEY_CONFLICT, message: 'Idempotency key was already used for a different prompt' },
+              };
+            }
+            if (existing?.kind === 'duplicate') {
+              const completed = existing.receipt.status === 'completed';
+              return {
+                index,
+                sessionId: entry.sessionId,
+                success: completed,
+                runId: existing.receipt.runId,
+                duplicate: true,
+                receipt: existing.receipt,
+                error: completed ? undefined : {
+                  code: ErrorCode.SESSION_BUSY,
+                  message: `Existing run is ${existing.receipt.status}`,
+                },
+              };
+            }
+          }
+        } catch (error) {
+          if (error instanceof IdempotencyKeyValidationError) {
+            return {
+              index,
+              sessionId: entry.sessionId,
+              success: false,
+              error: { code: ErrorCode.INVALID_REQUEST, message: error.message },
+            };
+          }
+          throw error;
+        }
+
+        const isBusy = reg.sdkType === 'claude'
+          ? claudeService.isRunning(entry.sessionId)
+          : reg.sdkType === 'opencode'
+            ? opencodeService.isRunning(entry.sessionId)
+            : false;
+        if (isBusy) {
+          return {
+            index,
+            sessionId: entry.sessionId,
+            success: false,
+            error: { code: ErrorCode.SESSION_BUSY, message: 'Session is currently busy' },
+          };
+        }
+
+        let reservation;
+        try {
+          reservation = await runReceipts.beginRun(beginInput);
+        } catch (error) {
+          if (error instanceof IdempotencyKeyValidationError) {
+            return {
+              index,
+              sessionId: entry.sessionId,
+              success: false,
+              error: { code: ErrorCode.INVALID_REQUEST, message: error.message },
+            };
+          }
+          throw error;
+        }
+
+        if (reservation.kind === 'conflict') {
+          return {
+            index,
+            sessionId: entry.sessionId,
+            success: false,
+            runId: reservation.receipt.runId,
+            receipt: reservation.receipt,
+            error: { code: ErrorCode.IDEMPOTENCY_KEY_CONFLICT, message: 'Idempotency key was already used for a different prompt' },
+          };
+        }
+        if (reservation.kind === 'duplicate') {
+          const completed = reservation.receipt.status === 'completed';
+          return {
+            index,
+            sessionId: entry.sessionId,
+            success: completed,
+            runId: reservation.receipt.runId,
+            duplicate: true,
+            receipt: reservation.receipt,
+            error: completed ? undefined : {
+              code: reservation.receipt.errorCode ?? ErrorCode.SESSION_BUSY,
+              message: `Existing run is ${reservation.receipt.status}`,
+            },
+          };
+        }
+
+        const runId = reservation.receipt.runId;
+        reservedRunId = runId;
+        const busyAfterReservation = reg.sdkType === 'claude'
+          ? claudeService.isRunning(entry.sessionId)
+          : reg.sdkType === 'opencode'
+            ? opencodeService.isRunning(entry.sessionId)
+            : false;
+        if (busyAfterReservation) {
+          await runReceipts.finish(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY });
+          return {
+            index,
+            sessionId: entry.sessionId,
+            success: false,
+            runId,
+            error: { code: ErrorCode.SESSION_BUSY, message: 'Session is currently busy' },
+          };
+        }
+        try {
+          await runReceipts.markStarted(runId);
+        } catch (error) {
+          await runReceipts.finish(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
+          logger.errorObject(`Failed to start batch run receipt ${runId}`, error);
+          return {
+            index,
+            sessionId: entry.sessionId,
+            success: false,
+            runId,
+            error: { code: ErrorCode.INTERNAL_ERROR, message: 'Failed to start run' },
+          };
+        }
         const collector = createEventCollector();
-        await executePrompt(
+        await executePromptWithReceipt(
+          runId,
           entry.sessionId,
           reg.sdkType as SessionRuntime,
           entry.message,
@@ -1893,6 +2275,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             index,
             sessionId: entry.sessionId,
             success: false,
+            runId,
             error: { code: ErrorCode.RUNTIME_ERROR, message: collector.error.message },
           };
         }
@@ -1900,6 +2283,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           index,
           sessionId: entry.sessionId,
           success: true,
+          runId,
           content: collector.textParts.join(''),
           tokens: collector.usage,
         };
@@ -1908,6 +2292,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           index,
           sessionId: entry.sessionId,
           success: false,
+          runId: reservedRunId,
           error: {
             code: ErrorCode.RUNTIME_ERROR,
             message: err instanceof Error ? err.message : 'Prompt failed',
@@ -2101,6 +2486,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     handleListSessions,
     handleGetSession,
     handleGetSessionInfo,
+    handleGetRunReceipt,
     handleGetSessionHistory,
     handleDeleteSession,
     handleSendPrompt,

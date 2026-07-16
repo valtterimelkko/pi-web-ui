@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.5.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.6.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -146,8 +146,10 @@ The current surface is strong enough for the full Tier-1 orchestration loop:
 - **No parent/child metadata model yet:** the API does not yet expose
   `parentSessionId`, `orchestrationId`, or `GET /sessions?parent=...`.
   Orchestrators must track their own child-session relationships.
-- **No async job registry yet:** prompt dispatch is still session-oriented,
-  not job-oriented. There is no job id or queue API.
+- **Run receipts are dispatch-scoped, not a queue:** every accepted Internal-API
+  prompt has a durable `runId` and receipt, but Pi Web UI still does not expose
+  a general-purpose job queue or scheduler. Use `GET /runs/:runId` for a
+  detached run's state.
 - **Pending approvals endpoint is informational:**
   `GET /sessions/:id/approvals/pending` currently reports state and guidance,
   not a true runtime-backed pending list.
@@ -300,7 +302,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.5.0",
+    "contractVersion": "1.6.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -484,6 +486,7 @@ GET /api/v1/sessions
       "sessionId": "a1b2c3d4-...",
       "sessionPath": "a1b2c3d4-...",
       "runtime": "claude",
+      "executionInstanceId": "glm52-claude-sdk",
       "cwd": "/home/user/myproject",
       "model": "sonnet",
       "status": "idle",
@@ -514,6 +517,7 @@ Both endpoints now return enriched runtime metadata where available.
   "sessionId": "a1b2c3d4-...",
   "sessionPath": "a1b2c3d4-...",
   "runtime": "claude",
+  "executionInstanceId": "glm52-claude-sdk",
   "backendMode": "sdk",
   "nativeSessionId": "claude-native-id",
   "sessionFile": "/root/.pi-web-ui/claude-sessions/a1b2c3d4-....jsonl",
@@ -571,6 +575,7 @@ how much detail you receive.
 | `verbosity` | string | No | `answers` | `answers`, `tasks`, or `full` |
 | `mode` | string | No | `prompt` | `prompt`, `follow_up`, or `steer` |
 | `detach` | boolean | No | `false` | Fire-and-forget: run the pre-flight checks, start the turn, and return `202 Accepted` immediately without waiting. The turn keeps running server-side; read results later via `/info` + `/transcript`. Only valid with `verbosity=answers`. See [Detached dispatch](#detached-fire-and-forget-dispatch). |
+| `idempotencyKey` | string | No | — | Session-scoped key, 1–128 characters. A matching request reuses the existing run within the default 24-hour TTL; a different request with the same live key returns `IDEMPOTENCY_KEY_CONFLICT`. The raw key is never persisted. |
 
 You can also set verbosity via header: `X-Verbosity: tasks`
 
@@ -589,6 +594,7 @@ completes. The caller sees nothing while the agent works.
 ```json
 {
   "sessionId": "a1b2c3d4-...",
+  "runId": "run-…",
   "messageId": "msg_xyz",
   "content": "Here is the refactored function using async/await:\n\n```javascript\nasync function fetchData() {\n  const response = await fetch('/api/data');\n  return response.json();\n}\n```",
   "tokens": { "input": 150, "output": 80, "total": 230 },
@@ -649,6 +655,7 @@ data: {}
 ```
 
 What you see:
+- `X-Run-Id` response header identifies the durable run for this stream
 - `task_status` events for each tool the agent runs (human-readable)
 - `message_update` events with the assistant's text
 - `agent_start`/`agent_end` for turn boundaries
@@ -705,8 +712,63 @@ Best for: custom frontends that want full rendering control, debugging.
 **Prompt errors:**
 - `400` — Missing `message`, or prompt injection detected
 - `404` — Session not found
-- `409` — Session is currently busy (already streaming)
+- `409` — Session is currently busy (already streaming), or the idempotency key conflicts with a different request
 - `500` — Runtime error during execution
+
+---
+
+### Run identity and receipts
+
+Every prompt accepted by the Internal API receives a `runId`. Answers-mode
+responses include it as a JSON field, detached responses include it alongside
+`202 Accepted`, and streaming responses expose it in the additive `X-Run-Id`
+header without changing the SSE event envelope.
+
+```text
+GET /api/v1/runs/:runId
+```
+
+The lookup returns the persisted receipt directly:
+
+```json
+{
+  "runId": "run-…",
+  "sessionId": "a1b2c3d4-…",
+  "runtime": "claude",
+  "executionInstanceId": "glm52-claude-sdk",
+  "model": "profile:glm52-claude-sdk",
+  "status": "completed",
+  "acceptedAt": "2026-07-15T12:00:00.000Z",
+  "startedAt": "2026-07-15T12:00:00.100Z",
+  "agentEndAt": "2026-07-15T12:00:03.000Z",
+  "terminalAt": "2026-07-15T12:00:03.000Z",
+  "idempotencyExpiresAt": "2026-07-16T12:00:00.000Z"
+}
+```
+
+Receipt statuses are `accepted`, `started`, `completed`, `failed`,
+`cancelled`, and `interrupted`. `interrupted` is written during startup
+recovery when a process died or was restarted while a run was accepted or
+started; its `errorCode` is `SERVER_RESTART` and it is not automatically
+retried. Receipts contain identity, timestamps, status, and stable error codes
+only — never prompt text, transcript bodies, credentials, cookies, or tokens.
+
+Idempotency is scoped to `(sessionId, idempotencyKey)` and defaults to 24 hours
+from acceptance (`INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS`). A same-key retry with
+the same message/mode/verbosity/detach returns HTTP 200 with
+`{ sessionId, runId, duplicate: true, receipt }` (plus `detached: true` when
+applicable) and does not invoke the runtime again. A same-key request with a
+different fingerprint returns `409 IDEMPOTENCY_KEY_CONFLICT`; after the TTL, the key may be reused
+for a new run while the old receipt remains subject to bounded retention.
+
+Receipts are persisted under `INTERNAL_API_RUN_RECEIPTS_DIR` (default
+`~/.pi-web-ui/run-receipts`). Terminal receipts are bounded by age and count;
+old receipts may return `RUN_NOT_FOUND` after retention.
+
+`executionInstanceId` is the Claude profile id when recorded (or
+`claude-default` for older sessions without profile metadata). Pi, OpenCode,
+and Antigravity use `pi-local-default`, `opencode-default`, and
+`antigravity-default` respectively.
 
 ---
 
@@ -728,7 +790,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.5.0",
+    "contractVersion": "1.6.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -1351,7 +1413,7 @@ in parallel; set `parallel: false` to run them sequentially.
 ```json
 {
   "prompts": [
-    { "sessionId": "child-1", "message": "Summarise this file" },
+    { "sessionId": "child-1", "message": "Summarise this file", "idempotencyKey": "child-1-summarise-1" },
     { "sessionId": "child-2", "message": "Write a unit test" }
   ],
   "parallel": true
@@ -1370,8 +1432,12 @@ in parallel; set `parallel: false` to run them sequentially.
 }
 ```
 
-Each entry is independently prompt-injection-checked. Missing sessions
-and runtime failures are reported per-item without aborting the batch.
+Each entry is independently prompt-injection-checked. Missing sessions,
+busy runtimes, and runtime failures are reported per-item without aborting the
+batch. An idempotent retry returns `runId`, `duplicate: true`, and the current
+`receipt`; duplicate batch results intentionally omit `content` because
+receipts never persist transcript bodies. Fetch the session transcript if the
+answer text is needed again.
 
 ---
 
@@ -1562,7 +1628,7 @@ prompt-injection scan), **starts the turn, and returns `202 Accepted`
 immediately** without waiting for it to complete:
 
 ```json
-{ "sessionId": "a1b2c3d4-...", "detached": true, "status": "accepted" }
+{ "sessionId": "a1b2c3d4-...", "runId": "run-…", "detached": true, "status": "accepted" }
 ```
 
 The turn keeps running server-side — a disconnected request does **not** abort
@@ -1748,6 +1814,8 @@ Actionable errors may also include additive `hint` (next step) and `docs`
 | `INVALID_REQUEST` | 400 | Missing required field |
 | `METHOD_NOT_ALLOWED` | 405 | Wrong HTTP method |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
+| `RUN_NOT_FOUND` | 404 | Run receipt is unknown or retention-pruned |
+| `IDEMPOTENCY_KEY_CONFLICT` | 409 | Key reused for a different request |
 
 ## Configuration
 
@@ -1765,6 +1833,12 @@ INTERNAL_API_KEY=
 
 # Path for auto-generated token (default: ~/.pi-web-ui/internal-api-token)
 INTERNAL_API_TOKEN_PATH=
+
+# Directory for persisted run receipts (default: ~/.pi-web-ui/run-receipts)
+INTERNAL_API_RUN_RECEIPTS_DIR=
+
+# Session-scoped idempotency replay window (default 24h, milliseconds)
+INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS=86400000
 
 # Directory for durable API-pin expiry ledger (default: ~/.pi-web-ui/pins)
 INTERNAL_API_PIN_DIR=

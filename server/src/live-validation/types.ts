@@ -7,6 +7,8 @@ import type {
   SessionControlRequest,
   SessionDetail,
   SessionHistoryResponse,
+  PromptDispatchResponse,
+  RunReceipt,
 } from '../internal-api/types.js';
 
 export type ValidationCapabilities = CapabilitiesResponse;
@@ -15,6 +17,8 @@ export type ValidationRuntime = keyof ValidationCapabilities['runtimes'];
 export interface InternalApiClientLike {
   createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; source?: string; scenarioId?: string; ephemeral?: boolean }): Promise<CreateSessionResponse>;
   promptStream(sessionId: string, input: SendPromptRequest): Promise<NormalizedEvent[]>;
+  promptWithIdempotency(sessionId: string, input: SendPromptRequest): Promise<PromptDispatchResponse>;
+  getRunReceipt(runId: string): Promise<RunReceipt>;
   /**
    * Stream a prompt, invoking `onEvent` for each SSE event as it arrives
    * (before the turn completes). Needed for mid-turn interactions such as
