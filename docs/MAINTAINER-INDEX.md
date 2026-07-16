@@ -7,7 +7,7 @@ Many docs below intentionally contain concrete paths, socket locations, service 
 If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` before reading deeper architecture docs.
 
 ## Recent major doc-relevant changes
-- **Pi Codex compaction session-ID patch + auto-heal** — the embedded Pi SDK is patched in postinstall so compaction summary requests carry the session ID (Codex Luna failed without it); layered repair + failure-mode runbook in [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md)
+- **Pi Codex compaction session-ID patch retired** — OpenAI fixed the Codex backend server-side (upstream #6477/#6555 closed without a pi code change); postinstall hook, patch scripts, extension auto-heal, and regression tests removed; both SDK installs restored to pristine. History: [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md)
 - **Third live-validation option: browser-WebSocket path** — cookie auth + `/ws` without a browser, for extension slash commands, `notification` toasts, and browser-native messages; runbook + `scripts/ws-validate.mjs` in [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
 - **Claude SDK `AskUserQuestion` support** — first-class browser dialog, cancel/timeout handling, and `extension_ui_cancel`. See [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md), [`PROTOCOL.md`](./PROTOCOL.md), and [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
 - **Antigravity inactivity stall watchdog + bounded retry** — configurable via `ANTIGRAVITY_STALL_TIMEOUT_MS` and `ANTIGRAVITY_MAX_ATTEMPTS`. See [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
@@ -45,7 +45,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md) — OpenCode architecture, provider auth storage, credential-safe model routing, and the provider allowlist
 - [`OPENCODE-MODEL-AUTOMATION.md`](./OPENCODE-MODEL-AUTOMATION.md) — analysis/proposal for keeping the OpenCode model list current (Kilo Gateway, OpenCode Zen) automatically
 - [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md) — keeping the Pi runtime model list current with the OpenRouter gateway automatically (weekly refresh, no secrets stored)
-- [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md) — why the embedded Pi SDK is patched in postinstall (Codex compaction session identity), every repair layer, failure modes, and the dispatched-agent runbook
+- [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md) — RETIRED: the Codex compaction session-ID patch ecosystem (postinstall patch, auto-heal extension probe), why it existed, and how it was retired after OpenAI's server-side fix
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md) — Antigravity / `agy` architecture, logs, and failure modes
 
 ## 6. Internal API and orchestration

@@ -210,7 +210,7 @@ curl http://localhost:<server-port>/api/health/workers
 - **Session stuck streaming** → inspect stale-stream reset logic in `multi-session-manager.ts`
 - **Worker crash / dispose errors** → inspect `session-worker.ts` and crash logging
 - **Pinned session confusion** → check pin state plus stale-stream behaviour; pinning prevents cleanup, not status reset
-- **Compaction fails on Codex models** (`Summarization failed: … Model not found …`) or **`npm install` fails in postinstall** → the embedded Pi SDK's compaction session-ID patch; full runbook in [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md). Quick check: `/autocompact75` in a Pi session should report `SDK integrity: OK`
+- **Compaction fails on Codex models** (`Summarization failed: … Model not found …`) → the old embedded-SDK session-ID patch was retired after OpenAI fixed the backend server-side; history and re-diagnosis guidance in [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md)
 
 ## Claude Runtime
 
