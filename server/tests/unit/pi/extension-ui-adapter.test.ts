@@ -30,6 +30,11 @@ function createContext() {
 }
 
 describe('createCommandContextActions reload', () => {
+  it('advertises safe in-place reload support to loaded extensions', () => {
+    const capability = Symbol.for('pi-web-ui:in-place-extension-reload');
+    expect((globalThis as Record<symbol, unknown>)[capability]).toBe(true);
+  });
+
   it('reloads the active AgentSession in place', async () => {
     const context = createContext();
     const actions = createCommandContextActions(context);

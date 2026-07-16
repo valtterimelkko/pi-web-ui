@@ -10,6 +10,8 @@ import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('ExtensionUiAdapter');
 
+export const WEB_UI_IN_PLACE_RELOAD_CAPABILITY = Symbol.for('pi-web-ui:in-place-extension-reload');
+(globalThis as Record<symbol, unknown>)[WEB_UI_IN_PLACE_RELOAD_CAPABILITY] = true;
 
 export interface WebUIContext {
   sendToClient(message: unknown): void;
