@@ -24,6 +24,7 @@ export interface CommandActionContext {
   piService: {
     removeClient(clientId: string): void;
     cleanup(): Promise<void>;
+    reloadSession(sessionId: string): Promise<void>;
   };
   sessionPool: {
     createClientSession(clientId: string, options?: { cwd?: string }): Promise<{
@@ -430,11 +431,9 @@ export function createCommandContextActions(
       }
     },
 
-    // Reload extensions, skills, prompts, and themes
+    // Reload extensions, skills, prompts, themes, and context in place.
     async reload(): Promise<void> {
-      // Trigger a reload by notifying the client
-      // The actual reload happens on the next session creation
-      ctx.piService.removeClient(ctx.clientId);
+      await ctx.piService.reloadSession(ctx.sessionId);
     },
   };
 }

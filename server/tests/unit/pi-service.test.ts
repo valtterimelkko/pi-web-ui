@@ -183,6 +183,34 @@ describe('PiService', () => {
       expect(session.bindExtensions).toHaveBeenCalledWith({});
     });
 
+    it('binds Web UI reload to the same active AgentSession', async () => {
+      const { createAgentSession } = await import('@earendil-works/pi-coding-agent');
+      const mockSession = {
+        sessionId: 'web-ui-reload-session',
+        subscribe: vi.fn(),
+        setModel: vi.fn(),
+        dispose: vi.fn(),
+        reload: vi.fn().mockResolvedValue(undefined),
+        bindExtensions: vi.fn().mockResolvedValue(undefined),
+        sessionManager: {},
+      };
+      (createAgentSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ session: mockSession });
+
+      await service.createSession({
+        clientId: 'web-ui-reload-client',
+        webUIContext: {
+          clientId: 'web-ui-reload-client',
+          sendToClient: vi.fn(),
+        },
+      });
+      const bindings = mockSession.bindExtensions.mock.calls[0]?.[0];
+
+      await bindings.commandContextActions.reload();
+
+      expect(mockSession.reload).toHaveBeenCalledOnce();
+      expect(service.getSessionByClientId('web-ui-reload-client')).toBe(mockSession);
+    });
+
     it('waits for extension session_start handlers before returning the session', async () => {
       const { createAgentSession } = await import('@earendil-works/pi-coding-agent');
       let releaseBind!: () => void;
@@ -316,6 +344,33 @@ describe('PiService', () => {
     it('should return undefined for non-existent session', () => {
       const session = service.getSession('non-existent');
       expect(session).toBeUndefined();
+    });
+  });
+
+  describe('reloadSession', () => {
+    it('reloads the active AgentSession in place', async () => {
+      const { createAgentSession } = await import('@earendil-works/pi-coding-agent');
+      const mockSession = {
+        sessionId: 'reload-session',
+        subscribe: vi.fn(),
+        setModel: vi.fn(),
+        dispose: vi.fn(),
+        reload: vi.fn().mockResolvedValue(undefined),
+        bindExtensions: vi.fn().mockResolvedValue(undefined),
+        sessionManager: {},
+      };
+      (createAgentSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ session: mockSession });
+      await service.createSession({ clientId: 'reload-client' });
+
+      await service.reloadSession('reload-session');
+
+      expect(mockSession.reload).toHaveBeenCalledOnce();
+      expect(service.getSession('reload-session')).toBe(mockSession);
+      expect(service.getSessionByClientId('reload-client')).toBe(mockSession);
+    });
+
+    it('fails explicitly for an unknown session', async () => {
+      await expect(service.reloadSession('missing-session')).rejects.toThrow('Session not found');
     });
   });
 

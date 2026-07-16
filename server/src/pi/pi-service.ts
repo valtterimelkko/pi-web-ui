@@ -253,6 +253,7 @@ export class PiService {
           piService: {
             removeClient: this.removeClient.bind(this),
             cleanup: this.cleanup.bind(this),
+            reloadSession: this.reloadSession.bind(this),
           },
           sessionPool: this.sessionPool || {
             createClientSession: async () => ({ sessionId: '', session: {} }),
@@ -286,6 +287,14 @@ export class PiService {
 
   getSession(sessionId: string): AgentSession | undefined {
     return this.sessions.get(sessionId);
+  }
+
+  async reloadSession(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    await session.reload();
   }
 
   getSessionByClientId(clientId: string): AgentSession | undefined {
