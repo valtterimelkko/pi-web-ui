@@ -174,10 +174,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   }, [claudeProfiles, currentModel, isAntigravitySession, isClaudeSession, isOpenCodeSession, models, storeCurrentModel]);
 
   useEffect(() => {
+    if (isLoading) return;
     if (!availableThinkingLevels.includes(thinkingLevel)) {
       setThinkingLevel(availableThinkingLevels.at(-1) ?? 'off');
     }
-  }, [availableThinkingLevels, thinkingLevel]);
+  }, [availableThinkingLevels, isLoading, thinkingLevel]);
 
   const handleSave = () => {
     // Claude sessions lock the model at creation: never send a mid-session model

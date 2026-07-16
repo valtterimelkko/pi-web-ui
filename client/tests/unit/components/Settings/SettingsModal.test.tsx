@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SettingsModal } from '../../../../src/components/Settings/SettingsModal';
 
+const apiGetMock = vi.hoisted(() => vi.fn());
+
 // Profile entries returned by GET /api/models?sdkType=claude (profile-backed).
 const CLAUDE_PROFILES = [
   { id: 'profile:claude-sonnet-sdk', displayName: 'Claude Sonnet', provider: 'anthropic', backend: 'sdk-subscription', claudeModel: 'sonnet' },
@@ -19,6 +21,12 @@ const PI_MODELS = [
     name: 'GPT-5.4',
     provider: 'openai-codex',
     thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+  },
+  {
+    id: 'gpt-5.6-luna',
+    name: 'GPT-5.6 Luna',
+    provider: 'openai-codex',
+    thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   },
 ];
 
@@ -39,19 +47,20 @@ vi.mock('../../../../src/hooks/useWebSocket', () => ({
 
 vi.mock('../../../../src/lib/api', () => ({
   api: {
-    get: vi.fn(async (url: string) => {
-      if (url.includes('sdkType=claude')) return { models: CLAUDE_PROFILES };
-      if (url.includes('sdkType=opencode')) return { models: OPENCODE_MODELS };
-      if (url.includes('sdkType=antigravity')) return { models: [] };
-      if (url.includes('sdkType=pi')) return { models: PI_MODELS };
-      return { models: [] };
-    }),
+    get: apiGetMock,
   },
 }));
 
 describe('SettingsModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    apiGetMock.mockImplementation(async (url: string) => {
+      if (url.includes('sdkType=claude')) return { models: CLAUDE_PROFILES };
+      if (url.includes('sdkType=opencode')) return { models: OPENCODE_MODELS };
+      if (url.includes('sdkType=antigravity')) return { models: [] };
+      if (url.includes('sdkType=pi')) return { models: PI_MODELS };
+      return { models: [] };
+    });
     sessionState = {
       currentSessionSdkType: 'claude',
       currentModel: 'profile:claude-sonnet-sdk',
@@ -120,6 +129,25 @@ describe('SettingsModal', () => {
   });
 
   describe('Pi runtime — model-specific thinking limits', () => {
+    it('preserves a restored Max level while Pi model capabilities load', async () => {
+      let resolveModels!: (value: { models: typeof PI_MODELS }) => void;
+      apiGetMock.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveModels = resolve;
+      }));
+      sessionState = {
+        currentSessionSdkType: 'pi',
+        currentModel: 'openai-codex/gpt-5.6-luna',
+        currentThinkingLevel: 'max',
+        error: null,
+      };
+
+      render(<SettingsModal isOpen onClose={vi.fn()} />);
+      resolveModels({ models: PI_MODELS });
+
+      const maxButton = (await screen.findByText('Max')).closest('button');
+      expect(maxButton?.className).toContain('border-blue-500');
+    });
+
     it('does not expose Max when the selected Pi SDK model does not support it', async () => {
       sessionState = {
         currentSessionSdkType: 'pi',
