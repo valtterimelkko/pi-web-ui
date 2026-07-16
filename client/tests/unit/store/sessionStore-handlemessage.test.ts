@@ -27,6 +27,7 @@ describe('sessionStore', () => {
       sessionCacheMeta: {},
       pinnedSessionPaths: [],
       archivedSessionPaths: [],
+      transferReadySessionIds: {},
     });
     useUIStore.setState({ toasts: [] });
   });
@@ -412,6 +413,29 @@ describe('sessionStore', () => {
       // Non-blocking: no global error banner, streaming state untouched.
       expect(useSessionStore.getState().error).toBeNull();
       expect(useSessionStore.getState().isStreaming).toBe(true);
+    });
+
+    it('marks the transfer target as ready and clears the marker on the next user message', () => {
+      const state = useSessionStore.getState();
+      state.setCurrentSession('target-1');
+
+      state.handleServerMessage({
+        type: 'session_transfer_completed',
+        sourceSessionId: 'source-1',
+        targetSessionId: 'target-1',
+        createdNewSession: false,
+      });
+
+      expect(useSessionStore.getState().transferReadySessionIds['target-1']).toBe(true);
+
+      state.addMessage({
+        id: 'user-1',
+        role: 'user',
+        content: 'Continue from the transferred context.',
+        timestamp: Date.now(),
+      });
+
+      expect(useSessionStore.getState().transferReadySessionIds['target-1']).toBeUndefined();
     });
 
     it('should handle thinking_level_changed message', () => {

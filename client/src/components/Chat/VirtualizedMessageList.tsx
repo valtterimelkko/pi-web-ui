@@ -3,6 +3,7 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Loader2, AlertCircle } from 'lucide-react';
 import type { LiveMessage } from '../../hooks/useSessionStream.js';
 import type { WorkerStatus } from '../../store';
+import { TRANSFER_READY_MESSAGE } from '../../store/sessionStore';
 import { MessageBubble } from './MessageBubble';
 // Screen-view rule primitives are imported from the shared package so the
 // message list and the Internal API `view=screen` projection are defined by
@@ -27,6 +28,8 @@ interface VirtualizedMessageListProps {
   hasSession?: boolean;
   onCreateSession?: () => void;
   workerStatus?: WorkerStatus;
+  /** True after context has been transferred into this session, until the next user prompt. */
+  transferReady?: boolean;
   /**
    * Stable identifier for the current session. Used to scope the scroll
    * identity guard so it resets exactly once per session switch — not every
@@ -228,7 +231,7 @@ export const VirtualizedMessageList = forwardRef<
 >(function VirtualizedMessageList(
   // isStreaming stays in the props API (callers pass it) but auto-scroll is now
   // driven entirely by Virtuoso's followOutput, so it is intentionally not read here.
-  { messages, onAtBottomChange, hasSession = true, onCreateSession, workerStatus, sessionId },
+  { messages, onAtBottomChange, hasSession = true, onCreateSession, workerStatus, transferReady = false, sessionId },
   ref
 ) {
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
@@ -372,8 +375,26 @@ export const VirtualizedMessageList = forwardRef<
     },
   }), [listItems.length]);
 
+  const transferReadyBanner = transferReady ? (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="transfer-ready-banner"
+      className="flex-shrink-0 border-b border-emerald-200 bg-emerald-50 px-4 py-2.5 text-center text-sm font-medium text-emerald-800"
+    >
+      {TRANSFER_READY_MESSAGE}
+    </div>
+  ) : null;
+
   if (visibleMessages.length === 0) {
-    return <EmptyState hasSession={hasSession} onCreateSession={onCreateSession} />;
+    return (
+      <div className="flex h-full flex-col">
+        {transferReadyBanner}
+        <div className="min-h-0 flex-1">
+          <EmptyState hasSession={hasSession} onCreateSession={onCreateSession} />
+        </div>
+      </div>
+    );
   }
 
   // Show worker status when actively processing (spawning, streaming, or error)
@@ -381,6 +402,7 @@ export const VirtualizedMessageList = forwardRef<
 
   return (
     <div className="flex flex-col h-full">
+      {transferReadyBanner}
       <div className="flex-1 overflow-hidden">
         <Virtuoso
           ref={virtuosoRef}

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useTransferStore, type TransferScope } from '../../store/transferStore';
 import { useSessionStore } from '../../store';
+import { TRANSFER_READY_MESSAGE } from '../../store/sessionStore';
 import { useUIStore } from '../../store/uiStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { api } from '../../lib/api';
@@ -189,7 +190,7 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
 
   const statusText = () => {
     if (isSubmitting) return 'Transferring...';
-    if (isSucceeded) return 'Transfer complete';
+    if (isSucceeded) return TRANSFER_READY_MESSAGE;
     if (status === 'failed') return 'Transfer failed';
     return 'Ready to transfer';
   };
@@ -522,7 +523,7 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
             {isSucceeded ? (
               <>
                 <Check className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                <span className="text-sm text-emerald-600 font-medium">Transfer complete</span>
+                <span className="text-sm text-emerald-600 font-medium">{TRANSFER_READY_MESSAGE}</span>
               </>
             ) : isSubmitting ? (
               <>

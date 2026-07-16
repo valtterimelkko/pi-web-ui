@@ -30,6 +30,8 @@ import { useTransferStore } from './transferStore';
 
 const STORAGE_KEY = 'pi-web-ui-session';
 
+export const TRANSFER_READY_MESSAGE = 'Context transferred — ready for your next instruction';
+
 let throttleWriteTimer: ReturnType<typeof setTimeout> | null = null;
 let throttlePendingValue: string | null = null;
 
@@ -395,6 +397,10 @@ interface SessionState {
   isCompacting: boolean;
   compactionReason: string | null;
 
+  // Ephemeral UI marker for a completed context transfer. This is deliberately
+  // not persisted in the runtime transcript or localStorage.
+  transferReadySessionIds: Record<string, boolean>;
+
   // Multi-session data storage - per-session state for background sessions
   sessionData: Record<string, SessionData>;
 
@@ -430,6 +436,9 @@ interface SessionState {
   setLoading: (isLoading: boolean) => void;
   setSwitchingSession: (isSwitching: boolean, sessionId?: string | null) => void;
   setError: (error: string | null) => void;
+  markTransferReady: (sessionId: string) => void;
+  clearTransferReady: (sessionId: string) => void;
+  isTransferReady: (sessionId: string) => boolean;
   clearMessages: () => void;
   setExtensionUIRequest: (request: ExtensionUIRequest | null) => void;
   setSessionInfo: (info: SessionStats | null) => void;
@@ -526,6 +535,7 @@ export const useSessionStore = create<SessionState>()(
       // Auto-compaction state
       isCompacting: false,
       compactionReason: null,
+      transferReadySessionIds: {},
       // Multi-session data storage
       sessionData: {},
       // Worker status tracking
@@ -1157,11 +1167,17 @@ export const useSessionStore = create<SessionState>()(
                 },
               }
             : state.sessionCacheMeta;
+          let transferReadySessionIds = state.transferReadySessionIds;
+          if (sessionId && message.role === 'user' && state.transferReadySessionIds[sessionId]) {
+            transferReadySessionIds = { ...state.transferReadySessionIds };
+            delete transferReadySessionIds[sessionId];
+          }
           return { 
             messages: newMessages,
             sessionMessages: newSessionMessages,
             sessionCache: newCache,
             sessionCacheMeta: newSessionCacheMeta,
+            transferReadySessionIds,
           };
         });
       },
@@ -1221,6 +1237,19 @@ export const useSessionStore = create<SessionState>()(
         switchingToSessionId: isSwitching ? sessionId : null 
       }),
       setError: (error) => set({ error }),
+      markTransferReady: (sessionId) => set((state) => ({
+        transferReadySessionIds: {
+          ...state.transferReadySessionIds,
+          [sessionId]: true,
+        },
+      })),
+      clearTransferReady: (sessionId) => set((state) => {
+        if (!state.transferReadySessionIds[sessionId]) return state;
+        const transferReadySessionIds = { ...state.transferReadySessionIds };
+        delete transferReadySessionIds[sessionId];
+        return { transferReadySessionIds };
+      }),
+      isTransferReady: (sessionId) => Boolean(get().transferReadySessionIds[sessionId]),
 
       clearMessages: () => set({ messages: [] }),
 
@@ -2609,13 +2638,12 @@ export const useSessionStore = create<SessionState>()(
               createdNewSession: boolean;
             };
             console.log(`[sessionStore] Transfer completed: ${transferMsg.sourceSessionId} -> ${transferMsg.targetSessionId}`);
+            get().markTransferReady(transferMsg.targetSessionId);
             useTransferStore.getState().setSucceeded(transferMsg.targetSessionId);
-            if (transferMsg.createdNewSession) {
-              useUIStore.getState().addToast({
-                type: 'success' as const,
-                message: 'Session context transferred successfully',
-              });
-            }
+            useUIStore.getState().addToast({
+              type: 'success' as const,
+              message: TRANSFER_READY_MESSAGE,
+            });
             break;
           }
 

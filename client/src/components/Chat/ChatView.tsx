@@ -24,6 +24,9 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const isLoading = useSessionStore((state) => state.isLoading);
   const currentSessionId = useSessionStore((state) => state.currentSessionId);
   const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
+  const transferReady = useSessionStore((state) =>
+    state.currentSessionId ? state.isTransferReady(state.currentSessionId) : false,
+  );
   const extensionWidgets = useSessionStore((state) => state.extensionWidgets);
   const goalEngineStatus = useSessionStore((state) => state.extensionStatuses['goal-engine']);
   const getWorkerStatus = useSessionStore((state) => state.getWorkerStatus);
@@ -110,6 +113,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
           hasSession={!!currentSessionId}
           onCreateSession={() => setShowNewSessionModal(true)}
           workerStatus={workerStatus}
+          transferReady={transferReady}
         />
 
         {/* Scroll to bottom button */}

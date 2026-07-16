@@ -76,6 +76,12 @@ describe('VirtualizedMessageList', () => {
     expect(screen.getByTestId('message-bubble-3')).toBeInTheDocument();
   });
 
+  it('shows a deterministic ready marker after context transfer', () => {
+    render(<VirtualizedMessageList messages={[]} isStreaming={false} transferReady />);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Context transferred — ready for your next instruction');
+  });
+
   it('shows empty state when no messages', () => {
     render(<VirtualizedMessageList messages={[]} isStreaming={false} />);
     

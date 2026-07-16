@@ -330,6 +330,46 @@ describe('TransferService', () => {
       expect(result.error?.code).toBe(TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE);
     });
 
+    it('uses the Pi session header cwd when resolving a fallback session path', async () => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-fallback-cwd-test-'));
+      const encodedCwdDir = path.join(tmpDir, '--root-pi-web-ui--');
+      await fs.mkdir(encodedCwdDir, { recursive: true });
+
+      const sourcePath = path.join(encodedCwdDir, '2026-01-01T00-00-00-000Z_pi-source.jsonl');
+      const targetPath = path.join(encodedCwdDir, '2026-01-01T00-00-00-000Z_pi-target.jsonl');
+      const sessionHeader = JSON.stringify({
+        type: 'session',
+        version: 3,
+        id: 'pi-source',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        cwd: '/root/pi-web-ui',
+      });
+      await fs.writeFile(sourcePath, [
+        sessionHeader,
+        JSON.stringify({
+          type: 'message',
+          message: { role: 'user', content: [{ type: 'text', text: 'Hello from fallback Pi' }] },
+          timestamp: 1700000000000,
+        }),
+      ].join('\n') + '\n');
+      await fs.writeFile(targetPath, sessionHeader + '\n');
+
+      const sendPiPrompt = vi.fn(async (_sessionPath: string, _message: string, onEvent: (event: unknown) => void) => {
+        onEvent({ type: 'agent_start' });
+      });
+      const config = makeConfig({ piSessionDir: tmpDir, sendPiPrompt });
+      const result = await new TransferService(config).executeTransfer({
+        sourceSessionId: 'pi-source',
+        targetSessionId: 'pi-target',
+        scope: 'visible_full',
+      });
+
+      expect(result.success).toBe(true);
+      expect(sendPiPrompt).toHaveBeenCalledWith(targetPath, expect.stringContaining('Source workspace: /root/pi-web-ui'), expect.any(Function));
+
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
     it('handles Pi source extraction', async () => {
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-tx-test-'));
       const sessionFile = path.join(tmpDir, 'session.jsonl');

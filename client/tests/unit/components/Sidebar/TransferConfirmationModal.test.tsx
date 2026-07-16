@@ -235,7 +235,7 @@ describe('TransferConfirmationModal', () => {
     it('shows success state after transfer succeeds with "Go to target session" button', () => {
       setupExistingStore({ status: 'succeeded', createdSessionId: 'new-1' });
       render(<TransferConfirmationModal onConfirm={mockOnConfirm} />);
-      expect(screen.getByText('Transfer complete')).toBeInTheDocument();
+      expect(screen.getByText('Context transferred — ready for your next instruction')).toBeInTheDocument();
       const goToBtn = screen.getByRole('button', { name: /Go to target session/ });
       expect(goToBtn).toBeInTheDocument();
       fireEvent.click(goToBtn);

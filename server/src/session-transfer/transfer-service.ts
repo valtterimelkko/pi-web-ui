@@ -213,7 +213,27 @@ export class TransferService {
           if (!stat.isFile()) continue;
           const dirName = path.basename(path.dirname(candidate));
           const inner = dirName.replace(/^--/, '').replace(/--$/, '');
-          const cwd = '/' + inner.replace(/--/g, '/');
+          // Pi session directory names are lossy for cwd reconstruction because
+          // hyphens can be either path separators or part of a directory name.
+          // Prefer the authoritative cwd stored in the session header and keep
+          // the directory-derived value only as a legacy fallback.
+          let cwd = '/' + inner.replace(/--/g, '/');
+          try {
+            const handle = await fs.open(candidate, 'r');
+            try {
+              const buffer = Buffer.alloc(4096);
+              const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+              const firstLine = buffer.toString('utf8', 0, bytesRead).split('\n', 1)[0];
+              const header = JSON.parse(firstLine) as { cwd?: unknown };
+              if (typeof header.cwd === 'string' && header.cwd.trim()) {
+                cwd = header.cwd;
+              }
+            } finally {
+              await handle.close();
+            }
+          } catch {
+            // Older or partial files may not have a readable session header.
+          }
           return {
             id: sessionIdOrPath,
             sdkType: 'pi' as const,
