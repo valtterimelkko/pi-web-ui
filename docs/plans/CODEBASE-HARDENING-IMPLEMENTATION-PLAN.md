@@ -126,19 +126,27 @@ A changed baseline is not automatically a failure. It requires a written reconci
 
 ### 4.2 RED → GREEN → REFACTOR is required
 
-For every behaviour-changing task:
+For every behaviour-changing task, execute one small behaviour at a time:
 
-1. Add the smallest regression test that expresses the required behaviour.
-2. Run that exact test and capture the expected assertion failure.
+1. Add the smallest regression test that expresses the required behaviour through a public boundary or the narrowest legitimate test seam.
+2. Run that exact test and capture the expected assertion failure **before any production-file edit for that behaviour**.
 3. Confirm it failed because the defect exists, not because of a syntax/setup error.
 4. Implement the minimum production change.
-5. Run the same test and capture PASS.
+5. Run the same test and capture PASS without weakening or deleting its assertion.
 6. Run the entire affected test file and adjacent subsystem tests.
-7. Refactor only while tests remain green.
+7. Refactor only while tests remain green, then start a new RED cycle for the next behaviour.
 
-No production code may precede its failing test. If exploratory code is needed, discard it before starting the recorded TDD cycle.
+No production code may precede its failing test. If exploratory code is needed, discard it before starting the recorded TDD cycle. The execution report must capture the focused RED command/output while the diff contains only the test/report change; a later recollection that “the test was red” is not evidence.
 
-Configuration-only documentation changes may use a command-level RED state instead, but the report must still show the command failing before and passing after. For performance-only changes, add a deterministic behavioural/lifecycle test first; benchmark numbers alone are not a regression test.
+Use the correct test-first pattern for the kind of work:
+
+- **Defect or changed boundary:** add a regression test that fails on the current defect and passes with the fix.
+- **Semantics-preserving refactor:** first add/confirm a passing characterisation test for behaviour that must not change, then add a focused failing assertion for the actual defect being removed (for example duplicate invocation, leaked timer, unbounded cardinality, or redundant allocation). Do not manufacture RED by temporarily breaking production code.
+- **Performance work:** RED must be a deterministic count/bound/lifecycle assertion; wall-clock benchmarks are supporting evidence only.
+- **Configuration/tooling work:** a command-level RED state is acceptable, but capture the exact failing command and prove GREEN does not come from excluding files, lowering thresholds, or disabling a rule.
+- **Already-fixed work on a newer baseline:** mark it `not applicable` with source and existing-test evidence. Do not invent a failing test or reimplement it.
+
+Tests must assert externally meaningful results and side-effect absence, not merely that a mock was called. Mocks/fake timers are acceptable at process, clock, provider, and filesystem boundaries when real dependencies would make the test unsafe or nondeterministic. A test may be corrected after RED only for a demonstrated test defect; the report must explain the correction. Never change expected behaviour merely to match the implementation.
 
 ### 4.3 Per-task definition of done
 
@@ -314,13 +322,15 @@ Live validate on a disposable server:
 
 ```bash
 npm run validate:server -- --dir <short-temp-dir> --port 0
-npm run validate:live -- --socket <sock> --token-path <token> \
-  --runtime pi --scenario smoke --json
-npm run validate:live -- --socket <sock> --token-path <token> \
-  --runtime pi --scenario run-receipt-idempotency --json
+# The final bounded smoke matrix in section 11.5 supplies the valid create/turn check.
+# Add one fast live malformed-input request against the same disposable socket:
+TOKEN="$(cat <token>)"
+curl --silent --show-error --unix-socket <sock> \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST http://localhost/api/v1/sessions -d '{"runtime":"not-a-runtime"}'
 ```
 
-A capability skip is evidence only for an unsupported scenario, not for malformed-input or bounded-concurrency tests.
+The malformed request must return `400` with `INVALID_REQUEST` and create no session. Do not print or persist the token. A capability skip is evidence only for an unsupported runtime scenario, not for malformed-input or bounded-concurrency tests.
 
 ### S4. Unify protection for all prompt-like browser paths
 
@@ -942,24 +952,55 @@ Requirements:
 
 Do not claim an improvement from a single noisy timing sample.
 
-### 11.5 Runtime live-validation gate
+### 11.5 Bounded mandatory live-validation gate
 
-Read `docs/LIVE-VALIDATION.md` before running. Use a disposable server and its printed socket/token paths. Never use production defaults or `--allow-production` without explicit user permission.
+Live validation is mandatory, but it is a **small smoke gate**, not a second exhaustive test suite. Unit/integration/E2E tests carry the edge-case matrix; live validation proves that the built server can still complete real work through its actual Internal API and browser WebSocket boundaries.
+
+Read `docs/LIVE-VALIDATION.md` before running. Boot **one** disposable server, reuse it for all checks below, and use only its printed socket/token/port. Never use production defaults or `--allow-production` without explicit user permission.
+
+#### Required bounded matrix
+
+1. **Internal API runtime smoke:** one `smoke` scenario for each runtime available on the disposable server. This is intentionally `--scenario smoke`, not `--scenario all`.
+2. **Exact browser WebSocket path:** one authenticated browser-protocol prompt using `scripts/ws-validate.mjs` against one available runtime/session. This covers the upgrade/auth/origin/routing path changed by S2/S4.
+3. **Internal API rejection path:** the single unknown-runtime request in S3 must return `400 INVALID_REQUEST` without creating a session.
+4. **Long-horizon persistence path:** because P1 directly changes this runner, perform one short `start` → `once` resume with `--interval 2 --max-wait 120`. Do not run an hour-long watch.
 
 ```bash
-npm run validate:server
+# Process 1: one isolated server for the whole matrix.
+npm run validate:server -- --dir <short-temp-dir> --port <free-port>
+
+# Process 2: at most one real turn per available runtime.
 npm run validate:live -- --socket <sock> --token-path <token> \
-  --runtime all --scenario all --json
+  --runtime all --scenario smoke --json
+
+# One exact browser-WebSocket prompt; use the session/password setup from S2.
+node scripts/ws-validate.mjs --base http://127.0.0.1:<free-port> \
+  --origin <allowed-origin> --password <validation-password> \
+  --session '<validation-session-path>' --step prompt \
+  --text 'Reply with exactly: LIVE-SMOKE-OK' --timeout 180000
+
+# One short resumability check; use a cheap deterministic text condition.
+npm run validate:long-horizon -- --socket <sock> --token-path <token> \
+  --subject <available-runtime> --seed 'Reply with exactly: LH-OK' \
+  --watch-text LH-OK --interval 2 --max-wait 120 --mode start \
+  --state <short-temp-dir>/lh-state.json
+npm run validate:long-horizon -- --socket <sock> --token-path <token> \
+  --mode once --state <short-temp-dir>/lh-state.json --json
 ```
 
-Additionally:
+The `once` check may initially report “still running”; poll it at the declared two-second cadence until it passes or the 120-second absolute budget expires. Successful task-level runs from S2, S3, or P1 count toward this final matrix and must not be repeated just for ceremony.
 
-- run the browser-WebSocket validation for S2/S4;
-- run a short `start` → `once` long-horizon resume for P1;
-- run provider-profile/concurrency validation only if Claude profile paths were changed;
-- record capability skips and unavailable runtimes honestly.
+#### Time and retry budget
 
-A capability-driven skip is not a failure, but it may not be reported as a pass. Antigravity’s non-isolatable store requires the explicit exception described in L6.
+- Target total elapsed time: **30 minutes or less** after the disposable server is ready.
+- Run only the four checks above. Do not add `scenario all`, wire proxies, profile matrices, concurrency suites, hour-long watches, or production validation unless a failure specifically requires diagnosis or the user requests them.
+- Retry one failed smoke once after checking the captured error. Do not loop indefinitely.
+- At least one Internal API real-runtime turn **and** the browser-WebSocket turn must pass. Unit tests cannot substitute for both live boundaries.
+- Record pass/fail/skip, duration, runtime/backend identity, and bounded scrubbed evidence in the implementation report.
+- Capability skips and unavailable runtimes must be reported as `skipped/unavailable`, never as passes. A provider outage after one controlled retry is an explicit external blocker for that runtime, not a reason to keep the whole scheme running forever.
+- Antigravity remains the documented exception: disposable mode disables it because `agy` cannot isolate its conversation store. Do not target production; use the L6 unit/integration evidence unless the user separately authorises a non-isolated live check.
+
+After the matrix, stop the disposable server, confirm its port/socket are gone, and remove the temporary directory. Failure to tear it down fails this gate.
 
 ### 11.6 Full browser gate
 
@@ -1075,6 +1116,6 @@ Split a suggested commit when RED/GREEN evidence or rollback boundaries are clea
 
 A valid final statement should be evidence-based and short:
 
-> All in-scope tasks in `CODEBASE-HARDENING-IMPLEMENTATION-PLAN.md` are complete at `<commit>`. The report contains RED/GREEN proof for every behaviour change. Full lint, typecheck, 3,xxx+ tests, truthful coverage, build, Chromium E2E, disposable runtime validation, dependency audit, lifecycle churn checks, and before/after performance gates passed. Audit reports zero high/critical production vulnerabilities. No UI/protocol compatibility change, secret, session artifact, or untracked review ledger was committed. M1 resulted in `<no retention change | separate approved compatibility plan>` based on recorded measurements.
+> All in-scope tasks in `CODEBASE-HARDENING-IMPLEMENTATION-PLAN.md` are complete at `<commit>`. The report contains captured test-first RED/GREEN proof for every behaviour change. Full lint, typecheck, 3,xxx+ tests, truthful coverage, build, Chromium E2E, the bounded disposable live smoke matrix, dependency audit, lifecycle churn checks, and before/after performance gates passed. Audit reports zero high/critical production vulnerabilities. No UI/protocol compatibility change, secret, session artifact, or untracked review ledger was committed. M1 resulted in `<no retention change | separate approved compatibility plan>` based on recorded measurements.
 
 If that statement cannot be filled with actual captured evidence, do not claim completion.
