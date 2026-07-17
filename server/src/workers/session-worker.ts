@@ -3,7 +3,8 @@
  * Manages a single Pi SDK RPC process for session isolation.
  */
 
-import { spawn, ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import type { SessionWorkerState, WorkerOptions, RPCEvent, EventHandler } from './types.js';
 import { RPCProtocolBridge } from './rpc-protocol-bridge.js';
 import type { WorkerStatus } from '@pi-web-ui/shared';
@@ -12,6 +13,9 @@ import { createLogger } from '../logging/logger.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
 
 const logger = createLogger('SessionWorker');
+
+/** Maximum size of the incomplete-line stdout buffer before it is reset. */
+const MAX_STDOUT_BUFFER_BYTES = 1024 * 1024; // 1 MiB
 
 export interface SessionWorkerObservabilityOptions {
   metrics?: OperationalMetrics;
@@ -23,6 +27,10 @@ export class SessionWorker {
   private bridge: RPCProtocolBridge;
   private eventHandlers: Set<EventHandler> = new Set();
   private stdoutBuffer: string = '';
+  /** UTF-8 decoder so multibyte chars split across stdout chunks reassemble. */
+  private stdoutDecoder = new StringDecoder('utf8');
+  /** Resolved on termination; makes terminate() idempotent. */
+  private terminatePromise: Promise<void> | null = null;
   private readonly metrics: OperationalMetrics;
   private readonly readinessFallbackMs: number;
 
@@ -74,47 +82,8 @@ export class SessionWorker {
     this.state.pid = this.state.process.pid;
     this.state.spawnedAt = Date.now();
 
-    // Handle stdout (JSONL events)
-    this.state.process.stdout?.on('data', (data: Buffer) => {
-      this.handleStdout(data.toString());
-    });
-
-    // Handle stderr (logs)
-    this.state.process.stderr?.on('data', (data: Buffer) => {
-      logger.error(`[SessionWorker:${this.state.pid}] stderr:`, data.toString());
-    });
-
-    // Handle process exit
-    this.state.process.on('exit', (code, signal) => {
-      this.handleExit(code, signal);
-    });
-
-    // Handle process spawn errors
-    this.state.process.on('spawn', () => {
-      this.state.status = 'ready';
-      logger.info(`[SessionWorker:${this.state.pid}] Process spawned successfully`);
-    });
-
-    this.state.process.on('error', (err) => {
-      this.state.status = 'error';
-      this.state.error = err.message;
-      logger.error(`[SessionWorker:${this.state.pid}] Process error:`, err);
-
-      // Record spawn failure if process hasn't fully started
-      if (!this.state.pid) {
-        const crashLogger = getCrashLogger();
-        crashLogger.recordCrash({
-          sessionPath: this.state.sessionPath,
-          pid: undefined,
-          exitCode: null,
-          signal: null,
-          memoryLimitMB: this.state.options.maxOldSpaceSize ?? 512,
-          spawnedAt: this.state.spawnedAt,
-          errorMessage: err.message,
-          previousStatus: 'spawning',
-        });
-      }
-    });
+    // Handle stdout (JSONL events) — attach handlers (extracted for testability).
+    this.attachProcessHandlers();
 
     // Wait for ready state (streaming_started or similar)
     await this.waitForReady();
@@ -177,21 +146,93 @@ export class SessionWorker {
   /**
    * Terminate the worker gracefully.
    */
-  async terminate(): Promise<void> {
+  terminate(): Promise<void> {
+    // Idempotent: a second call returns the same in-flight promise (exact same
+    // object) and does not re-kill or stack another exit listener.
+    if (this.terminatePromise) return this.terminatePromise;
+    const proc = this.state.process;
+    if (!proc || this.state.status === 'terminated') {
+      this.terminatePromise = Promise.resolve();
+      return this.terminatePromise;
+    }
+
+    this.terminatePromise = new Promise((resolve) => {
+      const onExit = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+      proc.once('exit', onExit);
+
+      const timeout = setTimeout(() => {
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          // Process may have already exited; resolve on the exit event below.
+        }
+      }, 5000);
+      timeout.unref?.();
+
+      try {
+        proc.kill('SIGTERM');
+      } catch {
+        // Process may have already exited; the once('exit') listener still
+        // resolves if the event has yet to fire.
+      }
+    });
+    return this.terminatePromise;
+  }
+
+  /**
+   * Attach stdout/stderr/exit/spawn/error handlers to the spawned process.
+   * Extracted from spawn() so the framing path is unit-testable with a fake
+   * process and so multibyte decoding + buffer bounding live in one place.
+   */
+  private attachProcessHandlers(): void {
     const proc = this.state.process;
     if (!proc) return;
 
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        proc.kill('SIGKILL');
-      }, 5000);
+    // Handle stdout (JSONL events). Decode via StringDecoder so a multibyte
+    // UTF-8 character split across chunks reassembles instead of producing a
+    // replacement char.
+    proc.stdout?.on('data', (data: Buffer) => {
+      this.handleStdout(this.stdoutDecoder.write(data));
+    });
 
-      proc.on('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
+    // Handle stderr (logs)
+    proc.stderr?.on('data', (data: Buffer) => {
+      logger.error(`[SessionWorker:${this.state.pid}] stderr:`, data.toString());
+    });
 
-      proc.kill('SIGTERM');
+    // Handle process exit
+    proc.on('exit', (code, signal) => {
+      this.handleExit(code, signal);
+    });
+
+    // Handle process spawn errors
+    proc.on('spawn', () => {
+      this.state.status = 'ready';
+      logger.info(`[SessionWorker:${this.state.pid}] Process spawned successfully`);
+    });
+
+    proc.on('error', (err: Error) => {
+      this.state.status = 'error';
+      this.state.error = err.message;
+      logger.error(`[SessionWorker:${this.state.pid}] Process error:`, err);
+
+      // Record spawn failure if process hasn't fully started
+      if (!this.state.pid) {
+        const crashLogger = getCrashLogger();
+        crashLogger.recordCrash({
+          sessionPath: this.state.sessionPath,
+          pid: undefined,
+          exitCode: null,
+          signal: null,
+          memoryLimitMB: this.state.options.maxOldSpaceSize ?? 512,
+          spawnedAt: this.state.spawnedAt,
+          errorMessage: err.message,
+          previousStatus: 'spawning',
+        });
+      }
     });
   }
 
@@ -199,8 +240,12 @@ export class SessionWorker {
    * Handle stdout data (JSONL lines).
    */
   private handleStdout(data: string): void {
+    // Ignore late output after termination so a dying process cannot resurrect
+    // state or grow the buffer.
+    if (this.state.status === 'terminated') return;
+
     this.stdoutBuffer += data;
-    
+
     // Process complete lines
     const lines = this.stdoutBuffer.split('\n');
     this.stdoutBuffer = lines.pop() || ''; // Keep incomplete line in buffer
@@ -211,12 +256,23 @@ export class SessionWorker {
         this.handleEvent(event);
       }
     }
+
+    // Bound the incomplete-line buffer. An unterminated run larger than the cap
+    // is discarded and reported as one controlled error — never parsed as a
+    // forged partial protocol message and never grown unbounded.
+    if (Buffer.byteLength(this.stdoutBuffer, 'utf8') > MAX_STDOUT_BUFFER_BYTES) {
+      this.stdoutBuffer = '';
+      this.handleEvent({ type: 'error', message: 'Worker stdout framing buffer overflow; incomplete line discarded' } as RPCEvent);
+    }
   }
 
   /**
    * Handle a parsed RPC event.
    */
   private handleEvent(event: RPCEvent): void {
+    // Late events from a terminated process must not update status/state.
+    if (this.state.status === 'terminated') return;
+
     this.state.lastActivity = Date.now();
     this.state.eventBuffer.push(event);
 
