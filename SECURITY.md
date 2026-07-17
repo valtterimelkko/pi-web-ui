@@ -50,7 +50,8 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
 
 ### 4. Prompt-injection detection
 
-- User prompts are screened before being forwarded to Pi Coding Agent, Claude Direct, or OpenCode.
+- Every user-controlled text field that reaches a runtime is screened through one prompt-injection check — browser WebSocket `prompt`, `follow_up`, and `steer`; Internal API single/batch prompts; and session-transfer handoff text — before any runtime adapter is invoked.
+- Auth/CSRF validation, per-client rate limiting, and payload bounding are applied uniformly upstream of the check, so equivalent prompt-like message types cannot bypass the boundary by alternating types.
 - Detection currently uses pattern-based checks in:
   - `server/src/security/prompt-injection.ts`
 - Do not bypass this stage when adding new runtime paths or prompt-like entry points.

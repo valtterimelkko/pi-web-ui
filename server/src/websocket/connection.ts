@@ -879,18 +879,36 @@ export class WebSocketConnectionManager {
     return this.clientViewingSession.get(clientId) || this.multiSessionManager.getClientSessionPath(clientId);
   }
 
-  private async handlePrompt(
-    clientId: string,
-    message: { type: 'prompt'; sessionId: string; message: string; images?: ImageContent[]; agent?: string }
-  ): Promise<void> {
-    // Prompt injection check
-    const injectionCheck = detectPromptInjection(message.message);
+  /**
+   * Unified prompt-boundary check for every user-controlled text field that
+   * reaches a runtime (prompt, steer, follow_up). Returns true and sends a
+   * PROMPT_INJECTION error when the text is blocked, so callers can early-return
+   * before any runtime adapter is invoked.
+   *
+   * Auth/CSRF validation, per-client rate limiting, and payload bounding are
+   * applied uniformly upstream in `handleMessage`/`routeMessage` before this
+   * runs, so the same protection sequence covers prompt, steer, and follow_up.
+   */
+  private blockIfPromptInjection(clientId: string, text: string): boolean {
+    const injectionCheck = detectPromptInjection(text);
     if (injectionCheck.recommendation === 'block') {
       this.sendMessage(clientId, {
         type: 'error',
         message: 'Prompt contains potentially malicious content',
         code: 'PROMPT_INJECTION',
       });
+      return true;
+    }
+    return false;
+  }
+
+  private async handlePrompt(
+    clientId: string,
+    message: { type: 'prompt'; sessionId: string; message: string; images?: ImageContent[]; agent?: string }
+  ): Promise<void> {
+    // Unified prompt-boundary check (prompt / steer / follow_up all route
+    // user-controlled text through this before any runtime is called).
+    if (this.blockIfPromptInjection(clientId, message.message)) {
       return;
     }
 
@@ -1284,6 +1302,9 @@ export class WebSocketConnectionManager {
   }
 
   private async handleSteer(clientId: string, message: { type: 'steer'; message: string }): Promise<void> {
+    if (this.blockIfPromptInjection(clientId, message.message)) {
+      return;
+    }
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
@@ -1300,6 +1321,9 @@ export class WebSocketConnectionManager {
   }
 
   private async handleFollowUp(clientId: string, message: { type: 'follow_up'; message: string }): Promise<void> {
+    if (this.blockIfPromptInjection(clientId, message.message)) {
+      return;
+    }
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
