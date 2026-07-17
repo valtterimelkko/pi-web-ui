@@ -4,8 +4,8 @@
  */
 
 import { SessionWorker } from './session-worker.js';
-import type { WorkerOptions, WorkerManagerConfig, EventHandler, RPCEvent } from './types.js';
-import { WorkerStatus, WorkerPoolStats, WorkerInfo } from '@pi-web-ui/shared';
+import type { WorkerOptions, WorkerManagerConfig } from './types.js';
+import { WorkerPoolStats, WorkerInfo } from '@pi-web-ui/shared';
 import { getCrashLogger, CrashStats } from './crash-logger.js';
 
 export class WorkerPool {
@@ -26,17 +26,28 @@ export class WorkerPool {
    * Get or create a worker for a session.
    */
   async getOrCreate(sessionPath: string, options?: Partial<WorkerOptions>): Promise<SessionWorker> {
+    // Sweep any workers whose process has exited/crashed (status 'terminated')
+    // so they no longer occupy capacity. This is the lazy half of the unified
+    // cleanup path; explicit terminate()/cleanupIdle()/shutdownAll() release
+    // eagerly. Converges exit/crash/explicit-delete onto one idempotent path.
+    this.cleanupTerminated();
+
     // Check if worker already exists
     const existing = this.workers.get(sessionPath);
     if (existing && existing.status !== 'terminated') {
       return existing;
+    }
+    // Existing entry is terminated -> release it before recreating.
+    if (existing) {
+      this.release(sessionPath, existing);
     }
 
     // Check max workers limit
     if (this.workers.size >= this.config.maxWorkers) {
       // Try to cleanup idle workers first and wait for processes to exit.
       await this.cleanupIdle();
-      
+      this.cleanupTerminated();
+
       if (this.workers.size >= this.config.maxWorkers) {
         throw new Error(`Maximum worker limit reached (${this.config.maxWorkers})`);
       }
@@ -66,6 +77,38 @@ export class WorkerPool {
   }
 
   /**
+   * Idempotently remove a worker from the pool map. Only deletes the entry if
+   * it still points at `expected` (or `expected` is omitted), so a stale
+   * reference cannot remove a newer worker that reused the same path. This is
+   * the single cleanup primitive shared by terminate/cleanupIdle/shutdown.
+   */
+  private release(sessionPath: string, expected?: SessionWorker): boolean {
+    const current = this.workers.get(sessionPath);
+    if (!current || (expected !== undefined && current !== expected)) {
+      return false;
+    }
+    this.workers.delete(sessionPath);
+    return true;
+  }
+
+  /**
+   * Remove every worker whose process has exited/crashed ('terminated'). These
+   * hold no live process and must not occupy capacity. Called lazily from
+   * getOrCreate and from the periodic cleanup so exit/crash converges on the
+   * same release path as explicit termination.
+   */
+  private cleanupTerminated(): number {
+    let removed = 0;
+    for (const [path, worker] of this.workers) {
+      if (worker.status === 'terminated') {
+        this.release(path, worker);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  /**
    * Remove idle workers and return count removed.
    */
   async cleanupIdle(maxIdleMs?: number): Promise<number> {
@@ -79,9 +122,12 @@ export class WorkerPool {
 
       if (isIdle && idleTime > idleThreshold) {
         terminations.push(worker.terminate());
-        this.workers.delete(path);
+        this.release(path, worker);
       }
     }
+
+    // Also purge any already-terminated workers in the same sweep.
+    this.cleanupTerminated();
 
     await Promise.all(terminations);
     return terminations.length;
@@ -94,7 +140,7 @@ export class WorkerPool {
     const worker = this.workers.get(sessionPath);
     if (worker) {
       await worker.terminate();
-      this.workers.delete(sessionPath);
+      this.release(sessionPath, worker);
     }
   }
 
