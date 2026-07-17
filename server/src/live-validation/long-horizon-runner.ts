@@ -18,7 +18,7 @@
  *    can drive one at a time, with all progress persisted to a run-state file.
  */
 
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, writeFile, rename, rm } from 'fs/promises';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import type {
@@ -367,9 +367,52 @@ export async function finalize(state: LongHorizonRunState, config: LongHorizonCo
 
 // ─── Run-state persistence ──────────────────────────────────────────────────
 
+/**
+ * Per-state-path write chain: serialises writes so concurrent persistState()
+ * calls for the same file cannot interleave/corrupt it and an older state
+ * cannot overwrite a newer one (each write awaits the previous, in call order).
+ */
+const stateWriteChains = new Map<string, Promise<void>>();
+
+/**
+ * Atomic state persistence: write an owner-only temp file in the same directory
+ * (so rename is atomic on POSIX), then rename it over the target. A failure
+ * between write and rename leaves the previous valid file untouched and cleans
+ * up the temp file. The temp file is created with mode 0o600 and rename carries
+ * that mode onto the final path.
+ */
+async function writeAtomicState(statePath: string, state: LongHorizonRunState): Promise<void> {
+  const dir = path.dirname(statePath);
+  await mkdir(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(statePath)}.tmp-${process.pid}-${randomUUID()}`);
+  try {
+    await writeFile(tmp, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
+    await rename(tmp, statePath);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {
+      // Best-effort cleanup of the orphaned temp file.
+    });
+    throw err;
+  }
+}
+
 export async function persistState(statePath: string, state: LongHorizonRunState): Promise<void> {
-  await mkdir(path.dirname(statePath), { recursive: true });
-  await writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
+  // Serialise per path: chain this write after any in-flight write for the same
+  // path. The stored chain never rejects so a failed write doesn't block later
+  // retries; the caller still observes its own rejection via `next`.
+  const prev = stateWriteChains.get(statePath) ?? Promise.resolve();
+  const next = prev.then(
+    () => writeAtomicState(statePath, state),
+    () => writeAtomicState(statePath, state),
+  );
+  stateWriteChains.set(
+    statePath,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  await next;
 }
 
 export async function loadState(statePath: string): Promise<LongHorizonRunState> {
