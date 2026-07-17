@@ -121,6 +121,7 @@ describe('notification lifecycle (integration)', () => {
 
   afterEach(async () => {
     manager.shutdown();
+    await manager.waitForIdle();
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
