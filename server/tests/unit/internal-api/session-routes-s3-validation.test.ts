@@ -91,19 +91,18 @@ afterEach(async () => {
 });
 
 function makeRoutes() {
+  // Cast the whole deps object once (the mocks are partial by design); avoids
+  // per-field `any` casts that would inflate the lint-warning count.
   return createSessionRoutes({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    claudeService: { isAvailable: vi.fn().mockResolvedValue(true), createSession: vi.fn().mockResolvedValue({ sessionId: 'claude-x' }) } as any,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    opencodeService: { isAvailable: vi.fn().mockResolvedValue(true), createSession: vi.fn().mockResolvedValue({ sessionId: 'oc-x' }), setThinkingLevel: vi.fn() } as any,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    antigravityService: { isAvailable: vi.fn().mockResolvedValue(true), createSession: vi.fn().mockResolvedValue({ sessionId: 'agy-x' }) } as any,
-    multiSessionManager: multiSessionManager as any,
-    sessionRegistry: registry as any,
-    piService: { setModel: vi.fn().mockResolvedValue(undefined) } as any,
+    claudeService: { isAvailable: vi.fn().mockResolvedValue(true), createSession: vi.fn().mockResolvedValue({ sessionId: 'claude-x' }) },
+    opencodeService: { isAvailable: vi.fn().mockResolvedValue(true), createSession: vi.fn().mockResolvedValue({ sessionId: 'oc-x' }), setThinkingLevel: vi.fn() },
+    antigravityService: { isAvailable: vi.fn().mockResolvedValue(true), createSession: vi.fn().mockResolvedValue({ sessionId: 'agy-x' }) },
+    multiSessionManager,
+    sessionRegistry: registry,
+    piService: { setModel: vi.fn().mockResolvedValue(undefined) },
     internalClientId: 's3-test',
     watchDir: path.join(tempDir, 'watches'),
-  } as any);
+  } as never);
 }
 
 describe('S3: Internal API session/batch validation + bounded fan-out', () => {
