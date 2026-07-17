@@ -4,6 +4,7 @@ import { apiLimiter } from '../security/rate-limit.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { createWriteStream, mkdirSync } from 'fs';
+import { StringDecoder } from 'node:string_decoder';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { createLogger } from '../logging/logger.js';
@@ -174,28 +175,43 @@ router.get('/read', async (req: Request, res: Response) => {
     // Check file size
     const stat = await fs.stat(validatedPath);
     const maxSize = 200 * 1024; // Increased to 200KB limit
-    
+
     if (stat.size > maxSize) {
-      // For large files, only read the beginning
+      // For large files, only read the beginning. Allocate the actual bounded
+      // read size (min(file size, maxSize + 1)) — never the whole file and never
+      // a fixed maxSize buffer for a file only just over the limit. The +1 byte
+      // lets us detect truncation from the read and avoids cutting a multibyte
+      // UTF-8 sequence exactly at the limit.
+      const readLen = Math.min(stat.size, maxSize + 1);
       const handle = await fs.open(validatedPath, 'r');
-      const buffer = Buffer.alloc(maxSize);
-      await handle.read(buffer, 0, maxSize, 0);
-      await handle.close();
-      
-      let content = buffer.toString('utf-8');
-      // Truncate to last newline
-      const lastNewline = content.lastIndexOf('\n');
-      if (lastNewline > 0) {
-        content = content.substring(0, lastNewline);
+      try {
+        const buffer = Buffer.alloc(readLen);
+        const { bytesRead } = await handle.read(buffer, 0, readLen, 0);
+        // Honour bytesRead so a short read cannot leave zero-padding in content.
+        const available = buffer.subarray(0, bytesRead);
+        // If we read past maxSize, the file exceeds the limit (truncated); keep
+        // only the first maxSize bytes before decoding.
+        const limit = bytesRead > maxSize ? maxSize : bytesRead;
+        // Decode only complete UTF-8 characters within the limit so a multibyte
+        // sequence split at the cut does not become a U+FFFD replacement char.
+        // StringDecoder.write() drops the incomplete trailing sequence.
+        let content = new StringDecoder('utf8').write(available.subarray(0, limit));
+        // Truncate to last newline
+        const lastNewline = content.lastIndexOf('\n');
+        if (lastNewline > 0) {
+          content = content.substring(0, lastNewline);
+        }
+
+        res.json({
+          content,
+          truncated: true,
+          totalSize: stat.size,
+          readSize: content.length,
+        });
+        return;
+      } finally {
+        await handle.close();
       }
-      
-      res.json({
-        content,
-        truncated: true,
-        totalSize: stat.size,
-        readSize: content.length,
-      });
-      return;
     }
     
     const content = await fs.readFile(validatedPath, 'utf-8');
