@@ -64,6 +64,14 @@ export class ClaudeProcessPool {
   /** Grace period (ms) to wait after a process exits before spawning a new one,
    *  to allow the Claude CLI to release its session lock file. */
   private postExitGraceMs: number;
+  /**
+   * Pending retry timers per session (lock-cleanup / session-lock / transient
+   * backoff). Tracked so `abort()` can cancel a scheduled respawn — otherwise a
+   * retry fires after the operator aborted the turn.
+   */
+  private retryTimers: Map<string, Set<NodeJS.Timeout>> = new Map();
+  /** Sessions whose operator aborted the current turn; no new retry schedules. */
+  private aborted: Set<string> = new Set();
   /** Injectable lock-cleaner for testing. Defaults to removeStaleSessionLock. */
   private readonly _lockCleaner: (cwd: string, claudeSessionId: string) => Promise<boolean>;
 
@@ -85,6 +93,17 @@ export class ClaudeProcessPool {
     retryCount: number = 0,
     transientRetryCount: number = 0,
   ): Promise<void> {
+    // A fresh operator-initiated turn (retryCount === 0 && transientRetryCount
+    // === 0) clears any prior abort flag so retries can schedule again. Retry
+    // spawns (incremented counts) do NOT clear it — an abort must suppress all
+    // later respawns for that turn.
+    if (retryCount === 0 && transientRetryCount === 0) {
+      this.aborted.delete(options.sessionId);
+      // Cancel any retry timer left over from a prior turn so it cannot fire
+      // into this new turn.
+      this.clearRetryTimers(options.sessionId);
+    }
+
     // ── Wait for any previous process for this session to fully exit ────────
     // This is critical after an abort: the old process may still be dying and
     // holding the session lock.  We wait for it to exit, then add a grace
@@ -279,11 +298,11 @@ export class ClaudeProcessPool {
             if (cleaned) {
               logger.info(`[ClaudeProcessPool] Removed stale last-prompt lock for ${options.claudeSessionId}, retrying immediately`);
               // Retry quickly since we've fixed the root cause
-              setTimeout(() => {
+              this.scheduleRetry(options.sessionId, 500, () => {
                 this.spawn(options, onEvent, onComplete, retryCount + 1, transientRetryCount).catch((retryErr) => {
                   onComplete(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
                 });
-              }, 500);
+              });
               return;
             }
           } catch (cleanErr) {
@@ -293,11 +312,11 @@ export class ClaudeProcessPool {
 
         const delay = 1500 + retryCount * 1000; // 1.5s, 2.5s, 3.5s, 4.5s, 5.5s
         logger.info(`[ClaudeProcessPool] Session lock detected for ${options.sessionId}, retry ${retryCount + 1}/5 in ${delay}ms...`);
-        setTimeout(() => {
+        this.scheduleRetry(options.sessionId, delay, () => {
           this.spawn(options, onEvent, onComplete, retryCount + 1).catch((retryErr) => {
             onComplete(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
           });
-        }, delay);
+        });
         return;
       }
 
@@ -344,11 +363,11 @@ export class ClaudeProcessPool {
           `[ClaudeProcessPool] Transient failure for ${options.sessionId} ` +
           `(retry ${transientRetryCount + 1}/${transientCfg.maxRetries}): ${failMessage} — retrying in ${delay}ms`,
         );
-        setTimeout(() => {
+        this.scheduleRetry(options.sessionId, delay, () => {
           this.spawn(options, onEvent, onComplete, retryCount, transientRetryCount + 1).catch((retryErr) => {
             onComplete(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
           });
-        }, delay);
+        });
         return;
       }
 
@@ -363,6 +382,11 @@ export class ClaudeProcessPool {
    * `isActive()` accurate and prevents race conditions with new spawns.
    */
   abort(sessionId: string): void {
+    // Mark the turn aborted so no further retry schedules, and cancel any
+    // retry timer already armed (e.g. transient backoff) so abort truly stops
+    // the turn instead of respawning moments later.
+    this.aborted.add(sessionId);
+    this.clearRetryTimers(sessionId);
     const active = this.activeProcesses.get(sessionId);
     if (active) {
       active.process.kill('SIGTERM');
@@ -370,6 +394,50 @@ export class ClaudeProcessPool {
       // The exit handler will clean up when the process actually exits,
       // which also resolves the exit promise so a new spawn can proceed.
     }
+  }
+
+  /**
+   * Schedule a bounded retry for a session, tracked so `abort()` can cancel it
+   * and `dispose()` can clear all. No-op once the session has been aborted.
+   * Timers are `unref`'d so they do not keep the process alive.
+   */
+  private scheduleRetry(sessionId: string, delayMs: number, fn: () => void): void {
+    if (this.aborted.has(sessionId)) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      const set = this.retryTimers.get(sessionId);
+      if (set) {
+        set.delete(timer);
+        if (set.size === 0) this.retryTimers.delete(sessionId);
+      }
+      fn();
+    }, delayMs);
+    timer.unref?.();
+    let set = this.retryTimers.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.retryTimers.set(sessionId, set);
+    }
+    set.add(timer);
+  }
+
+  /** Cancel all pending retry timers for a session. */
+  private clearRetryTimers(sessionId: string): void {
+    const set = this.retryTimers.get(sessionId);
+    if (set) {
+      for (const timer of set) clearTimeout(timer);
+      this.retryTimers.delete(sessionId);
+    }
+  }
+
+  /** Clear all pending retry timers (shutdown / test teardown). */
+  dispose(): void {
+    for (const [, set] of this.retryTimers) {
+      for (const timer of set) clearTimeout(timer);
+    }
+    this.retryTimers.clear();
+    this.aborted.clear();
   }
 
   /** Number of currently running processes. */
