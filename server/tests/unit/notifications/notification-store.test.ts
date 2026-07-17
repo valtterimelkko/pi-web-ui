@@ -344,3 +344,87 @@ describe('NotificationStore — observability logging', () => {
     expect(records.find((r) => r.component === 'NotificationStore' && r.level === 'warn')).toBeUndefined();
   });
 });
+
+// ── P2: terminal-transition rollback on persistence failure ─────────────────
+describe('NotificationStore — P2 terminal transition rollback', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-notif-p2-'));
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  it('markSent rolls back when the terminal-log write fails (item stays retryable)', async () => {
+    const store = new NotificationStore(dir);
+    await store.init();
+    await store.enqueue(queued('n1', 's1'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const real = (store as any).persist.bind(store);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(store as any, 'persist').mockImplementation(async (file: string, data: unknown) => {
+      if (file === 'delivery-log.json') throw new Error('LOG_WRITE_FAIL');
+      return real(file, data);
+    });
+
+    await expect(store.markSent('n1', '2026-06-29T00:00:09.000Z')).rejects.toThrow('LOG_WRITE_FAIL');
+
+    // In-memory: still pending in the outbox, not falsely 'sent' in the log.
+    expect(store.getById('n1')?.delivery.status).toBe('pending');
+    expect(store.listLog().find((q) => q.notification.id === 'n1')).toBeUndefined();
+
+    // A simulated restart still sees it pending (no false durable terminal state).
+    const reloaded = new NotificationStore(dir);
+    await reloaded.init();
+    expect(reloaded.getById('n1')?.delivery.status).toBe('pending');
+  });
+
+  it('markSent keeps terminal state when outbox cleanup fails after log success (terminal wins on restart)', async () => {
+    const store = new NotificationStore(dir);
+    await store.init();
+    await store.enqueue(queued('n1', 's1'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const real = (store as any).persist.bind(store);
+    let logPersisted = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(store as any, 'persist').mockImplementation(async (file: string, data: unknown) => {
+      if (file === 'delivery-log.json') {
+        const r = real(file, data);
+        logPersisted = true;
+        return r;
+      }
+      if (file === 'outbox.json' && logPersisted) throw new Error('OUTBOX_WRITE_FAIL');
+      return real(file, data);
+    });
+
+    await expect(store.markSent('n1', '2026-06-29T00:00:09.000Z')).rejects.toThrow('OUTBOX_WRITE_FAIL');
+
+    const reloaded = new NotificationStore(dir);
+    await reloaded.init();
+    const log = reloaded.listLog().filter((q) => q.notification.id === 'n1');
+    expect(log).toHaveLength(1); // exactly one terminal record (terminal wins)
+    expect(reloaded.getById('n1')?.delivery.status).toBe('sent');
+  });
+
+  it('recordFailure(terminal) rolls back when the terminal-log write fails', async () => {
+    const store = new NotificationStore(dir);
+    await store.init();
+    await store.enqueue(queued('n1', 's1'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const real = (store as any).persist.bind(store);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(store as any, 'persist').mockImplementation(async (file: string, data: unknown) => {
+      if (file === 'delivery-log.json') throw new Error('LOG_WRITE_FAIL');
+      return real(file, data);
+    });
+
+    await expect(store.recordFailure('n1', 'fatal', true)).rejects.toThrow('LOG_WRITE_FAIL');
+
+    expect(store.getById('n1')?.delivery.status).toBe('pending'); // still retryable
+    expect(store.listLog().find((q) => q.notification.id === 'n1')).toBeUndefined();
+  });
+});
