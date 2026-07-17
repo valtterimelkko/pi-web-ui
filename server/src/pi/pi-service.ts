@@ -100,7 +100,14 @@ export class PiService {
 
   async initialize(): Promise<void> {
     if (!this.initialization) {
-      this.initialization = this.initializeOnce();
+      // Coalesce concurrent first loads into one initializeOnce(). On failure,
+      // clear the cached promise so a later call can retry — a transient
+      // first-load failure (e.g. a malformed models.json read) must not
+      // permanently poison the service with a cached rejection.
+      this.initialization = this.initializeOnce().catch((err) => {
+        this.initialization = null;
+        throw err;
+      });
     }
     await this.initialization;
   }
