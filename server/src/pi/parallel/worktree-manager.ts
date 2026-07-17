@@ -5,13 +5,55 @@
  * Each worktree has its own branch and working directory.
  */
 
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import * as os from 'node:os';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Validate that a value used as a git reference / identifier is safe to pass to
+ * git as a single argument. This is defense in depth on top of argument-array
+ * execution (`execFile`): it rejects leading flags (option injection such as
+ * `--upload-pack=...`), shell metacharacters, control characters, and the
+ * character sequences git itself forbids in ref names.
+ *
+ * The value is always passed to git as one literal argument by the `git()`
+ * helper below; this guard exists so obviously-malicious or malformed refs are
+ * rejected with a clear error instead of reaching the subprocess.
+ */
+export function assertSafeGitRef(value: unknown, field: string): void {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 200) {
+    throw new Error(`Invalid ${field}: must be a non-empty string (max 200 chars)`);
+  }
+  if (value.startsWith('-')) {
+    throw new Error(`Invalid ${field}: must not start with '-' (leading flag)`);
+  }
+  for (const ch of value) {
+    const code = ch.charCodeAt(0);
+    // 0x00-0x20 (space, newline, tab, ...) and 0x7f (DEL)
+    if (code <= 0x20 || code === 0x7f) {
+      throw new Error(`Invalid ${field}: must not contain control characters or spaces`);
+    }
+  }
+  // git ref metacharacters / shell-relevant separators.
+  if (/[~^:?*[\]\\|&;$<>]/.test(value)) {
+    throw new Error(`Invalid ${field}: contains a forbidden character`);
+  }
+  if (value.includes('..')) {
+    throw new Error(`Invalid ${field}: must not contain '..'`);
+  }
+  if (value.includes('`') || value.includes('$')) {
+    throw new Error(`Invalid ${field}: must not contain shell substitution characters`);
+  }
+  if (value.includes('@{')) {
+    throw new Error(`Invalid ${field}: must not contain '@{'`);
+  }
+  if (value.endsWith('.lock') || value.endsWith('/') || value.endsWith('.')) {
+    throw new Error(`Invalid ${field}: invalid trailing characters`);
+  }
+}
 
 export interface WorktreeInfo {
   id: string;
@@ -59,10 +101,15 @@ export interface ConflictInfo {
 }
 
 /**
- * Execute a git command in the specified directory
+ * Execute a git command in the specified directory.
+ *
+ * Uses `execFile` with an argument array — never a shell string — so that
+ * branch names, paths, and commit messages are passed to git as literal
+ * arguments and cannot be interpreted by a shell. Ref-like values are also
+ * validated by `assertSafeGitRef` before reaching this helper.
  */
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout, stderr } = await execAsync(`git ${args.join(' ')}`, {
+  const { stdout, stderr } = await execFileAsync('git', args, {
     cwd,
     maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large diffs
   });
@@ -173,7 +220,13 @@ export class WorktreeManager {
    */
   async createWorktree(options: CreateWorktreeOptions): Promise<WorktreeInfo> {
     const { taskId, baseBranch = 'main', taskDescription, repoPath } = options;
-    
+
+    // Validate ref-like inputs before they reach git. Commit messages
+    // (taskDescription) are safe as literal execFile arguments and are not
+    // constrained here; taskId and baseBranch are used as git refs.
+    assertSafeGitRef(taskId, 'taskId');
+    assertSafeGitRef(baseBranch, 'baseBranch');
+
     // Generate unique ID and branch name
     const id = generateWorktreeId(taskId);
     const branchName = sanitizeBranchName(taskDescription, taskId);
@@ -299,7 +352,7 @@ export class WorktreeManager {
     // Remove the worktree
     try {
       await git(this.repoPath, 'worktree', 'remove', info.path, '--force');
-    } catch (error) {
+    } catch {
       // Try pruning if normal remove fails
       await git(this.repoPath, 'worktree', 'prune');
       
@@ -522,7 +575,7 @@ export class WorktreeManager {
       await this.saveMetadata();
       
       return { success: true, message: `Successfully merged ${info.branch} into ${info.baseBranch}` };
-    } catch (error) {
+    } catch {
       // Check for conflicts
       const status = await git(this.repoPath, 'status', '--porcelain');
       const conflicts: ConflictInfo[] = [];
