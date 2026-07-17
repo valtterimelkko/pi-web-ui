@@ -10,7 +10,7 @@ import path from 'path';
 import { createApp } from './app.js';
 import { config } from './config.js';
 import { WebSocketConnectionManager } from './websocket/index.js';
-import { handleTerminalWebSocket } from './terminal/terminal-websocket.js';
+import { handleWebSocketUpgrade } from './websocket/upgrade-handler.js';
 import { initializePiService, startSessionWatcher, getPiService, type SessionChangeEvent, type SessionInfo } from './pi/index.js';
 import { SessionCleanupService } from './session-cleanup.js';
 import { getSessionRegistry } from './session-registry.js';
@@ -39,47 +39,14 @@ async function initialize(): Promise<void> {
     // Create WebSocket connection manager
     wsManager = new WebSocketConnectionManager();
 
-    // Handle WebSocket upgrade requests
+    // Handle WebSocket upgrade requests. One central pre-upgrade guard
+    // (origin + cookie-auth + upgrade rate-limit) is applied to every accepted
+    // path inside handleWebSocketUpgrade, before any handleUpgrade.
     server.on('upgrade', (request, socket, head) => {
-      const url = new URL(request.url || '', `http://${request.headers.host}`);
-
-      // Main WebSocket endpoint
-      if (url.pathname === '/ws') {
-        wsManager!.handleUpgrade(request, socket, head);
-        return;
-      }
-
-      // Per-session WebSocket endpoint: /ws/sessions/:sessionId
-      const sessionMatch = url.pathname.match(/^\/ws\/sessions\/([^/?]+)$/);
-      if (sessionMatch) {
-        const sessionId = sessionMatch[1];
-
-        // Import handleSessionWebSocket dynamically to avoid circular dependencies
-        import('./websocket/session-websocket.js').then(({ handleSessionWebSocket }) => {
-          // Get the MultiSessionManager from WebSocketConnectionManager
-          const multiSessionManager = wsManager!.getMultiSessionManager();
-
-          // Handle the upgrade
-          wsManager!.getWss().handleUpgrade(request, socket, head, (ws) => {
-            handleSessionWebSocket(ws, request, sessionId, multiSessionManager);
-          });
-        }).catch((error) => {
-          logger.error('Failed to handle session WebSocket upgrade:', error);
-          socket.destroy();
-        });
-        return;
-      }
-
-      // Terminal WebSocket endpoint: /ws/terminal
-      if (url.pathname === '/ws/terminal') {
-        wsManager!.getWss().handleUpgrade(request, socket, head, (ws) => {
-          handleTerminalWebSocket(ws, request);
-        });
-        return;
-      }
-
-      // Unknown WebSocket path
-      socket.destroy();
+      handleWebSocketUpgrade(request, socket, head, {
+        wsManager: wsManager!,
+        verbose: process.env.NODE_ENV === 'development',
+      });
     });
 
     // Initialize CLI session watcher

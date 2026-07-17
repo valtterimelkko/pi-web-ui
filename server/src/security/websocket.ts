@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'http';
 import { config } from '../config.js';
 import { verifyToken, type JwtPayload } from './auth.js';
 import { validateCsrfToken } from './csrf.js';
+import { wsUpgradeLimiter } from './rate-limit.js';
 
 export interface WsAuthResult {
   success: boolean;
@@ -12,6 +13,44 @@ export interface WsAuthResult {
 export function validateOrigin(origin: string | undefined): boolean {
   if (!origin) return false;
   return config.allowedOrigins.includes(origin);
+}
+
+/**
+ * The single pre-upgrade decision applied to every accepted WebSocket path
+ * (`/ws`, `/ws/sessions/:id`, `/ws/session/:id`, `/ws/terminal`). Runs BEFORE
+ * `handleUpgrade`, so rejected requests never create a WebSocket, never emit
+ * `connection`, and never allocate session/terminal resources.
+ *
+ * Checks, in order: (1) allowed Origin, (2) valid cookie JWT, (3) upgrade rate
+ * limit. This is cookie authentication at upgrade time; it is distinct from the
+ * post-connection CSRF handshake (`authenticateWebSocket` with a CSRF token),
+ * which is preserved unchanged.
+ */
+export interface WsUpgradeDecision {
+  allowed: boolean;
+  statusCode: number;
+  reason: 'origin' | 'auth' | 'rate' | 'ok';
+  user?: JwtPayload;
+}
+
+export function decideWsUpgrade(req: IncomingMessage): WsUpgradeDecision {
+  // 1. Origin must be present and allow-listed.
+  if (!validateOrigin(req.headers.origin)) {
+    return { allowed: false, statusCode: 403, reason: 'origin' };
+  }
+
+  // 2. Cookie JWT must authenticate (origin is re-checked inside, idempotently).
+  const auth = authenticateWebSocket(req);
+  if (!auth.success || !auth.user) {
+    return { allowed: false, statusCode: 401, reason: 'auth' };
+  }
+
+  // 3. Upgrade rate limit, keyed by the authenticated user.
+  if (!wsUpgradeLimiter.check(auth.user.userId)) {
+    return { allowed: false, statusCode: 429, reason: 'rate' };
+  }
+
+  return { allowed: true, statusCode: 101, reason: 'ok', user: auth.user };
 }
 
 export function extractJwtFromCookie(cookieHeader: string | undefined): string | null {

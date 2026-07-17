@@ -42,8 +42,10 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
 
 ### 3. Origin validation / WebSocket protection
 
-- WebSocket upgrades validate origin against `ALLOWED_ORIGINS`.
-- This protects against cross-site WebSocket hijacking.
+- Every accepted WebSocket path (`/ws`, `/ws/sessions/:id`, `/ws/session/:id`, `/ws/terminal`) passes through one central pre-upgrade guard before `handleUpgrade`: allowed `Origin`, valid auth cookie, and a per-client upgrade rate limit.
+- Rejected upgrades are answered with an HTTP status (403/401/429) and destroyed — they never emit `connection` and never create session/terminal resources.
+- This is cookie authentication at upgrade time and is distinct from the post-connection CSRF handshake, which is preserved unchanged.
+- This protects against cross-site WebSocket hijacking and upgrade flooding.
 - Preserve this when changing WebSocket auth or reverse-proxy behaviour.
 
 ### 4. Prompt-injection detection
