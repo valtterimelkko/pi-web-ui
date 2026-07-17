@@ -73,8 +73,7 @@ export async function createOneSession(params: {
       return { sessionId, sessionPath: sessionId, runtime: 'antigravity', model: entry.model, cwd };
     }
 
-    case 'pi':
-    default: {
+    case 'pi': {
       const status = await deps.multiSessionManager.createAndSubscribe(deps.internalClientId, cwd);
       await deps.sessionRegistry.upsert({
         id: status.sessionId,
@@ -102,6 +101,13 @@ export async function createOneSession(params: {
         model: entry.model,
         cwd,
       };
+    }
+
+    default: {
+      // createOneSession is only called after batchCreateBodySchema validation,
+      // which restricts runtime to the four supported values. Reject explicitly
+      // rather than falling back to Pi for an unknown runtime.
+      throw new Error(`Unsupported runtime: ${runtime}`);
     }
   }
 }

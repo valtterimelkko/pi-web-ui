@@ -38,6 +38,7 @@ import type {
   TransferSessionRequest,
   TransferSessionResponse,
   BatchCreateRequest,
+  BatchCreateEntry,
   BatchCreateResponse,
   BatchCreateResultItem,
   BatchPromptRequest,
@@ -70,6 +71,13 @@ import {
 import { createSSEStream } from '../sse-stream.js';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
 import { readBoundedJsonBody as readJsonBody } from '../request-body.js';
+import {
+  createSessionBodySchema,
+  batchCreateBodySchema,
+  batchPromptBodySchema,
+  mapWithConcurrency,
+  BATCH_CONCURRENCY_LIMIT,
+} from '../session-validation.js';
 import { withCorrelation, newRequestId, getCorrelationContext } from '../../logging/correlation.js';
 import { TransferService } from '../../session-transfer/transfer-service.js';
 import {
@@ -80,7 +88,6 @@ import {
 } from '../../session-transfer/index.js';
 import { stat, readdir, unlink, rm } from 'fs/promises';
 
-const MAX_BATCH_ITEMS = 50;
 import path from 'path';
 import { config } from '../../config.js';
 import { createLogger } from '../../logging/logger.js';
@@ -306,18 +313,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const body = await readJsonBody<CreateSessionRequest>(req);
-    if (!body || !body.runtime) {
-      sendJson(res, 400, { error: 'runtime is required', code: ErrorCode.INVALID_REQUEST });
+    const raw = await readJsonBody<unknown>(req);
+    const parsed = createSessionBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      sendJson(res, 400, {
+        error: parsed.error.issues[0]?.message ?? 'Invalid request body',
+        code: ErrorCode.INVALID_REQUEST,
+        details: parsed.error.issues,
+      });
       return;
     }
-    if (body.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
-      sendJson(res, 400, { error: 'thinkingLevel is invalid', code: ErrorCode.INVALID_REQUEST });
-      return;
-    }
+    const body: CreateSessionRequest = parsed.data as CreateSessionRequest;
 
-    const runtime: SessionRuntime = body.runtime;
-    const cwd = body.cwd || process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd();
+    const runtime: SessionRuntime = parsed.data.runtime;
+    const cwd = parsed.data.cwd || process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd();
     let base: CreateSessionResponse | null = null;
 
     try {
@@ -386,8 +395,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           break;
         }
 
-        case 'pi':
-        default: {
+        case 'pi': {
           const status = await multiSessionManager.createAndSubscribe(internalClientId, cwd);
           await sessionRegistry.upsert({
             id: status.sessionId,
@@ -417,6 +425,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             createdAt: new Date().toISOString(),
           };
           break;
+        }
+
+        default: {
+          // Unreachable: createSessionBodySchema restricts runtime to the four
+          // supported values. Kept as defense in depth so a future bypass can
+          // never silently create a Pi session for an unknown runtime.
+          sendJson(res, 400, { error: `Unsupported runtime: ${runtime}`, code: ErrorCode.INVALID_REQUEST });
+          return;
         }
       }
 
@@ -2095,21 +2111,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const body = await readJsonBody<BatchCreateRequest>(req);
-    if (!body || !Array.isArray(body.sessions) || body.sessions.length === 0) {
-      sendJson(res, 400, { error: 'sessions[] is required and must be non-empty', code: ErrorCode.INVALID_REQUEST });
+    const raw = await readJsonBody<unknown>(req);
+    const parsed = batchCreateBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      sendJson(res, 400, {
+        error: parsed.error.issues[0]?.message ?? 'sessions[] is required and must be non-empty',
+        code: ErrorCode.INVALID_REQUEST,
+        details: parsed.error.issues,
+      });
       return;
     }
-    if (body.sessions.length > MAX_BATCH_ITEMS) {
-      sendJson(res, 400, { error: `sessions[] accepts at most ${MAX_BATCH_ITEMS} entries`, code: ErrorCode.INVALID_REQUEST });
-      return;
-    }
-    if (body.sessions.some((entry) => entry.thinkingLevel !== undefined && !isThinkingLevel(entry.thinkingLevel))) {
-      sendJson(res, 400, { error: 'thinkingLevel is invalid', code: ErrorCode.INVALID_REQUEST });
-      return;
-    }
+    const body: BatchCreateRequest = { sessions: parsed.data.sessions as BatchCreateEntry[] };
 
-    const results = await Promise.all(body.sessions.map(async (entry, index) => {
+    const results = await mapWithConcurrency(body.sessions, BATCH_CONCURRENCY_LIMIT, async (entry, index) => {
       try {
         // Reuse the single-session create logic by invoking it against a
         // throwaway response collector, then translate to a result item.
@@ -2160,7 +2174,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           },
         };
       }
-    }));
+    });
 
     const createdCount = results.filter((r) => r.success).length;
     sendJson(res, 200, {
@@ -2174,16 +2188,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const body = await readJsonBody<BatchPromptRequest>(req);
-    if (!body || !Array.isArray(body.prompts) || body.prompts.length === 0) {
-      sendJson(res, 400, { error: 'prompts[] is required and must be non-empty', code: ErrorCode.INVALID_REQUEST });
+    const raw = await readJsonBody<unknown>(req);
+    const parsed = batchPromptBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      sendJson(res, 400, {
+        error: parsed.error.issues[0]?.message ?? 'prompts[] is required and must be non-empty',
+        code: ErrorCode.INVALID_REQUEST,
+        details: parsed.error.issues,
+      });
       return;
     }
-
-    if (body.prompts.length > MAX_BATCH_ITEMS) {
-      sendJson(res, 400, { error: `prompts[] accepts at most ${MAX_BATCH_ITEMS} entries`, code: ErrorCode.INVALID_REQUEST });
-      return;
-    }
+    const body: BatchPromptRequest = {
+      prompts: parsed.data.prompts as BatchPromptRequest['prompts'],
+      parallel: parsed.data.parallel,
+    };
 
     const parallel = body.parallel !== false;
 
@@ -2402,7 +2420,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           content: collector.textParts.join(''),
           tokens: collector.usage,
         };
-      } catch (err) {
+      } catch {
         return {
           index,
           sessionId: entry.sessionId,
@@ -2417,7 +2435,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     };
 
     const results = parallel
-      ? await Promise.all(body.prompts.map((p, i) => runOne(p, i)))
+      ? await mapWithConcurrency(body.prompts, BATCH_CONCURRENCY_LIMIT, (p, i) => runOne(p, i))
       : await body.prompts.reduce(async (acc, p, i) => {
           const list = await acc;
           list.push(await runOne(p, i));

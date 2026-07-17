@@ -1395,8 +1395,12 @@ object containing a transfer error code (e.g.
 POST /api/v1/sessions/batch
 ```
 
-Creates up to 50 sessions in one call. All entries are dispatched in
-parallel.
+Creates up to 50 sessions in one call. Entries are dispatched with a small
+bounded concurrency (4) to respect runtime capacity; results are returned in
+input order regardless of completion order. Request bodies are strictly
+validated: `runtime` must be one of the four supported runtimes (an unknown
+runtime returns `400 INVALID_REQUEST` rather than falling back to Pi), and a
+structurally invalid batch is rejected atomically before any session is created.
 
 **Request:**
 ```json
@@ -1435,7 +1439,8 @@ POST /api/v1/sessions/batch/prompt
 
 Sends a prompt to up to 50 sessions in one call. Each entry
 runs in `answers` mode (final text only). By default all prompts run
-in parallel; set `parallel: false` to run them sequentially.
+with bounded concurrency (4); set `parallel: false` to run them strictly
+sequentially. Results are returned in input order.
 
 **Request:**
 ```json
