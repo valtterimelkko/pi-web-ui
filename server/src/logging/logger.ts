@@ -6,8 +6,8 @@
  * is mechanical (`console.log(x)` → `logger.info(x)`) while gaining:
  *
  * - **Levels** (`LOG_LEVEL=error|warn|info|debug`, default info) — see ../config.ts.
- * - **Namespaces** (`DEBUG=claude,opencode*`) — a component allowlist; when set,
- *   only matching components emit. Unset = all components per LOG_LEVEL.
+ * - **Namespaces** (`DEBUG=claude,opencode*`) — focuses info/debug output on
+ *   matching components. Warnings/errors remain visible for safety.
  * - **Format** (`LOG_FORMAT=pretty|json`, default pretty) — pretty keeps the
  *   human `[Component] msg` convention; json emits one parseable object/line.
  * - **Correlation** — every line is stamped with the current request/session id
@@ -15,7 +15,7 @@
  *
  * Emission rule (deterministic, no surprises):
  *   shouldEmit(component, level) =
- *     (!namespaces.active || namespaces.isEnabled(component))
+ *     (level is warn/error || !namespaces.active || namespaces.isEnabled(component))
  *     && levelOrder(level) <= levelOrder(configuredLevel)
  *
  * Pretty rendering preserves existing output for tagged messages: if the
@@ -63,8 +63,10 @@ export interface LogRecord {
   /** Human message (leading `[Component] ` stripped when it matches). */
   msg: string;
   requestId?: string;
+  runId?: string;
   sessionId?: string;
   runtime?: string;
+  executionInstanceId?: string;
   error?: LogRecordError;
   [key: string]: unknown;
 }
@@ -140,7 +142,13 @@ export function createLogger(component: string, options?: Partial<LoggerOptions>
   const boundContext: Record<string, unknown> = options?.boundContext ?? {};
 
   function isLevelEnabled(msgLevel: LogLevel): boolean {
-    if (namespaces.active && !namespaces.isEnabled(component)) return false;
+    // DEBUG is a focus aid, not a safety filter: never hide warnings/errors from
+    // unrelated components just because an operator is debugging one namespace.
+    if (
+      namespaces.active
+      && !namespaces.isEnabled(component)
+      && (msgLevel === 'debug' || msgLevel === 'info')
+    ) return false;
     return LEVEL_ORDER[msgLevel] <= LEVEL_ORDER[level];
   }
 
@@ -159,8 +167,10 @@ export function createLogger(component: string, options?: Partial<LoggerOptions>
       component,
       msg,
       ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
+      ...(correlation.runId ? { runId: correlation.runId } : {}),
       ...(correlation.sessionId ? { sessionId: correlation.sessionId } : {}),
       ...(correlation.runtime ? { runtime: correlation.runtime } : {}),
+      ...(correlation.executionInstanceId ? { executionInstanceId: correlation.executionInstanceId } : {}),
       ...(errArg
         ? { error: { name: errArg.name, message: errArg.message, stack: errArg.stack } }
         : {}),
@@ -229,8 +239,10 @@ function renderJson(record: LogRecord, _rawMsg: string): string {
 function correlationSuffix(record: LogRecord): string {
   const parts: string[] = [];
   if (record.requestId) parts.push(`req=${record.requestId}`);
+  if (record.runId) parts.push(`run=${record.runId}`);
   if (record.sessionId) parts.push(`sid=${record.sessionId}`);
   if (record.runtime) parts.push(`rt=${record.runtime}`);
+  if (record.executionInstanceId) parts.push(`exec=${record.executionInstanceId}`);
   return parts.length ? ` [${parts.join(' ')}]` : '';
 }
 

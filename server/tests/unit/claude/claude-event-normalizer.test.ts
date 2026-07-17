@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { ClaudeEventNormalizer } from '../../../src/claude/claude-event-normalizer.js';
+import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
 import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 
 /** Capture structured log records via the central logger tap (restores on return). */
@@ -189,9 +190,14 @@ describe('ClaudeEventNormalizer', () => {
 
   // ─── Invalid JSON line ───────────────────────────────────────────────────
 
-  it('invalid JSON line → returns empty array (no crash)', () => {
-    const events = normalizer.normalize('NOT JSON AT ALL {{{', SESSION_ID);
-    expect(events).toEqual([]);
+  it('invalid/malformed input returns no events and records schema-drift categories', () => {
+    const metrics = new OperationalMetrics();
+    const observed = new ClaudeEventNormalizer({ metrics });
+    expect(observed.normalize('NOT JSON AT ALL {{{', SESSION_ID)).toEqual([]);
+    expect(observed.normalize(JSON.stringify({ type: 'assistant', message: {} }), SESSION_ID)).toEqual([]);
+    expect(metrics.snapshot().pipeline.adapterDrops).toEqual({
+      claude: { invalid_json: 1, assistant_content_missing: 1 },
+    });
   });
 
   it('empty line → returns empty array', () => {

@@ -266,6 +266,31 @@ describe('notifications routes', () => {
       expect(Array.isArray(body.deliveries)).toBe(true);
     });
 
+    it('canonicalizes Pi identity consistently for POST, GET, and DELETE', async () => {
+      const uuid = '019f23d5-624d-7ca3-b34c-53b6732c2b44';
+      const basename = `2026-07-02T17-16-54-733Z_${uuid}`;
+      const sessionPath = `/sessions/${basename}.jsonl`;
+      registry.get.mockResolvedValue({ sdkType: 'pi', path: sessionPath });
+
+      await routes.handleOptIn(createJsonReq('POST', '/opt-in', {}), createMockRes(), basename);
+      const state = createMockRes();
+      await routes.handleGetSessionState(createJsonReq('GET', '/notifications'), state, basename);
+      expect((json(state) as { optIn: { sessionId: string } }).optIn.sessionId).toBe(uuid);
+
+      await routes.handleOptOut(createJsonReq('DELETE', '/opt-in'), createMockRes(), basename);
+      expect(manager.getOptIn(uuid)).toBeUndefined();
+    });
+
+    it('returns a retryable failure instead of falsely succeeding when identity lookup fails', async () => {
+      registry.get.mockRejectedValue(new Error('registry unavailable'));
+      const getRes = createMockRes();
+      await routes.handleGetSessionState(createJsonReq('GET', '/notifications'), getRes, 'pi-session');
+      expect(getRes.statusCode).toBe(503);
+      const deleteRes = createMockRes();
+      await routes.handleOptOut(createJsonReq('DELETE', '/opt-in'), deleteRes, 'pi-session');
+      expect(deleteRes.statusCode).toBe(503);
+    });
+
     it('returns optIn:null when not opted in', async () => {
       const res = createMockRes();
       await routes.handleGetSessionState(createJsonReq('GET', '/api/v1/sessions/s1/notifications'), res, 's1');
@@ -323,6 +348,31 @@ describe('notifications routes', () => {
       );
       expect(conflict.statusCode).toBe(409);
       expect((json(conflict) as { code: string }).code).toBe('IDEMPOTENCY_KEY_CONFLICT');
+    });
+
+    it('trims explicit content and accepts only app-relative or HTTP(S) deep links', async () => {
+      const accepted = createMockRes();
+      await routes.handleExplicitNotify(
+        createJsonReq('POST', '/api/v1/notifications', {
+          title: '  Milestone  ', body: '  phase complete  ', deepLink: '/sessions/current',
+        }),
+        accepted,
+      );
+      expect(accepted.statusCode).toBe(202);
+      await manager.drain();
+      expect(channel.received.at(-1)).toMatchObject({
+        title: 'Milestone', body: 'phase complete', deepLink: '/sessions/current',
+      });
+
+      for (const payload of [
+        { title: 'X', body: '   ' },
+        { title: 'X', body: 'ok', deepLink: 'javascript:alert(1)' },
+        { title: 'X', body: 'ok', deepLink: '//evil.example/path' },
+      ]) {
+        const rejected = createMockRes();
+        await routes.handleExplicitNotify(createJsonReq('POST', '/api/v1/notifications', payload), rejected);
+        expect(rejected.statusCode).toBe(400);
+      }
     });
 
     it('returns one notification delivery by server notification id', async () => {

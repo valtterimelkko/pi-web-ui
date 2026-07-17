@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { CrashLogger, CrashStats, getCrashLogger, resetCrashLogger } from '../../../src/workers/crash-logger.js';
 import type { WorkerStatus } from '@pi-web-ui/shared';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 
 describe('CrashLogger', () => {
   let logger: CrashLogger;
@@ -28,6 +29,32 @@ describe('CrashLogger', () => {
       expect(record.exitCode).toBe(1);
       expect(record.type).toBe('crashed');
       expect(record.lifetimeMs).toBeGreaterThanOrEqual(10000);
+    });
+
+    it('publishes crash evidence through the central structured logger', () => {
+      const records: LogRecord[] = [];
+      setLogTap((record) => records.push(record));
+      try {
+        const observed = new CrashLogger({ logToConsole: true });
+        observed.recordCrash({
+          sessionPath: '/test/session',
+          pid: 12345,
+          exitCode: null,
+          signal: 'SIGKILL',
+          memoryLimitMB: 512,
+          spawnedAt: Date.now() - 5000,
+          previousStatus: 'streaming' as WorkerStatus,
+        });
+        expect(records).toContainEqual(expect.objectContaining({
+          component: 'CrashLogger',
+          level: 'warn',
+          sessionId: '/test/session',
+          crashType: 'oom_killed',
+          pid: 12345,
+        }));
+      } finally {
+        setLogTap(null);
+      }
     });
 
     it('should categorize OOM kills (SIGKILL)', () => {

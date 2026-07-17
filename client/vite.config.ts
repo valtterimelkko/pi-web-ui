@@ -3,6 +3,11 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    'import.meta.env.VITE_BUILD_VERSION': JSON.stringify(
+      process.env.VITE_BUILD_VERSION ?? process.env.npm_package_version ?? 'dev',
+    ),
+  },
   server: {
     port: 3457,
     proxy: {

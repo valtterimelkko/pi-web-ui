@@ -26,6 +26,7 @@ import { ChannelRouter } from './channels/notification-channel.js';
 import { formatNotification } from './notification-formatter.js';
 import { createLogger } from '../logging/logger.js';
 import type { NotificationIngressSpool } from './notification-ingress-spool.js';
+import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
 import type {
   DeliveryRecord,
   Notification,
@@ -75,6 +76,7 @@ export interface NotificationManagerDeps {
   /** Optional durable terminal-ingress spool, isolated per server instance. */
   ingressSpool?: NotificationIngressSpool;
   ingressPollMs?: number;
+  metrics?: OperationalMetrics;
 }
 
 export class NotificationIdempotencyConflictError extends Error {
@@ -97,6 +99,13 @@ interface ObservedSession {
   brokerUnsub: () => void;
   /** Accumulated text of the current assistant message (reset on each assistant turn). */
   assistantTail: string;
+  /** Guards against clearing text from a newer turn while durable enqueue awaits I/O. */
+  tailVersion: number;
+  /** Agent-end snapshots waiting for durable outbox acceptance, oldest first. */
+  pendingTails: Array<{ tail: string; version: number }>;
+  /** Latest snapshot inside the debounce window (duplicate agent_end coalescing). */
+  debouncedTail: { tail: string; version: number } | null;
+  flushPromise: Promise<void> | null;
   debounceTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -104,6 +113,7 @@ export class NotificationManager {
   private readonly deps: NotificationManagerDeps;
   private readonly broker: InternalApiEventBroker;
   private readonly now: () => string;
+  private readonly metrics: OperationalMetrics;
   private readonly observed = new Map<string, ObservedSession>();
   private drainPromise: Promise<void> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -117,6 +127,7 @@ export class NotificationManager {
     this.deps = deps;
     this.broker = deps.broker ?? new InternalApiEventBroker();
     this.now = deps.now ?? (() => new Date().toISOString());
+    this.metrics = deps.metrics ?? getOperationalMetrics();
   }
 
   async init(): Promise<void> {
@@ -194,6 +205,15 @@ export class NotificationManager {
   }
 
   async optIn(record: OptInRecord): Promise<void> {
+    const existing = this.deps.store.getOptIn(record.sessionId);
+    if (
+      existing
+      && (existing.runtime !== record.runtime || existing.sessionPath !== record.sessionPath)
+    ) {
+      logger.child({ sessionId: record.sessionId, runtime: record.runtime }).warn(
+        'notification opt-in identity replaced an existing runtime/path binding',
+      );
+    }
     await this.deps.store.setOptIn(record);
     const log = logger.child({ sessionId: record.sessionId, runtime: record.runtime });
     log.info('opted in for agent_end notifications');
@@ -273,6 +293,7 @@ export class NotificationManager {
       };
       const accepted = await this.deps.store.enqueueIdempotent({ notification, delivery, ingress });
       if (accepted.conflict) throw new NotificationIdempotencyConflictError();
+      if (!accepted.duplicate) this.metrics.recordNotificationQueued();
       this.kickDrain();
       if (!accepted.duplicate) logger.info(`explicit notification queued: ${accepted.item.notification.id}`);
       return { notification: accepted.item.notification, duplicate: accepted.duplicate };
@@ -292,11 +313,19 @@ export class NotificationManager {
     this.shutDown = true;
     const pendingFlushes: Promise<void>[] = [];
     for (const [sessionId, observed] of this.observed) {
+      const hadTimer = Boolean(observed.debounceTimer);
       if (observed.debounceTimer) {
         clearTimeout(observed.debounceTimer);
         observed.debounceTimer = null;
-        // Start the flush while the observed record is still available. Because
-        // shutDown is already true it is persisted but not sent during teardown.
+      }
+      if (
+        hadTimer
+        || observed.flushPromise
+        || observed.pendingTails.length > 0
+        || observed.debouncedTail
+      ) {
+        // Join an in-flight flush or start the pending one while the observed
+        // record is still available. Shutdown persists but never sends it.
         pendingFlushes.push(this.flush(sessionId));
       }
     }
@@ -384,8 +413,19 @@ export class NotificationManager {
 
   private async drainPending(): Promise<void> {
     if (this.deps.router.listConfigured().length === 0) return;
-    const pending = this.deps.store.listPending();
-    for (const item of pending) await this.tryDeliver(item);
+    // Include items durably enqueued while this drain is already active. Failed
+    // items are attempted at most once per drain and left for bounded retry.
+    const attempted = new Set<string>();
+    let batch = this.deps.store.listPending()
+      .filter((item) => !attempted.has(item.notification.id));
+    while (batch.length > 0) {
+      for (const item of batch) {
+        attempted.add(item.notification.id);
+        await this.tryDeliver(item);
+      }
+      batch = this.deps.store.listPending()
+        .filter((item) => !attempted.has(item.notification.id));
+    }
     if (this.deps.store.listPending().length > 0) this.scheduleRetry();
   }
 
@@ -400,6 +440,7 @@ export class NotificationManager {
     });
     if (ok) {
       await this.deps.store.markSent(item.notification.id, this.now());
+      this.metrics.recordNotificationSent();
       log.info(`notification delivered: ${item.notification.id}`);
       return;
     }
@@ -410,6 +451,7 @@ export class NotificationManager {
       `notification delivery attempt ${attempts} failed${terminal ? ' (terminal, giving up)' : ''}: ${item.notification.id} — ${error}`,
     );
     await this.deps.store.recordFailure(item.notification.id, error, terminal);
+    this.metrics.recordNotificationFailure(terminal);
   }
 
   private serviceFor(runtime: NotificationRuntime): NotificationServiceObserver | undefined {
@@ -445,12 +487,17 @@ export class NotificationManager {
       sessionId,
       (event) => this.handleEvent(sessionId, event),
       false, // no replay: we only react to live agent_end
+      'notification',
     );
     this.observed.set(sessionId, {
       record,
       observer,
       brokerUnsub,
       assistantTail: '',
+      tailVersion: 0,
+      pendingTails: [],
+      debouncedTail: null,
+      flushPromise: null,
       debounceTimer: null,
     });
   }
@@ -482,12 +529,18 @@ export class NotificationManager {
     switch (event.type) {
       case 'message_start': {
         const data = event.data as { role?: string } | undefined;
-        if (data?.role === 'assistant') obs.assistantTail = '';
+        if (data?.role === 'assistant') {
+          obs.assistantTail = '';
+          obs.tailVersion += 1;
+        }
         break;
       }
       case 'message_update': {
         const delta = extractTextDelta(event.data);
-        if (delta) obs.assistantTail += delta;
+        if (delta) {
+          obs.assistantTail += delta;
+          obs.tailVersion += 1;
+        }
         break;
       }
       case 'agent_end':
@@ -501,52 +554,89 @@ export class NotificationManager {
     }
   }
 
-  private scheduleFlush(sessionId: string): void {
+  private scheduleFlush(
+    sessionId: string,
+    delayMs = this.deps.debounceMs,
+    captureCurrentTail = true,
+  ): void {
     const obs = this.observed.get(sessionId);
     if (!obs) return;
+    // Snapshot only for a real agent_end. Retries must not turn partial text
+    // from a newer in-flight turn into a notification.
+    if (captureCurrentTail) {
+      obs.debouncedTail = { tail: obs.assistantTail, version: obs.tailVersion };
+    }
     if (obs.debounceTimer) clearTimeout(obs.debounceTimer);
     obs.debounceTimer = setTimeout(() => {
+      obs.debounceTimer = null;
       void this.flush(sessionId).catch((err) => {
         logger.child({ sessionId }).errorObject('notification flush failed', err);
+        if (!this.shutDown && this.observed.get(sessionId) === obs) {
+          this.scheduleFlush(sessionId, this.deps.retryBackoffMs ?? 5000, false);
+        }
       });
-    }, this.deps.debounceMs);
+    }, delayMs);
+    obs.debounceTimer.unref?.();
   }
 
   private async flush(sessionId: string): Promise<void> {
     const obs = this.observed.get(sessionId);
     if (!obs) return;
-    const tail = obs.assistantTail;
-    // Live-resolve the operator-facing session name (the renamed display name)
-    // so a rename after opt-in is reflected. Falls back to the opt-in snapshot
-    // label, then the formatter's runtime label. A resolver failure must never
-    // break a notification.
-    const liveLabel = await this.resolveLabelSafe(obs.record.sessionPath);
-    const label = (liveLabel && liveLabel.trim()) || obs.record.label;
-    const formatted = formatNotification(
-      {
+    if (obs.flushPromise) return obs.flushPromise;
+    obs.flushPromise = this.flushPending(sessionId, obs).finally(() => {
+      obs.flushPromise = null;
+    });
+    return obs.flushPromise;
+  }
+
+  private async flushPending(sessionId: string, obs: ObservedSession): Promise<void> {
+    if (obs.debouncedTail) {
+      obs.pendingTails.push(obs.debouncedTail);
+      obs.debouncedTail = null;
+    }
+    let pending = obs.pendingTails[0];
+    while (pending) {
+      const { tail, version: tailVersion } = pending;
+      // Live-resolve the operator-facing session name (the renamed display name)
+      // so a rename after opt-in is reflected. Falls back to the opt-in snapshot
+      // label, then the formatter's runtime label. A resolver failure must never
+      // break a notification.
+      const liveLabel = await this.resolveLabelSafe(obs.record.sessionPath);
+      const label = (liveLabel && liveLabel.trim()) || obs.record.label;
+      const formatted = formatNotification(
+        {
+          sessionId,
+          runtime: obs.record.runtime,
+          label,
+          kind: 'agent_end',
+          tail,
+        },
+        { tailMaxChars: this.deps.tailMaxChars, publicBaseUrl: this.deps.publicBaseUrl },
+      );
+      const notification: Notification = {
+        id: uuidv4(),
         sessionId,
         runtime: obs.record.runtime,
-        label,
         kind: 'agent_end',
-        tail,
-      },
-      { tailMaxChars: this.deps.tailMaxChars, publicBaseUrl: this.deps.publicBaseUrl },
-    );
-    obs.assistantTail = '';
-    const notification: Notification = {
-      id: uuidv4(),
-      sessionId,
-      runtime: obs.record.runtime,
-      kind: 'agent_end',
-      title: formatted.title,
-      body: formatted.body,
-      deepLink: formatted.deepLink,
-      createdAt: this.now(),
-    };
-    await this.enqueueAndDispatch(notification);
-    logger
-      .child({ sessionId, runtime: obs.record.runtime })
-      .info(`agent_end notification queued: ${notification.id}`);
+        title: formatted.title,
+        body: formatted.body,
+        deepLink: formatted.deepLink,
+        createdAt: this.now(),
+      };
+      await this.enqueueAndDispatch(notification);
+      // Clear only after durable acceptance, and never erase a newer turn that
+      // arrived while label resolution or the outbox write was in flight.
+      obs.pendingTails.shift();
+      if (obs.tailVersion === tailVersion) obs.assistantTail = '';
+      logger
+        .child({ sessionId, runtime: obs.record.runtime })
+        .info(`agent_end notification queued: ${notification.id}`);
+      if (obs.debouncedTail) {
+        obs.pendingTails.push(obs.debouncedTail);
+        obs.debouncedTail = null;
+      }
+      pending = obs.pendingTails[0];
+    }
   }
 
   /** Runs the injected label resolver, swallowing errors (best-effort enrichment). */
@@ -575,6 +665,7 @@ export class NotificationManager {
       firstQueuedAt: this.now(),
     };
     await this.deps.store.enqueue({ notification, delivery, ingress });
+    this.metrics.recordNotificationQueued();
     this.kickDrain();
   }
 

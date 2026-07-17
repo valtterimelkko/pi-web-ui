@@ -16,7 +16,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.8.0",
+  "contractVersion": "1.9.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -24,6 +24,11 @@ Current contract:
 
 ### Changelog
 
+- **1.9.0** (minor, additive) — added lightweight local observability without external telemetry:
+  - `GET /api/v1/health` retains the legacy runtime availability strings and adds a unified `runtimeHealth` matrix with enabled/available/backend/check status, bounded check timing, and the latest scrubbed failure.
+  - diagnostics responses add a privacy-safe `operational` snapshot with bounded turn outcome/latency counters, pipeline-integrity counters, aggregate registry session counts, and worker/crash statistics.
+  - diagnostics log filtering adds `requestId`, `runId`, `component`, `runtime`, and `since` selectors.
+  Old `1.8.x` clients can ignore every new field; no existing route or field was removed.
 - **1.8.0** (minor, additive with a corrected acceptance status) — hardened trusted multi-client operation and notification ingress:
   - `POST /api/v1/notifications` accepts an optional `Idempotency-Key`, durably queues before responding, returns `202 Accepted` plus `Location`/`statusUrl`, and returns `409 IDEMPOTENCY_KEY_CONFLICT` if a key is reused with a different payload.
   - `GET /api/v1/notifications/:notificationId` exposes pollable `pending | sent | failed` delivery state.

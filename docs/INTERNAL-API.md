@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.8.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.9.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -305,7 +305,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.8.0",
+    "contractVersion": "1.9.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -801,7 +801,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.8.0",
+    "contractVersion": "1.9.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },

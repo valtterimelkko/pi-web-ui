@@ -67,6 +67,10 @@ describe('AskUserQuestion live-validation scenarios', () => {
       client: {
         createSession: vi.fn(async () => ({ sessionId: 'sess-1', sessionPath: 'sess-1', runtime: 'claude', cwd: '/tmp' })),
         deleteSession: vi.fn(async () => undefined),
+        getSessionInfo: vi.fn(async () => ({
+          sessionId: 'sess-1', runtime: 'claude', status: 'idle', cwd: '/tmp',
+          createdAt: new Date().toISOString(), lastActivity: new Date().toISOString(), messageCount: 1,
+        })),
         respondToApproval: vi.fn(async () => ({ success: true, approved: true })),
         promptStreamLive: vi.fn(async (_sessionId: string, _input: unknown, onEvent: (evt: NormalizedEvent) => void) => {
           for (const evt of promptEvents) onEvent(evt);

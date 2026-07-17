@@ -67,7 +67,7 @@ describe('central logger — namespace filtering (Task 3)', () => {
     expect(lines).toHaveLength(1);
   });
 
-  it('active namespaces emit only matching components', () => {
+  it('active namespaces emit debug only for matching components', () => {
     const claude = makeLogger({
       component: 'claude',
       level: 'debug',
@@ -78,19 +78,21 @@ describe('central logger — namespace filtering (Task 3)', () => {
       level: 'debug',
       namespaces: { active: true, patterns: ['claude'], isEnabled: (c) => c === 'claude' },
     });
-    claude.logger.info('c'); opencode.logger.info('o');
+    claude.logger.debug('c'); opencode.logger.debug('o');
     expect(claude.lines).toHaveLength(1);
     expect(opencode.lines).toHaveLength(0);
   });
 
-  it('namespace filter suppresses even error from non-matching components', () => {
+  it('namespace filter never suppresses warning or error records', () => {
     const { logger, lines } = makeLogger({
       component: 'opencode',
       level: 'debug',
       namespaces: { active: true, patterns: ['claude'], isEnabled: (c) => c === 'claude' },
     });
+    logger.info('routine');
+    logger.warn('recoverable');
     logger.error('important');
-    expect(lines).toHaveLength(0);
+    expect(lines.map((line) => line.level)).toEqual(['warn', 'error']);
   });
 });
 
@@ -131,13 +133,21 @@ describe('central logger — format (Task 4)', () => {
 
   it('json correlation fields appear when present', () => {
     const { logger, lines } = makeLogger({ component: 'Foo', format: 'json', level: 'debug' });
-    withCorrelation({ requestId: 'req-1', sessionId: 'sess-1', runtime: 'claude' }, () => {
+    withCorrelation({
+      requestId: 'req-1',
+      runId: 'run-1',
+      sessionId: 'sess-1',
+      runtime: 'claude',
+      executionInstanceId: 'profile-1',
+    }, () => {
       logger.info('hi');
     });
     const obj = JSON.parse(lines[0].line);
     expect(obj.requestId).toBe('req-1');
+    expect(obj.runId).toBe('run-1');
     expect(obj.sessionId).toBe('sess-1');
     expect(obj.runtime).toBe('claude');
+    expect(obj.executionInstanceId).toBe('profile-1');
   });
 });
 
@@ -149,10 +159,16 @@ describe('central logger — component & correlation', () => {
 
   it('stamps correlation id on pretty lines', () => {
     const { logger, lines } = makeLogger({ component: 'Foo' });
-    withCorrelation({ requestId: 'req-9', sessionId: 's9', runtime: 'pi' }, () => {
+    withCorrelation({
+      requestId: 'req-9',
+      runId: 'run-9',
+      sessionId: 's9',
+      runtime: 'pi',
+      executionInstanceId: 'pi-local-default',
+    }, () => {
       logger.info('doing work');
     });
-    expect(lines[0].line).toBe('[Foo] doing work [req=req-9 sid=s9 rt=pi]');
+    expect(lines[0].line).toBe('[Foo] doing work [req=req-9 run=run-9 sid=s9 rt=pi exec=pi-local-default]');
   });
 
   it('does not stamp anything outside a correlation context', () => {

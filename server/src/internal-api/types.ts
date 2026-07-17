@@ -54,7 +54,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.8.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.9.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -490,7 +490,7 @@ export interface DuplicatePromptResponse {
   detached?: true;
 }
 
-export type PromptDispatchResponse = PromptResponse | DuplicatePromptResponse;
+export type PromptDispatchResponse = PromptResponse | DuplicatePromptResponse | DetachedPromptResponse;
 
 export interface ModelInfo {
   id: string;
@@ -564,6 +564,16 @@ export interface CapabilitiesResponse {
   };
 }
 
+export interface RuntimeHealthEntry {
+  enabled: boolean;
+  available: boolean;
+  backend: RuntimeBackendMode;
+  checkStatus: 'ok' | 'unavailable' | 'error' | 'disabled';
+  checkedAt: string;
+  checkDurationMs: number;
+  lastFailure?: { at: string; message: string };
+}
+
 export interface HealthResponse {
   status: 'ok' | 'degraded';
   contract: InternalApiContractInfo;
@@ -573,6 +583,8 @@ export interface HealthResponse {
     opencode: 'available' | 'unavailable';
     antigravity: 'available' | 'unavailable';
   };
+  /** Additive detailed runtime health; legacy `runtimes` remains for 1.8 clients. */
+  runtimeHealth: Record<SessionRuntime, RuntimeHealthEntry>;
   uptime: number;
   version?: string;
 }

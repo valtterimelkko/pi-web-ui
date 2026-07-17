@@ -97,13 +97,21 @@ describe('runScenario', () => {
         { type: 'message_update', timestamp: 2, data: { assistantMessageEvent: { type: 'text_delta', delta: 'LIVE-VALIDATION-OK' } } },
         { type: 'agent_end', timestamp: 3, data: { usage: { input_tokens: 1, output_tokens: 1 } } },
       ]),
-      getSessionInfo: vi.fn().mockResolvedValue({ sessionId: 'sess-1', runtime: 'claude', messageCount: 1, status: 'idle', lastActivity: '2026-05-20T00:00:00.000Z' }),
+      getSessionInfo: vi.fn().mockResolvedValue({
+        sessionId: 'sess-1', sessionPath: 'sess-1', runtime: 'claude', executionInstanceId: 'claude-profile-1',
+        cwd: '/root/pi-web-ui', model: 'sonnet', backendMode: 'sdk', messageCount: 1, firstMessage: 'x',
+        status: 'idle', createdAt: '2026-05-20T00:00:00.000Z', lastActivity: '2026-05-20T00:00:00.000Z',
+      }),
       getCapabilities: vi.fn().mockResolvedValue(makeCapabilities()),
       controlSession: vi.fn(),
       getSessionHistory: vi.fn(),
       respondToApproval: vi.fn(),
       optInNotifications: vi.fn().mockResolvedValue({}),
       getNotificationState: vi.fn().mockResolvedValue({ optIn: null, deliveries: [] }),
+      getLastPromptEvidence: vi.fn().mockReturnValue({
+        runId: 'run-1',
+        eventCounts: { agent_start: 1, message_update: 1, agent_end: 1 },
+      }),
       deleteSession: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -117,8 +125,40 @@ describe('runScenario', () => {
 
     expect(result.passed).toBe(true);
     expect(result.assertions.some((assertion) => assertion.name === 'assistant_text')).toBe(true);
+    expect(result).toMatchObject({
+      runId: 'run-1', model: 'sonnet', backendMode: 'sdk', executionInstanceId: 'claude-profile-1',
+      eventCounts: { agent_start: 1, message_update: 1, agent_end: 1 },
+      attemptHistory: [{ attempt: 1, passed: true }],
+    });
+    expect(result.startedAt).toBeTruthy();
+    expect(result.completedAt).toBeTruthy();
+    expect(result.durationMs).toBeTypeOf('number');
     expect(client.createSession).toHaveBeenCalled();
     expect(client.deleteSession).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('preserves the original execution failure and cleanup warnings', async () => {
+    const client = {
+      createSession: vi.fn().mockResolvedValue({ sessionId: 'sess-fail', runtime: 'pi' }),
+      promptStream: vi.fn().mockRejectedValue(new Error('runtime failed')),
+      getSessionInfo: vi.fn(),
+      getCapabilities: vi.fn(),
+      controlSession: vi.fn(),
+      getSessionHistory: vi.fn(),
+      respondToApproval: vi.fn(),
+      optInNotifications: vi.fn(),
+      getNotificationState: vi.fn(),
+      deleteSession: vi.fn().mockRejectedValue(new Error('delete failed')),
+    } as unknown as InternalApiClientLike;
+    const result = await runScenario({
+      client,
+      runtime: 'pi',
+      scenario: scenarioRegistry.smoke,
+      capabilities: makeCapabilities(),
+      cwd: '/root/pi-web-ui',
+    });
+    expect(result.reason).toContain('runtime failed');
+    expect(result.cleanupWarnings).toContain('session cleanup failed: delete failed');
   });
 
   it('skips unsupported scenarios based on runtime capabilities', async () => {
@@ -196,6 +236,10 @@ describe('runScenario', () => {
     expect(retryScenario.run).toHaveBeenCalledTimes(2);
     expect(result.passed).toBe(true);
     expect(result.attempt).toBe(2);
+    expect(result.attemptHistory).toMatchObject([
+      { attempt: 1, passed: false },
+      { attempt: 2, passed: true },
+    ]);
   });
 
   it('uses GLM-5.2 when exercising the OpenCode thinking-level scenario', async () => {

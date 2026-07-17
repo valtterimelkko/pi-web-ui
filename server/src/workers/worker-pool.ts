@@ -34,8 +34,8 @@ export class WorkerPool {
 
     // Check max workers limit
     if (this.workers.size >= this.config.maxWorkers) {
-      // Try to cleanup idle workers first
-      this.cleanupIdle();
+      // Try to cleanup idle workers first and wait for processes to exit.
+      await this.cleanupIdle();
       
       if (this.workers.size >= this.config.maxWorkers) {
         throw new Error(`Maximum worker limit reached (${this.config.maxWorkers})`);
@@ -68,23 +68,23 @@ export class WorkerPool {
   /**
    * Remove idle workers and return count removed.
    */
-  cleanupIdle(maxIdleMs?: number): number {
+  async cleanupIdle(maxIdleMs?: number): Promise<number> {
     const idleThreshold = maxIdleMs ?? this.config.idleTimeoutMs;
     const now = Date.now();
-    let removed = 0;
+    const terminations: Promise<void>[] = [];
 
     for (const [path, worker] of this.workers) {
       const idleTime = now - worker.lastActivity;
       const isIdle = worker.status === 'idle' || worker.status === 'ready';
-      
+
       if (isIdle && idleTime > idleThreshold) {
-        worker.terminate();
+        terminations.push(worker.terminate());
         this.workers.delete(path);
-        removed++;
       }
     }
 
-    return removed;
+    await Promise.all(terminations);
+    return terminations.length;
   }
 
   /**
@@ -146,13 +146,12 @@ export class WorkerPool {
    * Get info for all workers.
    */
   getAllWorkers(): WorkerInfo[] {
-    const now = Date.now();
     return Array.from(this.workers.entries()).map(([sessionPath, worker]) => ({
       sessionPath,
       status: worker.status,
       pid: worker.pid,
       lastActivity: worker.lastActivity,
-      spawnedAt: now, // Approximation
+      spawnedAt: worker.spawnedAt
     }));
   }
 
@@ -161,7 +160,7 @@ export class WorkerPool {
    */
   startCleanupInterval(intervalMs = 60000): void {
     this.cleanupInterval = setInterval(() => {
-      this.cleanupIdle();
+      void this.cleanupIdle();
     }, intervalMs);
   }
 

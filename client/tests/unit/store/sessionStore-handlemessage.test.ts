@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useSessionStore, type Message, type Session } from '../../../src/store/sessionStore';
 import { useUIStore } from '../../../src/store/uiStore';
 import { useTransferStore } from '../../../src/store/transferStore';
+import { clearBrowserDiagnostics, createBrowserDiagnosticBundle } from '../../../src/lib/browserDiagnostics';
 
 describe('sessionStore', () => {
   beforeEach(() => {
@@ -32,9 +33,19 @@ describe('sessionStore', () => {
       transferReadySessionIds: {},
     });
     useUIStore.setState({ toasts: [] });
+    clearBrowserDiagnostics();
   });
 
   describe('handleServerMessage', () => {
+    it('counts malformed and unknown frontend protocol messages without retaining payloads', () => {
+      const state = useSessionStore.getState();
+      state.handleServerMessage(null);
+      state.handleServerMessage({ type: 'future_protocol_message', payload: 'private transcript content' });
+      const bundle = createBrowserDiagnosticBundle();
+      expect(bundle.protocolDrift).toMatchObject({ malformed: 1, unknown: 1 });
+      expect(JSON.stringify(bundle)).not.toContain('private transcript content');
+    });
+
     it('should handle sessions_list message', () => {
       const state = useSessionStore.getState();
       const sessions: Session[] = [

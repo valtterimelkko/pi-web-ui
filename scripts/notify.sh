@@ -16,7 +16,7 @@
 #   scripts/notify.sh <kind> <title>            # body read from stdin
 #   echo "details" | scripts/notify.sh <kind> <title>
 #
-#   kind   : done | question | blocked   (any other value becomes a custom label)
+#   kind   : milestone | done | question | blocked (other values become custom labels)
 #   title  : short one-line summary (NO emoji — the script adds it)
 #   body   : optional detail; "-" or omitted → read from stdin
 #
@@ -41,7 +41,7 @@ log() { printf '%s\n' "$*" >&2; }   # stderr only — keep stdout clean for pipi
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 if [[ $# -lt 2 ]]; then
-  log "usage: scripts/notify.sh <done|question|blocked> <title> [body]"
+  log "usage: scripts/notify.sh <milestone|done|question|blocked> <title> [body]"
   log "       body omitted or '-' is read from stdin"
   exit 64
 fi
@@ -51,6 +51,7 @@ TITLE_SUMMARY="$2"
 BODY_ARG="${3:-}"
 
 case "$KIND" in
+  milestone) TITLE="📍 Milestone: $TITLE_SUMMARY" ;;
   done)     TITLE="✅ Done: $TITLE_SUMMARY" ;;
   question) TITLE="❓ Question: $TITLE_SUMMARY" ;;
   blocked)  TITLE="⚠️ Blocked: $TITLE_SUMMARY" ;;

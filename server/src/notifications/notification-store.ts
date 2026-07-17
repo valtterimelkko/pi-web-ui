@@ -100,24 +100,43 @@ export class NotificationStore {
   }
 
   async setOptIn(record: OptInRecord): Promise<void> {
+    const previous = this.optIns.get(record.sessionId);
     this.optIns.set(record.sessionId, record);
     const snapshot: Record<string, OptInRecord> = {};
     for (const rec of this.optIns.values()) snapshot[rec.sessionId] = rec;
-    await this.persist(OPTINS_FILE, snapshot);
+    try {
+      await this.persist(OPTINS_FILE, snapshot);
+    } catch (error) {
+      if (previous) this.optIns.set(record.sessionId, previous);
+      else this.optIns.delete(record.sessionId);
+      throw error;
+    }
   }
 
   async removeOptIn(sessionId: string): Promise<void> {
+    const previous = this.optIns.get(sessionId);
     this.optIns.delete(sessionId);
     const snapshot: Record<string, OptInRecord> = {};
     for (const rec of this.optIns.values()) snapshot[rec.sessionId] = rec;
-    await this.persist(OPTINS_FILE, snapshot);
+    try {
+      await this.persist(OPTINS_FILE, snapshot);
+    } catch (error) {
+      if (previous) this.optIns.set(sessionId, previous);
+      throw error;
+    }
   }
 
   // ── Outbox ────────────────────────────────────────────────────────
 
   async enqueue(item: QueuedNotification): Promise<void> {
     this.outbox.push(item);
-    await this.persist(OUTBOX_FILE, this.outbox);
+    try {
+      await this.persist(OUTBOX_FILE, this.outbox);
+    } catch (error) {
+      const index = this.outbox.findIndex((queued) => queued === item);
+      if (index !== -1) this.outbox.splice(index, 1);
+      throw error;
+    }
   }
 
   /** Reserve one ingress key until its first outbox write is durably complete. */

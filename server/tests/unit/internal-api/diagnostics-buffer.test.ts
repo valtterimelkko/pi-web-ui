@@ -20,11 +20,28 @@ function rec(over: Partial<LogRecord> = {}): LogRecord {
 }
 
 describe('diagnostics ring buffer — secret scrubbing (Task 10)', () => {
-  it('redacts values of sensitive keys', () => {
-    const out = scrubRecord(rec({ msg: 'x', password: 'hunter2', api_key: 'k123', Authorization: 'Bearer abc' } as unknown as LogRecord));
-    expect((out as Record<string, unknown>).password).toBe('[REDACTED]');
-    expect((out as Record<string, unknown>).api_key).toBe('[REDACTED]');
-    expect((out as Record<string, unknown>).Authorization).toBe('[REDACTED]');
+  it('redacts values of sensitive keys, including common compound credential names', () => {
+    const out = scrubRecord(rec({
+      msg: 'x',
+      password: 'hunter2',
+      api_key: 'k123',
+      Authorization: 'Bearer abc',
+      accessToken: 'access-123',
+      refresh_token: 'refresh-123',
+      clientSecret: 'client-123',
+      privateKey: 'private-123',
+      telegramBotToken: 'telegram-123',
+      nested: { oauthAccessToken: 'oauth-123' },
+    } as unknown as LogRecord)) as Record<string, unknown>;
+    expect(out.password).toBe('[REDACTED]');
+    expect(out.api_key).toBe('[REDACTED]');
+    expect(out.Authorization).toBe('[REDACTED]');
+    expect(out.accessToken).toBe('[REDACTED]');
+    expect(out.refresh_token).toBe('[REDACTED]');
+    expect(out.clientSecret).toBe('[REDACTED]');
+    expect(out.privateKey).toBe('[REDACTED]');
+    expect(out.telegramBotToken).toBe('[REDACTED]');
+    expect(out.nested).toEqual({ oauthAccessToken: '[REDACTED]' });
   });
 
   it('redacts bearer tokens and sk- keys inside message strings', () => {
@@ -32,6 +49,16 @@ describe('diagnostics ring buffer — secret scrubbing (Task 10)', () => {
     expect((out.msg as string)).not.toContain('abc.def-ghi_SK');
     expect((out.msg as string)).not.toContain('sk-proj-1234567890abcdef');
     expect((out.msg as string)).toContain('[REDACTED]');
+  });
+
+  it('redacts compound credential assignments and credential query values inside messages', () => {
+    const out = scrubRecord(rec({
+      msg: 'accessToken=private-one refresh_token=private-two https://x.test/?api_key=private-three',
+    }));
+    const raw = JSON.stringify(out);
+    expect(raw).not.toContain('private-one');
+    expect(raw).not.toContain('private-two');
+    expect(raw).not.toContain('private-three');
   });
 
   it('does NOT redact normal ids (requestId / sessionId)', () => {
@@ -60,11 +87,42 @@ describe('diagnostics ring buffer — capture & query (Task 10)', () => {
     expect(logs[logs.length - 1].msg).toBe('m1499');
   });
 
-  it('filters by sessionId', () => {
-    pushDiagnosticsRecord(rec({ msg: 'for-a', sessionId: 'a' }));
-    pushDiagnosticsRecord(rec({ msg: 'for-b', sessionId: 'b' }));
-    pushDiagnosticsRecord(rec({ msg: 'for-a2', sessionId: 'a' }));
-    expect(getRecentLogs({ sessionId: 'a' }).map((l) => l.msg)).toEqual(['for-a', 'for-a2']);
+  it('filters by structured correlation and component fields', () => {
+    pushDiagnosticsRecord(rec({
+      ts: '2026-06-23T11:59:59.000Z',
+      msg: 'old',
+      requestId: 'req-a',
+      runId: 'run-a',
+      sessionId: 'a',
+      runtime: 'pi',
+      component: 'Old',
+    }));
+    pushDiagnosticsRecord(rec({
+      ts: '2026-06-23T12:00:01.000Z',
+      msg: 'match',
+      requestId: 'req-a',
+      runId: 'run-a',
+      sessionId: 'a',
+      runtime: 'pi',
+      component: 'Target',
+    }));
+    pushDiagnosticsRecord(rec({
+      ts: '2026-06-23T12:00:02.000Z',
+      msg: 'other',
+      requestId: 'req-b',
+      runId: 'run-b',
+      sessionId: 'b',
+      runtime: 'claude',
+      component: 'Target',
+    }));
+    expect(getRecentLogs({
+      sessionId: 'a',
+      requestId: 'req-a',
+      runId: 'run-a',
+      runtime: 'pi',
+      component: 'Target',
+      since: '2026-06-23T12:00:00.000Z',
+    }).map((l) => l.msg)).toEqual(['match']);
   });
 
   it('filters by minimum level', () => {

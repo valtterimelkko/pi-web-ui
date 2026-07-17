@@ -1064,9 +1064,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
-      logger.info(`[InternalAPI] Prompt dispatched: runtime=${runtime} verbosity=${verbosity} mode=${mode} runId=${runId}`);
+      return withCorrelation({
+        runId,
+        executionInstanceId: beginInput.executionInstanceId,
+      }, async () => {
+        logger.info(`[InternalAPI] Prompt dispatched: runtime=${runtime} verbosity=${verbosity} mode=${mode} runId=${runId}`);
 
-      if (body.detach) {
+        if (body.detach) {
         void executePromptWithReceipt(
           runId,
           sessionId,
@@ -1097,14 +1101,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         // occur after markStarted but before the runtime is invoked.
         await runReceipts.finish(runId, { status: 'failed', errorCode: ErrorCode.RUNTIME_ERROR }).catch(() => undefined);
         logger.errorObject('Prompt failed', err);
-        if (!res.headersSent) {
-          sendJson(res, 500, {
-            error: err instanceof Error ? err.message : 'Prompt execution failed',
-            code: ErrorCode.RUNTIME_ERROR,
-            runId,
-          });
+          if (!res.headersSent) {
+            sendJson(res, 500, {
+              error: 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
+              code: ErrorCode.RUNTIME_ERROR,
+              runId,
+            });
+          }
         }
-      }
+      });
     });
   }
 
@@ -1135,7 +1140,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     if (collector.error) {
       sendJson(res, 500, {
-        error: collector.error.message,
+        error: 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
         code: ErrorCode.RUNTIME_ERROR,
         runId,
       });
@@ -1635,7 +1640,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const unsub = broker.subscribe(sessionId, (event) => {
       sse.write(event.type, event);
-    });
+    }, true, 'sse');
 
     // Keep this handler alive until the client disconnects. Without this,
     // Node may consider the GET request "complete" (it has no body) and
@@ -2363,7 +2368,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           };
         }
         const collector = createEventCollector();
-        await executePromptWithReceipt(
+        await withCorrelation({
+          runId,
+          sessionId: entry.sessionId,
+          runtime: reg.sdkType,
+          executionInstanceId: beginInput.executionInstanceId,
+        }, () => executePromptWithReceipt(
           runId,
           entry.sessionId,
           reg.sdkType as SessionRuntime,
@@ -2374,14 +2384,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             if (error) collector.error = error;
             collector.complete = true;
           },
-        );
+        ));
         if (collector.error) {
           return {
             index,
             sessionId: entry.sessionId,
             success: false,
             runId,
-            error: { code: ErrorCode.RUNTIME_ERROR, message: collector.error.message },
+            error: { code: ErrorCode.RUNTIME_ERROR, message: 'Runtime prompt failed. Inspect diagnostics using the returned runId.' },
           };
         }
         return {
@@ -2400,7 +2410,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           runId: reservedRunId,
           error: {
             code: ErrorCode.RUNTIME_ERROR,
-            message: err instanceof Error ? err.message : 'Prompt failed',
+            message: 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
           },
         };
       }

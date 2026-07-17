@@ -10,13 +10,25 @@ const recordSchema = z.object({
   version: z.literal(1),
   idempotencyKey: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/),
   title: z.string().trim().min(1).max(500),
-  body: z.string().min(1).max(20_000),
-  deepLink: z.string().trim().max(2000).optional(),
+  body: z.string().trim().min(1).max(20_000),
+  deepLink: z.string().trim().max(2000).refine(isSafeDeepLink, {
+    message: 'deepLink must be an app-relative path or an HTTP(S) URL',
+  }).optional(),
   createdAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
 }).strict();
 
 export type NotificationIngressRecord = z.infer<typeof recordSchema>;
+
+function isSafeDeepLink(value: string): boolean {
+  if (value.startsWith('/') && !value.startsWith('//')) return true;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 export interface NotificationIngressClaim {
   record: NotificationIngressRecord;
@@ -56,6 +68,7 @@ export class NotificationIngressSpool {
     const entries = await readdir(this.dir, { withFileTypes: true });
     const candidates = entries
       .filter((entry) => entry.name.endsWith('.json') && !entry.name.startsWith('.processing-'))
+      .sort((a, b) => a.name.localeCompare(b.name))
       .slice(0, this.maxFiles);
     const claims: NotificationIngressClaim[] = [];
 

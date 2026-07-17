@@ -5,6 +5,9 @@ import os from 'os';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { InternalApiEventBroker } from '../../../src/internal-api/event-broker.js';
 import { WatchManager } from '../../../src/internal-api/watch/watch-manager.js';
+import { WatchStore } from '../../../src/internal-api/watch/watch-store.js';
+import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 
 function ev(type: string, data: Record<string, unknown> = {}): NormalizedEvent {
   return { type, timestamp: Date.now(), data };
@@ -97,6 +100,59 @@ describe('WatchManager — standing observation + durable ledger', () => {
     expect(reloaded.status).toBe('detached');
     expect(reloaded.allFired).toBe(true);
     expect(reloaded.firingCount).toBe(1);
+  });
+
+  it('rolls back a newly registered watch when its initial durable write fails', async () => {
+    const originalSave = WatchStore.prototype.save;
+    const save = vi.spyOn(WatchStore.prototype, 'save')
+      .mockRejectedValueOnce(new Error('disk unavailable'))
+      .mockImplementation(originalSave);
+    try {
+      await expect(manager.register({
+        sessionId: 'register-fail', sessionPath: 'register-fail', runtime: 'pi',
+        request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+      })).rejects.toThrow('disk unavailable');
+      expect(manager.get('register-fail')).toBeUndefined();
+    } finally {
+      save.mockRestore();
+    }
+  });
+
+  it('records and retries a failed firing persistence without losing the live firing', async () => {
+    const metrics = new OperationalMetrics();
+    manager.close();
+    manager = new WatchManager({
+      broker,
+      storeDir: dir,
+      pinSession: pin,
+      metrics,
+      persistenceRetryMs: 5,
+    });
+    await manager.register({
+      sessionId: 'persist-1', sessionPath: 'persist-1', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+    });
+    const originalSave = WatchStore.prototype.save;
+    const save = vi.spyOn(WatchStore.prototype, 'save')
+      .mockRejectedValueOnce(new Error('disk unavailable'))
+      .mockImplementation(originalSave);
+    const records: LogRecord[] = [];
+    setLogTap((record) => records.push(record));
+    try {
+      broker.publish('persist-1', ev('agent_end'));
+      await flush();
+      expect(manager.get('persist-1')?.allFired).toBe(true);
+      expect(save.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(metrics.snapshot().pipeline.watchPersistenceFailures).toBe(1);
+      expect(records.some((record) =>
+        record.component === 'WatchManager'
+        && record.level === 'warn'
+        && record.sessionId === 'persist-1',
+      )).toBe(true);
+    } finally {
+      setLogTap(null);
+      save.mockRestore();
+    }
   });
 
   it('deletes a watch and stops recording', async () => {

@@ -39,8 +39,10 @@ const optInBodySchema = z
 const explicitBodySchema = z
   .object({
     title: z.string().trim().min(1).max(500),
-    body: z.string().min(1).max(20_000),
-    deepLink: z.string().trim().max(2000).optional(),
+    body: z.string().trim().min(1).max(20_000),
+    deepLink: z.string().trim().max(2000).refine(isSafeDeepLink, {
+      message: 'deepLink must be an app-relative path or an HTTP(S) URL',
+    }).optional(),
   })
   .strict();
 
@@ -54,6 +56,13 @@ export interface NotificationsRoutesDeps {
 
 export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
   const { manager, sessionRegistry } = deps;
+
+  async function resolveCanonicalId(sessionId: string): Promise<string> {
+    const entry = await sessionRegistry.get(sessionId);
+    return entry && isNotificationRuntime(entry.sdkType)
+      ? canonicalOptInId(entry.sdkType, sessionId, entry.path ?? sessionId)
+      : sessionId;
+  }
 
   /** POST /api/v1/sessions/:id/notifications/opt-in */
   async function handleOptIn(req: IncomingMessage, res: ServerResponse, sessionId: string): Promise<void> {
@@ -94,17 +103,28 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
 
   /** DELETE /api/v1/sessions/:id/notifications/opt-in */
   async function handleOptOut(_req: IncomingMessage, res: ServerResponse, sessionId: string): Promise<void> {
-    await manager.optOut(sessionId);
-    sendJson(res, 200, { status: 'ok', optIn: null });
+    try {
+      await manager.optOut(await resolveCanonicalId(sessionId));
+      sendJson(res, 200, { status: 'ok', optIn: null });
+    } catch (error) {
+      logger.errorObject('notification opt-out identity lookup failed', error, { sessionId });
+      sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Notification identity lookup is temporarily unavailable.'));
+    }
   }
 
   /** GET /api/v1/sessions/:id/notifications */
   async function handleGetSessionState(_req: IncomingMessage, res: ServerResponse, sessionId: string): Promise<void> {
-    sendJson(res, 200, {
-      status: 'ok',
-      optIn: manager.getOptIn(sessionId) ?? null,
-      deliveries: manager.listDeliveriesForSession(sessionId),
-    });
+    try {
+      const canonicalId = await resolveCanonicalId(sessionId);
+      sendJson(res, 200, {
+        status: 'ok',
+        optIn: manager.getOptIn(canonicalId) ?? null,
+        deliveries: manager.listDeliveriesForSession(canonicalId),
+      });
+    } catch (error) {
+      logger.errorObject('notification state identity lookup failed', error, { sessionId });
+      sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Notification identity lookup is temporarily unavailable.'));
+    }
   }
 
   /** POST /api/v1/notifications */
@@ -177,6 +197,16 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
     handleGetDeliveryStatus,
     handleGetRecentDeliveries,
   };
+}
+
+function isSafeDeepLink(value: string): boolean {
+  if (value.startsWith('/') && !value.startsWith('//')) return true;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 function sendJson(res: ServerResponse, statusCode: number, data: unknown): void {

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type {
+  InternalApiClientLike,
   ValidationAssertion,
   ValidationCapabilities,
   ValidationContext,
@@ -65,12 +66,41 @@ async function withEphemeralSession(
     ephemeral: true,
   });
 
+  let result: ValidationScenarioResult | undefined;
+  let executionError: unknown;
+  let detail: Awaited<ReturnType<InternalApiClientLike['getSessionInfo']>> | undefined;
+  const cleanupWarnings: string[] = [];
   try {
-    const result = await execute(session.sessionId);
-    return { ...result, sessionId: session.sessionId };
+    result = await execute(session.sessionId);
+    detail = await context.client.getSessionInfo(session.sessionId).catch(() => undefined);
+  } catch (error) {
+    executionError = error;
   } finally {
-    await context.client.deleteSession(session.sessionId).catch(() => undefined);
+    try {
+      await context.client.deleteSession(session.sessionId);
+    } catch (error) {
+      cleanupWarnings.push(`session cleanup failed: ${safeFailureMessage(error)}`);
+    }
   }
+  if (executionError !== undefined) {
+    const error = executionError instanceof Error
+      ? executionError
+      : new Error(safeFailureMessage(executionError));
+    Object.assign(error, { cleanupWarnings });
+    throw error;
+  }
+  if (!result) throw new Error('Scenario did not produce a result');
+  const promptEvidence = context.client.getLastPromptEvidence?.(session.sessionId);
+  return {
+    ...result,
+    sessionId: session.sessionId,
+    model: detail?.model ?? session.model,
+    backendMode: detail?.backendMode,
+    executionInstanceId: detail?.executionInstanceId,
+    runId: promptEvidence?.runId ?? result.runId,
+    eventCounts: promptEvidence?.eventCounts ?? result.eventCounts,
+    ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
+  };
 }
 
 /**
@@ -979,28 +1009,91 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function readCleanupWarnings(error: unknown): string[] {
+  if (!error || typeof error !== 'object' || !('cleanupWarnings' in error)) return [];
+  const warnings = (error as { cleanupWarnings?: unknown }).cleanupWarnings;
+  return Array.isArray(warnings)
+    ? warnings.filter((warning): warning is string => typeof warning === 'string').slice(0, 20)
+    : [];
+}
+
+function safeFailureMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b(?:access|refresh|auth|bot)?[_-]?(?:token|secret|password|api[_-]?key)\s*[=:]\s*[^\s,;&]+/gi, '[REDACTED]')
+    .replace(/([?&](?:access|refresh|auth|bot)?[_-]?(?:token|secret|password|api[_-]?key)=)[^&\s]+/gi, '$1[REDACTED]')
+    .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
+    .slice(0, 500) || 'validation failed';
+}
+
 export async function runScenario(context: ValidationContext & { scenario: ValidationScenario }): Promise<ValidationScenarioResult> {
   const maxAttempts = 2;
+  const overallStarted = Date.now();
+  const startedAt = new Date(overallStarted).toISOString();
+  const attemptHistory: NonNullable<ValidationScenarioResult['attemptHistory']> = [];
+  const cleanupWarnings: string[] = [];
   let lastResult: ValidationScenarioResult | null = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const result = await context.scenario.run(context);
+    const attemptStarted = Date.now();
+    let result: ValidationScenarioResult;
+    try {
+      result = await context.scenario.run(context);
+    } catch (error) {
+      const failure = { name: error instanceof Error ? error.name : typeof error, message: safeFailureMessage(error) };
+      result = {
+        scenarioId: context.scenario.id,
+        runtime: context.runtime,
+        passed: false,
+        reason: failure.message,
+        failure,
+        assertions: [{ name: 'scenario_execution', passed: false, details: failure.message }],
+        cleanupWarnings: readCleanupWarnings(error),
+      };
+    }
+    const attemptDuration = Math.max(0, Date.now() - attemptStarted);
+    for (const warning of result.cleanupWarnings ?? []) {
+      if (!cleanupWarnings.includes(warning)) cleanupWarnings.push(warning);
+    }
     result.attempt = attempt;
+    attemptHistory.push({
+      attempt,
+      passed: result.passed,
+      skipped: result.skipped,
+      durationMs: attemptDuration,
+      reason: result.reason,
+    });
     lastResult = result;
 
     if (result.passed || result.skipped || attempt === maxAttempts) {
-      return result;
+      const completed = Date.now();
+      return {
+        ...result,
+        startedAt,
+        completedAt: new Date(completed).toISOString(),
+        durationMs: Math.max(0, completed - overallStarted),
+        attemptHistory,
+        ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
+      };
     }
 
     await sleep(1500);
   }
 
-  return lastResult ?? {
-    scenarioId: context.scenario.id,
-    runtime: context.runtime,
-    passed: false,
-    assertions: [{ name: 'runner', passed: false, details: 'Scenario did not produce a result' }],
-    attempt: maxAttempts,
+  const completed = Date.now();
+  return {
+    ...(lastResult ?? {
+      scenarioId: context.scenario.id,
+      runtime: context.runtime,
+      passed: false,
+      assertions: [{ name: 'runner', passed: false, details: 'Scenario did not produce a result' }],
+      attempt: maxAttempts,
+    }),
+    startedAt,
+    completedAt: new Date(completed).toISOString(),
+    durationMs: Math.max(0, completed - overallStarted),
+    attemptHistory,
   };
 }
 

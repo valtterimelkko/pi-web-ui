@@ -157,7 +157,14 @@ If neither flag is provided, the runner refuses to proceed unless `--allow-produ
 - socket: `~/.pi-web-ui/internal-api.sock`
 - token: `~/.pi-web-ui/internal-api-token`
 
-The runner queries runtime capabilities, creates an ephemeral session on the targeted server, streams normalized events with `verbosity=full`, runs assertions, and cleans the session up afterwards.
+The runner queries runtime capabilities, creates an ephemeral session on the targeted server, streams normalized events with `verbosity=full`, runs assertions, and cleans the session up afterwards. Internal API calls use absolute wall-clock deadlines (not socket-inactivity timeouts), so heartbeat/SSE chunks cannot keep a stuck validation alive forever.
+
+Each result includes bounded evidence: start/completion/duration, attempt
+history, runtime/model/backend/execution identity where available, `runId`,
+low-cardinality event counts, scrubbed failure metadata, and any cleanup
+warnings. A failed assertion may be retried once, but cleanup warnings from all
+attempts are retained. Long-horizon polling failures become explicit `failed`
+verdicts and still run watch/session finalization.
 
 ## Current scenarios
 
@@ -240,6 +247,12 @@ What this is for:
 - proving the actual model id used on the wire
 - proving reasoning effort changed when you changed Thinking Level
 - proving 1M-context beta/header behaviour for provider-backed Claude profiles
+
+Safety properties:
+- the log is opened eagerly with owner-only `0600` permissions and each JSONL record is flushed before the request is forwarded; evidence-write failure stops validation rather than silently proxying without evidence
+- logged paths omit query strings; authorization/cookie headers are never allowlisted
+- prompt/message/input/content fields remain omitted even with explicit extraction
+- `--unsafe-log-redacted-body` is the only way to capture a bounded recursively redacted body, and it still omits content fields
 
 Two practical cautions:
 - use the proxy for **wire inspection**, not for throughput/latency measurement

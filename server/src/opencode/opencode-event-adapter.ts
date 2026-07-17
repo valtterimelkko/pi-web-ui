@@ -1,6 +1,7 @@
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { OpenCodeSSEEvent, OpenCodeMessage } from './opencode-types.js';
 import { config } from '../config.js';
+import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
 
 export class OpenCodeEventAdapter {
   private currentMessageIdBySession: Map<string, string> = new Map();
@@ -8,9 +9,15 @@ export class OpenCodeEventAdapter {
   private emittedToolStarts: Set<string> = new Set();
   private emittedToolEnds: Set<string> = new Set();
   private debugRawEvents: boolean;
+  private readonly metrics: OperationalMetrics;
 
-  constructor(debugRawEvents?: boolean) {
-    this.debugRawEvents = debugRawEvents ?? config.opencodeDebugRawEvents;
+  constructor(options?: boolean | { debugRawEvents?: boolean; metrics?: OperationalMetrics }) {
+    this.debugRawEvents = typeof options === 'boolean'
+      ? options
+      : options?.debugRawEvents ?? config.opencodeDebugRawEvents;
+    this.metrics = typeof options === 'object' && options?.metrics
+      ? options.metrics
+      : getOperationalMetrics();
   }
 
   adaptSSEEvent(event: OpenCodeSSEEvent, sessionId: string): NormalizedEvent[] {
@@ -41,7 +48,10 @@ export class OpenCodeEventAdapter {
 
       case 'message.updated': {
         const info = props.info as Record<string, unknown> | undefined;
-        if (!info) return [];
+        if (!info) {
+          this.metrics.recordAdapterDrop('opencode', 'message_info_missing');
+          return [];
+        }
         const role = info.role as string;
         const messageID = info.id as string;
         const finish = info.finish as string | undefined;
@@ -273,6 +283,7 @@ export class OpenCodeEventAdapter {
       }
 
       default:
+        this.metrics.recordAdapterDrop('opencode', `unknown:${type || 'missing'}`);
         if (this.debugRawEvents) {
           return [{
             type: 'opencode_raw',

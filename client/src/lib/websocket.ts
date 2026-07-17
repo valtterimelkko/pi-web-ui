@@ -1,6 +1,7 @@
 // WebSocket client with automatic reconnection and worker-based session support
 
 import { useAuth } from '../hooks/useAuth';
+import { recordBrowserDiagnostic, recordProtocolDrift } from './browserDiagnostics.js';
 
 /**
  * Worker status types for worker-based session architecture
@@ -108,6 +109,10 @@ export interface WebSocketClientOptions {
   onWorkerStatusUpdate?: (message: WorkerStatusMessage) => void;
   onExtensionUIRequest?: (message: ExtensionUIRequestMessage) => void;
   onSessionEvent?: (message: SessionEventMessage) => void;
+  /** Deterministic seams for bounded reconnect tests. */
+  maxReconnectAttempts?: number;
+  reconnectDelay?: number;
+  random?: () => number;
 }
 
 export class WebSocketClient {
@@ -115,21 +120,27 @@ export class WebSocketClient {
   private options: WebSocketClientOptions;
   private status: WebSocketStatus = 'disconnected';
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectDelay = 1000;
+  private maxReconnectAttempts: number;
+  private reconnectDelay: number;
+  private readonly random: () => number;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private csrfToken: string | null = null;
   // Track if we're reconnecting to a worker-based session
   private pendingSessionReconnect: string | null = null;
+  private intentionalDisconnect = false;
 
   constructor(options: WebSocketClientOptions) {
     this.options = options;
     this.csrfToken = useAuth.getState().csrfToken;
+    this.maxReconnectAttempts = Math.max(0, options.maxReconnectAttempts ?? 5);
+    this.reconnectDelay = Math.max(10, options.reconnectDelay ?? 1000);
+    this.random = options.random ?? Math.random;
   }
 
   connect(targetSessionId?: string): void {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
+    this.intentionalDisconnect = false;
 
     // Track if we're reconnecting to a specific session
     if (targetSessionId) {
@@ -144,8 +155,13 @@ export class WebSocketClient {
       // using a token that expired or was invalidated by a server restart.
       this.csrfToken = useAuth.getState().csrfToken;
       this.ws = new WebSocket(WS_URL);
+      const socket = this.ws;
 
-      this.ws.onopen = () => {
+      socket.onopen = () => {
+        if (this.ws !== socket || this.intentionalDisconnect) {
+          socket.close();
+          return;
+        }
         console.log('WebSocket connected');
         this.setStatus('connected');
         this.reconnectAttempts = 0;
@@ -167,18 +183,43 @@ export class WebSocketClient {
         }
       };
 
-      this.ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (this.ws !== socket || this.intentionalDisconnect) return;
         try {
           const message = JSON.parse(event.data);
           this.handleMessage(message);
         } catch (error) {
+          recordProtocolDrift('malformed');
           console.error('Failed to parse WebSocket message:', error);
         }
       };
 
-      this.ws.onclose = (event) => {
+      socket.onclose = (event) => {
         console.log('WebSocket closed:', event.code, event.reason);
+        // Ignore a delayed close from a socket that was replaced by a newer
+        // connection. An intentional close is still useful local evidence.
+        if (this.ws !== socket) {
+          if (this.intentionalDisconnect) {
+            recordBrowserDiagnostic({
+              kind: 'connection', state: 'disconnected', closeCode: event.code,
+              closeReason: event.reason, reconnectAttempt: this.reconnectAttempts,
+            });
+          }
+          return;
+        }
         this.stopHeartbeat();
+        this.ws = null;
+        recordBrowserDiagnostic({
+          kind: 'connection',
+          state: 'disconnected',
+          closeCode: event.code,
+          closeReason: event.reason,
+          reconnectAttempt: this.reconnectAttempts,
+        });
+        if (this.intentionalDisconnect) {
+          this.setStatus('disconnected');
+          return;
+        }
         // Check if this was an abnormal closure that might indicate worker issues
         if (event.code === 1006 || event.code === 1011) {
           console.warn('[WebSocket] Abnormal closure, may need worker recovery');
@@ -186,7 +227,8 @@ export class WebSocketClient {
         this.attemptReconnect();
       };
 
-      this.ws.onerror = (error) => {
+      socket.onerror = (error) => {
+        if (this.ws !== socket || this.intentionalDisconnect) return;
         console.error('WebSocket error:', error);
         this.options.onError?.(new Error('WebSocket error'));
       };
@@ -198,14 +240,16 @@ export class WebSocketClient {
   }
 
   disconnect(): void {
+    this.intentionalDisconnect = true;
     this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     this.pendingSessionReconnect = null;
-    this.ws?.close();
+    const socket = this.ws;
     this.ws = null;
+    socket?.close();
     this.setStatus('disconnected');
   }
 
@@ -259,6 +303,11 @@ export class WebSocketClient {
 
   private setStatus(status: WebSocketStatus): void {
     this.status = status;
+    recordBrowserDiagnostic({
+      kind: 'connection',
+      state: status,
+      reconnectAttempt: this.reconnectAttempts,
+    });
     this.options.onStatusChange(status);
   }
 
@@ -272,7 +321,9 @@ export class WebSocketClient {
     this.reconnectAttempts++;
     this.setStatus('reconnecting');
 
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+    const exponential = Math.min(30_000, this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1));
+    const jitter = 0.8 + Math.min(1, Math.max(0, this.random())) * 0.4;
+    const delay = Math.round(exponential * jitter);
     console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
     this.reconnectTimer = setTimeout(() => {
@@ -297,6 +348,8 @@ export class WebSocketClient {
    * Handle incoming messages with worker-specific routing
    */
   private handleMessage(message: unknown): void {
+    // The general store handler records one privacy-safe message projection.
+    // Avoid duplicating every protocol event in the bounded browser ring here.
     // Handle worker status updates
     if (isWorkerStatusMessage(message)) {
       console.log(`[WebSocket] Worker status update: ${message.sessionId} = ${message.status}`);

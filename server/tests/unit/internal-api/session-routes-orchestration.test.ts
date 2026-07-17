@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { PassThrough, Writable } from 'stream';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
 import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
+import { getCorrelationContext, type LogContext } from '../../../src/logging/correlation.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import fs from 'fs/promises';
 import path from 'path';
@@ -707,11 +708,22 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(JSON.parse(res.body).error).toMatch(/at most 50/i);
     });
 
-    it('runs prompts and returns per-session content', async () => {
+    it('runs prompts with independent structured correlation and returns per-session content', async () => {
       registry.get.mockImplementation(async (id: string) => {
         if (id === 'c1') return claudeEntry('c1');
         if (id === 'oc1') return opencodeEntry('oc1');
         return undefined;
+      });
+      const contexts: LogContext[] = [];
+      const originalClaudeSend = claudeService.sendPrompt.getMockImplementation();
+      const originalOpenCodeSend = opencodeService.sendPrompt.getMockImplementation();
+      claudeService.sendPrompt.mockImplementationOnce(async (...args: unknown[]) => {
+        contexts.push({ ...getCorrelationContext() });
+        return originalClaudeSend!(...args);
+      });
+      opencodeService.sendPrompt.mockImplementationOnce(async (...args: unknown[]) => {
+        contexts.push({ ...getCorrelationContext() });
+        return originalOpenCodeSend!(...args);
       });
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
@@ -728,6 +740,14 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(body.failedCount).toBe(0);
       expect(body.results[0].sessionId).toBe('c1');
       expect(body.results[0].content).toBe('hi');
+      expect(contexts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: 'c1', runtime: 'claude', runId: expect.any(String), executionInstanceId: 'claude-default',
+        }),
+        expect.objectContaining({
+          sessionId: 'oc1', runtime: 'opencode', runId: expect.any(String), executionInstanceId: 'opencode-default',
+        }),
+      ]));
     });
 
     it('replays a completed idempotent entry without returning a misleading empty answer', async () => {
@@ -972,8 +992,11 @@ describe('createSessionRoutes orchestration endpoints', () => {
         // and carries the sessionId + runtime
         expect(withReq.every((r) => r.sessionId === 'corr-1')).toBe(true);
         expect(withReq[0].runtime).toBe('claude');
-        // and the dispatch anchor line is among them
-        expect(withReq.some((r) => r.msg.includes('Prompt dispatched'))).toBe(true);
+        // Once reserved, lifecycle records carry durable run/provider identity.
+        const lifecycle = withReq.filter((r) => r.msg.includes('Prompt dispatched') || r.msg.includes('Prompt turn complete'));
+        expect(lifecycle.length).toBeGreaterThan(0);
+        expect(lifecycle.every((r) => typeof r.runId === 'string' && r.runId.length > 0)).toBe(true);
+        expect(lifecycle.every((r) => r.executionInstanceId === 'claude-default')).toBe(true);
       } finally {
         setLogTap(null);
       }

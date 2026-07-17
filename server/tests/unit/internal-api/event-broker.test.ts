@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { InternalApiEventBroker } from '../../../src/internal-api/event-broker.js';
+import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 
 function makeEvent(type: string, data?: Record<string, unknown>): NormalizedEvent {
@@ -100,17 +102,31 @@ describe('InternalApiEventBroker', () => {
     expect(sub).not.toHaveBeenCalled();
   });
 
-  it('one subscriber throwing does not block other subscribers', () => {
-    const broken = vi.fn(() => {
-      throw new Error('boom');
-    });
-    const good = vi.fn();
-    broker.subscribe('s1', broken);
-    broker.subscribe('s1', good);
+  it('one subscriber throwing does not block others and leaves bounded evidence', () => {
+    const metrics = new OperationalMetrics();
+    const observed = new InternalApiEventBroker({ metrics });
+    const records: LogRecord[] = [];
+    setLogTap((record) => records.push(record));
+    try {
+      const broken = vi.fn(() => {
+        throw new Error('boom');
+      });
+      const good = vi.fn();
+      observed.subscribe('s1', broken, true, 'watch');
+      observed.subscribe('s1', good, true, 'sse');
 
-    broker.publish('s1', makeEvent('agent_start'));
-    expect(broken).toHaveBeenCalledTimes(1);
-    expect(good).toHaveBeenCalledTimes(1);
+      observed.publish('s1', makeEvent('agent_start'));
+      expect(broken).toHaveBeenCalledTimes(1);
+      expect(good).toHaveBeenCalledTimes(1);
+      expect(metrics.snapshot().pipeline.subscriberFailures).toEqual({ watch: 1 });
+      expect(records.some((record) =>
+        record.level === 'warn'
+        && record.component === 'InternalApiEventBroker'
+        && record.msg.includes('watch'),
+      )).toBe(true);
+    } finally {
+      setLogTap(null);
+    }
   });
 
   it('subscriberCount returns 0 when no subscribers', () => {

@@ -49,6 +49,7 @@ import type { PiService } from '../pi/pi-service.js';
 import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
 import { bindOwnerOnlyUnixSocket, UnixSocketOwner } from './unix-socket-owner.js';
+import { getWorkerPool } from '../routes/sessions.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -199,6 +200,11 @@ export class InternalApiServer {
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
       startTime: this.startTime,
+      enabled: {
+        claude: true,
+        opencode: config.opencodeServerEnabled,
+        antigravity: config.antigravityEnabled,
+      },
     };
     const healthRoutes = createHealthRoutes(healthDeps);
 
@@ -209,7 +215,23 @@ export class InternalApiServer {
     };
     const capabilitiesRoutes = createCapabilitiesRoutes(capabilitiesDeps);
 
-    const diagnosticsRoutes = createDiagnosticsRoutes();
+    const diagnosticsRoutes = createDiagnosticsRoutes({
+      sessionRegistry: this.sessionRegistry,
+      workerSummary: () => {
+        const pool = getWorkerPool();
+        const crashes = pool.getCrashStats();
+        return {
+          pool: pool.getStats(),
+          crashes: {
+            totalCrashes: crashes.totalCrashes,
+            crashesLast24h: crashes.crashesLast24h,
+            crashesLastHour: crashes.crashesLastHour,
+            byType: crashes.byType,
+            oomStats: crashes.oomStats,
+          },
+        };
+      },
+    });
 
     const eventTypesRoutes = createEventTypesRoutes();
 

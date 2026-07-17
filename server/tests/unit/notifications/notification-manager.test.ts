@@ -218,6 +218,33 @@ describe('NotificationManager', () => {
       expect(n.deepLink).toBe('https://app.example.com?session=s1');
     });
 
+    it('retains the assistant tail until the notification is durably enqueued', async () => {
+      const h = makeHarness(dir);
+      await h.mgr.init();
+      await h.mgr.optIn(piOptIn());
+      const originalEnqueue = h.store.enqueue.bind(h.store);
+      const enqueue = vi.spyOn(h.store, 'enqueue')
+        .mockRejectedValueOnce(new Error('disk full'))
+        .mockImplementation(originalEnqueue);
+
+      for (const event of assistantText('s1', 'Durable result text.')) h.pi.emit('/sessions/s1', event);
+      h.pi.emit('/sessions/s1', agentEnd('s1'));
+      await wait(60);
+      expect(h.store.listPending()).toHaveLength(0);
+
+      for (const event of assistantText('s1', 'Newer turn text.')) h.pi.emit('/sessions/s1', event);
+      h.pi.emit('/sessions/s1', agentEnd('s1'));
+      await wait(100);
+      await h.mgr.drain();
+      await waitFor(() => h.channel.received.length === 2);
+      expect(h.channel.received).toHaveLength(2);
+      expect(h.channel.received.map((item) => item.body)).toEqual(expect.arrayContaining([
+        expect.stringContaining('Durable result text.'),
+        expect.stringContaining('Newer turn text.'),
+      ]));
+      enqueue.mockRestore();
+    });
+
     it('ignores agent_end for a non-opted-in session', async () => {
       const h = makeHarness(dir);
       await h.mgr.init();
@@ -264,6 +291,34 @@ describe('NotificationManager', () => {
       expect(fresh.listPending()).toHaveLength(1);
       expect(fresh.listPending()[0].notification.body).toContain('last words');
       expect(h.channel.received).toHaveLength(0);
+    });
+
+    it('waits for an already in-flight durable flush during shutdown', async () => {
+      const h = makeHarness(dir);
+      await h.mgr.init();
+      await h.mgr.optIn(piOptIn());
+      const originalEnqueue = h.store.enqueue.bind(h.store);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const enqueue = vi.spyOn(h.store, 'enqueue').mockImplementation(async (item) => {
+        await gate;
+        return originalEnqueue(item);
+      });
+      for (const event of assistantText('s1', 'in flight')) h.pi.emit('/sessions/s1', event);
+      h.pi.emit('/sessions/s1', agentEnd('s1'));
+      await waitFor(() => enqueue.mock.calls.length === 1);
+
+      h.mgr.shutdown();
+      let idle = false;
+      const waiting = h.mgr.waitForIdle().then(() => { idle = true; });
+      await wait(20);
+      expect(idle).toBe(false);
+      release();
+      await waiting;
+      const fresh = new NotificationStore(dir);
+      await fresh.init();
+      expect(fresh.listPending()[0]?.notification.body).toContain('in flight');
+      enqueue.mockRestore();
     });
 
     it('coalesces two agent_ends within the window into one notification', async () => {

@@ -25,6 +25,10 @@ import type {
 } from '../types.js';
 import { ConditionEngine, resolveConditions, type ResolvedCondition } from './condition-evaluator.js';
 import { WatchStore, type PersistedWatch } from './watch-store.js';
+import { createLogger } from '../../logging/logger.js';
+import { getOperationalMetrics, type OperationalMetrics } from '../../observability/operational-metrics.js';
+
+const logger = createLogger('WatchManager');
 
 export interface WatchManagerDeps {
   broker: InternalApiEventBroker;
@@ -41,6 +45,10 @@ export interface WatchManagerDeps {
   maxFiringsPerCondition?: number;
   /** Hard cap on total ledger size per watch. */
   maxTotalFirings?: number;
+  /** Low-cardinality observability seam. */
+  metrics?: OperationalMetrics;
+  /** Retry delay after a durable ledger write fails. */
+  persistenceRetryMs?: number;
 }
 
 interface ActiveWatch {
@@ -63,6 +71,8 @@ export class WatchManager {
   private readonly ensureObserver?: WatchManagerDeps['ensureObserver'];
   private readonly maxPerCondition: number;
   private readonly maxTotal: number;
+  private readonly metrics: OperationalMetrics;
+  private readonly persistenceRetryMs: number;
   /** Live watches keyed by sessionId. */
   private readonly active = new Map<string, ActiveWatch>();
   private initialized = false;
@@ -74,6 +84,8 @@ export class WatchManager {
     this.ensureObserver = deps.ensureObserver;
     this.maxPerCondition = deps.maxFiringsPerCondition ?? DEFAULT_MAX_PER_CONDITION;
     this.maxTotal = deps.maxTotalFirings ?? DEFAULT_MAX_TOTAL;
+    this.metrics = deps.metrics ?? getOperationalMetrics();
+    this.persistenceRetryMs = deps.persistenceRetryMs ?? 5_000;
   }
 
   /**
@@ -157,12 +169,12 @@ export class WatchManager {
 
     const engine = new ConditionEngine(resolved);
     const handler = (event: NormalizedEvent) => this.handleEvent(sessionId, event);
-    const unsub: Array<() => void> = [this.broker.subscribe(sessionId, handler)];
+    const unsub: Array<() => void> = [this.broker.subscribe(sessionId, handler, true, 'watch')];
     // Pi publishes events under the session *path*; other runtimes use the id
     // (which equals the path). Subscribe to both distinct keys so the watch
     // sees events regardless of which key the runtime publishes under.
     if (sessionPath && sessionPath !== sessionId) {
-      unsub.push(this.broker.subscribe(sessionPath, handler));
+      unsub.push(this.broker.subscribe(sessionPath, handler, true, 'watch'));
     }
 
     this.active.set(sessionId, {
@@ -173,7 +185,15 @@ export class WatchManager {
       snapshotDirty: false,
     });
 
-    await this.store.save(record);
+    try {
+      await this.store.save(record);
+    } catch (error) {
+      // Registration is not accepted until its initial ledger exists. Remove
+      // the live subscriptions and cache entry so a caller can retry cleanly.
+      this.teardown(sessionId);
+      await this.store.delete(sessionId);
+      throw error;
+    }
     return this.toResponse(record);
   }
 
@@ -258,25 +278,44 @@ export class WatchManager {
 
     if (firedSomething) {
       // Firings are rare and important — persist immediately so they survive a
-      // crash a moment later.
-      void this.store.save(record);
+      // crash a moment later. Failed writes stay dirty and retry with evidence.
       if (live.flushTimer) { clearTimeout(live.flushTimer); live.flushTimer = undefined; }
       live.snapshotDirty = false;
+      this.persistLive(sessionId, live, 'firing');
     } else {
       // Snapshot-only churn (e.g. streaming deltas) is throttled to avoid disk
       // thrash; the next firing or the timer will flush it.
       live.snapshotDirty = true;
-      if (!live.flushTimer) {
-        live.flushTimer = setTimeout(() => {
-          live.flushTimer = undefined;
-          if (live.snapshotDirty) {
-            live.snapshotDirty = false;
-            void this.store.save(record);
-          }
-        }, SNAPSHOT_FLUSH_MS);
-        if (live.flushTimer.unref) live.flushTimer.unref();
-      }
+      this.schedulePersist(sessionId, live, SNAPSHOT_FLUSH_MS, 'snapshot');
     }
+  }
+
+  private schedulePersist(
+    sessionId: string,
+    live: ActiveWatch,
+    delayMs: number,
+    reason: 'snapshot' | 'retry',
+  ): void {
+    if (live.flushTimer) return;
+    live.flushTimer = setTimeout(() => {
+      live.flushTimer = undefined;
+      if (!live.snapshotDirty || this.active.get(sessionId) !== live) return;
+      live.snapshotDirty = false;
+      this.persistLive(sessionId, live, reason);
+    }, delayMs);
+    live.flushTimer.unref?.();
+  }
+
+  private persistLive(sessionId: string, live: ActiveWatch, reason: string): void {
+    void this.store.save(live.record).catch((error) => {
+      if (this.active.get(sessionId) !== live) return;
+      live.snapshotDirty = true;
+      this.metrics.recordWatchPersistenceFailure();
+      logger.child({ sessionId, runtime: live.record.runtime }).warn(
+        `watch ledger persistence failed (${reason}); retrying: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      this.schedulePersist(sessionId, live, this.persistenceRetryMs, 'retry');
+    });
   }
 
   private toResponse(record: PersistedWatch): WatchResponse {

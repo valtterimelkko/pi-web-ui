@@ -5,6 +5,9 @@
  */
 
 import { WorkerStatus } from '@pi-web-ui/shared';
+import { createLogger } from '../logging/logger.js';
+
+const structuredLogger = createLogger('CrashLogger');
 
 export type CrashType = 'graceful' | 'oom_killed' | 'crashed' | 'signal_terminated' | 'spawn_failed' | 'unknown';
 
@@ -134,7 +137,8 @@ export class CrashLogger {
     // Persist if path configured
     if (this.config.persistPath) {
       this.persistRecord(record).catch((err) => {
-        console.error('[CrashLogger] Failed to persist record:', err);
+        structuredLogger.child({ sessionId: record.sessionPath, crashType: record.type })
+          .errorObject('failed to persist worker crash record', err);
       });
     }
 
@@ -181,40 +185,41 @@ export class CrashLogger {
     return 'unknown';
   }
 
-  /**
-   * Log a crash record to console with appropriate severity.
-   */
+  /** Publish a crash record through the central structured logger. */
   private logCrash(record: WorkerCrashRecord): void {
     const { type, sessionPath, exitCode, signal, lifetimeMs, pid } = record;
-    const lifetimeSec = Math.round(lifetimeMs / 1000);
-    const pidStr = pid ? `[PID:${pid}]` : '';
-
-    const message = `[CrashLogger]${pidStr} Worker crashed: type=${type}, session=${sessionPath}, exit=${exitCode}, signal=${signal}, lifetime=${lifetimeSec}s`;
+    const log = structuredLogger.child({
+      sessionId: sessionPath,
+      pid,
+      crashType: type,
+      exitCode,
+      signal,
+      lifetimeMs,
+      memoryLimitMB: record.memoryLimitMB,
+      previousStatus: record.previousStatus,
+    });
+    const message = `worker exited: type=${type} exit=${exitCode} signal=${signal} lifetimeMs=${lifetimeMs}`;
 
     switch (type) {
       case 'oom_killed':
-        console.warn(`⚠️  ${message} (Likely out of memory - consider increasing PI_WORKER_MEMORY)`);
+        log.warn(`${message}; likely out of memory, consider increasing PI_WORKER_MEMORY`);
         break;
       case 'spawn_failed':
-        console.error(`❌ ${message} (Worker failed to start)`);
-        break;
       case 'crashed':
-        console.error(`💥 ${message}`);
+        log.error(message);
         break;
       case 'signal_terminated':
-        console.log(`📝 ${message} (Terminated by signal)`);
+        log.info(message);
         break;
       case 'graceful':
-        // Don't log graceful exits as crashes
         break;
       default:
-        console.warn(`⚠️  ${message}`);
+        log.warn(message);
     }
 
-    // Warn if same session has crashed multiple times
     const sessionCrashes = this.sessionCrashCounts.get(sessionPath) ?? 0;
     if (sessionCrashes > 1 && type !== 'graceful') {
-      console.warn(`[CrashLogger] Session ${sessionPath} has crashed ${sessionCrashes} times total`);
+      log.warn(`session worker has crashed ${sessionCrashes} times in the current process`);
     }
   }
 

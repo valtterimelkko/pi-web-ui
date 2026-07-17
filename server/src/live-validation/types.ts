@@ -36,6 +36,7 @@ export interface InternalApiClientLike {
   deleteSession(sessionId: string): Promise<void>;
   optInNotifications(sessionId: string, label?: string): Promise<unknown>;
   getNotificationState(sessionId: string): Promise<{ optIn: unknown; deliveries: unknown[] }>;
+  getLastPromptEvidence?(sessionId: string): { runId?: string; eventCounts: Record<string, number> } | undefined;
 }
 
 export interface ValidationAssertion {
@@ -53,6 +54,23 @@ export interface ValidationScenarioResult {
   assertions: ValidationAssertion[];
   sessionId?: string;
   attempt?: number;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  runId?: string;
+  model?: string;
+  backendMode?: string;
+  executionInstanceId?: string;
+  eventCounts?: Record<string, number>;
+  attemptHistory?: Array<{
+    attempt: number;
+    passed: boolean;
+    skipped?: boolean;
+    durationMs: number;
+    reason?: string;
+  }>;
+  cleanupWarnings?: string[];
+  failure?: { name: string; message: string };
 }
 
 export interface ValidationContext {

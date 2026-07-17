@@ -145,6 +145,11 @@ describe('scripts/notify.sh — CLI self-notification helper', () => {
     expect(JSON.parse(captured[1].body).title).toBe('⚠️ Blocked: need creds');
   });
 
+  it('formats milestone notifications with a low-noise progress prefix', async () => {
+    await runScript(['milestone', 'phase 3 complete', 'health and diagnostics green'], env());
+    expect(JSON.parse(captured[0].body).title).toBe('📍 Milestone: phase 3 complete');
+  });
+
   it('accepts a custom kind as a literal label', async () => {
     await runScript(['deploy', 'staging pushed', 'sha abc123'], env());
     expect(JSON.parse(captured[0].body).title).toBe('📢 deploy: staging pushed');

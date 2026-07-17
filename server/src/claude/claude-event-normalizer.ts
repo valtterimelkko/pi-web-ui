@@ -6,11 +6,18 @@
 
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
+import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
 
 const logger = createLogger('ClaudeEventNormalizer');
 
 
 export class ClaudeEventNormalizer {
+  private readonly metrics: OperationalMetrics;
+
+  constructor(options: { metrics?: OperationalMetrics } = {}) {
+    this.metrics = options.metrics ?? getOperationalMetrics();
+  }
+
   /**
    * Normalize a single raw NDJSON line from Claude CLI output.
    * Returns an array of NormalizedEvents (one line can produce multiple events).
@@ -23,7 +30,7 @@ export class ClaudeEventNormalizer {
     try {
       parsed = JSON.parse(line) as Record<string, unknown>;
     } catch {
-      // Not valid JSON — ignore
+      this.metrics.recordAdapterDrop('claude', 'invalid_json');
       return [];
     }
 
@@ -47,7 +54,8 @@ export class ClaudeEventNormalizer {
         return this.normalizeResult(parsed, sessionId, timestamp);
 
       default:
-        // Unknown type — emit as raw
+        this.metrics.recordAdapterDrop('claude', `unknown:${type ?? 'missing'}`);
+        // Preserve the existing raw compatibility event without logging payload data.
         return [
           {
             type: 'claude_raw',
@@ -95,10 +103,16 @@ export class ClaudeEventNormalizer {
     timestamp: number,
   ): NormalizedEvent[] {
     const message = event.message as Record<string, unknown> | undefined;
-    if (!message) return [];
+    if (!message) {
+      this.metrics.recordAdapterDrop('claude', 'assistant_message_missing');
+      return [];
+    }
 
     const content = message.content as Array<Record<string, unknown>> | undefined;
-    if (!Array.isArray(content) || content.length === 0) return [];
+    if (!Array.isArray(content) || content.length === 0) {
+      this.metrics.recordAdapterDrop('claude', 'assistant_content_missing');
+      return [];
+    }
 
     const events: NormalizedEvent[] = [];
     const messageId = message.id as string | undefined;

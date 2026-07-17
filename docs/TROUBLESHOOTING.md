@@ -10,12 +10,12 @@ Follow this order unless you already know the exact failing subsystem:
 
 When you have Internal API access, start here before reaching for browser automation or host logs:
 
-1. `GET /api/v1/diagnostics` — recent secret-scrubbed server logs
-2. `GET /api/v1/sessions/:id/diagnostics` — same, scoped to one session
+1. `GET /api/v1/diagnostics` — recent secret-scrubbed logs plus bounded aggregate operational evidence; narrow with `runId`, `requestId`, `runtime`, `component`, `since`, `minLevel`, and `limit`
+2. `GET /api/v1/sessions/:id/diagnostics` — same filters, scoped to one session
 3. `GET /api/v1/sessions/:id/transcript?view=screen` — read-only "what the user sees" projection
 4. `GET /api/v1/sessions/:id/history` — lower-level replay/debug detail only if needed
 
-This is often the most token-efficient route for LLM agents because it avoids driving the UI and avoids rediscovering log locations first.
+This is often the most token-efficient route for LLM agents because it avoids driving the UI and avoids rediscovering log locations first. For a browser-only failure that reaches the React error screen, ask the operator to use **Copy diagnostics** or **Download diagnostics**; the privacy-safe browser ring is manual-only and is never uploaded automatically.
 
 1. **Find the session entry quickly**
    ```bash

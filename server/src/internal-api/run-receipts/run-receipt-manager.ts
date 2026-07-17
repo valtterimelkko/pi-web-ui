@@ -9,6 +9,7 @@ import type {
 } from '../types.js';
 import { RunReceiptStore, type PersistedRunReceipt } from './run-receipt-store.js';
 import { createLogger } from '../../logging/logger.js';
+import { getOperationalMetrics, type OperationalMetrics } from '../../observability/operational-metrics.js';
 
 const logger = createLogger('RunReceiptManager');
 const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -36,6 +37,7 @@ export interface RunReceiptManagerDeps {
   now?: () => number;
   idFactory?: () => string;
   idempotencyTtlMs?: number;
+  metrics?: OperationalMetrics;
 }
 
 export type ExistingRunResult =
@@ -64,6 +66,7 @@ export class RunReceiptManager {
   private readonly now: () => number;
   private readonly idFactory: () => string;
   private readonly idempotencyTtlMs: number;
+  private readonly metrics: OperationalMetrics;
   private readonly activeBySession = new Map<string, Set<string>>();
   private readonly keyLocks = new Map<string, Promise<void>>();
   private readonly runLocks = new Map<string, Promise<void>>();
@@ -74,6 +77,7 @@ export class RunReceiptManager {
     this.store = deps.store;
     this.now = deps.now ?? Date.now;
     this.idFactory = deps.idFactory ?? (() => randomUUID());
+    this.metrics = deps.metrics ?? getOperationalMetrics();
     this.idempotencyTtlMs = Number.isFinite(deps.idempotencyTtlMs) && (deps.idempotencyTtlMs as number) > 0
       ? deps.idempotencyTtlMs as number
       : DEFAULT_IDEMPOTENCY_TTL_MS;
@@ -136,6 +140,7 @@ export class RunReceiptManager {
         requestFingerprint: keyDigest ? fingerprint : undefined,
       };
       await this.store.create(record);
+      this.metrics.recordTurnAccepted(record.runtime);
       this.addActive(record.sessionId, record.runId);
       return { kind: 'created', receipt: toPublicReceipt(record) };
     };
@@ -197,6 +202,11 @@ export class RunReceiptManager {
       terminalAt: new Date(this.now()).toISOString(),
     });
     this.removeActive(terminal.sessionId, terminal.runId);
+    this.metrics.recordTurnFinished(
+      terminal.runtime,
+      terminal.status as Extract<RunReceiptStatus, 'completed' | 'failed' | 'cancelled' | 'interrupted'>,
+      elapsedMs(terminal.acceptedAt, terminal.terminalAt),
+    );
     return toPublicReceipt(terminal);
   }
 
@@ -234,6 +244,11 @@ export class RunReceiptManager {
         clearIdempotency: true,
       });
       this.removeActive(terminal.sessionId, terminal.runId);
+      this.metrics.recordTurnFinished(
+        terminal.runtime,
+        terminal.status as Extract<RunReceiptStatus, 'completed' | 'failed' | 'cancelled' | 'interrupted'>,
+        elapsedMs(terminal.acceptedAt, terminal.terminalAt),
+      );
       return toPublicReceipt(terminal);
     });
   }
@@ -352,6 +367,13 @@ function digest(value: string): string {
 
 function isTerminal(status: RunReceiptStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'interrupted';
+}
+
+function elapsedMs(startIso: string, endIso?: string): number | undefined {
+  if (!endIso) return undefined;
+  const start = Date.parse(startIso);
+  const end = Date.parse(endIso);
+  return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : undefined;
 }
 
 function toPublicReceipt(record: PersistedRunReceipt): RunReceipt {

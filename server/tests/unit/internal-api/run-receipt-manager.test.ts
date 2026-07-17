@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { RunReceiptManager, type BeginRunInput } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
+import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
 
 const baseInput: BeginRunInput = {
   sessionId: 'session-1',
@@ -21,16 +22,19 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
   let now: number;
   let nextId: number;
   let manager: RunReceiptManager;
+  let metrics: OperationalMetrics;
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-run-manager-'));
     now = Date.parse('2026-07-15T12:00:00.000Z');
     nextId = 0;
+    metrics = new OperationalMetrics({ now: () => now });
     manager = new RunReceiptManager({
       store: new RunReceiptStore(dir, { now: () => now }),
       now: () => now,
       idFactory: () => `run-${++nextId}`,
       idempotencyTtlMs: 1_000,
+      metrics,
     });
     await manager.init();
   });
@@ -133,9 +137,10 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     expect(second.receipt.runId).not.toBe(first.receipt.runId);
   });
 
-  it('records agent_end and completes successfully when the existing completion callback succeeds', async () => {
+  it('records agent_end, completion, and low-cardinality turn latency', async () => {
     const started = await manager.beginRun(baseInput);
     await manager.markStarted(started.receipt.runId);
+    now += 1_250;
     manager.observeEvent(started.receipt.runId, {
       type: 'agent_end',
       sessionId: baseInput.sessionId,
@@ -148,6 +153,11 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       status: 'completed',
       agentEndAt: new Date(now).toISOString(),
       terminalAt: new Date(now).toISOString(),
+    });
+    expect(metrics.snapshot().turns.pi).toMatchObject({
+      accepted: 1,
+      completed: 1,
+      latency: { count: 1, totalMs: 1_250, maxMs: 1_250 },
     });
   });
 

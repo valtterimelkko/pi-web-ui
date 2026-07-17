@@ -1,4 +1,4 @@
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type ClientRequest } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
@@ -27,6 +27,36 @@ import type { InternalApiClientLike, ValidationRuntime } from './types.js';
 
 const DEFAULT_SOCKET_PATH = `${homedir()}/.pi-web-ui/internal-api.sock`;
 const DEFAULT_TOKEN_PATH = `${homedir()}/.pi-web-ui/internal-api-token`;
+
+function positiveTimeout(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) && (value as number) > 0 ? Math.floor(value as number) : fallback;
+}
+
+function setRequestTimeout(req: ClientRequest, timeoutMs: number, method: string, path: string): () => void {
+  // ClientRequest#setTimeout measures socket inactivity. Validation needs an
+  // absolute deadline so keepalive chunks cannot hold a run open forever.
+  const timer = setTimeout(() => {
+    req.destroy(new Error(`Internal API ${method} ${path} timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+  timer.unref?.();
+  const clear = () => clearTimeout(timer);
+  req.once('close', clear);
+  return clear;
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function countEvents(events: NormalizedEvent[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const event of events) {
+    const requested = typeof event.type === 'string' ? event.type.slice(0, 80) : 'malformed';
+    const key = Object.hasOwn(counts, requested) || Object.keys(counts).length < 50 ? requested : 'other';
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+}
 
 function parseJsonResponse<T>(raw: string): T {
   if (!raw.trim()) {
@@ -71,14 +101,26 @@ function parseSse(raw: string): NormalizedEvent[] {
 export class InternalApiClient implements InternalApiClientLike {
   private readonly socketPath: string;
   private readonly token: string;
+  private readonly requestTimeoutMs: number;
+  private readonly promptTimeoutMs: number;
+  private readonly promptEvidence = new Map<string, { runId?: string; eventCounts: Record<string, number> }>();
 
-  constructor(options?: { socketPath?: string; tokenPath?: string; token?: string }) {
+  constructor(options?: {
+    socketPath?: string;
+    tokenPath?: string;
+    token?: string;
+    requestTimeoutMs?: number;
+    promptTimeoutMs?: number;
+  }) {
     this.socketPath = options?.socketPath ?? DEFAULT_SOCKET_PATH;
     this.token = options?.token ?? readFileSync(options?.tokenPath ?? DEFAULT_TOKEN_PATH, 'utf8').trim();
+    this.requestTimeoutMs = positiveTimeout(options?.requestTimeoutMs, 30_000);
+    this.promptTimeoutMs = positiveTimeout(options?.promptTimeoutMs, 5 * 60_000);
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, timeoutMs = this.requestTimeoutMs): Promise<T> {
     return new Promise((resolve, reject) => {
+      let clearDeadline = () => {};
       const req = httpRequest({
         socketPath: this.socketPath,
         path,
@@ -93,6 +135,7 @@ export class InternalApiClient implements InternalApiClientLike {
           raw += chunk.toString();
         });
         res.on('end', () => {
+          clearDeadline();
           if ((res.statusCode ?? 500) >= 400) {
             reject(new Error(raw || `Internal API request failed: ${res.statusCode}`));
             return;
@@ -100,7 +143,11 @@ export class InternalApiClient implements InternalApiClientLike {
           resolve(parseJsonResponse<T>(raw));
         });
       });
-      req.on('error', reject);
+      clearDeadline = setRequestTimeout(req, timeoutMs, method, path);
+      req.on('error', (error) => {
+        clearDeadline();
+        reject(error);
+      });
       if (body !== undefined) {
         req.write(JSON.stringify(body));
       }
@@ -114,16 +161,21 @@ export class InternalApiClient implements InternalApiClientLike {
 
   /** Detached (fire-and-forget) prompt dispatch: returns 202 immediately; the
    * turn keeps running server-side. Read results later via getSessionInfo(). */
-  async promptDetached(sessionId: string, message: string): Promise<{ sessionId: string; detached: boolean; status: string }> {
-    return this.request<{ sessionId: string; detached: boolean; status: string }>(
+  async promptDetached(sessionId: string, message: string): Promise<{ sessionId: string; runId: string; detached: boolean; status: string }> {
+    this.promptEvidence.delete(sessionId);
+    const result = await this.request<{ sessionId: string; runId: string; detached: boolean; status: string }>(
       'POST',
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`,
       { message, verbosity: 'answers', detach: true },
     );
+    this.promptEvidence.set(sessionId, { runId: result.runId, eventCounts: {} });
+    return result;
   }
 
   async promptStream(sessionId: string, input: SendPromptRequest): Promise<NormalizedEvent[]> {
+    this.promptEvidence.delete(sessionId);
     return new Promise((resolve, reject) => {
+      let clearDeadline = () => {};
       const req = httpRequest({
         socketPath: this.socketPath,
         path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`,
@@ -134,19 +186,27 @@ export class InternalApiClient implements InternalApiClientLike {
           'X-Verbosity': input.verbosity ?? 'full',
         },
       }, (res) => {
+        const runId = headerValue(res.headers['x-run-id']);
         let raw = '';
         res.on('data', (chunk) => {
           raw += chunk.toString();
         });
         res.on('end', () => {
+          clearDeadline();
           if ((res.statusCode ?? 500) >= 400) {
             reject(new Error(raw || `Prompt stream failed: ${res.statusCode}`));
             return;
           }
-          resolve(parseSse(raw));
+          const events = parseSse(raw);
+          this.promptEvidence.set(sessionId, { runId, eventCounts: countEvents(events) });
+          resolve(events);
         });
       });
-      req.on('error', reject);
+      clearDeadline = setRequestTimeout(req, this.promptTimeoutMs, 'POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`);
+      req.on('error', (error) => {
+        clearDeadline();
+        reject(error);
+      });
       req.write(JSON.stringify({ ...input, verbosity: input.verbosity ?? 'full' }));
       req.end();
     });
@@ -167,7 +227,9 @@ export class InternalApiClient implements InternalApiClientLike {
     input: SendPromptRequest,
     onEvent: (event: NormalizedEvent) => void,
   ): Promise<NormalizedEvent[]> {
+    this.promptEvidence.delete(sessionId);
     return new Promise((resolve, reject) => {
+      let clearDeadline = () => {};
       const req = httpRequest({
         socketPath: this.socketPath,
         path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`,
@@ -178,10 +240,14 @@ export class InternalApiClient implements InternalApiClientLike {
           'X-Verbosity': input.verbosity ?? 'full',
         },
       }, (res) => {
+        const runId = headerValue(res.headers['x-run-id']);
         if ((res.statusCode ?? 500) >= 400) {
           let raw = '';
           res.on('data', (chunk) => { raw += chunk.toString(); });
-          res.on('end', () => reject(new Error(raw || `Prompt stream failed: ${res.statusCode}`)));
+          res.on('end', () => {
+            clearDeadline();
+            reject(new Error(raw || `Prompt stream failed: ${res.statusCode}`));
+          });
           return;
         }
         const events: NormalizedEvent[] = [];
@@ -201,12 +267,25 @@ export class InternalApiClient implements InternalApiClientLike {
             }
           }
         });
-        res.on('end', () => resolve(events));
+        res.on('end', () => {
+          clearDeadline();
+          this.promptEvidence.set(sessionId, { runId, eventCounts: countEvents(events) });
+          resolve(events);
+        });
       });
-      req.on('error', reject);
+      clearDeadline = setRequestTimeout(req, this.promptTimeoutMs, 'POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`);
+      req.on('error', (error) => {
+        clearDeadline();
+        reject(error);
+      });
       req.write(JSON.stringify({ ...input, verbosity: input.verbosity ?? 'full' }));
       req.end();
     });
+  }
+
+  getLastPromptEvidence(sessionId: string): { runId?: string; eventCounts: Record<string, number> } | undefined {
+    const evidence = this.promptEvidence.get(sessionId);
+    return evidence ? { ...evidence, eventCounts: { ...evidence.eventCounts } } : undefined;
   }
 
   async getCapabilities(): Promise<CapabilitiesResponse> {
@@ -270,20 +349,20 @@ export class InternalApiClient implements InternalApiClientLike {
 
   /** Answers-mode prompt (non-streaming), including idempotent replay responses. */
   async prompt(sessionId: string, input: SendPromptRequest): Promise<PromptDispatchResponse> {
-    return this.request<PromptDispatchResponse>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`, {
+    this.promptEvidence.delete(sessionId);
+    const result = await this.request<PromptDispatchResponse>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`, {
       ...input,
       verbosity: input.verbosity ?? 'answers',
     });
+    this.promptEvidence.set(sessionId, { runId: result.runId, eventCounts: {} });
+    return result;
   }
 
   async promptWithIdempotency(
     sessionId: string,
     input: SendPromptRequest,
   ): Promise<PromptDispatchResponse> {
-    return this.request<PromptDispatchResponse>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompt`, {
-      ...input,
-      verbosity: input.verbosity ?? 'answers',
-    });
+    return this.prompt(sessionId, input);
   }
 
   async getRunReceipt(runId: string): Promise<RunReceipt> {
@@ -295,7 +374,12 @@ export class InternalApiClient implements InternalApiClientLike {
   }
 
   async waitForStatus(sessionId: string, status: 'idle' | 'running' = 'idle', timeoutMs = 60000): Promise<WaitResponse> {
-    return this.request<WaitResponse>('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/wait?status=${status}&timeout=${timeoutMs}`);
+    return this.request<WaitResponse>(
+      'GET',
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/wait?status=${status}&timeout=${timeoutMs}`,
+      undefined,
+      Math.max(this.requestTimeoutMs, timeoutMs + 5_000),
+    );
   }
 
   async registerWatch(sessionId: string, body: RegisterWatchRequest): Promise<WatchResponse> {

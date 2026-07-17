@@ -89,6 +89,41 @@ describe('SessionNotifyToggle', () => {
     );
   });
 
+  it('disables toggling until the initial server state is known', async () => {
+    let resolveGet!: (value: Response) => void;
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => { resolveGet = resolve; }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<SessionNotifyToggle sessionId="s1" sdkType="pi" sessionPath="/p/s1" />);
+    const button = screen.getByRole('button', { name: /enable notifications/i });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolveGet({ ok: true, json: async () => ({ optIn: null }) } as Response);
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it('surfaces initial state lookup failures without breaking the toggle', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+    render(<SessionNotifyToggle sessionId="s1" sdkType="pi" sessionPath="/p/s1" />);
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'error', message: expect.stringMatching(/load notification/i),
+    })));
+  });
+
+  it('surfaces opt-in write failures and leaves the state unchanged', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ optIn: null }) })
+      .mockResolvedValueOnce({ ok: false, status: 500 });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<SessionNotifyToggle sessionId="s1" sdkType="pi" sessionPath="/p/s1" />);
+    const button = await screen.findByRole('button', { name: /enable notifications/i });
+    fireEvent.click(button);
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'error', message: expect.stringMatching(/update notification/i),
+    })));
+    expect(screen.getByRole('button', { name: /enable notifications/i })).toBeInTheDocument();
+  });
+
   describe('idle-at-opt-in feedback (Q2 fix)', () => {
     it('shows an info toast when opting into a session that is currently idle', async () => {
       mockSessionStatus('idle');

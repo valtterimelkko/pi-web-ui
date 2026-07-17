@@ -36,6 +36,7 @@ export function SessionNotifyToggle({
   const optInId = canonicalOptInId(sdkType, sessionId, sessionPath);
   const [on, setOn] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [initializing, setInitializing] = useState(true);
   // Opt-in only reacts to LIVE agent_end events (no replay of past turns —
   // see docs/NOTIFICATIONS.md). If the session isn't actively generating right
   // now, opting in won't retroactively notify for a turn that already ended;
@@ -45,18 +46,27 @@ export function SessionNotifyToggle({
 
   useEffect(() => {
     let cancelled = false;
+    setInitializing(true);
     fetch(`/api/sessions/${encodeURIComponent(optInId)}/notifications`, { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((response) => {
+        if (!response.ok) throw new Error(`notification state request failed (${response.status})`);
+        return response.json();
+      })
       .then((data) => {
         if (!cancelled) setOn(Boolean(data?.optIn));
       })
       .catch(() => {
-        /* notifications are best-effort; never break the session list */
+        if (!cancelled) {
+          addToast({ type: 'error', message: 'Could not load notification settings. Please try again.' });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setInitializing(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [optInId, addToast]);
 
   const toggle = async (event: React.MouseEvent): Promise<void> => {
     event.stopPropagation();
@@ -73,19 +83,18 @@ export function SessionNotifyToggle({
             credentials: 'include',
             body: JSON.stringify({ runtime: sdkType, sessionPath, label }),
           });
-      if (res.ok) {
-        const turningOn = !on;
-        setOn(turningOn);
-        const isActive = liveStatus === 'streaming' || liveStatus === 'busy';
-        if (turningOn && !isActive) {
-          addToast({
-            type: 'info',
-            message: "Notifications on — this session is idle, so you'll get notified starting with its next reply.",
-          });
-        }
+      if (!res.ok) throw new Error(`notification update failed (${res.status})`);
+      const turningOn = !on;
+      setOn(turningOn);
+      const isActive = liveStatus === 'streaming' || liveStatus === 'busy';
+      if (turningOn && !isActive) {
+        addToast({
+          type: 'info',
+          message: "Notifications on — this session is idle, so you'll get notified starting with its next reply.",
+        });
       }
     } catch {
-      /* non-fatal */
+      addToast({ type: 'error', message: 'Could not update notification settings. Please try again.' });
     } finally {
       setLoading(false);
     }
@@ -95,14 +104,14 @@ export function SessionNotifyToggle({
     <button
       type="button"
       onClick={toggle}
-      disabled={loading}
+      disabled={loading || initializing}
       title={on ? 'Notifications on — click to turn off' : 'Enable agent_end notifications'}
       aria-label={on ? 'Disable notifications' : 'Enable notifications'}
       className={`p-1 rounded transition-colors ${
         on ? 'text-blue-500 hover:bg-blue-100' : 'text-gray-400 hover:bg-gray-200 hover:text-gray-600'
-      } ${loading ? 'opacity-50 cursor-wait' : ''}`}
+      } ${loading || initializing ? 'opacity-50 cursor-wait' : ''}`}
     >
-      {loading ? (
+      {loading || initializing ? (
         <Loader2 size={14} className="animate-spin" />
       ) : on ? (
         <Bell size={14} />

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -97,6 +97,16 @@ describe('NotificationStore — durable persistence', () => {
     });
   });
 
+  it('rolls back opt-in mutations when persistence fails', async () => {
+    const store = new NotificationStore(dir);
+    await store.init();
+    await store.setOptIn(optIn('s1'));
+    vi.spyOn(store as unknown as { persist(name: string, data: unknown): Promise<void> }, 'persist')
+      .mockRejectedValueOnce(new Error('disk full'));
+    await expect(store.setOptIn({ ...optIn('s1'), label: 'changed' })).rejects.toThrow('disk full');
+    expect(store.getOptIn('s1')?.label).not.toBe('changed');
+  });
+
   describe('outbox', () => {
     it('enqueues, lists pending, and marks sent → moves to the delivery log', async () => {
       const store = new NotificationStore(dir);
@@ -113,6 +123,15 @@ describe('NotificationStore — durable persistence', () => {
       expect(log).toHaveLength(1);
       expect(log[0].delivery.status).toBe('sent');
       expect(log[0].delivery.deliveredAt).toBe('2026-06-29T00:00:09.000Z');
+    });
+
+    it('rolls back the in-memory outbox when durable enqueue fails', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      vi.spyOn(store as unknown as { persist(name: string, data: unknown): Promise<void> }, 'persist')
+        .mockRejectedValueOnce(new Error('disk full'));
+      await expect(store.enqueue(queued('failed', 's1'))).rejects.toThrow('disk full');
+      expect(store.listPending()).toEqual([]);
     });
 
     it('records a non-terminal failure (increments attempts, stays pending)', async () => {

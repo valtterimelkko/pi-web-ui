@@ -2,7 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_WS_URL: string
-  // add more env variables here
+  readonly VITE_BUILD_VERSION?: string
 }
 
 interface ImportMeta {

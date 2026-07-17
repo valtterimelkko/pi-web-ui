@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { OpenCodeEventAdapter } from '../../../src/opencode/opencode-event-adapter.js';
+import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
 import type { OpenCodeSSEEvent, OpenCodeMessage } from '../../../src/opencode/opencode-types.js';
 
 const SID = 'sess-opencode-1';
@@ -90,12 +91,15 @@ describe('OpenCodeEventAdapter', () => {
     expect(data.id).toBe('msg-1');
   });
 
-  it('message.updated without info → empty', () => {
-    const events = adapter.adaptSSEEvent(
-      sse('message.updated', {}),
-      SID,
-    );
-    expect(events).toHaveLength(0);
+  it('malformed and unknown event categories are counted without storing payloads', () => {
+    const metrics = new OperationalMetrics();
+    const observed = new OpenCodeEventAdapter({ metrics });
+    expect(observed.adaptSSEEvent(sse('message.updated', {}), SID)).toEqual([]);
+    expect(observed.adaptSSEEvent(sse('provider.future-event', { secret: 'must-not-be-retained' }), SID)).toEqual([]);
+    expect(metrics.snapshot().pipeline.adapterDrops).toEqual({
+      opencode: { message_info_missing: 1, 'unknown:provider.future-event': 1 },
+    });
+    expect(JSON.stringify(metrics.snapshot())).not.toContain('must-not-be-retained');
   });
 
   it('message.part.delta → message_update with text delta', () => {

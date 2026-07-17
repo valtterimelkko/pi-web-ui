@@ -281,7 +281,7 @@ scripts/notify.sh <kind> <title> [body]
 
 | Arg | Value |
 |---|---|
-| `kind` | `done` \| `question` \| `blocked` (any other value becomes a custom label) |
+| `kind` | `milestone` \| `done` \| `question` \| `blocked` (any other value becomes a custom label) |
 | `title` | Short one-line summary — **no emoji**, the script adds the standard prefix |
 | `body` | Optional detail; omit or pass `-` to read from stdin (falls back to the title) |
 
@@ -290,6 +290,7 @@ regardless of which harness or model wrote them:
 
 | `kind` | Resulting title |
 |---|---|
+| `milestone` | `📍 Milestone: <title>` |
 | `done` | `✅ Done: <title>` |
 | `question` | `❓ Question: <title>` |
 | `blocked` | `⚠️ Blocked: <title>` |
@@ -298,6 +299,10 @@ regardless of which harness or model wrote them:
 Examples:
 
 ```bash
+scripts/notify.sh milestone "observability phase 3 complete" \
+  "Health and diagnostics changes are implemented; focused tests and typecheck pass."
+
+
 scripts/notify.sh done "restarted prod" \
   "Built client+server; typecheck+lint+tests green; restarted pi-web-ui.service."
 
@@ -339,6 +344,13 @@ e.g.:
 > Inspect `docs/NOTIFICATIONS.md` § 9. When you finish the task, or if you have
 > a question for me, call `scripts/notify.sh` to ping me on Telegram with a
 > short summary.
+
+For multi-phase autonomous work, keep notifications low-noise: send `milestone`
+only after a meaningful phase/review gate, `question` or `blocked` only when
+operator input is genuinely required, and exactly one `done` after final
+validation. Do not notify for each test or file edit. Reuse one idempotency key
+when retrying the same milestone, and do not self-notify a web-UI-managed
+session that already has `agent_end` notifications enabled.
 
 The agent reads this section and runs the script. This is **best-effort,
 agent-initiated** (~80–90% reliable depending on the model's

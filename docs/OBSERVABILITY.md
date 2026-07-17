@@ -13,9 +13,10 @@
    also pull recent logs over the API — see [Diagnostics](#diagnostics).
 2. **Too noisy / too quiet?** Set `LOG_LEVEL=error|warn|info|debug` and/or
    `DEBUG=<component>[,<component>…]` (e.g. `DEBUG=ClaudeService,opencode*`).
-3. **One prompt's whole story:** every log line for a prompt shares a
-   `requestId` + `sessionId` — `grep <requestId>` (or filter JSON logs) to get
-   the full causal chain.
+3. **One prompt's whole story:** accepted turns carry `requestId`, `runId`,
+   `sessionId`, runtime, and execution-instance context where available. Filter
+   diagnostics by `runId` for the durable turn identity; use `requestId` for the
+   originating HTTP request.
 4. **What went wrong on the wire?** Every Internal API error carries a stable
    `code`; the actionable ones also carry a `hint`.
 5. **Fast test loop:** see [Fast test loop](./TROUBLESHOOTING.md#fast-test-loop-for-agents).
@@ -34,10 +35,9 @@ logger.info('Loaded N models');
 logger.errorObject('failed to list models', err, { sessionId }); // message + stack + context
 ```
 
-The `no-console` ESLint rule is **error** for `server/src/**` (Task 22), so the
-~330-call `console.*` sprawl cannot regrow. `workers/crash-logger.ts` is the one
-documented exception (it owns its own console output as the structured-log
-precedent).
+The `no-console` ESLint rule is **error** for `server/src/**`, so ad-hoc
+`console.*` sprawl cannot regrow. Worker crash evidence also flows through the
+central structured logger and the aggregate diagnostics snapshot.
 
 ### Levels (`LOG_LEVEL`)
 
@@ -54,9 +54,9 @@ Env: `LOG_LEVEL=error|warn|info|debug` (default `info`), parsed in
 ### Component namespaces (`DEBUG`)
 
 Env: `DEBUG=<component>[,<component>…]`, comma-separated, `*` wildcard,
-case-insensitive (default: off). When set, **only** matching components emit;
-all others are suppressed. Combine with `LOG_LEVEL=debug` for full detail on one
-subsystem.
+case-insensitive (default: off). When set, unmatched **info/debug** records are
+suppressed, while warnings and errors always remain visible. Combine with
+`LOG_LEVEL=debug` for full detail on one subsystem.
 
 ```bash
 DEBUG=ClaudeService            # only ClaudeService
@@ -91,12 +91,11 @@ Error logs always include `error.message` + `error.stack` + context (use
 
 ### Correlation IDs
 
-Every prompt's lifecycle log lines share one `requestId` and carry the
-`sessionId` + `runtime`, stamped via an `AsyncLocalStorage` context
-(`server/src/logging/correlation.ts`). The Internal API request-logging
-middleware allocates the `requestId` and the prompt path (`handleSendPrompt`)
-reuses it, so the request log, the prompt dispatch/complete logs, and any
-runtime logs emitted in-process on the same async chain all share the id.
+Every accepted prompt gets a durable `runId`; its in-process lifecycle also
+carries the originating `requestId`, `sessionId`, runtime, and resolved
+`executionInstanceId` where known. These are stamped via `AsyncLocalStorage`
+(`server/src/logging/correlation.ts`). Batch prompts get child contexts rather
+than sharing one ambiguous correlation identity.
 
 ```bash
 # Send a prompt at json+debug, then reconstruct its whole lifecycle by id:
@@ -118,12 +117,28 @@ on push (tokens/passwords/`Bearer …`/`sk-…`/sensitive keys → `[REDACTED]`;
 `requestId`/`sessionId` preserved). See [`INTERNAL-API.md`](./INTERNAL-API.md).
 
 ```
-GET /api/v1/diagnostics                       # recent logs + errors + summary
+GET /api/v1/diagnostics                       # logs/errors/summary + aggregate operational snapshot
 GET /api/v1/diagnostics?limit=200&minLevel=warn
-GET /api/v1/sessions/:sessionId/diagnostics   # scoped to one session
+GET /api/v1/diagnostics?runId=<id>&runtime=pi&component=SessionWorker&since=<ISO>
+GET /api/v1/sessions/:sessionId/diagnostics   # same filters, scoped to one session
 ```
 
-Authed like every other internal-api route (only `/health` is exempt).
+Authed like every other internal-api route (only `/health` is exempt). The
+`operational` snapshot is bounded and process-local: low-cardinality turn and
+notification outcomes, latency buckets, adapter/subscriber/watch/worker anomaly
+counts, aggregate session counts, and path-free worker crash totals. It contains
+no prompts, transcripts, tool payloads, models, session paths, tokens, or
+credentials. Health retains legacy runtime strings and adds a uniform
+`runtimeHealth` matrix with bounded checks and scrubbed failure evidence.
+
+## Manual browser diagnostic bundle
+
+The browser keeps a small in-memory ring of connection lifecycle, abnormal
+close, protocol-drift, storage-failure, and React error evidence. It stores no
+chat text, tool payloads, session IDs, paths, auth data, or raw malformed
+messages. If the React error boundary appears, **Copy diagnostics** or
+**Download diagnostics** exports the bundle manually; nothing is uploaded
+automatically. Reloading clears the ring.
 
 ## Error codes & enrichment
 

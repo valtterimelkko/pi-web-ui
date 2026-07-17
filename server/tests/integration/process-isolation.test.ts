@@ -31,8 +31,8 @@ describe('Process Isolation', () => {
       // - Error is thrown when exceeding limit
     });
 
-    it('should cleanup idle workers', () => {
-      const removed = pool.cleanupIdle();
+    it('should cleanup idle workers', async () => {
+      const removed = await pool.cleanupIdle();
       expect(removed).toBe(0);
     });
   });

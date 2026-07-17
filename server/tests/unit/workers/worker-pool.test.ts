@@ -8,6 +8,7 @@ vi.mock('../../../src/workers/session-worker.js', () => ({
     status: 'ready',
     pid: 12345,
     lastActivity: Date.now(),
+    spawnedAt: 123456789,
     spawn: vi.fn().mockResolvedValue(undefined),
     terminate: vi.fn().mockResolvedValue(undefined),
     subscribe: vi.fn().mockReturnValue(() => {}),
@@ -50,9 +51,17 @@ describe('WorkerPool', () => {
     });
   });
 
-  describe('cleanupIdle', () => {
-    it('should return 0 when no workers', () => {
-      const removed = pool.cleanupIdle();
+  describe('worker lifecycle evidence', () => {
+    it('reports the real worker spawn timestamp', async () => {
+      await pool.getOrCreate('/tmp/session.jsonl');
+      expect(pool.getAllWorkers()[0]).toMatchObject({
+        sessionPath: '/tmp/session.jsonl',
+        spawnedAt: 123456789,
+      });
+    });
+
+    it('awaits idle cleanup and returns the number removed', async () => {
+      const removed = await pool.cleanupIdle();
       expect(removed).toBe(0);
     });
   });

@@ -24,23 +24,32 @@
  */
 
 import type { NormalizedEvent } from '@pi-web-ui/shared';
+import { createLogger } from '../logging/logger.js';
+import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
+
+const logger = createLogger('InternalApiEventBroker');
 
 export type EventBrokerSubscriber = (event: NormalizedEvent) => void;
 
 export interface EventBrokerOptions {
   /** How many recent events to buffer per session for late subscribers. 0 disables. */
   replayBufferSize?: number;
+  /** Injected low-cardinality metrics seam (primarily for tests). */
+  metrics?: OperationalMetrics;
 }
 
 const DEFAULT_REPLAY_BUFFER_SIZE = 50;
 
 export class InternalApiEventBroker {
   private subscribers: Map<string, Set<EventBrokerSubscriber>> = new Map();
+  private subscriberClasses = new WeakMap<EventBrokerSubscriber, string>();
   private replayBuffers: Map<string, NormalizedEvent[]> = new Map();
   private readonly replayBufferSize: number;
+  private readonly metrics: OperationalMetrics;
 
   constructor(options: EventBrokerOptions = {}) {
     this.replayBufferSize = Math.max(0, options.replayBufferSize ?? DEFAULT_REPLAY_BUFFER_SIZE);
+    this.metrics = options.metrics ?? getOperationalMetrics();
   }
 
   /**
@@ -49,19 +58,25 @@ export class InternalApiEventBroker {
    * delivered to the subscriber synchronously before this returns.
    * Returns an unsubscribe function.
    */
-  subscribe(sessionId: string, subscriber: EventBrokerSubscriber, replay = true): () => void {
+  subscribe(
+    sessionId: string,
+    subscriber: EventBrokerSubscriber,
+    replay = true,
+    subscriberClass = 'subscriber',
+  ): () => void {
     let set = this.subscribers.get(sessionId);
     if (!set) {
       set = new Set();
       this.subscribers.set(sessionId, set);
     }
     set.add(subscriber);
+    this.subscriberClasses.set(subscriber, subscriberClass);
 
     if (replay) {
       const buffer = this.replayBuffers.get(sessionId);
       if (buffer) {
         for (const event of buffer) {
-          this.safeInvoke(subscriber, event);
+          this.safeInvoke(sessionId, subscriber, event, subscriberClass);
         }
       }
     }
@@ -81,6 +96,7 @@ export class InternalApiEventBroker {
 
   /** Publish an event to all subscribers for a session. */
   publish(sessionId: string, event: NormalizedEvent): void {
+    this.metrics.recordEvent(event.timestamp);
     if (this.replayBufferSize > 0) {
       let buffer = this.replayBuffers.get(sessionId);
       if (!buffer) {
@@ -97,7 +113,12 @@ export class InternalApiEventBroker {
     const set = this.subscribers.get(sessionId);
     if (!set || set.size === 0) return;
     for (const subscriber of set) {
-      this.safeInvoke(subscriber, event);
+      this.safeInvoke(
+        sessionId,
+        subscriber,
+        event,
+        this.subscriberClasses.get(subscriber) ?? 'subscriber',
+      );
     }
   }
 
@@ -126,12 +147,24 @@ export class InternalApiEventBroker {
     return false;
   }
 
-  /** Internal: invoke a subscriber, swallowing errors. */
-  private safeInvoke(subscriber: EventBrokerSubscriber, event: NormalizedEvent): void {
+  /** Internal: invoke a subscriber without allowing it to break sibling observers. */
+  private safeInvoke(
+    sessionId: string,
+    subscriber: EventBrokerSubscriber,
+    event: NormalizedEvent,
+    subscriberClass: string,
+  ): void {
     try {
       subscriber(event);
-    } catch {
-      // Non-fatal: never let one subscriber break the others.
+    } catch (error) {
+      const count = this.metrics.recordSubscriberFailure(subscriberClass);
+      // Keep failures visible without turning a hot broken consumer into a log flood.
+      if (count === 1 || count % 100 === 0) {
+        const errorName = error instanceof Error ? error.name : typeof error;
+        logger.child({ sessionId }).warn(
+          `event subscriber failed: class=${subscriberClass} count=${count} error=${errorName}`,
+        );
+      }
     }
   }
 }

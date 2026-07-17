@@ -15,6 +15,7 @@ import type { ContentPart } from '../hooks/useSessionStream.js';
 import type { SubagentToolSummary } from '@pi-web-ui/shared';
 
 import { useTransferStore } from './transferStore';
+import { recordBrowserDiagnostic, recordProtocolDrift } from '../lib/browserDiagnostics.js';
 
 // ============================================================================
 // Throttled localStorage for Zustand persist
@@ -43,9 +44,19 @@ if (typeof document !== 'undefined') {
       throttleWriteTimer = null;
       try {
         localStorage.setItem(STORAGE_KEY, throttlePendingValue);
-      } catch { /* quota exceeded — silently ignore */ }
+      } catch (error) {
+        recordStorageFailure('flush_on_hide', error);
+      }
       throttlePendingValue = null;
     }
+  });
+}
+
+function recordStorageFailure(operation: string, error: unknown): void {
+  recordBrowserDiagnostic({
+    kind: 'storage_error',
+    operation,
+    errorName: error instanceof Error ? error.name : typeof error,
   });
 }
 
@@ -53,7 +64,8 @@ const throttledStorage = {
   getItem: (name: string): string | null => {
     try {
       return localStorage.getItem(name);
-    } catch {
+    } catch (error) {
+      recordStorageFailure('read', error);
       return null;
     }
   },
@@ -69,7 +81,9 @@ const throttledStorage = {
       throttleWriteTimer = null;
       try {
         localStorage.setItem(name, value);
-      } catch { /* quota exceeded — silently ignore */ }
+      } catch (error) {
+        recordStorageFailure('write', error);
+      }
       throttlePendingValue = null;
     }, 1000);
   },
@@ -79,7 +93,11 @@ const throttledStorage = {
       throttleWriteTimer = null;
     }
     throttlePendingValue = null;
-    localStorage.removeItem(name);
+    try {
+      localStorage.removeItem(name);
+    } catch (error) {
+      recordStorageFailure('remove', error);
+    }
   },
 };
 
@@ -1251,7 +1269,16 @@ export const useSessionStore = create<SessionState>()(
       clearMessages: () => set({ messages: [] }),
 
       handleServerMessage: (message: unknown) => {
+        if (!message || typeof message !== 'object' || typeof (message as { type?: unknown }).type !== 'string') {
+          recordProtocolDrift('malformed');
+          return;
+        }
         const msg = message as { type: string; [key: string]: unknown };
+        recordBrowserDiagnostic({
+          kind: 'message',
+          messageType: msg.type,
+          runtime: typeof msg.runtime === 'string' ? msg.runtime : undefined,
+        });
 
         switch (msg.type) {
           case 'sessions_list': {
@@ -2678,6 +2705,10 @@ export const useSessionStore = create<SessionState>()(
             useTransferStore.getState().setFailed(failMsg.code, failMsg.message);
             break;
           }
+
+          default:
+            recordProtocolDrift('unknown', msg.type);
+            break;
         }
       },
     }),

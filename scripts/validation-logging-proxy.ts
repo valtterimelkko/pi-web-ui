@@ -41,8 +41,13 @@
 
 import http from 'node:http';
 import https from 'node:https';
-import { appendFileSync } from 'node:fs';
 import { URL } from 'node:url';
+import {
+  createValidationLogWriter,
+  sanitizeValidationCapture,
+  sanitizeValidationExtract,
+  sanitizeValidationRequestPath,
+} from '../server/src/live-validation/validation-proxy-log.js';
 
 // ─── Args ──────────────────────────────────────────────────────────────────────
 
@@ -60,6 +65,10 @@ function parseArgs(argv: string[]) {
   const log = get('--log') ?? '/tmp/validation-proxy-reqs.jsonl';
   const extract = get('--extract') ?? 'model,output_config.effort';
   const headerAllowlist = get('--header-allowlist') ?? 'anthropic-beta';
+  if (argv.includes('--log-body')) {
+    console.error('validation-logging-proxy: --log-body was removed; use --unsafe-log-redacted-body for bounded, recursively redacted capture');
+    process.exit(2);
+  }
   return {
     upstream,
     port: Number(get('--port') ?? '8799'),
@@ -70,7 +79,7 @@ function parseArgs(argv: string[]) {
     headerAllowlist: headerAllowlist.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
     // Only paths containing this substring are body-parsed/extracted (others just pass through).
     pathFilter: get('--path-filter') ?? '',
-    logBody: argv.includes('--log-body'),
+    unsafeLogRedactedBody: argv.includes('--unsafe-log-redacted-body'),
   };
 }
 
@@ -95,13 +104,20 @@ function getPath(obj: unknown, path: string): unknown {
 // ─── Main ───────────────────────────────────────────────────────────────────────
 
 const args = parseArgs(process.argv.slice(2));
+let logWriter;
+try {
+  logWriter = createValidationLogWriter(args.log);
+} catch (error) {
+  console.error(`validation-logging-proxy: cannot open owner-only log ${args.log}: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
 const upstreamUrl = new URL(args.upstream);
 const upstreamClient = upstreamUrl.protocol === 'http:' ? http : https;
 const upstreamPort = upstreamUrl.port || (upstreamUrl.protocol === 'http:' ? 80 : 443);
 const upstreamBasePath = upstreamUrl.pathname.replace(/\/$/, ''); // no trailing slash
 
-function logLine(obj: Record<string, unknown>): void {
-  try { appendFileSync(args.log, JSON.stringify(obj) + '\n'); } catch { /* non-fatal */ }
+function logLine(obj: Record<string, unknown>): boolean {
+  return logWriter.append(obj);
 }
 
 const server = http.createServer((req, res) => {
@@ -112,13 +128,17 @@ const server = http.createServer((req, res) => {
     const interesting = !args.pathFilter || (req.url ?? '').includes(args.pathFilter);
 
     if (interesting) {
-      const entry: Record<string, unknown> = { ts: Date.now(), method: req.method, path: req.url };
+      const entry: Record<string, unknown> = {
+        ts: Date.now(),
+        method: req.method,
+        path: sanitizeValidationRequestPath(req.url),
+      };
       // Allowlisted, non-secret headers only.
       const hdrs: Record<string, string> = {};
       for (const h of args.headerAllowlist) {
         if (SECRET_HEADERS.has(h)) continue;
         const v = req.headers[h];
-        if (v != null) hdrs[h] = Array.isArray(v) ? v.join(',') : String(v);
+        if (v != null) hdrs[h] = String(sanitizeValidationCapture(Array.isArray(v) ? v.join(',') : String(v), 1000));
       }
       if (Object.keys(hdrs).length) entry.headers = hdrs;
       // Extracted JSON body fields.
@@ -126,17 +146,19 @@ const server = http.createServer((req, res) => {
         const parsed = JSON.parse(body.toString('utf8'));
         for (const p of args.extract) {
           const val = getPath(parsed, p);
-          if (val !== undefined) entry[p] = val;
+          if (val !== undefined) entry[p] = sanitizeValidationExtract(p, val, 2000);
         }
-        if (args.logBody) {
-          const clone = { ...parsed };
-          if (Array.isArray(clone.messages)) clone.messages = `[${clone.messages.length} messages omitted]`;
-          entry.body = clone;
+        if (args.unsafeLogRedactedBody) {
+          entry.body = sanitizeValidationCapture(parsed, 16 * 1024);
         }
       } catch {
         entry.nonJsonBytes = body.length;
       }
-      logLine(entry);
+      if (!logLine(entry)) {
+        res.writeHead(507, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end('validation-logging-proxy: evidence log write failed');
+        return;
+      }
     }
 
     // ── Forward upstream, streaming the response UNBUFFERED ──────────────────
@@ -158,7 +180,11 @@ const server = http.createServer((req, res) => {
       },
     );
     upReq.on('error', (e) => {
-      logLine({ ts: Date.now(), proxyError: e.message, path: req.url });
+      logLine({
+        ts: Date.now(),
+        proxyError: sanitizeValidationCapture(e.message, 500),
+        path: sanitizeValidationRequestPath(req.url),
+      });
       if (!res.headersSent) res.writeHead(502);
       res.end('validation-logging-proxy: upstream error');
     });
@@ -182,5 +208,10 @@ server.listen(args.port, '127.0.0.1', () => {
 });
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(sig, () => { server.close(); process.exit(0); });
+  process.on(sig, () => {
+    server.close(() => {
+      logWriter.close();
+      process.exit(0);
+    });
+  });
 }

@@ -5,10 +5,13 @@ import os from 'os';
 import { getWorkerPool } from './sessions.js';
 import { getCrashLogger } from '../workers/crash-logger.js';
 import { getOpenCodeService } from '../opencode/index.js';
+import { getClaudeService } from '../claude/index.js';
+import { getAntigravityService } from '../antigravity/index.js';
 import { createLogger } from '../logging/logger.js';
+import { RuntimeHealthMonitor } from '../observability/runtime-health.js';
 
 const logger = createLogger('Health');
-
+const runtimeHealthMonitor = new RuntimeHealthMonitor();
 
 const router = Router();
 
@@ -142,6 +145,31 @@ router.get('/ready', async (_req: Request, res: Response) => {
     };
   }
 
+  // The public readiness route may be mounted before singleton runtime services
+  // have a registry. Treat that as unavailable rather than letting the probe hang.
+  const claudeService = tryGetRuntimeService(getClaudeService);
+  const antigravityService = tryGetRuntimeService(getAntigravityService);
+  const runtimeHealth = await runtimeHealthMonitor.check({
+    pi: { enabled: true, backend: 'native', probe: async () => true },
+    claude: {
+      enabled: true,
+      backend: claudeService
+        ? await claudeService.getBackendMode().catch(() => 'direct' as const)
+        : 'direct',
+      probe: async () => claudeService ? claudeService.isAvailable() : false,
+    },
+    opencode: {
+      enabled: config.opencodeServerEnabled,
+      backend: 'server',
+      probe: () => getOpenCodeService().isAvailable(),
+    },
+    antigravity: {
+      enabled: config.antigravityEnabled,
+      backend: 'subprocess',
+      probe: async () => antigravityService ? antigravityService.isAvailable() : false,
+    },
+  });
+
   const response: {
     status: string;
     timestamp: string;
@@ -149,6 +177,7 @@ router.get('/ready', async (_req: Request, res: Response) => {
     version: string;
     nodeEnv: string;
     checks: typeof checks;
+    runtimeHealth: typeof runtimeHealth;
     workerStats?: typeof workerStats;
   } = {
     status: allHealthy ? 'ok' : 'degraded',
@@ -157,6 +186,7 @@ router.get('/ready', async (_req: Request, res: Response) => {
     version: process.env.npm_package_version || 'unknown',
     nodeEnv: config.nodeEnv,
     checks,
+    runtimeHealth,
   };
 
   // Include worker stats in response when available
@@ -226,5 +256,13 @@ router.get('/workers', (_req: Request, res: Response) => {
     });
   }
 });
+
+function tryGetRuntimeService<T>(factory: () => T): T | undefined {
+  try {
+    return factory();
+  } catch {
+    return undefined;
+  }
+}
 
 export default router;

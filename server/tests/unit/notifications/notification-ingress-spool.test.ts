@@ -82,6 +82,16 @@ describe('NotificationIngressSpool', () => {
     await rm(outside, { force: true });
   });
 
+  it('claims files in deterministic filename order before applying the batch bound', async () => {
+    for (const name of ['30.json', '10.json', '20.json']) {
+      await writeFile(join(dir, name), JSON.stringify(record(`key-${name}`)), { mode: 0o600 });
+    }
+    const claims = await new NotificationIngressSpool(dir, {
+      now: () => NOW, maxFiles: 2, maxFileBytes: 4096,
+    }).claimBatch();
+    expect(claims.map((claim) => claim.record.idempotencyKey)).toEqual(['key-10.json', 'key-20.json']);
+  });
+
   it('bounds one drain batch even when more files are present', async () => {
     for (let i = 0; i < 12; i += 1) {
       await writeFile(join(dir, `${i}.json`), JSON.stringify(record(`key-${i}`)), { mode: 0o600 });

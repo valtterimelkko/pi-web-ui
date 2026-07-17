@@ -83,6 +83,16 @@ async function main() {
         if (result.reason) {
           console.log(`   reason: ${result.reason}`);
         }
+        const identity = [
+          result.runId ? `run=${result.runId}` : null,
+          result.model ? `model=${result.model}` : null,
+          result.backendMode ? `backend=${result.backendMode}` : null,
+          result.executionInstanceId ? `exec=${result.executionInstanceId}` : null,
+          result.durationMs !== undefined ? `durationMs=${result.durationMs}` : null,
+        ].filter(Boolean);
+        if (identity.length > 0) console.log(`   evidence: ${identity.join(' ')}`);
+        if (result.eventCounts) console.log(`   events: ${JSON.stringify(result.eventCounts)}`);
+        for (const warning of result.cleanupWarnings ?? []) console.log(`   cleanup warning: ${warning}`);
       }
     }
   }

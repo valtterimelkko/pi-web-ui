@@ -24,7 +24,7 @@ import { randomUUID } from 'crypto';
 import type {
   CreateSessionResponse,
   DeleteWatchResponse,
-  PromptResponse,
+  PromptDispatchResponse,
   RegisterWatchRequest,
   SendPromptRequest,
   SessionControlResponse,
@@ -38,7 +38,7 @@ import type { ValidationRuntime } from './types.js';
 /** The Internal API surface the runner depends on (InternalApiClient satisfies it). */
 export interface LongHorizonClient {
   createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string }): Promise<CreateSessionResponse>;
-  prompt(sessionId: string, input: SendPromptRequest): Promise<PromptResponse>;
+  prompt(sessionId: string, input: SendPromptRequest): Promise<PromptDispatchResponse>;
   pinSession(sessionId: string): Promise<SessionControlResponse>;
   registerWatch(sessionId: string, body: RegisterWatchRequest): Promise<WatchResponse>;
   getWatch(sessionId: string, sinceIndex?: number): Promise<WatchResponse>;
@@ -103,10 +103,12 @@ export interface LongHorizonRunState {
   firedConditionIds: string[];
   firings: WatchFiring[];
   probeAnswer?: string;
+  seedRunId?: string;
   verdict?: string;
   statePath?: string;
   keepSubject: boolean;
   keepWatch?: boolean;
+  cleanupWarnings: string[];
 }
 
 export interface TickResult {
@@ -154,11 +156,26 @@ export async function startRun(config: LongHorizonConfig): Promise<{ state: Long
 
   // Registering the watch also pins the subject (pin defaults to true), so it
   // survives idle eviction while the validator sleeps.
-  const watch = await client.registerWatch(subjectSessionId, {
-    conditions: config.conditions,
-    pin: config.pin,
-    label: config.label,
-  });
+  let watch: WatchResponse;
+  try {
+    watch = await client.registerWatch(subjectSessionId, {
+      conditions: config.conditions,
+      pin: config.pin,
+      label: config.label,
+    });
+  } catch (registrationError) {
+    if (createdSubject) {
+      try {
+        await client.deleteSession(subjectSessionId);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [registrationError, cleanupError],
+          `Watch registration failed (${safeErrorMessage(registrationError)}); subject cleanup also failed (${safeErrorMessage(cleanupError)})`,
+        );
+      }
+    }
+    throw registrationError;
+  }
   log(`Registered watch ${watch.watchId} with ${watch.conditions.length} condition(s); pinned=${watch.pinned}`);
 
   const conditionIds = watch.conditions.map((c) => c.id);
@@ -169,10 +186,20 @@ export async function startRun(config: LongHorizonConfig): Promise<{ state: Long
   // Dispatch the seed prompt WITHOUT blocking: the subject works asynchronously
   // server-side while we poll the watch. A disconnected answers-mode request
   // does not abort the turn, so fire-and-forget is safe here.
+  let seedRunId: string | undefined;
   if (config.seedPrompt) {
     log(`Dispatching seed prompt (${config.seedPrompt.length} chars)`);
-    void client.prompt(subjectSessionId, { message: config.seedPrompt, verbosity: 'answers' })
-      .catch((err) => log(`Seed prompt error (non-fatal): ${err instanceof Error ? err.message : String(err)}`));
+    try {
+      const dispatch = await client.prompt(subjectSessionId, {
+        message: config.seedPrompt,
+        verbosity: 'answers',
+        detach: true,
+      });
+      seedRunId = dispatch.runId;
+      log(`Seed prompt accepted with runId=${seedRunId}`);
+    } catch (error) {
+      log(`Seed prompt error (non-fatal): ${safeErrorMessage(error)}`);
+    }
   }
 
   const now = Date.now();
@@ -194,9 +221,11 @@ export async function startRun(config: LongHorizonConfig): Promise<{ state: Long
     status: 'running',
     firedConditionIds: watch.conditions.filter((c) => c.fired).map((c) => c.id),
     firings: [...watch.firings],
+    seedRunId,
     statePath: config.statePath,
     keepSubject: config.keepSubject ?? false,
     keepWatch: config.keepWatch ?? false,
+    cleanupWarnings: [],
   };
 
   if (config.statePath) await persistState(config.statePath, state);
@@ -256,13 +285,26 @@ export async function runToCompletion(config: LongHorizonConfig): Promise<LongHo
   const log = config.logger ?? noopLogger;
   const { state } = await startRun(config);
 
-  while (state.status === 'running') {
-    await sleep(state.pollIntervalMs);
-    const result = await tick(state, config.client, log);
-    if (result.done) break;
+  try {
+    while (state.status === 'running') {
+      await sleep(state.pollIntervalMs);
+      const result = await tick(state, config.client, log);
+      if (result.done) break;
+    }
+  } catch (error) {
+    state.status = 'failed';
+    state.verdict = `Validation polling failed: ${safeErrorMessage(error)}`;
+    log(state.verdict);
+  } finally {
+    try {
+      await finalize(state, config);
+    } catch (error) {
+      const warning = `validation finalization failed: ${safeErrorMessage(error)}`;
+      state.cleanupWarnings.push(warning);
+      state.updatedAt = new Date().toISOString();
+      log(warning);
+    }
   }
-
-  await finalize(state, config);
   return state;
 }
 
@@ -279,24 +321,43 @@ export async function finalize(state: LongHorizonRunState, config: LongHorizonCo
       // an in-flight turn.
       await config.client.waitForStatus(state.subjectSessionId, 'idle', 120000).catch(() => undefined);
       const answer = await config.client.prompt(state.subjectSessionId, { message: config.probePrompt, verbosity: 'answers' });
-      state.probeAnswer = answer.content;
-      log(`Probe answer captured (${answer.content.length} chars)`);
+      if ('content' in answer) {
+        state.probeAnswer = answer.content;
+        log(`Probe answer captured (${answer.content.length} chars)`);
+      } else {
+        log(`Probe returned non-terminal dispatch evidence (runId=${answer.runId})`);
+      }
     } catch (err) {
-      log(`Probe failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+      log(`Probe failed (non-fatal): ${safeErrorMessage(err)}`);
     }
   }
 
   // Cleanup. Remove the watch ledger unless the caller explicitly asked to keep
   // it for post-run evidence queries; remove the subject only if we created it
   // and the caller didn't ask to keep it.
+  state.cleanupWarnings ??= [];
   if (!state.keepWatch && !config.keepWatch) {
-    try { await config.client.deleteWatch(state.subjectSessionId); } catch { /* non-fatal */ }
+    try {
+      const deleted = await config.client.deleteWatch(state.subjectSessionId);
+      if (!deleted.success) throw new Error('server did not confirm deletion');
+      log(`Deleted watch for subject ${state.subjectSessionId}`);
+    } catch (error) {
+      const warning = `watch cleanup failed: ${safeErrorMessage(error)}`;
+      state.cleanupWarnings.push(warning);
+      log(warning);
+    }
   } else {
     state.keepWatch = true;
   }
   if (state.createdSubject && !state.keepSubject) {
-    try { await config.client.deleteSession(state.subjectSessionId); } catch { /* non-fatal */ }
-    log(`Deleted runner-created subject ${state.subjectSessionId}`);
+    try {
+      await config.client.deleteSession(state.subjectSessionId);
+      log(`Deleted runner-created subject ${state.subjectSessionId}`);
+    } catch (error) {
+      const warning = `session cleanup failed: ${safeErrorMessage(error)}`;
+      state.cleanupWarnings.push(warning);
+      log(warning);
+    }
   }
 
   state.updatedAt = new Date().toISOString();
@@ -318,4 +379,13 @@ export async function loadState(statePath: string): Promise<LongHorizonRunState>
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function safeErrorMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error))
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b(?:access|refresh|auth|bot)?[_-]?(?:token|secret|password|api[_-]?key)\s*[=:]\s*[^\s,;&]+/gi, '[REDACTED]')
+    .replace(/([?&](?:access|refresh|auth|bot)?[_-]?(?:token|secret|password|api[_-]?key)=)[^&\s]+/gi, '$1[REDACTED]')
+    .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
+    .slice(0, 300);
 }

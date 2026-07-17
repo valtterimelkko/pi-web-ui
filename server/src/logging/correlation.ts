@@ -15,12 +15,16 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 export interface LogContext {
-  /** Correlation id for a single prompt/turn. */
+  /** Correlation id for one inbound HTTP/WebSocket request. */
   requestId?: string;
+  /** Durable Internal API run identity, when the request has reserved one. */
+  runId?: string;
   /** Pi Web UI internal session id. */
   sessionId?: string;
   /** Runtime family: pi | claude | opencode | antigravity. */
   runtime?: string;
+  /** Concrete provider/backend execution identity (for example a Claude profile id). */
+  executionInstanceId?: string;
   [key: string]: unknown;
 }
 

@@ -22,8 +22,13 @@ const buffer: LogRecord[] = [];
 
 // ─── Secret scrubbing ────────────────────────────────────────────────────────
 
-const SENSITIVE_KEY_RE =
-  /^(pass(word|wd)?|secret|secrets|token|tokens|api[_-]?key|apikey|authToken|authorization|auth|cookie|cookies|bearer|credential|credentials)$/i;
+const SENSITIVE_NORMALIZED_KEY_RE =
+  /(?:password|passwd|secret|secrets|token|tokens|apikey|authtoken|authorization|cookie|cookies|bearer|credential|credentials|privatekey)$/;
+
+function isSensitiveKey(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return normalized === 'auth' || SENSITIVE_NORMALIZED_KEY_RE.test(normalized);
+}
 
 const SECRET_VALUE_PATTERNS: ReadonlyArray<RegExp> = [
   /Bearer\s+[A-Za-z0-9._~+/=-]+/gi, // Authorization: Bearer <token>
@@ -37,11 +42,13 @@ function scrubString(value: string): string {
   for (const re of SECRET_VALUE_PATTERNS) {
     out = out.replace(re, '[REDACTED]');
   }
-  return out;
+  return out
+    .replace(/\b(?:access|refresh|auth|bot)?[_-]?(?:token|secret|password|api[_-]?key)\s*[=:]\s*[^\s,;&]+/gi, '[REDACTED]')
+    .replace(/([?&](?:access|refresh|auth|bot)?[_-]?(?:token|secret|password|api[_-]?key)=)[^&\s]+/gi, '$1[REDACTED]');
 }
 
 function scrubValue(value: unknown, key?: string): unknown {
-  if (key && SENSITIVE_KEY_RE.test(key)) return '[REDACTED]';
+  if (key && isSensitiveKey(key)) return '[REDACTED]';
   if (typeof value === 'string') return scrubString(value);
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map((v) => scrubValue(v));
@@ -69,26 +76,44 @@ export function pushDiagnosticsRecord(record: LogRecord): void {
 
 export interface DiagnosticsQuery {
   sessionId?: string;
+  requestId?: string;
+  runId?: string;
+  runtime?: string;
+  component?: string;
+  /** Inclusive ISO timestamp lower bound. Invalid timestamps match no records. */
+  since?: string;
   limit?: number;
   minLevel?: LogLevel;
 }
 
-/** Recent records, optionally filtered by session and/or minimum level. */
-export function getRecentLogs(query: DiagnosticsQuery = {}): LogRecord[] {
-  const limit = clamp(query.limit ?? 200, 1, MAX_RECORDS);
+function filteredRecords(query: DiagnosticsQuery): LogRecord[] {
   const minOrder = query.minLevel ? LEVEL_ORDER[query.minLevel] : undefined;
   let recs = buffer;
   if (query.sessionId) recs = recs.filter((r) => r.sessionId === query.sessionId);
+  if (query.requestId) recs = recs.filter((r) => r.requestId === query.requestId);
+  if (query.runId) recs = recs.filter((r) => r.runId === query.runId);
+  if (query.runtime) recs = recs.filter((r) => r.runtime === query.runtime);
+  if (query.component) recs = recs.filter((r) => r.component === query.component);
+  if (query.since) {
+    const sinceMs = Date.parse(query.since);
+    recs = Number.isFinite(sinceMs)
+      ? recs.filter((r) => Date.parse(r.ts) >= sinceMs)
+      : [];
+  }
   if (minOrder !== undefined) recs = recs.filter((r) => LEVEL_ORDER[r.level] <= minOrder);
-  return recs.slice(-limit);
+  return recs;
 }
 
-/** Recent error-level records (optionally per session). */
-export function getRecentErrors(query: { sessionId?: string; limit?: number } = {}): LogRecord[] {
+/** Recent records, optionally filtered by correlation, source, time, and level. */
+export function getRecentLogs(query: DiagnosticsQuery = {}): LogRecord[] {
+  const limit = clamp(query.limit ?? 200, 1, MAX_RECORDS);
+  return filteredRecords(query).slice(-limit);
+}
+
+/** Recent error-level records using the same filters as the main log list. */
+export function getRecentErrors(query: DiagnosticsQuery = {}): LogRecord[] {
   const limit = clamp(query.limit ?? 50, 1, MAX_RECORDS);
-  let recs = buffer.filter((r) => r.level === 'error');
-  if (query.sessionId) recs = recs.filter((r) => r.sessionId === query.sessionId);
-  return recs.slice(-limit);
+  return filteredRecords(query).filter((r) => r.level === 'error').slice(-limit);
 }
 
 export interface DiagnosticsSummary {
@@ -99,8 +124,8 @@ export interface DiagnosticsSummary {
   newestTs?: string;
 }
 
-export function getDiagnosticsSummary(query: { sessionId?: string } = {}): DiagnosticsSummary {
-  const recs = query.sessionId ? buffer.filter((r) => r.sessionId === query.sessionId) : buffer;
+export function getDiagnosticsSummary(query: DiagnosticsQuery = {}): DiagnosticsSummary {
+  const recs = filteredRecords(query);
   return {
     bufferedRecords: recs.length,
     errorCount: recs.filter((r) => r.level === 'error').length,

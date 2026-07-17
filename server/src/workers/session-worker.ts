@@ -9,17 +9,26 @@ import { RPCProtocolBridge } from './rpc-protocol-bridge.js';
 import type { WorkerStatus } from '@pi-web-ui/shared';
 import { getCrashLogger } from './crash-logger.js';
 import { createLogger } from '../logging/logger.js';
+import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
 
 const logger = createLogger('SessionWorker');
 
+export interface SessionWorkerObservabilityOptions {
+  metrics?: OperationalMetrics;
+  readinessFallbackMs?: number;
+}
 
 export class SessionWorker {
   private state: SessionWorkerState;
   private bridge: RPCProtocolBridge;
   private eventHandlers: Set<EventHandler> = new Set();
   private stdoutBuffer: string = '';
+  private readonly metrics: OperationalMetrics;
+  private readonly readinessFallbackMs: number;
 
-  constructor(options: WorkerOptions) {
+  constructor(options: WorkerOptions, observability: SessionWorkerObservabilityOptions = {}) {
+    this.metrics = observability.metrics ?? getOperationalMetrics();
+    this.readinessFallbackMs = observability.readinessFallbackMs ?? 1_000;
     this.state = {
       process: null,
       sessionPath: options.sessionPath,
@@ -160,6 +169,11 @@ export class SessionWorker {
     return this.state.lastActivity;
   }
 
+  /** Stable timestamp for the most recent process spawn attempt. */
+  get spawnedAt(): number {
+    return this.state.spawnedAt;
+  }
+
   /**
    * Terminate the worker gracefully.
    */
@@ -238,7 +252,7 @@ export class SessionWorker {
     logger.info(`[SessionWorker:${this.state.pid}] Exited with code=${code}, signal=${signal}`);
 
     // Record crash for monitoring (skip if graceful shutdown via terminate())
-    if (signal !== 'SIGTERM' || code !== 0) {
+    if (signal !== 'SIGTERM' && code !== 0) {
       const crashLogger = getCrashLogger();
       crashLogger.recordCrash({
         sessionPath: this.state.sessionPath,
@@ -258,27 +272,56 @@ export class SessionWorker {
    */
   private async waitForReady(timeout = 30000): Promise<void> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('Worker spawn timeout'));
-      }, timeout);
+      let settled = false;
+      const processRef = this.state.process;
+      let unsubscribe = () => {};
 
-      const unsubscribe = this.subscribe((event) => {
-        // Worker is ready when we receive any event or after a short delay
-        if (event.type === 'streaming_started' || event.type === 'message_start') {
-          clearTimeout(timer);
-          unsubscribe();
-          this.state.status = 'ready';
-          resolve();
-        }
-      });
-
-      // Also resolve after a short delay if no events
-      setTimeout(() => {
-        clearTimeout(timer);
+      const cleanup = () => {
+        clearTimeout(hardTimeout);
+        clearTimeout(fallbackTimer);
         unsubscribe();
+        processRef?.off('spawn', onSpawn);
+        processRef?.off('error', onProcessFailure);
+      };
+      const ready = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         this.state.status = 'ready';
         resolve();
-      }, 1000);
+      };
+      const onSpawn = () => ready();
+      const onProcessFailure = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      const hardTimeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error('Worker spawn timeout'));
+      }, timeout);
+      const fallbackTimer = setTimeout(() => {
+        if (settled) return;
+        this.metrics.recordWorkerReadinessFallback();
+        logger.child({ sessionId: this.state.sessionPath }).warn(
+          `worker readiness fallback used after ${this.readinessFallbackMs}ms without a process or RPC readiness signal`,
+        );
+        ready();
+      }, Math.min(timeout, this.readinessFallbackMs));
+      hardTimeout.unref?.();
+      fallbackTimer.unref?.();
+
+      unsubscribe = this.subscribe((event) => {
+        if (event.type === 'streaming_started' || event.type === 'message_start') ready();
+      });
+      processRef?.once('spawn', onSpawn);
+      processRef?.once('error', onProcessFailure);
+
+      if (this.state.status === 'ready') ready();
     });
   }
 }
