@@ -33,6 +33,8 @@ export class SessionWatcher extends EventEmitter {
   private sessionIdsByPath = new Map<string, string>();
   private pendingInfoByPath = new Map<string, Promise<SessionInfo | null>>();
   private debounceDelay = 500; // ms
+  /** True once stop() has run; handleChange becomes a no-op so a stopped watcher never broadcasts. */
+  private stopped = false;
 
   constructor(sessionsDir?: string) {
     super();
@@ -47,6 +49,7 @@ export class SessionWatcher extends EventEmitter {
       logger.warn('SessionWatcher already started');
       return;
     }
+    this.stopped = false;
 
     const pattern = path.join(this.sessionsDir, '**/*.jsonl');
     
@@ -75,11 +78,12 @@ export class SessionWatcher extends EventEmitter {
    * Stop watching
    */
   async stop(): Promise<void> {
+    this.stopped = true;
     if (this.watcher) {
       await this.watcher.close();
       this.watcher = null;
     }
-    
+
     // Clear any pending debounce timers
     for (const timer of this.debounceTimers.values()) {
       clearTimeout(timer);
@@ -87,7 +91,11 @@ export class SessionWatcher extends EventEmitter {
     this.debounceTimers.clear();
     this.sessionIdsByPath.clear();
     this.pendingInfoByPath.clear();
-    
+
+    // Symmetric cleanup: remove all EventEmitter listeners registered via
+    // start()/on() so repeated initialisation does not multiply them.
+    this.removeAllListeners();
+
     logger.info('SessionWatcher stopped');
   }
 
@@ -95,6 +103,9 @@ export class SessionWatcher extends EventEmitter {
    * Handle file change with debouncing
    */
   private handleChange(type: 'add' | 'change' | 'unlink', filePath: string): void {
+    // No-op once stopped so a dying watcher cannot broadcast post-shutdown.
+    if (this.stopped) return;
+
     // Clear existing timer for this file
     const existingTimer = this.debounceTimers.get(filePath);
     if (existingTimer) {
@@ -396,7 +407,12 @@ export function startSessionWatcher(sessionsDir?: string): SessionWatcher {
 
 export function stopSessionWatcher(): Promise<void> {
   if (sessionWatcher) {
-    return sessionWatcher.stop();
+    const w = sessionWatcher;
+    // Null the singleton so a subsequent startSessionWatcher() builds a fresh
+    // instance instead of reusing a stopped one (which would carry stale
+    // listeners and multiply them across re-initialisation).
+    sessionWatcher = null;
+    return w.stop();
   }
   return Promise.resolve();
 }
