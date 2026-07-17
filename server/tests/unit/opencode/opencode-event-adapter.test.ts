@@ -686,3 +686,53 @@ describe('OpenCodeEventAdapter', () => {
     });
   });
 });
+
+// ── R2: adapter is the single owner of event identity / dedup ───────────────
+describe('R2: dedup ownership (one owner for event identity)', () => {
+  let a: OpenCodeEventAdapter;
+  beforeEach(() => { a = new OpenCodeEventAdapter(); });
+
+  function toolPartUpdated(toolCallId: string, status: string, toolName = 'Read') {
+    return {
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: `part-${toolCallId}`,
+          type: 'tool-invocation',
+          toolInvocationId: toolCallId,
+          toolName,
+          state: { status, input: {}, output: 'done' },
+        },
+      },
+    } as unknown as OpenCodeSSEEvent;
+  }
+
+  it('emits a completed tool end once even if the same part is updated twice (dedup)', () => {
+    const r1 = a.adaptSSEEvent(toolPartUpdated('tool-1', 'completed'), SID);
+    const r2 = a.adaptSSEEvent(toolPartUpdated('tool-1', 'completed'), SID);
+    expect(r1.some((e) => e.type === 'tool_execution_end')).toBe(true);
+    expect(r2).toEqual([]); // duplicate suppressed by the dedup owner
+  });
+
+  it('retains two distinct tool calls even when they share a tool name', () => {
+    const ends: string[] = [];
+    for (const id of ['tool-A', 'tool-B']) {
+      for (const e of a.adaptSSEEvent(toolPartUpdated(id, 'completed', 'Read'), SID)) {
+        if (e.type === 'tool_execution_end') ends.push((e.data as { toolCallId: string }).toolCallId);
+      }
+    }
+    expect(ends).toEqual(['tool-A', 'tool-B']);
+  });
+
+  it('parses each event once: N distinct events -> N non-empty results, no cross-contamination', () => {
+    const sse = (type: string, properties?: Record<string, unknown>) => ({ type, properties }) as OpenCodeSSEEvent;
+    let nonEmpty = 0;
+    for (let i = 0; i < 5; i++) {
+      const out = a.adaptSSEEvent(sse('message.part.updated', {
+        part: { id: `p${i}`, type: 'tool-invocation', toolInvocationId: `t${i}`, toolName: 'X', state: { status: 'completed', output: 'y' } },
+      }), SID);
+      if (out.length > 0) nonEmpty++;
+    }
+    expect(nonEmpty).toBe(5); // each distinct tool emits exactly once
+  });
+});

@@ -1182,6 +1182,9 @@ export class OpenCodeService {
     const normalized = this.eventAdapter.adaptSSEEvent(event, sessionId);
 
     const callback = this.promptCallbacks.get(sessionId);
+    // Single pass over the normalized events (the adapter is the one owner of
+    // event identity/dedup): fan out to the prompt callback + API observers,
+    // track permission ids, and finalise on agent_end.
     for (const evt of normalized) {
       if (evt.type === 'permission_request' && evt.data) {
         const permId = (evt.data as Record<string, unknown>).permissionId as string;
@@ -1193,9 +1196,7 @@ export class OpenCodeService {
         try { callback.onEvent(evt); } catch { /* non-fatal */ }
       }
       this.emitApiObserverEvent(sessionId, evt);
-    }
 
-    for (const evt of normalized) {
       if (evt.type === 'agent_end') {
         this.completeSession(sessionId);
 
