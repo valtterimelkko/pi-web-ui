@@ -214,7 +214,12 @@ export interface AgyResult {
  * don't pass `--log-file` (version check, model listing) skip the stall
  * watchdog entirely and rely on the hard ceiling alone, same as before.
  */
-function runAgy(args: string[], cwd: string, timeoutMs: number, stallTimeoutMs?: number, logFilePath?: string, signal?: AbortSignal): Promise<AgyResult> {
+export function runAgy(args: string[], cwd: string, timeoutMs: number, stallTimeoutMs?: number, logFilePath?: string, signal?: AbortSignal): Promise<AgyResult> {
+  // Defense in depth: never spawn a subprocess for a turn that is already
+  // aborted (the retry loop also checks, but runAgy may be called directly).
+  if (signal?.aborted) {
+    return Promise.resolve({ stdout: '', stderr: '', ok: false, reason: 'aborted' });
+  }
   return new Promise((resolve, reject) => {
     const env = { ...process.env, PATH: `/root/.local/bin:${process.env.PATH ?? ''}` };
     const proc = spawn(AGY_BINARY, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -651,6 +656,13 @@ export class AntigravityService {
       try {
         let attempt = 1;
         for (;;) {
+          // Abort cancels pending retries: if the operator aborted this turn
+          // (often landing in the same tick as a watchdog 'timeout'/'stall'
+          // resolve), do not spawn another agy subprocess.
+          if (abortController.signal.aborted) {
+            result = { stdout: '', stderr: '', ok: false, reason: 'aborted' };
+            break;
+          }
           const beforeConversations = conversationId ? new Map<string, ConversationFileInfo>() : await listConversationFiles();
           const agyLogFile = await createAgyRunLogPath(sessionId);
           const args = ['--log-file', agyLogFile, '--dangerously-skip-permissions', '--print-timeout', printTimeout];
