@@ -94,6 +94,9 @@ export class TerminalManager {
 
     process_.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => {
       emitter.emit('exit', { exitCode, signal });
+      // Terminal is gone: remove websocket data/exit listeners so the closed
+      // ws reference is released and no stale output is delivered.
+      emitter.removeAllListeners();
       this.terminals.delete(clientId);
       this.clearIdleTimer(clientId);
     });
@@ -145,6 +148,11 @@ export class TerminalManager {
     } catch {
       // ignore
     }
+    // Remove the data/exit listeners (attached by the websocket on create) so a
+    // destroyed terminal cannot deliver further output and the closed WebSocket
+    // reference is released immediately rather than waiting for GC. This is the
+    // symmetric cleanup that prevents listener accumulation across reconnects.
+    session.emitter.removeAllListeners();
     this.terminals.delete(clientId);
   }
 
