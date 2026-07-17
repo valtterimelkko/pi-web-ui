@@ -233,6 +233,12 @@ export class WebSocketConnectionManager {
    * subscribers) the pending question(s) are cancelled as `disconnected`.
    */
   private askUserDisconnectGraceTimers: Map<string, NodeJS.Timeout> = new Map();
+  /**
+   * Handle for the periodic session-status broadcast interval. Owned here so it
+   * can be cleared on shutdown; `setupSessionStatusBroadcasting` is idempotent
+   * so repeated init (e.g. re-initialisation in tests) cannot stack intervals.
+   */
+  private statusBroadcastTimer: NodeJS.Timeout | null = null;
   private opencodeService: OpenCodeService;
   private opencodeSessionIds: Set<string> = new Set();
   private opencodeSubs = new OpenCodeSessionSubscribers();
@@ -364,8 +370,13 @@ export class WebSocketConnectionManager {
    * Claude Direct sessions (via ClaudeService/ClaudeProcessPool).
    */
   private setupSessionStatusBroadcasting(): void {
+    // Idempotent: never stack a second interval if already armed (protects
+    // re-initialisation in tests and any future re-setup path).
+    if (this.statusBroadcastTimer) {
+      clearInterval(this.statusBroadcastTimer);
+    }
     // Poll for session status changes every second
-    setInterval(() => {
+    this.statusBroadcastTimer = setInterval(() => {
       // Pi SDK session statuses
       const statuses = this.multiSessionManager.getAllSessionStatuses();
       for (const status of statuses) {
@@ -427,6 +438,9 @@ export class WebSocketConnectionManager {
         }
       }
     }, 1000);
+    // Do not keep the process alive solely for status polling; the HTTP/WS
+    // listeners own the event loop, and this lets tests exit cleanly.
+    this.statusBroadcastTimer?.unref?.();
   }
 
   private setupServer(): void {
@@ -2811,6 +2825,11 @@ export class WebSocketConnectionManager {
       this.clientCwd.delete(clientId);
       this.clientViewingSession.delete(clientId);
       this.clients.delete(clientId);
+
+      // Remove this client's Pi event handler exactly once so disconnected
+      // clients do not accumulate in the PiService handler map. (The `if`
+      // guard above makes double close/error disconnects idempotent.)
+      this.piService.removeEventHandler(clientId);
     }
   }
 
@@ -2975,6 +2994,13 @@ export class WebSocketConnectionManager {
    * Close all connections and cleanup
    */
   async close(): Promise<void> {
+    // Stop the session-status broadcast loop so a disposed manager does not
+    // keep firing (and so re-initialisation cannot stack a second interval).
+    if (this.statusBroadcastTimer) {
+      clearInterval(this.statusBroadcastTimer);
+      this.statusBroadcastTimer = null;
+    }
+
     // Dispose MultiSessionManager (which disposes all sessions)
     this.multiSessionManager.dispose();
 
