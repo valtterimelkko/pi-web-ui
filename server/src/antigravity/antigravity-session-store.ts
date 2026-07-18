@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, writeFile, mkdir, access, rename } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, access, rename, stat, chmod } from 'node:fs/promises';
 import * as path from 'node:path';
 
 export type AntigravityTurnStatus = 'running' | 'done' | 'error';
@@ -38,6 +38,9 @@ export function isTurnDone(turn: AntigravityTurn): boolean {
 
 export class AntigravitySessionStore {
   private sessionDir: string;
+  /** Session-file paths whose 0o600 mode has already been verified/repaired,
+   *  so append does not stat+chmod on every call. */
+  private readonly modeVerified = new Set<string>();
 
   constructor(sessionDir: string) {
     this.sessionDir = sessionDir;
@@ -53,7 +56,8 @@ export class AntigravitySessionStore {
   }
 
   async ensureDir(): Promise<void> {
-    await mkdir(this.sessionDir, { recursive: true });
+    // Owner-only directory (0o700); mkdir applies the mode only when creating.
+    await mkdir(this.sessionDir, { recursive: true, mode: 0o700 });
   }
 
   async loadHistory(sessionId: string): Promise<AntigravityTurn[]> {
@@ -70,9 +74,25 @@ export class AntigravitySessionStore {
     const line = JSON.stringify(entry) + '\n';
     try {
       await access(sessionPath);
+      // File exists: append. Verify/repair its mode to 0o600 ONCE per path
+      // (not on every append); a legacy 0o644 file is repaired, a correct file
+      // is left untouched and subsequent appends skip stat+chmod entirely.
+      if (!this.modeVerified.has(sessionPath)) {
+        try {
+          const info = await stat(sessionPath);
+          if ((info.mode & 0o077) !== 0) {
+            await chmod(sessionPath, 0o600);
+          }
+        } catch {
+          // Non-fatal: a stat/chmod failure must not block the append.
+        }
+        this.modeVerified.add(sessionPath);
+      }
       await writeFile(sessionPath, line, { flag: 'a' });
     } catch {
-      await writeFile(sessionPath, line, { flag: 'w' });
+      // File does not exist: create it owner-only.
+      await writeFile(sessionPath, line, { flag: 'w', mode: 0o600 });
+      this.modeVerified.add(sessionPath);
     }
   }
 
