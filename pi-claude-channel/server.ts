@@ -8,6 +8,17 @@ import {
 const WS_PORT = parseInt(process.env.CLAUDE_CHANNEL_WS_PORT || "3100");
 const HOOK_PORT = parseInt(process.env.CLAUDE_CHANNEL_HOOK_PORT || "3101");
 
+/**
+ * Debug control (M1): per-event payload/activity log lines are opt-in behind
+ * CLAUDE_CHANNEL_DEBUG=1. Lifecycle/failure logs (connections, hooks, fatal
+ * errors) always print. Prompts, tool payloads, tokens, cookies, and
+ * credentials are NEVER logged, regardless of this flag.
+ */
+const DEBUG = process.env.CLAUDE_CHANNEL_DEBUG === "1";
+function dbg(msg: string): void {
+  if (DEBUG) console.error(msg);
+}
+
 interface WSData {
   sessionId: string;
 }
@@ -46,7 +57,7 @@ function broadcast(
     client.send(data);
     sent++;
   }
-  console.error(`[broadcast] type=${event.type} session=${sessionId} sent=${sent} (global=${globalClients.size} session=${clients?.size || 0})`);
+  dbg(`[broadcast] type=${event.type} session=${sessionId} sent=${sent} (global=${globalClients.size} session=${clients?.size || 0})`);
   if (addToHistory) {
     const h = sessionHistory.get(sessionId) || [];
     h.push(event);
@@ -199,7 +210,9 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args, _meta } = request.params;
 
   if (_meta) {
-    console.error(`[mcp] tool=${name} _meta=${JSON.stringify(_meta).slice(0, 500)}`);
+    // Per-event activity line (opt-in). Never log the _meta payload itself —
+    // it may carry tool inputs; only the tool name is recorded.
+    dbg(`[mcp] tool=${name} (meta present, redacted)`);
   }
 
   switch (name) {
@@ -345,7 +358,7 @@ function handleWSMessage(
         content: string;
         cwd?: string;
       };
-      console.error(`[ws] prompt received: session=${sessionId} content="${content.slice(0, 50)}..."`);
+      console.error(`[ws] prompt received: session=${sessionId} chars=${content.length}`);
       const now = Date.now();
       setStatus(sessionId, "streaming");
       broadcast(sessionId, {
