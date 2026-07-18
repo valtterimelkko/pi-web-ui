@@ -108,6 +108,15 @@ export class WatchStore {
         await rename(tmp, file);
       });
     this.writeChains.set(record.sessionId, next);
+    // Remove the settled chain entry so the map cannot grow unbounded — but
+    // only if no newer write has chained onto this one (else we'd drop the
+    // in-flight entry). Runs on resolve and reject.
+    const cleanup = (): void => {
+      if (this.writeChains.get(record.sessionId) === next) {
+        this.writeChains.delete(record.sessionId);
+      }
+    };
+    next.then(cleanup, cleanup);
     return next;
   }
 

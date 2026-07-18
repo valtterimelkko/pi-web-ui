@@ -274,6 +274,14 @@ export class RunReceiptStore {
         await rename(temporary, file);
       });
     this.writeChains.set(record.runId, next);
+    // Remove the settled chain entry so the map cannot grow unbounded — but
+    // only if no newer write has chained onto this one. Runs on resolve/reject.
+    const cleanup = (): void => {
+      if (this.writeChains.get(record.runId) === next) {
+        this.writeChains.delete(record.runId);
+      }
+    };
+    next.then(cleanup, cleanup);
     await next;
   }
 
