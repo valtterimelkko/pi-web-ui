@@ -18,7 +18,7 @@
  *    can drive one at a time, with all progress persisted to a run-state file.
  */
 
-import { mkdir, readFile, writeFile, rename, rm } from 'fs/promises';
+import { mkdir, readFile, open, rename, rm } from 'fs/promises';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import type {
@@ -383,11 +383,29 @@ const stateWriteChains = new Map<string, Promise<void>>();
  */
 async function writeAtomicState(statePath: string, state: LongHorizonRunState): Promise<void> {
   const dir = path.dirname(statePath);
-  await mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
   const tmp = path.join(dir, `.${path.basename(statePath)}.tmp-${process.pid}-${randomUUID()}`);
   try {
-    await writeFile(tmp, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
+    const handle = await open(tmp, 'wx', 0o600);
+    try {
+      await handle.writeFile(JSON.stringify(state, null, 2), 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     await rename(tmp, statePath);
+    // Best-effort directory fsync makes the rename durable across power loss on
+    // filesystems that support syncing directory handles.
+    try {
+      const dirHandle = await open(dir, 'r');
+      try {
+        await dirHandle.sync();
+      } finally {
+        await dirHandle.close();
+      }
+    } catch {
+      // Atomic file replacement still holds where directory fsync is unavailable.
+    }
   } catch (err) {
     await rm(tmp, { force: true }).catch(() => {
       // Best-effort cleanup of the orphaned temp file.

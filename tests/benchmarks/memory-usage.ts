@@ -22,7 +22,7 @@ function getMemoryUsage(): number {
 }
 
 // Session cache instance
-let memoryCache: MemoryTrackingCache
+let memoryCache = new MemoryTrackingCache(5)
 
 describe('Memory Usage Benchmarks', () => {
   beforeAll(() => {

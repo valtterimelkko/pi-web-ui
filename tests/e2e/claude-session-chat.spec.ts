@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { execSync } from 'child_process';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,28 +40,6 @@ async function openNewSessionModal(page: any): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// Determine Claude availability at test-collection time.
-// Uses the same command the server uses so the detection matches the app state.
-// ---------------------------------------------------------------------------
-function isClaudeAvailable(): boolean {
-  try {
-    execSync('which claude', { timeout: 2000, stdio: 'pipe' });
-    // The server runs exactly this command; if it throws, claudeAvailable = false
-    const result = execSync('claude auth status --json', {
-      encoding: 'utf-8',
-      timeout: 5000,
-      stdio: 'pipe',
-    });
-    const parsed = JSON.parse(result) as { loggedIn?: boolean };
-    return parsed.loggedIn === true;
-  } catch {
-    return false;
-  }
-}
-
-const CLAUDE_AVAILABLE = isClaudeAvailable();
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -84,37 +61,34 @@ test.describe('Claude Direct Session Chat', () => {
       return;
     }
 
-    const isDisabled = await claudeBtn.isDisabled();
-
-    if (CLAUDE_AVAILABLE) {
-      // claude is installed & auth passes → button should be enabled
-      expect(isDisabled).toBe(false);
+    if (await claudeBtn.isDisabled()) {
+      // The backend may report a detailed auth error (exposed as title) or the
+      // neutral availability state rendered in the button body.
+      await expect(claudeBtn).toContainText(/not installed|auth check failed|not available/i);
     } else {
-      // claude missing or not authenticated → button must be disabled
-      expect(isDisabled).toBe(true);
+      await expect(claudeBtn).toBeEnabled();
     }
   });
 
   test('Claude Direct unavailability hint is shown when not available', async ({ page }) => {
-    if (CLAUDE_AVAILABLE) {
-      test.skip(true, 'Claude is available — skipping unavailability hint test');
-      return;
-    }
-
     const opened = await openNewSessionModal(page);
     if (!opened) {
       test.skip(true, 'No new session button found');
       return;
     }
 
-    // When disabled the subtitle shows "Not available" or an auth error
-    const hint = page.locator('text=/not available|not installed|auth/i').first();
+    const claudeBtn = page.locator('button').filter({ hasText: /Claude Direct/i }).first();
+    if (!(await claudeBtn.isDisabled())) {
+      test.skip(true, 'Claude is available on the target server');
+      return;
+    }
+
+    // When disabled the subtitle shows "Not available" or an auth error.
+    const hint = claudeBtn.locator('text=/not available|not installed|auth/i').first();
     await expect(hint).toBeVisible({ timeout: 5000 });
   });
 
   test('Create Claude Direct session (requires Claude)', async ({ page }) => {
-    test.skip(!CLAUDE_AVAILABLE, 'Claude Code not installed / not authenticated');
-
     const opened = await openNewSessionModal(page);
     if (!opened) {
       test.skip(true, 'No new session button found');
@@ -123,13 +97,15 @@ test.describe('Claude Direct Session Chat', () => {
 
     // Select Claude Direct
     const claudeBtn = page.locator('button').filter({ hasText: /Claude Direct/i }).first();
-    await expect(claudeBtn).toBeEnabled({ timeout: 5000 });
+    await expect(claudeBtn).toBeVisible({ timeout: 5000 });
+    if (await claudeBtn.isDisabled()) {
+      test.skip(true, 'Claude is unavailable on the target server');
+      return;
+    }
     await claudeBtn.click();
     await page.waitForTimeout(300);
 
-    // Verify Claude button now has violet selected styling
-    const classAttr = await claudeBtn.getAttribute('class');
-    expect(classAttr).toMatch(/violet/i);
+    await expect(claudeBtn).toHaveAttribute('aria-pressed', 'true');
 
     // Confirm and create the session
     const createBtn = page.locator('button').filter({ hasText: /create session|start session/i }).first();

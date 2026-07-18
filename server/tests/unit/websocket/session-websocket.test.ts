@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SessionWebSocketHandler } from '../../../src/websocket/session-websocket.js';
 import { WorkerPool } from '../../../src/workers/worker-pool.js';
+import type { SessionWorker } from '../../../src/workers/session-worker.js';
 
 // Mock WorkerPool
 vi.mock('../../../src/workers/worker-pool.js', () => ({
@@ -25,6 +26,7 @@ vi.mock('../../../src/workers/session-rpc-client.js', () => ({
     setModel: vi.fn().mockResolvedValue(undefined),
     setThinkingLevel: vi.fn().mockResolvedValue(undefined),
     subscribe: vi.fn().mockReturnValue(() => {}),
+    dispose: vi.fn(),
     sessionPath: '/tmp/test.jsonl',
     status: 'ready',
   })),
@@ -56,12 +58,52 @@ describe('SessionWebSocketHandler', () => {
       }));
     });
 
-    it('should handle unsubscribe message', async () => {
+    it('should handle unsubscribe message and dispose the worker-level subscription', async () => {
+      const { SessionRPCClient } = await import('../../../src/workers/session-rpc-client.js');
       await handler.handleMessage({ type: 'subscribe', sessionPath: '/tmp/test.jsonl' });
-      handler.handleMessage({ type: 'unsubscribe', sessionPath: '/tmp/test.jsonl' });
+      const client = SessionRPCClient as unknown as vi.Mock;
+      const instance = client.mock.results[0]?.value;
+
+      await handler.handleMessage({ type: 'unsubscribe', sessionPath: '/tmp/test.jsonl' });
+
+      expect(instance?.dispose).toHaveBeenCalledTimes(1);
       expect(mockSend).toHaveBeenCalledWith('client-1', expect.objectContaining({
         type: 'unsubscribed',
       }));
+    });
+
+    it('re-subscribing the same path disposes the replaced client', async () => {
+      const { SessionRPCClient } = await import('../../../src/workers/session-rpc-client.js');
+      await handler.handleMessage({ type: 'subscribe', sessionPath: '/tmp/test.jsonl' });
+      const client = SessionRPCClient as unknown as vi.Mock;
+      const first = client.mock.results[0]?.value;
+
+      await handler.handleMessage({ type: 'subscribe', sessionPath: '/tmp/test.jsonl' });
+
+      expect(first?.dispose).toHaveBeenCalledTimes(1);
+      expect(handler.activeSessionCount).toBe(1);
+    });
+
+    it('keeps only the newest client when same-path subscriptions overlap', async () => {
+      const { SessionRPCClient } = await import('../../../src/workers/session-rpc-client.js');
+      const client = SessionRPCClient as unknown as vi.Mock;
+      let releaseFirst!: (worker: SessionWorker) => void;
+      const firstWorker = new Promise<SessionWorker>((resolve) => { releaseFirst = resolve; });
+      const readyWorker = {
+        sessionPath: '/tmp/test.jsonl', status: 'ready', pid: 1, subscribe: vi.fn(() => () => {}),
+      } as unknown as SessionWorker;
+      vi.mocked(mockWorkerPool.getOrCreate)
+        .mockImplementationOnce(() => firstWorker)
+        .mockResolvedValueOnce(readyWorker);
+
+      const first = handler.handleMessage({ type: 'subscribe', sessionPath: '/tmp/test.jsonl' });
+      await Promise.resolve();
+      await handler.handleMessage({ type: 'subscribe', sessionPath: '/tmp/test.jsonl' });
+      releaseFirst(readyWorker);
+      await first;
+
+      expect(client).toHaveBeenCalledTimes(1);
+      expect(handler.activeSessionCount).toBe(1);
     });
 
     it('should handle prompt message after subscribe', async () => {
@@ -79,10 +121,35 @@ describe('SessionWebSocketHandler', () => {
   });
 
   describe('close', () => {
-    it('should clean up subscriptions', async () => {
+    it('should clean up subscriptions and dispose worker-level clients', async () => {
+      const { SessionRPCClient } = await import('../../../src/workers/session-rpc-client.js');
       await handler.handleMessage({ type: 'subscribe', sessionPath: '/tmp/test.jsonl' });
+      const client = SessionRPCClient as unknown as vi.Mock;
+      const instance = client.mock.results[0]?.value;
       expect(handler.activeSessionCount).toBe(1);
+
       handler.close();
+
+      expect(handler.activeSessionCount).toBe(0);
+      expect(instance?.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not install a subscription that finishes resolving after close', async () => {
+      const { SessionRPCClient } = await import('../../../src/workers/session-rpc-client.js');
+      const client = SessionRPCClient as unknown as vi.Mock;
+      let release!: (worker: SessionWorker) => void;
+      const pendingWorker = new Promise<SessionWorker>((resolve) => { release = resolve; });
+      vi.mocked(mockWorkerPool.getOrCreate).mockImplementationOnce(() => pendingWorker);
+
+      const subscribing = handler.handleMessage({ type: 'subscribe', sessionPath: '/tmp/test.jsonl' });
+      await Promise.resolve();
+      handler.close();
+      release({
+        sessionPath: '/tmp/test.jsonl', status: 'ready', pid: 1, subscribe: vi.fn(() => () => {}),
+      } as unknown as SessionWorker);
+      await subscribing;
+
+      expect(client).not.toHaveBeenCalled();
       expect(handler.activeSessionCount).toBe(0);
     });
   });

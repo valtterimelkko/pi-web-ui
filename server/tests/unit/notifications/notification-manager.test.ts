@@ -777,7 +777,7 @@ describe('NotificationManager — observability logging', () => {
     await h.mgr.optIn(piOptIn());
     for (const e of assistantText('s1', 'done')) h.pi.emit('/sessions/s1', e);
     h.pi.emit('/sessions/s1', agentEnd('s1'));
-    await wait(60);
+    await waitFor(() => findLog('info', 'notification queued') !== undefined);
     const rec = findLog('info', 'notification queued');
     expect(rec).toBeDefined();
     expect(rec?.sessionId).toBe('s1');
@@ -791,7 +791,7 @@ describe('NotificationManager — observability logging', () => {
     await h.mgr.init();
     await h.mgr.optIn(piOptIn());
     h.pi.emit('/sessions/s1', agentEnd('s1'));
-    await wait(60);
+    await waitFor(() => h.channel.received.length === 1);
     await h.mgr.drain();
     const rec = findLog('info', 'notification delivered');
     expect(rec).toBeDefined();

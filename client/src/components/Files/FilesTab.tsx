@@ -56,32 +56,30 @@ function isMarkdownFile(path: string): boolean {
 // ── component ─────────────────────────────────────────────────────────────
 
 export function FilesTab() {
-  const {
-    currentPath,
-    items,
-    selectedFile,
-    previewContent,
-    previewTruncated,
-    previewTotalSize,
-    isLoading,
-    error,
-    isEditing,
-    editBuffer,
-    isDirty,
-    isSaving,
-    saveError,
-    navigate,
-    refresh,
-    selectFile,
-    createFile,
-    createDir,
-    renameItem,
-    deleteItem,
-    startEditing,
-    updateEditBuffer,
-    saveFile,
-    cancelEditing,
-  } = useFilesStore();
+  const currentPath = useFilesStore(s => s.currentPath);
+  const items = useFilesStore(s => s.items);
+  const selectedFile = useFilesStore(s => s.selectedFile);
+  const previewContent = useFilesStore(s => s.previewContent);
+  const previewTruncated = useFilesStore(s => s.previewTruncated);
+  const previewTotalSize = useFilesStore(s => s.previewTotalSize);
+  const isLoading = useFilesStore(s => s.isLoading);
+  const error = useFilesStore(s => s.error);
+  const isEditing = useFilesStore(s => s.isEditing);
+  const editBuffer = useFilesStore(s => s.editBuffer);
+  const isDirty = useFilesStore(s => s.isDirty);
+  const isSaving = useFilesStore(s => s.isSaving);
+  const saveError = useFilesStore(s => s.saveError);
+  const navigate = useFilesStore(s => s.navigate);
+  const refresh = useFilesStore(s => s.refresh);
+  const selectFile = useFilesStore(s => s.selectFile);
+  const createFile = useFilesStore(s => s.createFile);
+  const createDir = useFilesStore(s => s.createDir);
+  const renameItem = useFilesStore(s => s.renameItem);
+  const deleteItem = useFilesStore(s => s.deleteItem);
+  const startEditing = useFilesStore(s => s.startEditing);
+  const updateEditBuffer = useFilesStore(s => s.updateEditBuffer);
+  const saveFile = useFilesStore(s => s.saveFile);
+  const cancelEditing = useFilesStore(s => s.cancelEditing);
 
   const [searchFilter, setSearchFilter] = useState('');
   const [newItemName, setNewItemName]   = useState('');

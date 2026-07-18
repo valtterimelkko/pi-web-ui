@@ -27,6 +27,7 @@ const { claudeMock, opencodeMock, antigravityMock, piMock } = vi.hoisted(() => {
       cancelPendingAskUserQuestionsForSession: vi.fn(),
       wasRecentlyResolvedAskUserQuestion: vi.fn().mockReturnValue(false),
       startChannel: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
       listSessions: vi.fn().mockResolvedValue([]),
       abort: vi.fn(),
       hasSession: vi.fn().mockReturnValue(false),
@@ -40,11 +41,13 @@ const { claudeMock, opencodeMock, antigravityMock, piMock } = vi.hoisted(() => {
       isPendingPermission: vi.fn().mockReturnValue(false),
       resolvePermission: vi.fn().mockResolvedValue(undefined),
       listSessions: vi.fn().mockResolvedValue([]),
+      shutdown: vi.fn().mockResolvedValue(undefined),
     },
     antigravityMock: {
       isAvailable: vi.fn().mockResolvedValue(true),
       validateSetup: vi.fn().mockResolvedValue({ ok: true }),
       listSessions: vi.fn().mockResolvedValue([]),
+      shutdown: vi.fn().mockResolvedValue(undefined),
     },
     piMock: noopRecursive,
   };

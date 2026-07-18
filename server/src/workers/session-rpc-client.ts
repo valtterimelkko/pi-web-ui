@@ -5,7 +5,7 @@
 
 import { SessionWorker } from './session-worker.js';
 import { RPCProtocolBridge } from './rpc-protocol-bridge.js';
-import type { EventHandler, RPCEvent } from './types.js';
+import type { RPCEvent } from './types.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { ImageContent } from '@earendil-works/pi-ai';
 import { createLogger } from '../logging/logger.js';
@@ -32,13 +32,14 @@ export class SessionRPCClient {
   private worker: SessionWorker;
   private bridge: RPCProtocolBridge;
   private eventSubscribers: Set<(event: NormalizedEvent) => void> = new Set();
+  private unsubscribeWorker: (() => void) | null;
 
   constructor(worker: SessionWorker) {
     this.worker = worker;
     this.bridge = new RPCProtocolBridge();
 
     // Forward worker events to our subscribers
-    worker.subscribe((event: RPCEvent) => {
+    this.unsubscribeWorker = worker.subscribe((event: RPCEvent) => {
       const normalized = this.bridge.normalizeEvent(event, worker.sessionPath);
       for (const subscriber of this.eventSubscribers) {
         try {
@@ -116,6 +117,14 @@ export class SessionRPCClient {
   subscribe(handler: (event: NormalizedEvent) => void): () => void {
     this.eventSubscribers.add(handler);
     return () => this.eventSubscribers.delete(handler);
+  }
+
+  /** Release the worker-level subscription and all downstream subscribers. */
+  dispose(): void {
+    if (!this.unsubscribeWorker) return;
+    this.unsubscribeWorker();
+    this.unsubscribeWorker = null;
+    this.eventSubscribers.clear();
   }
 
   /**

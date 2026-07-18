@@ -12,6 +12,9 @@ export class WorkerPool {
   private workers: Map<string, SessionWorker> = new Map();
   private config: Required<WorkerManagerConfig>;
   private cleanupInterval: NodeJS.Timeout | null = null;
+  private readonly terminationUnsubscribers = new Map<SessionWorker, () => void>();
+  private shuttingDown = false;
+  private shutdownPromise: Promise<void> | null = null;
 
   constructor(config: WorkerManagerConfig = {}) {
     this.config = {
@@ -26,6 +29,10 @@ export class WorkerPool {
    * Get or create a worker for a session.
    */
   async getOrCreate(sessionPath: string, options?: Partial<WorkerOptions>): Promise<SessionWorker> {
+    if (this.shuttingDown) {
+      throw new Error('Worker pool is shutting down');
+    }
+
     // Sweep any workers whose process has exited/crashed (status 'terminated')
     // so they no longer occupy capacity. This is the lazy half of the unified
     // cleanup path; explicit terminate()/cleanupIdle()/shutdownAll() release
@@ -62,11 +69,20 @@ export class WorkerPool {
 
     const worker = new SessionWorker(workerOptions);
     this.workers.set(sessionPath, worker);
+    const unsubscribeTermination = worker.onTerminated(() => {
+      this.release(sessionPath, worker);
+    });
+    this.terminationUnsubscribers.set(worker, unsubscribeTermination);
 
-    // Spawn the worker process
-    await worker.spawn();
-
-    return worker;
+    try {
+      // Spawn the worker process
+      await worker.spawn();
+      return worker;
+    } catch (error) {
+      this.release(sessionPath, worker);
+      await worker.terminate();
+      throw error;
+    }
   }
 
   /**
@@ -88,6 +104,11 @@ export class WorkerPool {
       return false;
     }
     this.workers.delete(sessionPath);
+    const unsubscribeTermination = this.terminationUnsubscribers.get(current);
+    if (unsubscribeTermination) {
+      unsubscribeTermination();
+      this.terminationUnsubscribers.delete(current);
+    }
     return true;
   }
 
@@ -205,9 +226,11 @@ export class WorkerPool {
    * Start periodic cleanup.
    */
   startCleanupInterval(intervalMs = 60000): void {
+    this.stopCleanupInterval();
     this.cleanupInterval = setInterval(() => {
       void this.cleanupIdle();
     }, intervalMs);
+    this.cleanupInterval.unref?.();
   }
 
   /**
@@ -223,14 +246,20 @@ export class WorkerPool {
   /**
    * Shutdown all workers.
    */
-  async shutdownAll(): Promise<void> {
+  shutdownAll(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shuttingDown = true;
     this.stopCleanupInterval();
-    
-    const terminations = Array.from(this.workers.values()).map((worker) =>
-      worker.terminate()
-    );
 
-    await Promise.all(terminations);
-    this.workers.clear();
+    const entries = Array.from(this.workers.entries());
+    this.shutdownPromise = Promise.all(entries.map(async ([sessionPath, worker]) => {
+      try {
+        await worker.terminate();
+      } finally {
+        this.release(sessionPath, worker);
+      }
+    })).then(() => undefined);
+
+    return this.shutdownPromise;
   }
 }

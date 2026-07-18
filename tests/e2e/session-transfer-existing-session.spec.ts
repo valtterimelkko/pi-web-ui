@@ -8,7 +8,7 @@ test.describe('Session Context Transfer', () => {
 
     const passwordInput = page.locator('input[type="password"]');
     if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill(process.env.AUTH_PASSWORD ?? 'test-password');
+      await passwordInput.fill('Ey@U1U%d5D77J99F');
       await page.locator('button[type="submit"]').click();
       await page.waitForTimeout(3000);
     }

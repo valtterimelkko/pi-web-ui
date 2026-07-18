@@ -189,21 +189,17 @@ test.describe('Cross-Tab State', () => {
     await page.goto('/');
     await page.waitForTimeout(1000);
 
-    // BottomNav tabs – find buttons in the bottom nav area
-    const tabLabels = ['Chat', 'Shell', 'Files', 'Git'];
-    for (const label of tabLabels) {
-      // On mobile there may be two buttons (one hidden desktop, one visible mobile)
-      // Click the first visible one
-      const btns = page.locator('button').filter({ hasText: new RegExp(`^${label}$`) });
-      const count = await btns.count();
-      for (let i = 0; i < count; i++) {
-        const btn = btns.nth(i);
-        if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
-          await btn.click();
-          await page.waitForTimeout(200);
-          break;
-        }
-      }
+    const closeSidebar = page.getByTitle('Close sidebar');
+    if (await closeSidebar.isVisible().catch(() => false)) {
+      await closeSidebar.click();
+    }
+
+    const bottomNav = page.getByRole('navigation', { name: 'Primary mobile navigation' });
+    await expect(bottomNav).toBeVisible();
+
+    for (const label of ['Chat', 'Shell', 'Files', 'Git']) {
+      await bottomNav.getByRole('button', { name: label, exact: true }).click();
+      await page.waitForTimeout(200);
     }
 
     // No crash

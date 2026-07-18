@@ -63,12 +63,13 @@ describe('L4: ClaudeProcessPool disposable retry timers', () => {
     sessionId: 'sess', claudeSessionId: 'claude-sess', cwd, model: 'opus', prompt: 'hi',
   });
 
-  it('abort during a transient-retry backoff cancels the pending respawn', async () => {
+  it('abort during a transient-retry backoff cancels the pending respawn and settles once', async () => {
     setEnv({ CLAUDE_TRANSIENT_MAX_RETRIES: '3', CLAUDE_TRANSIENT_BASE_DELAY_MS: '60', CLAUDE_TRANSIENT_MAX_DELAY_MS: '120' });
     const proc1 = makeProc();
     spawnMock.mockImplementation(() => proc1);
+    const onComplete = vi.fn();
 
-    pool.spawn(opts(tmpDir), () => {}, () => {});
+    pool.spawn(opts(tmpDir), () => {}, onComplete);
 
     await tick();
     proc1.stderr.write('API Error: 529 {"type":"overloaded_error","message":"Overloaded"}\n');
@@ -81,7 +82,30 @@ describe('L4: ClaudeProcessPool disposable retry timers', () => {
     await tick(200);              // well past the original backoff
 
     expect(spawnMock).toHaveBeenCalledTimes(1); // no respawn
+    expect(onComplete).toHaveBeenCalledTimes(1);
     expect((pool as any).retryTimers.size).toBe(0);
+  });
+
+  it('abort after a retry timer fires but during exit grace prevents the respawn', async () => {
+    pool = new ClaudeProcessPool(10, 100);
+    setEnv({ CLAUDE_TRANSIENT_MAX_RETRIES: '2', CLAUDE_TRANSIENT_BASE_DELAY_MS: '1', CLAUDE_TRANSIENT_MAX_DELAY_MS: '1' });
+    const proc1 = makeProc();
+    const proc2 = makeProc();
+    spawnMock.mockImplementationOnce(() => proc1).mockImplementationOnce(() => proc2);
+    const onComplete = vi.fn();
+
+    pool.spawn(opts(tmpDir), () => {}, onComplete);
+    await tick();
+    proc1.stderr.write('API Error: 529 {"type":"overloaded_error","message":"Overloaded"}\n');
+    await tick();
+    proc1.emit('exit', 1, null);
+    await tick(20); // retry callback has fired and is waiting in post-exit grace
+
+    pool.abort('sess');
+    await tick(150);
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledTimes(1);
   });
 
   it('a fresh turn after abort can spawn again (abort does not poison the session)', async () => {
@@ -104,6 +128,33 @@ describe('L4: ClaudeProcessPool disposable retry timers', () => {
     pool.spawn(opts(tmpDir), () => {}, () => {});
     await tick();
     expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retain or re-settle a retry callback after its timer fires', async () => {
+    vi.useFakeTimers();
+    try {
+      const firedFirst = vi.fn();
+      const cancelledFirst = vi.fn();
+      const cancelledSecond = vi.fn();
+      const internals = pool as unknown as {
+        scheduleRetry: (sessionId: string, delayMs: number, run: () => void, cancel: () => void) => void;
+        retryCancelCallbacks: Map<string, Map<NodeJS.Timeout, () => void>>;
+      };
+      const scheduleRetry = internals.scheduleRetry.bind(pool);
+
+      scheduleRetry('sess', 10, firedFirst, cancelledFirst);
+      scheduleRetry('sess', 20, vi.fn(), cancelledSecond);
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(firedFirst).toHaveBeenCalledTimes(1);
+      pool.abort('sess');
+
+      expect(cancelledFirst).not.toHaveBeenCalled();
+      expect(cancelledSecond).toHaveBeenCalledTimes(1);
+      expect(internals.retryCancelCallbacks.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('leaves no retry timers after a completed transient-retry turn', async () => {

@@ -12,6 +12,7 @@ vi.mock('../../../src/workers/session-worker.js', () => ({
     spawn: vi.fn().mockResolvedValue(undefined),
     terminate: vi.fn().mockResolvedValue(undefined),
     subscribe: vi.fn().mockReturnValue(() => {}),
+    onTerminated: vi.fn().mockReturnValue(() => {}),
   })),
 }));
 
@@ -67,10 +68,19 @@ describe('WorkerPool', () => {
   });
 
   describe('startCleanupInterval', () => {
-    it('should start and stop interval', () => {
-      pool.startCleanupInterval(1000);
-      pool.stopCleanupInterval();
-      // No error means success
+    it('owns exactly one unrefd interval across repeated starts and clears it on stop', () => {
+      vi.useFakeTimers();
+      try {
+        const baseline = vi.getTimerCount();
+        pool.startCleanupInterval(1000);
+        pool.startCleanupInterval(1000);
+        expect(vi.getTimerCount()).toBe(baseline + 1);
+
+        pool.stopCleanupInterval();
+        expect(vi.getTimerCount()).toBe(baseline);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

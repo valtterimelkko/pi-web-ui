@@ -15,9 +15,9 @@ const { claudeMock, opencodeMock, antigravityMock, piMock } = vi.hoisted(() => {
     apply: () => undefined,
   });
   return {
-    claudeMock: { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn().mockReturnValue(false), sendPrompt: vi.fn(), abort: vi.fn(), hasSession: vi.fn().mockReturnValue(false), getSessionState: vi.fn(), setThinkingLevel: vi.fn(), createSession: vi.fn(), listSessions: vi.fn().mockResolvedValue([]), validateAuth: vi.fn().mockResolvedValue({ ok: true }) },
-    opencodeMock: { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn().mockReturnValue(false), isSessionPinned: vi.fn().mockReturnValue(false), validateSetup: vi.fn().mockResolvedValue({ ok: true }), isPendingPermission: vi.fn().mockReturnValue(false), resolvePermission: vi.fn(), listSessions: vi.fn().mockResolvedValue([]) },
-    antigravityMock: { isAvailable: vi.fn().mockResolvedValue(true), validateSetup: vi.fn().mockResolvedValue({ ok: true }), listSessions: vi.fn().mockResolvedValue([]) },
+    claudeMock: { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn().mockReturnValue(false), sendPrompt: vi.fn(), abort: vi.fn(), hasSession: vi.fn().mockReturnValue(false), getSessionState: vi.fn(), setThinkingLevel: vi.fn(), createSession: vi.fn(), listSessions: vi.fn().mockResolvedValue([]), validateAuth: vi.fn().mockResolvedValue({ ok: true }), stop: vi.fn().mockResolvedValue(undefined) },
+    opencodeMock: { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn().mockReturnValue(false), isSessionPinned: vi.fn().mockReturnValue(false), validateSetup: vi.fn().mockResolvedValue({ ok: true }), isPendingPermission: vi.fn().mockReturnValue(false), resolvePermission: vi.fn(), listSessions: vi.fn().mockResolvedValue([]), shutdown: vi.fn().mockResolvedValue(undefined) },
+    antigravityMock: { isAvailable: vi.fn().mockResolvedValue(true), validateSetup: vi.fn().mockResolvedValue({ ok: true }), listSessions: vi.fn().mockResolvedValue([]), shutdown: vi.fn().mockResolvedValue(undefined) },
     piMock: noopRecursive,
   };
 });
@@ -99,6 +99,45 @@ describe('L1: status-broadcast timer ownership', () => {
     expect(multi1.getAllSessionStatuses).not.toHaveBeenCalled(); // m1 cleared
     expect(multi2.getAllSessionStatuses).toHaveBeenCalled(); // only m2 live
     await m2.close();
+  });
+
+  it('close() removes Pi handlers for clients before clearing connection state', async () => {
+    const mgr = new WebSocketConnectionManager();
+    const removeEventHandler = vi.fn();
+    (mgr as any).piService = { removeEventHandler };
+    (mgr as any).multiSessionManager = fakeMulti();
+    (mgr as any).clients.set('c1', { id: 'c1', ws: { readyState: 1, close: vi.fn() }, isAuthenticated: true });
+    (mgr as any).clients.set('c2', { id: 'c2', ws: { readyState: 1, close: vi.fn() }, isAuthenticated: true });
+
+    await mgr.close();
+
+    expect(removeEventHandler).toHaveBeenCalledTimes(2);
+    expect(removeEventHandler).toHaveBeenCalledWith('c1');
+    expect(removeEventHandler).toHaveBeenCalledWith('c2');
+  });
+
+  it('close() disposes every runtime service owner', async () => {
+    const mgr = new WebSocketConnectionManager();
+    (mgr as any).multiSessionManager = fakeMulti();
+
+    await mgr.close();
+
+    expect(claudeMock.stop).toHaveBeenCalledTimes(1);
+    expect(opencodeMock.shutdown).toHaveBeenCalledTimes(1);
+    expect(antigravityMock.shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('still closes the WebSocket server and attempts every runtime shutdown when one fails', async () => {
+    const mgr = new WebSocketConnectionManager();
+    (mgr as any).multiSessionManager = fakeMulti();
+    const closeWss = vi.spyOn(mgr.getWss(), 'close').mockImplementation(() => mgr.getWss());
+    claudeMock.stop.mockRejectedValueOnce(new Error('claude shutdown failed'));
+
+    await expect(mgr.close()).rejects.toThrow('claude shutdown failed');
+
+    expect(opencodeMock.shutdown).toHaveBeenCalledTimes(1);
+    expect(antigravityMock.shutdown).toHaveBeenCalledTimes(1);
+    expect(closeWss).toHaveBeenCalledTimes(1);
   });
 
   it('double close() is harmless', async () => {

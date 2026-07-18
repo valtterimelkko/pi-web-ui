@@ -139,7 +139,9 @@ export class SessionWatcher extends EventEmitter {
     // before the debounce fires, the unlink handler can still await this read.
     const pendingInfo = this.readSessionInfo(filePath)
       .then((info) => {
-        this.sessionIdsByPath.set(filePath, info.id);
+        // stop() may have completed while the asynchronous read was in flight;
+        // do not repopulate cleared lifecycle maps after shutdown.
+        if (!this.stopped) this.sessionIdsByPath.set(filePath, info.id);
         return info;
       })
       .catch(() => null);

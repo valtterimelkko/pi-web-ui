@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import sidebarSource from '../../../src/components/Sidebar/Sidebar.tsx?raw';
+import newSessionModalSource from '../../../src/components/Session/NewSessionModal.tsx?raw';
+import filesTabSource from '../../../src/components/Files/FilesTab.tsx?raw';
 import { render, screen, act } from '@testing-library/react';
 import { useSessionStore } from '../../../src/store/sessionStore';
 
@@ -9,6 +12,22 @@ import { useSessionStore } from '../../../src/store/sessionStore';
  * whole-store subscriptions, no composite selectors without shallow equality.)
  */
 describe('F1: narrow selectors isolate rerenders', () => {
+  it('target components do not subscribe to an entire Zustand store', () => {
+    const targets = [
+      ['components/Sidebar/Sidebar.tsx', sidebarSource, ['useChatStore', 'useUIStore']],
+      ['components/Session/NewSessionModal.tsx', newSessionModalSource, ['useUIStore']],
+      ['components/Files/FilesTab.tsx', filesTabSource, ['useFilesStore']],
+    ] as const;
+
+    for (const [relativePath, source, hooks] of targets) {
+      for (const hook of hooks) {
+        expect(source, `${relativePath} must use selectors for ${hook}`).not.toMatch(
+          new RegExp(`${hook}\\(\\s*\\)`),
+        );
+      }
+    }
+  });
+
   function Track({ onChange }: { onChange: () => void }) {
     const id = useSessionStore((s) => s.currentSessionId);
     onChange(); // count renders

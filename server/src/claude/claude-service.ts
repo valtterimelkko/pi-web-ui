@@ -64,6 +64,7 @@ export class ClaudeService {
   private channelService: ClaudeChannelService | null = null;
   private sdkService: ClaudeSdkService | null = null;
   private profileManager: ClaudeProfileManager | null = null;
+  private stopPromise: Promise<void> | null = null;
 
   constructor(cfg: {
     claudeSessionDir: string;
@@ -108,6 +109,14 @@ export class ClaudeService {
     if (this.channelService) {
       await this.channelService.start();
     }
+  }
+
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+    this.processPool.dispose();
+    this.sdkService?.dispose();
+    this.stopPromise = (this.channelService?.stop() ?? Promise.resolve()).then(() => undefined);
+    return this.stopPromise;
   }
 
   sendPermissionResponse(sessionId: string, requestId: string, allowed: boolean): void {

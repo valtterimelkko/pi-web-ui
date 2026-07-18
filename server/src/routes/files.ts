@@ -63,7 +63,8 @@ async function validatePath(requestedPath: string): Promise<string | null> {
     for (const allowed of allowedDirs) {
       try {
         const allowedReal = await fs.realpath(allowed);
-        if (real.startsWith(allowedReal)) {
+        const relative = path.relative(allowedReal, real);
+        if (relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`))) {
           return real;
         }
       } catch {

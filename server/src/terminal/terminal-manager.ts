@@ -97,8 +97,13 @@ export class TerminalManager {
       // Terminal is gone: remove websocket data/exit listeners so the closed
       // ws reference is released and no stale output is delivered.
       emitter.removeAllListeners();
-      this.terminals.delete(clientId);
-      this.clearIdleTimer(clientId);
+      // A replacement PTY may already exist for the same WebSocket client.
+      // A late exit from the old process must not delete the replacement or
+      // clear its idle timer.
+      if (this.terminals.get(clientId) === session) {
+        this.terminals.delete(clientId);
+        this.clearIdleTimer(clientId);
+      }
     });
 
     this.resetIdleTimer(clientId);

@@ -201,6 +201,7 @@ export class NotificationStore {
     const delivery: DeliveryRecord = { ...item.delivery, status: 'sent', deliveredAt };
     this.outbox.splice(idx, 1);
     const logEntry: QueuedNotification = { notification: item.notification, delivery, ingress: item.ingress };
+    const priorLog = [...this.log];
     this.pushLog(logEntry);
     // Persist terminal state first. Startup reconciliation removes an old
     // outbox copy if the process exits before the second write completes.
@@ -211,8 +212,7 @@ export class NotificationStore {
       // just pushed, so any concurrent outbox mutation made during the await
       // (e.g. an ingress enqueue) is preserved. Mirrors the enqueue() rollback.
       this.outbox.splice(idx, 0, item);
-      const pushedAt = this.log.indexOf(logEntry);
-      if (pushedAt !== -1) this.log.splice(pushedAt, 1);
+      this.restoreLogAfterFailedPush(logEntry, priorLog);
       throw err;
     }
     // The terminal state is now durable. If the outbox-cleanup write fails we
@@ -241,6 +241,7 @@ export class NotificationStore {
         delivery: { ...item.delivery, status: 'failed', attempts, lastError },
         ingress: item.ingress,
       };
+      const priorLog = [...this.log];
       this.pushLog(logEntry);
       try {
         await this.persist(LOG_FILE, this.log);
@@ -248,8 +249,7 @@ export class NotificationStore {
         // Surgical rollback (see markSent): restore only this item + drop the
         // pushed log entry, preserving concurrent outbox mutations.
         this.outbox.splice(idx, 0, item);
-        const pushedAt = this.log.indexOf(logEntry);
-        if (pushedAt !== -1) this.log.splice(pushedAt, 1);
+        this.restoreLogAfterFailedPush(logEntry, priorLog);
         throw err;
       }
       await this.persist(OUTBOX_FILE, this.outbox);
@@ -281,6 +281,20 @@ export class NotificationStore {
   private pushLog(item: QueuedNotification): void {
     this.log.unshift(item);
     if (this.log.length > this.maxRecords) this.log.length = this.maxRecords;
+  }
+
+  private restoreLogAfterFailedPush(
+    failedEntry: QueuedNotification,
+    priorLog: QueuedNotification[],
+  ): void {
+    const pushedAt = this.log.indexOf(failedEntry);
+    if (pushedAt !== -1) this.log.splice(pushedAt, 1);
+    // Refill any pre-transition records evicted by the cap, while retaining
+    // terminal entries concurrently added during the failed persistence await.
+    for (const entry of priorLog) {
+      if (!this.log.includes(entry)) this.log.push(entry);
+      if (this.log.length >= this.maxRecords) break;
+    }
   }
 
   private async readJson<T>(name: string, fallback: T): Promise<T> {

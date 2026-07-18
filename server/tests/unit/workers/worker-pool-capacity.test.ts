@@ -3,6 +3,7 @@ import { WorkerPool } from '../../../src/workers/worker-pool.js';
 
 // Mock SessionWorker with MUTABLE status so tests can simulate a process
 // exit/crash (status -> 'terminated') without spawning a real `pi` process.
+let nextSpawnError: Error | undefined;
 const created: Array<{
   sessionPath: string;
   status: string;
@@ -11,6 +12,7 @@ const created: Array<{
   spawnedAt: number;
   spawn: ReturnType<typeof vi.fn>;
   terminate: ReturnType<typeof vi.fn>;
+  onTerminated: ReturnType<typeof vi.fn>;
   simulateExit: () => void;
 }> = [];
 
@@ -22,12 +24,25 @@ vi.mock('../../../src/workers/session-worker.js', () => ({
       pid: 1000 + created.length,
       lastActivity: Date.now(),
       spawnedAt: 123456789 + created.length, // distinct, stable timestamp
-      spawn: vi.fn().mockResolvedValue(undefined),
+      spawn: vi.fn(async () => {
+        if (nextSpawnError) {
+          const error = nextSpawnError;
+          nextSpawnError = undefined;
+          throw error;
+        }
+      }),
       terminate: vi.fn(async function (this: typeof w) {
         this.status = 'terminated';
       }),
+      onTerminated: vi.fn((handler: () => void) => {
+        (w as typeof w & { terminatedHandler?: () => void }).terminatedHandler = handler;
+        return () => {
+          delete (w as typeof w & { terminatedHandler?: () => void }).terminatedHandler;
+        };
+      }),
       simulateExit() {
         w.status = 'terminated';
+        (w as typeof w & { terminatedHandler?: () => void }).terminatedHandler?.();
       },
     };
     created.push(w);
@@ -40,6 +55,7 @@ describe('L2: WorkerPool capacity release + idempotent cleanup', () => {
 
   beforeEach(() => {
     created.length = 0;
+    nextSpawnError = undefined;
     pool = new WorkerPool({ maxWorkers: 1, idleTimeoutMs: 5000 });
   });
 
@@ -98,17 +114,40 @@ describe('L2: WorkerPool capacity release + idempotent cleanup', () => {
     expect(pool.getStats().total).toBe(0);
   });
 
-  it('sweeps exited workers on the next getOrCreate so capacity is not held', async () => {
+  it('releases exited workers immediately without requiring another pool operation', async () => {
     pool = new WorkerPool({ maxWorkers: 200, idleTimeoutMs: 5000 });
     for (let i = 0; i < 50; i++) {
       await pool.getOrCreate(`/s/${i}`);
     }
-    // All processes exit (crash). None are explicitly terminated.
-    for (const w of created) w.simulateExit();
-    expect(pool.getStats().total).toBe(50); // still in the map until swept
 
-    // A new spawn must sweep the terminated workers and succeed.
-    await pool.getOrCreate('/s/new');
-    expect(pool.getStats().total).toBe(1); // only the new worker remains
+    for (const w of created) w.simulateExit();
+
+    expect(pool.getStats().total).toBe(0);
+  });
+
+  it('releases a reserved map entry when spawn fails', async () => {
+    nextSpawnError = new Error('spawn failed');
+
+    await expect(pool.getOrCreate('/s/broken')).rejects.toThrow('spawn failed');
+
+    expect(pool.get('/s/broken')).toBeUndefined();
+    expect(pool.getStats().total).toBe(0);
+    await expect(pool.getOrCreate('/s/recovery')).resolves.toBeDefined();
+  });
+
+  it('rejects new workers while shutdown is in progress instead of losing a replacement', async () => {
+    await pool.getOrCreate('/s/a');
+    let releaseTermination!: () => void;
+    created[0].terminate.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      releaseTermination = resolve;
+    }));
+
+    const shutdown = pool.shutdownAll();
+    await Promise.resolve();
+
+    await expect(pool.getOrCreate('/s/b')).rejects.toThrow(/shutting down/i);
+    releaseTermination();
+    await shutdown;
+    expect(pool.getStats().total).toBe(0);
   });
 });

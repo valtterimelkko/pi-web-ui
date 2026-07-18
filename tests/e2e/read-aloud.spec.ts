@@ -10,7 +10,7 @@ async function login(page: any) {
   await page.waitForTimeout(1000);
   const passwordInput = page.locator('input[type="password"]');
   if (await passwordInput.isVisible().catch(() => false)) {
-    await passwordInput.fill('admin');
+    await passwordInput.fill('Ey@U1U%d5D77J99F');
     await page.locator('button[type="submit"]').click();
     // Wait for JWT cookie to be set and chat interface to mount
     await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 15000 });
@@ -99,6 +99,12 @@ async function createSessionAndSendPrompt(page: any) {
 // ---------------------------------------------------------------------------
 
 test.describe.serial('Read Aloud Buttons', () => {
+  // A fresh disposable server may need to create a real Pi session and wait for
+  // its first provider response (the helper below already allows 120 seconds).
+  // Keep the test-level budget consistent so a valid slow first turn is not
+  // reported as a flaky 30-second timeout and then passed only via retry state.
+  test.setTimeout(150_000);
+
   test.beforeEach(async ({ page }) => {
     await login(page);
   });

@@ -72,7 +72,8 @@ export function BottomNav() {
           </button>
         </div>
       )}
-      <div
+      <nav
+        aria-label="Primary mobile navigation"
         className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white dark:bg-gray-950 border-t border-gray-200 dark:border-gray-800"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
@@ -113,7 +114,7 @@ export function BottomNav() {
             <span className="text-[10px] font-medium">More</span>
           </button>
         </div>
-      </div>
+      </nav>
     </>
   );
 }

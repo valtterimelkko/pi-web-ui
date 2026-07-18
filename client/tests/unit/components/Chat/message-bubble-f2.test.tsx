@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MessageBubble } from '../../../../src/components/Chat/MessageBubble';
 import type { LiveMessage } from '../../../../src/hooks/useSessionStream';
 
@@ -43,6 +43,36 @@ describe('F2: MessageBubble memo comparator', () => {
     // New message object with DIFFERENT content -> comparator false -> body runs.
     rerender(<MessageBubble message={userMessage('m2', 'second')} />);
     expect(storeCall.mock.calls.length).toBeGreaterThan(afterFirst);
+  });
+
+  it('rerenders when rendered error provider metadata changes', () => {
+    const first = {
+      ...userMessage('m-error', ''),
+      role: 'assistant',
+      error: { message: 'auth failed', provider: 'anthropic', model: 'sonnet' },
+    } as unknown as LiveMessage;
+    const { rerender } = render(<MessageBubble message={first} />);
+    expect(screen.getByText('anthropic / sonnet')).toBeTruthy();
+
+    rerender(<MessageBubble message={{
+      ...first,
+      error: { message: 'auth failed', provider: 'zai', model: 'glm' },
+    } as unknown as LiveMessage} />);
+
+    expect(screen.getByText('zai / glm')).toBeTruthy();
+  });
+
+  it('rerenders when tool-call arguments change', () => {
+    const tool = (command: string) => ({
+      id: 'm-tool', role: 'tool', content: [], timestamp: 1,
+      toolCall: { name: 'bash', args: { command } },
+    }) as unknown as LiveMessage;
+    const { rerender } = render(<MessageBubble message={tool('echo first')} />);
+    expect(screen.getByText('echo first')).toBeTruthy();
+
+    rerender(<MessageBubble message={tool('echo second')} />);
+
+    expect(screen.getByText('echo second')).toBeTruthy();
   });
 
   it('rerenders when a structural prop changes (isLast)', () => {

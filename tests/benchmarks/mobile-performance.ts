@@ -17,7 +17,7 @@ import {
 } from './index'
 
 // Session cache instance
-let sessionCache: SessionCache
+let sessionCache = new SessionCache(5)
 
 describe('Mobile Performance Benchmarks', () => {
   beforeAll(() => {

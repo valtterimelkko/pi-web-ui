@@ -99,6 +99,21 @@ describe('L7: TerminalManager listener + timer cleanup', () => {
     expect(emitter.listenerCount('exit')).toBe(0);
   });
 
+  it('a late exit from a replaced PTY cannot delete the replacement terminal', async () => {
+    await manager.create('c1', '/tmp', 80, 24);
+    const oldExit = fakePty.exitCbs[0];
+
+    await manager.create('c1', '/tmp', 100, 30);
+    const replacement = emitterOf(manager, 'c1');
+    expect(manager.list()).toHaveLength(1);
+
+    oldExit({ exitCode: 0 });
+
+    expect(manager.getEmitter('c1')).toBe(replacement);
+    expect(manager.list()).toHaveLength(1);
+    expect(idleTimersOf(manager).size).toBe(1);
+  });
+
   it('delivers exactly one output event per PTY data chunk (no duplicate delivery)', async () => {
     await manager.create('c1', '/tmp', 80, 24);
     const emitter = emitterOf(manager, 'c1');

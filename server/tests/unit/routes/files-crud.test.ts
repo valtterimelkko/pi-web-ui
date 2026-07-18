@@ -76,6 +76,15 @@ describe('Files CRUD Routes', () => {
       expect(mockWriteFile).not.toHaveBeenCalled();
     });
 
+    it('rejects sibling paths that only share an allowed directory prefix', async () => {
+      const res = await request(app)
+        .post('/api/files/write')
+        .send({ path: '/root-escape/secret.txt', content: 'evil' });
+
+      expect(res.status).toBe(400);
+      expect(mockWriteFile).not.toHaveBeenCalled();
+    });
+
     it('returns 400 when path is missing', async () => {
       const res = await request(app)
         .post('/api/files/write')

@@ -111,6 +111,19 @@ describe('handleWebSocketUpgrade — central guard across all paths', () => {
     });
   });
 
+  it('destroys a malformed upgrade URL instead of throwing out of the server handler', () => {
+    const socket = { write: vi.fn(), destroy: vi.fn() };
+    const req = { url: 'http://[', headers: { host: '[' } };
+
+    expect(() => handleWebSocketUpgrade(
+      req as never,
+      socket as never,
+      Buffer.alloc(0),
+      buildDeps(),
+    )).not.toThrow();
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
+  });
+
   it('destroys unknown paths without upgrading', async () => {
     const outcome = await attemptConnect('/ws/unknown-path', { origin: ALLOWED, cookie: validCookie() });
     expect(outcome).toBe('rejected');

@@ -15,7 +15,11 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 1,
-  workers: process.env.CI ? 1 : undefined,
+  // The suites share one single-operator server and its security limits/state;
+  // parallel workers make otherwise valid logins and lifecycle checks interfere.
+  // Keep the default deterministic while allowing an explicit isolated setup
+  // to opt into parallelism.
+  workers: Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? '1', 10),
   reporter: [['html', { open: 'never' }], ['list']],
   use: {
     baseURL: process.env.TEST_URL || 'http://localhost:3457',

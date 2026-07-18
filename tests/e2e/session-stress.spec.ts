@@ -231,8 +231,7 @@ test.describe('Session List Stability', () => {
     
     if (count === 0) {
       // Should show empty state
-      const emptyMessage = page.locator('text=/No sessions found|Create.*session/i');
-      await expect(emptyMessage).toBeVisible();
+      await expect(page.getByText('No sessions found', { exact: true })).toBeVisible();
     }
   });
 

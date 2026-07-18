@@ -3001,7 +3001,15 @@ export class WebSocketConnectionManager {
       this.statusBroadcastTimer = null;
     }
 
-    // Dispose MultiSessionManager (which disposes all sessions)
+    // Disconnect through the normal idempotent path before clearing the map so
+    // per-client Pi handlers and runtime subscriptions are released as well as
+    // the sockets themselves. Asynchronous close/error events become no-ops.
+    for (const [clientId, client] of [...this.clients]) {
+      client.ws.close();
+      this.handleDisconnect(clientId);
+    }
+
+    // Dispose MultiSessionManager after clients have unsubscribed.
     this.multiSessionManager.dispose();
 
     // Clear any armed AskUserQuestion disconnect grace timers so nothing dangles.
@@ -3010,11 +3018,20 @@ export class WebSocketConnectionManager {
     }
     this.askUserDisconnectGraceTimers.clear();
 
-    // Clean up all clients
-    for (const client of this.clients.values()) {
-      client.ws.close();
+    // Runtime services own timers, subscriptions, and subprocesses outside the
+    // WebSocket manager. Start every teardown and await all of them so one
+    // failure cannot strand another runtime's resources. Preserve the first
+    // reported failure after all owners have had a chance to shut down.
+    try {
+      const results = await Promise.allSettled([
+        this.claudeService.stop(),
+        this.opencodeService.shutdown(),
+        this.antigravityService.shutdown(),
+      ]);
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failure) throw failure.reason;
+    } finally {
+      this.wss.close();
     }
-    this.clients.clear();
-    this.wss.close();
   }
 }

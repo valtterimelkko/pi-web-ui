@@ -358,7 +358,7 @@ function handleWSMessage(
         content: string;
         cwd?: string;
       };
-      console.error(`[ws] prompt received: session=${sessionId} chars=${content.length}`);
+      dbg(`[ws] prompt received: session=${sessionId} chars=${content.length}`);
       const now = Date.now();
       setStatus(sessionId, "streaming");
       broadcast(sessionId, {
@@ -515,7 +515,7 @@ const hookServer = Bun.serve({
       }
 
       case "post-tool-use": {
-        console.error(`[hook] post-tool-use: ${body.tool_name || "unknown"}`);
+        dbg(`[hook] post-tool-use: ${body.tool_name || "unknown"}`);
         const {
           session_id,
           tool_name,

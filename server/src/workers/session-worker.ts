@@ -5,7 +5,7 @@
 
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import type { SessionWorkerState, WorkerOptions, RPCEvent, EventHandler } from './types.js';
+import type { SessionWorkerState, WorkerOptions, RPCEvent, RpcResponse, EventHandler } from './types.js';
 import { RPCProtocolBridge } from './rpc-protocol-bridge.js';
 import type { WorkerStatus } from '@pi-web-ui/shared';
 import { getCrashLogger } from './crash-logger.js';
@@ -20,6 +20,14 @@ const MAX_STDOUT_BUFFER_BYTES = 1024 * 1024; // 1 MiB
 export interface SessionWorkerObservabilityOptions {
   metrics?: OperationalMetrics;
   readinessFallbackMs?: number;
+  commandTimeoutMs?: number;
+}
+
+interface PendingRequest {
+  command: string;
+  timeout: NodeJS.Timeout;
+  resolve: () => void;
+  reject: (error: Error) => void;
 }
 
 export class SessionWorker {
@@ -33,10 +41,16 @@ export class SessionWorker {
   private terminatePromise: Promise<void> | null = null;
   private readonly metrics: OperationalMetrics;
   private readonly readinessFallbackMs: number;
+  private readonly commandTimeoutMs: number;
+  private readonly pendingRequests = new Map<string, PendingRequest>();
+  private readonly terminatedHandlers = new Set<() => void>();
+  private requestSequence = 0;
+  private crashRecorded = false;
 
   constructor(options: WorkerOptions, observability: SessionWorkerObservabilityOptions = {}) {
     this.metrics = observability.metrics ?? getOperationalMetrics();
     this.readinessFallbackMs = observability.readinessFallbackMs ?? 1_000;
+    this.commandTimeoutMs = observability.commandTimeoutMs ?? 30_000;
     this.state = {
       process: null,
       sessionPath: options.sessionPath,
@@ -44,7 +58,6 @@ export class SessionWorker {
       status: 'spawning' as WorkerStatus,
       lastActivity: Date.now(),
       spawnedAt: Date.now(),
-      eventBuffer: [],
     };
     this.bridge = new RPCProtocolBridge();
   }
@@ -54,6 +67,7 @@ export class SessionWorker {
    */
   async spawn(): Promise<void> {
     const { sessionPath, model, thinkingLevel, maxOldSpaceSize = 512 } = this.state.options;
+    this.crashRecorded = false;
     
     // Build command args
     const args = [
@@ -93,13 +107,40 @@ export class SessionWorker {
    * Send a command to the worker.
    */
   async sendCommand(command: Parameters<RPCProtocolBridge['formatRPCCommand']>[0]): Promise<void> {
-    if (!this.state.process?.stdin) {
+    const stdin = this.state.process?.stdin;
+    if (!stdin || this.state.status === 'terminated') {
       throw new Error('Worker process not running');
     }
 
-    const line = this.bridge.formatRPCCommand(command);
-    this.state.process.stdin.write(line);
-    this.state.lastActivity = Date.now();
+    const id = `worker_req_${++this.requestSequence}`;
+    const line = this.bridge.formatRPCCommand(command, id);
+
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (!this.pendingRequests.delete(id)) return;
+        reject(new Error(`Timeout waiting for worker response to ${command.type}`));
+      }, this.commandTimeoutMs);
+      timeout.unref?.();
+
+      this.pendingRequests.set(id, {
+        command: command.type,
+        timeout,
+        resolve,
+        reject,
+      });
+
+      try {
+        stdin.write(line);
+        this.state.lastActivity = Date.now();
+      } catch (error) {
+        const pending = this.pendingRequests.get(id);
+        this.pendingRequests.delete(id);
+        if (pending) {
+          clearTimeout(pending.timeout);
+          pending.reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+    });
   }
 
   /**
@@ -108,6 +149,17 @@ export class SessionWorker {
   subscribe(handler: EventHandler): () => void {
     this.eventHandlers.add(handler);
     return () => this.eventHandlers.delete(handler);
+  }
+
+  /** Subscribe to process termination so owners can release capacity eagerly. */
+  onTerminated(handler: () => void): () => void {
+    this.terminatedHandlers.add(handler);
+    return () => this.terminatedHandlers.delete(handler);
+  }
+
+  /** Visible for deterministic lifecycle/cardinality tests and diagnostics. */
+  get pendingRequestCount(): number {
+    return this.pendingRequests.size;
   }
 
   /**
@@ -147,6 +199,8 @@ export class SessionWorker {
    * Terminate the worker gracefully.
    */
   terminate(): Promise<void> {
+    this.rejectPendingRequests(new Error('Worker terminated before responding'));
+
     // Idempotent: a second call returns the same in-flight promise (exact same
     // object) and does not re-kill or stack another exit listener.
     if (this.terminatePromise) return this.terminatePromise;
@@ -157,11 +211,19 @@ export class SessionWorker {
     }
 
     this.terminatePromise = new Promise((resolve) => {
-      const onExit = () => {
+      let settled = false;
+      const onClosed = () => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
+        proc.off('exit', onClosed);
+        proc.off('close', onClosed);
         resolve();
       };
-      proc.once('exit', onExit);
+      // A failed child-process spawn emits `error` then `close`, but no `exit`.
+      // Observe both terminal events so shutdown cannot hang on ENOENT/EACCES.
+      proc.once('exit', onClosed);
+      proc.once('close', onClosed);
 
       const timeout = setTimeout(() => {
         try {
@@ -203,8 +265,12 @@ export class SessionWorker {
       logger.error(`[SessionWorker:${this.state.pid}] stderr:`, data.toString());
     });
 
-    // Handle process exit
+    // Handle both normal exit and failed-spawn close. handleExit is guarded so
+    // the normal exit→close sequence settles lifecycle ownership only once.
     proc.on('exit', (code, signal) => {
+      this.handleExit(code, signal);
+    });
+    proc.on('close', (code, signal) => {
       this.handleExit(code, signal);
     });
 
@@ -215,7 +281,9 @@ export class SessionWorker {
     });
 
     proc.on('error', (err: Error) => {
+      if (this.state.status === 'terminated') return;
       this.state.status = 'error';
+      this.rejectPendingRequests(new Error(`Worker process error: ${err.message}`));
       this.state.error = err.message;
       logger.error(`[SessionWorker:${this.state.pid}] Process error:`, err);
 
@@ -232,6 +300,7 @@ export class SessionWorker {
           errorMessage: err.message,
           previousStatus: 'spawning',
         });
+        this.crashRecorded = true;
       }
     });
   }
@@ -253,7 +322,11 @@ export class SessionWorker {
     for (const line of lines) {
       const event = this.bridge.parseRPCLine(line);
       if (event) {
-        this.handleEvent(event);
+        if (event.type === 'response') {
+          this.handleResponse(event);
+        } else {
+          this.handleEvent(event);
+        }
       }
     }
 
@@ -262,19 +335,40 @@ export class SessionWorker {
     // forged partial protocol message and never grown unbounded.
     if (Buffer.byteLength(this.stdoutBuffer, 'utf8') > MAX_STDOUT_BUFFER_BYTES) {
       this.stdoutBuffer = '';
-      this.handleEvent({ type: 'error', message: 'Worker stdout framing buffer overflow; incomplete line discarded' } as RPCEvent);
+      this.handleEvent({ type: 'error', message: 'Worker stdout framing buffer overflow; incomplete line discarded' });
     }
+  }
+
+  private handleResponse(response: RpcResponse): void {
+    if (!response.id) return;
+    const pending = this.pendingRequests.get(response.id);
+    if (!pending) return;
+
+    this.pendingRequests.delete(response.id);
+    clearTimeout(pending.timeout);
+    if (response.success) {
+      pending.resolve();
+    } else {
+      pending.reject(new Error(response.error || `${pending.command} failed`));
+    }
+  }
+
+  private rejectPendingRequests(error: Error): void {
+    for (const pending of this.pendingRequests.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
+    this.pendingRequests.clear();
   }
 
   /**
    * Handle a parsed RPC event.
    */
-  private handleEvent(event: RPCEvent): void {
+  private handleEvent(event: Exclude<RPCEvent, RpcResponse>): void {
     // Late events from a terminated process must not update status/state.
     if (this.state.status === 'terminated') return;
 
     this.state.lastActivity = Date.now();
-    this.state.eventBuffer.push(event);
 
     // Update status based on event type
     if (event.type === 'streaming_started') {
@@ -301,14 +395,25 @@ export class SessionWorker {
    * Records crash information for monitoring.
    */
   private handleExit(code: number | null, signal: string | null): void {
+    if (this.state.status === 'terminated') return;
     const previousStatus = this.state.status;
     this.state.status = 'terminated';
+    this.rejectPendingRequests(new Error(`Worker process exited (code=${code}, signal=${signal})`));
+
+    for (const handler of [...this.terminatedHandlers]) {
+      try {
+        handler();
+      } catch (error) {
+        logger.error('[SessionWorker] Termination handler error:', error);
+      }
+    }
+    this.terminatedHandlers.clear();
 
     // Log basic exit info
     logger.info(`[SessionWorker:${this.state.pid}] Exited with code=${code}, signal=${signal}`);
 
     // Record crash for monitoring (skip if graceful shutdown via terminate())
-    if (signal !== 'SIGTERM' && code !== 0) {
+    if (signal !== 'SIGTERM' && code !== 0 && !this.crashRecorded) {
       const crashLogger = getCrashLogger();
       crashLogger.recordCrash({
         sessionPath: this.state.sessionPath,
@@ -320,6 +425,7 @@ export class SessionWorker {
         errorMessage: this.state.error,
         previousStatus,
       });
+      this.crashRecorded = true;
     }
   }
 

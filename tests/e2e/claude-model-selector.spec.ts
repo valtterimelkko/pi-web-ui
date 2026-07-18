@@ -1,19 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { execSync } from 'child_process';
-
-// Check if Claude is available for testing
-function isClaudeAvailable(): boolean {
-  try {
-    execSync('which claude', { timeout: 2000, stdio: 'pipe' });
-    const result = execSync('claude auth status --json', { encoding: 'utf-8', timeout: 5000 });
-    const parsed = JSON.parse(result);
-    return parsed.loggedIn === true;
-  } catch {
-    return false;
-  }
-}
-
-const CLAUDE_AVAILABLE = isClaudeAvailable();
 
 async function login(page: import('@playwright/test').Page) {
   await page.goto('/');
@@ -31,31 +16,24 @@ async function login(page: import('@playwright/test').Page) {
 
 test.describe('Claude Direct Model Selector', () => {
   test.beforeEach(async ({ page }) => {
-    test.skip(!CLAUDE_AVAILABLE, 'Claude Code not installed/authenticated');
     await login(page);
   });
 
   test('Claude session locks the in-session model selector (Channel backend disabled)', async ({ page }) => {
-    test.skip(!CLAUDE_AVAILABLE, 'Claude Code not installed/authenticated');
 
-    // 1. Open the New Session modal
-    const modalTitle = page.locator('text=Create New Session').first();
-    const isModalOpen = await modalTitle.isVisible().catch(() => false);
-    if (!isModalOpen) {
-      const newSessionBtn = page.locator('button').filter({ hasText: /new session/i }).first();
-      const createNewSessionBtn = page.locator('button:has-text("Create new session")').first();
-      if (await newSessionBtn.isVisible().catch(() => false)) {
-        await newSessionBtn.click();
-      } else if (await createNewSessionBtn.isVisible().catch(() => false)) {
-        await createNewSessionBtn.click();
-      }
-      await page.waitForTimeout(500);
-    }
+    // 1. Open the New Session modal through its stable sidebar action.
+    const newSessionBtn = page.locator('button[title="New session"]').first();
+    await expect(newSessionBtn).toBeVisible({ timeout: 5000 });
+    await newSessionBtn.click();
+    await expect(page.locator('[data-testid="new-session-modal"]')).toBeVisible({ timeout: 5000 });
 
     // 2. Select Claude Direct
     const claudeBtn = page.locator('button').filter({ hasText: /Claude Direct/i });
     await expect(claudeBtn).toBeVisible({ timeout: 5000 });
-    await expect(claudeBtn).toBeEnabled();
+    if (await claudeBtn.isDisabled()) {
+      test.skip(true, 'Claude is unavailable on the target server');
+      return;
+    }
     await claudeBtn.click();
     await page.waitForTimeout(800);
 

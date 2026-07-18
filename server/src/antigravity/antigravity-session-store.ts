@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, writeFile, mkdir, access, rename, stat, chmod } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, access, rename, stat, chmod, rm } from 'node:fs/promises';
 import * as path from 'node:path';
 
 export type AntigravityTurnStatus = 'running' | 'done' | 'error';
@@ -36,11 +36,16 @@ export function isTurnDone(turn: AntigravityTurn): boolean {
   return turn.status === undefined || turn.status === 'done';
 }
 
+const MAX_VERIFIED_MODE_PATHS = 1024;
+
 export class AntigravitySessionStore {
   private sessionDir: string;
   /** Session-file paths whose 0o600 mode has already been verified/repaired,
    *  so append does not stat+chmod on every call. */
   private readonly modeVerified = new Set<string>();
+  private dirModeVerified = false;
+  /** Serialize append and read-rewrite finalization per session file. */
+  private readonly writeChains = new Map<string, Promise<void>>();
 
   constructor(sessionDir: string) {
     this.sessionDir = sessionDir;
@@ -56,8 +61,14 @@ export class AntigravitySessionStore {
   }
 
   async ensureDir(): Promise<void> {
-    // Owner-only directory (0o700); mkdir applies the mode only when creating.
+    // Owner-only directory (0o700). The mode option only applies on creation,
+    // so verify/repair a legacy directory once per store instance as well.
     await mkdir(this.sessionDir, { recursive: true, mode: 0o700 });
+    if (!this.dirModeVerified) {
+      const info = await stat(this.sessionDir);
+      if ((info.mode & 0o077) !== 0) await chmod(this.sessionDir, 0o700);
+      this.dirModeVerified = true;
+    }
   }
 
   async loadHistory(sessionId: string): Promise<AntigravityTurn[]> {
@@ -71,29 +82,26 @@ export class AntigravitySessionStore {
   }
 
   private async appendLine(sessionPath: string, entry: AntigravityTurn): Promise<void> {
-    const line = JSON.stringify(entry) + '\n';
-    try {
-      await access(sessionPath);
-      // File exists: append. Verify/repair its mode to 0o600 ONCE per path
-      // (not on every append); a legacy 0o644 file is repaired, a correct file
-      // is left untouched and subsequent appends skip stat+chmod entirely.
+    return this.enqueueWrite(sessionPath, async () => {
+      const line = JSON.stringify(entry) + '\n';
+      // Verify/repair an existing file once. ENOENT is expected for the first
+      // append; other stat/chmod failures are real and must not be converted into
+      // a destructive overwrite fallback.
       if (!this.modeVerified.has(sessionPath)) {
         try {
           const info = await stat(sessionPath);
-          if ((info.mode & 0o077) !== 0) {
-            await chmod(sessionPath, 0o600);
-          }
-        } catch {
-          // Non-fatal: a stat/chmod failure must not block the append.
+          if ((info.mode & 0o077) !== 0) await chmod(sessionPath, 0o600);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }
-        this.modeVerified.add(sessionPath);
       }
-      await writeFile(sessionPath, line, { flag: 'a' });
-    } catch {
-      // File does not exist: create it owner-only.
-      await writeFile(sessionPath, line, { flag: 'w', mode: 0o600 });
-      this.modeVerified.add(sessionPath);
-    }
+
+      // `a` creates a missing file with 0600 and appends to an existing file.
+      // If append fails, propagate the error; never retry with `w`, which would
+      // truncate durable history on an I/O or permission error.
+      await writeFile(sessionPath, line, { flag: 'a', mode: 0o600 });
+      this.rememberVerifiedMode(sessionPath);
+    });
   }
 
   /**
@@ -137,44 +145,76 @@ export class AntigravitySessionStore {
     await this.ensureDir();
     const p = this.sessionPath(sessionId);
 
-    let lines: AntigravityTurn[] = [];
-    try {
-      const raw = await readFile(p, 'utf-8');
-      lines = raw.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as AntigravityTurn);
-    } catch {
-      // No file yet — fall through to the defensive append below.
-    }
-
-    let found = false;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].turnId === turnId) {
-        lines[i] = { ...lines[i], ...patch };
-        found = true;
-        break;
+    await this.enqueueWrite(p, async () => {
+      let raw = '';
+      try {
+        raw = await readFile(p, 'utf-8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        // No file yet — fall through to the defensive append below.
       }
-    }
+      // Parse outside the read-error catch. Malformed durable history must stop
+      // finalization rather than being mistaken for a missing file and replaced.
+      const lines = raw.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as AntigravityTurn);
 
-    if (!found) {
-      lines.push({
-        turnId,
-        prompt: '',
-        response: patch.response ?? '',
-        model: '',
-        conversationId: patch.conversationId ?? null,
-        timestamp: 0,
-        ...patch,
-      });
-    }
+      let found = false;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].turnId === turnId) {
+          lines[i] = { ...lines[i], ...patch };
+          found = true;
+          break;
+        }
+      }
 
-    const content = lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
-    await this.atomicWrite(p, content);
+      if (!found) {
+        lines.push({
+          turnId,
+          prompt: '',
+          response: patch.response ?? '',
+          model: '',
+          conversationId: patch.conversationId ?? null,
+          timestamp: 0,
+          ...patch,
+        });
+      }
+
+      const content = lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+      await this.atomicWrite(p, content);
+    });
+  }
+
+  private rememberVerifiedMode(sessionPath: string): void {
+    if (this.modeVerified.has(sessionPath)) return;
+    if (this.modeVerified.size >= MAX_VERIFIED_MODE_PATHS) {
+      const oldest = this.modeVerified.values().next().value as string | undefined;
+      if (oldest !== undefined) this.modeVerified.delete(oldest);
+    }
+    this.modeVerified.add(sessionPath);
+  }
+
+  private enqueueWrite<T>(sessionPath: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.writeChains.get(sessionPath) ?? Promise.resolve();
+    const queued = previous.catch(() => undefined).then(operation);
+    const stored = queued.then(() => undefined, () => undefined);
+    this.writeChains.set(sessionPath, stored);
+    const cleanup = (): void => {
+      if (this.writeChains.get(sessionPath) === stored) this.writeChains.delete(sessionPath);
+    };
+    stored.then(cleanup, cleanup);
+    return queued;
   }
 
   /** Write-then-rename so a crash during finalize can't tear the session file. */
   private async atomicWrite(targetPath: string, content: string): Promise<void> {
     const tmp = `${targetPath}.${randomUUID()}.tmp`;
-    await writeFile(tmp, content, { flag: 'w' });
-    await rename(tmp, targetPath);
+    try {
+      await writeFile(tmp, content, { flag: 'wx', mode: 0o600 });
+      await rename(tmp, targetPath);
+      this.rememberVerifiedMode(targetPath);
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async sessionExists(sessionId: string): Promise<boolean> {

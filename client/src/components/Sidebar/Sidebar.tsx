@@ -16,9 +16,12 @@ export function Sidebar() {
   const currentSessionId = useSessionStore(s => s.currentSessionId);
   const archivedSessionPaths = useSessionStore(s => s.archivedSessionPaths);
   const sessionDisplayNames = useSessionStore(s => s.sessionDisplayNames);
-  const { sidebarOpen, toggleSidebar } = useChatStore();
+  const sidebarOpen = useChatStore(s => s.sidebarOpen);
+  const toggleSidebar = useChatStore(s => s.toggleSidebar);
   const { createNewSession, getSessions } = useWebSocket();
-  const { theme, toggleTheme, openDriveMode } = useUIStore();
+  const theme = useUIStore(s => s.theme);
+  const toggleTheme = useUIStore(s => s.toggleTheme);
+  const openDriveMode = useUIStore(s => s.openDriveMode);
   const [filter, setFilter] = useState('');
   const [cwdFilter, setCwdFilter] = useState<string | null>(null);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
@@ -134,7 +137,10 @@ export function Sidebar() {
         onClick={toggleSidebar}
       />
 
-      <aside className="fixed inset-y-0 left-0 w-60 md:relative md:w-60 h-full bg-gray-50 border-r border-gray-200 flex flex-col z-50 animate-in slide-in-from-left duration-200">
+      <aside
+        data-testid="session-sidebar"
+        className="fixed inset-y-0 left-0 w-60 md:relative md:w-60 h-full bg-gray-50 border-r border-gray-200 flex flex-col z-50 animate-in slide-in-from-left duration-200"
+      >
         {/* Header - Brand */}
         <div className="px-4 pt-4 pb-2">
           <div className="flex items-center justify-between mb-3">

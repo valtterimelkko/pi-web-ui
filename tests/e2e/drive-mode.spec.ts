@@ -1,8 +1,22 @@
 import { test, expect } from '@playwright/test';
 
+async function seedRecentFolder(page: import('@playwright/test').Page, path = '/tmp') {
+  await page.evaluate((folderPath) => {
+    localStorage.setItem('pi-web-ui-ui-store', JSON.stringify({
+      state: {
+        theme: 'light',
+        recentFolders: [{ path: folderPath, label: 'tmp', count: 1, lastUsed: Date.now() }],
+      },
+      version: 0,
+    }));
+  }, path);
+  await page.reload();
+  await page.waitForLoadState('domcontentloaded');
+}
+
 test.describe('Drive Mode', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('http://localhost:3456');
+    await page.goto('/');
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
 
@@ -51,30 +65,26 @@ test.describe('Drive Mode', () => {
     await page.getByRole('button', { name: 'Start a new session' }).click();
     await expect(page.locator('text=Choose a Model')).toBeVisible({ timeout: 10000 });
 
-    // Select a model
+    // Selecting a model advances directly to the folder picker.
     await page.locator('text=Kimi for Coding').click();
-    await page.getByRole('button', { name: 'Next' }).click();
 
     // Should see folder picker
     await expect(page.locator('text=Choose a Folder')).toBeVisible({ timeout: 10000 });
   });
 
   test('Full new session flow creates session and reaches dictate screen', async ({ page }) => {
+    await seedRecentFolder(page);
     const driveModeButton = page.locator('button[aria-label="Enter Drive Mode"]');
     await driveModeButton.click();
 
     await page.getByRole('button', { name: 'Start a new session' }).click();
     await expect(page.locator('text=Choose a Model')).toBeVisible({ timeout: 10000 });
 
-    // Select Kimi for Coding (Pi SDK)
+    // Select Kimi for Coding (Pi SDK); selection advances directly.
     await page.locator('text=Kimi for Coding').click();
-    await page.getByRole('button', { name: 'Next' }).click();
 
-    // Should see folder picker
     await expect(page.locator('text=Choose a Folder')).toBeVisible({ timeout: 10000 });
-
-    // Use the current folder (/root) by clicking "Select This Folder"
-    await page.getByRole('button', { name: 'Select This Folder' }).click();
+    await page.locator('button').filter({ hasText: '/tmp' }).click();
 
     // Should transition to dictate screen
     await expect(page.locator('text=Tap to speak')).toBeVisible({ timeout: 15000 });

@@ -59,6 +59,9 @@ export class SessionWebSocketHandler {
   private send: WSSender;
   private activeSessions: Map<string, () => void> = new Map();
   private sessionClients: Map<string, SessionRPCClient> = new Map();
+  private subscriptionGenerations = new Map<string, number>();
+  private subscriptionSequence = 0;
+  private closed = false;
 
   constructor(options: SessionWebSocketOptions) {
     this.ws = options.ws;
@@ -106,11 +109,20 @@ export class SessionWebSocketHandler {
    */
   private async handleSubscribe(message: SessionWebSocketMessage): Promise<void> {
     const sessionPath = message.sessionPath || message.sessionId;
-    if (!sessionPath) return;
+    if (!sessionPath || this.closed) return;
+
+    // Replacing a subscription for the same path must release the old
+    // SessionRPCClient's worker-level listener before installing the new one.
+    // A unique generation also prevents an older overlapping getOrCreate()
+    // from installing a stale client after a newer subscribe/unsubscribe.
+    this.disposeSession(sessionPath);
+    const generation = ++this.subscriptionSequence;
+    this.subscriptionGenerations.set(sessionPath, generation);
 
     try {
       // Get or create worker
       const worker = await this.workerPool.getOrCreate(sessionPath);
+      if (this.closed || this.subscriptionGenerations.get(sessionPath) !== generation) return;
       const client = new SessionRPCClient(worker);
       
       // Store client for this session
@@ -134,11 +146,14 @@ export class SessionWebSocketHandler {
         status: worker.status,
       });
     } catch (error) {
-      this.send(this.clientId, {
-        type: 'error',
-        message: error instanceof Error ? error.message : 'Failed to subscribe',
-        sessionId: sessionPath,
-      });
+      if (!this.closed && this.subscriptionGenerations.get(sessionPath) === generation) {
+        this.subscriptionGenerations.delete(sessionPath);
+        this.send(this.clientId, {
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to subscribe',
+          sessionId: sessionPath,
+        });
+      }
     }
   }
 
@@ -149,13 +164,8 @@ export class SessionWebSocketHandler {
     const sessionPath = message.sessionPath || message.sessionId;
     if (!sessionPath) return;
 
-    const unsubscribe = this.activeSessions.get(sessionPath);
-    if (unsubscribe) {
-      unsubscribe();
-      this.activeSessions.delete(sessionPath);
-    }
-
-    this.sessionClients.delete(sessionPath);
+    this.subscriptionGenerations.delete(sessionPath);
+    this.disposeSession(sessionPath);
 
     this.send(this.clientId, {
       type: 'unsubscribed',
@@ -300,15 +310,29 @@ export class SessionWebSocketHandler {
     }
   }
 
+  private disposeSession(sessionPath: string): void {
+    const unsubscribe = this.activeSessions.get(sessionPath);
+    if (unsubscribe) unsubscribe();
+    this.activeSessions.delete(sessionPath);
+
+    const client = this.sessionClients.get(sessionPath);
+    if (client) client.dispose();
+    this.sessionClients.delete(sessionPath);
+  }
+
   /**
    * Clean up all subscriptions.
    */
   close(): void {
-    for (const [sessionPath, unsubscribe] of this.activeSessions) {
-      unsubscribe();
+    if (this.closed) return;
+    this.closed = true;
+    this.subscriptionGenerations.clear();
+    for (const sessionPath of new Set([
+      ...this.activeSessions.keys(),
+      ...this.sessionClients.keys(),
+    ])) {
+      this.disposeSession(sessionPath);
     }
-    this.activeSessions.clear();
-    this.sessionClients.clear();
   }
 
   /**

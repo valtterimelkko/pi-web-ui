@@ -131,6 +131,30 @@ describe('S3: Internal API session/batch validation + bounded fan-out', () => {
       expect(multiSessionManager.createAndSubscribe).not.toHaveBeenCalled();
     });
 
+    it('rejects unknown fields instead of silently accepting a misspelled option', async () => {
+      const routes = makeRoutes();
+      const res = createMockRes();
+      await routes.handleCreateSession(
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'pi', thinkngLevel: 'high' }),
+        res,
+        's3-test',
+      );
+      expect(res.statusCode).toBe(400);
+      expect(multiSessionManager.createAndSubscribe).not.toHaveBeenCalled();
+    });
+
+    it('rejects the Claude-only profileId field for another runtime', async () => {
+      const routes = makeRoutes();
+      const res = createMockRes();
+      await routes.handleCreateSession(
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'pi', profileId: 'claude-profile' }),
+        res,
+        's3-test',
+      );
+      expect(res.statusCode).toBe(400);
+      expect(multiSessionManager.createAndSubscribe).not.toHaveBeenCalled();
+    });
+
     it('accepts a valid pi runtime and creates the session', async () => {
       const routes = makeRoutes();
       const res = createMockRes();
@@ -175,6 +199,19 @@ describe('S3: Internal API session/batch validation + bounded fan-out', () => {
         res,
       );
       expect(res.statusCode).toBe(400);
+      expect(multiSessionManager.createAndSubscribe).not.toHaveBeenCalled();
+    });
+
+    it('rejects unknown top-level and per-entry fields atomically', async () => {
+      const routes = makeRoutes();
+      for (const body of [
+        { sessions: [{ runtime: 'pi' }], unexpected: true },
+        { sessions: [{ runtime: 'pi', thinkngLevel: 'high' }] },
+      ]) {
+        const res = createMockRes();
+        await routes.handleBatchCreate(createJsonReq('POST', '/api/v1/sessions/batch', body), res);
+        expect(res.statusCode).toBe(400);
+      }
       expect(multiSessionManager.createAndSubscribe).not.toHaveBeenCalled();
     });
 
@@ -246,6 +283,19 @@ describe('S3: Internal API session/batch validation + bounded fan-out', () => {
         res,
       );
       expect(res.statusCode).toBe(400);
+    });
+
+    it('rejects unknown prompt fields atomically', async () => {
+      const routes = makeRoutes();
+      const res = createMockRes();
+      await routes.handleBatchPrompt(
+        createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
+          prompts: [{ sessionId: 's1', message: 'hi', detach: true }],
+        }),
+        res,
+      );
+      expect(res.statusCode).toBe(400);
+      expect(multiSessionManager.prompt).not.toHaveBeenCalled();
     });
 
     it('rejects an entry missing sessionId with 400', async () => {

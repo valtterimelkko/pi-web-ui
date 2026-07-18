@@ -136,7 +136,7 @@ test.describe('Dual-SDK Session Creation', () => {
     await expect(label).toBeVisible({ timeout: 5000 });
   });
 
-  test('Selecting Pi SDK keeps violet border on Pi button', async ({ page }) => {
+  test('Selecting Pi SDK keeps Pi marked as selected', async ({ page }) => {
     const opened = await openNewSessionModal(page);
     if (!opened) {
       test.skip(true, 'Could not find new session button');
@@ -150,8 +150,7 @@ test.describe('Dual-SDK Session Creation', () => {
     await piBtn.click();
     await page.waitForTimeout(200);
 
-    const classAttr = await piBtn.getAttribute('class');
-    expect(classAttr).toMatch(/violet/i);
+    await expect(piBtn).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('Session list exists after login', async ({ page }) => {

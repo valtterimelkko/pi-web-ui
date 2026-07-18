@@ -74,7 +74,16 @@ export function handleWebSocketUpgrade(
   head: Buffer,
   deps: UpgradeDeps,
 ): void {
-  const url = new URL(req.url || '', `http://${req.headers.host}`);
+  let url: URL;
+  try {
+    // Routing depends only on the request target; never trust Host as the URL
+    // base, because a malformed Host/request target must not throw out of the
+    // server's upgrade callback and terminate the process.
+    url = new URL(req.url || '', 'http://localhost');
+  } catch {
+    socket.destroy();
+    return;
+  }
 
   // Central pre-upgrade guard for every accepted path.
   const decision = decideWsUpgrade(req);

@@ -677,7 +677,9 @@ export class NotificationManager {
     if (this.retryTimer || this.shutDown) return;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      void this.drain();
+      void this.drain().catch((error) => {
+        logger.errorObject('notification retry drain failed', error);
+      });
     }, this.deps.retryBackoffMs ?? 5000);
   }
 }

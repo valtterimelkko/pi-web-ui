@@ -40,11 +40,11 @@ export interface SessionWorkerState {
   lastActivity: number;
   spawnedAt: number;
   error?: string;
-  eventBuffer: RPCEvent[];
 }
 
 // RPC event types (from Pi SDK stdout)
 export type RPCEvent = 
+  | RpcResponse
   | { type: 'message_start'; id: string; role: string }
   | { type: 'message_update'; id: string; delta: unknown }
   | { type: 'message_end'; id: string }

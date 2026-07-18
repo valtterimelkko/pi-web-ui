@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { SessionWorker } from '../../../src/workers/session-worker.js';
-import { resetCrashLogger } from '../../../src/workers/crash-logger.js';
+import { getCrashLogger, resetCrashLogger } from '../../../src/workers/crash-logger.js';
 
 /**
  * L3: bounded stdout framing buffer, multibyte-safe framing, idempotent
@@ -46,6 +46,14 @@ describe('L3: session-worker framing + lifecycle', () => {
       expect(nonError).toHaveLength(0);
     });
 
+    it('does not retain every dispatched event in an unused unbounded buffer', () => {
+      for (let i = 0; i < 1000; i++) {
+        (worker as any).handleStdout(`{"type":"message_update","id":"${i}","delta":"x"}\n`);
+      }
+
+      expect((worker as any).state.eventBuffer ?? []).toHaveLength(0);
+    });
+
     it('parses a multibyte UTF-8 JSONL line split at a byte boundary (decoder)', () => {
       const events: Array<{ type: string; message?: string }> = [];
       worker.subscribe((e) => events.push(e));
@@ -67,7 +75,116 @@ describe('L3: session-worker framing + lifecycle', () => {
       fakeStdout.emit('data', buf.subarray(byteOff));
       const err = events.find((e) => e.type === 'error');
       expect(err).toBeDefined();
-      expect(err!.message).toBe('hi 😀'); // multibyte char intact, not a replacement char
+      expect(err?.message).toBe('hi 😀'); // multibyte char intact, not a replacement char
+    });
+  });
+
+  describe('RPC response lifecycle', () => {
+    function attachRpcProcess() {
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      const writes: string[] = [];
+      const proc = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        stdin: { write: ReturnType<typeof vi.fn> };
+        kill: ReturnType<typeof vi.fn>;
+        pid: number;
+      };
+      proc.stdout = stdout;
+      proc.stderr = stderr;
+      proc.stdin = { write: vi.fn((line: string) => { writes.push(line); return true; }) };
+      proc.kill = vi.fn(() => proc.emit('exit', 0, 'SIGTERM'));
+      proc.pid = 77;
+      (worker as any).state.process = proc;
+      (worker as any).attachProcessHandlers();
+      return { proc, stdout, writes };
+    }
+
+    it('keeps a command pending until its correlated success response arrives', async () => {
+      const { stdout, writes } = attachRpcProcess();
+      let settled = false;
+      const command = worker.sendCommand({ type: 'abort' }).then(() => { settled = true; });
+      await Promise.resolve();
+
+      expect(settled).toBe(false);
+      expect(worker.pendingRequestCount).toBe(1);
+      const sent = JSON.parse(writes[0]) as { id: string };
+      stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'response', id: sent.id, command: 'abort', success: true })}\n`));
+
+      await command;
+      expect(settled).toBe(true);
+      expect(worker.pendingRequestCount).toBe(0);
+    });
+
+    it('rejects a failed response and removes its timeout/pending entry', async () => {
+      const { stdout, writes } = attachRpcProcess();
+      const command = worker.sendCommand({ type: 'set_model', provider: 'bad', modelId: 'missing' });
+      const sent = JSON.parse(writes[0]) as { id: string };
+      stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'response', id: sent.id, command: 'set_model', success: false, error: 'Model not found' })}\n`));
+
+      await expect(command).rejects.toThrow('Model not found');
+      expect(worker.pendingRequestCount).toBe(0);
+    });
+
+    it('rejects all outstanding commands once on process exit and ignores late replies', async () => {
+      const { proc, stdout, writes } = attachRpcProcess();
+      const command = worker.sendCommand({ type: 'abort' });
+      const sent = JSON.parse(writes[0]) as { id: string };
+
+      proc.emit('exit', 1, null);
+      await expect(command).rejects.toThrow(/exited/i);
+      expect(worker.pendingRequestCount).toBe(0);
+
+      stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'response', id: sent.id, command: 'abort', success: true })}\n`));
+      expect(worker.pendingRequestCount).toBe(0);
+    });
+
+    it('settles 1,000 success/timeout cycles without retaining requests or timers', async () => {
+      vi.useFakeTimers();
+      try {
+        worker = new SessionWorker(
+          { sessionPath: '/tmp/l3-cardinality.jsonl', maxOldSpaceSize: 256 },
+          { commandTimeoutMs: 25 } as any,
+        );
+        const { stdout, writes } = attachRpcProcess();
+        const baselineTimers = vi.getTimerCount();
+
+        const successful = Array.from({ length: 500 }, () => worker.sendCommand({ type: 'abort' }));
+        for (const line of writes.splice(0)) {
+          const { id } = JSON.parse(line) as { id: string };
+          stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'response', id, command: 'abort', success: true })}\n`));
+        }
+        await Promise.all(successful);
+        expect(worker.pendingRequestCount).toBe(0);
+        expect(vi.getTimerCount()).toBe(baselineTimers);
+
+        const timedOut = Array.from({ length: 500 }, () => worker.sendCommand({ type: 'abort' }));
+        const settlements = Promise.allSettled(timedOut);
+        await vi.advanceTimersByTimeAsync(25);
+        expect((await settlements).every((result) => result.status === 'rejected')).toBe(true);
+        expect(worker.pendingRequestCount).toBe(0);
+        expect(vi.getTimerCount()).toBe(baselineTimers);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('times out an unanswered command without retaining pending state', async () => {
+      vi.useFakeTimers();
+      worker = new SessionWorker(
+        { sessionPath: '/tmp/l3-timeout.jsonl', maxOldSpaceSize: 256 },
+        { commandTimeoutMs: 25 } as any,
+      );
+      attachRpcProcess();
+      const command = worker.sendCommand({ type: 'abort' });
+      const rejection = expect(command).rejects.toThrow(/timeout/i);
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await rejection;
+      expect(worker.pendingRequestCount).toBe(0);
+      vi.useRealTimers();
     });
   });
 
@@ -91,6 +208,25 @@ describe('L3: session-worker framing + lifecycle', () => {
       await p1;
       // After exit, the once-listener is gone.
       expect(proc.listenerCount('exit')).toBe(listenersBeforeExit - 1);
+    });
+
+    it('resolves termination when a failed spawn closes without emitting exit', async () => {
+      const proc = fakeProc();
+      (worker as any).state.process = proc;
+      (worker as any).attachProcessHandlers();
+      proc.emit('error', new Error('ENOENT'));
+      let settled = false;
+      const termination = worker.terminate().then(() => { settled = true; });
+
+      try {
+        proc.emit('close', -2, null);
+        await Promise.resolve();
+        expect(settled).toBe(true);
+        expect(getCrashLogger().getStats().totalCrashes).toBe(1);
+      } finally {
+        proc.emit('exit', -2, null);
+        await termination;
+      }
     });
 
     it('1000 terminate cycles do not accumulate exit listeners', async () => {

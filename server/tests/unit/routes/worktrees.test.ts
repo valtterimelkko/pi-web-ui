@@ -15,12 +15,18 @@ import { generateSessionToken } from '../../../src/security/auth.js';
 
 const execFileAsync = promisify(execFile);
 
-const listWorktrees = vi.fn();
+const { listWorktrees, createWorktreeManager } = vi.hoisted(() => {
+  const list = vi.fn();
+  return {
+    listWorktrees: list,
+    createWorktreeManager: vi.fn(async () => ({ listWorktrees: list })),
+  };
+});
 const parsePlanFile = vi.fn();
 const validatePlan = vi.fn();
 
 vi.mock('../../../src/pi/parallel/worktree-manager.js', () => ({
-  createWorktreeManager: vi.fn(async () => ({ listWorktrees })),
+  createWorktreeManager,
 }));
 
 vi.mock('../../../src/pi/parallel/plan-parser.js', () => ({
@@ -60,6 +66,7 @@ afterAll(async () => {
 describe('Worktree routes — auth gate (real cookieAuthMiddleware)', () => {
   beforeEach(() => {
     listWorktrees.mockReset();
+    createWorktreeManager.mockClear();
     parsePlanFile.mockReset();
     validatePlan.mockReset();
   });
@@ -98,6 +105,22 @@ describe('Worktree routes — auth gate (real cookieAuthMiddleware)', () => {
     expect(listWorktrees).toHaveBeenCalledTimes(1);
   });
 
+  it('accepts a nested directory and canonicalises it to the repository root', async () => {
+    const repo = path.join(tmpRoot, 'nested-repo');
+    const nested = path.join(repo, 'packages', 'app');
+    await fs.mkdir(nested, { recursive: true });
+    await execFileAsync('git', ['init', '-b', 'main'], { cwd: repo });
+    listWorktrees.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .get('/api/worktrees')
+      .set('Cookie', validCookie())
+      .query({ repoPath: nested });
+
+    expect(res.status).toBe(200);
+    expect(createWorktreeManager).toHaveBeenCalledWith(await fs.realpath(repo));
+  });
+
   it('rejects an authenticated repoPath that is not a git repository (400)', async () => {
     // tmpRoot is a real directory but not a git repo.
     const res = await request(buildApp())
@@ -106,6 +129,20 @@ describe('Worktree routes — auth gate (real cookieAuthMiddleware)', () => {
       .query({ repoPath: tmpRoot });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/git repository|directory|repoPath/i);
+    expect(listWorktrees).not.toHaveBeenCalled();
+  });
+
+  it('rejects a directory that only contains a fake .git marker', async () => {
+    const fakeRepo = path.join(tmpRoot, 'fake-repo');
+    await fs.mkdir(fakeRepo, { recursive: true });
+    await fs.writeFile(path.join(fakeRepo, '.git'), 'not a gitdir');
+
+    const res = await request(buildApp())
+      .get('/api/worktrees')
+      .set('Cookie', validCookie())
+      .query({ repoPath: fakeRepo });
+
+    expect(res.status).toBe(400);
     expect(listWorktrees).not.toHaveBeenCalled();
   });
 

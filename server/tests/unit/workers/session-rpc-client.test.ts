@@ -6,6 +6,7 @@ import type { RPCEvent } from '../../../src/workers/types.js';
 // Create a mock worker
 const createMockWorker = (): SessionWorker => {
   const subscribers: Set<(event: RPCEvent) => void> = new Set();
+  const unsubscribeWorker = vi.fn();
   
   return {
     sessionPath: '/tmp/test-session.jsonl',
@@ -15,8 +16,12 @@ const createMockWorker = (): SessionWorker => {
     sendCommand: vi.fn().mockResolvedValue(undefined),
     subscribe: vi.fn((handler: (event: RPCEvent) => void) => {
       subscribers.add(handler);
-      return () => subscribers.delete(handler);
+      return () => {
+        subscribers.delete(handler);
+        unsubscribeWorker();
+      };
     }),
+    unsubscribeWorker,
     spawn: vi.fn().mockResolvedValue(undefined),
     terminate: vi.fn().mockResolvedValue(undefined),
   } as unknown as SessionWorker;
@@ -93,6 +98,16 @@ describe('SessionRPCClient', () => {
       const unsubscribe = client.subscribe(handler);
       expect(typeof unsubscribe).toBe('function');
       unsubscribe();
+    });
+
+    it('dispose releases the underlying worker subscription exactly once', () => {
+      const unsubscribeWorker = (mockWorker as unknown as { unsubscribeWorker: ReturnType<typeof vi.fn> }).unsubscribeWorker;
+      client.subscribe(vi.fn());
+
+      client.dispose();
+      client.dispose();
+
+      expect(unsubscribeWorker).toHaveBeenCalledTimes(1);
     });
   });
 

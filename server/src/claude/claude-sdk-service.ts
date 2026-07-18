@@ -483,6 +483,14 @@ export class ClaudeSdkService {
     }
   }
 
+  dispose(): void {
+    for (const [sessionId, state] of this.sessions) {
+      state.abortController?.abort();
+      this.cancelPendingAskUserQuestionsForSession(sessionId, 'aborted');
+    }
+    this.resolvedAskUserQuestions.clear();
+  }
+
   isRunning(sessionId: string): boolean {
     return this.sessions.get(sessionId)?.isRunning ?? false;
   }

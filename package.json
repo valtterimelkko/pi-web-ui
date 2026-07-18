@@ -17,7 +17,7 @@
     "test": "npm run test --workspace=server && npm run test --workspace=client",
     "test:coverage": "npm run test:coverage --workspace=server && npm run test:coverage --workspace=client",
     "test:e2e": "playwright test",
-    "benchmark": "vitest bench --config tests/benchmarks/vitest.bench.config.ts",
+    "benchmark": "vitest bench --run --config tests/benchmarks/vitest.bench.config.ts",
     "benchmark:quick": "tsx tests/benchmarks/index.ts",
     "validate:live": "npx tsx scripts/live-validate.ts",
     "validate:long-horizon": "npx tsx scripts/long-horizon-validate.ts",

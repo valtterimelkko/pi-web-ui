@@ -13,9 +13,9 @@ const { claudeMock, opencodeMock, antigravityMock, piMock } = vi.hoisted(() => {
     apply: () => undefined,
   });
   return {
-    claudeMock: { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn().mockReturnValue(false), sendPrompt: vi.fn(), abort: vi.fn(), hasSession: vi.fn().mockReturnValue(false), getSessionState: vi.fn(), setThinkingLevel: vi.fn(), createSession: vi.fn(), listSessions: vi.fn().mockResolvedValue([]), validateAuth: vi.fn().mockResolvedValue({ ok: true }) },
-    opencodeMock: { isAvailable: vi.fn().mockResolvedValue(true), validateSetup: vi.fn().mockResolvedValue({ ok: true }), isPendingPermission: vi.fn().mockReturnValue(false), resolvePermission: vi.fn(), listSessions: vi.fn().mockResolvedValue([]) },
-    antigravityMock: { isAvailable: vi.fn().mockResolvedValue(true), validateSetup: vi.fn().mockResolvedValue({ ok: true }), listSessions: vi.fn().mockResolvedValue([]) },
+    claudeMock: { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn().mockReturnValue(false), sendPrompt: vi.fn(), abort: vi.fn(), hasSession: vi.fn().mockReturnValue(false), getSessionState: vi.fn(), setThinkingLevel: vi.fn(), createSession: vi.fn(), listSessions: vi.fn().mockResolvedValue([]), validateAuth: vi.fn().mockResolvedValue({ ok: true }), stop: vi.fn().mockResolvedValue(undefined) },
+    opencodeMock: { isAvailable: vi.fn().mockResolvedValue(true), validateSetup: vi.fn().mockResolvedValue({ ok: true }), isPendingPermission: vi.fn().mockReturnValue(false), resolvePermission: vi.fn(), listSessions: vi.fn().mockResolvedValue([]), shutdown: vi.fn().mockResolvedValue(undefined) },
+    antigravityMock: { isAvailable: vi.fn().mockResolvedValue(true), validateSetup: vi.fn().mockResolvedValue({ ok: true }), listSessions: vi.fn().mockResolvedValue([]), shutdown: vi.fn().mockResolvedValue(undefined) },
     piMock: noopRecursive,
   };
 });

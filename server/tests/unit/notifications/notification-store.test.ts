@@ -428,6 +428,29 @@ describe('NotificationStore — P2 terminal transition rollback', () => {
     expect(store.listLog().find((q) => q.notification.id === 'n1')).toBeUndefined();
   });
 
+  it('markSent rollback restores a terminal record evicted by the log cap', async () => {
+    const store = new NotificationStore(dir, { maxDeliveryLog: 2, maxDeliveryRecords: 2 });
+    await store.init();
+    for (const id of ['L1', 'L2']) {
+      await store.enqueue(queued(id, 's1'));
+      await store.markSent(id, `2026-07-18T00:00:0${id === 'L1' ? '1' : '2'}.000Z`);
+    }
+    await store.enqueue(queued('A', 's1'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const real = (store as any).persist.bind(store);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(store as any, 'persist').mockImplementation(async (file: string, data: unknown) => {
+      if (file === 'delivery-log.json') throw new Error('LOG_WRITE_FAIL');
+      return real(file, data);
+    });
+
+    await expect(store.markSent('A', '2026-07-18T00:00:03.000Z')).rejects.toThrow('LOG_WRITE_FAIL');
+
+    expect(store.listLog().map((item) => item.notification.id)).toEqual(['L2', 'L1']);
+    expect(store.getById('A')?.delivery.status).toBe('pending');
+  });
+
   it('markSent rollback preserves a concurrent enqueue (no whole-array clobber)', async () => {
     const store = new NotificationStore(dir);
     await store.init();

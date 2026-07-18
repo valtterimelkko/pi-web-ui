@@ -53,6 +53,14 @@ export const createSessionBodySchema = z.object({
   ephemeral: z.boolean().optional(),
   profileId: z.string().min(1).max(200).optional(),
   ...pinFields,
+}).strict().superRefine((body, ctx) => {
+  if (body.profileId !== undefined && body.runtime !== 'claude') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['profileId'],
+      message: 'profileId is only supported for the claude runtime',
+    });
+  }
 });
 
 const batchCreateEntrySchema = z.object({
@@ -61,22 +69,22 @@ const batchCreateEntrySchema = z.object({
   model: modelSchema.optional(),
   thinkingLevel: thinkingLevelSchema.optional(),
   ...pinFields,
-});
+}).strict();
 
 export const batchCreateBodySchema = z.object({
   sessions: z.array(batchCreateEntrySchema).min(1).max(MAX_BATCH_ITEMS),
-});
+}).strict();
 
 const batchPromptEntrySchema = z.object({
   sessionId: sessionIdSchema,
   message: messageSchema,
   idempotencyKey: idempotencyKeySchema.optional(),
-});
+}).strict();
 
 export const batchPromptBodySchema = z.object({
   prompts: z.array(batchPromptEntrySchema).min(1).max(MAX_BATCH_ITEMS),
   parallel: z.boolean().optional(),
-});
+}).strict();
 
 export type CreateSessionBody = z.infer<typeof createSessionBodySchema>;
 export type BatchCreateBody = z.infer<typeof batchCreateBodySchema>;

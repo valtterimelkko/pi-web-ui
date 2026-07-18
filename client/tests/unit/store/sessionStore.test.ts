@@ -853,6 +853,35 @@ describe('sessionStore', () => {
       expect(useSessionStore.getState().sessions.length).toBeGreaterThanOrEqual(0);
     });
 
+    it('applies newer cross-tab metadata without overwriting newer local records', () => {
+      useSessionStore.setState({
+        sessionMeta: {
+          'pi:local-newer': { displayName: 'Keep local', legacyKey: '/local', updatedAt: 300 },
+          'pi:shared': { displayName: 'Old name', legacyKey: '/shared', updatedAt: 100 },
+        },
+        sessionDisplayNames: { '/local': 'Keep local', '/shared': 'Old name' },
+      });
+
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'pi-web-ui-session',
+        storageArea: localStorage,
+        newValue: JSON.stringify({
+          state: {
+            sessionMeta: {
+              'pi:local-newer': { displayName: 'Stale local', legacyKey: '/local', updatedAt: 200 },
+              'pi:shared': { displayName: 'Fresh name', legacyKey: '/shared', updatedAt: 400 },
+            },
+          },
+          version: 0,
+        }),
+      }));
+
+      expect(useSessionStore.getState().sessionDisplayNames).toEqual({
+        '/local': 'Keep local',
+        '/shared': 'Fresh name',
+      });
+    });
+
     it('should throttle multiple rapid set() calls into a single localStorage write', () => {
       vi.useFakeTimers();
       const spy = vi.spyOn(Storage.prototype, 'setItem');

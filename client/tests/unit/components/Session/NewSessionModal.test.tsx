@@ -35,8 +35,13 @@ vi.mock('../../../../src/store', () => ({
   useSessionStore: (sel: (s: typeof sessionState) => unknown) => sel(sessionState),
 }));
 
+const uiState = {
+  recentFolders: [],
+  addRecentFolder: vi.fn(),
+  getRecentFolders: () => [],
+};
 vi.mock('../../../../src/store/uiStore', () => ({
-  useUIStore: () => ({ recentFolders: [], addRecentFolder: vi.fn(), getRecentFolders: () => [] }),
+  useUIStore: (selector: (state: typeof uiState) => unknown) => selector(uiState),
 }));
 
 vi.mock('../../../../src/lib/api', () => ({

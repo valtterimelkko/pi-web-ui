@@ -123,7 +123,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const [claudeModel, setClaudeModel] = useState<string>('sonnet');
   const recentDropdownRef = useRef<HTMLDivElement>(null);
 
-  const { recentFolders, addRecentFolder, getRecentFolders } = useUIStore();
+  const recentFolders = useUIStore(s => s.recentFolders);
+  const addRecentFolder = useUIStore(s => s.addRecentFolder);
+  const getRecentFolders = useUIStore(s => s.getRecentFolders);
   const claudeAvailable = useSessionStore(s => s.claudeAvailable);
   const claudeAuthError = useSessionStore(s => s.claudeAuthError);
   const opencodeAvailable = useSessionStore(s => s.opencodeAvailable);
@@ -352,6 +354,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
             {/* Pi SDK option */}
             <button
               onClick={() => setSdkType('pi')}
+              aria-pressed={sdkType === 'pi'}
               className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
                 sdkType === 'pi'
                   ? 'border-blue-500 bg-blue-50 text-gray-900'
@@ -367,6 +370,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
             <button
               onClick={() => claudeAvailable && setSdkType('claude')}
               disabled={!claudeAvailable}
+              aria-pressed={sdkType === 'claude'}
               title={claudeAuthError || undefined}
               className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
                 !claudeAvailable
@@ -389,6 +393,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
             <button
               onClick={() => opencodeAvailable && setSdkType('opencode')}
               disabled={!opencodeAvailable}
+              aria-pressed={sdkType === 'opencode'}
               title={opencodeAuthError || undefined}
               className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
                 !opencodeAvailable
@@ -411,6 +416,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
             <button
               onClick={() => antigravityAvailable && setSdkType('antigravity')}
               disabled={!antigravityAvailable}
+              aria-pressed={sdkType === 'antigravity'}
               title={antigravityAuthError || undefined}
               className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
                 !antigravityAvailable

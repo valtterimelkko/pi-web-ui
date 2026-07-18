@@ -32,11 +32,12 @@ export class RPCProtocolBridge {
   /**
    * Format an internal command as a JSONL line for worker stdin.
    */
-  formatRPCCommand(command: InternalCommand): string {
-    // Map internal command to RPC command format
+  formatRPCCommand(command: InternalCommand, requestId = this.generateId()): string {
+    // Map internal command to RPC command format. Callers that correlate
+    // responses provide the request id; standalone callers still get one.
     const rpcCommand = {
       ...command,
-      id: this.generateId(),
+      id: requestId,
     };
     return JSON.stringify(rpcCommand) + '\n';
   }

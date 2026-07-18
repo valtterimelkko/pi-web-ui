@@ -78,8 +78,7 @@ test.describe('Session Persistence', () => {
     // Verify Pi SDK selected by default
     const piBtn = page.locator('button').filter({ hasText: /Pi SDK/i }).first();
     if (await piBtn.isVisible().catch(() => false)) {
-      const cls = await piBtn.getAttribute('class');
-      expect(cls).toMatch(/violet/i);
+      await expect(piBtn).toHaveAttribute('aria-pressed', 'true');
     }
 
     // Close modal via Escape
@@ -93,8 +92,7 @@ test.describe('Session Persistence', () => {
 
     const piBtnAgain = page.locator('button').filter({ hasText: /Pi SDK/i }).first();
     if (await piBtnAgain.isVisible().catch(() => false)) {
-      const cls2 = await piBtnAgain.getAttribute('class');
-      expect(cls2).toMatch(/violet/i);
+      await expect(piBtnAgain).toHaveAttribute('aria-pressed', 'true');
     }
   });
 

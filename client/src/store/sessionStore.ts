@@ -35,6 +35,7 @@ export const TRANSFER_READY_MESSAGE = 'Context transferred — ready for your ne
 
 let throttleWriteTimer: ReturnType<typeof setTimeout> | null = null;
 let throttlePendingValue: string | null = null;
+let throttleCommittedValue: string | null = null;
 
 // Flush on page hide so no state is lost
 if (typeof document !== 'undefined') {
@@ -44,6 +45,7 @@ if (typeof document !== 'undefined') {
       throttleWriteTimer = null;
       try {
         localStorage.setItem(STORAGE_KEY, throttlePendingValue);
+        throttleCommittedValue = throttlePendingValue;
       } catch (error) {
         recordStorageFailure('flush_on_hide', error);
       }
@@ -63,15 +65,19 @@ function recordStorageFailure(operation: string, error: unknown): void {
 const throttledStorage = {
   getItem: (name: string): string | null => {
     try {
-      return localStorage.getItem(name);
+      const value = localStorage.getItem(name);
+      throttleCommittedValue = value;
+      return value;
     } catch (error) {
       recordStorageFailure('read', error);
       return null;
     }
   },
   setItem: (name: string, value: string): void => {
-    // Only write if value actually changed
-    if (value === throttlePendingValue) return;
+    // Only write if value actually changed from either the pending or last
+    // committed snapshot. The committed check also prevents storage-event
+    // hydration from echoing the same value back to its source tab.
+    if (value === throttlePendingValue || value === throttleCommittedValue) return;
     throttlePendingValue = value;
 
     if (throttleWriteTimer !== null) {
@@ -81,6 +87,7 @@ const throttledStorage = {
       throttleWriteTimer = null;
       try {
         localStorage.setItem(name, value);
+        throttleCommittedValue = value;
       } catch (error) {
         recordStorageFailure('write', error);
       }
@@ -93,6 +100,7 @@ const throttledStorage = {
       throttleWriteTimer = null;
     }
     throttlePendingValue = null;
+    throttleCommittedValue = null;
     try {
       localStorage.removeItem(name);
     } catch (error) {
@@ -2732,3 +2740,60 @@ export const useSessionStore = create<SessionState>()(
     }
   )
 );
+
+function parseCrossTabSessionMeta(raw: string): Record<string, SessionMeta> | null {
+  try {
+    const parsed = JSON.parse(raw) as { state?: { sessionMeta?: unknown } };
+    const candidate = parsed.state?.sessionMeta;
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+
+    const result: Record<string, SessionMeta> = {};
+    for (const [key, value] of Object.entries(candidate)) {
+      if (!/^(?:pi|claude|opencode|antigravity|unknown):/.test(key)
+        || !value || typeof value !== 'object' || Array.isArray(value)) return null;
+      const record = value as Record<string, unknown>;
+      if (record.archived !== undefined && record.archived !== true) return null;
+      if (record.pinned !== undefined && record.pinned !== true) return null;
+      if (record.displayName !== undefined && typeof record.displayName !== 'string') return null;
+      if (record.legacyKey !== undefined && typeof record.legacyKey !== 'string') return null;
+      if (record.updatedAt !== undefined
+        && (typeof record.updatedAt !== 'number' || !Number.isFinite(record.updatedAt))) return null;
+      result[key] = record as SessionMeta;
+    }
+    return result;
+  } catch (error) {
+    recordStorageFailure('cross_tab_parse', error);
+    return null;
+  }
+}
+
+// Zustand persist hydrates the current tab, but browser storage events are the
+// only notification for already-open sibling tabs. Merge only the canonical
+// metadata slice by its server-compatible updatedAt clock; session lists remain
+// owned by each tab's WebSocket. A resulting persist write is deduplicated by
+// throttledStorage, preventing cross-tab echo loops.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key !== STORAGE_KEY || event.newValue === null) return;
+    if (event.storageArea && event.storageArea !== localStorage) return;
+    throttleCommittedValue = event.newValue;
+
+    const incoming = parseCrossTabSessionMeta(event.newValue);
+    if (!incoming) return;
+    const current = useSessionStore.getState().sessionMeta;
+    const merged = { ...current };
+    let changed = false;
+    for (const [key, record] of Object.entries(incoming)) {
+      const existing = current[key];
+      if (!existing || (record.updatedAt ?? 0) >= (existing.updatedAt ?? 0)) {
+        if (existing !== record && JSON.stringify(existing) !== JSON.stringify(record)) {
+          merged[key] = record;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      useSessionStore.setState({ sessionMeta: merged, ...deriveLegacyFromMeta(merged) });
+    }
+  });
+}

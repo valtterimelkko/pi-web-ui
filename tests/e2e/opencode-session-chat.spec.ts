@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { execSync } from 'child_process';
 
 async function login(page: any) {
   await page.goto('/');
@@ -34,17 +33,6 @@ async function openNewSessionModal(page: any): Promise<boolean> {
   return true;
 }
 
-function isOpenCodeAvailable(): boolean {
-  try {
-    execSync('which opencode', { timeout: 2000, stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const OPENCODE_AVAILABLE = isOpenCodeAvailable();
-
 test.describe('OpenCode Direct Session', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
@@ -62,11 +50,6 @@ test.describe('OpenCode Direct Session', () => {
   });
 
   test('OpenCode Direct button is disabled when opencode is not available', async ({ page }) => {
-    if (OPENCODE_AVAILABLE) {
-      test.skip(true, 'OpenCode is available, testing disabled state not applicable');
-      return;
-    }
-
     const opened = await openNewSessionModal(page);
     if (!opened) {
       test.skip(true, 'Could not find new session button');
@@ -75,6 +58,10 @@ test.describe('OpenCode Direct Session', () => {
 
     const opencodeBtn = page.locator('button').filter({ hasText: /OpenCode Direct/i }).first();
     await expect(opencodeBtn).toBeVisible({ timeout: 5000 });
+    if (await opencodeBtn.isEnabled()) {
+      test.skip(true, 'Target server reports OpenCode available');
+      return;
+    }
 
     const isDisabled = await opencodeBtn.isDisabled().catch(() => false);
     expect(isDisabled).toBe(true);
@@ -83,7 +70,7 @@ test.describe('OpenCode Direct Session', () => {
     expect(classAttr).toMatch(/cursor-not-allowed|disabled/i);
   });
 
-  test('New Session Modal shows all three SDK options', async ({ page }) => {
+  test('New Session Modal shows all four runtime options', async ({ page }) => {
     const opened = await openNewSessionModal(page);
     if (!opened) {
       test.skip(true, 'Could not find new session button');
@@ -93,20 +80,22 @@ test.describe('OpenCode Direct Session', () => {
     const piBtn = page.locator('button').filter({ hasText: /Pi SDK/i }).first();
     const claudeBtn = page.locator('button').filter({ hasText: /Claude Direct/i }).first();
     const opencodeBtn = page.locator('button').filter({ hasText: /OpenCode Direct/i }).first();
+    const antigravityBtn = page.locator('button').filter({ hasText: /Antigravity/i }).first();
 
     await expect(piBtn).toBeVisible({ timeout: 5000 });
     await expect(claudeBtn).toBeVisible({ timeout: 5000 });
     await expect(opencodeBtn).toBeVisible({ timeout: 5000 });
+    await expect(antigravityBtn).toBeVisible({ timeout: 5000 });
   });
 
-  test('Session type grid has three columns for three SDK options', async ({ page }) => {
+  test('Session type grid has four columns at desktop width', async ({ page }) => {
     const opened = await openNewSessionModal(page);
     if (!opened) {
       test.skip(true, 'Could not find new session button');
       return;
     }
 
-    const grid = page.locator('.grid-cols-3').first();
+    const grid = page.locator('.sm\\:grid-cols-4').first();
     await expect(grid).toBeVisible({ timeout: 5000 });
   });
 });
@@ -117,11 +106,6 @@ test.describe('OpenCode Direct Session Creation', () => {
   });
 
   test('OpenCode session creation succeeds when available', async ({ page }) => {
-    if (!OPENCODE_AVAILABLE) {
-      test.skip(true, 'OpenCode is not available on this system');
-      return;
-    }
-
     const opened = await openNewSessionModal(page);
     if (!opened) {
       test.skip(true, 'Could not find new session button');
@@ -130,6 +114,10 @@ test.describe('OpenCode Direct Session Creation', () => {
 
     const opencodeBtn = page.locator('button').filter({ hasText: /OpenCode Direct/i }).first();
     await expect(opencodeBtn).toBeVisible({ timeout: 5000 });
+    if (await opencodeBtn.isDisabled()) {
+      test.skip(true, 'Target server reports OpenCode unavailable');
+      return;
+    }
 
     await opencodeBtn.click();
     await page.waitForTimeout(300);

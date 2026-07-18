@@ -15,13 +15,14 @@ import { createWorktreeManager, WorktreeManager, WorktreeInfo } from '../pi/para
 import { parsePlanFile, validatePlan } from '../pi/parallel/plan-parser.js';
 import { z } from 'zod';
 import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { apiLimiter } from '../security/rate-limit.js';
 import { createLogger } from '../logging/logger.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const logger = createLogger('Worktrees');
-
+const execFileAsync = promisify(execFile);
 
 const router = Router();
 
@@ -82,14 +83,25 @@ async function resolveRepoPath(repoPath: unknown): Promise<string> {
   if (!stat.isDirectory()) {
     throw new ValidationError('repoPath must be a directory');
   }
-  // Verify it is a git work tree (`.git` is a directory for normal repos and a
-  // file for linked worktrees).
+  // Ask Git itself rather than trusting the presence of a `.git` marker (which
+  // can be a malformed file). Argument-array execution keeps the path as data;
+  // `cwd` supports both ordinary repositories and linked worktrees.
   try {
-    await fs.stat(path.join(real, '.git'));
+    const { stdout } = await execFileAsync(
+      'git',
+      ['rev-parse', '--is-inside-work-tree', '--show-toplevel'],
+      { cwd: real, maxBuffer: 64 * 1024 },
+    );
+    const lines = stdout.trim().split(/\r?\n/);
+    const topLevel = await fs.realpath(lines.at(-1) ?? '');
+    if (lines[0] !== 'true') throw new Error('not a work tree');
+    // A session cwd may legitimately be a nested directory. Canonicalise that
+    // input to Git's real top-level path instead of imposing a new root-only
+    // policy that would break existing operator-selected repositories.
+    return topLevel;
   } catch {
     throw new ValidationError('repoPath is not a git repository');
   }
-  return real;
 }
 
 /**
