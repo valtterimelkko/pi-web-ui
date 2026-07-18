@@ -9,27 +9,31 @@
  */
 
 import { InternalApiClient } from '../server/src/live-validation/internal-api-client.js';
-import { readFileSync, readFileSync as rf } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import http from 'node:http';
+import { fileURLToPath } from 'node:url';
 
 const SOCKET_PATH = `${os.homedir()}/.pi-web-ui/internal-api.sock`;
 const TOKEN_PATH = `${os.homedir()}/.pi-web-ui/internal-api-token`;
 const OPENCODE_CONFIG = path.join(os.homedir(), '.config', 'opencode', 'opencode.json');
 const REGISTRY_PATH = path.join(os.homedir(), '.pi-web-ui', 'session-registry.json');
 
-const token = readFileSync(TOKEN_PATH, 'utf8').trim();
-const client = new InternalApiClient({ socketPath: SOCKET_PATH, token });
-
 const REASONING_PROMPT =
   'Solve step by step: A farmer has 100 meters of fencing to enclose a rectangular field along a river (no fence needed on the river side). What dimensions maximize the enclosed area? Show your work.';
 
-function readOcConfig(): Record<string, any> {
-  try { return JSON.parse(rf(OPENCODE_CONFIG, 'utf8')); } catch { return {}; }
+/**
+ * Read + parse the OpenCode config asynchronously (the scanner portion is async
+ * so it never blocks the event loop while doing file I/O). Returns {} on a
+ * missing/unreadable/invalid file.
+ */
+export async function readOcConfig(configPath: string = OPENCODE_CONFIG): Promise<Record<string, any>> {
+  try { return JSON.parse(await readFile(configPath, 'utf8')); } catch { return {}; }
 }
 
-function findThinkingOption(cfg: Record<string, any>): { type: string } | null {
+/** Find the configured thinking option in an OpenCode config object (pure). */
+export function findThinkingOption(cfg: Record<string, any>): { type: string } | null {
   for (const prov of Object.values(cfg.provider ?? {})) {
     for (const model of Object.values((prov as any).models ?? {})) {
       const thinking = (model as any).options?.thinking;
@@ -39,9 +43,10 @@ function findThinkingOption(cfg: Record<string, any>): { type: string } | null {
   return null;
 }
 
-function getOcSessionId(piSessionId: string): string | null {
+/** Look up the OpenCode session id for a Pi session id in the registry (async). */
+export async function getOcSessionId(piSessionId: string, registryPath: string = REGISTRY_PATH): Promise<string | null> {
   try {
-    const reg = JSON.parse(rf(REGISTRY_PATH, 'utf8'));
+    const reg = JSON.parse(await readFile(registryPath, 'utf8'));
     for (const s of reg.sessions ?? []) {
       if (s.id === piSessionId) return s.opencodeSessionId ?? null;
     }
@@ -125,6 +130,12 @@ async function getLastAssistantMessage(ocSessionId: string): Promise<{ reasoning
 async function main() {
   console.log('=== End-to-End OpenCode Thinking-Level Validation ===\n');
 
+  // Read the token + build the client inside main() so the module has no
+  // import-time side effects (and so the scanner helpers are unit-testable
+  // without a live token).
+  const token = (await readFile(TOKEN_PATH, 'utf8')).trim();
+  const client = new InternalApiClient({ socketPath: SOCKET_PATH, token });
+
   // 1. Create session
   console.log('1. Creating OpenCode session via Internal API...');
   const session = await client.createSession({
@@ -143,7 +154,7 @@ async function main() {
     // 3. Set thinking OFF
     console.log('\n3. Setting thinking level to OFF...');
     await client.controlSession(session.sessionId, { action: 'set_thinking_level', level: 'off' });
-    const cfgOff = readOcConfig();
+    const cfgOff = await readOcConfig();
     console.log(`   Config: thinking=${JSON.stringify(findThinkingOption(cfgOff))} (expected null/removed)`);
 
     console.log('   Waiting for server recycle...');
@@ -158,7 +169,7 @@ async function main() {
     });
     console.log(`   Received ${eventsOff.length} events, agent_end=${eventsOff.filter(e => e.type === 'agent_end').length}`);
 
-    let ocSessionId = getOcSessionId(session.sessionId);
+    let ocSessionId = await getOcSessionId(session.sessionId);
 
     // Extract from agent_start event data (most reliable)
     if (!ocSessionId) {
@@ -182,7 +193,7 @@ async function main() {
     // 5. Set thinking HIGH
     console.log('\n5. Setting thinking level to HIGH...');
     await client.controlSession(session.sessionId, { action: 'set_thinking_level', level: 'high' });
-    const cfgHigh = readOcConfig();
+    const cfgHigh = await readOcConfig();
     console.log(`   Config: thinking=${JSON.stringify(findThinkingOption(cfgHigh))} (expected {"type":"enabled"})`);
 
     console.log('   Waiting for server recycle...');
@@ -225,7 +236,11 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+// Run only when executed directly (not when imported for unit testing).
+const isMain = fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  main().catch((err) => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
