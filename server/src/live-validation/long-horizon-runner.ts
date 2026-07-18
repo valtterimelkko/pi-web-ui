@@ -405,13 +405,19 @@ export async function persistState(statePath: string, state: LongHorizonRunState
     () => writeAtomicState(statePath, state),
     () => writeAtomicState(statePath, state),
   );
-  stateWriteChains.set(
-    statePath,
-    next.then(
-      () => undefined,
-      () => undefined,
-    ),
+  const stored = next.then(
+    () => undefined,
+    () => undefined,
   );
+  stateWriteChains.set(statePath, stored);
+  // Remove the settled chain entry (only if it still points at `stored`) so the
+  // map cannot grow unbounded — consistent with watch-store/run-receipt-store.
+  const cleanup = (): void => {
+    if (stateWriteChains.get(statePath) === stored) {
+      stateWriteChains.delete(statePath);
+    }
+  };
+  stored.then(cleanup, cleanup);
   await next;
 }
 

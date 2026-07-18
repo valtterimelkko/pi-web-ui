@@ -198,23 +198,21 @@ export class NotificationStore {
     const idx = this.outbox.findIndex((q) => q.notification.id === notificationId);
     if (idx === -1) return;
     const item = this.outbox[idx];
-    // Snapshot the pre-mutation in-memory state so a failed terminal-log write
-    // can be rolled back: the item must remain pending (retryable) and getById
-    // must not report a durable terminal state that never reached disk.
-    const prevOutbox = this.outbox.slice();
-    const prevLog = this.log.slice();
     const delivery: DeliveryRecord = { ...item.delivery, status: 'sent', deliveredAt };
     this.outbox.splice(idx, 1);
-    this.pushLog({ notification: item.notification, delivery, ingress: item.ingress });
+    const logEntry: QueuedNotification = { notification: item.notification, delivery, ingress: item.ingress };
+    this.pushLog(logEntry);
     // Persist terminal state first. Startup reconciliation removes an old
     // outbox copy if the process exits before the second write completes.
     try {
       await this.persist(LOG_FILE, this.log);
     } catch (err) {
-      // Terminal-log write failed: roll back to pending so the item is retried
-      // and in-memory matches the (unchanged) durable outbox.
-      this.outbox = prevOutbox;
-      this.log = prevLog;
+      // Surgical rollback: restore ONLY this item and remove the log entry we
+      // just pushed, so any concurrent outbox mutation made during the await
+      // (e.g. an ingress enqueue) is preserved. Mirrors the enqueue() rollback.
+      this.outbox.splice(idx, 0, item);
+      const pushedAt = this.log.indexOf(logEntry);
+      if (pushedAt !== -1) this.log.splice(pushedAt, 1);
       throw err;
     }
     // The terminal state is now durable. If the outbox-cleanup write fails we
@@ -237,20 +235,21 @@ export class NotificationStore {
     const item = this.outbox[idx];
     const attempts = item.delivery.attempts + 1;
     if (terminal) {
-      // Snapshot so a failed terminal-log write can be rolled back (see markSent).
-      const prevOutbox = this.outbox.slice();
-      const prevLog = this.log.slice();
       this.outbox.splice(idx, 1);
-      this.pushLog({
+      const logEntry: QueuedNotification = {
         notification: item.notification,
         delivery: { ...item.delivery, status: 'failed', attempts, lastError },
         ingress: item.ingress,
-      });
+      };
+      this.pushLog(logEntry);
       try {
         await this.persist(LOG_FILE, this.log);
       } catch (err) {
-        this.outbox = prevOutbox;
-        this.log = prevLog;
+        // Surgical rollback (see markSent): restore only this item + drop the
+        // pushed log entry, preserving concurrent outbox mutations.
+        this.outbox.splice(idx, 0, item);
+        const pushedAt = this.log.indexOf(logEntry);
+        if (pushedAt !== -1) this.log.splice(pushedAt, 1);
         throw err;
       }
       await this.persist(OUTBOX_FILE, this.outbox);

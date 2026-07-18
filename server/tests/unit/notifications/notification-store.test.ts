@@ -427,4 +427,34 @@ describe('NotificationStore — P2 terminal transition rollback', () => {
     expect(store.getById('n1')?.delivery.status).toBe('pending'); // still retryable
     expect(store.listLog().find((q) => q.notification.id === 'n1')).toBeUndefined();
   });
+
+  it('markSent rollback preserves a concurrent enqueue (no whole-array clobber)', async () => {
+    const store = new NotificationStore(dir);
+    await store.init();
+    await store.enqueue(queued('A', 's1'));
+    await store.enqueue(queued('B', 's1'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const real = (store as any).persist.bind(store);
+    let concurrentEnqueued = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(store as any, 'persist').mockImplementation(async (file: string, _data: unknown) => {
+      if (file === 'delivery-log.json') {
+        // Simulate a concurrent enqueue landing during the LOG persist await.
+        if (!concurrentEnqueued) {
+          concurrentEnqueued = true;
+          await store.enqueue(queued('C', 's1'));
+        }
+        throw new Error('LOG_WRITE_FAIL');
+      }
+      return real(file, _data);
+    });
+
+    await expect(store.markSent('A', '2026-07-18T00:00:00.000Z')).rejects.toThrow('LOG_WRITE_FAIL');
+
+    // A rolled back to pending; B present; C (enqueued during the await) NOT clobbered.
+    const ids = store.listPending().map((q) => q.notification.id).sort();
+    expect(ids).toEqual(['A', 'B', 'C']);
+    expect(store.listLog().find((q) => q.notification.id === 'A')).toBeUndefined();
+  });
 });
