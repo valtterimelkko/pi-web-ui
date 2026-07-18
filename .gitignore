@@ -67,3 +67,6 @@ tests/e2e_*_debug*.py
 
 # Screen-view build handoff evidence (real session transcripts — never commit)
 .screen-view-handoff/
+
+# Whole-codebase review working ledger (local backlog artifact — never commit)
+.code-review-ledger.md
