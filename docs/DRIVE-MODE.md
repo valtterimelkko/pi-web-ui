@@ -44,3 +44,5 @@ Drive Mode can look like a separate product flow, but it still relies on the sam
 - check the Drive Mode store and overlay first
 - then check the ordinary WebSocket/session creation flow
 - do **not** assume it has a separate backend path
+- for dictation/read-aloud failures, check the `/api/dictation` or `/api/tts` response and provider configuration; the E2E suite treats provider availability as an explicit prerequisite rather than pretending an unavailable provider is a UI regression
+- read-aloud uses browser audio permissions/user-gesture handling, so a generated TTS response can still fail to play until the operator taps the control again

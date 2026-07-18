@@ -18,15 +18,25 @@ A **watch** is a standing subscription the server keeps on a session. It evaluat
 
 - the observer disconnecting (nobody needs to hold `/events` open),
 - the session going idle,
-- a full **server restart** (the ledger is reloaded from disk).
+- a full **server restart** (already-recorded firings are reloaded from disk).
 
-This is the load-bearing idea: it **decouples observation from the observer's liveness**. A validator can register a watch, walk away for an hour, then ask "what fired while I was gone?" in one cheap request.
+This is the load-bearing idea: it **decouples observation from the observer's liveness** while the server instance remains up. A validator can register a watch, walk away for an hour, then ask "what fired while I was gone?" in one cheap request. A server restart preserves the ledger but requires explicit watch re-registration for future events.
+
+The restart guarantee is deliberately narrower than automatic watch recovery:
+when the server boots, an `active` watch is reloaded as `detached`. Its past
+firings and snapshot remain readable, but it has no live broker subscription and
+records no new events until the caller re-registers the watch. Treat a restart
+as an evidence boundary: preserve the old ledger, then register a new watch
+before continuing. The current CLI does not re-register or merge the old
+firing-count/state automatically; use a new runner/state file (or a custom
+Internal-API client that explicitly reconciles the two ledgers) rather than
+claiming uninterrupted observation.
 
 Because conditions match on the runtime-neutral `NormalizedEvent` shape, the watch needs **zero per-runtime code** — it works the same across Pi, Claude, OpenCode, and Antigravity.
 
-### 2. The Runner — a headless, resumable validator
+### 2. The Runner — a headless, restart-tolerant evidence collector
 
-The [`validate:long-horizon`](#cli) runner drives a real **subject** session through the Internal API and polls the watch on an interval. It never blocks on the subject: it dispatches work, then sleeps and polls. Because all progress lives in the durable ledger plus a small run-state file, the runner can be a long-lived daemon **or** exit and be re-launched by cron between polls and lose nothing.
+The [`validate:long-horizon`](#cli) runner drives a real **subject** session through the Internal API and polls the watch on an interval. It never blocks on the subject: it dispatches work, then sleeps and polls. Because progress is split between the durable ledger and a private run-state file, the runner can be a long-lived daemon **or** exit and be re-launched by cron between polls without losing already-recorded evidence. If the **server** restarts, the next check will see `detached`; it does not re-register or reconcile ledgers automatically. Preserve the old run-state as evidence, register a new watch, and start a new runner/state (or implement explicit reconciliation in a custom client) before expecting new firings. Without that recovery, a long-horizon run preserves past evidence but does not observe new events after the restart.
 
 The "hour" in a long-horizon test is just `pollInterval × N` — the loop logic is identical whether N polls span seconds or hours.
 
@@ -40,7 +50,9 @@ The waiting is a **scheduler** concern, and a scheduler belongs in the validator
 
 ## Watch API
 
-All endpoints are additive under `/api/v1` (contract `1.1.0`). One watch per session.
+All endpoints are additive under `/api/v1` (watch support was introduced in
+contract `1.1.0`; the current published contract is `1.9.0`). There is one watch
+per session.
 
 ### Register a watch
 
@@ -60,7 +72,7 @@ POST /api/v1/sessions/:sessionId/watch
 }
 ```
 
-Registering **pins the subject by default** so idle/timeout eviction can't kill it while the validator sleeps. Returns the full watch object (`201`). A bad regex or an empty `conditions` array returns `400`.
+Registering **pins the subject by default** so idle/timeout eviction can't kill it while the validator sleeps. This watch pin uses the runtime's watch pin path and is not the time-bounded Internal-API pin ledger; deleting the watch does not unpin the session. Explicitly unpin or delete the subject when finished. Returns the full watch object (`201`). A bad regex or an empty `conditions` array returns `400`.
 
 > **Pinning is also available standalone**, without a watch. If you only need a
 > session to survive cleanup for a long task — and don't need durable condition
@@ -166,10 +178,15 @@ Because a seed dispatched in `start` mode continues server-side after the proces
 ```bash
 # Drive a Pi subject on a disposable validation server, succeed when it both
 # runs Bash and reports PASS, polling every 5s for up to 2 minutes.
-npm run validate:server -- --dir ~/.pi-web-ui/validation/example --port 0
+# Terminal A / background task:
+VALIDATION_DIR="$(mktemp -d /tmp/pi-web-ui-lh-XXXXXX)"
+npm run validate:server -- --dir "$VALIDATION_DIR" --port 0 \
+  >"$VALIDATION_DIR/server.log" 2>&1 &
+# Terminal B: export/replace VALIDATION_DIR with the same directory, then:
+PI_WEB_UI_WAIT_SOCKET="$VALIDATION_DIR/internal-api.sock" npm run internal-api:wait
 npm run validate:long-horizon -- \
-  --socket ~/.pi-web-ui/validation/example/internal-api.sock \
-  --token-path ~/.pi-web-ui/validation/example/internal-api-token \
+  --socket "$VALIDATION_DIR/internal-api.sock" \
+  --token-path "$VALIDATION_DIR/internal-api-token" \
   --subject pi \
   --seed "Run the test suite and tell me if it passed." \
   --watch-tool Bash \
@@ -178,10 +195,10 @@ npm run validate:long-horizon -- \
 ```
 
 ```bash
-# Drive a Claude subject through an explicit provider profile.
+# In the same shell, drive a Claude subject through an explicit provider profile.
 npm run validate:long-horizon -- \
-  --socket ~/.pi-web-ui/validation/example/internal-api.sock \
-  --token-path ~/.pi-web-ui/validation/example/internal-api-token \
+  --socket "$VALIDATION_DIR/internal-api.sock" \
+  --token-path "$VALIDATION_DIR/internal-api-token" \
   --subject claude \
   --model profile:glm52-claude-sdk \
   --seed "Work until you can truthfully say LONG_HORIZON_OK." \
@@ -200,23 +217,31 @@ npm run validate:server          # prints an isolated socket + token; stays up
 npm run validate:server -- --port 3092
 ```
 
-It is fully isolated — separate port, Unix socket, API token, runtime companion
-ports, session registry, watch dir, and Claude/Antigravity session dirs (all under
-`~/.pi-web-ui/validation/`) — and it boots in **validation mode**
-(`PI_WEB_UI_VALIDATION_MODE=true`), which **disables session cleanup** and skips
-the real-session registry rebuild. That combination is what guarantees booting
-it can't delete or mutate real session data (the destructive default-server
-behaviour that auto-removes >90-day archived sessions does not run here).
+It isolates the port, Unix socket, API token, runtime companion ports, Pi
+session directory, session registry, watch dir, and Claude session dir under the
+explicit `--dir` (or a short auto-created `/tmp/pi-web-ui-validation/run-*`
+directory). It boots in **validation mode** (`PI_WEB_UI_VALIDATION_MODE=true`),
+which **disables session cleanup** and skips the real-session registry rebuild,
+so boot does not delete or import real Pi session state. This is not a full
+preference/credential boundary: `PI_AGENT_DIR` remains the normal agent directory for auth/models/resources
+unless the caller overrides it, and the
+preferences file derived from that directory is not isolated by default. A
+long-horizon API run does not use preference routes, but custom clients must not
+mutate archive/pin/rename state unless they explicitly provision a disposable
+`PI_AGENT_DIR` and runtime setup.
 
-Pi keeps its real agent dir for auth/models; any Pi sessions created during a
-run are ephemeral and the runner deletes them.
+Pi sessions created by the runner use the validation session directory and are
+ephemeral; the runner deletes them unless `--keep` is requested. Antigravity is
+disabled in this disposable mode because `agy` has no supported
+conversation-data directory override; an authorised Antigravity check must
+record that it may touch the real `~/.gemini` state.
 
-Point the runner (or any Internal API client) at the printed paths. This is not optional for normal validation; the CLI will refuse to use production defaults without `--allow-production`:
+Point the runner (or any Internal API client) at the printed paths. This is not optional for normal validation; the CLI will refuse to use production defaults without `--allow-production`. Pass the socket and token again on every later `--mode once` invocation:
 
 ```bash
 npm run validate:long-horizon -- \
-  --socket ~/.pi-web-ui/validation/internal-api.sock \
-  --token-path ~/.pi-web-ui/validation/internal-api-token \
+  --socket "$VALIDATION_DIR/internal-api.sock" \
+  --token-path "$VALIDATION_DIR/internal-api-token" \
   --subject pi --seed "…" --watch-text DONE --interval 5 --max-wait 120
 ```
 

@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Internal API observability and runtime-health surface (`1.9.0`)**
+  - `GET /api/v1/health` adds a unified `runtimeHealth` matrix while retaining legacy availability fields for compatibility.
+  - Diagnostics now accept `requestId`, `runId`, `runtime`, `component`, `since`, `minLevel`, and bounded `limit` filters, plus a privacy-safe process-local `operational` snapshot.
+  - The diagnostics ring, counters, and latest health failures reset on process restart; use run receipts, transcripts, and runtime-owned files for durable evidence.
+  - Canonical docs: [`OBSERVABILITY.md`](./OBSERVABILITY.md), [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md)
+
 - **Internal API multi-client and notification-ingress hardening (`1.8.0`)**
   - Disposable validation launches now default to unique locked state directories and cooperatively reserved dynamic companion ports.
   - Unix-socket ownership is fail-closed; owner-only mode is applied before readiness, and an enabled Internal API startup failure is fatal.
@@ -40,9 +46,26 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 - **Files tab Markdown editor**
   - The Files tab's read-only preview is now a Markdown source editor for `.md`/`.mdx`/`.markdown`/`.txt`: a plain `<textarea>` with an Edit ⇄ Preview toggle (GitHub-flavored live preview via `react-markdown` + `remark-gfm`, mirroring chat rendering), explicit Save through the existing `/api/files/write`, and manual Refresh. No new dependency, no backend change.
-  - Truncation safety: files loaded truncated (>200KB) are read-only — editing and Save are blocked at both the store and UI layers, so a partial copy can never overwrite a full file. Unsaved changes are guarded on close / refresh / file-switch.
+  - Truncation safety: files loaded truncated (>200 KiB) are read-only — editing and Save are blocked at both the store and UI layers, so a partial copy can never overwrite a full file. Unsaved changes are guarded on close / refresh / file-switch.
   - Client-only: `store/filesStore.ts`, `components/Files/MarkdownEditor.tsx`, `components/Files/FilesTab.tsx`.
   - Plan: [`plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md`](./plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md)
+
+- **Browser workspace and chat ergonomics**
+  - The chat composer caps a prompt at five attachments with visible overflow feedback; code blocks expose copy feedback without leaving stale timers behind.
+  - Pi subagent cards now show bounded model and aggregate tool-usage summaries live and after reopen; inner subagent transcripts are not replayed into the card.
+  - Sidebar/session UX now keeps the active session visibly distinct, preserves model-aware thinking selections while catalogues load, and uses the v2 keyed metadata channel for archive/pin/display-name persistence.
+  - Context transfer now leaves the target visibly ready for the next user instruction and falls back to the source CWD for new Pi targets when no target directory is supplied.
+  - Drive Mode remains a frontend overlay over the ordinary session/prompt path; read-aloud provider availability is bounded in E2E rather than assumed.
+  - Pi extension reload now refreshes the active session in place and advertises a safe reload capability instead of dropping the client binding.
+  - Pi new-session and Drive Mode pickers expose the current GPT-5.6 Codex variants; the former compaction session-ID patch is retired after the upstream fix.
+  - Canonical docs: [`SESSION-METADATA.md`](./SESSION-METADATA.md), [`DRIVE-MODE.md`](./DRIVE-MODE.md), [`PROTOCOL.md`](./PROTOCOL.md), [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md), [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md), [`SHARP-EDGES.md`](./SHARP-EDGES.md), [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md)
+
+- **Runtime, persistence, and security hardening (post-`1.8.0`)**
+  - Long-horizon and notification persistence writes are atomic/private and serialized; terminal notification transitions roll back surgically if the terminal write fails, while a later outbox-cleanup failure leaves the durable terminal record for startup reconciliation.
+  - Pi/OpenCode model and event paths are concurrency-safe; worker, session-watcher, Claude retry, WebSocket, and Antigravity retry listeners/timers now clean up on abort/shutdown rather than accumulating.
+  - Prompt-boundary checks cover browser prompt-like actions, Internal API single/batch prompts, and transfer handoffs; every WebSocket upgrade path and worktree operation remains guarded.
+  - Batch dispatch, file reads, worker output, and other untrusted buffers are bounded before expensive work.
+  - Canonical docs: [`SECURITY.md`](../SECURITY.md), [`OBSERVABILITY.md`](./OBSERVABILITY.md), [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md), [`SHARP-EDGES.md`](./SHARP-EDGES.md)
 
 ## Earlier highlights
 

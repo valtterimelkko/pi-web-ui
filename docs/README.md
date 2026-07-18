@@ -1,6 +1,6 @@
 # Pi Web UI Docs
 
-> **What's new?** See [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) for a rolling summary of doc-relevant changes. Recent highlights include first-class Claude SDK `AskUserQuestion` support in the browser, an Antigravity inactivity stall watchdog with bounded retry, and a Markdown source editor with GFM live preview in the Files tab.
+> **What's new?** See [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) for a rolling summary of doc-relevant changes. Recent highlights include the Internal API `1.9.0` runtime-health/diagnostics surface, durable run-aware troubleshooting, first-class Claude SDK `AskUserQuestion` support, an Antigravity inactivity stall watchdog with bounded retry, and a Markdown source editor with GFM live preview in the Files tab.
 
 This folder supports **two different reading paths**:
 
@@ -8,6 +8,15 @@ This folder supports **two different reading paths**:
 2. **Maintainer/agent docs** — for contributors and LLM coding agents fixing bugs, tracing architecture, and troubleshooting runtime behaviour
 
 If you arrived here from the public GitHub repo, start with the **public/adopter path** below.
+
+### If an operator gives you a session identifier
+Do not search the whole filesystem first. From the repo root run:
+
+```bash
+npm run debug:where -- <internal-id|runtime-native-id|registry-path|conversation-id>
+```
+
+Then use the resolved internal id with the session-scoped diagnostics/API routes, or read the low-noise screen projection with `GET /api/v1/sessions/<id>/transcript?view=screen`. The locator output tells you which runtime-owned files and logs are relevant. The maintainer path in [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md#session-id-evidence-ladder) explains the fallbacks.
 
 ---
 
@@ -54,7 +63,7 @@ Maintainer-only deeper internals such as Pi worker isolation live in the maintai
 If you are changing code, debugging a runtime, or operating this repo as a live runbook, start here instead:
 
 - [`MAINTAINER-INDEX.md`](./MAINTAINER-INDEX.md)
-- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
+- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) — including the session-ID evidence ladder; use this before raw log searches
 - [`CODEBASE-MAP.md`](./CODEBASE-MAP.md)
 - [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
 - [`PROTOCOL.md`](./PROTOCOL.md)

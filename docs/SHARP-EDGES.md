@@ -3,14 +3,36 @@
 > Living list of architectural traps, brittle patterns, and known limitations. Read this before debugging or extending a runtime.
 
 Quick jump:
+- [Session-ID diagnosis](#session-id-diagnosis)
+- [Internal API / validation](#internal-api--validation)
+- [Notifications](#notifications)
 - [Claude SDK backend](#claude-sdk-backend)
 - [Claude Direct](#claude-direct)
 - [Claude channel-backed mode](#claude-channel-backed-mode)
-- [OpenCode](#opencode-direct)
-- [Pi Coding Agent](#pi-sdk)
+- [OpenCode](#opencode)
+- [Antigravity](#antigravity)
+- [Pi Coding Agent](#pi-coding-agent)
 - [Session Registry](#session-registry)
 - [WebSocket / Auth](#websocket--auth)
 - [Frontend](#frontend)
+
+## Session-ID diagnosis
+
+- **Do not start with a global grep.** Run `npm run debug:where -- <id-or-path>` first. It resolves the registry entry and prints the relevant runtime-owned session file, native id, log source, and useful checks.
+- **Identifier forms are not interchangeable in every route.** The locator accepts the Pi Web UI internal id, registry path, Claude native id, OpenCode native id, and Antigravity conversation id. The read-only `transcript?view=screen` route resolves those forms; session-scoped diagnostics use the resolved internal id, while `GET /runs/:runId` uses the `runId` returned by prompt dispatch.
+- **Use narrow evidence in order:** screen transcript → scoped diagnostics → run receipt / durable ledger → runtime-specific file and bounded journal query. `LOG_FORMAT=json` is for field filtering; pretty logs use `sid=`, `run=`, `req=`, `rt=`, and `exec=` suffixes.
+
+## Internal API / validation
+
+- **The default Unix socket is production.** Live validation must use the socket/token printed by `npm run validate:server`; production requires explicit `--allow-production` (and user authorisation).
+- **`--runtime all` is not all four runtimes in disposable mode.** The runner's current `all` set is Pi, Claude, and OpenCode. Antigravity is disabled by disposable validation because `agy` has no supported isolated conversation directory; validate it only through an explicitly authorised workflow.
+- **A detached prompt is the disconnect-safe path.** `verbosity=answers` with `detach:true` keeps the turn running after the caller disconnects. `tasks`/`full` streaming is supervision, not fire-and-forget: a client disconnect cancels the run and aborts the runtime.
+- **A watch's ledger survives restart, not its observer.** A reloaded watch is `detached`; its past firings remain readable, but it must be registered again to observe new events. Watch pinning is separate from API pins and is not automatically cleared by deleting the watch; explicitly unpin or delete the session when finished.
+
+## Notifications
+
+- **`202 Accepted` is queue acceptance, not Telegram delivery.** Poll the returned status URL or `GET /api/v1/notifications`; `pending` can persist while notifications are disabled or no channel is configured, and Telegram delivery is at-least-once.
+- **Terminal self-notification is opt-in by prompt.** Use `scripts/notify.sh` only for meaningful milestones, blockers/questions, and one final completion message. Web-UI-managed sessions already have the `agent_end` path and should not be double-notified.
 
 ## Claude SDK backend
 
@@ -82,7 +104,12 @@ The UI only shows Claude channel tool activity if the plugin bridge emits the ex
 ## OpenCode
 
 ### SSE duplicate tool events
-OpenCode SSE can deliver the same tool event multiple times. `opencode-event-adapter.ts` has deduplication logic, but it is brittle. If you see repeated tool cards in the UI, check the deduplication keys.
+OpenCode SSE can deliver the same tool event multiple times, and multiple local
+consumers must not fan out the same source event repeatedly. The adapter owns
+runtime-specific tool deduplication; the service makes one normalized pass and
+fans each event out to the prompt callback and API observers. If you see
+repeated tool cards or diverging watchers, check `opencode-event-adapter.ts` and
+the observer fan-out owner in `opencode-service.ts`.
 
 ### Context window defaults to 0 until model cache resolves
 `contextWindow` is 0 until `cacheModelContextWindows()` successfully fetches models from OpenCode. On slow starts, the context ring may show 0% or fail to render until the cache populates.
@@ -95,6 +122,27 @@ Transfer dispatch into OpenCode auto-approves permission requests for the handof
 
 ### Trusted permissions still block catastrophic patterns
 Even with `OPENCODE_TRUSTED_PERMISSIONS=true`, shell patterns like `rm -rf /`, `mkfs *`, `dd *`, `shutdown *`, `reboot *` are denied. Do not remove these deny rules.
+
+## Antigravity
+
+### Subprocess output is batch-shaped
+`agy -p` does not provide native tool visibility or response streaming. The UI
+gets one response batch plus synthetic `stream_activity` heartbeats; a heartbeat
+is liveness only, never completion. Diagnose a silent turn through the per-turn
+`agy-logs/` mtime/watchdog evidence and the Antigravity conversation id, not by
+assuming the browser has seen every tool call.
+
+### Stall retries are bounded and abortable
+`ANTIGRAVITY_STALL_TIMEOUT_MS` kills a silent attempt and
+`ANTIGRAVITY_MAX_ATTEMPTS` bounds retries. Aborting a session must cancel pending
+retry work; if a supposedly aborted turn starts again, inspect retry cancellation
+in `antigravity-service.ts` before changing timeout values.
+
+### Disposable validation cannot isolate agy conversations
+The disposable validation server disables Antigravity because `agy` writes its
+conversation DB under the user's `~/.gemini` tree. An Antigravity live check is
+an explicitly authorised operation, not part of the normal `--runtime all`
+disposable matrix.
 
 ## Pi Coding Agent
 
@@ -110,11 +158,24 @@ If heap usage exceeds 2500MB, `multi-session-manager.ts` triggers aggressive cle
 ### Stale streaming reset applies to pinned sessions too
 Pinning protects from idle cleanup, but a 15-minute stale stream is still detected and reset to idle. The session stays in memory; only the status changes.
 
+### Model catalogue refresh is concurrency-sensitive
+Pi model catalogue loading/refresh is shared and retryable. Do not add a second
+uncoordinated refresh path or assume an in-flight refresh has already populated
+the model registry; use the existing `pi-service.ts`/OpenRouter refresh seam and
+inspect its bounded retry state when models intermittently disappear.
+
 ### Skill content transformation requires both open and close tags
 `getSkillContentInfo()` checks for `<skill name="...">` **and** `</skill>`. Partial skill injection (missing close tag) is not transformed and will render raw markup.
 
 ### `/compact` is a browser-side interception, not a prompt
 The frontend turns `/compact` into a `{type:'compact'}` WebSocket message. Sending the literal text `/compact` through the Internal API prompt endpoint reaches the LLM as plain text. Extension commands (like `/autocompact75`) execute on both paths.
+
+### Extension reload is in place
+Pi's extension `reload` action now calls `PiService.reloadSession()` for the
+active session rather than removing the client and waiting for a future session
+creation. Preserve the in-place identity/event bindings and the advertised
+`pi-web-ui:in-place-extension-reload` capability when changing extension UI
+adapters.
 
 ## Session Registry
 
@@ -129,11 +190,31 @@ The frontend turns `/compact` into a `{type:'compact'}` WebSocket message. Sendi
 
 ## WebSocket / Auth
 
+### Every upgrade path is guarded
+`/ws`, session WebSockets, and terminal upgrades all pass the central pre-upgrade
+origin/auth/rate-limit guard before `handleUpgrade`; the post-connection CSRF
+handshake still applies. Do not add a special upgrade path that only checks one
+of those layers.
+
 ### CSRF tokens are wiped on server restart
 The server stores CSRF tokens in memory. After a restart, all clients must refresh the page to get a new token. The connection handler sends `CSRF_TOKEN_REFRESH_REQUIRED` in this case.
 
 ### Origin validation happens before auth
 WebSocket upgrades are rejected at the origin check before authentication is even attempted. If you see "Origin not allowed" in logs, check `ALLOWED_ORIGINS` first.
+
+## Persistence and privileged paths
+
+### Persistence failures must not silently corrupt ledgers
+Run receipts, watches, notification state, and other local ledgers use private,
+atomic/serialised write paths and may roll back an in-memory terminal transition
+when the durable write fails. Preserve that ordering when changing persistence;
+never report a terminal success before the corresponding durable record exists.
+
+### Worktree paths are privileged input
+Worktree REST operations are authenticated/rate-limited and canonicalise repo/plan
+paths before invoking Git. Keep `realpath`/regular-file/repository checks and
+argument-array execution; shell interpolation or a new unvalidated path input
+would re-open traversal/injection risk.
 
 ## Frontend
 

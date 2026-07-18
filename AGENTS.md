@@ -20,7 +20,7 @@
 - **Protocol:** [`docs/PROTOCOL.md`](./docs/PROTOCOL.md)
 - **Security:** [`SECURITY.md`](./SECURITY.md)
 - **Deployment:** [`DEPLOYMENT.md`](./DEPLOYMENT.md)
-- **Troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)
+- **Troubleshooting / logs / session files:** [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md) — start with its session-ID evidence ladder, not a repository-wide grep
 - **Observability (logging/diagnostics/errors):** [`docs/OBSERVABILITY.md`](./docs/OBSERVABILITY.md)
 - **Sharp edges:** [`docs/SHARP-EDGES.md`](./docs/SHARP-EDGES.md)
 
@@ -62,7 +62,7 @@ Core architectural themes:
 | Add a REST route | `server/src/routes/*.ts` and `cookieAuthMiddleware`; then read [`SECURITY.md`](./SECURITY.md) |
 | Auth / CSRF / prompt-injection / path validation | `server/src/security/*`, `server/src/middleware/auth.ts`, [`SECURITY.md`](./SECURITY.md) |
 | Config / env vars / ops | `server/src/config.ts`, `.env.example`, [`DEPLOYMENT.md`](./DEPLOYMENT.md) |
-| Fast log or session-file lookup | [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md), `npm run debug:where -- <id-or-path>` |
+| Fast session diagnosis / log or session-file lookup | [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md), first run `npm run debug:where -- <id-or-path>`, then use the printed canonical paths/API filters |
 | Logging / levels / namespaces / correlation / diagnostics / error codes | `server/src/logging/*`, `server/src/internal-api/error-codes.ts`, `server/src/internal-api/diagnostics-buffer.ts`, [`docs/OBSERVABILITY.md`](./docs/OBSERVABILITY.md) |
 
 ## High-signal file map
@@ -109,10 +109,10 @@ Core architectural themes:
 ## Runtime-aware validation shortcuts
 
 - General checks: `npm run lint`, `npm run typecheck`, `npm run build`, `npm test`
-- Browserless runtime validation: start `npm run validate:server`, then run `npm run validate:live -- --socket <validation.sock> --token-path <validation-token> --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`; use production only with explicit user permission plus `--allow-production`.
+- Browserless runtime validation: start `npm run validate:server`, then run `npm run validate:live -- --socket <validation.sock> --token-path <validation-token> --runtime <pi|claude|opencode|all> --scenario <id>`; disposable `all` currently covers Pi/Claude/OpenCode, while Antigravity needs a separately authorised workflow because it is disabled in disposable mode. Use production only with explicit user permission plus `--allow-production`.
 - Claude provider profile validation: start a profiles-enabled validation server, then run `npm run validate:claude-profiles -- --socket <sock> --token-path <token> --glm-profile <id> --native-profile <id>`; see [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md).
-- Long-horizon (autonomous, restart-surviving) validation: start `npm run validate:server`, then run `npm run validate:long-horizon -- --socket <validation.sock> --token-path <validation-token> --subject <runtime> --seed "<prompt>" --watch-text <substr> --interval <seconds>` — see [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md)
-- Fast runtime/session lookup: `npm run debug:where -- <session-id-or-runtime-id-or-path>`
+- Long-horizon validation: the watch ledger preserves already-recorded evidence across restarts, but a reloaded watch is detached and must be registered again to resume observation; start `npm run validate:server`, then run `npm run validate:long-horizon -- --socket <validation.sock> --token-path <validation-token> --subject <runtime> --seed "<prompt>" --watch-text <substr> --interval <seconds>` — see [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md)
+- Fast runtime/session lookup: first run `npm run debug:where -- <session-id-or-runtime-id-or-path>`; it resolves the registry/native identity and prints runtime-specific evidence paths. Prefer the Internal API `transcript?view=screen` and scoped diagnostics before raw-file or global-log searches.
 - OpenCode model catalogue refresh: `npm run opencode:refresh-models`
 - Pi runtime OpenRouter catalogue refresh: `npm run pi:refresh-models` (see [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md))
 

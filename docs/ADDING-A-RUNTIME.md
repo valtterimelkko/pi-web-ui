@@ -1,6 +1,6 @@
 # Adding a New Runtime to Pi Web UI
 
-> Checklist for integrating a fourth backend runtime alongside Pi Coding Agent, the Claude runtime family, and OpenCode.
+> Checklist for integrating another backend runtime alongside the existing Pi Coding Agent, Claude runtime family, OpenCode, and Antigravity paths.
 
 ## 1. Shared Types
 
@@ -81,12 +81,26 @@ In `client/src/components/Session/NewSessionModal.tsx`:
 - Add runtime option to the picker.
 - Show availability state.
 
-## 8. Tests
+## 8. Cross-cutting integrations and tests
 
 - Unit tests for event adapter and history replay.
 - WebSocket routing tests in `server/tests/unit/websocket/`.
 - Integration tests for session creation and switching.
 - E2E tests if the runtime is available in CI.
+- Add the runtime to Internal API capabilities/models/health and the runtime
+  health check; do not make callers infer availability from a generic top-level
+  status.
+- Add a service-level observer (`addApiObserver`/`removeApiObserver`) so
+  browser-originated turns reach watches and notifications as well as
+  API-originated turns; separately ensure the Internal-API prompt path feeds
+  run-receipt terminal detection for this runtime.
+- Add runtime-native identifier mapping to `debug:where` and document its
+  session/replay/log paths in `TROUBLESHOOTING.md`.
+- Add a disposable-safe validation scenario only if the runtime can be isolated;
+  otherwise document the explicit authorisation and real-state boundary like
+  Antigravity. Never broaden `--runtime all` by assumption.
+- Preserve prompt-injection, request bounds, auth/CSRF/origin, path validation,
+  private persistence, and abort/shutdown cleanup invariants.
 
 ## Key Invariants
 

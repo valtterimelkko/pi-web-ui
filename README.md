@@ -1,6 +1,6 @@
 # Pi Web UI
 
-> **Latest work:** Claude SDK `AskUserQuestion` is now supported first-class in the browser, the Antigravity runtime has an inactivity stall watchdog with bounded retry, and the Files tab now has a Markdown source editor with a GFM live preview (explicit Save, truncated files stay read-only). See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
+> **Latest work:** the Internal API now exposes additive runtime-health and filtered diagnostics (`1.9.0`), while Claude SDK `AskUserQuestion` is supported first-class in the browser, Antigravity has an inactivity stall watchdog with bounded retry, and the Files tab has a Markdown source editor with a GFM live preview (explicit Save, truncated files stay read-only). See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
 
 Built for a simple reality: **one agent runtime and one subscription is often not enough.**
 
@@ -145,7 +145,8 @@ Current docs:
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md)
 
 Recent power-user additions worth knowing about:
-- **self-service diagnostics** and **event-type introspection** for local consumers
+- **runtime health** and filtered, secret-scrubbed **self-service diagnostics** with a bounded process-local operational snapshot
+- durable **run receipts**, idempotent prompt dispatch, and explicit disconnect-safe detached answer-mode prompts
 - a read-only **screen-view transcript projection** (`view=screen`) for fetching what the user sees without browser automation
 - optional **Pi runtime OpenRouter model refresh** via `npm run pi:refresh-models`; see [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md)
 

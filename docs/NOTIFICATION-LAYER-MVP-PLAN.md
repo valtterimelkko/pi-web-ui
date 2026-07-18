@@ -2,11 +2,25 @@
 
 > Historical implementation plan. The canonical current-state docs are [`NOTIFICATIONS.md`](./NOTIFICATIONS.md), [`INTERNAL-API.md`](./INTERNAL-API.md), and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 >
-> **Status:** Ready for execution.
+> **Status:** Implemented and archived. This plan records the original TDD
+> decisions and execution history; it is **not** an instruction to start a new
+> implementation. Read [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) for current
+> behaviour, configuration, and operations.
 > **Author of plan:** Planning agent (Opus 4.8), 2026-06-29.
-> **Executing agent:** A capable long-horizon agent (1M context). Read this file **in full** before writing any code, and re-read the relevant phase before starting it.
-> **Final acceptance:** An independent validation pass is performed by the *planning agent*, not the executing agent (see [§13](#13-final-independent-validation-planner-owned)). You do not get to declare this done.
-> **First action on startup:** ask the operator for the dedicated Telegram bot credentials (see Phase 0). Do this before you start coding, not at Phase 6.
+> **Execution note:** the original plan's pre-implementation gap analysis is
+> intentionally historical. Claude and Antigravity now expose service-level
+> observers, and the notification manager owns its private broker; do not use
+> the old "missing observer" paragraphs as current-state evidence.
+> **Validation note:** current disposable validation covers Pi, Claude, and
+> OpenCode; Antigravity requires an explicitly authorised workflow because
+> `agy` has no supported isolated conversation-data directory override. The
+> disposable wrapper isolates runtime session/registry state but leaves Pi's
+> `PI_AGENT_DIR` (and its derived preferences file) at the normal location by
+> default; do not use browser preference mutations in that setup unless you
+> explicitly provision a disposable Pi agent directory. **Retry note:** the
+> shipped manager uses a fixed five-second retry timer; any
+> "backoff" wording in the historical plan is not an exponential-backoff
+> promise. Use [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) for current semantics.
 
 ---
 
@@ -86,7 +100,7 @@ In this operator's setup, **all four runtimes auto-approve everything** — noth
 1. it finished its work, or
 2. it wrote its critical question as its final message and **stopped**.
 
-**Both of these are `agent_end`.** "Finished" and "has a question for you" are the *same event* with different *content*. So `agent_end` = *"the agent has yielded control back to you and is now waiting"* — which is exactly the moment to notify. This was **live-validated across all four runtimes** during planning (Pi/Claude/OpenCode/Antigravity all emit `agent_end`; `supportsApprovals` is `false` on three of four, confirming the approval/permission triggers are dead and must not be used).
+**Both of these are `agent_end`.** "Finished" and "has a question for you" are the *same event* with different *content*. So `agent_end` = *"the agent has yielded control back to you and is now waiting"* — which is exactly the moment to notify. The planning-time runtime matrix exercised all four runtimes and confirmed that each can emit `agent_end`; the later execution evidence below records the actual live/unit coverage and the Claude environment limitation. `supportsApprovals` was `false` on three of four, confirming the approval/permission triggers are not a general notification boundary.
 
 **Do not** add `permission_request` / `extension_ui_request` triggers. They are vestigial in this architecture.
 
@@ -247,7 +261,7 @@ interface NotificationChannel {
 }
 ```
 
-**Outbox semantics:** enqueue on build; a dispatcher drains pending records; on success mark `sent`; on failure increment `attempts`, record `lastError`, retry with backoff up to a configurable cap, then mark `failed` (and keep it in the log for ops). The outbox **survives restart** — on boot, re-load pending records and resume draining. Bound the delivery log (cap N most recent, like the watch ledger caps firings).
+**Outbox semantics (historical design wording):** enqueue on build; a dispatcher drains pending records; on success mark `sent`; on failure increment `attempts`, record `lastError`, retry up to a configurable cap, then mark `failed` (and keep it in the log for ops). The shipped manager uses a fixed five-second retry timer, not exponential backoff; see [`NOTIFICATIONS.md`](./NOTIFICATIONS.md). The outbox **survives restart** — on boot, re-load pending records and resume draining. Bound the delivery log (cap N most recent, like the watch ledger caps firings).
 
 **De-dupe / debounce:** coalesce multiple `agent_end`s for the same session within `NOTIFICATIONS_DEBOUNCE_MS` into one notification (default e.g. 1500 ms). Each notification carries a stable id so a retry never double-sends.
 
@@ -332,9 +346,17 @@ Add to `config.ts` (mirror existing `process.env.X || default` style) and docume
 
 ---
 
-## 8. Testing & live-validation matrix (MAXIMUM level — this is mandatory, not aspirational)
+## 8. Testing & live-validation matrix (historical execution record)
 
-### 8.1 Static gates (run after every phase, and again at the end)
+> The requirements and checklists in this archived section describe the original
+> implementation acceptance plan. They are not a current runbook or permission
+> to target production. Current disposable validation intentionally covers Pi,
+> Claude, and OpenCode; Antigravity requires an explicitly authorised workflow
+> because its conversation data cannot be isolated. Use [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+> and [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) for current commands and delivery
+> semantics.
+
+### 8.1 Static gates (historical gate definition)
 ```
 npm run lint
 npm run typecheck
@@ -350,22 +372,29 @@ All five must be **green** at final hand-off. A red anything = not done.
 
 ### 8.3 Live validation (disposable server only — safety contract from `docs/LIVE-VALIDATION.md`)
 
+> **Current boundary for this historical plan:** use the current disposable
+> runbooks rather than copying old no-argument commands. `--runtime all` now
+> covers Pi, Claude, and OpenCode only; Antigravity is disabled in disposable
+> mode because `agy` has no isolated conversation-data directory. An
+> Antigravity check requires explicit authorisation and may touch real
+> `~/.gemini` state.
+
 Boot a throwaway server (never the production `~/.pi-web-ui/internal-api.sock`):
 ```
-VALIDATION_DIR=~/.pi-web-ui/validation/notif-$(date +%s)
+VALIDATION_DIR="$(mktemp -d /tmp/pi-web-ui-notif-XXXXXX)"
 npm run validate:server -- --dir "$VALIDATION_DIR" --port 0
 ```
 
-**(a) Baseline `agent_end` across runtimes (already proven, re-confirm):**
+**(a) Baseline `agent_end` across the disposable-safe runtimes (historical
+plan wording updated to the current scope):**
 ```
 npm run validate:live -- --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" --runtime all --scenario smoke --json
-# then explicitly, because --runtime all skips antigravity:
-npm run validate:live -- --socket "$VALIDATION_DIR/internal-api.sock" \
-  --token-path "$VALIDATION_DIR/internal-api-token" --runtime antigravity --scenario smoke --json
+# Antigravity is a separately authorised check, not a disposable matrix member.
 ```
 
-**(b) ORIGIN-INDEPENDENT capture → notification, all 4 runtimes (the real test — §4):**
+**(b) ORIGIN-INDEPENDENT capture → notification, the disposable-safe runtimes
+(the real test — §4):**
 You must prove that with only a notification **observer** attached (opt-in), and a prompt driven so that the Internal API prompt path is **not** the thing publishing to the broker, the NotificationManager still fires. Achieve this by **adding a dedicated live-validation scenario** (e.g. `notify-on-agent-end`) under `server/src/live-validation/scenarios.ts` that:
 1. creates an ephemeral session, opts it into notifications (which attaches the service observer),
 2. triggers a turn,

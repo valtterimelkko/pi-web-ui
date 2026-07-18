@@ -1,5 +1,11 @@
 # Execution Plan — Markdown Editor in the Files Tab
 
+> **Status:** implemented and archived. The editor shipped in the Files tab; the
+> current user-facing summary is [`../RECENT-CHANGES.md`](../RECENT-CHANGES.md)
+> and the code map is [`../CODEBASE-MAP.md`](../CODEBASE-MAP.md). The
+> future-tense checklist below records the original TDD decisions and evidence;
+> it is not an outstanding implementation request.
+>
 > **Audience:** a highly capable execution agent.
 > **Prime directive:** This feature is *small in surface area but strict on quality*. You are known to be excellent — and known to occasionally declare victory early. **Do not.** A task is done only when every quality gate in [§9](#9-quality-gates-non-negotiable) has passed with captured evidence, including a **live browser validation on a disposable server**. If you are tempted to say "this should work" — stop, run it, and paste the output.
 
@@ -28,7 +34,7 @@ These were decided with the maintainer. **Do not expand scope. Do not re-litigat
 
 ### Sub-decisions (defaults — implement these unless the maintainer overrides)
 
-1. **Truncation safety (CRITICAL — see [§6](#6-critical-safety-truncation--data-loss)).** If a file was loaded truncated, the editor must be **read-only and Save must be blocked**. Never let a user save a partial copy over a full file.
+1. **Truncation safety (CRITICAL — see [§6](#6-critical-safety-truncation-and-data-loss)).** If a file was loaded truncated, the editor must be **read-only and Save must be blocked**. Never let a user save a partial copy over a full file.
 2. **Editor widget:** plain `<textarea>`. Zero new dependencies. Honors "keep diffs minimal."
 3. **File-type gating:** editing is offered only for Markdown-ish extensions (`.md`, `.mdx`, `.markdown`, `.txt`). Every other file keeps today's read-only `<pre>` preview.
 4. **Mobile UX:** edit mode opens as a **full-screen overlay** (the current side panel is too narrow to edit in), with an **unsaved-changes guard** before close/navigate.
@@ -56,8 +62,8 @@ These were decided with the maintainer. **Do not expand scope. Do not re-litigat
 
 **The code you will change or extend:**
 - `/root/pi-web-ui/client/src/components/Files/FilesTab.tsx` — the tab. Today it renders a file list + a **read-only** `<pre>` preview panel. This is where the editor UI goes.
-- `/root/pi-web-ui/client/src/store/filesStore.ts` — Zustand store. Has `selectFile`, `createFile(path, content)`, and talks to `/api/files/*`. **Note:** `selectFile` currently *discards* the server's `truncated` flag — you must preserve it (see [§6](#6-critical-safety-truncation--data-loss)).
-- `/root/pi-web-ui/server/src/routes/files.ts` — Express routes. **`/api/files/write` already overwrites files**, and **`/api/files/read` already returns `{ content, truncated, totalSize }`**. You most likely need **zero server changes** (confirm; see [§5](#5-backend-do-not-change-unless-you-prove-you-must)).
+- `/root/pi-web-ui/client/src/store/filesStore.ts` — Zustand store. Has `selectFile`, `createFile(path, content)`, and talks to `/api/files/*`. **Note:** `selectFile` currently *discards* the server's `truncated` flag — you must preserve it (see [§6](#6-critical-safety-truncation-and-data-loss)).
+- `/root/pi-web-ui/server/src/routes/files.ts` — Express routes. **`/api/files/write` already overwrites files**, and **`/api/files/read` already returns `{ content, truncated, totalSize }`**. You most likely need **zero server changes** (confirm; see [§5](#5-backend--do-not-change-unless-you-prove-you-must)).
 
 **Reuse references (do not reinvent):**
 - `/root/pi-web-ui/client/src/components/Chat/MessageBubble.tsx` — the canonical, already-shipping usage of `ReactMarkdown` + `remarkGfm` in this codebase. **Match its rendering approach** (component overrides, `@tailwindcss/typography` classes) so the preview looks consistent with chat. Deps already in `client/package.json`: `react-markdown`, `remark-gfm`, `@tailwindcss/typography`.
@@ -114,17 +120,17 @@ If you conclude a server change *is* required, you must:
 
 ---
 
-## 6. CRITICAL SAFETY: truncation → data loss
+## 6. Critical safety: truncation and data loss
 
 This is the single real correctness hazard in this feature. **Treat it as a hard requirement, not a nicety.**
 
-- `/api/files/read` caps at 200KB and returns `truncated: true` for larger files; the old UI further truncated the display.
+- `/api/files/read` caps at 200 KiB and returns `truncated: true` for larger files; the old UI further truncated the display.
 - If a user edits a file that was loaded **truncated** and then saves, the write would **overwrite the full on-disk file with a partial copy → silent data loss.**
 
 **Required behavior:**
 - The store must preserve `truncated` from the read response (today `selectFile` throws it away — fix that).
 - When `truncated` is true: editing is **not offered**, the editor is **not entered**, and Save is **impossible** (guard at both store and UI layers). Show a clear read-only notice explaining the file is too large to edit safely here.
-- There must be an **automated test** proving Save is blocked for a truncated file, and a **live-validation step** exercising it (see [§7](#7-tdd-required-order-of-work) and [§8](#8-live-validation-mandatory-disposable-server-only)).
+- There must be an **automated test** proving Save is blocked for a truncated file, and a **live-validation step** exercising it (see [§7](#7-tdd--required-order-of-work) and [§8](#8-live-validation-mandatory-disposable-server-only)).
 
 ---
 

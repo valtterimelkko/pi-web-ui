@@ -4,16 +4,18 @@ Reading order for contributors, operators, and LLM coding agents working **on Pi
 
 Many docs below intentionally contain concrete paths, socket locations, service names, and maintainer runbook commands because this repository doubles as a live operational manual.
 
-If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` before reading deeper architecture docs.
+If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md). Given a session identifier, run `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` first; do not begin with a repository-wide grep. The locator resolves the registry/native identity and prints the relevant API, log, and session-file paths.
 
 ## Recent major doc-relevant changes
+- **Internal API `1.9.0` observability layer** — `/health` now includes detailed `runtimeHealth`; diagnostics accept `requestId`, `runId`, `runtime`, `component`, and `since` filters and return a bounded process-local `operational` snapshot. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), and [`OBSERVABILITY.md`](./OBSERVABILITY.md)
+- **Whole-codebase hardening** — request/body bounds, prompt-boundary coverage, WebSocket upgrade guards, path/worktree protections, private/atomic persistence, listener/timer cleanup, bounded worker output, and truthful validation/coverage gates were completed. The operator-facing consequences are summarised in [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) and [`SHARP-EDGES.md`](./SHARP-EDGES.md); the evidence ledger is [`plans/CODEBASE-HARDENING-IMPLEMENTATION-REPORT.md`](./plans/CODEBASE-HARDENING-IMPLEMENTATION-REPORT.md).
 - **Pi Codex compaction session-ID patch retired** — OpenAI fixed the Codex backend server-side (upstream #6477/#6555 closed without a pi code change); postinstall hook, patch scripts, extension auto-heal, and regression tests removed; both SDK installs restored to pristine. History: [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md)
 - **Third live-validation option: browser-WebSocket path** — cookie auth + `/ws` without a browser, for extension slash commands, `notification` toasts, and browser-native messages; runbook + `scripts/ws-validate.mjs` in [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
 - **Claude SDK `AskUserQuestion` support** — first-class browser dialog, cancel/timeout handling, and `extension_ui_cancel`. See [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md), [`PROTOCOL.md`](./PROTOCOL.md), and [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
 - **Antigravity inactivity stall watchdog + bounded retry** — configurable via `ANTIGRAVITY_STALL_TIMEOUT_MS` and `ANTIGRAVITY_MAX_ATTEMPTS`. See [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md)
 - **Files tab Markdown editor** — shipped: source editor + GFM live preview for `.md`/`.mdx`/`.markdown`/`.txt`, explicit Save via `/api/files/write`, truncated files read-only. Plan (now delivered) at [`plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md`](./plans/FILES-TAB-MARKDOWN-EDITOR-PLAN.md)
-- **Internal API contract `1.5.0`** — adds notification endpoints for opt-in/out, state, explicit emit, and recent deliveries; previous `1.4.0` screen-view transcript projection remains current
-- **Observability/introspection endpoints (`1.3.0`)** — `GET /api/v1/diagnostics`, `GET /api/v1/sessions/:id/diagnostics`, and `GET /api/v1/events/types`
+- **Internal API contract history** — `1.5.0` added notifications, `1.6.x` added run receipts/idempotency, `1.7.0` added model-aware thinking levels, `1.8.0` hardened multi-client/notification ingress, and `1.9.0` added runtime-health and operational diagnostics. [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) is the version authority.
+- **Observability/introspection** — `GET /api/v1/diagnostics`, session-scoped diagnostics, event-type introspection, correlation filters, and a bounded operational snapshot are documented in [`OBSERVABILITY.md`](./OBSERVABILITY.md) and [`INTERNAL-API.md`](./INTERNAL-API.md)
 - **Pi runtime OpenRouter model automation** — Pi can now surface a broader OpenRouter-backed model catalogue; see [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md)
 - **Notification layer (Telegram on `agent_end`)** — one-way operator notifications when an agent yields control, across all 4 runtimes, with a durable outbox; see [`NOTIFICATIONS.md`](./NOTIFICATIONS.md)
 - **Run receipts and execution instance identity** — durable Internal-API dispatch identity, session-scoped idempotency, restart recovery, and configured runtime-instance projection; see [`INTERNAL-API.md`](./INTERNAL-API.md) and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md)
@@ -24,8 +26,8 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`../CLAUDE.md`](../CLAUDE.md) — Claude Code agent entry point; kept byte-identical to `AGENTS.md` via `npm run docs:sync-agent-guides`
 
 ## 2. First-stop debugging
-- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) — fastest path to logs, session files, registry inspection, and runtime-specific diagnosis
-- `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` — quickest session-to-log/session-file locator
+- [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) — fastest evidence ladder: locator → screen transcript/diagnostics → runtime-specific files/logs
+- `npm run debug:where -- <session-id-or-runtime-session-id-or-path>` — quickest session-to-registry/native-id/log/session-file locator; use the resolved internal id for session-scoped diagnostics
 
 ## 3. System structure
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — high-level architecture, runtime paths, responsibilities
@@ -52,7 +54,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API reference (including transcript vs screen-view vs history read paths)
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — task-oriented guide for spawning, monitoring, and collecting child sessions across runtimes (including run receipts)
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — the three live-validation options (Internal API, Playwright E2E, browser-WebSocket path) with full runbooks; includes `scripts/ws-validate.mjs`
-- [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watches + headless `validate:long-horizon` runner for autonomous, restart-surviving, long-running validation
+- [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watch ledgers + headless `validate:long-horizon` runner for long-running validation; recorded firings survive restart, but reloaded watches must be re-registered to resume live observation
 
 ## 7. Integration & extension
 - [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md) — checklist for adding a new runtime

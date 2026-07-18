@@ -19,6 +19,11 @@
 │  OpenCode│────▶│  opencode-event-adapter.ts  │────▶│                  │
 │  (SSE)          │     │  (NormalizedEvent)          │     │                  │
 └─────────────────┘     └─────────────────────────────┘     └──────────────────┘
+
+┌─────────────────┐     ┌─────────────────────────────┐
+│ Antigravity     │────▶│ antigravity-service.ts       │────▶ same broker/router
+│ (agy -p/logs)   │     │ (normalized turn + heartbeat)│
+└─────────────────┘     └─────────────────────────────┘
 ```
 
 ## The NormalizedEvent Contract
@@ -95,7 +100,7 @@ The channel-backed path may also emit `stream_activity` so the frontend can show
 
 ### OpenCode
 
-OpenCode emits Server-Sent Events. `opencode-event-adapter.ts` maps SSE types to `NormalizedEvent`. This adapter also handles:
+OpenCode emits Server-Sent Events. `opencode-event-adapter.ts` maps SSE types to `NormalizedEvent` and owns runtime-specific deduplication. `opencode-service.ts` then makes one normalized pass and fans each event out to the prompt callback and service observers. The adapter also handles:
 - **Permission bridging:** OpenCode `permission.asked` → `extension_ui_request`
 - **Tool deduplication:** Prevents duplicate tool events from being forwarded
 - **Context window tracking:** Extracts token usage from `message.updated` events
@@ -106,6 +111,35 @@ OpenCode SSE: { type: 'tool.call', properties: { tool: 'Bash', args: { command: 
   → opencode-event-adapter.ts produces: { type: 'tool_execution_start', data: { toolCallId: '...', toolName: 'Bash', args: ... } }
   → connection.ts converts to: { type: 'session_event', event: { type: 'tool_execution_start', ... } }
 ```
+
+### Antigravity
+
+Antigravity runs `agy -p` as a subprocess per turn. It does not provide the
+same native streaming/tool-event surface as Pi, Claude, or OpenCode. The service
+persists each turn in Pi-owned JSONL, emits normalized message lifecycle events
+when output is available, and emits synthetic `stream_activity` heartbeats while
+the subprocess runs. A per-turn log-file mtime watchdog kills a silent attempt
+and retries up to `ANTIGRAVITY_MAX_ATTEMPTS`; abort cancels pending retry work.
+
+After a turn, the conversation UUID is reconciled with the agy-owned SQLite DB
+so subsequent turns resume the same conversation. For diagnostics, correlate
+the registry's `antigravityConversationId` with the Pi-owned JSONL, the per-turn
+`agy-logs/` file, and the matching `.db` rather than searching all of `~/.gemini`.
+
+## Server-side observers and replay
+
+The WebSocket client is not the only consumer of normalized events. The Internal
+API event broker feeds persistent `/events` subscribers, long-horizon watches,
+and cross-runtime notifications; the API prompt path additionally ties its
+`runId` receipt to terminal events. Runtime service observers are attached
+directly so browser-started turns are visible to watches and notifications too;
+only an accepted Internal-API prompt has a run receipt, so browser turns do not
+invent receipt identities.
+
+Replay is separate from live normalization: runtime history adapters rebuild a
+bounded/readable event sequence when a session is opened, while observers react
+to live events. A replayed `agent_end` is not a new live turn for notification
+purposes.
 
 ## Frontend Ingestion
 

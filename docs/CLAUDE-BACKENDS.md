@@ -47,7 +47,7 @@ Claude Code's built-in `AskUserQuestion` tool is supported first-class through t
 - **Flow:** Claude emits `AskUserQuestion` → SDK backend intercepts it via `canUseTool` → emits `ask_user_question_request` to the browser → the user answers in a structured dialog → the SDK backend resolves the callback with the answers → the turn continues.
 - **UI:** `client/src/components/Extensions/AskUserQuestionDialog.tsx` renders 1–4 questions with single-select, multi-select, option descriptions, and preview-safe markdown.
 - **Cancel/timeout:** if the request is not answered before the timeout, the session aborts, the turn ends, or all subscribers disconnect, the backend emits `ask_user_question_closed` (mapped to `extension_ui_cancel` for the browser) and resolves the callback as cancelled. This prevents zombie dialogs and silent drops of late answers.
-- **Configuration:** `CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS` (default 30 minutes, positive integer). A 5-minute default was the original cause of a production zombie-dialog bug; the current default is intentionally a long safety net.
+- **Configuration:** `CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS` (default 30 minutes, positive integer) is the wall-clock safety net; `CLAUDE_ASK_USER_QUESTION_DISCONNECT_GRACE_MS` (default 120 seconds, positive integer) is the primary last-subscriber abandonment grace. A 5-minute default was the original cause of a production zombie-dialog bug; the current default is intentionally a long safety net.
 - **Internal API:** `POST /api/v1/sessions/:id/approvals/:requestId/respond` accepts structured `answers` / `annotations` / `cancelled` for a pending `AskUserQuestion`; returns `409 ASK_ALREADY_CLOSED` if the request already resolved.
 - **Not available on:** direct CLI (`claude -p`) or channel-backed backends in this release. Those backends do not wire the interactive callback.
 
@@ -216,6 +216,13 @@ sudo journalctl -u pi-web-ui -f | grep ClaudeChannel
 claude auth status --json
 ```
 
+Channel event/activity debug lines are opt-in with `CLAUDE_CHANNEL_DEBUG=1`.
+Even in debug mode the channel bridge must not log prompts, tool payloads,
+tokens, cookies, or credentials; lifecycle/failure lines remain visible without
+that flag. For replay-cost/volume measurements use the repository's bounded
+`pi-claude-channel/measure-replay.ts` helper rather than enabling unrestricted
+payload logging.
+
 ### Session file locations
 
 - Pi-owned replay file: `~/.pi-web-ui/claude-sessions/<internal-session-id>.jsonl`
@@ -310,13 +317,49 @@ If a future regression appears in one of those areas, search recent commits in `
 ## Live Validation
 
 When you make changes to Claude runtime code, use the generic Internal-API
-live-validation runner instead of the old browser-auth WebSocket script:
+live-validation runner instead of the old browser-auth WebSocket script. Start a
+disposable server and pass both paths explicitly (the runner refuses production
+defaults unless `--allow-production` is deliberate):
 
 ```bash
-npm run validate:live -- --runtime claude --scenario smoke
-npm run validate:live -- --runtime claude --scenario tool-visibility
-npm run validate:live -- --runtime claude --scenario session-info
-npm run validate:live -- --runtime claude --scenario follow-up
+# Terminal A
+VAL_DIR="$(mktemp -d /tmp/pi-web-ui-claude-XXXXXX)"
+npm run validate:server -- --dir "$VAL_DIR" --port 0 \
+  >"$VAL_DIR/server.log" 2>&1 &
+
+# Terminal B (export VAL_DIR there, or replace it with the printed directory)
+PI_WEB_UI_WAIT_SOCKET="$VAL_DIR/internal-api.sock" npm run internal-api:wait
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario smoke
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario tool-visibility
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario session-info
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario follow-up
+```
+
+For the SDK `AskUserQuestion` lifecycle scenarios, use the same socket/token
+with a profiles-enabled SDK backend:
+
+```bash
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario claude-ask-user-question
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario claude-ask-user-question-cancel
+# Boot the validation server with CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS=1..30000 first.
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario claude-ask-user-question-timeout
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario claude-ask-user-question-delayed-answer
 ```
 
 For **profile-specific validation** (SDK/direct backends, GLM profiles):
@@ -346,10 +389,13 @@ This validates:
 - Skills available and usable
 - Follow-up/resume works with profile persistence
 
-If Claude is running in channel-backed mode, also run:
+If Claude is running in channel-backed mode, also run (against the same
+validation server):
 
 ```bash
-npm run validate:live -- --runtime claude --scenario channel-heartbeat
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario channel-heartbeat
 ```
 
 What this validates:
@@ -361,10 +407,13 @@ What this validates:
 - **Follow-up turns:** a second turn succeeds when the runtime reports follow-up support
 - **Channel liveness:** `stream_activity` is emitted when Claude is using the channel-backed path
 
-The runner auto-discovers the Internal API socket and token, creates an
+The runner uses the explicitly supplied disposable socket/token, creates an
 ephemeral session, streams normalized events, and cleans up afterwards — no
-browser login required. See [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) for
-runner usage and [`INTERNAL-API.md`](./INTERNAL-API.md) for the underlying API.
+browser login required. It does not discover or select a disposable server for
+you; use the validation server's printed paths. Omitting them is a deliberate
+production target only when `--allow-production` is supplied. See
+[`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) for runner usage and
+[`INTERNAL-API.md`](./INTERNAL-API.md) for the underlying API.
 
 ## How to Decide Which Code Path to Read
 

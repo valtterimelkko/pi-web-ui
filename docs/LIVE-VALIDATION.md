@@ -4,7 +4,15 @@
 
 ## The three live-validation options
 
-All three run against a **disposable validation server** by default (production only with explicit user permission plus `--allow-production` / explicit instruction). Choose by what you need to observe:
+The Internal API runner and browser-WebSocket driver use a **disposable
+validation server** by default. Playwright E2E has a separately managed target
+(`TEST_URL`, default `http://localhost:3457`); its `webServer` lifecycle is
+intentionally disabled, so do not assume it is isolated or production-safe
+without starting and documenting an appropriate server yourself. For the
+Internal API/long-horizon runners, production requires explicit user permission
+plus `--allow-production`; the manually targeted Playwright/WS paths need the
+same explicit safety decision even where the test tool has no such flag. Choose
+by what you need to observe:
 
 | # | Method | What it exercises | Use it for | Runbook |
 |---|--------|-------------------|------------|---------|
@@ -42,9 +50,13 @@ future agents, automation, and local debugging while preserving the main app's
 security model.
 
 This document covers **single-turn** validation. For validation that must wait
-out a long horizon (minutes to hours) and survive the validator disconnecting or
-the server restarting — driven by the durable watch endpoints and the headless
-`validate:long-horizon` runner — read [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
+out a long horizon (minutes to hours) and preserve watch-ledger evidence when
+the validator disconnects or the server restarts — driven by the durable watch
+endpoints and the headless `validate:long-horizon` runner — read
+[`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md). A server restart
+reloads an existing watch as `detached`; preserve its ledger, then create a new
+watch/runner (or explicitly reconcile it in a custom client) before expecting
+new firings. The current runner does not auto-recover live observation.
 
 If you are building agentic orchestration rather than test scenarios, read:
 - [`INTERNAL-API.md`](./INTERNAL-API.md)
@@ -85,8 +97,13 @@ a second owner fails safely. Explicit companion ports are validated as distinct
 and available. Example with a caller-owned directory:
 
 ```bash
+# Terminal A / background task
 VALIDATION_DIR="$(mktemp -d /tmp/pi-validation-XXXXXX)"
-npm run validate:server -- --dir "$VALIDATION_DIR" --port 0
+npm run validate:server -- --dir "$VALIDATION_DIR" --port 0 \
+  >"$VALIDATION_DIR/server.log" 2>&1 &
+
+# Terminal B: export/replace VALIDATION_DIR with the same directory
+PI_WEB_UI_WAIT_SOCKET="$VALIDATION_DIR/internal-api.sock" npm run internal-api:wait
 npm run validate:live -- \
   --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" \
@@ -106,13 +123,21 @@ npm run validate:server -- --env-file .env.production \
   --env-key GLM_CODING_PLAN_TOKEN --dir "$VALIDATION_DIR" --port 0
 ```
 
-Disposable servers force their Pi session watcher/cache, OpenCode workspace,
-registry, sockets, tokens, and runtime metadata under the validation directory.
-They also clear any ambient `INTERNAL_API_KEY`, so the printed isolated token file
-is always authoritative. Antigravity is disabled in disposable mode because the
-`agy` CLI has no supported conversation-data directory override and would otherwise
-write to the user's real `~/.gemini` conversation store; validate Antigravity only
-through a separately authorised workflow that explicitly accepts that limitation.
+Disposable servers force their Pi session directory/watcher/cache, OpenCode
+workspace, registry, sockets, tokens, and runtime metadata under the validation
+directory. They also clear any ambient `INTERNAL_API_KEY`, so the printed isolated
+token file is always authoritative. By design, the wrapper does **not** override
+`PI_AGENT_DIR`: Pi auth/models/resources remain available from the normal agent
+directory, and the derived `web-ui-prefs.json` path is therefore not isolated by
+default. Validation mode disables boot-time session cleanup and real-session
+registry rebuild, but browser tests that mutate preferences (archive/pin/rename)
+must either launch with `PI_AGENT_DIR="$VALIDATION_DIR/pi-agent"` and a deliberately
+provisioned disposable runtime setup, or avoid those mutations. Do not assume a
+runtime-disposable server is a full preference/credential isolation boundary.
+Antigravity is disabled in disposable mode because the `agy` CLI has no supported
+conversation-data directory override and would otherwise write to the user's real
+`~/.gemini` conversation store; validate Antigravity only through a separately
+authorised workflow that explicitly accepts that limitation.
 
 `--env-key` is a repeatable allowlist: only those named values are imported from
 that file, so this option does not pull in its unrelated production secrets or
@@ -130,11 +155,18 @@ List available scenarios without connecting to a server:
 npm run validate:live -- --list
 ```
 
-Run against every available runtime on the disposable server:
+Run the current disposable-safe runtime set (Pi, Claude, and OpenCode) against all registered scenarios:
 
 ```bash
 npm run validate:live -- --socket <sock> --token-path <token> --runtime all --scenario all
 ```
+
+`--runtime all` is intentionally not a synonym for all four runtime families:
+`live-validate.ts` currently expands it to `pi`, `claude`, and `opencode`.
+Antigravity is disabled by the disposable server because `agy` has no supported
+conversation-data directory override. Run an Antigravity scenario only with an
+explicitly authorised, separately isolated-enough workflow and record that it
+can touch the user's real `~/.gemini` state.
 
 JSON output for agents/tools:
 
@@ -170,11 +202,38 @@ verdicts and still run watch/session finalization.
 
 - `smoke` — create a session and verify a minimal turn completes
 - `run-receipt-idempotency` — verify `runId`, terminal receipt lookup, execution-instance attribution, and same-key deduplication
+- `model-smoke` — create a session with an explicit `--model` and verify the selected model is reflected; requires `--model <provider/id>`
 - `tool-visibility` — verify tool execution is surfaced in the full stream
 - `session-info` — verify enriched internal-API session info is available
+- `thinking-level` — verify capability-gated model/thinking-level control and the OpenCode config bridge
 - `follow-up` — verify the runtime accepts a follow-up turn when supported
 - `notify-on-agent-end` — opt in, run a real turn, and verify the disposable capture channel records the delivery without contacting Telegram
 - `channel-heartbeat` — verify Claude channel-backed sessions emit `stream_activity`
+- `claude-ask-user-question` — verify the Claude SDK browser question flow, structured answers, and resumed turn
+- `claude-ask-user-question-cancel` — verify cancellation closes the question and the turn completes without an answer
+- `claude-ask-user-question-timeout` — verify timeout/late-answer handling; boot the validation server with `CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS=1..30000`
+- `claude-ask-user-question-delayed-answer` — verify the disconnect grace does not close a question before a delayed answer arrives
+
+## Validation evidence matrix
+
+| Evidence / scenario | Disposable-safe scope | What it proves |
+|---|---|---|
+| `smoke` | Pi, Claude, OpenCode; Antigravity only when explicitly authorised | session creation and a minimal completed turn |
+| `run-receipt-idempotency` | Pi, Claude, OpenCode | durable `runId`, terminal receipt, execution identity, and same-key deduplication |
+| `model-smoke` | capability/runtime dependent; explicit model required | create-time model selection and reported model identity |
+| `tool-visibility` | capability-dependent; normally Pi/Claude/OpenCode | normalized tool events in the full stream |
+| `session-info` | Pi, Claude, OpenCode; Antigravity when explicitly authorised | enriched runtime/session metadata |
+| `thinking-level` | OpenCode config bridge; capability-gated | model-aware thinking-level control and provider config mapping |
+| `follow-up` | capability-dependent; Antigravity can run in an authorised workflow | follow-up/resume behaviour |
+| `notify-on-agent-end` | Pi, Claude, OpenCode disposable capture channel | origin-independent notification observation without Telegram |
+| `channel-heartbeat` | Claude channel backend only | `stream_activity` liveness events |
+| `claude-ask-user-question` | Claude SDK backend only | structured multi-question answer flow and resumed turn |
+| `claude-ask-user-question-cancel` | Claude SDK backend only | cancellation/closed event and graceful continuation |
+| `claude-ask-user-question-timeout` | Claude SDK backend only; short timeout must be configured | timeout closure, terminal turn, and late-answer rejection |
+| `claude-ask-user-question-delayed-answer` | Claude SDK backend only | disconnect grace prevents premature dialog closure |
+
+A skipped result is capability evidence, not a failure. A failed disposable
+result should be investigated before any production validation is considered.
 
 ## Claude profile validation runner
 
@@ -356,7 +415,7 @@ Flags when the defaults don't match: `--base http://localhost:<port>`, `--passwo
 
 ### Teardown
 
-Kill the validation server (and verify the port is really free — see orphan pitfall), then `rm -rf` the `--dir`. Pi-runtime session JSONLs land in the real `~/.pi/agent/sessions/<cwd-hash>/` (Pi keeps its real agent dir even under validation); leave them or note them in the report.
+Kill the validation server (and verify the port is really free — see orphan pitfall), then `rm -rf` the `--dir`. Disposable validation redirects Pi session storage and the session watcher to `<dir>/pi-sessions`; Pi's `PI_AGENT_DIR` remains the real agent directory for auth/models/resources, so do not copy or alter that directory and record any provider-side effects separately.
 
 ## Capability-driven behaviour
 

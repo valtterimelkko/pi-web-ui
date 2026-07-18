@@ -1,10 +1,17 @@
 # Plan: Fix notification opt-in desync (Pi dual-id) via canonical `pi:<uuid>` identity
 
-> **Status:** ready for execution. **Owner runtime of the bug:** Pi (Claude / OpenCode /
-> Antigravity are unaffected). **Approach:** normalize the notification opt-in identity
-> to the same stable bare-UUID that the v2 session-metadata layer already uses — **do not
-> change `session.id`, do not touch rename/pin/archive.** TDD-first: write the failing
-> test, then the code, then validate (unit → lint → typecheck → build → live).
+> **Status:** implemented and archived. The current contract is in
+> [`NOTIFICATIONS.md`](./NOTIFICATIONS.md). This file records the original TDD
+> plan and evidence; do not restart the implementation from this checklist.
+> **Owner runtime of the original bug:** Pi (Claude / OpenCode / Antigravity were
+> unaffected). The shipped implementation normalizes Pi notification opt-ins to
+> the stable bare UUID derived from the session path without changing
+> `session.id` or the rename/pin/archive model.
+> **Current validation boundary:** the old validation checklist below is
+> historical. Use [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) for current
+> commands; disposable `--runtime all` covers Pi, Claude, and OpenCode, while
+> Antigravity requires explicit authorisation and may touch real `~/.gemini`
+> state. Production validation is never implied by this archived plan.
 
 ---
 
@@ -270,25 +277,27 @@ and **no double-notifications**. Nothing about the visual/interaction design cha
 
 ---
 
-## 7. Live validation (REQUIRED — do not skip; this is where past attempts fell short)
+## 7. Historical validation evidence (archived; not a current runbook)
 
-Use the Pi Web UI Internal-API orchestration skill — invoke it by name:
-**`pi-web-ui-internal-api-orchestration`** (you have this skill under your own path; use the
-name, not a path). It covers booting a disposable validation server and driving the runtimes
-over the Unix socket.
+The original plan required the checks below, but this file is now archived. Use
+[`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) for current commands and safety rules;
+disposable `--runtime all` covers Pi, Claude, and OpenCode, while Antigravity
+requires explicit authorisation because its conversation store cannot be isolated.
+Do not copy historical no-argument or production-targeting commands from this
+section, and do not invoke the orchestration skill solely because this archived
+plan mentions it.
 
-### 7.1 Browserless runtime validation (all four runtimes)
-- Boot a disposable validation server (isolated dirs) per the skill / `docs/LIVE-VALIDATION.md`
-  and `CLAUDE.md` "Runtime-aware validation shortcuts".
-- Run the `notify-on-agent-end` scenario for `--runtime pi|claude|opencode|antigravity`
-  (`server/src/live-validation/scenarios.ts:182`). It proves origin-independent `agent_end`
-  delivery still works after the change.
-- **Add a targeted regression assertion for the Pi desync:** opt a Pi session in using the
-  **live basename** id, then read the opt-in state back using the **bare-UUID** id, and assert
-  the record is found (pre-fix this returns null). If the scenario harness can't express both
-  id forms, do this via a short orchestration snippet using the Internal-API client.
+### 7.1 Original browserless acceptance intent (all four runtimes)
+- The original acceptance called for a disposable validation server and the
+  `notify-on-agent-end` scenario for `--runtime pi|claude|opencode|antigravity`.
+  Current disposable validation deliberately excludes Antigravity; the evidence
+  and limitation are recorded in the archived deviation below.
+- **Targeted Pi regression:** opt a Pi session in using the **live basename** id,
+  then read the opt-in state back using the **bare-UUID** id, and assert the
+  record is found (pre-fix this returned null). If a current harness needs this,
+  follow the current Internal API runbook rather than the old command examples.
 
-### 7.2 Real-browser validation of the toggle (the actual user-visible bug)
+### 7.2 Historical real-browser validation of the toggle
 - Localhost: use **`webapp-testing`** (manages the dev server) for a headless Playwright check;
   for interactive/visual use **`playwright-cli`**. Steps:
   1. Create/open a **Pi** session, send a turn so it's live.
@@ -302,9 +311,18 @@ over the Unix socket.
 - Explicitly diff the observed UI behavior against §5 — the visual states, toast text, and
   click semantics must be unchanged.
 
-### 7.3 Production live validation (operator permits it — use it)
-The operator grants permission to validate against **production**. Past agents did an
-incomplete job precisely because they avoided prod; do the real thing, carefully:
+### 7.3 Historical production validation (not standing authorisation)
+
+> This subsection records the original operator-specific acceptance procedure.
+> It is **not current permission** to touch production. Do not run it from this
+> archived plan: obtain explicit, present authorisation and follow the current
+> production exception in [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) instead.
+> Past claims about operator permission, topology, credentials, or deployment
+> must be re-verified before any action.
+
+**Original procedure text (historical):** the plan recorded an operator grant to
+validate against **production**. That grant has no continuing force; do not copy
+or execute the commands below.
 - **Prod topology (per operator setup — verify before acting):** systemd service
   `pi-web-ui.service`, port **3456**, public host `pi.letsautomate.work`. Redeploy after code
   changes = build then `sudo systemctl restart pi-web-ui.service`.
@@ -330,7 +348,9 @@ incomplete job precisely because they avoided prod; do the real thing, carefully
 3. `npm run typecheck`
 4. `npm run build`
 5. `npm test` (root — client + server + shared workspaces) + the targeted notification tests.
-6. Live validation §7 (browserless all-runtimes + real-browser Pi + production).
+6. Historical live-validation evidence in §7 was part of the original
+   acceptance; current checks must follow [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+   and must not target production without present explicit authorisation.
 7. `git status --short`, `git diff --stat`, `git diff --cached --stat`; verify **no** secrets,
    tokens, cookies, session dumps, or local machine files are staged (the repo is public).
 8. Update `docs/NOTIFICATIONS.md` with a short note that Pi opt-ins are keyed by the canonical
@@ -343,8 +363,12 @@ incomplete job precisely because they avoided prod; do the real thing, carefully
 - Opting in on a **live** Pi session and reloading leaves the bell **on** (server state and UI
   agree). Turning it off **stops** notifications. **No double** notifications after re-toggle.
 - Telegram deep links open the correct Pi session after reload.
-- The four-runtime `notify-on-agent-end` live scenario passes; Pi cross-id read-back passes.
+- The original four-runtime `notify-on-agent-end` acceptance was attempted as
+  recorded in the evidence below; current disposable `--runtime all` excludes
+  Antigravity and current runtime evidence belongs in the live-validation report.
+  Pi cross-id read-back passes.
 - Claude / OpenCode / Antigravity opt-in behavior is unchanged.
 - `sessionKeyOf`, `session.id`, and the v2 rename/pin/archive model are **untouched** and
   their tests remain green (no regression to the last five commits' work).
-- All of §8 is green, including production validation with the operator's data left intact.
+- The original §8 included a production-validation step; current completion
+  must use the repository's present safety contract and explicit authorisation.

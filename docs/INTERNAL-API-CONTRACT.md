@@ -4,6 +4,11 @@
 
 ## Contract identity
 
+`server/src/internal-api/types.ts` is the machine-readable version source of
+truth and this document is the canonical human-readable compatibility record.
+Other indexes and delta summaries should link here rather than inventing a
+second current version number.
+
 The Internal API publishes its contract metadata through both:
 
 - `GET /api/v1/health`
@@ -27,7 +32,8 @@ Current contract:
 - **1.9.0** (minor, additive) — added lightweight local observability without external telemetry:
   - `GET /api/v1/health` retains the legacy runtime availability strings and adds a unified `runtimeHealth` matrix with enabled/available/backend/check status, bounded check timing, and the latest scrubbed failure.
   - diagnostics responses add a privacy-safe `operational` snapshot with bounded turn outcome/latency counters, pipeline-integrity counters, aggregate registry session counts, and worker/crash statistics.
-  - diagnostics log filtering adds `requestId`, `runId`, `component`, `runtime`, and `since` selectors.
+  - diagnostics log filtering adds `requestId`, `runId`, `component`, `runtime`, and `since` selectors, alongside the existing bounded `limit`/`minLevel` filters.
+  - the detailed runtime-health checks and diagnostics operational snapshot are bounded and process-local; consumers must not treat them as durable history and should use receipts/transcripts for restart-surviving evidence.
   Old `1.8.x` clients can ignore every new field; no existing route or field was removed.
 - **1.8.0** (minor, additive with a corrected acceptance status) — hardened trusted multi-client operation and notification ingress:
   - `POST /api/v1/notifications` accepts an optional `Idempotency-Key`, durably queues before responding, returns `202 Accepted` plus `Location`/`statusUrl`, and returns `409 IDEMPOTENCY_KEY_CONFLICT` if a key is reused with a different payload.
@@ -129,7 +135,7 @@ For `/api/v1`, preserve these rules:
 2. **Existing field meanings are stable.** Do not silently change semantics of a documented field.
 3. **Unknown fields must be safe to ignore.** Consumers should not need to exhaustively parse every object property.
 4. **Runtime differences must remain explicit.** Put new runtime capability differences under `/capabilities` before depending on them.
-5. **Completion must be machine-detectable.** If an orchestration flow can run work, it must expose a reliable completion path via `/wait`, `/transcript`, or documented SSE events.
+5. **Completion must be machine-detectable.** If an orchestration flow can run work, it must expose a reliable completion path via `/wait`, `/transcript`, or documented SSE events. For a prompt whose caller may disconnect, use `detach:true` with `verbosity=answers` and retain the returned `runId`.
 6. **Claude channel event caveats stay documented.** Do not imply all runtimes have identical event reliability.
 7. **Local-only security boundary stays intact.** Keep Unix-socket + bearer-token assumptions unless a separate public API is intentionally designed.
 8. **Trusted multi-client, not multi-tenant.** Every process holding the shared token can inspect and control every API session. Concurrency safety does not provide tenant isolation or per-client authorization.

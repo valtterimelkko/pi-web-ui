@@ -2,10 +2,13 @@
 
 > Historical execution plan. The live-card work shipped in `f5fc841` / `61126aa`.
 >
-> **2026-07-10 follow-up:** the original live-only scope proved insufficient for reopened Pi sessions: `loadSessionMessages` discarded all persisted tool records. `pi/session-history.ts` now restores only compact `subagent` / `evaluated_subagent` cards during Pi history replay, using this plan's `SubagentToolSummary` contract. It never replays inner transcripts, commands, or final reports. `evaluated_subagent` is also routed through `SubagentToolCard` so its agent identity and aggregate usage are visible.
-> Executor: follow this **exactly**. Do **not** claim completion until every box in
-> [§9 Definition of Done](#9-definition-of-done-hard-gate) is checked with the
-> evidence named there. Marking work "done" without the named artifact = failure.
+> **Status:** implemented and archived. The 2026-07-10 replay follow-up also
+> shipped: reopened Pi sessions restore only compact `subagent` /
+> `evaluated_subagent` cards using `SubagentToolSummary`; inner transcripts,
+> commands, and final reports are not replayed. For current behaviour, inspect
+> [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md) and
+> [`CODEBASE-MAP.md`](./CODEBASE-MAP.md). The executor checklist below is
+> historical evidence, not a request to repeat the implementation.
 
 ---
 

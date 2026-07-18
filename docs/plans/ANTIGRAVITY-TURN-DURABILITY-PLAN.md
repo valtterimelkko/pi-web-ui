@@ -1,9 +1,16 @@
 # Execution Plan — Antigravity Turn Durability & Failure Visibility
 
+> **Status:** implemented and archived across `6af05f1`, `df4ab8c`,
+> `7da6821`, `142ec23`, `352197e`, and `dbc3e47`. Current runtime behaviour is
+> documented in [`../ANTIGRAVITY-INTEGRATION.md`](../ANTIGRAVITY-INTEGRATION.md),
+> [`../EVENT-PIPELINE.md`](../EVENT-PIPELINE.md), and
+> [`../TROUBLESHOOTING.md`](../TROUBLESHOOTING.md). The execution checklist
+> below is historical evidence, not an outstanding implementation request.
+>
 > **Audience:** an execution agent implementing this fix end-to-end.
 > **Author:** analysis/review agent (will validate the executor's result at the end).
 > **Branch policy:** work on the **current branch** (do **not** create a new branch). Commit and push when done.
-> **Status when handed to you:** analysis complete, no code written yet.
+> **Original handoff status:** analysis complete, no code written yet.
 
 ---
 

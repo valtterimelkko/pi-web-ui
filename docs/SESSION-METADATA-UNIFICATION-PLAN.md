@@ -1,7 +1,15 @@
 # Session Metadata Unification — TDD Execution Plan
 
+> **Status:** implemented and archived in `22afbfe` and `3da7855`.
+> Current behaviour is documented in [`SESSION-METADATA.md`](./SESSION-METADATA.md)
+> and [`ARCHITECTURE.md`](./ARCHITECTURE.md). The future-tense checklist below
+> records the original TDD decisions and evidence; it is not an outstanding
+> implementation request.
+> **Current validation boundary:** use [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+> for current commands and safety rules; any historical production-validation
+> wording below is not standing authorisation.
+>
 > **Audience:** an execution agent implementing this end-to-end.
-> **Status:** approved plan, not yet started.
 > **Golden rule:** this plan is only "done" when it is **proven working by live
 > validation against a real browser** — not when the tests pass. You are known
 > to declare victory early. Do not. Every phase has a **Quality Gate** and a
@@ -357,15 +365,14 @@ transactions; migrate JSON → SQLite once with a backup.
 
 ---
 
-## 5. Live Validation (mandatory, blocking) — and you MAY use production
+## 5. Historical live validation (archived; not standing authorisation)
 
-> The operator has **explicitly granted production access for live validation**.
-> The previous incident happened because an agent could not / did not validate
-> against real behavior and *assumed* a root cause. **Do not repeat that.**
-> Production is `pi.letsautomate.work` on port 3456 (systemd `pi-web-ui.service`);
-> you may inspect it, hit its API, drive it in a browser, rebuild, and restart
-> it. **You must restore `web-ui-prefs.json` to its captured baseline after every
-> run and confirm the count matches.**
+> The procedure below records the original operator-specific acceptance evidence.
+> It is **not current permission** to inspect, rebuild, restart, or otherwise
+> target production. Do not copy it as a runbook. Use [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+> for current safety rules, and obtain present explicit authorisation before any
+> production validation. Historical topology, credentials, and restoration
+> instructions must be re-verified rather than assumed.
 
 ### 5.1 How to drive prod in a real browser (this is the proven method)
 Prod sits **behind an external auth gateway** (`auth.letsautomate.work`), so a

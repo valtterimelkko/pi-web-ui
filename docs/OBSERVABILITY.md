@@ -128,8 +128,29 @@ Authed like every other internal-api route (only `/health` is exempt). The
 notification outcomes, latency buckets, adapter/subscriber/watch/worker anomaly
 counts, aggregate session counts, and path-free worker crash totals. It contains
 no prompts, transcripts, tool payloads, models, session paths, tokens, or
-credentials. Health retains legacy runtime strings and adds a uniform
-`runtimeHealth` matrix with bounded checks and scrubbed failure evidence.
+credentials. It is an operational snapshot, not a durable historical database;
+the ring, counters, and latest runtime-health failures reset when the server
+process restarts.
+
+Diagnostics query selectors are `sessionId`, `requestId`, `runId`, `runtime`,
+`component`, `since` (ISO timestamp), `minLevel`, and bounded `limit`. Use the
+resolved internal session id from `npm run debug:where` for
+`/sessions/:id/diagnostics`; use `runId` for one prompt's durable dispatch
+identity and `requestId` for the originating HTTP request. The session-scoped
+route narrows records but still returns the same process-level operational
+snapshot.
+
+
+## Runtime health
+
+`GET /api/v1/health` keeps the legacy `runtimes` availability strings for
+compatibility and adds `runtimeHealth` entries. Each entry reports `enabled`,
+`available`, the selected backend, `checkStatus` (`ok`, `unavailable`, `error`,
+or `disabled`), `checkedAt`, bounded `checkDurationMs`, and the latest scrubbed
+failure when one exists. The top-level health status is primarily a
+server/Pi-liveness compatibility signal; use `runtimeHealth` or
+`GET /api/v1/capabilities` when deciding whether a specific optional runtime is
+usable.
 
 ## Manual browser diagnostic bundle
 

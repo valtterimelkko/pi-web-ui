@@ -63,6 +63,29 @@ Antigravity conversations are tracked via the conversation UUID stored in:
 
 **Output extraction quirk**: resumed calls include prior assistant replies before the newest reply in stdout. `extractNewReply()` slices near the accumulated prior trimmed stdout length (`AntigravitySessionStore.priorReplyAnchor()`) to isolate the new response — but agy's replay of prior turns is **not always byte-stable** across invocations (observed: a run of blank lines collapsed on replay, 10 characters shorter than what the prior turn originally captured). Trusting the recorded byte offset blindly in that case truncates the start of the new reply. `extractNewReply()` therefore verifies/corrects the offset by anchoring on a suffix of the prior turn's actual stored response text (`priorReplyAnchor().text`) near the expected position, searching a ±400 char window and preferring the match closest to the recorded offset (guards against a short/common anchor false-matching earlier in a long transcript). It falls back to the raw offset when no anchor is found within tolerance (agy replayed nothing at all, or replayed content that differs too much to verify) — never worse than offset-only slicing. `buildAgyErrorBody()` (partial output on a timeout/error turn) uses the same shared `sliceAfterPriorReply()` helper.
 
+## Turn durability and failure visibility
+
+A prompt is written to the Pi-owned JSONL store as a `running` turn before the
+`agy` subprocess is spawned, and the registry is updated to `status: running`.
+A browser refresh therefore retains the user prompt and in-flight state instead
+of showing an empty history. Successful turns are finalized as `done`; timeout,
+stall, non-zero exit, and spawn failures are finalized as `error` with a
+non-empty reason and any safely isolated partial output. Both terminal paths
+emit `agent_end`, so the failure is visible in replay and can trigger an
+opted-in notification.
+
+If the process crashes while a turn is still `running`, startup deliberately
+leaves that turn as an in-flight historical record: replay shows the user prompt
+without inventing an assistant reply or `agent_end`. It is evidence of an
+interrupted turn, not proof that the model completed. The service does not
+silently reconcile it into success; inspect the per-turn `agy-logs/` file,
+conversation DB, and diagnostics before deciding whether to retry.
+
+The registry keeps the selected model label intact for UI/metadata. At the agy
+boundary the service strips one leading provider prefix such as
+`antigravity/` before passing `--model`, and logs a warning if agy still reports
+a silent downgrade to another label.
+
 ## Event Format
 
 Antigravity emits normalized events in the same format as other runtimes:
@@ -142,13 +165,26 @@ The `NewSessionModal` shows an Antigravity button (violet theme) when `antigravi
 
 ## Live Validation
 
+The disposable validation server intentionally disables Antigravity because
+`agy` has no supported conversation-data directory override. Do not include it
+in the normal `--runtime all` disposable matrix. Run an Antigravity scenario
+only against an explicitly authorised target and record that it may touch the
+real `~/.gemini` state:
+
 ```bash
-npm run validate:live -- --runtime antigravity --scenario smoke
-npm run validate:live -- --runtime antigravity --scenario follow-up
-npm run validate:live -- --runtime antigravity --scenario session-info
+npm run validate:live -- --allow-production \
+  --runtime antigravity --scenario smoke
+npm run validate:live -- --allow-production \
+  --runtime antigravity --scenario follow-up
+npm run validate:live -- --allow-production \
+  --runtime antigravity --scenario session-info
 ```
 
-All generic scenarios (`smoke`, `follow-up`, `session-info`) work unchanged because the runtime reports capabilities correctly and emits standard normalized events.
+When using a separately isolated Antigravity-capable server, pass its printed
+`--socket` and `--token-path` instead of `--allow-production`. The generic
+scenarios work because the runtime reports capabilities correctly and emits
+standard normalized events, but the subprocess/credential boundary is not
+made disposable by the runner.
 
 ## Observability
 

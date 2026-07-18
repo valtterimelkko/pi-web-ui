@@ -67,8 +67,10 @@ Nginx is also perfectly viable, and an example is included below.
 - [ ] Confirm Bun availability if using the channel-backed Claude path
 - [ ] Confirm `opencode` availability if using OpenCode
 - [ ] Confirm `agy` availability if using Antigravity
-- [ ] Configure logging / monitoring
+- [ ] Configure logging / monitoring (`LOG_LEVEL`, `LOG_FORMAT`, and journal retention)
+- [ ] If using the Internal API: verify the Unix socket/token are owner-only and run `npm run internal-api:wait` after startup
 - [ ] If using Telegram notifications: set `NOTIFICATIONS_ENABLED=true`, `NOTIFICATIONS_PUBLIC_BASE_URL`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID`
+- [ ] Keep runtime/session/receipt/watch/notification state directories private and backed up only according to your data-retention policy
 - [ ] Verify `npm run build` succeeds before restart
 
 ## Recommended Environment Variables
@@ -83,6 +85,32 @@ Nginx is also perfectly viable, and an example is included below.
 | `CSRF_SECRET` | strong random secret |
 | `AUTH_PASSWORD` | password or bcrypt hash |
 | `ALLOWED_ORIGINS` | frontend origins allowed to connect |
+
+### Internal API and local orchestration
+
+The Internal API is a trusted same-host control surface, not a public or
+multi-tenant API. It listens on a Unix socket and still requires the bearer token;
+any process that can read the token can inspect and control every API session.
+Startup is fail-closed when an enabled socket cannot be created with the expected
+owner/mode. Keep the socket, token, receipts, watches, and API-pin ledger private.
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `INTERNAL_API_ENABLED` | `true` | enable the local API |
+| `INTERNAL_API_SOCKET_PATH` | `~/.pi-web-ui/internal-api.sock` | Unix socket path |
+| `INTERNAL_API_TOKEN_PATH` | `~/.pi-web-ui/internal-api-token` | owner-only generated bearer token |
+| `INTERNAL_API_WATCH_DIR` | `~/.pi-web-ui/watches` | durable long-horizon watch ledgers |
+| `INTERNAL_API_RUN_RECEIPTS_DIR` | `~/.pi-web-ui/run-receipts` | durable prompt run receipts |
+| `INTERNAL_API_PIN_DIR` | `~/.pi-web-ui/pins` | time-bounded API-pin expiry ledger |
+| `INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS` | `86400000` | prompt retry replay window |
+| `INTERNAL_API_PIN_DEFAULT_TTL_MS` | `86400000` | default API-pin lifetime |
+| `INTERNAL_API_PIN_MAX_TTL_MS` | `604800000` | hard API-pin lifetime cap |
+
+Use `GET /api/v1/capabilities`, `GET /api/v1/health`, and
+`npm run internal-api:wait` to verify the local control plane. For a prompt that
+may outlive its caller, use answer-mode detached dispatch and retain its
+`runId`; streaming `tasks`/`full` requests are supervision streams, not durable
+jobs. See [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md).
 
 ### Pi worker path
 
@@ -108,6 +136,8 @@ This is the recommended current Claude deployment path. Use explicit profiles fo
 | `CLAUDE_SDK_ENABLED` | `true` (when profiles enabled) | enable the `sdk-subscription` backend |
 | `CLAUDE_DIRECT_PROFILES_ENABLED` | `true` | enable `cli-direct` profile support |
 | `CLAUDE_BACKEND_DEFAULT` | `direct` | default backend: `sdk` \| `direct` \| `channel` |
+| `CLAUDE_ASK_USER_QUESTION_TIMEOUT_MS` | `1800000` | SDK AskUserQuestion wall-clock safety net in milliseconds (30 minutes) |
+| `CLAUDE_ASK_USER_QUESTION_DISCONNECT_GRACE_MS` | `120000` | grace after the last browser subscriber disconnects before an unanswered SDK question is cancelled |
 
 To roll back to legacy direct mode: set `CLAUDE_PROFILES_ENABLED=false`, `CLAUDE_SDK_ENABLED=false`, `CLAUDE_BACKEND_DEFAULT=direct`.
 
@@ -124,6 +154,7 @@ Treat this as an explicit opt-in backend, not the default starting point. It rem
 | `CLAUDE_CHANNEL_PLUGIN_DIR` | `./pi-claude-channel` | local plugin bridge directory |
 | `CLAUDE_CHANNEL_WS_PORT` | `3100` | local channel WebSocket port |
 | `CLAUDE_CHANNEL_HOOK_PORT` | `3101` | local Claude hook receiver port |
+| `CLAUDE_CHANNEL_DEBUG` | `false` | opt-in redacted activity logs; prompts/tool payloads/credentials are never logged |
 
 Prerequisites:
 - `claude` installed and authenticated for the same service user
@@ -224,6 +255,27 @@ Antigravity uses `agy -p` in subprocess-per-turn mode rather than a long-lived s
 - the service user has already authenticated with Antigravity / Gemini CLI
 - the service user can read and write `~/.gemini/antigravity-cli/`
 - disk space is available for both `~/.pi-web-ui/antigravity-sessions/` and agy's own log/conversation directories
+- you do not use the disposable validation server for Antigravity: the `agy`
+  CLI has no supported conversation-data directory override, so validation may
+  touch the real `~/.gemini` state and must be explicitly authorised
+
+### Persistence and overlapping operations
+
+Session registry, runtime replay stores, run receipts, watches, API pins, and
+notification outboxes are local state, not a shared database. Current writers
+use private directories, bounded/atomic or serialised write paths, and restart
+reconciliation where the subsystem supports it. Do not copy live JSONL/ledger
+files while they are being written and do not run two deployments against the
+same state without the production-operation lock:
+
+```bash
+npm run production:lock -- npm run build
+```
+
+A successful `202` from explicit notifications means durable acceptance, not
+Telegram delivery; poll the returned status URL before declaring delivery
+successful. A server restart preserves durable receipts/ledgers, but process-local
+diagnostics counters and in-memory rings reset.
 
 ## systemd Example
 

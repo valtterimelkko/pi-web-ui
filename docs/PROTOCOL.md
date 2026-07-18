@@ -82,7 +82,7 @@ The app uses JSON messages with a `type` field rather than strict JSON-RPC frami
 
 ```typescript
 { type: 'set_model', modelId: string }
-{ type: 'set_thinking_level', level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' }
+{ type: 'set_thinking_level', level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }
 ```
 
 ### Approval / extension UI
@@ -93,7 +93,7 @@ The app uses JSON messages with a `type` field rather than strict JSON-RPC frami
 
 ### Session context transfer
 
-Transfer the visible transcript of one session into another (including across runtimes).
+Transfer the visible transcript of one session into another (including across runtimes). `visible_recent` is the compact/default choice for context efficiency; `visible_full` is only for an intentional full handoff.
 
 ```typescript
 {
@@ -198,6 +198,13 @@ Transfer error codes:
 - `TRANSFER_INVALID_REQUEST` — malformed request
 - `TRANSFER_RUNTIME_UNAVAILABLE` — requested runtime not available
 - `TRANSFER_DISPATCH_FAILED` — handoff injection failed
+
+## Transport and security boundary
+
+Every WebSocket upgrade path is checked before the connection is created for an
+allowed origin, the authenticated cookie, and upgrade rate limits. After the
+socket exists, the CSRF handshake still applies before state-changing messages
+are accepted. Preserve both layers when adding a route or proxy rule.
 
 ## Runtime-specific Behaviour Behind the Same Protocol
 

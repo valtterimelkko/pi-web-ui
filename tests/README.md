@@ -11,6 +11,11 @@ For server unit/integration tests, also see:
 Located in:
 - `tests/e2e/`
 
+Playwright does not manage a server in this repository: `webServer` is disabled
+and the target is `TEST_URL` (default `http://localhost:3457`). Start an
+appropriate isolated server yourself and record the target; do not point it at
+production merely because the default port is convenient.
+
 These cover user-visible behaviour such as:
 - auth and initial app load
 - session creation
@@ -27,15 +32,19 @@ Notable files include:
 ### 2. Live validation
 
 Browserless runtime validation is exposed through the Internal API and the
-repo-owned CLI runner:
+repo-owned CLI runner. Start a disposable validation server separately and pass
+its printed socket/token paths; the runner refuses production defaults unless
+`--allow-production` is explicit:
 
 ```bash
-npm run validate:live -- --runtime claude --scenario smoke
-npm run validate:live -- --runtime antigravity --scenario smoke
+npm run validate:live -- \
+  --socket "$VALIDATION_DIR/internal-api.sock" \
+  --token-path "$VALIDATION_DIR/internal-api-token" \
+  --runtime claude --scenario smoke
 ```
 
 Use it when you need to confirm live server/runtime behaviour without opening
- the web UI. Canonical guide (covers all **three** live-validation options —
+the web UI. Canonical guide (covers all **three** live-validation options —
 Internal API, Playwright E2E, and the browser-WebSocket path via
 `scripts/ws-validate.mjs`):
 - `docs/LIVE-VALIDATION.md`
@@ -68,9 +77,16 @@ npm run test:e2e
 
 ### Live validation
 ```bash
-npm run validate:live -- --runtime claude --scenario smoke
-npm run validate:live -- --runtime antigravity --scenario smoke
+npm run validate:live -- \
+  --socket "$VALIDATION_DIR/internal-api.sock" \
+  --token-path "$VALIDATION_DIR/internal-api-token" \
+  --runtime claude --scenario smoke
 ```
+
+For Antigravity, use an explicitly authorised target: disposable validation
+servers disable it because `agy` has no supported conversation-data directory
+override. `--runtime all` in disposable mode currently means Pi, Claude, and
+OpenCode only.
 
 ### Benchmarks
 ```bash
@@ -117,7 +133,7 @@ npm run test:e2e
 If you touched Pi Coding Agent / the Claude runtime family / OpenCode / Antigravity routing or replay logic, prefer:
 - unit tests for the affected runtime module(s)
 - relevant WebSocket tests
-- `npm run validate:live -- --runtime <pi|claude|opencode|antigravity|all> --scenario <id>`
+- `npm run validate:live -- --socket <validation-sock> --token-path <validation-token> --runtime <pi|claude|opencode|antigravity|all> --scenario <id>` (use `--allow-production` only when explicitly authorised; disposable `all` expands to Pi/Claude/OpenCode)
 - relevant E2E runtime tests
 
 ## Notes

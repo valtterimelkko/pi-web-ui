@@ -47,6 +47,7 @@ Use `ws://` locally and `wss://` in production.
 { type: 'steer', message: string }
 { type: 'abort' }
 { type: 'set_model', modelId: string }
+{ type: 'set_thinking_level', level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }
 { type: 'compact', customInstructions?: string }
 { type: 'pin_session', sessionPath: string }
 { type: 'unpin_session', sessionPath: string }
@@ -100,7 +101,7 @@ For complete message shapes and event semantics, see [`docs/PROTOCOL.md`](./docs
 
 ## Internal API
 
-The Internal API is documented in [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md).
+The Internal API is documented in [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md). It is a trusted same-host multi-client surface, not a multi-tenant boundary; possession of its bearer token grants session control.
 It began as the preferred surface for **live end-to-end validation against real runtimes** and is now also the preferred local automation surface for integrations, agent-to-agent orchestration, and the live-validation runner. It uses:
 
 - Unix socket transport: `~/.pi-web-ui/internal-api.sock`
@@ -113,7 +114,7 @@ Reference docs:
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
 
-`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.5.0`) for local consumers such as Agent OS style tooling.
+`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.9.0`) for local consumers such as Agent OS style tooling. Health also exposes additive per-runtime `runtimeHealth`; diagnostics are filtered by correlation/runtime selectors and include a bounded process-local operational snapshot.
 
 Important endpoints include:
 - `GET /api/v1/capabilities`
@@ -123,7 +124,7 @@ Important endpoints include:
 - `GET /api/v1/sessions/:id/diagnostics`
 - `GET /api/v1/events/types`
 - `POST /api/v1/sessions` (supports Claude `profileId` or `model: "profile:<id>"`)
-- `POST /api/v1/sessions/:id/prompt` (`detach:true` supported)
+- `POST /api/v1/sessions/:id/prompt` (`detach:true` supported only with `verbosity=answers`; retain the returned `runId`)
 - `GET /api/v1/sessions/:id/info`
 - `GET /api/v1/sessions/:id/history`
 - `GET /api/v1/sessions/:id/events`
@@ -135,6 +136,7 @@ Important endpoints include:
 - `POST /api/v1/sessions/batch/prompt`
 - `POST /api/v1/sessions/usage`
 - `GET /api/v1/sessions/:id/approvals/pending`
+- `GET /api/v1/runs/:runId` (durable accepted/started/terminal receipt)
 - `POST /api/v1/sessions/:id/control` (including standalone pin/unpin)
 - `POST /api/v1/sessions/:id/approvals/:requestId/respond`
 - `POST /api/v1/sessions/:id/notifications/opt-in`
@@ -145,7 +147,7 @@ Important endpoints include:
 - `POST/GET/DELETE /api/v1/sessions/:id/watch`
 
 Use the session read paths like this:
-- `/transcript` — runtime-agnostic result reading
+- `/transcript` — runtime-agnostic result reading; use `scope=visible_recent` for compact context
 - `/transcript?view=screen` — faithful read-only projection of what the user sees by default
 - `/history` — lower-level replay/debug detail
 
@@ -233,8 +235,8 @@ Export session transcript/output.
 #### `GET /api/files/browse?path=/path`
 Browse a directory.
 
-#### `GET /api/files/read?path=/file&offset=1&limit=100`
-Read file contents.
+#### `GET /api/files/read?path=/file`
+Read file contents. Reads are bounded at 200 KiB; larger files return a newline-safe prefix with `truncated: true`, `totalSize`, and `readSize`. Truncated Markdown remains read-only in the UI.
 
 ### Extensions
 

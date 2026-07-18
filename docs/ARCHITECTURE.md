@@ -218,6 +218,26 @@ Registry entries let the UI treat sessions consistently while preserving runtime
 
 For Claude specifically, the registry still uses `sdkType: 'claude'` even though the backend may be SDK, direct CLI, or channel-backed. That distinction is operational, not a separate frontend runtime family.
 
+### Identifier and persistence boundaries
+
+The canonical registry `entry.id` is the safest cross-runtime correlation key,
+but runtime-native identifiers remain useful evidence: Pi paths/basenames, Claude
+native session ids, OpenCode session ids, and Antigravity conversation ids. The
+`debug:where` helper resolves these forms to one registry entry before an agent
+opens runtime-owned files or journals; it is intentionally preferable to a
+root/home-wide grep.
+
+Persistence is deliberately split by runtime and concern:
+
+- the registry stores cross-runtime metadata and mappings;
+- each runtime owns its native transcript/continuity source, with Pi-owned replay
+  projections where the UI needs them;
+- run receipts, watches, API-pin expiry, notification outbox, and preferences
+  are separate local ledgers with their own retention/restart semantics;
+- diagnostics rings/counters and runtime-health failures are process-local and
+  reset on restart, so they are evidence for the current process window rather
+  than an audit database.
+
 ## WebSocket Routing Model
 
 `server/src/websocket/connection.ts` is the main runtime-aware router.
@@ -270,10 +290,22 @@ an Internal API over a Unix domain socket for local automation. That API:
 - reuses the same runtime services as the browser app
 - is authenticated with a bearer token stored on disk
 - can select Claude provider profiles through `profile:<id>` model entries or explicit `profileId`
+- provides runtime-neutral transcripts plus a screen-oriented projection for low-noise operator readback
+- provides durable `runId` receipts/idempotency for accepted prompt dispatches, while keeping diagnostics counters and rings explicitly process-local
 - powers browserless live validation via `scripts/live-validate.ts`, profile validation via `scripts/validate-claude-profiles.ts`, and wire-level validation via `scripts/validation-logging-proxy.ts`
+
+The Internal API is a trusted same-host multi-client boundary, not tenant
+isolation: possession of the shared bearer token grants session inspection and
+control. Detached answer-mode prompts are the disconnect-safe job primitive;
+`tasks`/`full` are live supervision streams. Durable watch ledgers preserve
+past firings across a server restart, but a reloaded watch is `detached` until
+explicitly re-registered.
 
 Canonical docs:
 - [`./INTERNAL-API.md`](./INTERNAL-API.md)
+- [`./INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md)
+- [`./INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
+- [`./OBSERVABILITY.md`](./OBSERVABILITY.md)
 - [`./LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
 
 ## Security Architecture
@@ -315,8 +347,13 @@ REST and WebSocket surfaces expose runtime availability:
 - `/api/health/ready`
 - `/api/models?sdkType=opencode`
 - `/api/models?sdkType=antigravity`
+- Internal API `/api/v1/health.runtimeHealth` for bounded per-runtime checks
+- Internal API `/api/v1/capabilities` for feature/runtime gates
 
-This allows the UI to degrade gracefully when optional runtimes are not installed.
+The legacy browser availability fields remain deliberately simple; local
+orchestrators should use `runtimeHealth` and `capabilities` rather than infer a
+specific backend's health from the top-level status alone. This allows the UI
+to degrade gracefully when optional runtimes are not installed.
 
 ## Testing Architecture
 

@@ -37,9 +37,13 @@ notifications later without a rewrite.
   derived deterministically from the session path (`canonicalOptInId` in
   `@pi-web-ui/shared`, the same identity the v2 session-metadata layer's `pi:<uuid>`
   is built on), so the bell stays in sync across a reload and turning it off truly
-  stops notifications. Both the browser route and the Internal-API route normalize
-  to this id; non-Pi runtimes key on the id unchanged (their id already equals
-  their path). A one-time, superset-preserving normalization runs in
+  stops notifications. The browser UI computes this canonical id and uses it for
+  GET, POST, and DELETE; the browser POST route normalizes it again from the
+  server-sourced `runtime` + `sessionPath`, while its GET/DELETE façade expects the
+  already-canonical id because those requests do not carry the path. The
+  Internal-API route resolves the registry entry and normalizes server-side. Non-Pi
+  runtimes key on the id unchanged (their id already equals their path). A
+  one-time, superset-preserving normalization runs in
   `NotificationManager.init()` (before rehydration), re-keying any legacy
   basename-keyed Pi opt-ins to the bare UUID and deduping records that collapse to
   the same id (keeping the newest) — so existing broken opt-ins self-heal on the
@@ -194,8 +198,10 @@ minimal reader; the URL bar is not otherwise kept in sync with the active sessio
 - **Delivery semantics:** ingress retries are idempotent when callers reuse a key.
   Telegram delivery is **at least once**: a process crash after Telegram accepts
   but before local `sent` persistence can still produce a duplicate on retry.
-- **Retry/backoff:** a failed delivery is retried with backoff up to
-  `NOTIFICATIONS_MAX_DELIVERY_ATTEMPTS`, then marked `failed` (kept in the log).
+- **Retry/backoff:** a failed delivery is retried on the manager's fixed
+  five-second retry timer (not exponential backoff), up to
+  `NOTIFICATIONS_MAX_DELIVERY_ATTEMPTS`; it is then marked `failed` and kept in
+  the log. Pending items are also attempted again after a restart.
 - **Graceful degradation:** a Telegram outage never breaks a session or the
   broker — delivery failures are captured in the outbox, not propagated.
 - **Graceful shutdown:** a pending debounced `agent_end` is forced into the
@@ -224,15 +230,20 @@ minimal reader; the URL bar is not otherwise kept in sync with the active sessio
 
 The `notify-on-agent-end` scenario (`server/src/live-validation/scenarios.ts`)
 opts a session in, runs a real turn, and asserts the manager produced an
-`agent_end` delivery record — the canonical origin-independence proof, runnable
-for each runtime against a disposable server:
+`agent_end` delivery record — the canonical origin-independence proof. The
+standard disposable server covers Pi, Claude, and OpenCode:
 
 ```
 npm run validate:server -- --dir "$VALIDATION_DIR" --port 0
 npm run validate:live -- --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" \
-  --runtime <pi|claude|opencode|antigravity> --scenario notify-on-agent-end --json
+  --runtime <pi|claude|opencode> --scenario notify-on-agent-end --json
 ```
+
+Antigravity is disabled by the disposable server because `agy` has no supported
+conversation-data directory override. Test its notification path only with an
+explicitly authorised, separately isolated-enough target, and record that the
+real `~/.gemini` state may be touched; see [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md).
 
 ---
 
@@ -249,12 +260,13 @@ without reconstructing it from timestamps by hand:
 | `NotificationStore` | `warn`: a persisted file (`opt-ins.json`/`outbox.json`/`delivery-log.json`) failed to parse for a reason other than "missing" — previously silent, which meant a corrupt file reset state to empty with no trace of why. A missing file (normal on first boot) stays quiet. |
 | `NotificationsRoutes` | `warn`: opt-in requested for a session the registry doesn't know about, or one whose runtime isn't supported — both indicate a registry/UI mismatch worth investigating. |
 
-Every manager log line is bound with `sessionId` + `runtime` via
+Session-scoped manager log lines are bound with `sessionId` + `runtime` via
 `logger.child(...)`, so `DEBUG=NotificationManager` or a
-`grep sid=<sessionId>` reconstructs one session's whole notification
-lifecycle — opt-in → attach → agent_end observed → queued → delivered — in one
-pass. See [`docs/OBSERVABILITY.md`](./OBSERVABILITY.md) for `LOG_LEVEL`,
-`DEBUG` namespaces, and `LOG_FORMAT=json`.
+`grep sid=<sessionId>` reconstructs one session's notification lifecycle —
+opt-in → attach → `agent_end` observed → queued → delivered — in one pass.
+Global lifecycle/ingress lines (for example boot counts and explicit emits) do
+not have a session to bind. See [`docs/OBSERVABILITY.md`](./OBSERVABILITY.md)
+for `LOG_LEVEL`, `DEBUG` namespaces, and `LOG_FORMAT=json`.
 
 ---
 

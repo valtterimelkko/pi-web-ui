@@ -67,6 +67,7 @@ These are the main limitations to keep in mind when designing orchestrators:
 - **No true pending-approvals list yet** — use `/events` to observe permission
   requests live; `GET /approvals/pending` is currently informational.
 - **Claude channel `/events` caveat** — see below.
+- **Watch restart semantics** — a watch ledger preserves already-recorded firings, but a watch reloaded after server restart is `detached`; re-register it to resume live observation. Watch registration may apply a runtime pin that is separate from the time-bounded API-pin ledger, so cleanup should explicitly unpin or delete the session.
 
 ## Recommended orchestration flow
 
@@ -77,9 +78,11 @@ Always start by asking the server what is available now and which contract versi
 - `GET /api/v1/capabilities` — includes `contract.name`, `contract.majorVersion`, and `contract.contractVersion`
 - `GET /api/v1/models`
 
-Useful debugging/introspection, notification, and model-control additions landed in contract `1.3.0` through `1.8.0`:
+Useful debugging/introspection, notification, model-control, run-identity, and
+health additions landed in contract `1.3.0` through `1.9.0`:
 
-- `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off.
+- `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off; `1.9.0` adds `requestId`, `runId`, `runtime`, `component`, and `since` selectors plus a bounded process-local `operational` snapshot.
+- `GET /api/v1/health` — use the additive `runtimeHealth` matrix for per-runtime checks; the legacy `runtimes` strings/top-level status are compatibility projections.
 - `GET /api/v1/events/types` — machine-readable catalogue of normalized event kinds on the `/events` stream.
 - `GET /api/v1/sessions/:id/transcript?view=screen` — a read-only “what the user sees” projection for a finished or in-progress session, without browser automation.
 - `POST /api/v1/notifications`, `GET /api/v1/notifications/:id`, and `GET /api/v1/notifications` — durable explicit acceptance, pollable delivery status, and recent delivery history. Reuse one `Idempotency-Key` across retries (contract `1.8.0+`).
@@ -141,20 +144,29 @@ There are two main patterns:
 
 ### Pattern A — final-answer oriented
 Use:
-- `POST /api/v1/sessions/:id/prompt` with `verbosity=answers`
-- or `POST /api/v1/sessions/batch/prompt`
+- `POST /api/v1/sessions/:id/prompt` with `verbosity=answers` for a short
+  synchronous turn; or
+- `POST /api/v1/sessions/batch/prompt` for a bounded batch whose caller will
+  remain connected until all answer bodies return.
 
-This is best when you only need final answers and do not care about live
-progress.
+### Pattern B — durable/disconnect-safe orchestration
+For work that may outlive the caller, use:
 
-### Pattern B — orchestration-oriented
-Use:
-- `POST /api/v1/sessions/:id/prompt`
-- plus either `GET /api/v1/sessions/:id/events` or
-  `GET /api/v1/sessions/:id/wait`
+```text
+create (optional time-bounded API pin)
+  → prompt with verbosity=answers, detach=true, idempotencyKey=<stable-key>
+  → retain sessionId + runId
+  → poll GET /runs/:runId or GET /sessions/:id/wait (and /info)
+  → read /sessions/:id/transcript or ?view=screen
+  → transfer/usage/cleanup as needed
+```
 
-This is best when you want to supervise long-running children or decide what
-to do mid-flight.
+`detach:true` is valid only with `verbosity=answers` and keeps the turn running
+server-side after disconnect. A `tasks` or `full` prompt is a live SSE
+supervision stream, not a durable job; disconnecting that stream cancels the run
+and aborts the runtime. `GET /sessions/:id/events` is useful supervision and
+can replay a bounded recent buffer, but `/wait` + receipts + transcript are the
+completion evidence for a durable flow.
 
 ### 5. Monitor child progress
 
@@ -162,7 +174,8 @@ to do mid-flight.
 - `GET /api/v1/sessions/:id/events`
 
 Use this when you want normalized event streaming similar to what the web UI
-sees.
+sees. It is supervision, not a durable queue; retain the `runId` and use the
+receipt/transcript for completion evidence if the stream may be interrupted.
 
 ### Safe fallback when live SSE is not the right choice
 - `GET /api/v1/sessions/:id/wait?status=idle&timeout=...`
@@ -178,7 +191,8 @@ Use this when:
 - `GET /api/v1/sessions/:id/transcript`
 
 This gives you a runtime-agnostic output format and is usually the best way to
-consume child results.
+consume child results. Start with `scope=visible_recent` to keep context small;
+request `visible_full` only when the whole transcript is needed.
 
 ### UI-faithful alternative
 - `GET /api/v1/sessions/:id/transcript?view=screen`

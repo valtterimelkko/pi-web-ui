@@ -35,7 +35,7 @@
 - `hooks/useDriveModeDictation.ts` — Drive Mode prompt-send flow.
 
 ### Files
-- `components/Files/FilesTab.tsx` — Files tab: file tree, read-only `<pre>` preview, and the full-screen Markdown editor overlay for editable (non-truncated) Markdown files.
+- `components/Files/FilesTab.tsx` — Files tab: file tree, read-only preview for other files, and the full-screen Markdown editor overlay for editable (non-truncated) Markdown files.
 - `components/Files/MarkdownEditor.tsx` — Presentational Markdown source editor: plain `<textarea>` + Edit ⇄ Preview toggle (GFM via `react-markdown` + `remark-gfm`, mirroring chat), explicit Save/Refresh, dirty + save-error banners, unsaved-changes guard. Truncated files render a read-only notice instead.
 
 ### Tools / Extensions
@@ -67,7 +67,8 @@
 - `workers/session-rpc-client.ts` — RPC client for talking to Pi workers.
 - `workers/rpc-protocol-bridge.ts` — Bridges between JSON-RPC and internal protocol.
 - `workers/event-normalizer.ts` — Normalizes Pi worker events.
-- `workers/session-worker.ts` — Individual Pi worker process script.
+- `workers/session-worker.ts` — Individual Pi worker process script; bounded stdout/crash handling and idempotent termination.
+- `workers/crash-logger.ts` — structured worker-crash evidence for logs and diagnostics.
 
 ### Claude Runtime Family (`server/src/claude/`)
 - `claude/claude-service.ts` — Claude runtime lifecycle, backend selection, session registry integration, prompt dispatch, stats.
@@ -131,12 +132,14 @@
 - `security/csrf.ts` — CSRF token generation and validation.
 - `security/prompt-injection.ts` — Pattern-based prompt injection detection.
 - `security/rate-limit.ts` — HTTP and WebSocket rate limiting.
-- `security/websocket.ts` — WebSocket auth handshake.
+- `security/input-validation.ts` — shared bounded input/payload validation helpers.
+- `security/websocket.ts` / `websocket/upgrade-handler.ts` — WebSocket auth/CSRF and pre-upgrade origin/auth/rate-limit guard.
 - `middleware/auth.ts` — Express auth middleware.
+- `routes/worktrees.ts` / `pi/parallel/worktree-manager.ts` — authenticated, rate-limited, canonicalised worktree operations with argument-array Git execution.
 
 ### REST Routes (`server/src/routes/`)
 - `routes/health.ts` — Health/readiness probes, runtime availability.
-- `routes/models.ts` — Model listing (Pi, OpenCode, and Antigravity).
+- `routes/models.ts` — Browser model listing (Pi, Claude, OpenCode, and Antigravity).
 - `routes/auth.ts` — Login/logout.
 - `routes/sessions.ts` — Session CRUD, export.
 - `routes/files.ts` — File browsing and reading (with path validation).
@@ -146,6 +149,19 @@
 - `routes/config.ts` — Config validation endpoint.
 - `routes/terminal.ts` — Terminal session management.
 - `routes/git.ts` — Git operations.
+
+### Internal API (`server/src/internal-api/`)
+- `server.ts` / `unix-socket-owner.ts` — token-authenticated Unix-socket server, fail-closed ownership, readiness, and bounded shutdown.
+- `routes/sessions.ts` — cross-runtime session CRUD, prompts, abort/control, wait/events, transcripts/screen view, transfer, usage, batch operations, run receipts, pins, and watches.
+- `routes/diagnostics.ts` / `routes/health.ts` / `routes/capabilities.ts` / `routes/models.ts` — self-service diagnostics, additive runtime health, capability discovery, and live model metadata.
+- `run-receipts/` — durable accepted/started/terminal run identity, idempotency, restart interruption recovery, and bounded retention.
+- `watch/` — durable condition watches and restart-aware ledgers for long-horizon validation.
+- `diagnostics-buffer.ts` / `event-broker.ts` / `event-filter.ts` — bounded scrubbed logs, normalized event fan-out, and verbosity projections.
+- `pin-expiry-manager.ts` — separate time-bounded API-pin ledger; do not confuse it with runtime/watch pinning.
+
+### Logging / observability
+- `logging/logger.ts` / `logging/correlation.ts` — central structured logger, level/namespace/format controls, and request/run/session correlation.
+- `observability/operational-metrics.ts` / `observability/runtime-health.ts` — bounded process-local counters/latency outcomes and per-runtime health checks exposed through the Internal API.
 
 ### Config / Bootstrap
 - `config.ts` — Environment variable parsing and defaults.

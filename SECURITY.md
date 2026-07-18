@@ -25,8 +25,7 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
 ### 1. Cookie-based authentication
 
 - Auth is handled with session tokens (JWT) stored in httpOnly cookies.
-- A single long-lived session token is issued on login (default 30 days).
-- A long-lived session token is issued on login (default 30 days), with exact deployment posture controlled by the operator.
+- A single long-lived session token is issued on login (default 30 days), with exact deployment posture controlled by the operator.
 - Protected REST routes use `cookieAuthMiddleware`.
 - Token generation and verification live under:
   - `server/src/security/auth.ts`
@@ -61,8 +60,24 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
 - File operations must validate paths before access.
 - Never trust client-supplied paths.
 - Validate against allowed roots and use resolved/real paths where relevant.
+- File reads and request bodies are bounded before allocation/processing; truncation
+  is surfaced to the Files UI and truncated Markdown cannot be saved back.
 
-### 6. Internal API token auth
+### 6. Privileged worktree and resource boundaries
+
+- Worktree routes are cookie-authenticated and rate-limited. Repository and plan
+  paths are canonicalised with `realpath`, checked as the expected Git
+  object/file, and passed to Git through argument arrays rather than shell
+  interpolation.
+- Batch session create/dispatch, notification bodies, worker output, and other
+  externally influenced buffers have explicit size/concurrency bounds. These
+  reduce accidental resource exhaustion but do not turn the product into a
+  multi-tenant isolation boundary.
+- Runtime lifecycle cleanup (workers, listeners, retry timers, and WebSocket
+  handlers) is part of the security/reliability boundary: preserve disposal on
+  abort, disconnect, shutdown, and replacement.
+
+### 7. Internal API token auth
 
 - The Internal API is exposed over a Unix domain socket, not the public network.
 - It still requires a bearer token from `~/.pi-web-ui/internal-api-token`.
@@ -71,13 +86,13 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
   - `server/src/internal-api/server.ts`
   - `server/src/internal-api/middleware/auth.ts`
 
-### 7. Notification secrets and browser route protection
+### 8. Notification secrets and browser route protection
 
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are operational secrets/config values and must never be committed.
 - The browser-facing notification opt-in routes are protected with `cookieAuthMiddleware`; do not bypass that just because the deeper notification manager also exists behind the Internal API.
 - Notification/logging paths should preserve token redaction and must not leak Telegram credentials in thrown errors or diagnostics.
 
-### 8. Rate limiting
+### 9. Rate limiting
 
 - HTTP and WebSocket surfaces are rate-limited.
 - Relevant code:

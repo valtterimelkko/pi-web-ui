@@ -2,20 +2,98 @@
 
 > Start here when an agent needs logs, session-file locations, health commands, or the fastest path to a runtime-specific diagnosis.
 
+## Session-ID evidence ladder
+
+When an operator gives you a session identifier, **do not start with `grep -R` from `/` or from the home directory**. The registry already maps the common identifier forms to the runtime-specific evidence. Use this sequence:
+
+### 1. Resolve the identifier once
+
+From the repository root:
+
+```bash
+npm run debug:where -- <internal-id|runtime-native-id|registry-path|conversation-id>
+```
+
+`debug:where` reads `~/.pi-web-ui/session-registry.json` and accepts:
+
+| Identifier the operator may have | Registry field / runtime |
+|---|---|
+| Pi Web UI internal id | `entry.id` |
+| Pi session path or Claude replay path | `entry.path` |
+| Claude native session id | `entry.claudeSessionId` |
+| OpenCode native session id | `entry.opencodeSessionId` |
+| Antigravity conversation id | `entry.antigravityConversationId` |
+
+Keep the resolved **internal id**, runtime, and any native id from the report. The internal id is the safest correlation key for diagnostics and run receipts. If the session belongs to a disposable validation server, point the locator at that server's registry with `--registry <validation-dir>/session-registry.json`; use the validation server's printed socket/token and file roots for subsequent evidence calls. `--registry` changes the lookup file, not the helper's home-directory path hints, so for disposable runs treat the validation directory and the registry entry's actual `path` as authoritative.
+
+### 2. Read the cheapest useful evidence
+
+If the Internal API is available, prefer the read-only screen projection before raw JSONL or full history. It accepts the supported id forms and is deliberately shaped like the resting browser view:
+
+```bash
+SOCKET="$HOME/.pi-web-ui/internal-api.sock"
+TOKEN="$(cat "$HOME/.pi-web-ui/internal-api-token")"
+ID='<id-from-the-operator>'
+ENCODED_ID="$(node -p 'encodeURIComponent(process.argv[1])' "$ID")"
+curl -s --unix-socket "$SOCKET" \
+  -H "Authorization: Bearer $TOKEN" \
+  "http://localhost/api/v1/sessions/$ENCODED_ID/transcript?view=screen" \
+  | jq .
+```
+
+Use the response's `sessionId` as the canonical internal id for the next calls. Choose the read path deliberately:
+
+- `transcript?view=screen` — lowest-noise answer to **what the operator sees**;
+- `transcript?scope=visible_recent` — compact runtime-agnostic result reading;
+- `history` — only when replay/event reconstruction is the problem.
+
+### 3. Narrow diagnostics by correlation, not by text search
+
+Session-scoped diagnostics use the canonical internal id. Add `runId` when a prompt response or receipt supplied one; add `requestId` when a request log supplied one:
+
+```bash
+CANONICAL_ID='<resolved-internal-id>'
+ENCODED_ID="$(node -p 'encodeURIComponent(process.argv[1])' "$CANONICAL_ID")"
+curl -s --unix-socket "$SOCKET" \
+  -H "Authorization: Bearer $TOKEN" \
+  "http://localhost/api/v1/sessions/$ENCODED_ID/diagnostics?minLevel=warn&limit=100" \
+  | jq .
+
+# Global diagnostics are still bounded; narrow them by run/request/component when known.
+curl -s --unix-socket "$SOCKET" \
+  -H "Authorization: Bearer $TOKEN" \
+  "http://localhost/api/v1/diagnostics?runId=<run-id>&limit=100" \
+  | jq .
+```
+
+The diagnostics ring and operational snapshot are process-local and reset on restart. A missing older line is not evidence that the event never happened; use the durable run receipt, transcript, notification ledger, or runtime-owned file when the time window is older than the ring buffer.
+
+### 4. Inspect the runtime-specific evidence printed by the locator
+
+Only after the API-first checks, follow the report's runtime branch. It tells you whether to inspect Pi JSONL, the Pi-owned Claude replay file plus Claude-native JSONL, OpenCode APIs/logs, or Antigravity JSONL/DB/`agy` logs. For central logs, use a bounded time window and the correlation field:
+
+```bash
+sudo journalctl -u pi-web-ui --since '15 minutes ago' | grep -F -- "sid=$CANONICAL_ID"
+```
+
+With `LOG_FORMAT=json`, filter fields rather than grepping message text. With pretty logs, `sid=`, `run=`, `req=`, `rt=`, and `exec=` are the correlation suffixes. A repository-wide or home-directory-wide grep is a last resort for a known time/path, never the default session lookup strategy.
+
 ## Fastest Starting Points
 
 Follow this order unless you already know the exact failing subsystem:
 
 ### Fastest API-first debugging for agents
 
-When you have Internal API access, start here before reaching for browser automation or host logs:
+When you have Internal API access, resolve the identifier once with the evidence ladder above, then use the smallest read that answers the question:
 
-1. `GET /api/v1/diagnostics` — recent secret-scrubbed logs plus bounded aggregate operational evidence; narrow with `runId`, `requestId`, `runtime`, `component`, `since`, `minLevel`, and `limit`
-2. `GET /api/v1/sessions/:id/diagnostics` — same filters, scoped to one session
-3. `GET /api/v1/sessions/:id/transcript?view=screen` — read-only "what the user sees" projection
+1. `GET /api/v1/sessions/:id/transcript?view=screen` — read-only "what the user sees" projection
+2. `GET /api/v1/sessions/:id/diagnostics` — correlated, secret-scrubbed session logs; narrow with `runId`, `requestId`, `runtime`, `component`, `since`, `minLevel`, and `limit`
+3. `GET /api/v1/diagnostics` — bounded global logs plus the process-local operational snapshot
 4. `GET /api/v1/sessions/:id/history` — lower-level replay/debug detail only if needed
 
 This is often the most token-efficient route for LLM agents because it avoids driving the UI and avoids rediscovering log locations first. For a browser-only failure that reaches the React error screen, ask the operator to use **Copy diagnostics** or **Download diagnostics**; the privacy-safe browser ring is manual-only and is never uploaded automatically.
+
+If the Internal API is unavailable:
 
 1. **Find the session entry quickly**
    ```bash
@@ -157,9 +235,11 @@ When correlating failures, distinguish between:
 - **Runtime-native id** — e.g. Claude native session id or OpenCode `opencodeSessionId`
 - **Registry path/file references** — stored in `~/.pi-web-ui/session-registry.json`
 
-`npm run debug:where -- <id>` understands some, but not all, native ids. For
-OpenCode-native session ids you may need to inspect the runtime's own logs and
-Pi registry metadata separately.
+`npm run debug:where -- <id>` accepts the registry's internal id, path, Claude
+native id, OpenCode native id, and Antigravity conversation id. If it reports no
+match, the registry may be stale or the identifier may not have been recorded;
+then inspect the runtime-specific source printed by the nearest registry entry,
+not the whole filesystem.
 
 See also:
 - [`INTERNAL-API.md`](./INTERNAL-API.md)
@@ -248,9 +328,15 @@ sudo journalctl -u pi-web-ui -f
 sudo journalctl -u pi-web-ui -f | grep ClaudeChannel
 sudo journalctl -u pi-web-ui -f | grep -i "profile\|ClaudeSdk"
 
-# Live validation via the Internal API (no browser required)
-npm run validate:live -- --runtime claude --scenario smoke
-npm run validate:live -- --runtime claude --scenario channel-heartbeat
+# Live validation via a disposable Internal API server (no browser required).
+# Start `npm run validate:server -- --dir "$VAL_DIR" --port 0` in another
+# terminal, then pass its printed socket/token paths on every invocation.
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario smoke
+npm run validate:live -- --socket "$VAL_DIR/internal-api.sock" \
+  --token-path "$VAL_DIR/internal-api-token" \
+  --runtime claude --scenario channel-heartbeat
 
 # Profile-specific validation (requires a disposable validation server)
 npm run validate:claude-profiles -- --list
@@ -272,7 +358,7 @@ npm run validate:claude-profiles -- --list
 - **Tools stuck as running** → inspect replay JSONL and history reconstruction
 - **Channel session appears idle too early or too late** → inspect PTY busy-state / idle detection in `claude-channel-process-manager.ts`
 - **Auth expired** → `claude auth status --json`, then inspect channel auth-expiry handling or legacy subprocess error propagation
-- **Live validation cannot connect** → check `~/.pi-web-ui/internal-api.sock`, `~/.pi-web-ui/internal-api-token`, and `docs/INTERNAL-API.md`
+- **Live validation cannot connect** → check the disposable server's printed socket/token paths, run `npm run internal-api:wait`, and read `docs/LIVE-VALIDATION.md`; do not silently fall back to `~/.pi-web-ui/internal-api.sock` (that is production).
 
 ## OpenCode
 
@@ -346,7 +432,7 @@ curl "http://localhost:<server-port>/api/models?sdkType=antigravity"
 ### Typical symptoms
 
 - **agy not available** → `agy --version` fails; check `AGY_BINARY` env var (default: `/root/.local/bin/agy`)
-- **Reply starts mid-sentence** → `rawStdoutLength` missing or wrong in the session JSONL; this tracks the trimmed cumulative stdout length the next resumed `agy` call should slice from. Fix: inspect the JSONL, confirm `rawStdoutLength` is present and growing each turn.
+- **Reply starts mid-sentence** → inspect `rawStdoutLength` and the prior completed response in the session JSONL. The current extractor uses the stored prior-response suffix as an anchor within a bounded window to correct agy replay drift before slicing; if the anchor cannot be verified, compare the per-turn stdout/log evidence and the stored turn offsets rather than blindly editing the byte count.
 - **Model forgets earlier turns** → conversation ID mismatch; confirm all JSONL entries share the same `conversationId`, that UUID exists in `~/.gemini/antigravity-cli/conversations/`, and that the first turn's per-run log contains the same `Print mode: conversation=<uuid>, sending message` line. If the log shows a different UUID than the JSONL, the session was bound to the wrong agy conversation.
 - **Conversation ID is null after first turn** → the per-run log did not contain a sent-conversation line and the `.db` fallback failed to detect the new file; check the conversations directory for a file newer than the turn's timestamp.
 - **agy hangs / timeout** → inspect `--print-timeout` setting (default 10m); check the latest agy log file in `~/.gemini/antigravity-cli/log/`

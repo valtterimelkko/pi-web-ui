@@ -1,6 +1,16 @@
 # Whole-Codebase Hardening and Efficiency Implementation Plan
 
-**Status:** proposed; no implementation in this document
+**Status:** implemented and archived. The scoped hardening work was completed
+and independently reviewed; see [`CODEBASE-HARDENING-IMPLEMENTATION-REPORT.md`](./CODEBASE-HARDENING-IMPLEMENTATION-REPORT.md)
+(Phase J) for authoritative evidence and current operator consequences. The
+future-tense checklist below is retained as planning history, not an outstanding
+implementation request.
+
+> Current validation safety is defined by [`../LIVE-VALIDATION.md`](../LIVE-VALIDATION.md)
+> and [`../LONG-HORIZON-VALIDATION.md`](../LONG-HORIZON-VALIDATION.md). Use
+> explicit disposable socket/token paths; do not copy historical no-argument
+> validation commands from this plan, and use `--allow-production` only after
+> explicit authorisation.
 
 **Plan baseline:** `5e3fa6dfecce3be945861f7544c98b0eb730f723` (`5e3fa6d`) on 2026-07-17
 

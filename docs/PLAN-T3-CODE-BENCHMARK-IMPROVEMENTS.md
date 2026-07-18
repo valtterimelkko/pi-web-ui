@@ -1,7 +1,11 @@
 # Plan: Run Receipts and Instance Identity (T3 Code Benchmark, Trimmed)
 
-_Status: revised plan; supersedes and replaces the 2026-07-14 original in place. No implementation in this document._
-_Date: 2026-07-14 (revision 2)_
+_Status: implemented and archived plan; the run-receipt/instance-identity slice shipped in `0dfd29e` / `624e035` and is documented in [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md)_.
+_Date: 2026-07-14 (revision 2; retained as planning/evidence history)_
+
+> Do not treat the future-tense requirements below as an outstanding task list.
+> For current endpoint semantics, use [`INTERNAL-API.md`](./INTERNAL-API.md) and
+> [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md).
 
 ## Purpose and intent
 
@@ -87,7 +91,7 @@ All must pass before commit:
 - **Contract mirror synced in the same working session:** the sibling repo's `/root/agent-os/docs/PI-WEB-UI-INTERNAL-API-CONTRACT.md` gets the same version bump, the new endpoints/fields, and a matching version-history entry, then is committed and pushed on that repo's current branch. This is the operator's standing workflow — a contract version bump here is never left unmirrored — and it is the one deliberate cross-repo touch this plan requires.
 - Grep-level check that no receipt/store code path can persist env values, auth material, or prompt/transcript bodies.
 - Restart test proves receipts survive process death.
-- The two live scenarios pass on an isolated validation server (`PI_AGENT_DIR` and prefs isolated — never against prod state).
+- The two live scenarios pass on a validation-mode server with isolated session/registry state; the default wrapper keeps `PI_AGENT_DIR` (and its derived preferences file) for auth/models, so do not describe it as full Pi-agent/prefs isolation unless those paths were explicitly overridden.
 
 ## Scope guardrails — explicitly out, do not drift in
 

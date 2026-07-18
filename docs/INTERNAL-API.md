@@ -315,9 +315,21 @@ No authentication required.
     "opencode": "available",
     "antigravity": "available"
   },
+  "runtimeHealth": {
+    "pi": { "enabled": true, "available": true, "backend": "native", "checkStatus": "ok", "checkedAt": "2026-07-18T12:00:00.000Z", "checkDurationMs": 1 },
+    "claude": { "enabled": true, "available": true, "backend": "sdk", "checkStatus": "ok", "checkedAt": "2026-07-18T12:00:00.000Z", "checkDurationMs": 4 },
+    "opencode": { "enabled": true, "available": true, "backend": "server", "checkStatus": "ok", "checkedAt": "2026-07-18T12:00:00.000Z", "checkDurationMs": 7 },
+    "antigravity": { "enabled": true, "available": true, "backend": "subprocess", "checkStatus": "ok", "checkedAt": "2026-07-18T12:00:00.000Z", "checkDurationMs": 3 }
+  },
   "uptime": 3600
 }
 ```
+
+`runtimes` is the backward-compatible availability projection. Use
+`runtimeHealth` for the detailed per-runtime decision: a runtime can be
+configured but disabled/unavailable while the server remains healthy. The
+legacy top-level status is primarily a server/Pi-liveness compatibility signal;
+use `/capabilities` before dispatching work to an optional runtime.
 
 ---
 
@@ -382,48 +394,50 @@ in OpenCode's own auth storage. See
 
 ---
 
-### Refresh OpenCode Models
+### Refresh runtime model catalogues
 
 ```
 POST /api/v1/models/refresh
 ```
 
-Warms the models.dev catalogue cache, recycles the OpenCode backend (idle-aware —
-deferred while any session is running), and returns a snapshot diff of what
-changed. Drives the weekly automation (`npm run opencode:refresh-models`) but is
-safe to call ad hoc. The response contains provider/model **ids only — never any
-credentials**. See [`OPENCODE-MODEL-AUTOMATION.md`](./OPENCODE-MODEL-AUTOMATION.md).
+This endpoint has two explicit modes. The response contains public provider/model
+**ids and metadata only — never credentials**.
 
-**Body (optional):**
+| Selection | Behaviour | CLI / canonical doc |
+|---|---|---|
+| omitted or `runtime: "opencode"` (default) | warms the models.dev cache, then recycles the OpenCode backend when idle; recycling is deferred while a session is running | `npm run opencode:refresh-models`, [`OPENCODE-MODEL-AUTOMATION.md`](./OPENCODE-MODEL-AUTOMATION.md) |
+| `runtime: "pi"` | fetches the public OpenRouter catalogue, caches it, registers it into the live Pi model registry when auth is available, and returns an ids diff | `npm run pi:refresh-models`, [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md) |
+
+For OpenCode, the optional body fields are:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
+| `runtime` | `"opencode"` \| `"pi"` | `"opencode"` | Select the catalogue path; query `?runtime=pi` is also accepted |
 | `warmCache` | boolean | `true` | Run `opencode models` to refresh the on-disk models.dev cache first |
 | `recycle` | boolean | `true` | Recycle the OpenCode backend so it reloads the catalogue (skipped while sessions run) |
 
-**Response:**
-```json
-{
-  "available": true,
-  "cacheWarmed": true,
-  "recycled": true,
-  "recycleDeferred": false,
-  "runningSessions": 0,
-  "providerCount": 3,
-  "modelCount": 355,
-  "diff": {
-    "addedModels": ["kilo/new-provider/new-model"],
-    "removedModels": [],
-    "addedProviders": [],
-    "removedProviders": [],
-    "changed": true
-  },
-  "snapshotPath": "~/.pi-web-ui/opencode-model-snapshot.json",
-  "generatedAt": "2026-06-17T04:30:00.000Z"
-}
+Examples:
+
+```bash
+# OpenCode (default)
+curl --unix-socket ~/.pi-web-ui/internal-api.sock \
+  -H "Authorization: Bearer $(cat ~/.pi-web-ui/internal-api-token)" \
+  -H 'Content-Type: application/json' -X POST \
+  -d '{"runtime":"opencode","warmCache":true,"recycle":true}' \
+  http://localhost/api/v1/models/refresh
+
+# Pi/OpenRouter
+curl --unix-socket ~/.pi-web-ui/internal-api.sock \
+  -H "Authorization: Bearer $(cat ~/.pi-web-ui/internal-api-token)" \
+  -H 'Content-Type: application/json' -X POST -d '{"runtime":"pi"}' \
+  http://localhost/api/v1/models/refresh
 ```
 
-Returns `503 OPENCODE_UNAVAILABLE` when OpenCode is not installed/enabled.
+The response includes `runtime`, `providerCount`, `modelCount`, `diff`,
+`snapshotPath`, and `generatedAt`. Pi additionally returns `registered`, which
+is false when the public catalogue was cached but the Pi runtime has no
+configured OpenRouter auth. OpenCode returns `503 OPENCODE_UNAVAILABLE` when
+OpenCode is not installed or enabled.
 
 ---
 
@@ -504,6 +518,27 @@ GET /api/v1/sessions
   ]
 }
 ```
+
+---
+
+### Session identifiers and read-path resolution
+
+The registry carries several identifiers for one session. `sessionId` normally
+means the Pi Web UI internal id, while `sessionPath` is the Pi session path or
+Pi-owned replay path. Runtime-native identifiers may be a Claude native session
+id, an OpenCode session id, or an Antigravity conversation id. The equivalent
+locator command is:
+
+```bash
+npm run debug:where -- <internal-id|runtime-native-id|registry-path|conversation-id>
+```
+
+`GET /api/v1/sessions/:id/transcript?view=screen` resolves all supported forms
+and returns the canonical `sessionId` in its response. Control, diagnostics,
+notification, and watch routes use the internal id; the run-receipt route uses a
+`runId` and its receipt carries the canonical `sessionId`. Resolve the session id
+first rather than guessing from a native id. See the evidence ladder in
+[`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md#session-id-evidence-ladder).
 
 ---
 
@@ -600,7 +635,7 @@ completes. The caller sees nothing while the agent works.
 ```json
 {
   "sessionId": "a1b2c3d4-...",
-  "runId": "run-…",
+  "runId": "7d7b1d9d-1a32-4c7a-9bd0-000000000001",
   "messageId": "msg_xyz",
   "content": "Here is the refactored function using async/await:\n\n```javascript\nasync function fetchData() {\n  const response = await fetch('/api/data');\n  return response.json();\n}\n```",
   "tokens": { "input": 150, "output": 80, "total": 230 },
@@ -738,7 +773,7 @@ The lookup returns the persisted receipt directly:
 
 ```json
 {
-  "runId": "run-…",
+  "runId": "7d7b1d9d-1a32-4c7a-9bd0-000000000001",
   "sessionId": "a1b2c3d4-…",
   "runtime": "claude",
   "executionInstanceId": "glm52-claude-sdk",
@@ -780,6 +815,12 @@ and server startup; old receipts may return `RUN_NOT_FOUND` after retention.
 `claude-default` for older sessions without profile metadata). Pi, OpenCode,
 and Antigravity use `pi-local-default`, `opencode-default`, and
 `antigravity-default` respectively.
+
+Transport matters for lifecycle: `detach:true` is the disconnect-safe,
+server-side fire-and-forget mode and is valid only with `verbosity=answers`.
+The `tasks` and `full` prompt modes hold an SSE stream open for supervision; if
+that streaming client disconnects, the server cancels the run and aborts the
+runtime. Do not treat a streaming request as a durable background job.
 
 ---
 
@@ -836,7 +877,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
       "supportsFollowUp": true,
       "supportsSteer": false,
       "supportsModelSwitch": true,
-      "supportsThinkingLevel": false,
+      "supportsThinkingLevel": true,
       "supportsPinning": true,
       "supportsReplayHistory": true,
       "supportsApprovals": true,
@@ -852,7 +893,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
       "supportsPinning": true,
       "supportsReplayHistory": true,
       "supportsApprovals": false,
-      "supportsHeartbeat": false
+      "supportsHeartbeat": true
     }
   }
 }
@@ -880,6 +921,12 @@ GET /api/v1/sessions/:sessionId/diagnostics   # scoped to one session
 |---|---|---|---|
 | `limit` | 1–1000 | 200 | Max records returned |
 | `minLevel` | `error`,`warn`,`info`,`debug` | (all) | Include this severity and above |
+| `sessionId` | string | — | Exact correlation session id for global diagnostics; the session route supplies it automatically |
+| `requestId` | string | — | Originating Internal API request id |
+| `runId` | string | — | Durable prompt-dispatch id |
+| `runtime` | string | — | Runtime label, e.g. `pi` or `claude` |
+| `component` | string | — | Logger namespace, e.g. `ClaudeSdkService` |
+| `since` | ISO timestamp | — | Exclude records older than this time |
 
 **Response (200):**
 ```json
@@ -889,16 +936,21 @@ GET /api/v1/sessions/:sessionId/diagnostics   # scoped to one session
       "msg": "Prompt dispatched: runtime=pi …", "requestId": "req_…", "sessionId": "…", "runtime": "pi" }
   ],
   "recentErrors": [ { "ts": "...", "level": "error", "component": "...", "msg": "...", "error": { "name": "Error", "message": "...", "stack": "..." } } ],
-  "summary": { "bufferedRecords": 35, "errorCount": 0, "warnCount": 1, "oldestTs": "...", "newestTs": "..." }
+  "summary": { "bufferedRecords": 35, "errorCount": 0, "warnCount": 1, "oldestTs": "...", "newestTs": "..." },
+  "operational": {
+    "turns": { "accepted": 12, "completed": 10, "failed": 1 },
+    "sessions": { "total": 4, "byRuntime": { "pi": 2, "claude": 1, "opencode": 1, "antigravity": 0 }, "byStatus": { "running": 0, "idle": 4, "error": 0 } }
+  }
 }
 ```
 
 Each record is a scrubbed structured log line. Secret values (tokens, passwords,
 `Bearer …`, `sk-…` keys, sensitive keys like `apiKey`/`authorization`) are
 redacted to `[REDACTED]` before they reach the buffer, so diagnostics never leak
-credentials. `requestId`/`sessionId` are preserved so an agent can correlate a
-diagnostics slice with a prompt's lifecycle.
-
+credentials. `requestId`/`runId`/`sessionId` are preserved so an agent can
+correlate a diagnostics slice with a prompt's lifecycle. The ring and
+`operational` snapshot are bounded and process-local; they reset on restart and
+are not a replacement for a durable receipt or transcript.
 **Errors:**
 - `401` — Missing/invalid token (authed like siblings)
 
@@ -1442,6 +1494,12 @@ runs in `answers` mode (final text only). By default all prompts run
 with bounded concurrency (4); set `parallel: false` to run them strictly
 sequentially. Results are returned in input order.
 
+This endpoint holds the request until each answer-mode item completes and
+returns answer bodies in memory. For a large or long-running fan-out where the
+caller may disconnect, create the sessions and dispatch individual
+`verbosity=answers, detach=true` prompts with idempotency keys instead; retain
+each `sessionId`/`runId` and collect results later from receipts and
+transcripts.
 **Request:**
 ```json
 {
@@ -1541,7 +1599,15 @@ stream and records every match to a disk-backed ledger that survives the
 observer disconnecting, the session going idle, and a **server restart**. This
 decouples observation from the observer's liveness: a headless validator can
 register a watch, sleep for an hour, then poll for what fired — without holding
-any connection open. See [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
+any connection open.
+
+The restart guarantee is about the **ledger**, not automatic observer recovery.
+On boot, an `active` watch is reloaded as `detached`: past firings remain
+readable, but new events are not recorded until the caller registers the watch
+again. A watch's default runtime pin is also separate from the time-bounded
+Internal-API pin ledger; deleting a watch does not unpin the subject. Explicitly
+unpin or delete the session when the long task is finished. See
+[`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
 
 ```
 POST   /api/v1/sessions/:sessionId/watch     # register (one per session); pins the subject
@@ -1661,7 +1727,7 @@ prompt-injection scan), **starts the turn, and returns `202 Accepted`
 immediately** without waiting for it to complete:
 
 ```json
-{ "sessionId": "a1b2c3d4-...", "runId": "run-…", "detached": true, "status": "accepted" }
+{ "sessionId": "a1b2c3d4-...", "runId": "7d7b1d9d-1a32-4c7a-9bd0-000000000001", "detached": true, "status": "accepted" }
 ```
 
 The turn keeps running server-side — a disconnected request does **not** abort
@@ -1677,6 +1743,10 @@ Rules:
 - Still subject to the busy check — a session processes one prompt at a time.
 - Read results later via `GET /sessions/:id/info` (`status: idle|running`) and
   `GET /sessions/:id/transcript`.
+- Do not substitute `verbosity=tasks` or `full` and then close the connection:
+  those are streaming supervision modes, and a client disconnect cancels the
+  run and aborts the runtime. Use detached `answers` mode when disconnect
+  survival matters.
 
 ---
 
@@ -1866,6 +1936,9 @@ INTERNAL_API_KEY=
 
 # Path for auto-generated token (default: ~/.pi-web-ui/internal-api-token)
 INTERNAL_API_TOKEN_PATH=
+
+# Directory for durable long-horizon watch ledgers (default: ~/.pi-web-ui/watches)
+INTERNAL_API_WATCH_DIR=
 
 # Directory for persisted run receipts (default: ~/.pi-web-ui/run-receipts)
 INTERNAL_API_RUN_RECEIPTS_DIR=

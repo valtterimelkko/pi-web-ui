@@ -7,6 +7,14 @@
 
 This report preserves the original execution evidence and the later independent review. Intermediate completion statements in Phases G–I are historical and are superseded by Phase J. The review found material omissions after the original `9e0f64c` claim; those omissions were fixed with RED→GREEN tests before final verification.
 
+> **Current-runbook boundary:** command snippets in the historical phases may
+> predate the disposable-validation safety guard. Do not copy a no-argument
+> `validate:live` or `validate:long-horizon` command from this report. Use the
+> current [`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md) and
+> [`LONG-HORIZON-VALIDATION.md`](../LONG-HORIZON-VALIDATION.md) runbooks with
+> explicit disposable socket/token paths; only use `--allow-production` after
+> explicit authorisation.
+
 ## 0. Baseline (§4.1)
 
 | Check | Command | Result |
