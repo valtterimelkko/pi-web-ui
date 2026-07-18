@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * L1: WebSocket status-timer ownership + disconnected Pi handler cleanup.
  *
