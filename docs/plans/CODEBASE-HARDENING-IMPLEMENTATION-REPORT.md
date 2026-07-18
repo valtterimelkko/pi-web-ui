@@ -2,9 +2,10 @@
 
 **Plan:** `docs/plans/CODEBASE-HARDENING-IMPLEMENTATION-PLAN.md`
 **Execution start:** 2026-07-17
-**Status:** complete (HEAD `9e0f64c`)
+**Independent review completed:** 2026-07-18
+**Status:** implementation verified through `9abc836`; the authoritative final evidence is in Phase J
 
-This report captures the captured, objective RED→GREEN→REFACTOR evidence required by §4 of the plan. No row is marked complete without linked evidence and a commit.
+This report preserves the original execution evidence and the later independent review. Intermediate completion statements in Phases G–I are historical and are superseded by Phase J. The review found material omissions after the original `9e0f64c` claim; those omissions were fixed with RED→GREEN tests before final verification.
 
 ## 0. Baseline (§4.1)
 
@@ -482,7 +483,9 @@ This report captures the captured, objective RED→GREEN→REFACTOR evidence req
 
 ## Phase D — frontend render and persistence efficiency (F1–F3)
 
-**Outcome — all three were already satisfied in the current codebase; each is now pinned by characterization tests so it cannot regress.** No component/store/persistence production code was changed (so there is no before/after UI/bundle/benchmark delta to gate; the client suite + build confirm no regression).
+> **Historical pre-review assessment.** The independent review in Phase J supersedes the claim below. It found that F2's custom comparator was unsafe and that F3 required production changes for validated, latest-wins cross-tab persistence.
+
+**Original assessment:** all three appeared already satisfied and were initially pinned by characterization tests.
 
 ### F1. Narrow Zustand subscriptions — ALREADY SATISFIED (pinned)
 
@@ -554,7 +557,7 @@ Added explicit `coverage.include` (`server src/**/*.ts`, `client src/**/*.{ts,ts
 ---
 
 
-## Phase G — final quality gates (§11)
+## Phase G — original pre-review quality gates (§11; superseded by Phase J)
 
 ### Core gates (all pass)
 | Gate | Command | Result |
@@ -597,13 +600,13 @@ Updated where contracts/behaviour changed: `SECURITY.md` (§3 WS guard, §4 prom
 
 ---
 
-## Completion statement
+## Intermediate completion statement (superseded by Phase J)
 
 All in-scope tasks in `CODEBASE-HARDENING-IMPLEMENTATION-PLAN.md` are complete at `9e0f64c` (HEAD). The report contains captured test-first RED→GREEN proof for every behaviour change (S1–S5, L1–L7, R1, P1–P5, F1–F3 pinned, T1, Q3, Q4; Q1/Q2 documented as already-satisfied/N/A with evidence; R2 a single-pass refactor + dedup characterization). Full lint (1146 warnings ≤ 1147 baseline, 0 errors), typecheck, 3291 tests, truthful coverage (both workspaces pass the ratchet), build (client gzip 209.06 kB), the bounded disposable live-smoke matrix (Internal-API real turn + browser-WebSocket turn + long-horizon resume all passed), dependency audit (0 high/critical production vulnerabilities), and lifecycle churn checks passed. **M1 resulted in no retention change** based on recorded measurements. The §11.6 full-browser E2E is environment-blocked (disposable server serves the client only in production mode → secure-cookie-over-HTTP trap); the browser-WS boundary is proven directly via `ws-validate` instead. No UI/protocol compatibility change, secret, session artifact, or untracked review ledger was committed.
 
 ---
 
-## Phase H — deeper live validation (goal-2: beyond smoke, across runtime paths)
+## Phase H — original deeper live validation (historical; superseded by Phase J)
 
 Booted a fresh disposable `validate:server` (test `AUTH_PASSWORD`, broad `ALLOWED_ORIGINS`, dev mode) and ran scenarios beyond the §11.5 smoke, plus the two-server browser recipe.
 
@@ -629,7 +632,7 @@ Booted a fresh disposable `validate:server` (test `AUTH_PASSWORD`, broad `ALLOWE
 
 ---
 
-## Phase I — critical code review fixes (goal-2)
+## Phase I — first review pass (historical; superseded by Phase J)
 
 An adversarial code review of the full diff (`5e3fa6d..HEAD`) found one real bug + one inconsistency, both fixed:
 
@@ -642,3 +645,102 @@ An adversarial code review of the full diff (`5e3fa6d..HEAD`) found one real bug
 - *`connection.ts` `close()` doesn't `removeEventHandler` for connected clients* (LOW): `ws.close()` fires async after `clients.clear()`, so `handleDisconnect`'s `if (client)` guard skips `removeEventHandler`. Test-harness-only (production shutdown exits the process).
 
 **Verification:** full server suite **2526 passed** (2525 + the new concurrent-rollback test), typecheck + lint clean.
+
+---
+
+## Phase J — independent adversarial review and authoritative final evidence
+
+### J1. Scope and review outcome
+
+A second review inspected the plan, all production/test changes from baseline `5e3fa6d`, the original report, and repository state rather than accepting the earlier completion statement. The reviewed implementation tip is `9abc836` (35 commits after the plan baseline; the report-only commit follows it).
+
+The review found material omissions that the original report did not disclose. They were reproduced before repair and fixed in `c424a07`; `9abc836` adds the final provider-bounded browser regression. Principal corrections were:
+
+- Correlated worker RPC requests with responses and bounded pending ownership on success, error, timeout, worker exit, and disposal; late responses can no longer settle an unrelated request.
+- Made `SessionRPCClient`, session-WebSocket subscriptions, worker-pool reservations, cleanup intervals, and all runtime shutdown paths explicitly disposable and race-safe.
+- Added subscription generations so overlapping same-path subscribes cannot install stale clients and a subscribe resolving after close cannot resurrect a connection.
+- Closed Claude retry cancellation races, including callbacks whose timer had already fired; guaranteed WebSocket closure even if runtime shutdown rejects.
+- Serialized and durably synced Antigravity JSONL persistence, propagated append failures, repaired private modes, removed failed temporary files, rejected malformed history, and bounded the mode cache.
+- Replaced unsafe path-prefix containment in file routes; canonicalized worktree repositories to their Git root; tightened runtime-specific Internal API validation.
+- Preserved concurrent notifications during persistence rollback and made long-horizon/watch/run-receipt write-chain cleanup bounded.
+- Removed the unsafe `MessageBubble` comparator and implemented validated, latest-wins cross-tab metadata merging with throttled-write and echo-dedup regressions.
+- Corrected stale browser assertions and made real-provider-dependent read-aloud setup a bounded capability check rather than an unrelated UI failure.
+
+Every behavioural correction above has a regression that failed against the pre-fix implementation. Representative RED evidence includes uncorrelated RPC promises, leaked pending/listener ownership, stale overlapping subscriptions, post-close installation, Claude retry callbacks firing twice, concurrent Antigravity append loss, unsafe sibling-path acceptance, and notification rollback clobbering a concurrent enqueue.
+
+### J2. Plan-task disposition
+
+| Task | Final disposition | Objective evidence |
+|---|---|---|
+| S1 | complete | authenticated worktree routes, `execFile` argument arrays, safe refs, `rev-parse` Git-root canonicalization; 41 focused route/security tests |
+| S2 | complete | one origin/auth/rate-limit guard before every supported upgrade; malformed URL regression |
+| S3 | complete | strict Zod create/batch schemas, 50-item bound, concurrency 4, runtime-specific `profileId` rejection; 68 related tests |
+| S4 | complete | prompt-injection boundary covers prompt/steer/follow-up; focused adversarial tests |
+| S5 | complete | bcrypt 6 compatibility tests; production audit reports 0 vulnerabilities |
+| L1 | complete | owned/unref'd status timer and disconnect handler cleanup; fake-timer churn tests |
+| L2 | complete | idempotent pool release, spawn/exit/shutdown race handling, one cleanup interval; capacity tests |
+| L3 | complete | response correlation, timeout/exit rejection, late-response guard, 1,000-cycle settlement and explicit disposal tests |
+| L4 | complete | Claude timers/subscribers and fired-retry callbacks are cancellable; abort/retry regressions |
+| L5 | complete | watcher cannot repopulate after stop; Pi/Claude/OpenCode/Antigravity shutdown uses independent settlement |
+| L6 | complete | Antigravity retry waits abort promptly; service shutdown verified |
+| L7 | complete | terminal listeners/timers are removed; stale process exits cannot delete replacements |
+| R1 | complete | Pi model-cache initialization is shared/concurrency-safe; existing characterization remains green |
+| R2 | complete | OpenCode normalization/dedup remains single-pass; full runtime suites green |
+| P1 | complete | long-horizon state writes are serialized, atomic, private, synced, and cleaned up |
+| P2 | complete | notification state transitions roll back surgically and remain retryable on persistence failure |
+| P3 | complete | file reads allocate only the bounded requested capacity; canonical containment enforced |
+| P4 | complete | settled write-chain entries are removed without deleting newer chains |
+| P5 | complete | Antigravity modes are repaired once/cached with bounded ownership; append durability strengthened |
+| F1 | complete | narrow selector characterization and selector/navigation tests pass |
+| F2 | complete | incorrect hand-written memo comparator removed; content changes cannot be hidden |
+| F3 | complete | one validated persistence owner; latest snapshot wins during throttling and cross-tab merges use `updatedAt` |
+| T1 | complete | asynchronous scanner and fixture-based tests; no import-time live side effects |
+| Q1 | complete | ESLint config resolves correctly; final 1,143 warnings is below the 1,147 baseline, with 0 errors |
+| Q2 | complete/N/A | exact-rule scan found no duplicate CSS rule to remove; no speculative visual edit made |
+| Q3 | complete | copy timer cleanup plus accessible/stable selectors; unit and browser coverage green |
+| Q4 | complete | production-source coverage include/ratchets are explicit and both workspace coverage runs pass |
+| M1 | complete | noisy prompt/tool channel activity is debug-gated and prompt bodies are not logged; measurement did not justify a replay cap |
+
+### J3. Authoritative final gates
+
+| Gate | Command/evidence | Final result |
+|---|---|---|
+| Agent-guide sync | `npm run docs:check-agent-guides` | pass |
+| Lint | `npm run lint` | pass: 0 errors, **1,143 warnings** (baseline 1,147) |
+| TypeScript | `npm run typecheck` | pass |
+| Unit/integration | `npm test` | pass: server **2,564**, client **771**, total **3,335** |
+| Coverage | both workspace `test:coverage` commands | pass: server 75.31/77.56/80.26/75.31; client 57.98/75.71/54.44/57.98 (statements/branches/functions/lines), all above ratchets |
+| Build | `npm run build` | pass: initial client JS **752.32 kB / 209.38 kB gzip**, +0.17% gzip from 209.02 kB baseline |
+| Dependencies | `npm audit --omit=dev` | pass: 0 vulnerabilities |
+| Patch hygiene | `git diff --check` | pass |
+| Quick benchmarks | five independent runs | stable medians: cold 50.69 ms, warm 0.06 ms, typing 80.87 ms, session-switch 0.10 ms, retained-heap delta 0.10 MB |
+| Full benchmark harness | `vitest bench --run --config tests/benchmarks/vitest.bench.config.ts` | pass with real non-zero samples: cold 23, warm 590, typing 37, switch 607, memory 32 |
+| Chromium E2E | disposable validation server + Vite proxy, `--retries=0` | **98 passed, 8 capability skips, 0 failed**, 9.9 min; focused read-aloud also 2/2 |
+
+The eight Chromium skips are explicit capability/fixture branches (for example unavailable Claude Direct or tests requiring an existing assistant message), not retry-converted failures. The final matrix ran with retries disabled. The earlier `/health` 429/500 cascade was traced to orphaned nested shell/npm subprocesses and blocked output pipes in the test helper; direct `exec node` ownership plus redirected logs fixed the infrastructure without weakening rate limiting. Ports 3466/3467 were empty after teardown.
+
+### J4. Mandatory bounded live validation
+
+One disposable validation environment with isolated state exercised the changed boundaries:
+
+| Check | Result |
+|---|---|
+| Pi smoke | pass, real turn completed |
+| OpenCode smoke | pass, real turn completed; runtime port closed at teardown |
+| Claude smoke | externally blocked after bounded retry because the disposable Claude CLI had no valid subscription authentication; session creation/dispatch path was reached, and this is recorded as an environment limitation rather than an application pass |
+| Antigravity smoke | runtime unavailable; explicit capability skip |
+| Unknown runtime | `400 INVALID_REQUEST`; session count unchanged |
+| Authenticated browser WebSocket prompt | exact assistant text `LIVE-SMOKE-OK` and terminal `agent_end` |
+| Long-horizon resume | `start` followed by `once` matched `LH-OK` from persisted state |
+| Teardown | Internal API socket, HTTP/Vite ports, runtime child processes, timers reachable through shutdown, and temporary state directories removed |
+
+The Claude limitation does not invalidate the code changes: the original deeper run recorded a successful Claude SDK/profile turn, while the final disposable CLI lacked the external credentials needed for a new Direct turn. It is not represented as a fresh final-matrix pass.
+
+### J5. Final audit and conclusion
+
+- The complete implementation diff was reviewed after fixes; temporary Vite configuration, benchmark JSON, coverage, Playwright results, validation state, session data, and helper scripts were not committed.
+- Secret-oriented review found no token, cookie, auth dump, transcript, live environment file, or machine-local validation artifact in the committed delta.
+- UI and protocol compatibility are preserved; stricter unknown-runtime/profile/path rejection is intentional and documented.
+- No material review finding remains accepted without a fix. The two low-severity items previously deferred in Phase I (fired Claude retry cancellation and app-close handler cleanup) are fixed and regression-tested.
+
+**Authoritative conclusion:** all in-scope hardening tasks are implemented and independently re-verified. Automated gates, coverage, performance bounds, no-retry Chromium E2E, disposable real-runtime smoke where capabilities were available, negative-path checks, and teardown checks pass. The only unavailable live paths are explicitly external capabilities (fresh Claude Direct authentication and Antigravity installation), not hidden failures.
