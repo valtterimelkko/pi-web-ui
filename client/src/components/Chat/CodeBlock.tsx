@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { copyToClipboard } from '../../lib/clipboard';
 
@@ -20,6 +20,15 @@ interface CodeBlockProps {
 export function CodeBlock({ children }: CodeBlockProps) {
   const preRef = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
+  // Owns the copy-feedback timer so it is cleared on unmount and on re-copy
+  // (no dangling timer, no setState-after-unmount).
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   const handleCopy = async () => {
     // The copy button itself is icon-only (no text content), so the <pre>'s
@@ -29,7 +38,8 @@ export function CodeBlock({ children }: CodeBlockProps) {
     const ok = await copyToClipboard(text, 'Code block copied to clipboard');
     if (ok) {
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
     }
   };
 

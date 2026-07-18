@@ -142,3 +142,17 @@ describe('CodeBlock', () => {
     expect(copyToClipboardMock.mock.calls[0][0]).toBe('block A');
   });
 });
+
+  it('Q3: clears the copy-feedback timer on unmount (no dangling timer)', async () => {
+    copyToClipboardMock.mockResolvedValue(true);
+    const { unmount } = render(
+      <CodeBlock>
+        <code>{'let x = 1'}</code>
+      </CodeBlock>,
+    );
+    await clickCopyButton(); // arms the 2s feedback timer
+    const clearTimeoutSpy = vi.spyOn(global, 'clearTimeout');
+    unmount();
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
+  });
