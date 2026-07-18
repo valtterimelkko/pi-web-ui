@@ -156,11 +156,6 @@ router.get('/browse', async (req: Request, res: Response) => {
 router.get('/read', async (req: Request, res: Response) => {
   try {
     const requestedPath = req.query.path as string;
-    // Note: offset and limit are parsed but not used in this implementation
-    // Future versions could support line-based pagination
-    const _offset = parseInt(req.query.offset as string) || 1;
-    const _limit = parseInt(req.query.limit as string) || 2000;
-    
     if (!requestedPath) {
       res.status(400).json({ error: 'path is required' });
       return;
