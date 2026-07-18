@@ -28,12 +28,21 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
+      // Measure production source explicitly (truthful coverage of src/**).
+      include: ['src/**/*.{ts,tsx}'],
       exclude: ['node_modules/', 'tests/', 'dist/', 'src/**/*.d.ts'],
+      // Truthful ratchet (Q4): the explicit `include` now measures ALL of src/**,
+      // so the previous 70/70/60/70 thresholds (which silently ignored
+      // unmeasured components) were inflated. The measured baseline with full
+      // src/** instrumentation is lines 57.04 / branches 75.43 / functions
+      // 54.07 / statements 57.04. Thresholds are set 1 point below to absorb
+      // run-to-run variance while still failing on a real regression. Raising
+      // these requires adding tests (not weakening the ratchet).
       thresholds: {
-        lines: 70,
-        functions: 70,
-        branches: 60,
-        statements: 70,
+        lines: 56,
+        functions: 53,
+        branches: 74,
+        statements: 56,
       },
     },
     include: ['tests/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
