@@ -6,7 +6,7 @@
  *
  * See SCREEN-VIEW-OBSERVABILITY-PLAN.md §4 Stage 2.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -19,6 +19,11 @@ import { turnsToReplayEvents } from '../../src/antigravity/antigravity-history-r
 import { projectDefaultViewFromEvents } from '@pi-web-ui/shared';
 import { createSessionRoutes } from '../../src/internal-api/routes/sessions.js';
 import { SessionRegistryManager } from '../../src/session-registry.js';
+
+const cleanupPaths: string[] = [];
+afterEach(async () => {
+  await Promise.all(cleanupPaths.splice(0).map((target) => fs.rm(target, { recursive: true, force: true })));
+});
 
 function createMockRes(): ServerResponse & { body: string; statusCode: number } {
   const chunks: Buffer[] = [];
@@ -47,6 +52,7 @@ function createMockRes(): ServerResponse & { body: string; statusCode: number } 
 describe('screen-view: real loader → projection pipeline', () => {
   it('Claude: real JSONL → historyToReplayEvents → projection (coalesced + tool paired)', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sv-claude-'));
+    cleanupPaths.push(dir);
     const sid = 'claude-sess-1';
     const file = path.join(dir, `${sid}.jsonl`);
     await fs.writeFile(
@@ -111,6 +117,7 @@ describe('screen-view: real loader → projection pipeline', () => {
 
   it('Pi: route end-to-end against a real registry + real session file', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sv-pi-route-'));
+    cleanupPaths.push(dir);
     const piFile = path.join(dir, 'pi-session.jsonl');
     await fs.writeFile(
       piFile,

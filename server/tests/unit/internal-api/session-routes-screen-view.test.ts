@@ -8,7 +8,7 @@
  *  - strictly read-only (never prompts / creates / upserts)
  *  - existing /transcript behaviour unchanged when `view` is absent
  */
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { ServerResponse } from 'http';
 import { Writable } from 'stream';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
@@ -16,6 +16,11 @@ import type { RegistryEntry } from '../../../src/session-registry.js';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+
+const cleanupPaths: string[] = [];
+afterEach(async () => {
+  await Promise.all(cleanupPaths.splice(0).map((target) => fs.rm(target, { recursive: true, force: true })));
+});
 
 // ─── Mock response helper (mirrors session-routes-orchestration.test.ts) ────────
 
@@ -172,6 +177,7 @@ describe('handleSessionTranscript view=screen', () => {
 
   it('returns a ScreenView for Pi from a real Pi session file', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-screen-'));
+    cleanupPaths.push(dir);
     const file = path.join(dir, 'session.jsonl');
     // Pi-native entries: a message envelope + a tool_execution pair.
     await fs.writeFile(
@@ -262,6 +268,7 @@ describe('handleSessionTranscript view=screen', () => {
 
   it('resolves Pi screen view from a directory by picking the newest .jsonl', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-dir-'));
+    cleanupPaths.push(dir);
     // Two .jsonl files with different content — newest should win.
     const olderFile = path.join(dir, 'older.jsonl');
     const newerFile = path.join(dir, 'newer.jsonl');
@@ -295,6 +302,7 @@ describe('handleSessionTranscript view=screen', () => {
 
   it('returns an empty/thin Pi view when the directory has no .jsonl files', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-empty-'));
+    cleanupPaths.push(dir);
     // Directory exists but has no .jsonl files.
     await fs.writeFile(path.join(dir, 'README.txt'), 'not a session', 'utf-8');
 
@@ -318,6 +326,7 @@ describe('handleSessionTranscript view=screen', () => {
 
   it('prefers the active Pi session file when one exists under the entry directory', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-active-'));
+    cleanupPaths.push(dir);
     const activeFile = path.join(dir, 'active-session.jsonl');
     const olderFile = path.join(dir, 'older.jsonl');
     await fs.writeFile(
@@ -350,6 +359,7 @@ describe('handleSessionTranscript view=screen', () => {
 
   it('still works when entry.path is already a .jsonl (direct file, not directory)', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-file-'));
+    cleanupPaths.push(dir);
     const file = path.join(dir, 'direct.jsonl');
     await fs.writeFile(
       file,

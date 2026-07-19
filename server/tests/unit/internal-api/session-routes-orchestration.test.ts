@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { PassThrough, Writable } from 'stream';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
@@ -241,6 +241,11 @@ describe('createSessionRoutes orchestration endpoints', () => {
       isAvailable: vi.fn().mockResolvedValue(true),
       createSession: vi.fn().mockResolvedValue({ sessionId: 'new-agy' }),
     };
+  });
+
+  afterEach(async () => {
+    setLogTap(null);
+    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   function makeRoutes() {
