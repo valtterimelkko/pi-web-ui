@@ -12,7 +12,7 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 import { useDictation } from '../../hooks/useDictation';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
 import { messagesToLiveMessages } from '../../lib/messageAdapter';
-import { deriveGoalTag } from '../../lib/piExtensionControls';
+import { deriveGoalTag, getGoalControlCommand, type GoalControlAction } from '../../lib/piExtensionControls';
 
 interface ChatViewProps {
   onOpenSettings?: () => void;
@@ -39,7 +39,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const listRef = useRef<VirtualizedMessageListHandle>(null);
-  const { createNewSession, goalControl } = useWebSocket();
+  const { createNewSession, goalControl, sendPrompt } = useWebSocket();
   const setDraft = useDraftStore((s) => s.setDraft);
   const [confirmClearGoal, setConfirmClearGoal] = useState(false);
 
@@ -60,9 +60,16 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   // long silent model-thinking gaps so an active goal never looks frozen.
   const goalTag = deriveGoalTag(goalEngineStatus, isStreaming);
 
-  // Goal controls (pause / resume / clear) are driven server-side and are
-  // OpenCode-only; Pi handles its own goal slash commands.
-  const goalControlsEnabled = goalTag.active && currentSessionSdkType === 'opencode';
+  // OpenCode has a server-side goal control path. Pi routes the same buttons
+  // through its extension slash commands so both runtimes expose equivalent UI.
+  const goalControlsEnabled = goalTag.active
+    && (currentSessionSdkType === 'pi' || currentSessionSdkType === 'opencode');
+  const handleGoalControl = useCallback((action: GoalControlAction) => {
+    if (!currentSessionId) return;
+    const command = getGoalControlCommand(currentSessionSdkType, action);
+    if (command) sendPrompt(command);
+    else goalControl(currentSessionId, action);
+  }, [currentSessionId, currentSessionSdkType, goalControl, sendPrompt]);
 
   // Reset the clear-confirmation when the goal is no longer active.
   useEffect(() => {
@@ -156,7 +163,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
                     {goalTag.paused ? (
                       <button
                         type="button"
-                        onClick={() => goalControl(currentSessionId, 'resume')}
+                        onClick={() => handleGoalControl('resume')}
                         className="rounded px-1.5 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
                         title="Resume goal"
                         data-testid="goal-resume"
@@ -166,7 +173,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
                     ) : (
                       <button
                         type="button"
-                        onClick={() => goalControl(currentSessionId, 'pause')}
+                        onClick={() => handleGoalControl('pause')}
                         className="rounded px-1.5 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
                         title="Pause goal (stops the current run and halts auto-continuation)"
                         data-testid="goal-pause"
@@ -177,7 +184,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
                     {confirmClearGoal ? (
                       <button
                         type="button"
-                        onClick={() => { goalControl(currentSessionId, 'clear'); setConfirmClearGoal(false); }}
+                        onClick={() => { handleGoalControl('clear'); setConfirmClearGoal(false); }}
                         className="rounded px-1.5 py-0.5 text-xs font-medium text-white bg-red-500 hover:bg-red-600"
                         title="Confirm: clear this goal"
                         data-testid="goal-clear-confirm"

@@ -1850,6 +1850,23 @@ export const useSessionStore = create<SessionState>()(
             break;
           }
 
+          case 'extension_error': {
+            const extensionError = msg as unknown as {
+              sessionId?: string;
+              extensionPath?: string;
+              error?: string;
+            };
+            if (extensionError.sessionId && extensionError.sessionId !== get().currentSessionId) break;
+            const label = extensionError.extensionPath?.startsWith('command:goal')
+              ? 'Goal extension error'
+              : 'Extension error';
+            useUIStore.getState().addToast({
+              type: 'error',
+              message: `${label}: ${extensionError.error ?? 'Unknown extension failure'}`,
+            });
+            break;
+          }
+
           case 'notification': {
             const { notification, sessionId } = msg as unknown as {
               sessionId?: string;

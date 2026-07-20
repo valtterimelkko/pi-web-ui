@@ -223,6 +223,40 @@ describe('PiService', () => {
       expect(service.getSessionByClientId('web-ui-reload-client')).toBe(mockSession);
     });
 
+    it('forwards extension command failures to the Web UI context', async () => {
+      const { createAgentSession } = await import('@earendil-works/pi-coding-agent');
+      const sendToClient = vi.fn();
+      const mockSession = {
+        sessionId: 'extension-error-session',
+        subscribe: vi.fn(),
+        setModel: vi.fn(),
+        dispose: vi.fn(),
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        bindExtensions: vi.fn().mockResolvedValue(undefined),
+        sessionManager: {},
+      };
+      (createAgentSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ session: mockSession });
+
+      await service.createSession({
+        clientId: 'extension-error-client',
+        webUIContext: { clientId: 'extension-error-client', sendToClient },
+      });
+      const bindings = mockSession.bindExtensions.mock.calls[0]?.[0];
+
+      bindings.onError({
+        extensionPath: 'command:goal',
+        event: 'command',
+        error: 'hideGoalStatusWidget is not defined',
+      });
+
+      expect(sendToClient).toHaveBeenCalledWith({
+        type: 'extension_error',
+        extensionPath: 'command:goal',
+        event: 'command',
+        error: 'hideGoalStatusWidget is not defined',
+      });
+    });
+
     it('waits for extension session_start handlers before returning the session', async () => {
       const { createAgentSession } = await import('@earendil-works/pi-coding-agent');
       let releaseBind!: () => void;

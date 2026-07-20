@@ -3,6 +3,7 @@ import {
   isPiSlashCommandAllowedWhileStreaming,
   shouldPauseGoalOnStop,
   deriveGoalTag,
+  getGoalControlCommand,
 } from '../../../src/lib/piExtensionControls';
 
 describe('Pi extension controls', () => {
@@ -12,6 +13,14 @@ describe('Pi extension controls', () => {
     expect(isPiSlashCommandAllowedWhileStreaming('normal prompt', true, 'pi')).toBe(false);
     expect(isPiSlashCommandAllowedWhileStreaming('/goal pause', true, 'claude')).toBe(false);
     expect(isPiSlashCommandAllowedWhileStreaming('/goal pause', false, 'pi')).toBe(false);
+  });
+
+  it('maps Pi goal controls to extension slash commands while leaving OpenCode server-driven', () => {
+    expect(getGoalControlCommand('pi', 'pause')).toBe('/goal pause-now');
+    expect(getGoalControlCommand('pi', 'resume')).toBe('/goal resume');
+    expect(getGoalControlCommand('pi', 'clear')).toBe('/goal clear');
+    expect(getGoalControlCommand('opencode', 'pause')).toBeNull();
+    expect(getGoalControlCommand('claude', 'resume')).toBeNull();
   });
 
   it('returns true for pause-on-stop when Pi or OpenCode goal is running', () => {

@@ -39,7 +39,7 @@ export interface CommandActionContext {
     }>;
     removeClient(clientId: string): void;
   };
-  getSessionManager: () => unknown;
+  waitForIdle: () => Promise<void>;
 }
 
 /**
@@ -358,25 +358,10 @@ export function createCommandContextActions(
   ctx: CommandActionContext
 ): ExtensionCommandContextActions {
   return {
-    // Wait for the agent to finish streaming
+    // Delegate to the AgentSession. SessionManager only owns persistence and
+    // has no idle state; polling it made every command-level wait time out.
     async waitForIdle(): Promise<void> {
-      // The agent idle state is managed by the session
-      // We'll poll briefly to check if agent becomes idle
-      const maxWaitTime = 60000; // 1 minute max wait
-      const pollInterval = 100;
-      let waited = 0;
-
-      while (waited < maxWaitTime) {
-        // Get the session and check if agent is idle
-        const session = ctx.getSessionManager();
-        if (!session || (session as { isIdle?: () => boolean }).isIdle?.()) {
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
-        waited += pollInterval;
-      }
-
-      throw new Error('Timeout waiting for agent to become idle');
+      await ctx.waitForIdle();
     },
 
     // Start a new session

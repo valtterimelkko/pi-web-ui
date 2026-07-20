@@ -85,6 +85,62 @@ describe('S4: unified prompt-boundary on prompt / steer / follow_up', () => {
     expect(followUpSpy).not.toHaveBeenCalled();
   });
 
+  it('executes Pi extension slash commands while the session is streaming', async () => {
+    (mgr as any).multiSessionManager.getSessionStatus = () => ({ status: 'streaming' });
+
+    await (mgr as any).handlePrompt('c1', {
+      type: 'prompt',
+      sessionId: 's',
+      message: '  /goal pause-now',
+    });
+
+    expect(promptSpy).toHaveBeenCalledOnce();
+    expect(promptSpy).toHaveBeenCalledWith('/goal pause-now', { images: undefined });
+    expect(sent.find((entry) => entry.message.code === 'SESSION_BUSY')).toBeUndefined();
+  });
+
+  it('keeps ordinary prompts blocked while the Pi session is streaming', async () => {
+    (mgr as any).multiSessionManager.getSessionStatus = () => ({ status: 'streaming' });
+
+    await (mgr as any).handlePrompt('c1', { type: 'prompt', sessionId: 's', message: BENIGN });
+
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(sent.find((entry) => entry.message.code === 'SESSION_BUSY')).toBeDefined();
+  });
+
+  it('reports an unhandled busy-session slash command as busy rather than stuck', async () => {
+    (mgr as any).multiSessionManager.getSessionStatus = () => ({ status: 'streaming' });
+    promptSpy.mockRejectedValueOnce(new Error("Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."));
+
+    await (mgr as any).handlePrompt('c1', {
+      type: 'prompt',
+      sessionId: 's',
+      message: '/not-an-extension-command',
+    });
+
+    expect(sent.find((entry) => entry.message.code === 'SESSION_BUSY')).toBeDefined();
+    expect(sent.find((entry) => entry.message.code === 'SESSION_STUCK')).toBeUndefined();
+  });
+
+  it('identifies browser-created Pi sessions as Pi in session_created', async () => {
+    (mgr as any).multiSessionManager.createAndSubscribe = vi.fn().mockResolvedValue({
+      sessionId: 'pi-session',
+      sessionPath: '/pi/session.jsonl',
+    });
+    (mgr as any).multiSessionManager.setClientViewingSession = vi.fn();
+    (mgr as any).getWebUIContext = vi.fn().mockReturnValue({ clientId: 'c1', sendToClient: vi.fn() });
+
+    await (mgr as any).handleNewSession('c1', {
+      type: 'new_session',
+      cwd: '/work',
+      sdkType: 'pi',
+    });
+
+    expect(sent.find((entry) => entry.message.type === 'session_created')?.message).toEqual(
+      expect.objectContaining({ type: 'session_created', sdkType: 'pi' }),
+    );
+  });
+
   it('accepts benign text on steer and forwards it to the runtime', async () => {
     await (mgr as any).handleSteer('c1', { type: 'steer', message: BENIGN });
     expect(blockedError()).toBeUndefined();

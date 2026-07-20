@@ -21,6 +21,18 @@ export function shouldPauseGoalOnStop(
   return sdkType === 'pi' || sdkType === 'opencode';
 }
 
+export type GoalControlAction = 'pause' | 'resume' | 'clear';
+
+/** Pi goal controls are extension commands; OpenCode has a server-side control path. */
+export function getGoalControlCommand(
+  sdkType: RuntimeSdkType,
+  action: GoalControlAction,
+): string | null {
+  if (sdkType !== 'pi') return null;
+  if (action === 'pause') return '/goal pause-now';
+  return `/goal ${action}`;
+}
+
 export interface GoalTag {
   /** Whether an actionable goal is active and the tag should be shown. */
   active: boolean;

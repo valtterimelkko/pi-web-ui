@@ -153,6 +153,24 @@ describe('extension UI state', () => {
     expect(useSessionStore.getState().extensionWidgets['goal-engine-status']).toBeUndefined();
   });
 
+  it('surfaces extension command failures as an error toast', () => {
+    const addToast = vi.spyOn(useUIStore.getState(), 'addToast');
+
+    useSessionStore.getState().handleServerMessage({
+      type: 'extension_error',
+      sessionId: 'session-1',
+      extensionPath: 'command:goal',
+      event: 'command',
+      error: 'Goal status failed',
+    });
+
+    expect(addToast).toHaveBeenCalledWith({
+      type: 'error',
+      message: 'Goal extension error: Goal status failed',
+    });
+    addToast.mockRestore();
+  });
+
   it('only shows session-scoped notifications for the active session', () => {
     const addToast = vi.spyOn(useUIStore.getState(), 'addToast');
 

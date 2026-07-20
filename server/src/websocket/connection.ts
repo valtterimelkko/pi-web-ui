@@ -954,7 +954,13 @@ export class WebSocketConnectionManager {
 
       // Pi SDK session — check status guard before calling SDK
       const sessionStatus = this.multiSessionManager.getSessionStatus(sessionPath);
-      if (sessionStatus && (sessionStatus.status === 'busy' || sessionStatus.status === 'streaming')) {
+      const sessionIsBusy = sessionStatus?.status === 'busy' || sessionStatus?.status === 'streaming';
+      const trimmedMessage = message.message.trimStart();
+      const isSlashCommand = trimmedMessage.startsWith('/');
+      // AgentSession.prompt() resolves extension commands before its streaming
+      // guard, so let slash commands reach it while busy. This is what makes
+      // /goal pause-now and the other extension controls usable mid-run.
+      if (sessionIsBusy && !isSlashCommand) {
         this.sendMessage(clientId, {
           type: 'error',
           message: 'Session is busy processing. Wait for the current turn to finish or send with steer/followUp.',
@@ -970,7 +976,7 @@ export class WebSocketConnectionManager {
       }
 
       try {
-        await agentSession.prompt(message.message, {
+        await agentSession.prompt(isSlashCommand ? trimmedMessage : message.message, {
           images: message.images,
         });
       } catch (error) {
@@ -978,8 +984,8 @@ export class WebSocketConnectionManager {
         if (errorMsg.includes('already processing') || errorMsg.includes('Agent is already processing')) {
           this.sendMessage(clientId, {
             type: 'error',
-            message: 'Session stuck in processing state. Try switching away and back to force rehydration.',
-            code: 'SESSION_STUCK',
+            message: 'Session is busy processing. The slash command was not handled by an extension.',
+            code: 'SESSION_BUSY',
           });
           return;
         }
@@ -1625,6 +1631,7 @@ export class WebSocketConnectionManager {
       type: 'session_created',
       sessionId: status.sessionId,
       sessionPath: sessionPath,
+      sdkType: 'pi',
     });
   }
 

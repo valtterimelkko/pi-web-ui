@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../src/logging/logger.js', () => ({
   createLogger: () => ({
@@ -25,11 +25,25 @@ function createContext() {
       switchClientSession: vi.fn(),
       removeClient: vi.fn(),
     },
-    getSessionManager: vi.fn(),
+    waitForIdle: vi.fn().mockResolvedValue(undefined),
   };
 }
 
-describe('createCommandContextActions reload', () => {
+describe('createCommandContextActions', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('delegates waitForIdle to the owning AgentSession', async () => {
+    vi.useFakeTimers();
+    const context = createContext();
+    const actions = createCommandContextActions(context);
+
+    const result = actions.waitForIdle();
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toBeUndefined();
+    expect(context.waitForIdle).toHaveBeenCalledOnce();
+  });
+
   it('advertises safe in-place reload support to loaded extensions', () => {
     const capability = Symbol.for('pi-web-ui:in-place-extension-reload');
     expect((globalThis as Record<symbol, unknown>)[capability]).toBe(true);

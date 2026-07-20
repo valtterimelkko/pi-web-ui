@@ -120,6 +120,8 @@ export class MultiSessionManager {
   private clientViewingSession: Map<string, string> = new Map(); // clientId -> sessionPath
   private subscriptionQueues = new Map<string, Promise<void>>();
   private webUIContextProvider?: WebUIContextProvider;
+  /** Latest replayable extension status/widget messages for browser subscribers. */
+  private extensionUiSnapshots = new Map<string, Map<string, unknown>>();
 
   // Internal API event observers (sessionPath -> callback)
   private apiObservers: Map<string, Set<(event: unknown) => void>> = new Map();
@@ -169,6 +171,39 @@ export class MultiSessionManager {
     logger.info(`[MultiSessionManager] Initialized with cleanupInterval=${this.cleanupIntervalMs}ms, idleTimeout=${this.idleSessionTimeoutMs}ms, maxSessions=${this.maxSessions}, maxPinned=${this.maxPinnedSessions}`);
   }
   
+  private recordExtensionUiMessage(sessionPath: string, message: unknown): void {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+    const payload = message as Record<string, unknown>;
+    const type = payload.type;
+    let snapshotKey: string;
+    let shouldDelete = false;
+
+    if (type === 'extension_status') {
+      const status = payload.status as { key?: unknown; text?: unknown } | undefined;
+      if (typeof status?.key !== 'string') return;
+      snapshotKey = `status:${status.key}`;
+      shouldDelete = status.text === undefined;
+    } else if (type === 'widget_content' || type === 'widget_cleared') {
+      if (typeof payload.key !== 'string') return;
+      snapshotKey = `widget:${payload.key}`;
+      shouldDelete = type === 'widget_cleared';
+    } else {
+      return;
+    }
+
+    const snapshot = this.extensionUiSnapshots.get(sessionPath) ?? new Map<string, unknown>();
+    if (shouldDelete) snapshot.delete(snapshotKey);
+    else snapshot.set(snapshotKey, message);
+    if (snapshot.size === 0) this.extensionUiSnapshots.delete(sessionPath);
+    else this.extensionUiSnapshots.set(sessionPath, snapshot);
+  }
+
+  private replayExtensionUiSnapshot(clientId: string, sessionPath: string): void {
+    for (const message of this.extensionUiSnapshots.get(sessionPath)?.values() ?? []) {
+      this.broadcast(clientId, message);
+    }
+  }
+
   /**
    * Start the periodic cleanup timer
    */
@@ -406,6 +441,7 @@ export class MultiSessionManager {
     
     // Remove from sessions map
     this.sessions.delete(sessionPath);
+    this.extensionUiSnapshots.delete(sessionPath);
     
     // Clear client viewing references
     for (const [clientId, viewingPath] of this.clientViewingSession.entries()) {
@@ -446,6 +482,7 @@ export class MultiSessionManager {
     this.piService.removeEventHandler(activeSession.handlerKey);
 
     this.sessions.delete(sessionPath);
+    this.extensionUiSnapshots.delete(sessionPath);
   }
 
   /**
@@ -519,6 +556,7 @@ export class MultiSessionManager {
               return;
             }
             const sessionScopedMessage = attachSessionIdToWebUiMessage(message, sessionId);
+            if (sessionPath) this.recordExtensionUiMessage(sessionPath, sessionScopedMessage);
             if (sessionPath && this.sessions.has(sessionPath)) {
               this.broadcastToSubscribers(sessionPath, sessionScopedMessage);
             } else {
@@ -632,6 +670,8 @@ export class MultiSessionManager {
       }
     }
 
+    const wasAlreadyActive = activeSession !== undefined;
+
     if (!activeSession) {
       // Session not in memory - need to rehydrate from disk
       logger.info(`[MultiSessionManager] Rehydrating session from disk: ${sessionPath}`);
@@ -656,6 +696,7 @@ export class MultiSessionManager {
                 return;
               }
               const sessionScopedMessage = attachSessionIdToWebUiMessage(message, sessionId);
+              this.recordExtensionUiMessage(sessionPath, sessionScopedMessage);
               if (this.sessions.has(sessionPath)) {
                 this.broadcastToSubscribers(sessionPath, sessionScopedMessage);
               } else {
@@ -709,6 +750,7 @@ export class MultiSessionManager {
     // Add client to subscribers
     activeSession.subscribers.add(clientId);
     activeSession.lastActivity = new Date();
+    if (wasAlreadyActive) this.replayExtensionUiSnapshot(clientId, sessionPath);
 
     // Track client subscription
     if (!this.clientSubscriptions.has(clientId)) {
@@ -1432,6 +1474,7 @@ export class MultiSessionManager {
 
     // Remove from sessions map
     this.sessions.delete(sessionPath);
+    this.extensionUiSnapshots.delete(sessionPath);
 
     // Clear client viewing references
     for (const [clientId, viewingPath] of this.clientViewingSession.entries()) {
@@ -1478,5 +1521,6 @@ export class MultiSessionManager {
     this.sessions.clear();
     this.clientSubscriptions.clear();
     this.clientViewingSession.clear();
+    this.extensionUiSnapshots.clear();
   }
 }

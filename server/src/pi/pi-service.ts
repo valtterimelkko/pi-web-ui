@@ -270,12 +270,20 @@ export class PiService {
             switchClientSession: async () => ({ sessionId: '', session: {} }),
             removeClient: () => {},
           },
-          getSessionManager: () => session.sessionManager,
+          waitForIdle: () => session.waitForIdle(),
         });
 
         await session.bindExtensions({
           uiContext,
           commandContextActions: commandContext,
+          onError: (error) => {
+            options.webUIContext?.sendToClient({
+              type: 'extension_error',
+              extensionPath: error.extensionPath,
+              event: error.event,
+              error: error.error,
+            });
+          },
         });
       } else {
         await session.bindExtensions({});
