@@ -171,6 +171,32 @@ describe('extension UI state', () => {
     addToast.mockRestore();
   });
 
+  it('keeps extension errors session-scoped and labels non-goal failures generically', () => {
+    const addToast = vi.spyOn(useUIStore.getState(), 'addToast');
+
+    useSessionStore.getState().handleServerMessage({
+      type: 'extension_error',
+      sessionId: 'session-2',
+      extensionPath: 'command:goal',
+      event: 'command',
+      error: 'Hidden from another session',
+    });
+    expect(addToast).not.toHaveBeenCalled();
+
+    useSessionStore.getState().handleServerMessage({
+      type: 'extension_error',
+      sessionId: 'session-1',
+      extensionPath: 'command:other',
+      event: 'command',
+      error: 'Visible generic failure',
+    });
+    expect(addToast).toHaveBeenCalledWith({
+      type: 'error',
+      message: 'Extension error: Visible generic failure',
+    });
+    addToast.mockRestore();
+  });
+
   it('only shows session-scoped notifications for the active session', () => {
     const addToast = vi.spyOn(useUIStore.getState(), 'addToast');
 

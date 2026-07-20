@@ -223,6 +223,30 @@ describe('PiService', () => {
       expect(service.getSessionByClientId('web-ui-reload-client')).toBe(mockSession);
     });
 
+    it('binds extension waitForIdle to the owning AgentSession', async () => {
+      const { createAgentSession } = await import('@earendil-works/pi-coding-agent');
+      const mockSession = {
+        sessionId: 'web-ui-idle-session',
+        subscribe: vi.fn(),
+        setModel: vi.fn(),
+        dispose: vi.fn(),
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        bindExtensions: vi.fn().mockResolvedValue(undefined),
+        sessionManager: {},
+      };
+      (createAgentSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ session: mockSession });
+
+      await service.createSession({
+        clientId: 'web-ui-idle-client',
+        webUIContext: { clientId: 'web-ui-idle-client', sendToClient: vi.fn() },
+      });
+      const bindings = mockSession.bindExtensions.mock.calls[0]?.[0];
+
+      await bindings.commandContextActions.waitForIdle();
+
+      expect(mockSession.waitForIdle).toHaveBeenCalledOnce();
+    });
+
     it('forwards extension command failures to the Web UI context', async () => {
       const { createAgentSession } = await import('@earendil-works/pi-coding-agent');
       const sendToClient = vi.fn();

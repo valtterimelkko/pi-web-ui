@@ -448,6 +448,47 @@ describe('MultiSessionManager', () => {
       });
     });
 
+    it('should not replay extension status or widgets after they are cleared', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'goal-session',
+        sessionFile: '/path/to/goal-session.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      const webUIContext = { clientId: 'client-1', sendToClient: vi.fn() } as any;
+      await manager.createAndSubscribe('client-1', '/work', webUIContext);
+
+      const createArgs = mockPiService.createSession.mock.calls.at(-1)?.[0];
+      const sendToClient = createArgs?.webUIContext?.sendToClient as ((message: unknown) => void) | undefined;
+      sendToClient?.({
+        type: 'extension_status',
+        status: { key: 'goal-engine', text: '🎯 ▶ Running — Run 0' },
+      });
+      sendToClient?.({
+        type: 'widget_content',
+        key: 'goal-engine-status',
+        content: ['🎯 Goal Status', 'Status: ▶ Running'],
+      });
+      sendToClient?.({
+        type: 'extension_status',
+        status: { key: 'goal-engine', text: undefined },
+      });
+      sendToClient?.({ type: 'widget_cleared', key: 'goal-engine-status' });
+      mockBroadcast.mockClear();
+
+      await manager.subscribeClient('client-2', '/path/to/goal-session.jsonl');
+
+      expect(mockBroadcast).not.toHaveBeenCalledWith(
+        'client-2',
+        expect.objectContaining({ type: 'extension_status' }),
+      );
+      expect(mockBroadcast).not.toHaveBeenCalledWith(
+        'client-2',
+        expect.objectContaining({ type: 'widget_content' }),
+      );
+    });
+
     it('should discard cached extension UI when an unloaded runtime is rehydrated without it', async () => {
       const firstSession = createMockAgentSession({
         sessionId: 'goal-session',
