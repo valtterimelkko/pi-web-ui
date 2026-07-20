@@ -264,6 +264,7 @@ export class PiService {
             removeClient: this.removeClient.bind(this),
             cleanup: this.cleanup.bind(this),
             reloadSession: this.reloadSession.bind(this),
+            navigateSessionTree: this.navigateSessionTree.bind(this),
           },
           sessionPool: this.sessionPool || {
             createClientSession: async () => ({ sessionId: '', session: {} }),
@@ -313,6 +314,18 @@ export class PiService {
       throw new Error(`Session not found: ${sessionId}`);
     }
     await session.reload();
+  }
+
+  async navigateSessionTree(
+    sessionId: string,
+    targetId: string,
+    options?: Parameters<AgentSession['navigateTree']>[1]
+  ): Promise<Awaited<ReturnType<AgentSession['navigateTree']>>> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    return session.navigateTree(targetId, options);
   }
 
   getSessionByClientId(clientId: string): AgentSession | undefined {

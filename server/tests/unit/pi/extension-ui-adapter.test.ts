@@ -19,6 +19,7 @@ function createContext() {
       removeClient: vi.fn(),
       cleanup: vi.fn().mockResolvedValue(undefined),
       reloadSession: vi.fn().mockResolvedValue(undefined),
+      navigateSessionTree: vi.fn().mockResolvedValue({ cancelled: false }),
     },
     sessionPool: {
       createClientSession: vi.fn(),
@@ -47,6 +48,20 @@ describe('createCommandContextActions', () => {
   it('advertises safe in-place reload support to loaded extensions', () => {
     const capability = Symbol.for('pi-web-ui:in-place-extension-reload');
     expect((globalThis as Record<symbol, unknown>)[capability]).toBe(true);
+  });
+
+  it('delegates tree navigation to the active AgentSession', async () => {
+    const context = createContext();
+    const actions = createCommandContextActions(context);
+
+    const result = await actions.navigateTree('entry-2', { summarize: false, label: 'target' });
+
+    expect(result).toEqual({ cancelled: false });
+    expect(context.piService.navigateSessionTree).toHaveBeenCalledWith(
+      'session-1',
+      'entry-2',
+      { summarize: false, label: 'target' },
+    );
   });
 
   it('reloads the active AgentSession in place', async () => {

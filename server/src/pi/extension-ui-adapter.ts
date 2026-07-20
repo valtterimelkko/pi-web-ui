@@ -27,6 +27,16 @@ export interface CommandActionContext {
     removeClient(clientId: string): void;
     cleanup(): Promise<void>;
     reloadSession(sessionId: string): Promise<void>;
+    navigateSessionTree(
+      sessionId: string,
+      targetId: string,
+      options?: {
+        summarize?: boolean;
+        customInstructions?: string;
+        replaceInstructions?: boolean;
+        label?: string;
+      }
+    ): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean }>;
   };
   sessionPool: {
     createClientSession(clientId: string, options?: { cwd?: string }): Promise<{
@@ -392,7 +402,8 @@ export function createCommandContextActions(
       return { cancelled: true };
     },
 
-    // Navigate to a different point in the session tree
+    // Navigate within the active AgentSession so its persisted branch and
+    // in-memory model context stay synchronized.
     async navigateTree(
       targetId: string,
       options?: {
@@ -401,10 +412,8 @@ export function createCommandContextActions(
         replaceInstructions?: boolean;
         label?: string;
       }
-    ): Promise<{ cancelled: boolean }> {
-      // Tree navigation will be implemented when the SDK supports it
-      logger.warn('Tree navigation not yet implemented in Web UI, targetId:', targetId, options);
-      return { cancelled: true };
+    ): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean }> {
+      return ctx.piService.navigateSessionTree(ctx.sessionId, targetId, options);
     },
 
     // Switch to a different session file

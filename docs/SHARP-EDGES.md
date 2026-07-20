@@ -177,6 +177,14 @@ creation. Preserve the in-place identity/event bindings and the advertised
 `pi-web-ui:in-place-extension-reload` capability when changing extension UI
 adapters.
 
+### Extension tree navigation must use the active AgentSession
+Pi extension command `ctx.navigateTree()` delegates through
+`PiService.navigateSessionTree()` to the currently bound `AgentSession`. Do not
+replace this with a UI-only acknowledgement or a `SessionManager` leaf update:
+the SDK method also rebuilds the agent's in-memory LLM context. AutoCompact75's
+safe append-only handoff refresh depends on this synchronization before the Web
+UI claims a session that advanced in the CLI.
+
 ## Session Registry
 
 ### Always use tmp+rename writes
