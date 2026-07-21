@@ -10,6 +10,17 @@
   - `npm run docs:sync-agent-guides`
   - `npm run docs:check-agent-guides`
 
+## Session-ID troubleshooting first stop
+
+When troubleshooting starts from a session ID, runtime-native ID, registry path,
+or “this session is broken” report, do not begin with a repository-wide grep:
+
+1. Run `npm run debug:where -- --json <id-or-path>` to resolve aliases and the canonical internal ID.
+2. Use the authenticated `GET /api/v1/sessions/:id/evidence` bundle first; it returns bounded diagnostics, receipts, and runtime locators in one read.
+3. Keep the canonical ID, `runId`, and `requestId`; use screen transcript/diagnostics next, and raw JSONL or tool payloads only when the evidence ladder requires them.
+
+Canonical runbook: [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md#session-id-evidence-ladder).
+
 ## Start here
 
 - **Maintainer index:** [`docs/MAINTAINER-INDEX.md`](./docs/MAINTAINER-INDEX.md)
