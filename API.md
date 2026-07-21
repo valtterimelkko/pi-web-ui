@@ -114,7 +114,7 @@ Reference docs:
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
 
-`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.9.0`) for local consumers such as Agent OS style tooling. Health also exposes additive per-runtime `runtimeHealth`; diagnostics are filtered by correlation/runtime selectors and include a bounded process-local operational snapshot.
+`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.10.0`) for local consumers such as Agent OS style tooling. Health also exposes additive per-runtime `runtimeHealth`; diagnostics are filtered by correlation/runtime selectors and include a bounded process-local operational snapshot; `/sessions/:id/evidence` provides the one-call troubleshooting bundle.
 
 Important endpoints include:
 - `GET /api/v1/capabilities`

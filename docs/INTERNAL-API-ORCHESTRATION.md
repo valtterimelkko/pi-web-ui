@@ -79,9 +79,10 @@ Always start by asking the server what is available now and which contract versi
 - `GET /api/v1/models`
 
 Useful debugging/introspection, notification, model-control, run-identity, and
-health additions landed in contract `1.3.0` through `1.9.0`:
+health and evidence additions landed in contract `1.3.0` through `1.10.0`:
 
 - `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off; `1.9.0` adds `requestId`, `runId`, `runtime`, `component`, and `since` selectors plus a bounded process-local `operational` snapshot.
+- `GET /api/v1/sessions/:id/evidence` — `1.10.0` compact one-call troubleshooting bundle; resolves aliases, returns bounded diagnostics and durable receipt summary, and links to deeper reads. Use this before separate `/info`, `/diagnostics`, and transcript calls.
 - `GET /api/v1/health` — use the additive `runtimeHealth` matrix for per-runtime checks; the legacy `runtimes` strings/top-level status are compatibility projections.
 - `GET /api/v1/events/types` — machine-readable catalogue of normalized event kinds on the `/events` stream.
 - `GET /api/v1/sessions/:id/transcript?view=screen` — a read-only “what the user sees” projection for a finished or in-progress session, without browser automation.
@@ -281,6 +282,7 @@ never the production instance by default.
 | Get only final answers | `/sessions/:id/prompt` with `answers`, or `/sessions/batch/prompt` |
 | Watch live progress | `/sessions/:id/events` |
 | Wait for completion safely | `/sessions/:id/wait` |
+| Start troubleshooting from any session id | `/sessions/:id/evidence` |
 | Read child output in one common format | `/sessions/:id/transcript` |
 | Read what the user sees by default | `/sessions/:id/transcript?view=screen` |
 | Get replay-like details | `/sessions/:id/history` |

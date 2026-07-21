@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.9.0",
+  "contractVersion": "1.10.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,13 @@ Current contract:
 
 ### Changelog
 
+- **1.10.0** (minor, additive) — added a compact, one-call session evidence bundle without external telemetry:
+  - `GET /api/v1/sessions/:id/evidence` resolves internal, registry-path, and runtime-native identifiers to one canonical session id.
+  - The default response is bounded and diagnostic-first: aliases, runtime/status/backend metadata, exact runtime source locators, bounded process-local diagnostics, durable run-receipt summary, warnings, and links to the existing full read paths.
+  - `expand=diagnostics,transcript,screen,runs` opts into bounded detail; prompts, raw JSONL, tool payloads, and the global operational snapshot are never included by default.
+  - WebSocket Pi prompt correlation now maps session paths to the registry id with a fail-safe path fallback, so browser-originated logs are discoverable through canonical session diagnostics.
+  - `npm run debug:where -- --json <id>` provides matching offline locator evidence while preserving the existing text output.
+  Old `1.9.x` clients can ignore the additive endpoint and fields.
 - **1.9.0** (minor, additive) — added lightweight local observability without external telemetry:
   - `GET /api/v1/health` retains the legacy runtime availability strings and adds a unified `runtimeHealth` matrix with enabled/available/backend/check status, bounded check timing, and the latest scrubbed failure.
   - diagnostics responses add a privacy-safe `operational` snapshot with bounded turn outcome/latency counters, pipeline-integrity counters, aggregate registry session counts, and worker/crash statistics.

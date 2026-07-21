@@ -140,6 +140,20 @@ identity and `requestId` for the originating HTTP request. The session-scoped
 route narrows records but still returns the same process-level operational
 snapshot.
 
+For the shortest troubleshooting path, use the additive session evidence bundle:
+
+```text
+GET /api/v1/sessions/:id/evidence
+GET /api/v1/sessions/:id/evidence?expand=diagnostics,transcript,screen,runs&limit=20
+```
+
+It resolves internal, path, and runtime-native identifiers in one read and
+combines canonical metadata, exact runtime locators, one bounded process-local
+log slice, and a durable run-receipt summary. The default omits prompt text,
+raw transcript/JSONL bodies, tool payloads, and the global operational snapshot.
+`expand=` is explicit and bounded. Diagnostics reset on restart; receipts and
+runtime-owned files are the durable fallback.
+
 
 ## Runtime health
 

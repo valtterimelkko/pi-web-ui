@@ -525,6 +525,15 @@ export class InternalApiServer {
           return;
         }
 
+        if (action === 'evidence') {
+          if (req.method === 'GET') {
+            await deps.sessionRoutes.handleGetSessionEvidence(req, res, sessionId, parsed.query);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+          return;
+        }
+
         if (action === 'history') {
           if (req.method === 'GET') {
             await deps.sessionRoutes.handleGetSessionHistory(req, res, sessionId);

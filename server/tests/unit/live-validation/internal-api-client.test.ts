@@ -70,4 +70,20 @@ describe('InternalApiClient request evidence', () => {
     await expect(client.prompt('session-1', { message: 'two' })).rejects.toThrow();
     expect(client.getLastPromptEvidence('session-1')).toBeUndefined();
   });
+
+  it('fetches session evidence with an encoded identifier and bounded expansion query', async () => {
+    const socketPath = await listen((req, res) => {
+      expect(req.url).toBe('/api/v1/sessions/path%2Fid/evidence?expand=diagnostics');
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        sessionId: 'canonical-id',
+        runtime: 'pi',
+        diagnostics: { processLocal: true, records: [] },
+      }));
+    });
+    const client = new InternalApiClient({ socketPath, token: 'test' });
+    const evidence = await client.getSessionEvidence('path/id', ['diagnostics']);
+    expect(evidence.sessionId).toBe('canonical-id');
+    expect(evidence.diagnostics.processLocal).toBe(true);
+  });
 });

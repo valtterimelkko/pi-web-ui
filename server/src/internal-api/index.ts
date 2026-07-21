@@ -51,6 +51,8 @@ export type {
   PendingApprovalsResponse,
   WaitResponse,
   TranscriptResponse,
+  ScreenViewResponse,
+  SessionEvidenceResponse,
   WatchConditionType,
   WatchConditionSpec,
   WatchConditionState,

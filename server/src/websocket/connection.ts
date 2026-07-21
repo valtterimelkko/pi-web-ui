@@ -32,6 +32,7 @@ import { getSessionRegistry } from '../session-registry.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
 import { withCorrelation, newRequestId } from '../logging/correlation.js';
+import { resolveCanonicalSessionId } from '../observability/session-correlation.js';
 
 const logger = createLogger('WebUI');
 
@@ -935,7 +936,19 @@ export class WebSocketConnectionManager {
 
     // Stamp a per-prompt correlation id on every log line for this prompt's
     // lifecycle so an agent can reconstruct the causal chain with one grep.
-    await withCorrelation({ requestId: newRequestId(), sessionId: sessionPath }, async () => {
+    // Pi browser sessions arrive here as a session path, while diagnostics use
+    // the registry's internal id. Resolution is deliberately best-effort: a
+    // registry outage must never block a prompt.
+    let correlationSessionId = sessionPath;
+    try {
+      correlationSessionId = await resolveCanonicalSessionId(
+        sessionPath,
+        getSessionRegistry(config.sessionRegistryPath),
+      );
+    } catch {
+      // Keep the existing path correlation when the registry cannot be opened.
+    }
+    await withCorrelation({ requestId: newRequestId(), sessionId: correlationSessionId }, async () => {
       // Dispatch to appropriate runtime handler
       if (this.antigravitySessionIds.has(sessionPath)) {
         await this.handleAntigravityPrompt(clientId, sessionPath, message.message);

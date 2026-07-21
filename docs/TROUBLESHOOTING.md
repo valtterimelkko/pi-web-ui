@@ -12,9 +12,11 @@ From the repository root:
 
 ```bash
 npm run debug:where -- <internal-id|runtime-native-id|registry-path|conversation-id>
+npm run debug:where -- --json <internal-id|runtime-native-id|registry-path|conversation-id>
 ```
 
-`debug:where` reads `~/.pi-web-ui/session-registry.json` and accepts:
+The default locator is human-readable; `--json` emits bounded offline evidence
+without prompt text or credentials. `debug:where` reads `~/.pi-web-ui/session-registry.json` and accepts:
 
 | Identifier the operator may have | Registry field / runtime |
 |---|---|
@@ -26,7 +28,31 @@ npm run debug:where -- <internal-id|runtime-native-id|registry-path|conversation
 
 Keep the resolved **internal id**, runtime, and any native id from the report. The internal id is the safest correlation key for diagnostics and run receipts. If the session belongs to a disposable validation server, point the locator at that server's registry with `--registry <validation-dir>/session-registry.json`; use the validation server's printed socket/token and file roots for subsequent evidence calls. `--registry` changes the lookup file, not the helper's home-directory path hints, so for disposable runs treat the validation directory and the registry entry's actual `path` as authoritative.
 
-### 2. Read the cheapest useful evidence
+### 2. Use the one-call live evidence bundle
+
+If the Internal API is available, start with the compact evidence endpoint. It
+accepts the same internal, path, and runtime-native identifier forms as the
+locator and returns canonical identity, runtime/status metadata, exact source
+locators, bounded process-local diagnostics, and a durable receipt summary:
+
+```bash
+SOCKET="$HOME/.pi-web-ui/internal-api.sock"
+TOKEN="$(cat "$HOME/.pi-web-ui/internal-api-token")"
+ID='<id-from-the-operator>'
+ENCODED_ID="$(node -p 'encodeURIComponent(process.argv[1])' "$ID")"
+curl -s --unix-socket "$SOCKET" \
+  -H "Authorization: Bearer $TOKEN" \
+  "http://localhost/api/v1/sessions/$ENCODED_ID/evidence" \
+  | jq .
+```
+
+Use `?expand=diagnostics,transcript,screen,runs&limit=20` only when the
+bounded default bundle is not enough. The default deliberately omits prompts,
+raw transcript/JSONL bodies, tool payloads, and the global operational
+snapshot. Diagnostics are process-local and reset on restart; follow the
+returned durable locators when older evidence is required.
+
+### 3. Read the cheapest useful transcript evidence
 
 If the Internal API is available, prefer the read-only screen projection before raw JSONL or full history. It accepts the supported id forms and is deliberately shaped like the resting browser view:
 
@@ -47,7 +73,7 @@ Use the response's `sessionId` as the canonical internal id for the next calls. 
 - `transcript?scope=visible_recent` — compact runtime-agnostic result reading;
 - `history` — only when replay/event reconstruction is the problem.
 
-### 3. Narrow diagnostics by correlation, not by text search
+### 4. Narrow diagnostics by correlation, not by text search
 
 Session-scoped diagnostics use the canonical internal id. Add `runId` when a prompt response or receipt supplied one; add `requestId` when a request log supplied one:
 
@@ -68,7 +94,7 @@ curl -s --unix-socket "$SOCKET" \
 
 The diagnostics ring and operational snapshot are process-local and reset on restart. A missing older line is not evidence that the event never happened; use the durable run receipt, transcript, notification ledger, or runtime-owned file when the time window is older than the ring buffer.
 
-### 4. Inspect the runtime-specific evidence printed by the locator
+### 5. Inspect the runtime-specific evidence printed by the locator
 
 Only after the API-first checks, follow the report's runtime branch. It tells you whether to inspect Pi JSONL, the Pi-owned Claude replay file plus Claude-native JSONL, OpenCode APIs/logs, or Antigravity JSONL/DB/`agy` logs. For central logs, use a bounded time window and the correlation field:
 
@@ -86,10 +112,11 @@ Follow this order unless you already know the exact failing subsystem:
 
 When you have Internal API access, resolve the identifier once with the evidence ladder above, then use the smallest read that answers the question:
 
-1. `GET /api/v1/sessions/:id/transcript?view=screen` — read-only "what the user sees" projection
-2. `GET /api/v1/sessions/:id/diagnostics` — correlated, secret-scrubbed session logs; narrow with `runId`, `requestId`, `runtime`, `component`, `since`, `minLevel`, and `limit`
-3. `GET /api/v1/diagnostics` — bounded global logs plus the process-local operational snapshot
-4. `GET /api/v1/sessions/:id/history` — lower-level replay/debug detail only if needed
+1. `GET /api/v1/sessions/:id/evidence` — one-call canonical identity, locators, bounded logs, and receipt summary
+2. `GET /api/v1/sessions/:id/transcript?view=screen` — read-only "what the user sees" projection
+3. `GET /api/v1/sessions/:id/diagnostics` — correlated, secret-scrubbed session logs; narrow with `runId`, `requestId`, `runtime`, `component`, `since`, `minLevel`, and `limit`
+4. `GET /api/v1/diagnostics` — bounded global logs plus the process-local operational snapshot
+5. `GET /api/v1/sessions/:id/history` — lower-level replay/debug detail only if needed
 
 This is often the most token-efficient route for LLM agents because it avoids driving the UI and avoids rediscovering log locations first. For a browser-only failure that reaches the React error screen, ask the operator to use **Copy diagnostics** or **Download diagnostics**; the privacy-safe browser ring is manual-only and is never uploaded automatically.
 

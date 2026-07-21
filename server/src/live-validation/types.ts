@@ -6,6 +6,7 @@ import type {
   SendPromptRequest,
   SessionControlRequest,
   SessionDetail,
+  SessionEvidenceResponse,
   SessionHistoryResponse,
   PromptDispatchResponse,
   RunReceipt,
@@ -28,6 +29,8 @@ export interface InternalApiClientLike {
    */
   promptStreamLive(sessionId: string, input: SendPromptRequest, onEvent: (event: NormalizedEvent) => void): Promise<NormalizedEvent[]>;
   getSessionInfo(sessionId: string): Promise<SessionDetail>;
+  /** Read the compact, alias-resolving troubleshooting evidence bundle. */
+  getSessionEvidence?(sessionId: string, expand?: string[]): Promise<SessionEvidenceResponse>;
   getCapabilities(): Promise<ValidationCapabilities>;
   controlSession(sessionId: string, input: SessionControlRequest): Promise<unknown>;
   getSessionHistory(sessionId: string): Promise<SessionHistoryResponse>;

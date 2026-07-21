@@ -205,6 +205,7 @@ verdicts and still run watch/session finalization.
 - `model-smoke` — create a session with an explicit `--model` and verify the selected model is reflected; requires `--model <provider/id>`
 - `tool-visibility` — verify tool execution is surfaced in the full stream
 - `session-info` — verify enriched internal-API session info is available
+- `session-evidence` — verify compact evidence resolves by internal id and registry-path alias without prompt bodies
 - `thinking-level` — verify capability-gated model/thinking-level control and the OpenCode config bridge
 - `follow-up` — verify the runtime accepts a follow-up turn when supported
 - `notify-on-agent-end` — opt in, run a real turn, and verify the disposable capture channel records the delivery without contacting Telegram
@@ -223,6 +224,7 @@ verdicts and still run watch/session finalization.
 | `model-smoke` | capability/runtime dependent; explicit model required | create-time model selection and reported model identity |
 | `tool-visibility` | capability-dependent; normally Pi/Claude/OpenCode | normalized tool events in the full stream |
 | `session-info` | Pi, Claude, OpenCode; Antigravity when explicitly authorised | enriched runtime/session metadata |
+| `session-evidence` | Pi, Claude, OpenCode disposable server; Antigravity only when explicitly authorised | alias resolution, bounded default evidence, and read-only evidence access |
 | `thinking-level` | OpenCode config bridge; capability-gated | model-aware thinking-level control and provider config mapping |
 | `follow-up` | capability-dependent; Antigravity can run in an authorised workflow | follow-up/resume behaviour |
 | `notify-on-agent-end` | Pi, Claude, OpenCode disposable capture channel | origin-independent notification observation without Telegram |

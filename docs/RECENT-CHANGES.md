@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Compact session evidence and troubleshooting surface (`1.10.0`)**
+  - `GET /api/v1/sessions/:id/evidence` resolves internal, path, Claude/OpenCode/Antigravity-native identifiers in one bounded read.
+  - The default bundle combines canonical metadata, runtime locators, process-local diagnostics, durable receipt summary, warnings, and links to deeper reads; expansions are explicit and bounded.
+  - `debug:where --json` provides matching offline locator evidence, and WebSocket Pi prompts now correlate to canonical registry ids with a safe path fallback.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
+
 - **Internal API observability and runtime-health surface (`1.9.0`)**
   - `GET /api/v1/health` adds a unified `runtimeHealth` matrix while retaining legacy availability fields for compatibility.
   - Diagnostics now accept `requestId`, `runId`, `runtime`, `component`, `since`, `minLevel`, and bounded `limit` filters, plus a privacy-safe process-local `operational` snapshot.

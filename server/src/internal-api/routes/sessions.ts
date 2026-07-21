@@ -23,6 +23,7 @@ import type {
   SessionInfo,
   SessionDetail,
   SessionHistoryResponse,
+  SessionEvidenceResponse,
   SessionControlResponse,
   ApprovalResponseResult,
   ListSessionsResponse,
@@ -86,13 +87,68 @@ import {
   extractOpenCodeTranscript,
   piSessionToReplayEvents,
 } from '../../session-transfer/index.js';
+import type { VisibleTranscript } from '../../session-transfer/types.js';
 import { stat, readdir, unlink, rm } from 'fs/promises';
 
 import path from 'path';
+import os from 'os';
 import { config } from '../../config.js';
-import { createLogger } from '../../logging/logger.js';
+import { createLogger, type LogRecord } from '../../logging/logger.js';
+import { getRecentLogs } from '../diagnostics-buffer.js';
 
 const logger = createLogger('InternalAPI');
+
+const EVIDENCE_DEFAULT_LIMIT = 10;
+const EVIDENCE_MAX_LIMIT = 50;
+const EVIDENCE_EXPANSIONS = new Set(['diagnostics', 'transcript', 'screen', 'runs']);
+
+function parseEvidenceExpansions(raw: string | null): Set<string> {
+  if (!raw) return new Set();
+  return new Set(raw.split(',').map((value) => value.trim()).filter((value) => EVIDENCE_EXPANSIONS.has(value)));
+}
+
+function parseEvidenceLimit(raw: string | null): number {
+  const parsed = raw === null ? EVIDENCE_DEFAULT_LIMIT : Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return EVIDENCE_DEFAULT_LIMIT;
+  return Math.min(EVIDENCE_MAX_LIMIT, Math.max(1, Math.floor(parsed)));
+}
+
+function compactEvidenceText(value: string, knownPrompt?: string, maxLength = 320): string {
+  let result = value;
+  if (knownPrompt && knownPrompt.length > 0) {
+    result = result.split(knownPrompt).join('[PROMPT_REDACTED]');
+  }
+  return result.length > maxLength ? `${result.slice(0, maxLength)}…` : result;
+}
+
+function compactDiagnosticRecord(
+  record: LogRecord,
+  knownPrompt?: string,
+  messageLimit = 320,
+): SessionEvidenceResponse['diagnostics']['records'][number] {
+  return {
+    ts: record.ts,
+    level: record.level,
+    component: record.component,
+    msg: compactEvidenceText(record.msg, knownPrompt, messageLimit),
+    ...(record.requestId ? { requestId: record.requestId } : {}),
+    ...(record.runId ? { runId: record.runId } : {}),
+    ...(record.runtime ? { runtime: record.runtime } : {}),
+    ...(record.executionInstanceId ? { executionInstanceId: record.executionInstanceId } : {}),
+    ...(record.error
+      ? {
+          error: {
+            name: compactEvidenceText(record.error.name, knownPrompt, 120),
+            message: compactEvidenceText(record.error.message, knownPrompt, messageLimit),
+          },
+        }
+      : {}),
+  };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\\"'\\\"'")}'`;
+}
 
 
 export interface SessionRoutesDeps {
@@ -280,6 +336,99 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (entry.sdkType !== 'pi') return entry.model;
     const currentModel = multiSessionManager.getAgentSession(entry.path)?.model;
     return currentModel ? `${currentModel.provider}/${currentModel.id}` : entry.model;
+  }
+
+  function evidenceStatus(entry: RegistryEntry): SessionInfo['status'] {
+    try {
+      const running = entry.sdkType === 'pi'
+        ? ['busy', 'streaming'].includes(multiSessionManager.getSessionStatus(entry.path)?.status ?? '')
+        : entry.sdkType === 'claude'
+          ? claudeService.isRunning(entry.id)
+          : entry.sdkType === 'opencode'
+            ? opencodeService.isRunning(entry.id)
+            : antigravityService.isRunning(entry.id);
+      return running ? 'running' : entry.status;
+    } catch {
+      return entry.status;
+    }
+  }
+
+  async function evidenceBackendMode(entry: RegistryEntry): Promise<SessionDetail['backendMode']> {
+    if (entry.sdkType === 'pi') return 'native';
+    if (entry.sdkType === 'opencode') return 'server';
+    if (entry.sdkType === 'antigravity') return 'subprocess';
+    try {
+      return await claudeService.getBackendMode();
+    } catch {
+      return entry.claudeProfileBackend === 'sdk-subscription'
+        ? 'sdk'
+        : entry.claudeProfileBackend === 'cli-direct'
+          ? 'direct'
+          : entry.claudeProfileBackend === 'channel'
+            ? 'channel'
+            : undefined;
+    }
+  }
+
+  function evidenceSources(entry: RegistryEntry): SessionEvidenceResponse['sources'] {
+    const runtime: Record<string, string> = {};
+    let journalUnit = 'pi-web-ui';
+    if (entry.sdkType === 'pi') {
+      runtime.sessionPath = entry.path;
+      runtime.sessionDirectory = entry.path.endsWith('.jsonl') ? path.dirname(entry.path) : entry.path;
+      runtime.workerCommand = 'ps aux | grep "pi --mode rpc"';
+    } else if (entry.sdkType === 'claude') {
+      const nativePath = entry.cwd && entry.claudeSessionId
+        ? path.join(
+            os.homedir(),
+            '.claude',
+            'projects',
+            `-${entry.cwd.split(path.sep).join('-').replace(/^-/, '')}`,
+            `${entry.claudeSessionId}.jsonl`,
+          )
+        : undefined;
+      runtime.replayPath = entry.path;
+      if (entry.claudeSessionId) runtime.claudeSessionId = entry.claudeSessionId;
+      if (nativePath) runtime.nativeSessionPath = nativePath;
+    } else if (entry.sdkType === 'opencode') {
+      journalUnit = 'opencode-serve';
+      if (entry.opencodeSessionId) runtime.opencodeSessionId = entry.opencodeSessionId;
+      runtime.transcriptSource = 'OpenCode runtime/message APIs';
+      runtime.goalEngineStateDir = path.join(os.homedir(), '.opencode', 'goal-engine');
+    } else {
+      runtime.sessionJsonl = path.join(deps.antigravitySessionDir ?? config.antigravitySessionDir, `${entry.id}.jsonl`);
+      if (entry.antigravityConversationId) {
+        runtime.conversationId = entry.antigravityConversationId;
+        runtime.conversationDb = path.join(
+          os.homedir(),
+          '.gemini',
+          'antigravity-cli',
+          'conversations',
+          `${entry.antigravityConversationId}.db`,
+        );
+      }
+      runtime.agyLogs = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'log', 'cli-*.log');
+    }
+
+    return {
+      registryPath: config.sessionRegistryPath,
+      runtime,
+      commands: [
+        `npm run debug:where -- --registry ${shellQuote(config.sessionRegistryPath)} ${shellQuote(entry.id)}`,
+        `sudo journalctl -u ${journalUnit} --since '15 minutes ago' --no-pager | grep -F -- ${shellQuote(`sid=${entry.id}`)}`,
+      ],
+    };
+  }
+
+  function evidenceLinks(sessionId: string): SessionEvidenceResponse['links'] {
+    const encoded = encodeURIComponent(sessionId);
+    return {
+      info: `/api/v1/sessions/${encoded}/info`,
+      diagnostics: `/api/v1/sessions/${encoded}/diagnostics`,
+      transcript: `/api/v1/sessions/${encoded}/transcript`,
+      screen: `/api/v1/sessions/${encoded}/transcript?view=screen`,
+      history: `/api/v1/sessions/${encoded}/history`,
+    };
   }
 
   function duplicatePromptResponse(
@@ -667,6 +816,128 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     } catch (err) {
       logger.errorObject('Failed to get session info', err);
       sendJson(res, 500, { error: 'Failed to get session info', code: ErrorCode.INTERNAL_ERROR });
+    }
+  }
+
+  async function handleGetSessionEvidence(
+    _req: IncomingMessage,
+    res: ServerResponse,
+    identifier: string,
+    query: URLSearchParams,
+  ): Promise<void> {
+    try {
+      const entry = await resolveSessionEntry(identifier);
+      if (!entry) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+        return;
+      }
+
+      const expansions = parseEvidenceExpansions(query.get('expand'));
+      const limit = parseEvidenceLimit(query.get('limit'));
+      const status = evidenceStatus(entry);
+      let model = entry.model;
+      try {
+        model = currentRunModel(entry);
+      } catch {
+        // Registry metadata remains a sufficient fallback for evidence lookup.
+      }
+      const backendMode = await evidenceBackendMode(entry);
+      // Ensure restart-surviving receipts are loaded before building the durable
+      // summary; the default bundle must not silently look empty during startup.
+      await runReceipts.init();
+      const diagnosticLimit = expansions.has('diagnostics') ? limit : Math.min(limit, EVIDENCE_DEFAULT_LIMIT);
+      const diagnosticRecords = [
+        ...getRecentLogs({ sessionId: entry.id, limit: diagnosticLimit }),
+        ...(entry.path !== entry.id
+          ? getRecentLogs({ sessionId: entry.path, limit: diagnosticLimit })
+          : []),
+      ]
+        .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
+        .slice(-diagnosticLimit)
+        .map((record) => compactDiagnosticRecord(
+          record,
+          entry.firstMessage,
+          expansions.has('diagnostics') ? 320 : 180,
+        ));
+      const receipts = runReceipts
+        .listBySession(entry.id)
+        .sort((a, b) => Date.parse(b.terminalAt ?? b.acceptedAt) - Date.parse(a.terminalAt ?? a.acceptedAt));
+      const sources = evidenceSources(entry);
+      const response: SessionEvidenceResponse = {
+        sessionId: entry.id,
+        runtime: entry.sdkType as SessionRuntime,
+        aliases: {
+          internalId: entry.id,
+          path: entry.path,
+          ...(entry.claudeSessionId ? { claudeSessionId: entry.claudeSessionId } : {}),
+          ...(entry.opencodeSessionId ? { opencodeSessionId: entry.opencodeSessionId } : {}),
+          ...(entry.antigravityConversationId ? { antigravityConversationId: entry.antigravityConversationId } : {}),
+        },
+        status,
+        ...(backendMode ? { backendMode } : {}),
+        ...(model ? { model } : {}),
+        cwd: entry.cwd,
+        messageCount: entry.messageCount,
+        createdAt: entry.createdAt,
+        lastActivity: entry.lastActivity,
+        executionInstanceId: resolveExecutionInstanceId(entry),
+        activity: { status, lastActivity: entry.lastActivity },
+        sources,
+        diagnostics: {
+          processLocal: true,
+          expanded: expansions.has('diagnostics'),
+          records: diagnosticRecords,
+        },
+        receiptSummary: {
+          durable: true,
+          count: receipts.length,
+          ...(receipts[0] ? { latest: receipts[0] } : {}),
+        },
+        warnings: [
+          'Diagnostics are process-local and reset when the server restarts.',
+          'Run receipts and runtime-owned source files are durable; this bundle is intentionally bounded.',
+        ],
+        links: evidenceLinks(entry.id),
+      };
+
+      if (expansions.has('runs')) {
+        response.runReceipts = receipts.slice(0, limit);
+      }
+      if (expansions.has('transcript')) {
+        const loaded = await loadSessionTranscript(entry, 'visible_recent');
+        response.transcript = {
+          sessionId: entry.id,
+          runtime: entry.sdkType as SessionRuntime,
+          ...loaded.transcript,
+        };
+      }
+      if (expansions.has('screen')) {
+        const events = await loadScreenViewEvents(entry);
+        const screenView = projectDefaultViewFromEvents(events, {
+          expand: parseScreenViewExpand(query.get('expand')),
+        });
+        response.screen = {
+          sessionId: entry.id,
+          runtime: entry.sdkType as SessionRuntime,
+          view: 'screen',
+          expanded: screenView.expanded,
+          screenView,
+          markdown: renderScreenViewMarkdown(screenView),
+          source: {
+            sessionId: entry.id,
+            displayName: entry.firstMessage?.slice(0, 50) ?? entry.id,
+            sdkType: entry.sdkType as SessionRuntime,
+            cwd: entry.cwd,
+            createdAt: entry.createdAt,
+            lastActivity: entry.lastActivity,
+          },
+        };
+      }
+
+      sendJson(res, 200, response);
+    } catch (err) {
+      logger.errorObject('Failed to build session evidence', err);
+      sendJson(res, 500, { error: 'Failed to build session evidence', code: ErrorCode.INTERNAL_ERROR });
     }
   }
 
@@ -1903,6 +2174,53 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     } satisfies ScreenViewResponse);
   }
 
+  async function loadSessionTranscript(
+    entry: RegistryEntry,
+    scope: 'visible_recent' | 'visible_full',
+  ): Promise<{ transcript: VisibleTranscript; error?: string }> {
+    const source = {
+      sessionId: entry.id,
+      displayName: entry.firstMessage?.slice(0, 50) ?? entry.id,
+      sdkType: entry.sdkType,
+      cwd: entry.cwd,
+      createdAt: entry.createdAt,
+      lastActivity: entry.lastActivity,
+    };
+
+    if (entry.sdkType === 'pi') {
+      const adapted = await extractPiTranscript(entry.path, source, scope);
+      return adapted;
+    }
+    if (entry.sdkType === 'claude') {
+      return extractClaudeTranscript(
+        (sid) => claudeService.loadSessionHistory(sid),
+        entry.id,
+        source,
+        scope,
+      );
+    }
+    if (entry.sdkType === 'opencode') {
+      return extractOpenCodeTranscript(opencodeService, entry.id, source, scope);
+    }
+    if (entry.sdkType === 'antigravity') {
+      const events = await antigravityService.getReplayEvents(entry.id);
+      const { replayEventsToVisibleItems, buildVisibleTranscript } = await import('../../session-transfer/visible-transcript.js');
+      return {
+        transcript: buildVisibleTranscript(replayEventsToVisibleItems(events), source, scope),
+      };
+    }
+    return {
+      transcript: {
+        scope,
+        itemCount: 0,
+        truncated: false,
+        items: [],
+        source,
+      },
+      error: `Transcript not supported for runtime: ${entry.sdkType}`,
+    };
+  }
+
   async function handleSessionTranscript(
     _req: IncomingMessage,
     res: ServerResponse,
@@ -1928,54 +2246,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         | 'visible_recent'
         | 'visible_full';
 
-      const source = {
-        sessionId: entry.id,
-        displayName: entry.firstMessage?.slice(0, 50) ?? entry.id,
-        sdkType: entry.sdkType,
-        cwd: entry.cwd,
-        createdAt: entry.createdAt,
-        lastActivity: entry.lastActivity,
-      };
-
-      let transcriptResult: {
-        scope: 'visible_recent' | 'visible_full';
-        itemCount: number;
-        truncated: boolean;
-        items: TranscriptResponse['items'];
-        source: TranscriptResponse['source'];
-      };
-      let transcriptError: string | undefined;
-
-      if (entry.sdkType === 'pi') {
-        const adapted = await extractPiTranscript(entry.path, source, scope);
-        transcriptResult = adapted.transcript;
-        transcriptError = adapted.error;
-      } else if (entry.sdkType === 'claude') {
-        const adapted = await extractClaudeTranscript(
-          (sid) => claudeService.loadSessionHistory(sid),
-          entry.id,
-          source,
-          scope,
-        );
-        transcriptResult = adapted.transcript;
-        transcriptError = adapted.error;
-      } else if (entry.sdkType === 'opencode') {
-        const adapted = await extractOpenCodeTranscript(opencodeService, entry.id, source, scope);
-        transcriptResult = adapted.transcript;
-        transcriptError = adapted.error;
-      } else if (entry.sdkType === 'antigravity') {
-        // Antigravity has no native VisibleTranscriptSource adapter, but its
-        // replay events can be reduced into VisibleTranscriptItems using the
-        // shared helper. This keeps the transcript format uniform.
-        const events = await antigravityService.getReplayEvents(entry.id);
-        const { replayEventsToVisibleItems, buildVisibleTranscript } = await import('../../session-transfer/visible-transcript.js');
-        const items = replayEventsToVisibleItems(events);
-        transcriptResult = buildVisibleTranscript(items, source, scope);
-      } else {
-        sendJson(res, 501, { error: `Transcript not supported for runtime: ${entry.sdkType}`, code: ErrorCode.NOT_IMPLEMENTED });
-        return;
-      }
-
+      const loaded = await loadSessionTranscript(entry, scope);
+      const transcriptResult = loaded.transcript;
+      const transcriptError = loaded.error;
       if (transcriptError && transcriptResult.itemCount === 0) {
         sendJson(res, 404, { error: transcriptError, code: ErrorCode.EMPTY_TRANSCRIPT });
         return;
@@ -2621,6 +2894,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     handleListSessions,
     handleGetSession,
     handleGetSessionInfo,
+    handleGetSessionEvidence,
     handleGetRunReceipt,
     handleGetSessionHistory,
     handleDeleteSession,

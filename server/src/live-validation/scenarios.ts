@@ -55,7 +55,7 @@ function requireCapability(
 
 async function withEphemeralSession(
   context: ValidationContext,
-  execute: (sessionId: string) => Promise<ValidationScenarioResult>,
+  execute: (sessionId: string, session: Awaited<ReturnType<InternalApiClientLike['createSession']>>) => Promise<ValidationScenarioResult>,
 ): Promise<ValidationScenarioResult> {
   const session = await context.client.createSession({
     runtime: context.runtime,
@@ -71,7 +71,7 @@ async function withEphemeralSession(
   let detail: Awaited<ReturnType<InternalApiClientLike['getSessionInfo']>> | undefined;
   const cleanupWarnings: string[] = [];
   try {
-    result = await execute(session.sessionId);
+    result = await execute(session.sessionId, session);
     detail = await context.client.getSessionInfo(session.sessionId).catch(() => undefined);
   } catch (error) {
     executionError = error;
@@ -308,6 +308,76 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
     },
   },
 
+  'session-evidence': {
+    id: 'session-evidence',
+    description: 'Verify compact session evidence resolves by canonical id and registry path without exposing prompt bodies.',
+    async run(context) {
+      const getEvidence = context.client.getSessionEvidence;
+      if (!getEvidence) {
+        return {
+          scenarioId: 'session-evidence',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: 'session-evidence requires an Internal API client with getSessionEvidence()',
+          assertions: [],
+        };
+      }
+
+      return withEphemeralSession(context, async (sessionId) => {
+        const events = await context.client.promptStream(sessionId, {
+          message: 'Reply with the exact text EVIDENCE-LIVE-OK and nothing else.',
+          verbosity: 'full',
+          mode: 'prompt',
+        });
+        const summary = collectValidationSummary(events);
+        const byId = await getEvidence.call(context.client, sessionId);
+        // The create response's sessionPath is runtime-specific (Claude and
+        // OpenCode commonly return the internal id). Use the returned registry
+        // path from evidence itself for the cross-runtime alias assertion.
+        const byPath = await getEvidence.call(context.client, byId.aliases.path);
+        const serialized = JSON.stringify(byId);
+        const assertions: ValidationAssertion[] = [
+          {
+            name: 'agent_end',
+            passed: summary.sawAgentEnd,
+            details: summary.sawAgentEnd ? 'agent_end seen' : 'agent_end missing',
+          },
+          {
+            name: 'canonical_id',
+            passed: byId.sessionId === sessionId && byPath.sessionId === sessionId,
+            details: `id=${byId.sessionId}; path=${byPath.sessionId}`,
+          },
+          {
+            name: 'path_alias',
+            passed: byPath.sessionId === sessionId && byPath.aliases.path === byId.aliases.path,
+            details: byId.aliases.path,
+          },
+          {
+            name: 'process_local_label',
+            passed: byId.diagnostics.processLocal === true,
+            details: String(byId.diagnostics.processLocal),
+          },
+          {
+            name: 'default_bundle_bounded',
+            passed: Buffer.byteLength(serialized) < 5_000,
+            details: `${Buffer.byteLength(serialized)} bytes`,
+          },
+          {
+            name: 'prompt_body_omitted',
+            passed: !Object.hasOwn(byId, 'firstMessage') && !Object.hasOwn(byId, 'items'),
+            details: 'default evidence omits firstMessage and transcript items',
+          },
+        ];
+        return {
+          scenarioId: 'session-evidence',
+          runtime: context.runtime,
+          passed: assertions.every((assertion) => assertion.passed),
+          assertions,
+        };
+      });
+    },
+  },
   'model-smoke': {
     id: 'model-smoke',
     description: 'Verify a specific model (via --model) is actually usable: minimal turn completes.',

@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.9.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.10.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -305,7 +305,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.9.0",
+    "contractVersion": "1.10.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -527,13 +527,17 @@ The registry carries several identifiers for one session. `sessionId` normally
 means the Pi Web UI internal id, while `sessionPath` is the Pi session path or
 Pi-owned replay path. Runtime-native identifiers may be a Claude native session
 id, an OpenCode session id, or an Antigravity conversation id. The equivalent
-locator command is:
+locator commands are:
 
 ```bash
 npm run debug:where -- <internal-id|runtime-native-id|registry-path|conversation-id>
+npm run debug:where -- --json <internal-id|runtime-native-id|registry-path|conversation-id>
 ```
 
-`GET /api/v1/sessions/:id/transcript?view=screen` resolves all supported forms
+The default command preserves its human-readable report. `--json` emits
+offline locator evidence only; it never includes prompt text, credentials, or
+process-local logs. For the live one-call bundle, use
+`GET /api/v1/sessions/:id/evidence`, which resolves all supported forms
 and returns the canonical `sessionId` in its response. Control, diagnostics,
 notification, and watch routes use the internal id; the run-receipt route uses a
 `runId` and its receipt carries the canonical `sessionId`. Resolve the session id
@@ -842,7 +846,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.9.0",
+    "contractVersion": "1.10.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -898,6 +902,57 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
   }
 }
 ```
+
+---
+
+### Session Evidence (compact troubleshooting bundle)
+
+Use this as the first read when an agent starts from a session id. It resolves
+all supported identifier forms in one call and returns a bounded metadata,
+locator, diagnostics, and receipt bundle without requiring several follow-up
+requests.
+
+```
+GET /api/v1/sessions/:id/evidence
+GET /api/v1/sessions/:id/evidence?expand=diagnostics,transcript,screen,runs&limit=20
+```
+
+Accepted `:id` forms are the internal id, registry path, Claude native id,
+OpenCode native id, and Antigravity conversation id. The response always uses
+the canonical internal id.
+
+The default response includes:
+
+- aliases, runtime/status/backend/model/CWD/activity metadata, and execution identity;
+- exact registry/runtime source locators and bounded journal commands;
+- one compact, secret-scrubbed process-local diagnostics slice;
+- a durable run-receipt summary, warnings, and links to `/info`, diagnostics,
+  transcript, screen view, and history.
+
+`expand` is opt-in and bounded. `diagnostics` increases the log slice,
+`transcript` adds the visible-recent transcript, `screen` adds the UI-faithful
+projection, and `runs` adds recent receipts. Prompts, raw JSONL, tool payloads,
+and the global operational snapshot are not part of the default response.
+Diagnostics reset on process restart; use the receipt summary and runtime-owned
+source locators for durable evidence.
+
+**Response (200, abbreviated):**
+```json
+{
+  "sessionId": "a1b2c3d4-...",
+  "runtime": "pi",
+  "aliases": { "internalId": "a1b2c3d4-...", "path": "/root/.pi/agent/sessions/..." },
+  "status": "idle",
+  "backendMode": "native",
+  "executionInstanceId": "pi-local-default",
+  "diagnostics": { "processLocal": true, "expanded": false, "records": [] },
+  "receiptSummary": { "durable": true, "count": 1 },
+  "warnings": ["Diagnostics are process-local and reset when the server restarts."]
+}
+```
+
+The read is strictly non-mutating: it does not prompt, create, upsert, pin,
+watch, emit notifications, or change session state.
 
 ---
 
@@ -2007,6 +2062,7 @@ POST /api/v1/sessions/:id/control     # set_model / set_thinking_level / pin / u
 GET  /api/v1/sessions/:id/events      # persistent SSE event stream
 GET  /api/v1/sessions/:id/wait        # wait for status (idle/running)
 GET  /api/v1/sessions/:id/transcript  # runtime-agnostic transcript
+GET  /api/v1/sessions/:id/evidence    # compact one-call troubleshooting bundle
 POST /api/v1/sessions/:id/transfer    # cross-session context transfer
 POST /api/v1/sessions/batch           # batch-create child sessions
 POST /api/v1/sessions/batch/prompt    # batch-dispatch prompts

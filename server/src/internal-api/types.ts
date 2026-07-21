@@ -54,7 +54,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.9.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.10.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -316,6 +316,76 @@ export interface ScreenViewResponse {
     createdAt?: string;
     lastActivity?: string;
   };
+}
+
+/**
+ * Compact, read-only evidence bundle for agents starting a troubleshooting
+ * session from any known session identifier. The default response deliberately
+ * contains metadata, locators, one bounded process-local log slice, and a
+ * durable receipt summary — not prompts, transcripts, tool payloads, or the
+ * global operational snapshot.
+ */
+export interface SessionEvidenceResponse {
+  sessionId: string;
+  runtime: SessionRuntime;
+  aliases: {
+    internalId: string;
+    path: string;
+    claudeSessionId?: string;
+    opencodeSessionId?: string;
+    antigravityConversationId?: string;
+  };
+  status: SessionInfo['status'];
+  backendMode?: RuntimeBackendMode;
+  model?: string;
+  cwd: string;
+  messageCount: number;
+  createdAt: string;
+  lastActivity: string;
+  executionInstanceId: string;
+  activity: {
+    status: SessionInfo['status'];
+    lastActivity: string;
+  };
+  sources: {
+    registryPath: string;
+    runtime: Record<string, string>;
+    commands: string[];
+  };
+  diagnostics: {
+    processLocal: true;
+    expanded: boolean;
+    records: Array<{
+      ts: string;
+      level: string;
+      component: string;
+      msg: string;
+      requestId?: string;
+      runId?: string;
+      runtime?: string;
+      executionInstanceId?: string;
+      error?: { name: string; message: string };
+    }>;
+  };
+  receiptSummary: {
+    durable: true;
+    count: number;
+    latest?: RunReceipt;
+  };
+  warnings: string[];
+  links: {
+    info: string;
+    diagnostics: string;
+    transcript: string;
+    screen: string;
+    history: string;
+  };
+  /** Included only when explicitly requested with `expand=transcript`. */
+  transcript?: TranscriptResponse;
+  /** Included only when explicitly requested with `expand=screen`. */
+  screen?: ScreenViewResponse;
+  /** Included only when explicitly requested with `expand=runs`. */
+  runReceipts?: RunReceipt[];
 }
 
 export interface SessionControlRequest {

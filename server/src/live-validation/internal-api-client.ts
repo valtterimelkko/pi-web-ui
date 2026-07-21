@@ -19,6 +19,7 @@ import type {
   SessionControlResponse,
   ThinkingLevel,
   SessionDetail,
+  SessionEvidenceResponse,
   SessionHistoryResponse,
   WaitResponse,
   WatchResponse,
@@ -214,6 +215,16 @@ export class InternalApiClient implements InternalApiClientLike {
 
   async getSessionInfo(sessionId: string): Promise<SessionDetail> {
     return this.request<SessionDetail>('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/info`);
+  }
+
+  async getSessionEvidence(sessionId: string, expand: string[] = []): Promise<SessionEvidenceResponse> {
+    const allowed = new Set(['diagnostics', 'transcript', 'screen', 'runs']);
+    const values = [...new Set(expand.filter((value) => allowed.has(value)))];
+    const query = values.length > 0 ? `?expand=${encodeURIComponent(values.join(','))}` : '';
+    return this.request<SessionEvidenceResponse>(
+      'GET',
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/evidence${query}`,
+    );
   }
 
   /**
