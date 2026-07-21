@@ -152,7 +152,7 @@
 
 ### Internal API (`server/src/internal-api/`)
 - `server.ts` / `unix-socket-owner.ts` — token-authenticated Unix-socket server, fail-closed ownership, readiness, and bounded shutdown.
-- `routes/sessions.ts` — cross-runtime session CRUD, prompts, abort/control, wait/events, transcripts/screen view, transfer, usage, batch operations, run receipts, pins, and watches.
+- `routes/sessions.ts` — cross-runtime session CRUD, prompts, abort/control, wait/events, transcripts/screen view, compact session evidence, transfer, usage, batch operations, run receipts, pins, and watches.
 - `routes/diagnostics.ts` / `routes/health.ts` / `routes/capabilities.ts` / `routes/models.ts` — self-service diagnostics, additive runtime health, capability discovery, and live model metadata.
 - `run-receipts/` — durable accepted/started/terminal run identity, idempotency, restart interruption recovery, and bounded retention.
 - `watch/` — durable condition watches and restart-aware ledgers for long-horizon validation.
@@ -161,6 +161,7 @@
 
 ### Logging / observability
 - `logging/logger.ts` / `logging/correlation.ts` — central structured logger, level/namespace/format controls, and request/run/session correlation.
+- `observability/session-correlation.ts` — best-effort Pi session-path to canonical registry-id resolution for WebSocket prompt logs, with a path fallback that cannot block prompts.
 - `observability/operational-metrics.ts` / `observability/runtime-health.ts` — bounded process-local counters/latency outcomes and per-runtime health checks exposed through the Internal API.
 
 ### Config / Bootstrap
@@ -169,7 +170,7 @@
 - `index.ts` — Server entry point.
 
 ### Operational Helpers
-- `scripts/debug-where.mjs` — Fast session locator: maps a session id, runtime-native id, path, or Antigravity conversation id to the relevant logs, registry entry, and runtime-owned files.
+- `scripts/debug-where.mjs` — Fast session locator: maps a session id, runtime-native id, path, or Antigravity conversation id to the relevant logs, registry entry, and runtime-owned files; `--json` emits offline bounded locator evidence.
 - `scripts/validate-claude-profiles.ts` — Profile-specific validation runner. Validates SDK backend, direct CLI backend, tool visibility, skills, follow-up, and concurrency through a disposable server. Run via `npm run validate:claude-profiles`.
 - `scripts/concurrency-test.ts` — Tests simultaneous Claude + provider-profile sessions for cross-contamination. Run directly with `npx tsx scripts/concurrency-test.ts`.
 - `pi-claude-channel/server.ts` — Local Claude channel/plugin bridge process.

@@ -951,6 +951,47 @@ source locators for durable evidence.
 }
 ```
 
+#### Response contract and bounds
+
+The default response has these stable groups:
+
+| Group | Contents | Default behaviour |
+|---|---|---|
+| `aliases` | canonical internal id, registry path, and available native ids | always present; the response `sessionId` is the canonical internal id |
+| session metadata | `runtime`, `status`, `backendMode`, `model`, `cwd`, timestamps, message count, activity, and `executionInstanceId` | registry/service metadata only; no message body |
+| `sources` | registry path, runtime-specific locators, and bounded journal/API commands | exact locators; commands are hints, not executed by the endpoint |
+| `diagnostics` | compact structured records (`ts`, level, component, message, correlation ids, scrubbed error summary) | process-local; 10 records by default and `expanded: false` |
+| `receiptSummary` | count plus the newest public run receipt when one exists | durable; receipts contain lifecycle identity/timestamps, never prompt bodies |
+| `warnings` / `links` | process-local/durable caveats and links to deeper reads | always present |
+
+The default diagnostic message is truncated to 180 characters. `limit=N` is
+clamped to 1–50; `expand=diagnostics` permits up to 50 bounded records with
+messages truncated to 320 characters. The default fixture bundle is kept below
+5 KB. Exact host paths are retained as locators, so unusually long custom paths
+can contribute to the serialized size. Unknown expansion names are ignored.
+
+Optional fields are included only when explicitly requested:
+
+- `expand=transcript` adds the runtime-agnostic `visible_recent` transcript.
+- `expand=screen` adds the structured UI-faithful screen projection and markdown
+  rendering. Add `tools` and/or `thinking` to the same query when those screen
+  details are needed (for example, `expand=screen,tools,thinking`).
+- `expand=runs` adds up to `limit` public run receipts.
+- Multiple values may be comma-separated; expansion never mutates the session.
+
+Runtime locator keys are intentionally runtime-specific: Pi exposes its session
+path/directory and worker hint; Claude exposes its Pi-owned replay path and, when
+available, the native Claude JSONL path; OpenCode exposes its native session
+source/API hint and Goal Engine state directory; Antigravity exposes its Pi-owned
+JSONL path plus conversation DB and `agy` log locators.
+
+The route is bearer-authenticated by the existing Internal API middleware and is
+read-only. A missing identifier returns `404 SESSION_NOT_FOUND`; unsupported
+methods return `405 METHOD_NOT_ALLOWED`. The endpoint does not execute the
+returned commands, read raw JSONL by default, emit notifications, create or
+delete sessions, prompt a runtime, change pins/watches, or expose the global
+operational snapshot.
+
 The read is strictly non-mutating: it does not prompt, create, upsert, pin,
 watch, emit notifications, or change session state.
 

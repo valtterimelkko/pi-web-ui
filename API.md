@@ -122,6 +122,7 @@ Important endpoints include:
 - `POST /api/v1/models/refresh` (OpenCode and Pi runtime catalogue refresh; Pi uses `{"runtime":"pi"}` for the OpenRouter-backed catalogue)
 - `GET /api/v1/diagnostics`
 - `GET /api/v1/sessions/:id/diagnostics`
+- `GET /api/v1/sessions/:id/evidence` (canonical alias resolution plus bounded diagnostic/receipt evidence)
 - `GET /api/v1/events/types`
 - `POST /api/v1/sessions` (supports Claude `profileId` or `model: "profile:<id>"`)
 - `POST /api/v1/sessions/:id/prompt` (`detach:true` supported only with `verbosity=answers`; retain the returned `runId`)

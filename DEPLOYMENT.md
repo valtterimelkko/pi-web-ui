@@ -518,8 +518,24 @@ the Unix socket, not merely the public HTTP listener. Its default deadline is
 non-default install.
 
 The helpers do not deploy or restart anything by themselves. Production control
-still requires explicit operator authorization. A public readiness check can be
-run in addition after the Internal API is ready:
+still requires explicit operator authorization. Because systemd starts the
+compiled `server/dist/index.js`, a source checkout update is not live until the
+build completes and the service is restarted. Verify both the process and the
+contract after restart without printing the bearer token:
+
+```bash
+systemctl is-active pi-web-ui.service
+systemctl show pi-web-ui.service -p MainPID -p ExecMainStartTimestamp --no-pager
+SOCKET="$HOME/.pi-web-ui/internal-api.sock"
+TOKEN="$(cat "$HOME/.pi-web-ui/internal-api-token")"
+curl --silent --unix-socket "$SOCKET" \
+  -H "Authorization: Bearer $TOKEN" \
+  http://localhost/api/v1/health \
+  | jq '{status, contract: .contract.contractVersion, runtimes}'
+```
+
+For the session-evidence release, the expected contract version is `1.10.0`.
+A public readiness check can be run in addition after the Internal API is ready:
 
 ```bash
 curl http://localhost:<port>/api/health/ready
