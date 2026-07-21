@@ -53,7 +53,7 @@ Start from:
 - `client/src/hooks/useWebSocket.ts`;
 - `server/src/websocket/connection.ts`;
 - shared protocol types for extension UI/navigation/cancel events;
-- the corresponding extension implementation in `pi-extensions-public`.
+- the corresponding extension implementation in the companion repo named by [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md).
 
 Any protocol change must update shared types, server routing, client handling, companion behavior, replay expectations, and canonical documentation together.
 

@@ -19,8 +19,8 @@ Use this matrix to distinguish behavior owned by this repository from behavior s
 | Durable run receipts | Yes | Yes | No | Dispatch-scoped; not a general job scheduler |
 | Runtime health/evidence | Yes | Yes | No | Core aggregation plus runtime locators |
 | Claude `AskUserQuestion` dialog | Yes | Claude SDK only | No | Requires the SDK interaction path |
-| Pi custom extensions/tools | Integration support | Pi only | Usually yes | Extension implementation commonly lives in `pi-extensions-public` |
-| OpenCode custom plugins | Integration support | OpenCode only | Usually yes | Plugin implementation commonly lives in `opencode-plugins` |
+| Pi custom extensions/tools | Integration support | Pi only | Usually yes | Extension implementation lives in the companion repo; see [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md) |
+| OpenCode custom plugins | Integration support | OpenCode only | Usually yes | Plugin implementation lives in the companion repo; see [`RUNTIME-COMPANIONS.md`](./RUNTIME-COMPANIONS.md) |
 | Goal/planning UI behavior | Partial integration | Usually Pi/extension-specific | Yes | See [`GOAL-EXTENSION-UI.md`](./GOAL-EXTENSION-UI.md) |
 | Rich memory/status/orchestration behaviors | Integration surface | Varies | Often yes | Do not assume they are core merely because the UI renders them |
 

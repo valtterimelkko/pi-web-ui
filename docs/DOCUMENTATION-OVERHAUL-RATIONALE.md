@@ -1,5 +1,15 @@
 # Documentation information-architecture overhaul: rationale
 
+```text
+Status: completed
+Class: plan/history (not current behavior)
+Canonical current doc: docs/DOCS-GOVERNANCE.md
+Implemented by: the documentation information-architecture overhaul branch
+Last verified: 2026-07-21
+```
+
+This is a history/rationale record, not a contract. For the live rules that govern documentation, see [`DOCS-GOVERNANCE.md`](./DOCS-GOVERNANCE.md).
+
 ## Decision
 
 Preserve the existing detailed subsystem documentation and add a task-oriented layer above it.
@@ -61,9 +71,8 @@ No deep canonical document was removed. Architecture, contracts, runtime caveats
 
 ## Future follow-up
 
-The next high-value improvements are mechanical rather than another prose expansion:
+The next high-value improvements are mechanical rather than another prose expansion. An internal-link check now ships in this change (`npm run docs:check-links`); the remaining mechanical work is:
 
-- automated internal-link checks;
 - route/schema-to-reference checks for the Internal API;
 - environment-variable documentation checks;
 - status metadata for completed or superseded plans;

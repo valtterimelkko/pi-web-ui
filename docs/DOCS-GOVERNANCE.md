@@ -81,10 +81,10 @@ Readers should never need to infer whether a plan is still prospective.
 
 ## Suggested automation
 
-Documentation checks should eventually cover:
+Documentation checks should cover:
 
-- internal Markdown links;
-- `AGENTS.md`/`CLAUDE.md` synchronization;
+- internal Markdown links — implemented: `npm run docs:check-links`;
+- `AGENTS.md`/`CLAUDE.md` synchronization — implemented: `npm run docs:check-agent-guides`;
 - documented environment variables versus `.env.example`/config schema;
 - Internal API route/schema versus reference/contract mirrors;
 - stale plan status markers;
