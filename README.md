@@ -1,6 +1,6 @@
 # Pi Web UI
 
-> **Latest work:** the Internal API now exposes a compact alias-resolving session evidence bundle (`1.10.0`) alongside additive runtime-health and filtered diagnostics, while Claude SDK `AskUserQuestion` is supported first-class in the browser, Antigravity has an inactivity stall watchdog with bounded retry, and the Files tab has a Markdown source editor with a GFM live preview (explicit Save, truncated files stay read-only). See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
+> **Latest work:** the Internal API now exposes a compact alias-resolving session evidence bundle (`1.10.0`) and truthful Pi completion across auto-compaction (`1.10.1`) alongside additive runtime-health and filtered diagnostics, while Claude SDK `AskUserQuestion` is supported first-class in the browser, Antigravity has an inactivity stall watchdog with bounded retry, and the Files tab has a Markdown source editor with a GFM live preview (explicit Save, truncated files stay read-only). See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
 
 Built for a simple reality: **one agent runtime and one subscription is often not enough.**
 

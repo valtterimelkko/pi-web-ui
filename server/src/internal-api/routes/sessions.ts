@@ -1873,6 +1873,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         multiSessionManager.addApiObserver(sessionPath, eventObserver);
 
         let ended = false;
+        let resolveTurnBoundary!: () => void;
+        const turnBoundary = new Promise<void>((resolve) => { resolveTurnBoundary = resolve; });
         const endObserver = (event: unknown) => {
           const normalized = event as NormalizedEvent;
           if (normalized.type === 'agent_end' && !ended) {
@@ -1880,6 +1882,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             multiSessionManager.removeApiObserver(sessionPath, endObserver);
             multiSessionManager.removeApiObserver(sessionPath, eventObserver);
             onComplete();
+            resolveTurnBoundary();
           }
         };
         multiSessionManager.addApiObserver(sessionPath, endObserver);
@@ -1892,13 +1895,29 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           } else {
             await agentSession.prompt(message);
           }
+          // Pi extension slash commands are handled synchronously by prompt()
+          // and do not emit an agent_end turn event. Their handler return is a
+          // documented command boundary, unlike an ordinary LLM prompt return.
+          if (!ended && mode === 'prompt' && /^\s*\//.test(message)) {
+            ended = true;
+            multiSessionManager.removeApiObserver(sessionPath, endObserver);
+            multiSessionManager.removeApiObserver(sessionPath, eventObserver);
+            onComplete();
+            resolveTurnBoundary();
+          }
         } catch (err) {
           multiSessionManager.removeApiObserver(sessionPath, endObserver);
           multiSessionManager.removeApiObserver(sessionPath, eventObserver);
           if (!ended) {
+            ended = true;
             onComplete(err instanceof Error ? err : new Error(String(err)));
+            resolveTurnBoundary();
           }
         }
+        // Pi's prompt promise can resolve at an auto-compaction boundary while
+        // the same AgentSession resumes asynchronously. The normalized
+        // agent_end event—not prompt() return—is the true terminal turn signal.
+        await turnBoundary;
         break;
       }
     }

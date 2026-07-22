@@ -401,6 +401,69 @@ describe('Internal API run receipt integration', () => {
     expect(manager.get(runId)?.model).toBe('openai-codex/gpt-5.6-terra');
   });
 
+  it('keeps a Pi receipt nonterminal when prompt returns at compaction and completes only on agent_end', async () => {
+    registry.get.mockResolvedValue(entry({
+      sdkType: 'pi',
+      claudeProfileId: undefined,
+      model: 'openai/gpt-5.6-terra',
+      path: '/tmp/pi-compaction-session.jsonl',
+    }));
+    const observers = new Set<(event: unknown) => void>();
+    multiSessionManager.addApiObserver.mockImplementation((_sessionPath: string, observer: (event: unknown) => void) => { observers.add(observer); });
+    multiSessionManager.removeApiObserver.mockImplementation((_sessionPath: string, observer: (event: unknown) => void) => { observers.delete(observer); });
+    let releasePrompt!: () => void;
+    const promptReturned = new Promise<void>((resolve) => { releasePrompt = resolve; });
+    multiSessionManager.getAgentSession.mockReturnValue({
+      model: { provider: 'openai-codex', id: 'gpt-5.6-terra' },
+      prompt: vi.fn(() => promptReturned),
+    });
+
+    const response = mockRes();
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'survive compaction', detach: true }),
+      response,
+      'session-1',
+    );
+    const { runId } = JSON.parse(response.body);
+    await vi.waitFor(() => expect(observers.size).toBeGreaterThanOrEqual(2));
+
+    for (const observer of [...observers]) observer({ type: 'session_compaction', sessionId: 'session-1', timestamp: Date.now(), data: {} });
+    releasePrompt();
+    for (const observer of [...observers]) observer({ type: 'agent_start', sessionId: 'session-1', timestamp: Date.now(), data: { resumed: true } });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(manager.get(runId)?.status).toBe('started');
+    expect(manager.get(runId)?.agentEndAt).toBeUndefined();
+    expect(manager.get(runId)?.terminalAt).toBeUndefined();
+
+    const endedAt = Date.now();
+    for (const observer of [...observers]) observer({ type: 'agent_end', sessionId: 'session-1', timestamp: endedAt, data: {} });
+    await vi.waitFor(() => expect(manager.get(runId)).toMatchObject({
+      status: 'completed',
+      agentEndAt: new Date(endedAt).toISOString(),
+      terminalAt: expect.any(String),
+    }));
+  });
+
+  it('completes a Pi slash command when its handler returns without agent_end', async () => {
+    registry.get.mockResolvedValue(entry({ sdkType: 'pi', claudeProfileId: undefined, model: 'openai/gpt-5.6-terra', path: '/tmp/pi-command-session.jsonl' }));
+    multiSessionManager.getAgentSession.mockReturnValue({
+      model: { provider: 'openai-codex', id: 'gpt-5.6-terra' },
+      prompt: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const response = mockRes();
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: '/autocompact75 validate-next 5', detach: true }),
+      response,
+      'session-1',
+    );
+    const { runId } = JSON.parse(response.body);
+
+    await vi.waitFor(() => expect(manager.get(runId)?.status).toBe('completed'));
+    expect(manager.get(runId)?.agentEndAt).toBeUndefined();
+    expect(manager.get(runId)?.terminalAt).toEqual(expect.any(String));
+  });
+
   it('returns a runId for detached dispatches', async () => {
     const response = mockRes();
     await routes.handleSendPrompt(

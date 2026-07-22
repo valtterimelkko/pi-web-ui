@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.10.0",
+  "contractVersion": "1.10.1",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,10 @@ Current contract:
 
 ### Changelog
 
+- **1.10.1** (patch) — corrected Pi run-receipt completion across auto-compaction:
+  - Pi prompt-promise return is no longer treated as a terminal turn boundary because the same `AgentSession` may resume asynchronously after compaction;
+  - an ordinary Pi LLM receipt now terminalises only after the normalized `agent_end` signal, preserving truthful `agentEndAt` evidence for detached orchestrators; synchronous extension slash commands remain terminal on documented handler return and may have no `agentEndAt`;
+  - runtime errors remain terminal failures. Existing clients remain compatible; defensive consumers should treat a Pi `completed` receipt without `agentEndAt` as contradictory/nonterminal evidence from an older server.
 - **1.10.0** (minor, additive) — added a compact, one-call session evidence bundle without external telemetry:
   - `GET /api/v1/sessions/:id/evidence` resolves internal, registry-path, and runtime-native identifiers to one canonical session id.
   - The default response is bounded and diagnostic-first: aliases, runtime/status/backend metadata, exact runtime source locators, bounded process-local diagnostics, durable run-receipt summary, warnings, and links to the existing full read paths.

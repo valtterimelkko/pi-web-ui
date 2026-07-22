@@ -1,6 +1,6 @@
 # Pi Web UI Docs
 
-> **What's new?** See [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) for a rolling summary of doc-relevant changes. Recent highlights include the Internal API `1.10.0` compact session-evidence surface plus the `1.9.0` runtime-health/diagnostics surface, durable run-aware troubleshooting, first-class Claude SDK `AskUserQuestion` support, an Antigravity inactivity stall watchdog with bounded retry, and a Markdown source editor with GFM live preview in the Files tab.
+> **What's new?** See [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) for a rolling summary of doc-relevant changes. Recent highlights include the Internal API `1.10.1` Pi auto-compaction completion fix, the `1.10.0` compact session-evidence surface, and the `1.9.0` runtime-health/diagnostics surface, durable run-aware troubleshooting, first-class Claude SDK `AskUserQuestion` support, an Antigravity inactivity stall watchdog with bounded retry, and a Markdown source editor with GFM live preview in the Files tab.
 
 This folder supports **four distinct reading paths**. Choose by task instead of reading the documentation linearly.
 

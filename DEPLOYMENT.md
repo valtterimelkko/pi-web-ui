@@ -534,7 +534,7 @@ curl --silent --unix-socket "$SOCKET" \
   | jq '{status, contract: .contract.contractVersion, runtimes}'
 ```
 
-For the session-evidence release, the expected contract version is `1.10.0`.
+The expected Internal API contract version is `1.10.1`; `1.10.0` introduced session evidence and `1.10.1` corrected Pi completion across auto-compaction.
 A public readiness check can be run in addition after the Internal API is ready:
 
 ```bash

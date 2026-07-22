@@ -4,6 +4,11 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Truthful Pi completion across auto-compaction (`1.10.1`)**
+  - Pi run receipts no longer terminalise merely because `agentSession.prompt()` returned at an auto-compaction boundary.
+  - Ordinary Pi LLM completion now waits for normalized `agent_end`, so detached orchestrators receive truthful `agentEndAt` evidence before collecting output or releasing work; synchronous extension slash commands still complete on handler return.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
+
 - **Compact session evidence and troubleshooting surface (`1.10.0`)**
   - `GET /api/v1/sessions/:id/evidence` resolves internal, path, Claude/OpenCode/Antigravity-native identifiers in one bounded read.
   - The default bundle combines canonical metadata, runtime locators, process-local diagnostics, durable receipt summary, warnings, and links to deeper reads; expansions are explicit and bounded.

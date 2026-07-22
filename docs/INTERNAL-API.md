@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.10.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.10.1`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -305,7 +305,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.10.0",
+    "contractVersion": "1.10.1",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -792,7 +792,14 @@ The lookup returns the persisted receipt directly:
 ```
 
 Receipt statuses are `accepted`, `started`, `completed`, `failed`,
-`cancelled`, and `interrupted`. `interrupted` is written during startup
+`cancelled`, and `interrupted`. For ordinary Pi LLM runs, `completed` is written
+only after the normalized `agent_end` turn boundary; `agentSession.prompt()` may
+return at auto-compaction while the same session resumes and is therefore not
+terminal evidence. Synchronous Pi extension slash commands are the explicit
+exception: their documented handler return is terminal and their receipt may
+have no `agentEndAt`. Defensive task orchestrators consuming older servers
+should not trust an ordinary Pi `completed` receipt whose `agentEndAt` is absent.
+`interrupted` is written during startup
 recovery when a process died or was restarted while a run was accepted or
 started; its `errorCode` is `SERVER_RESTART` and it is not automatically
 retried. Receipts contain identity, timestamps, status, and stable error codes
@@ -846,7 +853,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.10.0",
+    "contractVersion": "1.10.1",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
