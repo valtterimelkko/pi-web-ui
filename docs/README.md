@@ -92,6 +92,14 @@ If you are changing code, debugging a runtime, or operating this repo as a live 
 
 LLM coding agents should also read [`../AGENTS.md`](../AGENTS.md) or its byte-identical mirror [`../CLAUDE.md`](../CLAUDE.md).
 
+### If you are an LLM fixing the repo, read these first, in order
+
+1. [`MAINTAINER-INDEX.md`](./MAINTAINER-INDEX.md)
+2. [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) (or [`TROUBLESHOOTING-DECISION-TREE.md`](./TROUBLESHOOTING-DECISION-TREE.md) when you have a symptom but not a subsystem)
+3. [`CODEBASE-MAP.md`](./CODEBASE-MAP.md)
+4. [`OBSERVABILITY.md`](./OBSERVABILITY.md)
+5. [`INTERNAL-API.md`](./INTERNAL-API.md) — if the issue touches runtime routing, orchestration, diagnostics, or transcript readback
+
 ## Historical plans and reports
 
 Plans and validation reports preserve implementation rationale and evidence, but they are not automatically current contracts. Prefer canonical subsystem docs and emitted API capabilities. When adding or revisiting a plan, follow the status and canonical-link rules in [`DOCS-GOVERNANCE.md`](./DOCS-GOVERNANCE.md).
