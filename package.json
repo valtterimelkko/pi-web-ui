@@ -30,6 +30,7 @@
     "production:lock": "bash scripts/with-production-lock.sh",
     "docs:sync-agent-guides": "node scripts/sync-agent-guides.mjs",
     "docs:check-agent-guides": "node scripts/check-agent-guides.mjs",
+    "docs:check-links": "node scripts/check-doc-links.mjs",
     "lint": "eslint . --ext .ts,.tsx && eslint scripts/notify-client.mjs scripts/wait-for-internal-api.mjs",
     "typecheck": "npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared",
     "validate:proxy": "npx tsx scripts/validation-logging-proxy.ts"
