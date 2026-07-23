@@ -534,7 +534,7 @@ curl --silent --unix-socket "$SOCKET" \
   | jq '{status, contract: .contract.contractVersion, runtimes}'
 ```
 
-The expected Internal API contract version is `1.10.1`; `1.10.0` introduced session evidence and `1.10.1` corrected Pi completion across auto-compaction.
+The expected Internal API contract version is `1.11.0`; `1.10.0` introduced session evidence, `1.10.1` corrected Pi completion across auto-compaction, and `1.11.0` added exact fail-closed Claude profile binding with separate selector/runtime-model evidence.
 A public readiness check can be run in addition after the Internal API is ready:
 
 ```bash

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ClaudeService } from '../../../src/claude/claude-service.js';
 import { join } from 'node:path';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -28,6 +28,8 @@ describe('ClaudeService base-alias routing', () => {
           model: 'sonnet', skills: 'all' },
         { id: 'claude-opus-sdk', label: 'Claude Opus SDK', backend: 'sdk-subscription', launcherType: 'native-env',
           model: 'opus', skills: 'all' },
+        { id: 'claude-channel', label: 'Claude Channel', backend: 'channel', launcherType: 'native-env',
+          model: 'sonnet', skills: 'all' },
       ],
     }));
   });
@@ -42,10 +44,13 @@ describe('ClaudeService base-alias routing', () => {
     });
   }
 
-  function profileOf(sessionId: string): string | undefined {
+  function entryOf(sessionId: string): Record<string, unknown> | undefined {
     const reg = JSON.parse(readFileSync(registryPath, 'utf-8'));
-    const entry = reg.entries.find((e: { id: string }) => e.id === sessionId);
-    return entry?.claudeProfileId;
+    return reg.entries.find((e: { id: string }) => e.id === sessionId);
+  }
+
+  function profileOf(sessionId: string): string | undefined {
+    return entryOf(sessionId)?.claudeProfileId as string | undefined;
   }
 
   it('routes bare "sonnet" to the native Claude profile, not the GLM default', async () => {
@@ -61,5 +66,52 @@ describe('ClaudeService base-alias routing', () => {
   it('honors an explicit GLM profileId', async () => {
     const { sessionId } = await svc().createSession(tmpDir, 'sonnet', undefined, 'glm-sdk');
     expect(profileOf(sessionId)).toBe('glm-sdk');
+  });
+
+  it('rejects an empty explicit profile id instead of treating it as no selection', async () => {
+    const service = svc();
+    await expect(service.createSession(tmpDir, 'sonnet', undefined, '')).rejects.toThrow(/profile|empty|invalid/i);
+    expect(() => readFileSync(registryPath, 'utf-8')).toThrow();
+  });
+
+  it('fails closed when an explicit profile id is unknown instead of creating a direct fallback session', async () => {
+    const service = svc();
+    await expect(service.createSession(tmpDir, 'sonnet', undefined, 'missing-profile')).rejects.toThrow(/missing-profile|profile/i);
+    expect(() => readFileSync(registryPath, 'utf-8')).toThrow();
+  });
+
+  it('fails closed when an explicit profile backend is unavailable instead of creating a direct fallback session', async () => {
+    const service = svc();
+    await expect(service.createSession(tmpDir, 'sonnet', undefined, 'claude-channel')).rejects.toThrow(/claude-channel|channel|unavailable|healthy/i);
+    expect(() => readFileSync(registryPath, 'utf-8')).toThrow();
+  });
+
+  it('checks an explicit SDK backend once so health cannot race into direct fallback', async () => {
+    const service = svc();
+    const sdk = (service as any).sdkService;
+    sdk.isHealthy = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const { sessionId } = await service.createSession(tmpDir, 'sonnet', undefined, 'claude-sonnet-sdk');
+    expect(sdk.isHealthy).toHaveBeenCalledTimes(1);
+    expect(entryOf(sessionId)).toMatchObject({
+      model: 'sonnet',
+      claudeProfileId: 'claude-sonnet-sdk',
+      claudeProfileBackend: 'sdk-subscription',
+      claudeProviderId: 'anthropic',
+    });
+  });
+
+  it('persists the exact profile tuple for an available channel profile', async () => {
+    const service = svc();
+    (service as any).channelService = {
+      isHealthy: vi.fn().mockResolvedValue(true),
+      createSession: vi.fn().mockResolvedValue({ sessionId: 'channel-session', claudeSessionId: 'channel-native' }),
+    };
+    const { sessionId } = await service.createSession(tmpDir, 'sonnet', undefined, 'claude-channel');
+    expect(entryOf(sessionId)).toMatchObject({
+      model: 'sonnet',
+      claudeProfileId: 'claude-channel',
+      claudeProfileBackend: 'channel',
+      claudeProviderId: 'anthropic',
+    });
   });
 });

@@ -187,6 +187,11 @@ type (`native-env` or `command`), a model, and optional provider settings
 
 **Profile-backed model entries** appear in `/api/v1/models` as `profile:<id>` and in
 the web UI model selector. Selecting one creates a session bound to that profile.
+Since Internal API contract `1.11.0`, create/info/list/run-receipt projections
+expose this exact route as `modelSelector: "profile:<id>"`; `model` remains the
+effective runtime model such as `sonnet`. An explicit missing profile or
+unavailable requested backend fails creation and never falls through to another
+Claude backend.
 
 **GLM/Z.ai profile example** (uses GLM Coding Plan subscription token):
 ```json

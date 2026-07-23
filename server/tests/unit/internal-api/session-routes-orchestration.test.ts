@@ -563,6 +563,80 @@ describe('createSessionRoutes orchestration endpoints', () => {
   // ─── Create-time thinking levels ─────────────────────────────────────────
 
   describe('create-time thinking levels', () => {
+    it('exposes the exact Claude profile selector separately from the runtime model', async () => {
+      registry.get.mockResolvedValue({
+        ...claudeEntry('new-claude'),
+        model: 'sonnet',
+        claudeProfileId: 'owner-sonnet',
+        claudeProfileBackend: 'sdk-subscription',
+        claudeProviderId: 'anthropic',
+      });
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions', {
+        runtime: 'claude',
+        model: 'profile:owner-sonnet',
+        thinkingLevel: 'high',
+        cwd: '/tmp/claude-profile',
+      });
+      const res = createMockRes();
+
+      await routes.handleCreateSession(req, res, 'internal-test');
+
+      expect(res.statusCode).toBe(201);
+      expect(JSON.parse(res.body)).toMatchObject({
+        runtime: 'claude',
+        model: 'profile:owner-sonnet',
+        modelSelector: 'profile:owner-sonnet',
+        executionInstanceId: 'owner-sonnet',
+      });
+      expect(claudeService.createSession).toHaveBeenCalledWith('/tmp/claude-profile', 'sonnet', 'high', 'owner-sonnet');
+
+      const info = createMockRes();
+      await routes.handleGetSessionInfo(createJsonReq('GET', '/api/v1/sessions/new-claude/info'), info, 'new-claude');
+      expect(JSON.parse(info.body)).toMatchObject({
+        runtime: 'claude',
+        model: 'sonnet',
+        modelSelector: 'profile:owner-sonnet',
+        executionInstanceId: 'owner-sonnet',
+        claudeProfileId: 'owner-sonnet',
+        claudeProfileBackend: 'sdk-subscription',
+        claudeProviderId: 'anthropic',
+      });
+    });
+
+    it('rejects an empty exact Claude profile selector before creating a session', async () => {
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions', {
+        runtime: 'claude',
+        model: 'profile:',
+        cwd: '/tmp/claude-profile',
+      });
+      const res = createMockRes();
+
+      await routes.handleCreateSession(req, res, 'internal-test');
+
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'INVALID_REQUEST' });
+      expect(claudeService.createSession).not.toHaveBeenCalled();
+    });
+
+    it('rejects conflicting exact Claude profile selectors before creating a session', async () => {
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions', {
+        runtime: 'claude',
+        model: 'profile:owner-sonnet',
+        profileId: 'other-profile',
+        cwd: '/tmp/claude-profile',
+      });
+      const res = createMockRes();
+
+      await routes.handleCreateSession(req, res, 'internal-test');
+
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'INVALID_REQUEST' });
+      expect(claudeService.createSession).not.toHaveBeenCalled();
+    });
+
     it('passes max to Claude session creation', async () => {
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions', {
@@ -614,6 +688,54 @@ describe('createSessionRoutes orchestration endpoints', () => {
   // ─── POST /sessions/batch ────────────────────────────────────────────────
 
   describe('POST /sessions/batch', () => {
+    it('preserves an exact Claude profile selector instead of passing it as a runtime model', async () => {
+      registry.get.mockResolvedValue({
+        ...claudeEntry('new-claude'),
+        model: 'sonnet',
+        claudeProfileId: 'owner-sonnet',
+        claudeProfileBackend: 'sdk-subscription',
+        claudeProviderId: 'anthropic',
+      });
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions/batch', {
+        sessions: [{ runtime: 'claude', model: 'profile:owner-sonnet', thinkingLevel: 'high', cwd: '/tmp/batch-profile' }],
+      });
+      const res = createMockRes();
+
+      await routes.handleBatchCreate(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(claudeService.createSession).toHaveBeenCalledWith('/tmp/batch-profile', 'sonnet', 'high', 'owner-sonnet');
+      expect(JSON.parse(res.body).created[0]).toMatchObject({
+        success: true,
+        model: 'profile:owner-sonnet',
+        modelSelector: 'profile:owner-sonnet',
+        executionInstanceId: 'owner-sonnet',
+      });
+    });
+
+    it('cleans up a created Claude session when exact batch profile binding verification fails', async () => {
+      registry.get.mockResolvedValue({
+        ...claudeEntry('new-claude'),
+        model: 'sonnet',
+        claudeProfileId: 'wrong-profile',
+        claudeProfileBackend: 'sdk-subscription',
+        claudeProviderId: 'anthropic',
+      });
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions/batch', {
+        sessions: [{ runtime: 'claude', model: 'profile:owner-sonnet', cwd: '/tmp/batch-profile' }],
+      });
+      const res = createMockRes();
+
+      await routes.handleBatchCreate(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toMatchObject({ createdCount: 0, failedCount: 1 });
+      expect(claudeService.abort).toHaveBeenCalledWith('new-claude');
+      expect(registry.delete).toHaveBeenCalledWith('new-claude');
+    });
+
     it('applies max during batch creation of a Pi session', async () => {
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions/batch', {

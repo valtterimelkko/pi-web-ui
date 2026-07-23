@@ -54,7 +54,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.10.1' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.11.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -178,6 +178,8 @@ export interface BatchCreateResultItem {
   sessionPath?: string;
   runtime: SessionRuntime;
   model?: string;
+  modelSelector?: string;
+  executionInstanceId?: string;
   cwd?: string;
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
@@ -422,7 +424,12 @@ export interface CreateSessionResponse {
   sessionId: string;
   sessionPath: string;
   runtime: SessionRuntime;
+  /** Legacy create echo; profile-backed creation retains `profile:<id>` here. */
   model?: string;
+  /** Canonical creation selector when it differs from the runtime model (for example profile:<id>). */
+  modelSelector?: string;
+  /** Configured runtime instance resolved for the created session. */
+  executionInstanceId?: string;
   cwd: string;
   createdAt: string;
   /** True when the session was pinned at creation (pin:true requested). */
@@ -440,7 +447,10 @@ export interface SessionInfo {
   /** Configured runtime instance that handled this session. */
   executionInstanceId: string;
   cwd: string;
+  /** Effective runtime model; a profile-backed Claude session may report `sonnet`. */
   model?: string;
+  /** Canonical creation selector, additive for exact profile-backed routes. */
+  modelSelector?: string;
   status: 'idle' | 'running' | 'error';
   messageCount: number;
   firstMessage: string;
@@ -531,7 +541,10 @@ export interface RunReceipt {
   sessionId: string;
   runtime: SessionRuntime;
   executionInstanceId: string;
+  /** Effective runtime model used by the run. */
   model?: string;
+  /** Canonical creation selector bound to the run, when distinct from model. */
+  modelSelector?: string;
   status: RunReceiptStatus;
   acceptedAt: string;
   startedAt?: string;

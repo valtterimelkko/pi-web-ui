@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.10.1",
+  "contractVersion": "1.11.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,12 @@ Current contract:
 
 ### Changelog
 
+- **1.11.0** (minor, additive) — made exact Claude profile identity explicit and fail-closed:
+  - profile-backed Claude create/session-info/list/run-receipt responses add `modelSelector: "profile:<id>"`; for backwards compatibility the create response keeps its existing request-selector echo in `model`, while session info/list/receipts keep their existing effective-runtime-model meaning (for example `sonnet`);
+  - exact creation responses also expose the resolved `executionInstanceId`;
+  - conflicting `model: "profile:<a>"` plus `profileId: "<b>"` is rejected before creation;
+  - an explicit unknown profile or unavailable/unhealthy requested backend now fails creation instead of silently creating a session through another Claude backend;
+  - historical sessions and receipts remain readable because the new field is additive and derived from persisted profile metadata when available.
 - **1.10.1** (patch) — corrected Pi run-receipt completion across auto-compaction:
   - Pi prompt-promise return is no longer treated as a terminal turn boundary because the same `AgentSession` may resume asynchronously after compaction;
   - an ordinary Pi LLM receipt now terminalises only after the normalized `agent_end` signal, preserving truthful `agentEndAt` evidence for detached orchestrators; synchronous extension slash commands remain terminal on documented handler return and may have no `agentEndAt`;

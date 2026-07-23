@@ -61,6 +61,13 @@ export const createSessionBodySchema = z.object({
       message: 'profileId is only supported for the claude runtime',
     });
   }
+  if (body.runtime === 'claude' && body.model?.startsWith('profile:') && !body.model.slice('profile:'.length).trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['model'],
+      message: 'Claude profile model selector requires a non-empty profile id',
+    });
+  }
 });
 
 const batchCreateEntrySchema = z.object({
@@ -69,7 +76,15 @@ const batchCreateEntrySchema = z.object({
   model: modelSchema.optional(),
   thinkingLevel: thinkingLevelSchema.optional(),
   ...pinFields,
-}).strict();
+}).strict().superRefine((body, ctx) => {
+  if (body.runtime === 'claude' && body.model?.startsWith('profile:') && !body.model.slice('profile:'.length).trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['model'],
+      message: 'Claude profile model selector requires a non-empty profile id',
+    });
+  }
+});
 
 export const batchCreateBodySchema = z.object({
   sessions: z.array(batchCreateEntrySchema).min(1).max(MAX_BATCH_ITEMS),

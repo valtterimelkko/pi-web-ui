@@ -275,6 +275,8 @@ describe('Internal API run receipt integration', () => {
       status: 'completed',
       sessionId: 'session-1',
       executionInstanceId: 'native-profile',
+      model: 'sonnet',
+      modelSelector: 'profile:native-profile',
     });
   });
 

@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.10.1`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.11.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -305,7 +305,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.10.1",
+    "contractVersion": "1.11.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -466,7 +466,7 @@ POST /api/v1/sessions
 | `thinkingLevel` | string | No | runtime default | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use the selected model's `thinkingLevels` from `/models` as the capability source. |
 | `pin` | boolean | No | `false` | Pin the session at creation so it survives idle/timeout cleanup. Time-bounded — see [Session Pinning](#session-pinning-persistent-time-bounded). |
 | `pinTtlSeconds` | number | No | `86400` (24h) | Pin lifetime in seconds when `pin:true`. Clamped to a hard max of 7 days. |
-| `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. |
+| `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. Supplying both forms with different ids is rejected. An explicit profile never falls back to another profile/backend when unavailable. |
 
 **Response (201):**
 ```json
@@ -475,6 +475,8 @@ POST /api/v1/sessions
   "sessionPath": "a1b2c3d4-...",
   "runtime": "claude",
   "model": "profile:glm52-claude-sdk",
+  "modelSelector": "profile:glm52-claude-sdk",
+  "executionInstanceId": "glm52-claude-sdk",
   "cwd": "/home/user/myproject",
   "createdAt": "2026-04-28T12:00:00.000Z",
   "pinned": true,
@@ -509,6 +511,7 @@ GET /api/v1/sessions
       "executionInstanceId": "glm52-claude-sdk",
       "cwd": "/home/user/myproject",
       "model": "sonnet",
+      "modelSelector": "profile:glm52-claude-sdk",
       "status": "idle",
       "messageCount": 14,
       "firstMessage": "Write a function that...",
@@ -554,7 +557,7 @@ GET /api/v1/sessions/:sessionId/info
 ```
 
 `/info` is the preferred endpoint for live validation and local automation.
-Both endpoints now return enriched runtime metadata where available.
+Both endpoints now return enriched runtime metadata where available. For a profile-backed Claude session, session info/list `model` is the effective runtime model (for example `sonnet`) and `modelSelector` is the exact creation selector (`profile:<id>`); do not compare those as if they were the same identity category. The create response alone retains its historical selector echo in `model` for backwards compatibility.
 
 **Response (200):**
 ```json
@@ -567,7 +570,8 @@ Both endpoints now return enriched runtime metadata where available.
   "nativeSessionId": "claude-native-id",
   "sessionFile": "/root/.pi-web-ui/claude-sessions/a1b2c3d4-....jsonl",
   "cwd": "/home/user/myproject",
-  "model": "profile:glm52-claude-sdk",
+  "model": "sonnet",
+  "modelSelector": "profile:glm52-claude-sdk",
   "claudeProfileId": "glm52-claude-sdk",
   "claudeProfileBackend": "sdk-subscription",
   "claudeProviderId": "zai",
@@ -823,9 +827,10 @@ idempotency window is never pruned early). Pruning runs during receipt writes
 and server startup; old receipts may return `RUN_NOT_FOUND` after retention.
 
 `executionInstanceId` is the Claude profile id when recorded (or
-`claude-default` for older sessions without profile metadata). Pi, OpenCode,
-and Antigravity use `pi-local-default`, `opencode-default`, and
-`antigravity-default` respectively.
+`claude-default` for older sessions without profile metadata). Profile-backed
+Claude receipts also carry `modelSelector: "profile:<id>"`, while `model`
+remains the effective runtime model. Pi, OpenCode, and Antigravity use
+`pi-local-default`, `opencode-default`, and `antigravity-default` respectively.
 
 Transport matters for lifecycle: `detach:true` is the disconnect-safe,
 server-side fire-and-forget mode and is valid only with `verbosity=answers`.
@@ -853,7 +858,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.10.1",
+    "contractVersion": "1.11.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },

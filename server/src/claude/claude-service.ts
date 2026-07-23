@@ -252,6 +252,11 @@ export class ClaudeService {
     thinkingLevel?: string,
     profileId?: string,
   ): Promise<{ sessionId: string; claudeSessionId: string }> {
+    const explicitProfileRequested = profileId !== undefined;
+    if (explicitProfileRequested && !profileId?.trim()) {
+      throw new Error('Explicit Claude profile id must be a non-empty value.');
+    }
+
     // Resolve the effective profile.
     //
     // Resolution order:
@@ -263,7 +268,7 @@ export class ClaudeService {
     //   3. Otherwise fall back to the configured default profile.
     let profile: ClaudeProfile | undefined;
     let effectiveProfileId = profileId;
-    if (!effectiveProfileId && this.profileManager) {
+    if (!explicitProfileRequested && !effectiveProfileId && this.profileManager) {
       const BARE_ALIASES = ['sonnet', 'opus', 'haiku'];
       if (BARE_ALIASES.includes(model)) {
         effectiveProfileId = this.findNativeClaudeProfileId(model);
@@ -272,16 +277,42 @@ export class ClaudeService {
       }
     }
 
-    if (effectiveProfileId && this.profileManager) {
-      try {
-        profile = this.profileManager.requireProfile(effectiveProfileId);
-      } catch (err) {
-        logger.warn(`[ClaudeService] Profile '${effectiveProfileId}' not available:`, err instanceof Error ? err.message : err);
+    if (effectiveProfileId) {
+      if (!this.profileManager) {
+        if (explicitProfileRequested) throw new Error(`Explicit Claude profile '${profileId}' cannot be resolved because profiles are disabled.`);
+      } else {
+        try {
+          profile = this.profileManager.requireProfile(effectiveProfileId);
+        } catch (err) {
+          if (explicitProfileRequested) throw err;
+          logger.warn(`[ClaudeService] Profile '${effectiveProfileId}' not available:`, err instanceof Error ? err.message : err);
+        }
       }
     }
 
-    // Route to the appropriate backend
-    if (profile?.backend === 'sdk-subscription' && this.sdkService && await this.sdkService.isHealthy()) {
+    // Resolve backend health once. Re-checking and then falling through creates
+    // a race where an explicitly selected SDK/channel profile can silently run
+    // through Direct CLI instead.
+    const sdkHealthy = profile?.backend === 'sdk-subscription' && this.sdkService
+      ? await this.sdkService.isHealthy()
+      : false;
+    const channelHealthy = profile?.backend === 'channel' && this.channelService
+      ? await this.channelService.isHealthy()
+      : false;
+
+    // An explicit profile is an exact backend/provider binding. It must never
+    // degrade to another backend when the requested route is unavailable.
+    if (explicitProfileRequested && profile) {
+      if (profile.backend === 'sdk-subscription' && !sdkHealthy) {
+        throw new Error(`Explicit Claude profile '${profile.id}' requires the SDK subscription backend, which is unavailable or unhealthy.`);
+      }
+      if (profile.backend === 'channel' && !channelHealthy) {
+        throw new Error(`Explicit Claude profile '${profile.id}' requires the channel backend, which is unavailable or unhealthy.`);
+      }
+    }
+
+    // Route to the appropriate backend.
+    if (profile?.backend === 'sdk-subscription' && this.sdkService && sdkHealthy) {
       const result = await this.sdkService.createSession(cwd, model, thinkingLevel, profile.id);
       // Record profile metadata in registry
       await this.registry.upsert({
@@ -295,11 +326,22 @@ export class ClaudeService {
       return { sessionId: result.sessionId, claudeSessionId: result.claudeSessionId };
     }
 
-    if (profile?.backend === 'channel' && this.channelService && await this.channelService.isHealthy()) {
-      return this.channelService.createSession(cwd, profile.model ?? model, thinkingLevel);
+    if (profile?.backend === 'channel' && this.channelService && channelHealthy) {
+      const result = await this.channelService.createSession(cwd, profile.model ?? model, thinkingLevel);
+      await this.registry.upsert({
+        id: result.sessionId,
+        sdkType: 'claude',
+        cwd,
+        model: profile.model ?? model,
+        claudeProfileId: profile.id,
+        claudeProfileBackend: 'channel',
+        claudeProviderId: profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic',
+      });
+      return result;
     }
 
-    // Direct CLI (default or cli-direct profile)
+    // Direct CLI (default or cli-direct profile). Explicit non-direct profiles
+    // have already returned or thrown above, so this is never their fallback.
     const sessionId = randomUUID();
     const claudeSessionId = randomUUID();
     const effectiveModel = profile?.model ?? model;

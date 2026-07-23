@@ -79,7 +79,7 @@ Always start by asking the server what is available now and which contract versi
 - `GET /api/v1/models`
 
 Useful debugging/introspection, notification, model-control, run-identity, and
-health, evidence, and receipt-correctness additions landed in contract `1.3.0` through `1.10.1`:
+health, evidence, receipt-correctness, and exact-profile additions landed in contract `1.3.0` through `1.11.0`:
 
 - `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off; `1.9.0` adds `requestId`, `runId`, `runtime`, `component`, and `since` selectors plus a bounded process-local `operational` snapshot.
 - `GET /api/v1/sessions/:id/evidence` — `1.10.0` compact one-call troubleshooting bundle; resolves aliases, returns bounded diagnostics and durable receipt summary, and links to deeper reads. Use this before separate `/info`, `/diagnostics`, and transcript calls.
@@ -88,7 +88,7 @@ health, evidence, and receipt-correctness additions landed in contract `1.3.0` t
 - `GET /api/v1/sessions/:id/transcript?view=screen` — a read-only “what the user sees” projection for a finished or in-progress session, without browser automation.
 - `POST /api/v1/notifications`, `GET /api/v1/notifications/:id`, and `GET /api/v1/notifications` — durable explicit acceptance, pollable delivery status, and recent delivery history. Reuse one `Idempotency-Key` across retries (contract `1.8.0+`).
 - `POST/DELETE/GET /api/v1/sessions/:id/notifications...` — opt a child session into `agent_end` notifications and verify the opt-in/delivery state.
-- `GET /api/v1/runs/:runId` — durable run receipt lookup for accepted, detached, or retried dispatches. Contract `1.10.1` ensures Pi completion waits for `agent_end` across auto-compaction; on older servers, treat Pi `completed` without `agentEndAt` as contradictory/nonterminal evidence.
+- `GET /api/v1/runs/:runId` — durable run receipt lookup for accepted, detached, or retried dispatches. Contract `1.10.1` ensures Pi completion waits for `agent_end` across auto-compaction; on older servers, treat Pi `completed` without `agentEndAt` as contradictory/nonterminal evidence. Contract `1.11.0` adds `modelSelector` for exact profile-backed Claude evidence while retaining effective `model` separately.
 - `GET /api/v1/models` — model-specific `thinkingLevels`; use this before requesting `max` for Claude or Pi sessions.
 - `POST /api/v1/sessions/:id/control` with `{action:"set_thinking_level",level:"max"}` — available when the selected model advertises `max` (contract `1.7.0+`).
 

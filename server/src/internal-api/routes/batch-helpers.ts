@@ -24,6 +24,7 @@ export interface BatchCreateDeps {
   sessionRegistry: SessionRegistryManager;
   piService: PiService;
   internalClientId: string;
+  cleanupRejectedSession(sessionId: string): Promise<void>;
 }
 
 export interface CreatedSession {
@@ -31,6 +32,8 @@ export interface CreatedSession {
   sessionPath: string;
   runtime: SessionRuntime;
   model?: string;
+  modelSelector?: string;
+  executionInstanceId?: string;
   cwd: string;
 }
 
@@ -47,8 +50,31 @@ export async function createOneSession(params: {
       if (!(await deps.claudeService.isAvailable())) {
         throw new Error('Claude runtime is not available');
       }
-      const { sessionId } = await deps.claudeService.createSession(cwd, entry.model || 'sonnet', entry.thinkingLevel);
-      return { sessionId, sessionPath: sessionId, runtime: 'claude', model: entry.model || 'sonnet', cwd };
+      const requestedModel = entry.model || 'sonnet';
+      const profileId = requestedModel.startsWith('profile:')
+        ? requestedModel.slice('profile:'.length)
+        : undefined;
+      const model = profileId !== undefined ? 'sonnet' : requestedModel;
+      const { sessionId } = await deps.claudeService.createSession(cwd, model, entry.thinkingLevel, profileId);
+      if (profileId !== undefined) {
+        const resolved = await deps.sessionRegistry.get(sessionId);
+        if (!resolved
+          || resolved.sdkType !== 'claude'
+          || resolved.claudeProfileId !== profileId
+          || !resolved.claudeProfileBackend
+          || !resolved.claudeProviderId) {
+          await deps.cleanupRejectedSession(sessionId);
+          throw new Error(`Explicit Claude profile '${profileId}' did not resolve to the requested concrete session binding.`);
+        }
+      }
+      return {
+        sessionId,
+        sessionPath: sessionId,
+        runtime: 'claude',
+        model: requestedModel,
+        ...(profileId !== undefined ? { modelSelector: requestedModel, executionInstanceId: profileId } : {}),
+        cwd,
+      };
     }
 
     case 'opencode': {

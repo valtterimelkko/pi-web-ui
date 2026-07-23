@@ -4,6 +4,11 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Exact Claude profile binding (`1.11.0`)**
+  - Profile-backed Claude create/info/list/receipt projections now separate the canonical `modelSelector` (`profile:<id>`) from the effective runtime `model` (for example `sonnet`).
+  - Explicit unknown profiles, conflicting selector forms, and unavailable requested backends fail creation rather than falling through to another Claude backend.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`CLAUDE-BACKENDS.md`](./CLAUDE-BACKENDS.md)
+
 - **Truthful Pi completion across auto-compaction (`1.10.1`)**
   - Pi run receipts no longer terminalise merely because `agentSession.prompt()` returned at an auto-compaction boundary.
   - Ordinary Pi LLM completion now waits for normalized `agent_end`, so detached orchestrators receive truthful `agentEndAt` evidence before collecting output or releasing work; synchronous extension slash commands still complete on handler return.

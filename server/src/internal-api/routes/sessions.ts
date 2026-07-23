@@ -338,6 +338,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     return currentModel ? `${currentModel.provider}/${currentModel.id}` : entry.model;
   }
 
+  function modelSelectorForEntry(entry: RegistryEntry): string | undefined {
+    return entry.sdkType === 'claude' && entry.claudeProfileId
+      ? `profile:${entry.claudeProfileId}`
+      : undefined;
+  }
+
+  async function cleanupRejectedCreatedSession(sessionId: string): Promise<void> {
+    const entry = await sessionRegistry.get(sessionId);
+    if (!entry) return;
+    if (entry.sdkType === 'claude') claudeService.abort(sessionId);
+    await deleteSessionFiles(entry);
+    await sessionRegistry.delete(sessionId);
+  }
+
   function evidenceStatus(entry: RegistryEntry): SessionInfo['status'] {
     try {
       const running = entry.sdkType === 'pi'
@@ -481,23 +495,46 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       switch (runtime) {
         case 'claude': {
+          const explicitProfileId = (body as { profileId?: string }).profileId;
+          if (body.model?.startsWith('profile:')
+            && explicitProfileId
+            && body.model.slice('profile:'.length) !== explicitProfileId) {
+            sendJson(res, 400, {
+              error: 'model profile selector and profileId must identify the same Claude profile',
+              code: ErrorCode.INVALID_REQUEST,
+            });
+            return;
+          }
           if (!(await claudeService.isAvailable())) {
             sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Claude runtime is not available'));
             return;
           }
           // Support profile selection via model="profile:<id>" or explicit profileId
-          let profileId: string | undefined = (body as { profileId?: string }).profileId;
+          let profileId: string | undefined = explicitProfileId;
           let model: string | undefined = body.model || 'sonnet';
           if (model.startsWith('profile:')) {
             profileId = model.slice('profile:'.length);
             model = undefined; // the profile determines the model
           }
           const { sessionId } = await claudeService.createSession(cwd, model || 'sonnet', body.thinkingLevel, profileId);
+          let resolvedEntry: RegistryEntry | undefined;
+          if (profileId !== undefined) {
+            resolvedEntry = await sessionRegistry.get(sessionId);
+            if (!resolvedEntry
+              || resolvedEntry.sdkType !== 'claude'
+              || resolvedEntry.claudeProfileId !== profileId
+              || !resolvedEntry.claudeProfileBackend
+              || !resolvedEntry.claudeProviderId) {
+              await cleanupRejectedCreatedSession(sessionId);
+              throw new Error(`Explicit Claude profile '${profileId}' did not resolve to the requested concrete session binding.`);
+            }
+          }
           base = {
             sessionId,
             sessionPath: sessionId,
             runtime: 'claude',
-            model: profileId ? `profile:${profileId}` : (body.model || 'sonnet'),
+            model: profileId !== undefined ? `profile:${profileId}` : (body.model || 'sonnet'),
+            ...(profileId !== undefined ? { modelSelector: `profile:${profileId}`, executionInstanceId: profileId } : {}),
             cwd,
             createdAt: new Date().toISOString(),
           };
@@ -628,6 +665,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         executionInstanceId: resolveExecutionInstanceId(entry),
         cwd: entry.cwd,
         model: entry.model,
+        modelSelector: modelSelectorForEntry(entry),
         status: entry.status,
         messageCount: entry.messageCount,
         firstMessage: entry.firstMessage,
@@ -653,6 +691,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       executionInstanceId: resolveExecutionInstanceId(entry),
       cwd: entry.cwd,
       model: entry.model,
+      modelSelector: modelSelectorForEntry(entry),
       status: entry.status === 'error' ? 'error' : 'idle',
       messageCount: entry.messageCount,
       firstMessage: entry.firstMessage,
@@ -1236,6 +1275,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         runtime,
         executionInstanceId: resolveExecutionInstanceId(entry),
         model: currentRunModel(entry),
+        modelSelector: modelSelectorForEntry(entry),
         message: body.message,
         mode,
         verbosity,
@@ -2430,6 +2470,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sessionRegistry,
             piService,
             internalClientId,
+            cleanupRejectedSession: cleanupRejectedCreatedSession,
           },
         });
         onSessionCreated?.(created.sessionId, created.sessionPath, created.runtime);
@@ -2440,6 +2481,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           sessionPath: created.sessionPath,
           runtime: created.runtime,
           model: created.model,
+          modelSelector: created.modelSelector,
+          executionInstanceId: created.executionInstanceId,
           cwd: created.cwd,
         };
         // Optional per-entry create-time pin (see POST /sessions pin field).
@@ -2524,6 +2567,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           runtime: reg.sdkType as SessionRuntime,
           executionInstanceId: resolveExecutionInstanceId(reg),
           model: currentRunModel(reg),
+          modelSelector: modelSelectorForEntry(reg),
           message: entry.message,
           mode: 'prompt' as const,
           verbosity: 'answers' as const,

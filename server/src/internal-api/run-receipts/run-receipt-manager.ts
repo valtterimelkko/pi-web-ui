@@ -20,6 +20,7 @@ export interface BeginRunInput {
   runtime: SessionRuntime;
   executionInstanceId: string;
   model?: string;
+  modelSelector?: string;
   message: string;
   mode: PromptMode;
   verbosity: Verbosity;
@@ -131,6 +132,7 @@ export class RunReceiptManager {
         runtime: input.runtime,
         executionInstanceId: input.executionInstanceId,
         model: input.model,
+        modelSelector: input.modelSelector,
         status: 'accepted',
         acceptedAt: new Date(acceptedAtMs).toISOString(),
         idempotencyExpiresAt: keyDigest

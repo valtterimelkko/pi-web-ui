@@ -31,6 +31,7 @@ const ALLOWED_KEYS = new Set([
   'runtime',
   'executionInstanceId',
   'model',
+  'modelSelector',
   'status',
   'acceptedAt',
   'startedAt',
