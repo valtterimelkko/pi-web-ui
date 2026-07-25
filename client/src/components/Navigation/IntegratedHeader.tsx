@@ -3,6 +3,7 @@ import { MessageSquare, Terminal, FolderOpen, GitBranch, ListTodo, Info, Chevron
 import { useNavigationStore } from '../../store/navigationStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useUIStore } from '../../store/uiStore';
+import { NotificationBell } from '../common/NotificationTray';
 
 type Tab = 'chat' | 'shell' | 'files' | 'git' | 'tasks';
 
@@ -83,6 +84,9 @@ export function IntegratedHeader({ onOpenSettings }: { onOpenSettings: () => voi
               </button>
             </div>
           )}
+
+          {/* Notification history — extension notifications are one-shot */}
+          <NotificationBell />
 
           {/* Drive Mode button - always visible */}
           <button
@@ -172,6 +176,10 @@ function MobileHeader() {
               </button>
             </>
           )}
+
+          {/* Notification history — the tray is the only way to re-read a
+              one-shot extension notification on a phone. */}
+          <NotificationBell />
 
           {/* Collapse toggle */}
           <button

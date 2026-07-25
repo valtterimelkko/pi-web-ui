@@ -377,6 +377,80 @@ describe('draftStore', () => {
       expect(mockSendCallback).not.toHaveBeenCalled();
     });
 
+    it('should send a Pi extension slash command while streaming', async () => {
+      // MessageInput deliberately keeps the send button enabled for Pi slash
+      // commands mid-run (isPiSlashCommandAllowedWhileStreaming); sendDraft must
+      // honour the same allowance or /goal pause & friends never reach the SDK.
+      useSessionStore.setState({
+        currentSessionId: 'session-1',
+        currentSessionSdkType: 'pi',
+        isStreaming: true,
+      });
+
+      useDraftStore.setState({ sendCallback: mockSendCallback } as any);
+
+      const state = useDraftStore.getState();
+      state.setDraft('session-1', '/goal pause');
+
+      const sent = await state.sendDraft('session-1');
+
+      expect(sent).toBe(true);
+      expect(mockSendCallback).toHaveBeenCalledWith('/goal pause', undefined);
+    });
+
+    it('should not send a non-slash message while streaming on Pi', async () => {
+      useSessionStore.setState({
+        currentSessionId: 'session-1',
+        currentSessionSdkType: 'pi',
+        isStreaming: true,
+      });
+
+      useDraftStore.setState({ sendCallback: mockSendCallback } as any);
+
+      const state = useDraftStore.getState();
+      state.setDraft('session-1', 'just a message');
+
+      expect(await state.sendDraft('session-1')).toBe(false);
+      expect(mockSendCallback).not.toHaveBeenCalled();
+    });
+
+    it('should not send a slash command while streaming on non-Pi runtimes', async () => {
+      for (const sdkType of ['claude', 'opencode', 'antigravity'] as const) {
+        mockSendCallback.mockClear();
+        useSessionStore.setState({
+          currentSessionId: 'session-1',
+          currentSessionSdkType: sdkType,
+          isStreaming: true,
+        });
+
+        useDraftStore.setState({ sendCallback: mockSendCallback } as any);
+
+        const state = useDraftStore.getState();
+        state.setDraft('session-1', '/goal pause');
+
+        expect(await state.sendDraft('session-1')).toBe(false);
+        expect(mockSendCallback).not.toHaveBeenCalled();
+      }
+    });
+
+    it('should send a slash command for a non-current Pi session that is not streaming', async () => {
+      // isStreaming tracks the *viewed* session; a background session send must
+      // not be blocked by the foreground session's streaming state.
+      useSessionStore.setState({
+        currentSessionId: 'session-1',
+        currentSessionSdkType: 'pi',
+        isStreaming: true,
+      });
+
+      useDraftStore.setState({ sendCallback: mockSendCallback } as any);
+
+      const state = useDraftStore.getState();
+      state.setDraft('session-2', '/goal status');
+
+      expect(await state.sendDraft('session-2')).toBe(true);
+      expect(mockSendCallback).toHaveBeenCalledWith('/goal status', undefined);
+    });
+
     it('should not clear draft if not sent (streaming)', async () => {
       useSessionStore.setState({ 
         currentSessionId: 'session-1',

@@ -215,6 +215,8 @@ describe('extension UI state', () => {
     expect(addToast).toHaveBeenCalledWith({
       type: 'info',
       message: 'Visible in current session',
+      // Short single-line notifications keep the auto-dismiss behaviour.
+      sticky: false,
     });
 
     addToast.mockRestore();

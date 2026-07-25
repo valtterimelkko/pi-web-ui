@@ -10,6 +10,7 @@ import { useReadAloud } from '../../hooks/useReadAloud';
 import type { LiveMessage } from '../../hooks/useSessionStream.js';
 import { useSessionStore } from '../../store';
 import { StreamingText } from './StreamingText';
+import { isGoalContinuationPrompt } from '../../lib/goalModel';
 import { ThinkingBlock } from './ThinkingBlock';
 import { CollapsibleToolCard } from '../Tools/CollapsibleToolCard';
 import { SubagentToolCard } from '../Tools/SubagentToolCard';
@@ -74,6 +75,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
   const [showThinking, setShowThinking] = useState(!THINKING_COLLAPSED_BY_DEFAULT);
   const [copied, setCopied] = useState(false);
   const isStreaming = useSessionStore((state) => state.isStreaming);
+  const sessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
   const isAssistant = message.role === 'assistant';
@@ -103,6 +105,10 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
   const hasThinking = !!thinking;
   const hasVisibleContent = displayText && displayText.trim().length > 0;
   const isStreamingThis = !!(isLast && isStreaming && isAssistant);
+  // Only the runtimes that ship a goal engine can produce these prompts.
+  const isGoalContinuation = isUser
+    && (sessionSdkType === 'pi' || sessionSdkType === 'opencode')
+    && isGoalContinuationPrompt(displayText);
 
   // Auto-collapse long intermediate assistant messages during streaming
   const [manuallyExpanded, setManuallyExpanded] = useState(false);
@@ -267,6 +273,14 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
       {isAssistant && !hasVisibleContent && !hasThinking && (
         <div className="pl-4 pr-8 border-l-2 border-gray-200">
           <ActivityIndicator thinking={null} isStreaming={isStreamingThis} />
+        </div>
+      )}
+
+      {/* Goal-driven continuations arrive as ordinary user messages; without a
+          label the transcript reads as if the operator typed them. */}
+      {isUser && isGoalContinuation && (
+        <div className="mb-1 text-[10px] uppercase tracking-wide text-gray-400" data-testid="goal-continuation-label">
+          🎯 Goal continuation · sent automatically
         </div>
       )}
 

@@ -774,6 +774,12 @@ export class WebSocketConnectionManager {
         await this.handleTransferSessionContext(clientId, message);
         break;
 
+      // Browser heartbeat (websocket.ts startHeartbeat). Answer it instead of
+      // returning an INVALID_MESSAGE error frame every 30 seconds.
+      case 'ping':
+        this.sendMessage(clientId, { type: 'pong' });
+        break;
+
       default:
         this.sendMessage(clientId, {
           type: 'error',
@@ -2508,6 +2514,7 @@ export class WebSocketConnectionManager {
         }
       }
       const resolved = this.claudeService.respondToAskUserQuestion(id, resolution);
+      if (resolved) this.broadcastExtensionUiAnswered(id, clientId);
       if (!resolved) {
         // Race: the request was resolved between the pending check above and the
         // call (e.g. it just timed out). Don't silently drop the user's effort.
@@ -2533,6 +2540,7 @@ export class WebSocketConnectionManager {
         id,
         approved === true && cancelled !== true,
       );
+      this.broadcastExtensionUiAnswered(id, clientId);
       return;
     }
 
@@ -2543,6 +2551,7 @@ export class WebSocketConnectionManager {
       } catch (e) {
         logger.error('[handleExtensionUiResponse] OpenCode permission reply failed:', e);
       }
+      this.broadcastExtensionUiAnswered(id, clientId);
       return;
     }
 
@@ -2550,6 +2559,27 @@ export class WebSocketConnectionManager {
     const { getExtensionUIHandler } = await import('../pi/extension-ui-handler.js');
     const handler = getExtensionUIHandler();
     handler.handleResponse(message.response);
+    this.broadcastExtensionUiAnswered(id, clientId);
+  }
+
+  /**
+   * Close an answered dialog everywhere else.
+   *
+   * Extension UI requests are broadcast to every client subscribed to a session
+   * (phone + laptop), but only one answer resolves the request. Without this,
+   * the other device keeps a modal open forever — it blocks that client's whole
+   * composer and, once the underlying goal/tool moves on, is answering a
+   * question that no longer exists. The request id is unique, so a broadcast is
+   * safe: clients only act on it if it matches their open dialog.
+   */
+  private broadcastExtensionUiAnswered(id: string, answeringClientId: string): void {
+    for (const otherClientId of this.clients.keys()) {
+      if (otherClientId === answeringClientId) continue;
+      this.sendMessage(otherClientId, {
+        type: 'extension_ui_cancel',
+        request: { id, reason: 'answered' },
+      });
+    }
   }
 
   /**

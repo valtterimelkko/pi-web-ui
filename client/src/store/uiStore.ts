@@ -24,7 +24,27 @@ interface UIState {
     id: string;
     type: 'info' | 'success' | 'warning' | 'error';
     message: string;
+    /** Long, multi-line payloads (e.g. `/goal report`) wait for a dismissal. */
+    sticky?: boolean;
   }>;
+
+  /**
+   * Recent notifications, newest first. Extensions deliver reports and warnings
+   * as one-shot notifications; without a log a `/goal report` is gone in five
+   * seconds and cannot be read back.
+   */
+  notificationLog: Array<{
+    id: string;
+    type: 'info' | 'success' | 'warning' | 'error';
+    message: string;
+    sessionId: string | null;
+    at: number;
+    read: boolean;
+  }>;
+  notificationTrayOpen: boolean;
+
+  /** Per-session expand/collapse choice for the goal panel. */
+  goalPanelExpanded: Record<string, boolean>;
 
   // Recent folders for session creation
   recentFolders: RecentFolder[];
@@ -44,10 +64,22 @@ interface UIState {
   closeDriveMode: () => void;
   addToast: (toast: Omit<UIState['toasts'][0], 'id'>) => void;
   removeToast: (id: string) => void;
+  logNotification: (entry: { type: 'info' | 'success' | 'warning' | 'error'; message: string; sessionId: string | null }) => void;
+  openNotificationTray: () => void;
+  closeNotificationTray: () => void;
+  markNotificationsRead: () => void;
+  clearNotificationLog: () => void;
+  setGoalPanelExpanded: (sessionId: string, expanded: boolean) => void;
   addRecentFolder: (path: string) => void;
   getRecentFolders: (limit?: number) => RecentFolder[];
   clearRecentFolders: () => void;
 }
+
+/** Monotonic suffix so ids minted in the same millisecond stay unique. */
+let toastSequence = 0;
+
+/** How many notifications the tray keeps. */
+const NOTIFICATION_LOG_LIMIT = 50;
 
 // Extract label from path (last part of the path)
 const extractLabelFromPath = (path: string): string => {
@@ -65,6 +97,9 @@ export const useUIStore = create<UIState>()(
       treeViewOpen: false,
       driveModeOpen: false,
       toasts: [],
+      notificationLog: [],
+      notificationTrayOpen: false,
+      goalPanelExpanded: {},
       recentFolders: [],
 
       toggleTheme: () => set((state) => ({ theme: state.theme === 'dark' ? 'light' : 'dark' })),
@@ -85,12 +120,36 @@ export const useUIStore = create<UIState>()(
       openDriveMode: () => set({ driveModeOpen: true }),
       closeDriveMode: () => set({ driveModeOpen: false }),
 
+      // Two notifications can land in the same millisecond (the goal extension
+      // emits several at a run boundary), so the id needs a counter to stay
+      // unique — a duplicate React key silently drops a toast.
       addToast: (toast) => set((state) => ({
-        toasts: [...state.toasts, { ...toast, id: `toast_${Date.now()}` }],
+        toasts: [...state.toasts, { ...toast, id: `toast_${Date.now()}_${toastSequence++}` }],
       })),
 
       removeToast: (id) => set((state) => ({
         toasts: state.toasts.filter((t) => t.id !== id),
+      })),
+
+      logNotification: (entry) => set((state) => ({
+        notificationLog: [
+          { ...entry, id: `notif_${Date.now()}_${toastSequence++}`, at: Date.now(), read: false },
+          ...state.notificationLog,
+        ].slice(0, NOTIFICATION_LOG_LIMIT),
+      })),
+
+      openNotificationTray: () => set((state) => ({
+        notificationTrayOpen: true,
+        notificationLog: state.notificationLog.map((entry) => ({ ...entry, read: true })),
+      })),
+      closeNotificationTray: () => set({ notificationTrayOpen: false }),
+      markNotificationsRead: () => set((state) => ({
+        notificationLog: state.notificationLog.map((entry) => ({ ...entry, read: true })),
+      })),
+      clearNotificationLog: () => set({ notificationLog: [] }),
+
+      setGoalPanelExpanded: (sessionId, expanded) => set((state) => ({
+        goalPanelExpanded: { ...state.goalPanelExpanded, [sessionId]: expanded },
       })),
 
       addRecentFolder: (path: string) => {
@@ -136,6 +195,7 @@ export const useUIStore = create<UIState>()(
       partialize: (state) => ({
         theme: state.theme,
         recentFolders: state.recentFolders,
+        goalPanelExpanded: state.goalPanelExpanded,
       }),
     }
   )

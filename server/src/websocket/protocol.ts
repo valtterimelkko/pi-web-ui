@@ -101,6 +101,7 @@ export interface ImageContent {
 // Client → Server messages
 export type ClientMessage =
   | { type: 'auth'; csrfToken: string }
+  | { type: 'ping' }
   | { type: 'prompt'; sessionId: string; message: string; images?: ImageContent[]; agent?: string }
   | { type: 'steer'; message: string }
   | { type: 'follow_up'; message: string }
@@ -221,7 +222,8 @@ export type ServerMessage =
   | { type: 'auto_retry_end'; success: boolean; attempt: number; finalError?: string }
   | { type: 'extension_error'; extensionPath: string; event: string; error: string }
   | { type: 'extension_ui_request'; request: { id: string; type: 'confirm' | 'select' | 'input' | 'editor' | 'ask_user_question'; method: string; params: Record<string, unknown>; timeout: number } }
-  | { type: 'extension_ui_cancel'; request: { id: string; reason: 'timeout' | 'aborted' | 'turn_end' | 'disconnected' } }
+  | { type: 'extension_ui_cancel'; request: { id: string; reason: 'timeout' | 'aborted' | 'turn_end' | 'disconnected' | 'answered' } }
+  | { type: 'pong' }
   // CLI Session Watcher events
   | { type: 'session_update'; changeType: 'add' | 'change' | 'unlink'; path: string; sessionId?: string; cwd?: string; info?: SessionInfo }
   | { type: 'session_name_updated'; sessionId: string; name: string }

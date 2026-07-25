@@ -12,7 +12,7 @@ import { TasksPlaceholder } from './components/Tasks';
 import { ExtensionDialog } from './components/Extensions';
 import { SettingsModal } from './components/Settings';
 import { DriveModeOverlay } from './components/DriveMode';
-import { ToastContainer } from './components/common';
+import { ToastContainer, NotificationTray } from './components/common';
 import { useSessionStore } from './store/sessionStore';
 import { useUIStore } from './store/uiStore';
 import { useDeepLinkSession } from './hooks/useDeepLinkSession';
@@ -127,6 +127,7 @@ function AuthenticatedApp() {
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <DriveModeOverlay />
       <ToastContainer />
+      <NotificationTray />
     </div>
   );
 }

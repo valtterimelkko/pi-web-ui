@@ -15,6 +15,8 @@ import type { ContentPart } from '../hooks/useSessionStream.js';
 import type { SubagentToolSummary } from '@pi-web-ui/shared';
 
 import { useTransferStore } from './transferStore';
+import { useGoalStore } from './goalStore';
+import { GOAL_STATUS_KEY, GOAL_WIDGET_KEY } from '../lib/goalModel';
 import { recordBrowserDiagnostic, recordProtocolDrift } from '../lib/browserDiagnostics.js';
 
 // ============================================================================
@@ -1762,6 +1764,13 @@ export const useSessionStore = create<SessionState>()(
             // draft is preserved) rather than clearing it outright.
             const cancel = (msg as { request?: { id?: string; reason?: string } }).request;
             const current = get().extensionUIRequest;
+            if (cancel?.id && current?.id === cancel.id && cancel.reason === 'answered') {
+              // Another device answered this dialog. There is nothing left to
+              // decide here, so close it instead of leaving a modal that blocks
+              // this client's composer.
+              set({ extensionUIRequest: null });
+              break;
+            }
             if (cancel?.id && current?.id === cancel.id) {
               set({
                 extensionUIRequest: {
@@ -1781,6 +1790,9 @@ export const useSessionStore = create<SessionState>()(
             const targetSessionId = widgetMsg.sessionId ?? get().currentSessionId;
             if (key && Array.isArray(content) && targetSessionId) {
               const lines = content.map(String);
+              if (key === GOAL_WIDGET_KEY) {
+                useGoalStore.getState().applyWidget(targetSessionId, lines);
+              }
               set((state) => {
                 const currentSessionWidgets = state.sessionExtensionWidgets[targetSessionId] ?? {};
                 const nextSessionWidgets = {
@@ -1805,6 +1817,9 @@ export const useSessionStore = create<SessionState>()(
             const widgetMsg = msg as unknown as { sessionId?: string; key: string };
             const targetSessionId = widgetMsg.sessionId ?? get().currentSessionId;
             if (widgetMsg.key && targetSessionId) {
+              if (widgetMsg.key === GOAL_WIDGET_KEY) {
+                useGoalStore.getState().clearWidget(targetSessionId);
+              }
               set((state) => {
                 const currentSessionWidgets = { ...(state.sessionExtensionWidgets[targetSessionId] ?? {}) };
                 delete currentSessionWidgets[widgetMsg.key];
@@ -1828,6 +1843,11 @@ export const useSessionStore = create<SessionState>()(
             const key = statusMsg.status?.key;
             const targetSessionId = statusMsg.sessionId ?? get().currentSessionId;
             if (key && targetSessionId) {
+              if (key === GOAL_STATUS_KEY) {
+                // A cleared goal status is the extension's end-of-goal signal;
+                // the goal store archives it so the UI can still show it after.
+                useGoalStore.getState().applyStatus(targetSessionId, statusMsg.status?.text);
+              }
               set((state) => {
                 const currentSessionStatuses = { ...(state.sessionExtensionStatuses[targetSessionId] ?? {}) };
                 if (statusMsg.status?.text === undefined) {
@@ -1872,12 +1892,28 @@ export const useSessionStore = create<SessionState>()(
               sessionId?: string;
               notification: { message: string; type: 'info' | 'warning' | 'error' };
             };
+            const notificationSessionId = sessionId ?? get().currentSessionId ?? null;
+            if (notificationSessionId) {
+              // Goal completion is announced as a notification, so the archived
+              // record can be labelled with its real outcome.
+              useGoalStore.getState().applyNotification(notificationSessionId, notification.message);
+            }
+            // Log every notification, including ones for background sessions —
+            // the tray is the only place a one-shot report can be read back.
+            useUIStore.getState().logNotification({
+              type: notification.type,
+              message: notification.message,
+              sessionId: notificationSessionId,
+            });
             if (sessionId && sessionId !== get().currentSessionId) {
               break;
             }
             useUIStore.getState().addToast({
               type: notification.type,
               message: notification.message,
+              // Multi-line payloads (`/goal report`, budget explanations) need
+              // dwell time; a 5s auto-dismiss loses them.
+              sticky: notification.message.includes('\n') || notification.message.length > 160,
             });
             break;
           }
@@ -2730,6 +2766,11 @@ export const useSessionStore = create<SessionState>()(
             useTransferStore.getState().setFailed(failMsg.code, failMsg.message);
             break;
           }
+
+          // Heartbeat acknowledgement — nothing to do, but it must not be
+          // reported as protocol drift.
+          case 'pong':
+            break;
 
           default:
             recordProtocolDrift('unknown', msg.type);

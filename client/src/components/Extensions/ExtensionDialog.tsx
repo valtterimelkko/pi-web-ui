@@ -36,11 +36,23 @@ interface ExtensionDialogProps {
 export function ExtensionDialog({ request, onResponse, onDismiss }: ExtensionDialogProps) {
   const [inputValue, setInputValue] = useState('');
   const [selectedValue, setSelectedValue] = useState<unknown>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     setInputValue('');
     setSelectedValue(null);
   }, [request?.id]);
+
+  // A dialog that sits open past its request deadline is answering a question
+  // the runtime has already given up on, so show the remaining time.
+  const deadline = request && typeof request.receivedAt === 'number' && typeof request.timeout === 'number'
+    ? request.receivedAt + request.timeout
+    : null;
+  useEffect(() => {
+    if (deadline === null) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [deadline]);
 
   if (!request) return null;
 
@@ -91,12 +103,19 @@ export function ExtensionDialog({ request, onResponse, onDismiss }: ExtensionDia
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl border border-gray-200 w-full max-w-md mx-4 shadow-xl">
-        {/* Header */}
+        {/* Header — the extension's own title, not a generic label */}
         <div className="flex items-center gap-3 p-4 border-b border-gray-200">
-          <AlertCircle className="w-6 h-6 text-blue-600" />
-          <h3 className="text-lg font-semibold text-gray-900">
-            Extension Request
+          <AlertCircle className="w-6 h-6 flex-shrink-0 text-blue-600" />
+          <h3 className="text-lg font-semibold text-gray-900 min-w-0 break-words" data-testid="extension-dialog-title">
+            {typeof request.params.title === 'string' && request.params.title.trim()
+              ? request.params.title
+              : 'Extension Request'}
           </h3>
+          {deadline !== null && (
+            <span className="ml-auto flex-shrink-0 text-xs text-gray-400" data-testid="extension-dialog-expiry">
+              {Math.max(0, Math.ceil((deadline - now) / 1000))}s
+            </span>
+          )}
         </div>
 
         {/* Content */}
@@ -173,7 +192,12 @@ export function ExtensionDialog({ request, onResponse, onDismiss }: ExtensionDia
 function ConfirmContent({ params }: { params: Record<string, unknown> }) {
   return (
     <div>
-      <p className="text-gray-700">{params.message as string}</p>
+      <p
+        className="text-gray-700 whitespace-pre-wrap break-words max-h-[50vh] overflow-y-auto"
+        data-testid="extension-dialog-message"
+      >
+        {params.message as string}
+      </p>
       {!!params.details && (
         <pre className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded text-sm text-gray-600 overflow-auto max-h-40">
           {JSON.stringify(params.details, null, 2)}

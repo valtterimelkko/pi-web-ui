@@ -12,7 +12,9 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 import { useDictation } from '../../hooks/useDictation';
 import { SessionInfoModal } from '../StatusBar/SessionInfoModal';
 import { messagesToLiveMessages } from '../../lib/messageAdapter';
-import { deriveGoalTag, getGoalControlCommand, type GoalControlAction } from '../../lib/piExtensionControls';
+import { getGoalControlCommand, type GoalControlAction } from '../../lib/piExtensionControls';
+import { GOAL_WIDGET_KEY } from '../../lib/goalModel';
+import { GoalPanel } from './GoalPanel';
 
 interface ChatViewProps {
   onOpenSettings?: () => void;
@@ -41,7 +43,6 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const listRef = useRef<VirtualizedMessageListHandle>(null);
   const { createNewSession, goalControl, sendPrompt } = useWebSocket();
   const setDraft = useDraftStore((s) => s.setDraft);
-  const [confirmClearGoal, setConfirmClearGoal] = useState(false);
 
   const handleDictationTranscript = useCallback((text: string) => {
     if (currentSessionId) {
@@ -56,14 +57,9 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   // Get worker status for current session
   const workerStatus = currentSessionId ? getWorkerStatus(currentSessionId) : undefined;
 
-  // Live goal indicator (OpenCode/Pi goal engine). Pulses "running…" during the
-  // long silent model-thinking gaps so an active goal never looks frozen.
-  const goalTag = deriveGoalTag(goalEngineStatus, isStreaming);
-
+  // Goal surfacing lives in GoalPanel; ChatView only routes the controls.
   // OpenCode has a server-side goal control path. Pi routes the same buttons
   // through its extension slash commands so both runtimes expose equivalent UI.
-  const goalControlsEnabled = goalTag.active
-    && (currentSessionSdkType === 'pi' || currentSessionSdkType === 'opencode');
   const handleGoalControl = useCallback((action: GoalControlAction) => {
     if (!currentSessionId) return;
     const command = getGoalControlCommand(currentSessionSdkType, action);
@@ -71,10 +67,11 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
     else goalControl(currentSessionId, action);
   }, [currentSessionId, currentSessionSdkType, goalControl, sendPrompt]);
 
-  // Reset the clear-confirmation when the goal is no longer active.
-  useEffect(() => {
-    if (!goalTag.active) setConfirmClearGoal(false);
-  }, [goalTag.active]);
+  // The goal panel owns the goal widget; everything else keeps generic rendering.
+  const otherExtensionWidgets = useMemo(
+    () => Object.entries(extensionWidgets).filter(([key]) => key !== GOAL_WIDGET_KEY),
+    [extensionWidgets],
+  );
 
   // Memoize message conversion to avoid creating new arrays on every render
   // Only recomputes when the messages array reference changes
@@ -137,78 +134,16 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
         {/* Message Input */}
         <div className={`bg-white pb-safe flex-shrink-0 transition-all duration-200 ${!bottomNavCollapsed ? 'pb-[70px]' : ''}`}>
           <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
-            {goalTag.active && (
-              <div className="mb-2 flex items-center" data-testid="goal-tag">
-                <span
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${
-                    goalTag.paused
-                      ? 'border-amber-200 bg-amber-50 text-amber-800'
-                      : 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                  }`}
-                  title={goalEngineStatus}
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      goalTag.paused ? 'bg-amber-500' : 'bg-emerald-500'
-                    } ${goalTag.pulsing ? 'animate-pulse' : ''}`}
-                    data-testid={goalTag.pulsing ? 'goal-tag-pulse' : undefined}
-                  />
-                  <span>
-                    🎯 Goal {goalTag.label}
-                    {goalTag.run !== null ? ` · Run ${goalTag.run}` : ''}
-                  </span>
-                </span>
-                {goalControlsEnabled && currentSessionId && (
-                  <span className="ml-2 inline-flex items-center gap-1" data-testid="goal-controls">
-                    {goalTag.paused ? (
-                      <button
-                        type="button"
-                        onClick={() => handleGoalControl('resume')}
-                        className="rounded px-1.5 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-                        title="Resume goal"
-                        data-testid="goal-resume"
-                      >
-                        ▶ Resume
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleGoalControl('pause')}
-                        className="rounded px-1.5 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
-                        title="Pause goal (stops the current run and halts auto-continuation)"
-                        data-testid="goal-pause"
-                      >
-                        ⏸ Pause
-                      </button>
-                    )}
-                    {confirmClearGoal ? (
-                      <button
-                        type="button"
-                        onClick={() => { handleGoalControl('clear'); setConfirmClearGoal(false); }}
-                        className="rounded px-1.5 py-0.5 text-xs font-medium text-white bg-red-500 hover:bg-red-600"
-                        title="Confirm: clear this goal"
-                        data-testid="goal-clear-confirm"
-                      >
-                        Clear?
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmClearGoal(true)}
-                        className="rounded px-1.5 py-0.5 text-xs font-medium text-gray-500 hover:bg-gray-100"
-                        title="Clear goal (removes it entirely)"
-                        data-testid="goal-clear"
-                      >
-                        ✕ Clear
-                      </button>
-                    )}
-                  </span>
-                )}
-              </div>
-            )}
-            {Object.entries(extensionWidgets).length > 0 && (
+            <GoalPanel
+              sessionId={currentSessionId}
+              sdkType={currentSessionSdkType}
+              isStreaming={isStreaming}
+              statusText={goalEngineStatus}
+              onControl={handleGoalControl}
+            />
+            {otherExtensionWidgets.length > 0 && (
               <div className="mb-2 space-y-2" data-testid="extension-widgets">
-                {Object.entries(extensionWidgets).map(([key, lines]) => (
+                {otherExtensionWidgets.map(([key, lines]) => (
                   <div key={key} className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-950 shadow-sm" data-testid={`extension-widget-${key}`}>
                     {lines.map((line, index) => (
                       <div key={index} className={line.trim() === '' ? 'h-2' : 'whitespace-pre-wrap'}>{line}</div>

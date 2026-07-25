@@ -153,12 +153,11 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
     setInputValue(value);
     adjustTextareaHeight();
 
-    // Show slash palette when input starts with /
-    if (value.startsWith('/') && value.length <= 20) {
-      setShowSlashPalette(true);
-    } else {
-      setShowSlashPalette(false);
-    }
+    // Show the slash palette only while the command name is being typed. Once
+    // arguments start (`/goal report`) no command can match, and leaving the
+    // palette open just covers the transcript with "No commands found".
+    const commandToken = value.startsWith('/') ? value.slice(1) : null;
+    setShowSlashPalette(commandToken !== null && !/\s/.test(commandToken) && commandToken.length <= 20);
   };
 
   const handleSend = useCallback(async () => {
@@ -303,6 +302,8 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   const canSendWhileStreaming = isPiSlashCommandAllowedWhileStreaming(currentDraft, isStreaming, currentSessionSdkType);
   const canSend = (currentDraft.trim().length > 0 || hasUploads) && !disabled && (!isStreaming || canSendWhileStreaming) && !isAnyUploading;
   const pauseGoalOnStop = shouldPauseGoalOnStop(currentSessionSdkType, goalEngineStatus);
+  // Context usage arrives as a raw ratio; 18.044086021505375% is not a reading.
+  const displayContextPercent = Math.round(contextPercent);
 
   return (
     <div className="relative">
@@ -380,9 +381,9 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
                 percent={contextPercent}
                 size={20}
                 showLabel
-                label={`Context usage: ${contextUsageEstimated ? '~' : ''}${contextPercent}%${contextUsageEstimated ? ' (estimated until the next response)' : ''}`}
+                label={`Context usage: ${contextUsageEstimated ? '~' : ''}${displayContextPercent}%${contextUsageEstimated ? ' (estimated until the next response)' : ''}`}
               />
-              <span className="text-xs text-gray-400">{contextUsageEstimated ? '~' : ''}{contextPercent}%</span>
+              <span className="text-xs text-gray-400">{contextUsageEstimated ? '~' : ''}{displayContextPercent}%</span>
             </div>
           )}
         </div>

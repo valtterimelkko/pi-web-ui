@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useSessionStore } from './sessionStore';
+import { isPiSlashCommandAllowedWhileStreaming } from '../lib/piExtensionControls';
 
 interface DraftState {
   drafts: Record<string, string>;
@@ -88,8 +89,25 @@ export const useDraftStore = create<DraftStore>()(
           return false;
         }
         
-        // Don't send if session is streaming
-        if (sessionState.isStreaming) {
+        // Don't send while that session is streaming — except for Pi extension
+        // slash commands. AgentSession.prompt() resolves extension commands
+        // before its own streaming guard, which is what makes /goal pause-now
+        // (and the rest of the goal controls) usable mid-run; the composer keeps
+        // them enabled for exactly that reason, so this guard has to agree or
+        // the command is dropped silently in the browser.
+        // `isStreaming` tracks the viewed session, so a background session is
+        // judged by its own entry in streamingSessions.
+        const isViewedSession = sessionState.currentSessionId === sessionId;
+        const sessionIsStreaming = sessionState.streamingSessions[sessionId]
+          ?? (isViewedSession ? sessionState.isStreaming : false);
+        if (
+          sessionIsStreaming
+          && !isPiSlashCommandAllowedWhileStreaming(
+            content,
+            true,
+            isViewedSession ? sessionState.currentSessionSdkType : sessionState.sessions.find((s) => s.id === sessionId)?.sdkType,
+          )
+        ) {
           return false;
         }
         
