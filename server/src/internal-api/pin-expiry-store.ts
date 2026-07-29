@@ -1,48 +1,38 @@
 /**
- * Pin Expiry Store
+ * Durable store for source-owned Internal API retention leases.
  *
- * Durable, disk-backed record of API-initiated session pins and their absolute
- * expiry deadlines. This is what makes an API pin's "this won't be cleaned up"
- * guarantee survive a server restart, and — just as importantly — what lets the
- * pin be *cleaned up* automatically so a long-running agent task can't hog a
- * pin slot forever.
- *
- * Each pinned API session is one JSON file under the pin directory. Writes are
- * serialized per session so a burst of re-pins can't interleave and corrupt the
- * file. This mirrors {@link WatchStore} deliberately: the same durability
- * guarantees that make a long-horizon watch survive a restart apply here.
- *
- * IMPORTANT: this store only tracks *API-initiated* pins. Web-UI pins (managed
- * by humans through the preferences file) are unaffected and keep their existing
- * idle-based auto-unpin behaviour. The two mechanisms are independent and both
- * ultimately call the same per-runtime `unpinSession`.
+ * Historical files were keyed by session id and represented one API pin. The
+ * current format is keyed by lease id so several conductors can independently
+ * retain the same session. Legacy records are migrated on init.
  */
 
 import { mkdir, readFile, writeFile, readdir, unlink, rename } from 'fs/promises';
 import path from 'path';
 import type { SessionRuntime } from './types.js';
 
-/** Full on-disk shape — everything needed to re-apply / expire a pin after restart. */
+export type RetentionMode = 'durable' | 'resident';
+
 export interface PersistedApiPin {
+  leaseId: string;
   sessionId: string;
   sessionPath?: string;
   runtime?: SessionRuntime;
-  /** When the pin was granted, in ms since epoch. */
+  mode?: RetentionMode;
+  ownerId?: string;
   pinnedAt: number;
-  /** Absolute deadline after which the pin is revoked, in ms since epoch. */
   pinnedUntil: number;
-  /** Optional human-readable label (e.g. who/why pinned it). */
   label?: string;
 }
 
-function sanitize(sessionId: string): string {
-  return sessionId.replace(/[^a-zA-Z0-9_.-]/g, '_');
+type LegacyApiPin = Omit<PersistedApiPin, 'leaseId'> & { leaseId?: string };
+
+function sanitize(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]/g, '_');
 }
 
 export class PinExpiryStore {
   private readonly dir: string;
   private readonly cache = new Map<string, PersistedApiPin>();
-  /** Per-session write chain so concurrent saves serialize instead of racing. */
   private readonly writeChains = new Map<string, Promise<void>>();
   private ready = false;
 
@@ -50,76 +40,107 @@ export class PinExpiryStore {
     this.dir = dir;
   }
 
-  /** Load all persisted pins from disk into memory. Idempotent. Merge-only: a
-   * pin recorded after construction (e.g. a save that raced init) is preserved. */
   async init(): Promise<void> {
     if (this.ready) return;
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
     let files: string[] = [];
-    try {
-      files = await readdir(this.dir);
-    } catch {
-      files = [];
-    }
+    try { files = await readdir(this.dir); } catch { files = []; }
+
     for (const file of files) {
       if (!file.endsWith('.json')) continue;
+      const oldFile = path.join(this.dir, file);
       try {
-        const raw = await readFile(path.join(this.dir, file), 'utf8');
-        const record = JSON.parse(raw) as PersistedApiPin;
-        if (record && record.sessionId && !this.cache.has(record.sessionId)) {
-          this.cache.set(record.sessionId, record);
+        const raw = JSON.parse(await readFile(oldFile, 'utf8')) as LegacyApiPin;
+        if (!raw?.sessionId) continue;
+        const leaseId = raw.leaseId || `legacy-${sanitize(raw.sessionId)}`;
+        const record: PersistedApiPin = {
+          ...raw,
+          leaseId,
+          mode: raw.mode ?? 'resident',
+          ownerId: raw.ownerId ?? 'legacy-internal-api',
+        };
+        if (!this.cache.has(leaseId)) this.cache.set(leaseId, record);
+        const canonical = this.fileFor(leaseId);
+        if (canonical !== oldFile) {
+          await this.writeAtomic(canonical, JSON.stringify(record, null, 2));
+          await unlink(oldFile).catch(() => undefined);
         }
       } catch {
-        // A single corrupt file must not prevent the rest from loading.
+        // One corrupt record must not prevent the remaining leases loading.
       }
     }
     this.ready = true;
   }
 
+  /** Compatibility lookup: newest lease for a session. */
   get(sessionId: string): PersistedApiPin | undefined {
-    return this.cache.get(sessionId);
+    return this.listForSession(sessionId).sort((a, b) => b.pinnedUntil - a.pinnedUntil)[0];
+  }
+
+  getByLeaseId(leaseId: string): PersistedApiPin | undefined {
+    return this.cache.get(leaseId);
+  }
+
+  listForSession(sessionId: string): PersistedApiPin[] {
+    return [...this.cache.values()].filter((record) => record.sessionId === sessionId);
   }
 
   list(): PersistedApiPin[] {
-    return Array.from(this.cache.values());
+    return [...this.cache.values()];
   }
 
-  private fileFor(sessionId: string): string {
-    return path.join(this.dir, `${sanitize(sessionId)}.json`);
+  private fileFor(leaseId: string): string {
+    return path.join(this.dir, `${sanitize(leaseId)}.json`);
   }
 
-  /**
-   * Persist (or update) a pin. Updates the in-memory cache synchronously and
-   * returns a promise that resolves when the bytes are on disk. Writes for the
-   * same session are chained so they never overlap; an atomic temp-file rename
-   * avoids leaving a half-written file if the process dies mid-write.
-   */
+  private async writeAtomic(file: string, payload: string): Promise<void> {
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    await writeFile(tmp, payload, { mode: 0o600 });
+    await rename(tmp, file);
+  }
+
   save(record: PersistedApiPin): Promise<void> {
-    this.cache.set(record.sessionId, record);
-    const file = this.fileFor(record.sessionId);
+    const file = this.fileFor(record.leaseId);
     const payload = JSON.stringify(record, null, 2);
-    const prev = this.writeChains.get(record.sessionId) ?? Promise.resolve();
+    const prev = this.writeChains.get(record.leaseId) ?? Promise.resolve();
     const next = prev
-      .catch(() => { /* don't let a prior failure break the chain */ })
+      .catch(() => undefined)
       .then(async () => {
-        await mkdir(this.dir, { recursive: true, mode: 0o700 });
-        const tmp = `${file}.${process.pid}.tmp`;
-        await writeFile(tmp, payload, { mode: 0o600 });
-        await rename(tmp, file);
+        await this.writeAtomic(file, payload);
+        // Publish to readers only after the durable write succeeds.
+        this.cache.set(record.leaseId, record);
       });
-    this.writeChains.set(record.sessionId, next);
+    this.writeChains.set(record.leaseId, next);
+    void next.then(
+      () => { if (this.writeChains.get(record.leaseId) === next) this.writeChains.delete(record.leaseId); },
+      () => { if (this.writeChains.get(record.leaseId) === next) this.writeChains.delete(record.leaseId); },
+    );
     return next;
   }
 
+  deleteLease(leaseId: string): Promise<void> {
+    const prev = this.writeChains.get(leaseId) ?? Promise.resolve();
+    const next = prev
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await unlink(this.fileFor(leaseId));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        this.cache.delete(leaseId);
+      });
+    this.writeChains.set(leaseId, next);
+    void next.then(
+      () => { if (this.writeChains.get(leaseId) === next) this.writeChains.delete(leaseId); },
+      () => { if (this.writeChains.get(leaseId) === next) this.writeChains.delete(leaseId); },
+    );
+    return next;
+  }
+
+  /** Compatibility helper: remove all leases for one session. */
   async delete(sessionId: string): Promise<void> {
-    this.cache.delete(sessionId);
-    // Wait for any in-flight write to finish before unlinking.
-    await (this.writeChains.get(sessionId) ?? Promise.resolve()).catch(() => { /* legitimate: isolate the write chain — a prior failure is already handled/logged */ });
-    this.writeChains.delete(sessionId);
-    try {
-      await unlink(this.fileFor(sessionId));
-    } catch {
-      // Already gone — fine.
-    }
+    await Promise.all(this.listForSession(sessionId).map((record) => this.deleteLease(record.leaseId)));
   }
 }

@@ -180,6 +180,7 @@ interface ActiveSessionMeta {
   lastActivity: number;
   lastEventTimestamp: number;
   pinned: boolean;
+  pinClaims: Set<string>;
   status: 'idle' | 'streaming' | 'error';
   contextUsed: number;
   contextWindow: number;
@@ -372,6 +373,11 @@ export class OpenCodeService {
     return true;
   }
 
+  disposeSession(sessionId: string): void {
+    this.abort(sessionId);
+    this.removeSession(sessionId);
+  }
+
   private removeSession(sessionId: string): void {
     this.sessionMeta.delete(sessionId);
     this.runningSessions.delete(sessionId);
@@ -402,6 +408,7 @@ export class OpenCodeService {
       lastActivity: Date.now(),
       lastEventTimestamp: Date.now(),
       pinned: false,
+      pinClaims: new Set(),
       status: 'idle',
       contextUsed: 0,
       contextWindow: 0,
@@ -417,24 +424,28 @@ export class OpenCodeService {
     return true;
   }
 
-  async pinSession(sessionId: string): Promise<boolean> {
+  async pinSession(sessionId: string, claimId = 'web-ui'): Promise<boolean> {
     await this.ensureSession(sessionId);
     const meta = this.sessionMeta.get(sessionId);
     if (!meta) return false;
-    if (meta.pinned) return true;
+    if (meta.pinClaims.has(claimId)) return true;
 
-    const pinnedCount = this.getPinnedCount();
-    if (pinnedCount >= this.lifecycle.maxPinnedSessions) return false;
+    if (claimId === 'web-ui') {
+      const humanPinned = [...this.sessionMeta.values()].filter((item) => item.pinClaims.has('web-ui')).length;
+      if (humanPinned >= this.lifecycle.maxPinnedSessions) return false;
+    }
 
+    meta.pinClaims.add(claimId);
     meta.pinned = true;
     return true;
   }
 
-  unpinSession(sessionId: string): boolean {
+  unpinSession(sessionId: string, claimId = 'web-ui'): boolean {
     const meta = this.sessionMeta.get(sessionId);
     if (!meta) return false;
-    meta.pinned = false;
-    meta.lastActivity = Date.now();
+    meta.pinClaims.delete(claimId);
+    meta.pinned = meta.pinClaims.size > 0;
+    if (!meta.pinned) meta.lastActivity = Date.now();
     return true;
   }
 
@@ -525,6 +536,7 @@ export class OpenCodeService {
       lastActivity: Date.now(),
       lastEventTimestamp: Date.now(),
       pinned: false,
+      pinClaims: new Set(),
       status: 'idle',
       contextUsed: 0,
       contextWindow: 0,
@@ -589,7 +601,7 @@ export class OpenCodeService {
       let meta = this.sessionMeta.get(sessionId);
       if (!meta) {
         meta = {
-          lastActivity: Date.now(), lastEventTimestamp: Date.now(), pinned: false, status: 'idle',
+          lastActivity: Date.now(), lastEventTimestamp: Date.now(), pinned: false, pinClaims: new Set(), status: 'idle',
           contextUsed: 0, contextWindow: 0,
           tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           cost: 0, perMessageTokens: new Map(),

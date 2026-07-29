@@ -44,6 +44,11 @@ export const ErrorCode = {
   ASK_ALREADY_CLOSED: 'ASK_ALREADY_CLOSED',
   RUN_NOT_FOUND: 'RUN_NOT_FOUND',
   IDEMPOTENCY_KEY_CONFLICT: 'IDEMPOTENCY_KEY_CONFLICT',
+  RETENTION_CLAIM_NOT_FOUND: 'RETENTION_CLAIM_NOT_FOUND',
+  RETENTION_CLAIM_OWNER_MISMATCH: 'RETENTION_CLAIM_OWNER_MISMATCH',
+  RETENTION_RESIDENT_CAPACITY_EXHAUSTED: 'RETENTION_RESIDENT_CAPACITY_EXHAUSTED',
+  RETENTION_STORE_UNAVAILABLE: 'RETENTION_STORE_UNAVAILABLE',
+  ADMISSION_CAPACITY_EXHAUSTED: 'ADMISSION_CAPACITY_EXHAUSTED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -213,6 +218,41 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'The run id is unknown or its bounded receipt retention window has elapsed.',
     hint: 'Use the runId returned by prompt dispatch and query it before retention pruning.',
     docs: 'docs/INTERNAL-API.md#run-identity-and-receipts',
+  },
+  [ErrorCode.RETENTION_CLAIM_NOT_FOUND]: {
+    httpStatus: 404,
+    description: 'The requested retention lease does not exist for this session.',
+    cause: 'The lease id is wrong, expired, released, or belongs to another session.',
+    hint: 'Use the lease id returned when retention was acquired.',
+    docs: 'docs/INTERNAL-API.md#source-owned-session-retention',
+  },
+  [ErrorCode.RETENTION_CLAIM_OWNER_MISMATCH]: {
+    httpStatus: 409,
+    description: 'The retention lease owner does not match the conditional release request.',
+    cause: 'A cooperative local client attempted to release another owner’s lease.',
+    hint: 'Release the lease with the ownerId used when it was created.',
+    docs: 'docs/INTERNAL-API.md#source-owned-session-retention',
+  },
+  [ErrorCode.RETENTION_RESIDENT_CAPACITY_EXHAUSTED]: {
+    httpStatus: 409,
+    description: 'Required resident retention could not be applied.',
+    cause: 'The runtime refused to materialise or retain the session.',
+    hint: 'Use durable retention or retry after runtime capacity is available.',
+    docs: 'docs/INTERNAL-API.md#source-owned-session-retention',
+  },
+  [ErrorCode.RETENTION_STORE_UNAVAILABLE]: {
+    httpStatus: 503,
+    description: 'The retention lease could not be persisted durably.',
+    cause: 'The owner-only retention ledger was unavailable or unwritable.',
+    hint: 'Inspect diagnostics and retry only after storage is healthy.',
+    docs: 'docs/INTERNAL-API.md#source-owned-session-retention',
+  },
+  [ErrorCode.ADMISSION_CAPACITY_EXHAUSTED]: {
+    httpStatus: 429,
+    description: 'Runtime execution admission is temporarily exhausted.',
+    cause: 'A runtime/global turn cap or memory-headroom guard refused new work.',
+    hint: 'Respect Retry-After, inspect GET /api/v1/capacity, and retry later.',
+    docs: 'docs/INTERNAL-API.md#execution-admission-and-capacity',
   },
   [ErrorCode.IDEMPOTENCY_KEY_CONFLICT]: {
     httpStatus: 409,

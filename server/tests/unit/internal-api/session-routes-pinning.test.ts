@@ -5,6 +5,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
+import { AdmissionController } from '../../../src/internal-api/admission-controller.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 
 function createJsonReq(method: string, url: string, body?: unknown): IncomingMessage {
@@ -106,7 +107,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
-  function makeRoutes() {
+  function makeRoutes(admissionController?: AdmissionController) {
     return createSessionRoutes({
       claudeService,
       opencodeService,
@@ -119,6 +120,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
       pinDir: path.join(dir, 'pins'),
       // Make the expiry sweep inert during these fast tests.
       pinExpiryIntervalMs: 60_000,
+      admissionController,
     });
   }
 
@@ -131,7 +133,54 @@ describe('createSessionRoutes — API pinning + detach', () => {
     expect(res.statusCode).toBe(201);
     expect(json(res)).toMatchObject({ sessionId: 'claude-1', pinned: true });
     expect(json(res).pinnedUntil).toEqual(expect.any(String));
-    expect(claudeService.pinSession).toHaveBeenCalledWith('claude-1');
+    expect(claudeService.pinSession).toHaveBeenCalledWith('claude-1', expect.stringMatching(/^internal-api:/));
+  });
+
+  it('creates a required resident retention lease independently and returns its lease id', async () => {
+    const routes = makeRoutes();
+    const req = createJsonReq('POST', '/api/v1/sessions', {
+      runtime: 'claude',
+      retention: { mode: 'resident', ttlSeconds: 3600, ownerId: 'attempt-123' },
+    });
+    const res = createMockRes();
+    await routes.handleCreateSession(req, res, 'claude-1');
+
+    expect(res.statusCode).toBe(201);
+    expect(json(res)).toMatchObject({
+      sessionId: 'claude-1',
+      pinned: true,
+      retention: { mode: 'resident', ownerId: 'attempt-123' },
+    });
+    expect(json(res).retention.leaseId).toEqual(expect.any(String));
+    expect(claudeService.pinSession).toHaveBeenCalledWith('claude-1', expect.stringMatching(/^internal-api:/));
+  });
+
+  it('creates a durable lease without consuming runtime residency', async () => {
+    const routes = makeRoutes();
+    const res = createMockRes();
+    await routes.handleCreateSession(createJsonReq('POST', '/api/v1/sessions', {
+      runtime: 'claude',
+      retention: { mode: 'durable', ttlSeconds: 3600, ownerId: 'attempt-123' },
+    }), res, 'claude-1');
+
+    expect(res.statusCode).toBe(201);
+    expect(json(res)).toMatchObject({ pinned: false, retention: { mode: 'durable', ownerId: 'attempt-123' } });
+    expect(json(res).pinnedUntil).toBeUndefined();
+    expect(json(res).retention.leaseId).toEqual(expect.any(String));
+    expect(claudeService.pinSession).not.toHaveBeenCalled();
+  });
+
+  it('atomically cleans up a newly-created session when required resident retention cannot be applied', async () => {
+    claudeService.pinSession.mockReturnValue(false);
+    const routes = makeRoutes();
+    const res = createMockRes();
+    await routes.handleCreateSession(createJsonReq('POST', '/api/v1/sessions', {
+      runtime: 'claude', retention: { mode: 'resident', ttlSeconds: 3600, ownerId: 'attempt-123' },
+    }), res, 'claude-1');
+
+    expect(res.statusCode).toBe(409);
+    expect(json(res).code).toBe('RETENTION_RESIDENT_CAPACITY_EXHAUSTED');
+    expect(registry.delete).toHaveBeenCalledWith('claude-1');
   });
 
   it('returns PIN_LIMIT_REACHED (session still created) when the runtime refuses the pin', async () => {
@@ -175,6 +224,37 @@ describe('createSessionRoutes — API pinning + detach', () => {
     expect(json(res).pinnedUntil).toEqual(expect.any(String));
   });
 
+  it('control acquire_retention adds an independently owned lease to an existing session', async () => {
+    const routes = makeRoutes();
+    const res = createMockRes();
+    await routes.handleSessionControl(createJsonReq('POST', '/x', {
+      action: 'acquire_retention',
+      retention: { mode: 'resident', ttlSeconds: 3600, ownerId: 'conductor-b' },
+    }), res, 'claude-1');
+
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toMatchObject({ success: true, action: 'acquire_retention', retention: { mode: 'resident', ownerId: 'conductor-b' } });
+    expect(json(res).retention.leaseId).toEqual(expect.any(String));
+    expect(claudeService.pinSession).toHaveBeenCalledWith('claude-1', expect.stringMatching(/^internal-api:/));
+  });
+
+  it('control release_retention releases only the named lease', async () => {
+    const routes = makeRoutes();
+    const createRes = createMockRes();
+    await routes.handleCreateSession(createJsonReq('POST', '/api/v1/sessions', {
+      runtime: 'claude', retention: { mode: 'resident', ttlSeconds: 3600, ownerId: 'attempt-123' },
+    }), createRes, 'claude-1');
+    const leaseId = json(createRes).retention.leaseId;
+
+    const releaseRes = createMockRes();
+    await routes.handleSessionControl(createJsonReq('POST', '/x', {
+      action: 'release_retention', retentionLeaseId: leaseId, ownerId: 'attempt-123',
+    }), releaseRes, 'claude-1');
+
+    expect(json(releaseRes)).toMatchObject({ success: true, action: 'release_retention', pinned: false });
+    expect(claudeService.unpinSession).toHaveBeenCalledWith('claude-1', `internal-api:${leaseId}`);
+  });
+
   it('control unpin clears the pin ledger record', async () => {
     const routes = makeRoutes();
     // pin first
@@ -192,7 +272,20 @@ describe('createSessionRoutes — API pinning + detach', () => {
     );
 
     expect(json(unpinRes)).toMatchObject({ success: true, action: 'unpin', pinned: false });
-    expect(claudeService.unpinSession).toHaveBeenCalledWith('claude-1');
+    expect(claudeService.unpinSession).toHaveBeenCalledWith('claude-1', expect.stringMatching(/^internal-api:/));
+  });
+
+  it('legacy unpin leaves named retention leases intact', async () => {
+    const routes = makeRoutes();
+    const namedRes = createMockRes();
+    await routes.handleSessionControl(createJsonReq('POST', '/x', {
+      action: 'acquire_retention', retention: { mode: 'resident', ownerId: 'named-owner' },
+    }), namedRes, 'claude-1');
+    const namedLeaseId = json(namedRes).retention.leaseId;
+    await routes.handleSessionControl(createJsonReq('POST', '/x', { action: 'pin' }), createMockRes(), 'claude-1');
+    await routes.handleSessionControl(createJsonReq('POST', '/x', { action: 'unpin' }), createMockRes(), 'claude-1');
+
+    expect(claudeService.unpinSession).not.toHaveBeenCalledWith('claude-1', `internal-api:${namedLeaseId}`);
   });
 
   it('/info reports pinnedUntil while an API pin is active', async () => {
@@ -209,6 +302,42 @@ describe('createSessionRoutes — API pinning + detach', () => {
 
     expect(json(infoRes)).toMatchObject({ sessionId: 'claude-1', pinned: true });
     expect(json(infoRes).pinnedUntil).toEqual(expect.any(String));
+  });
+
+  it('/info does not project a durable-only lease as a legacy pin deadline', async () => {
+    const routes = makeRoutes();
+    await routes.handleSessionControl(createJsonReq('POST', '/x', {
+      action: 'acquire_retention', retention: { mode: 'durable', ownerId: 'durable-owner' },
+    }), createMockRes(), 'claude-1');
+
+    const infoRes = createMockRes();
+    await routes.handleGetSessionInfo(createJsonReq('GET', '/x'), infoRes, 'claude-1');
+    expect(json(infoRes)).toMatchObject({ sessionId: 'claude-1', pinned: false });
+    expect(json(infoRes).pinnedUntil).toBeUndefined();
+  });
+
+  it('exposes a bounded capacity snapshot and rejects prompt admission with Retry-After', async () => {
+    const admission = new AdmissionController({
+      maxActiveTurns: 2,
+      interactiveReserve: 1,
+      minimumHeadroomBytes: 1,
+      reservedBytesPerTurn: 1,
+      memory: () => ({ currentBytes: 0, limitBytes: 10_000 }),
+    });
+    const held = await admission.acquire('pi');
+    const routes = makeRoutes(admission);
+
+    const capacityRes = createMockRes();
+    routes.handleCapacity(createJsonReq('GET', '/api/v1/capacity'), capacityRes);
+    expect(json(capacityRes)).toMatchObject({ available: false, activeTurns: 1, apiTurnLimit: 1, interactiveReserve: 1 });
+
+    const promptRes = createMockRes();
+    await routes.handleSendPrompt(createJsonReq('POST', '/x', { message: 'hello' }), promptRes, 'claude-1');
+    expect(promptRes.statusCode).toBe(429);
+    expect(json(promptRes)).toMatchObject({ code: 'ADMISSION_CAPACITY_EXHAUSTED', reason: 'global_limit' });
+    expect(promptRes.setHeader).toHaveBeenCalledWith('Retry-After', '2');
+    expect(claudeService.sendPrompt).not.toHaveBeenCalled();
+    held.release();
   });
 
   it('detach=true returns 202 immediately and runs the turn in the background', async () => {
@@ -256,7 +385,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
     );
     await routes.handleDeleteSession(createJsonReq('DELETE', '/x'), createMockRes(), 'claude-1');
 
-    expect(claudeService.unpinSession).toHaveBeenCalledWith('claude-1');
+    expect(claudeService.unpinSession).toHaveBeenCalledWith('claude-1', expect.stringMatching(/^internal-api:/));
 
     // After delete, /info no longer reports a pinnedUntil for this session.
     claudeService.isSessionPinned.mockReturnValue(false);

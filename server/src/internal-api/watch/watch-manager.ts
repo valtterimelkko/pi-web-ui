@@ -35,7 +35,9 @@ export interface WatchManagerDeps {
   /** Directory for the durable ledger files. */
   storeDir: string;
   /** Pin a session so idle eviction can't kill it mid-watch. Returns whether it is now pinned. */
-  pinSession: (sessionId: string) => boolean | Promise<boolean>;
+  pinSession: (sessionId: string, claimId?: string) => boolean | Promise<boolean>;
+  /** Release only this watch's source-owned runtime claim. */
+  unpinSession?: (sessionId: string, claimId?: string) => boolean | Promise<boolean>;
   /**
    * Optional hook to ensure events for a session flow into the broker before
    * any prompt/SSE consumer exists (Pi needs its persistent observer attached).
@@ -68,6 +70,7 @@ export class WatchManager {
   private readonly broker: InternalApiEventBroker;
   private readonly store: WatchStore;
   private readonly pinSession: WatchManagerDeps['pinSession'];
+  private readonly unpinSession?: WatchManagerDeps['unpinSession'];
   private readonly ensureObserver?: WatchManagerDeps['ensureObserver'];
   private readonly maxPerCondition: number;
   private readonly maxTotal: number;
@@ -81,6 +84,7 @@ export class WatchManager {
     this.broker = deps.broker;
     this.store = new WatchStore(deps.storeDir);
     this.pinSession = deps.pinSession;
+    this.unpinSession = deps.unpinSession;
     this.ensureObserver = deps.ensureObserver;
     this.maxPerCondition = deps.maxFiringsPerCondition ?? DEFAULT_MAX_PER_CONDITION;
     this.maxTotal = deps.maxTotalFirings ?? DEFAULT_MAX_TOTAL;
@@ -127,13 +131,20 @@ export class WatchManager {
       throw new WatchValidationError(err instanceof Error ? err.message : 'Invalid condition');
     }
 
-    // Replace any existing watch for this session.
+    // Replace any existing watch for this session. Release exactly its prior
+    // claim first, including when the replacement opts out of pinning.
+    const previous = this.active.get(sessionId)?.record ?? this.store.get(sessionId);
     this.teardown(sessionId);
+    if (previous?.pinned && this.unpinSession) {
+      await Promise.resolve(this.unpinSession(sessionId, `watch:${previous.watchId}`)).catch(() => false);
+    }
 
+    const watchId = `watch-${sessionId}`;
+    const claimId = `watch:${watchId}`;
     let pinned = false;
     if (request.pin !== false) {
       try {
-        pinned = await this.pinSession(sessionId);
+        pinned = await this.pinSession(sessionId, claimId);
       } catch {
         pinned = false;
       }
@@ -153,7 +164,7 @@ export class WatchManager {
     }));
 
     const record: PersistedWatch = {
-      watchId: `watch-${sessionId}`,
+      watchId,
       sessionId,
       sessionPath,
       runtime,
@@ -191,6 +202,7 @@ export class WatchManager {
       // Registration is not accepted until its initial ledger exists. Remove
       // the live subscriptions and cache entry so a caller can retry cleanly.
       this.teardown(sessionId);
+      if (pinned && this.unpinSession) await Promise.resolve(this.unpinSession(sessionId, claimId)).catch(() => false);
       await this.store.delete(sessionId);
       throw error;
     }
@@ -207,8 +219,12 @@ export class WatchManager {
 
   /** Tear down and delete the watch for a session. */
   async delete(sessionId: string): Promise<boolean> {
-    const existed = this.active.has(sessionId) || !!this.store.get(sessionId);
+    const record = this.active.get(sessionId)?.record ?? this.store.get(sessionId);
+    const existed = !!record;
     this.teardown(sessionId);
+    if (record?.pinned && this.unpinSession) {
+      await Promise.resolve(this.unpinSession(sessionId, `watch:${record.watchId}`)).catch(() => false);
+    }
     await this.store.delete(sessionId);
     return existed;
   }

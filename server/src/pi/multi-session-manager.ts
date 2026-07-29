@@ -42,6 +42,8 @@ export interface ActiveSession {
   currentStep: number;
   webUIContext?: WebUIContext;
   pinned: boolean;
+  /** Independent residency claims. `web-ui` is the human pin governed by maxPinnedSessions. */
+  pinClaims: Set<string>;
   handlerKey: string;
 }
 
@@ -120,6 +122,7 @@ export class MultiSessionManager {
   private clientViewingSession: Map<string, string> = new Map(); // clientId -> sessionPath
   private subscriptionQueues = new Map<string, Promise<void>>();
   private webUIContextProvider?: WebUIContextProvider;
+  private sessionMaterializedHandler?: (sessionId: string, sessionPath: string) => Promise<void> | void;
   /** Latest replayable extension status/widget messages for browser subscribers. */
   private extensionUiSnapshots = new Map<string, Map<string, unknown>>();
 
@@ -171,6 +174,16 @@ export class MultiSessionManager {
     logger.info(`[MultiSessionManager] Initialized with cleanupInterval=${this.cleanupIntervalMs}ms, idleTimeout=${this.idleSessionTimeoutMs}ms, maxSessions=${this.maxSessions}, maxPinned=${this.maxPinnedSessions}`);
   }
   
+  setSessionMaterializedHandler(handler?: (sessionId: string, sessionPath: string) => Promise<void> | void): void {
+    this.sessionMaterializedHandler = handler;
+  }
+
+  private async notifySessionMaterialized(session: ActiveSession): Promise<void> {
+    if (this.sessionMaterializedHandler) {
+      await Promise.resolve(this.sessionMaterializedHandler(session.sessionId, session.sessionPath));
+    }
+  }
+
   private recordExtensionUiMessage(sessionPath: string, message: unknown): void {
     if (!message || typeof message !== 'object' || Array.isArray(message)) return;
     const payload = message as Record<string, unknown>;
@@ -461,6 +474,13 @@ export class MultiSessionManager {
     }
   }
 
+  /** Explicitly dispose a loaded session before its backing files are deleted. */
+  disposeLoadedSession(sessionPath: string): boolean {
+    if (!this.sessions.has(sessionPath)) return false;
+    this.disposeSession(sessionPath);
+    return true;
+  }
+
   /**
    * Unload a session from memory without deleting the session file.
    * This is used for lazy session management - the session can be rehydrated later.
@@ -601,10 +621,12 @@ export class MultiSessionManager {
       currentStep: 0,
       webUIContext: resolvedWebUIContext,
       pinned: false,
+      pinClaims: new Set(),
       handlerKey: tempClientId,
     };
 
     this.sessions.set(sessionPath, activeSession);
+    await this.notifySessionMaterialized(activeSession);
 
     // Add client to subscribers
     activeSession.subscribers.add(clientId);
@@ -737,10 +759,12 @@ export class MultiSessionManager {
         currentStep: 0,
         webUIContext: extensionWebUIContext,
         pinned: false,
+        pinClaims: new Set(),
         handlerKey: `multi-${sessionPath}`,
       };
 
       this.sessions.set(sessionPath, activeSession);
+      await this.notifySessionMaterialized(activeSession);
       logger.info(`[MultiSessionManager] Session rehydrated: ${agentSession.sessionId}`);
     } else if (webUIContext) {
       // Update webUIContext if provided for existing session
@@ -1286,33 +1310,42 @@ export class MultiSessionManager {
    * and aggressive cleanup. Only explicit stopSession() or dispose() will remove them.
    * Returns true if the session was pinned, false if not found or at max pinned limit.
    */
-  pinSession(sessionPath: string): boolean {
+  pinSession(sessionPath: string, claimId = 'web-ui'): boolean {
     const activeSession = this.sessions.get(sessionPath);
     if (!activeSession) return false;
-    
-    // Count current pinned sessions
-    const currentPinned = Array.from(this.sessions.values()).filter(s => s.pinned).length;
-    if (currentPinned >= this.maxPinnedSessions && !activeSession.pinned) {
-      logger.warn(`[MultiSessionManager] Cannot pin session: already at max pinned limit (${this.maxPinnedSessions})`);
-      return false;
+    if (activeSession.pinClaims.has(claimId)) return true;
+
+    // The historical two-session policy belongs only to human Web UI pins.
+    // API/watch claims are independently time-bounded by their own owners.
+    if (claimId === 'web-ui') {
+      const currentHumanPinned = Array.from(this.sessions.values())
+        .filter((session) => session.pinClaims.has('web-ui')).length;
+      if (currentHumanPinned >= this.maxPinnedSessions) {
+        logger.warn(`[MultiSessionManager] Cannot apply Web UI pin: already at max limit (${this.maxPinnedSessions})`);
+        return false;
+      }
     }
-    
+
+    activeSession.pinClaims.add(claimId);
     activeSession.pinned = true;
-    logger.info(`[MultiSessionManager] Session pinned: ${sessionPath} (${currentPinned + 1}/${this.maxPinnedSessions})`);
+    logger.info(`[MultiSessionManager] Session retention claimed: ${sessionPath} claim=${claimId}`);
     return true;
   }
 
   /**
-   * Unpin a session, allowing normal idle/stale cleanup to apply.
-   * Returns true if the session was unpinned, false if not found.
+   * Release one residency claim. The session remains pinned while any other
+   * source still owns a claim.
    */
-  unpinSession(sessionPath: string): boolean {
+  unpinSession(sessionPath: string, claimId = 'web-ui'): boolean {
     const activeSession = this.sessions.get(sessionPath);
     if (!activeSession) return false;
-    
-    activeSession.pinned = false;
-    activeSession.lastActivity = new Date(); // Reset idle clock so it doesn't immediately expire
-    logger.info(`[MultiSessionManager] Session unpinned: ${sessionPath}`);
+
+    activeSession.pinClaims.delete(claimId);
+    activeSession.pinned = activeSession.pinClaims.size > 0;
+    if (!activeSession.pinned) {
+      activeSession.lastActivity = new Date(); // Avoid immediate idle expiry.
+    }
+    logger.info(`[MultiSessionManager] Session retention released: ${sessionPath} claim=${claimId} retained=${activeSession.pinned}`);
     return true;
   }
 

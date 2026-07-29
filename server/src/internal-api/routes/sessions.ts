@@ -78,6 +78,7 @@ import {
   batchPromptBodySchema,
   mapWithConcurrency,
   BATCH_CONCURRENCY_LIMIT,
+  sessionControlBodySchema,
 } from '../session-validation.js';
 import { withCorrelation, newRequestId, getCorrelationContext } from '../../logging/correlation.js';
 import { TransferService } from '../../session-transfer/transfer-service.js';
@@ -95,6 +96,7 @@ import os from 'os';
 import { config } from '../../config.js';
 import { createLogger, type LogRecord } from '../../logging/logger.js';
 import { getRecentLogs } from '../diagnostics-buffer.js';
+import { AdmissionCapacityError, AdmissionController } from '../admission-controller.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -185,6 +187,8 @@ export interface SessionRoutesDeps {
   claudeSessionDir?: string;
   /** Directory for Antigravity session JSONL/log files. Defaults to config. */
   antigravitySessionDir?: string;
+  /** Shared process-local execution admission authority. */
+  admissionController?: AdmissionController;
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps) {
@@ -206,6 +210,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     store: new RunReceiptStore(deps.runReceiptDir),
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
   });
+  const admission = deps.admissionController ?? new AdmissionController();
 
   /**
    * Per-session event broker. Long-lived: subscribers added via
@@ -264,23 +269,30 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   /** Pin a session via the right runtime service. Used by watch registration. */
-  async function pinSessionById(sessionId: string): Promise<boolean> {
+  async function pinSessionById(sessionId: string, claimId = 'web-ui'): Promise<boolean> {
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) return false;
-    if (entry.sdkType === 'claude') return claudeService.pinSession(sessionId);
-    if (entry.sdkType === 'opencode') return opencodeService.pinSession(sessionId);
-    if (entry.sdkType === 'antigravity') return antigravityService.pinSession(sessionId);
-    return multiSessionManager.pinSession(entry.path);
+    if (entry.sdkType === 'claude') return claudeService.pinSession(sessionId, claimId);
+    if (entry.sdkType === 'opencode') return opencodeService.pinSession(sessionId, claimId);
+    if (entry.sdkType === 'antigravity') return antigravityService.pinSession(sessionId, claimId);
+    return multiSessionManager.pinSession(entry.path, claimId);
   }
 
-  /** Revoke a session's pin via the right runtime service (mirror of pinSessionById). */
-  async function unpinSessionById(sessionId: string): Promise<boolean> {
+  /** Revoke one source-owned runtime claim via the right service. */
+  async function unpinSessionById(sessionId: string, claimId = 'web-ui'): Promise<boolean> {
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) return false;
-    if (entry.sdkType === 'claude') return claudeService.unpinSession(sessionId);
-    if (entry.sdkType === 'opencode') return opencodeService.unpinSession(sessionId);
-    if (entry.sdkType === 'antigravity') return antigravityService.unpinSession(sessionId);
-    return multiSessionManager.unpinSession(entry.path);
+    if (entry.sdkType === 'claude') return claudeService.unpinSession(sessionId, claimId);
+    if (entry.sdkType === 'opencode') return opencodeService.unpinSession(sessionId, claimId);
+    if (entry.sdkType === 'antigravity') return antigravityService.unpinSession(sessionId, claimId);
+    return multiSessionManager.unpinSession(entry.path, claimId);
+  }
+
+  function isSessionPinnedByEntry(entry: RegistryEntry): boolean {
+    if (entry.sdkType === 'claude') return claudeService.isSessionPinned(entry.id);
+    if (entry.sdkType === 'opencode') return opencodeService.isSessionPinned(entry.id);
+    if (entry.sdkType === 'antigravity') return antigravityService.isSessionPinned(entry.id);
+    return multiSessionManager.isSessionPinned(entry.path);
   }
 
   /**
@@ -292,6 +304,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     broker,
     storeDir: deps.watchDir,
     pinSession: pinSessionById,
+    unpinSession: unpinSessionById,
   });
 
   /**
@@ -322,7 +335,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   /** Pin without TTL tracking — the fallback when no PinExpiryManager exists. */
   async function pinWithoutExpiry(sessionId: string): Promise<ApplyPinResult> {
-    const ok = await pinSessionById(sessionId);
+    const ok = await pinSessionById(sessionId, 'internal-api:legacy-untracked');
     return ok ? { pinned: true } : { pinned: false, reason: 'PIN_LIMIT_REACHED' };
   }
 
@@ -348,6 +361,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) return;
     if (entry.sdkType === 'claude') claudeService.abort(sessionId);
+    if (entry.sdkType === 'opencode') opencodeService.disposeSession(sessionId);
+    if (entry.sdkType === 'antigravity') antigravityService.disposeSession(sessionId);
+    if (entry.sdkType === 'pi') multiSessionManager.disposeLoadedSession(entry.path);
     await deleteSessionFiles(entry);
     await sessionRegistry.delete(sessionId);
   }
@@ -464,11 +480,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     pinned: boolean;
     pinnedUntil?: string;
     pinReason?: 'PIN_LIMIT_REACHED';
+    retentionLeaseId?: string;
+    retentionMode?: 'durable' | 'resident';
   } {
     return {
       pinned: result.pinned,
-      pinnedUntil: result.pinned ? new Date(result.pinnedUntil as number).toISOString() : undefined,
-      pinReason: result.pinned ? undefined : result.reason,
+      pinnedUntil: result.retentionMode !== 'durable' && result.pinnedUntil !== undefined
+        ? new Date(result.pinnedUntil).toISOString()
+        : undefined,
+      pinReason: result.reason,
+      retentionLeaseId: result.retentionLeaseId,
+      retentionMode: result.retentionMode,
     };
   }
 
@@ -491,6 +513,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const runtime: SessionRuntime = parsed.data.runtime;
     const cwd = parsed.data.cwd || process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd();
     let base: CreateSessionResponse | null = null;
+    let createdPiSessionPath: string | undefined;
 
     try {
       switch (runtime) {
@@ -583,6 +606,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
         case 'pi': {
           const status = await multiSessionManager.createAndSubscribe(internalClientId, cwd);
+          createdPiSessionPath = status.sessionPath;
           await sessionRegistry.upsert({
             id: status.sessionId,
             sdkType: 'pi',
@@ -627,9 +651,50 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
-      // Optional create-time pin: a persistent, time-bounded "don't clean this
-      // up while my long task runs" guarantee, decoupled from the watch machinery.
-      if (body.pin) {
+      // Required source-owned retention is atomic from the caller's perspective:
+      // if the guarantee cannot be persisted/applied, remove the unused session.
+      if (body.retention) {
+        if (!pinExpiry) {
+          await cleanupRejectedCreatedSession(base.sessionId);
+          sendJson(res, 503, { error: 'Durable retention storage is unavailable', code: ErrorCode.RETENTION_STORE_UNAVAILABLE });
+          return;
+        }
+        try {
+          const result = await pinExpiry.acquireLease(base.sessionId, {
+            ttlSeconds: body.retention.ttlSeconds,
+            sessionPath: base.sessionPath,
+            runtime: base.runtime,
+            mode: body.retention.mode,
+            ownerId: body.retention.ownerId,
+            label: body.retention.label,
+          });
+          if (!result.retentionLeaseId) {
+            await cleanupRejectedCreatedSession(base.sessionId);
+            sendJson(res, 409, {
+              error: 'Required resident retention capacity is unavailable',
+              code: ErrorCode.RETENTION_RESIDENT_CAPACITY_EXHAUSTED,
+            });
+            return;
+          }
+          Object.assign(base, pinResponseFields(result), {
+            retention: {
+              leaseId: result.retentionLeaseId,
+              mode: body.retention.mode,
+              ownerId: body.retention.ownerId,
+              expiresAt: new Date(result.pinnedUntil as number).toISOString(),
+            },
+          });
+        } catch (error) {
+          await cleanupRejectedCreatedSession(base.sessionId);
+          sendJson(res, 503, {
+            error: error instanceof Error ? error.message : 'Retention store unavailable',
+            code: ErrorCode.RETENTION_STORE_UNAVAILABLE,
+          });
+          return;
+        }
+      } else if (body.pin) {
+        // Legacy pin remains additive/backward compatible, now represented by
+        // its own API claim rather than the Web UI's human pin slot.
         const result = pinExpiry
           ? await pinExpiry.applyPin(base.sessionId, {
               ttlSeconds: body.pinTtlSeconds,
@@ -649,6 +714,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         error: err instanceof Error ? err.message : 'Failed to create session',
         code: ErrorCode.SESSION_CREATE_FAILED,
       });
+    } finally {
+      // The Internal API is not a human viewer. Its synthetic creation
+      // subscription must not keep every Pi session resident indefinitely.
+      if (createdPiSessionPath) multiSessionManager.unsubscribeClient(internalClientId, createdPiSessionPath);
     }
   }
 
@@ -1130,20 +1199,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
       }
 
-      // Release the runtime's in-memory pin slot before removing registry
-      // metadata. The durable API-pin ledger is cleared below, but services also
-      // keep their own per-runtime pinned state; deleting a pinned session must
-      // not leave a stale slot occupied until process restart.
-      await unpinSessionById(sessionId).catch(() => false);
+      // Release every source-owned claim while the registry/runtime object is
+      // still resolvable. A durable-ledger failure is fatal here: deleting the
+      // session while leaving a lease behind would resurrect stale ownership on
+      // restart. Each release is ownership-scoped and cannot clear another.
+      await watchManager.delete(sessionId);
+      if (pinExpiry) await pinExpiry.clear(sessionId);
+      await unpinSessionById(sessionId).catch(() => false); // human Web UI claim
+
+      if (entry.sdkType === 'pi') {
+        // Dispose the live SDK object before unlinking its backing JSONL. This
+        // also removes synthetic subscriber and event-handler references.
+        multiSessionManager.disposeLoadedSession(entry.path);
+      }
 
       // Remove the runtime's persisted session files so the session does not
       // reappear in the UI after a registry rebuild.
       await deleteSessionFiles(entry);
 
       await sessionRegistry.delete(sessionId);
-      // Drop any API-pin ledger record so the expiry sweep won't try to unpin a
-      // session that no longer exists.
-      if (pinExpiry) await pinExpiry.clear(sessionId).catch(() => { /* non-fatal */ });
       sendJson(res, 200, { success: true });
     } catch (err) {
       logger.errorObject('Failed to delete session', err);
@@ -1159,7 +1233,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     mode: PromptMode,
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
+    admittedLease?: { release: () => void },
   ): Promise<void> {
+    const admissionLease = admittedLease ?? await admission.acquire(runtime);
+    try {
     let completed = false;
     let completionError: Error | undefined;
     let persistence: Promise<unknown> = Promise.resolve();
@@ -1222,6 +1299,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     if (persistenceError) throw persistenceError;
     if (executionError) throw executionError;
+    } finally {
+      admissionLease.release();
+    }
   }
 
   async function handleSendPrompt(
@@ -1382,9 +1462,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         });
         return;
       }
+      let admissionLease: { release: () => void };
+      try {
+        admissionLease = await admission.acquire(runtime);
+      } catch (error) {
+        await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
+        const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
+        res.setHeader('Retry-After', String(capacityError.retryAfterSeconds));
+        sendJson(res, 429, {
+          ...enrichedErrorBody(ErrorCode.ADMISSION_CAPACITY_EXHAUSTED, capacityError.message),
+          reason: capacityError.reason,
+          retryAfterSeconds: capacityError.retryAfterSeconds,
+          runId,
+        });
+        return;
+      }
       try {
         await runReceipts.markStarted(runId);
       } catch (error) {
+        admissionLease.release();
         await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
         logger.errorObject(`Failed to start run receipt ${runId}`, error);
         sendJson(res, 500, { error: 'Failed to start run', code: ErrorCode.INTERNAL_ERROR, runId });
@@ -1408,6 +1504,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           (err) => {
             if (err) logger.errorObject(`Detached prompt failed for ${sessionId} run=${runId}`, err);
           },
+          admissionLease,
         ).catch((error) => {
           logger.errorObject(`Detached prompt error for ${sessionId} run=${runId}`, error);
         });
@@ -1417,12 +1514,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       try {
         if (verbosity === 'full' || verbosity === 'tasks') {
-          await handleStreamingPrompt(req, res, sessionId, runtime, body.message, verbosity, mode, runId);
+          await handleStreamingPrompt(req, res, sessionId, runtime, body.message, verbosity, mode, runId, admissionLease);
           return;
         }
 
-        await handleAnswersPrompt(res, sessionId, runtime, body.message, mode, runId);
+        await handleAnswersPrompt(res, sessionId, runtime, body.message, mode, runId, admissionLease);
       } catch (err) {
+        admissionLease.release();
         // executePromptWithReceipt normally terminalizes before rejecting. This
         // defensive finalizer covers failures in response/stream setup that can
         // occur after markStarted but before the runtime is invoked.
@@ -1447,6 +1545,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     message: string,
     mode: PromptMode,
     runId: string,
+    admissionLease: { release: () => void },
   ): Promise<void> {
     const collector = createEventCollector();
 
@@ -1463,6 +1562,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         if (error) collector.error = error;
         collector.complete = true;
       },
+      admissionLease,
     );
 
     if (collector.error) {
@@ -1495,6 +1595,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     verbosity: Verbosity,
     mode: PromptMode,
     runId: string,
+    admissionLease: { release: () => void },
   ): Promise<void> {
     res.setHeader('X-Run-Id', runId);
     const sse = createSSEStream(res);
@@ -1553,6 +1654,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           sse.complete({ sessionId, turnComplete: true });
         }
       },
+      admissionLease,
     );
   }
 
@@ -1595,11 +1697,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
-    const body = await readJsonBody<SessionControlRequest>(req);
-    if (!body?.action) {
-      sendJson(res, 400, { error: 'action is required', code: ErrorCode.INVALID_REQUEST });
+    const raw = await readJsonBody<unknown>(req);
+    const parsed = sessionControlBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      sendJson(res, 400, {
+        error: parsed.error.issues[0]?.message ?? 'Invalid request body',
+        code: ErrorCode.INVALID_REQUEST,
+        details: parsed.error.issues,
+      });
       return;
     }
+    const body = parsed.data as SessionControlRequest;
 
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
@@ -1687,21 +1795,110 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           break;
         }
 
-        case 'unpin': {
-          let unpinned: boolean;
-          if (entry.sdkType === 'claude') {
-            unpinned = claudeService.unpinSession(sessionId);
-          } else if (entry.sdkType === 'opencode') {
-            unpinned = opencodeService.unpinSession(sessionId);
-          } else if (entry.sdkType === 'antigravity') {
-            unpinned = antigravityService.unpinSession(sessionId);
-          } else {
-            unpinned = multiSessionManager.unpinSession(entry.path);
+        case 'acquire_retention': {
+          if (!pinExpiry || !body.retention) {
+            sendJson(res, 400, { error: 'retention is required', code: ErrorCode.INVALID_REQUEST });
+            return;
           }
-          // Drop the API-pin ledger record so a later restart won't re-pin a
-          // session the caller explicitly unpinned.
-          if (pinExpiry) await pinExpiry.clear(sessionId);
-          response = { success: unpinned, action: 'unpin', pinned: false };
+          let result: ApplyPinResult;
+          try {
+            result = await pinExpiry.acquireLease(sessionId, {
+              mode: body.retention.mode,
+              ttlSeconds: body.retention.ttlSeconds,
+              ownerId: body.retention.ownerId,
+              label: body.retention.label,
+              sessionPath: entry.path,
+              runtime: entry.sdkType as SessionRuntime,
+            });
+          } catch (error) {
+            sendJson(res, 503, { error: error instanceof Error ? error.message : 'Retention store unavailable', code: ErrorCode.RETENTION_STORE_UNAVAILABLE });
+            return;
+          }
+          if (!result.retentionLeaseId) {
+            sendJson(res, 409, { error: 'Required resident retention capacity is unavailable', code: ErrorCode.RETENTION_RESIDENT_CAPACITY_EXHAUSTED });
+            return;
+          }
+          response = {
+            success: true,
+            action: 'acquire_retention',
+            pinned: isSessionPinnedByEntry(entry),
+            retention: {
+              leaseId: result.retentionLeaseId,
+              mode: body.retention.mode,
+              ownerId: body.retention.ownerId,
+              expiresAt: new Date(result.pinnedUntil as number).toISOString(),
+            },
+          };
+          break;
+        }
+
+        case 'renew_retention': {
+          if (!pinExpiry || !body.retentionLeaseId) {
+            sendJson(res, 400, { error: 'retentionLeaseId is required', code: ErrorCode.INVALID_REQUEST });
+            return;
+          }
+          const claim = pinExpiry.listLeases(sessionId).find((item) => item.leaseId === body.retentionLeaseId);
+          if (!claim) {
+            sendJson(res, 404, { error: 'Retention lease not found', code: ErrorCode.RETENTION_CLAIM_NOT_FOUND });
+            return;
+          }
+          if (body.ownerId !== undefined && claim.ownerId !== body.ownerId) {
+            sendJson(res, 409, { error: 'Retention lease owner mismatch', code: ErrorCode.RETENTION_CLAIM_OWNER_MISMATCH });
+            return;
+          }
+          let result: ApplyPinResult;
+          try {
+            result = await pinExpiry.renewLease(sessionId, body.retentionLeaseId, body.pinTtlSeconds);
+          } catch (error) {
+            sendJson(res, 503, { error: error instanceof Error ? error.message : 'Retention store unavailable', code: ErrorCode.RETENTION_STORE_UNAVAILABLE });
+            return;
+          }
+          response = {
+            success: true,
+            action: 'renew_retention',
+            pinned: isSessionPinnedByEntry(entry),
+            retention: {
+              leaseId: body.retentionLeaseId,
+              mode: result.retentionMode!,
+              ownerId: claim.ownerId ?? '',
+              expiresAt: new Date(result.pinnedUntil as number).toISOString(),
+            },
+          };
+          break;
+        }
+
+        case 'release_retention': {
+          if (!pinExpiry || !body.retentionLeaseId) {
+            sendJson(res, 400, { error: 'retentionLeaseId is required', code: ErrorCode.INVALID_REQUEST });
+            return;
+          }
+          try {
+            await pinExpiry.releaseLease(sessionId, body.retentionLeaseId, body.ownerId);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : '';
+            const code = message === 'RETENTION_CLAIM_OWNER_MISMATCH'
+              ? ErrorCode.RETENTION_CLAIM_OWNER_MISMATCH
+              : message === 'RETENTION_CLAIM_NOT_FOUND'
+                ? ErrorCode.RETENTION_CLAIM_NOT_FOUND
+                : ErrorCode.RETENTION_STORE_UNAVAILABLE;
+            const status = code === ErrorCode.RETENTION_CLAIM_OWNER_MISMATCH ? 409
+              : code === ErrorCode.RETENTION_CLAIM_NOT_FOUND ? 404 : 503;
+            sendJson(res, status, { error: message || code, code });
+            return;
+          }
+          response = { success: true, action: 'release_retention', pinned: isSessionPinnedByEntry(entry) };
+          break;
+        }
+
+        case 'unpin': {
+          // Legacy Internal API unpin releases only Internal API leases. It must
+          // never clear a human Web UI or watch-owned runtime claim.
+          if (pinExpiry) {
+            await pinExpiry.releaseLegacyLease(sessionId);
+          } else {
+            await unpinSessionById(sessionId, 'internal-api:legacy-untracked');
+          }
+          response = { success: true, action: 'unpin', pinned: isSessionPinnedByEntry(entry) };
           break;
         }
 
@@ -1896,6 +2093,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
         const sessionPath = entry.path;
         await multiSessionManager.subscribeClient(internalClientId, sessionPath);
+        await pinExpiry?.reapplyForSession(sessionId);
+        try {
         const agentSession = multiSessionManager.getAgentSession(sessionPath);
         if (!agentSession) {
           throw new Error(`Pi session not loaded: ${sessionId}`);
@@ -1958,6 +2157,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         // the same AgentSession resumes asynchronously. The normalized
         // agent_end event—not prompt() return—is the true terminal turn signal.
         await turnBoundary;
+        } finally {
+          multiSessionManager.unsubscribeClient(internalClientId, sessionPath);
+        }
         break;
       }
     }
@@ -2950,9 +3152,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sendJson(res, 200, { success: true, watchId: `watch-${sessionId}` });
   }
 
+  function handleCapacity(_req: IncomingMessage, res: ServerResponse): void {
+    sendJson(res, 200, admission.snapshot());
+  }
+
   return {
     ready,
     shutdown,
+    reapplyRetentionForSession: (sessionId: string) => pinExpiry?.reapplyForSession(sessionId) ?? Promise.resolve(),
     handleCreateSession,
     handleListSessions,
     handleGetSession,
@@ -2978,6 +3185,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     handleRegisterWatch,
     handleGetWatch,
     handleDeleteWatch,
+    handleCapacity,
   };
 }
 

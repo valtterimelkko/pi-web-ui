@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Source-owned retention and execution admission (`1.12.0`)**
+  - Web UI, Internal API, and watch retention claims are independently owned; API leases do not consume the two human pin slots.
+  - Atomic create-time `durable`/`resident` leases renew/release by lease id and expire as crash safety.
+  - `/api/v1/capacity` reports turn admission, interactive reserve, and measured memory headroom; Agent OS stores and releases exact lease ids after quiescence.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
+
 - **Exact Claude profile binding (`1.11.0`)**
   - Profile-backed Claude create/info/list/receipt projections now separate the canonical `modelSelector` (`profile:<id>`) from the effective runtime `model` (for example `sonnet`).
   - Explicit unknown profiles, conflicting selector forms, and unavailable requested backends fail creation rather than falling through to another Claude backend.

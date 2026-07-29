@@ -136,6 +136,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
 
     multiSessionManager = {
       subscribeClient: vi.fn().mockResolvedValue(undefined),
+      unsubscribeClient: vi.fn(),
       getAgentSession: vi.fn(() => agentSession),
       addApiObserver: vi.fn((_p: string, observer: (e: unknown) => void) => { piObserverSets.push(observer); }),
       removeApiObserver: vi.fn((_p: string, observer: (e: unknown) => void) => {
@@ -365,6 +366,28 @@ describe('createSessionRoutes orchestration endpoints', () => {
 
       (eventsRes as any)._closeCb?.();
       await eventsDone;
+    });
+  });
+
+  describe('Pi synthetic subscription lifecycle', () => {
+    it('unsubscribes the Internal API client after a completed Pi prompt', async () => {
+      registry.get.mockResolvedValue({
+        id: 'pi-prompt', path: '/tmp/pi.jsonl', sdkType: 'pi', cwd: '/root/proj',
+        firstMessage: '', messageCount: 0, status: 'idle',
+      });
+      multiSessionManager.getAgentSession().prompt.mockImplementation(async () => {
+        for (const observer of [...piObserverSets]) {
+          observer({ type: 'agent_end', sessionId: 'pi-prompt', timestamp: Date.now(), data: {} });
+        }
+      });
+      const routes = makeRoutes();
+      const res = createMockRes();
+      await routes.handleSendPrompt(createJsonReq('POST', '/api/v1/sessions/pi-prompt/prompt', {
+        message: 'hello', verbosity: 'answers',
+      }), res, 'pi-prompt');
+
+      expect(res.statusCode).toBe(200);
+      expect(multiSessionManager.unsubscribeClient).toHaveBeenCalledWith('test-client', '/tmp/pi.jsonl');
     });
   });
 
@@ -667,6 +690,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(res.statusCode).toBe(201);
       expect(piService.setModel).toHaveBeenCalledWith('new-pi', 'openai-codex/gpt-5.6-luna');
       expect(multiSessionManager.getAgentSession().setThinkingLevel).toHaveBeenCalledWith('max');
+      expect(multiSessionManager.unsubscribeClient).toHaveBeenCalledWith('test-client', '/tmp/new-pi.jsonl');
     });
 
     it('applies max to an OpenCode session after selecting the requested model', async () => {

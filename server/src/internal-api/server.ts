@@ -50,6 +50,7 @@ import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
 import { bindOwnerOnlyUnixSocket, UnixSocketOwner } from './unix-socket-owner.js';
 import { getWorkerPool } from '../routes/sessions.js';
+import { AdmissionController } from './admission-controller.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -85,6 +86,11 @@ export interface InternalApiConfig {
   shutdownGraceMs?: number;
   /** Callback invoked when a session is created via the API */
   onSessionCreated?: (sessionId: string, sessionPath: string, runtime: string) => void;
+  /** Optional execution-admission tuning; defaults are CPU/memory-derived. */
+  admissionMaxActiveTurns?: number;
+  admissionInteractiveReserve?: number;
+  admissionMinimumHeadroomBytes?: number;
+  admissionReservedBytesPerTurn?: number;
 }
 
 const DEFAULT_SOCKET_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api.sock');
@@ -164,6 +170,15 @@ export class InternalApiServer {
     await runReceiptManager.init();
     this.runReceiptManager = runReceiptManager;
 
+    // One process-local admission authority sees all Internal API conductors.
+    // It preserves explicit headroom for interactive Web UI turns.
+    const admissionController = new AdmissionController({
+      maxActiveTurns: this.config.admissionMaxActiveTurns,
+      interactiveReserve: this.config.admissionInteractiveReserve,
+      minimumHeadroomBytes: this.config.admissionMinimumHeadroomBytes,
+      reservedBytesPerTurn: this.config.admissionReservedBytesPerTurn,
+    });
+
     // Create routes
     const sessionRoutes = createSessionRoutes({
       claudeService: this.claudeService,
@@ -183,9 +198,11 @@ export class InternalApiServer {
       piSessionDir: config.sessionDir || path.join(config.piAgentDir, 'sessions'),
       claudeSessionDir: config.claudeSessionDir,
       antigravitySessionDir: config.antigravitySessionDir,
+      admissionController,
     });
     this.sessionRoutesShutdown = sessionRoutes.shutdown;
     await sessionRoutes.ready;
+    this.multiSessionManager.setSessionMaterializedHandler((sessionId) => sessionRoutes.reapplyRetentionForSession(sessionId));
 
     const modelsDeps: ModelsRoutesDeps = {
       piService: this.piService,
@@ -364,6 +381,7 @@ export class InternalApiServer {
       notificationManager?.shutdown();
       await notificationManager?.waitForIdle();
       this.notificationManager = null;
+      this.multiSessionManager.setSessionMaterializedHandler(undefined);
       if (this.sessionRoutesShutdown) {
         await this.sessionRoutesShutdown().catch(() => { /* preserve startup error */ });
         this.sessionRoutesShutdown = null;
@@ -398,6 +416,7 @@ export class InternalApiServer {
       notificationManager?.shutdown();
       await notificationManager?.waitForIdle().catch((error) => failures.push(error));
       this.notificationManager = null;
+      this.multiSessionManager.setSessionMaterializedHandler(undefined);
       if (this.sessionRoutesShutdown) {
         await this.sessionRoutesShutdown().catch((error) => failures.push(error));
         this.sessionRoutesShutdown = null;
@@ -448,6 +467,14 @@ export class InternalApiServer {
     }
 
     switch (resource) {
+      case 'capacity': {
+        if (req.method === 'GET' && !id) {
+          deps.sessionRoutes.handleCapacity(req, res);
+        } else {
+          sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+        }
+        return;
+      }
       case 'sessions': {
         if (!id) {
           // /api/v1/sessions

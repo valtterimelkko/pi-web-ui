@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.11.0",
+  "contractVersion": "1.12.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,13 @@ Current contract:
 
 ### Changelog
 
+- **1.12.0** (minor, additive) — separated source-owned retention from execution admission:
+  - `POST /sessions` accepts required `retention: {mode:"durable"|"resident",ttlSeconds?,ownerId,label?}` and returns a lease id; failure is atomic and removes the unused session;
+  - `acquire_retention` adds an independent lease to an existing session; `renew_retention` and `release_retention` target one lease id, so Web UI, watch, and concurrent Internal API owners cannot release each other's claims;
+  - the historical two-pin cap now applies only to human Web UI claims; API leases do not consume those slots;
+  - `GET /api/v1/capacity` reports process-local admission, per-runtime active turns, interactive reserve, and measured cgroup/RSS memory headroom; prompt refusal returns `429 ADMISSION_CAPACITY_EXHAUSTED` with `Retry-After`;
+  - Pi Internal API synthetic subscriptions are released after create/turn completion, and explicit DELETE disposes the loaded SDK session before removing files;
+  - legacy `pin`/`unpin` fields remain compatible API-owned projections during migration. Old clients can ignore every additive field/endpoint.
 - **1.11.0** (minor, additive) — made exact Claude profile identity explicit and fail-closed:
   - profile-backed Claude create/session-info/list/run-receipt responses add `modelSelector: "profile:<id>"`; for backwards compatibility the create response keeps its existing request-selector echo in `model`, while session info/list/receipts keep their existing effective-runtime-model meaning (for example `sonnet`);
   - exact creation responses also expose the resolved `executionInstanceId`;
@@ -156,6 +163,8 @@ For `/api/v1`, preserve these rules:
 6. **Claude channel event caveats stay documented.** Do not imply all runtimes have identical event reliability.
 7. **Local-only security boundary stays intact.** Keep Unix-socket + bearer-token assumptions unless a separate public API is intentionally designed.
 8. **Trusted multi-client, not multi-tenant.** Every process holding the shared token can inspect and control every API session. Concurrency safety does not provide tenant isolation or per-client authorization.
+9. **Retention ownership and execution capacity are separate.** Durable recovery claims do not imply residency, residency does not grant a turn permit, and only the owner-selected lease id may be renewed/released.
+10. **Pi Web UI is final admission authority.** External conductors may preflight `/capacity`, but prompt admission is rechecked atomically against process-local concurrency and measured memory headroom while preserving interactive reserve.
 
 ## Error code catalog
 
@@ -188,6 +197,11 @@ re-introduced.
 | `UNSUPPORTED_OPERATION` | 400 | Op not supported for this runtime/config | e.g. `steer` outside Pi |
 | `NOT_IMPLEMENTED` | 501 | Endpoint exists but runtime path unimplemented | e.g. replay history for unsupported runtime |
 | `INTERNAL_ERROR` | 500 | Unexpected internal error | Unhandled exception in a route |
+| `RETENTION_CLAIM_NOT_FOUND` | 404 | Retention lease absent | Wrong, expired, released, or different-session lease id |
+| `RETENTION_CLAIM_OWNER_MISMATCH` | 409 | Conditional owner check failed | Caller supplied a different owner id |
+| `RETENTION_RESIDENT_CAPACITY_EXHAUSTED` | 409 | Required residency could not be applied | Runtime could not materialise/retain the new session |
+| `RETENTION_STORE_UNAVAILABLE` | 503 | Lease guarantee could not be persisted | Owner-only ledger unavailable/unwritable |
+| `ADMISSION_CAPACITY_EXHAUSTED` | 429 | Turn admission temporarily refused | Global/runtime budget or measured memory headroom |
 | `WATCH_NOT_FOUND` | 404 | No long-horizon watch for session | GET/DELETE `/watch` before POST, or post-restart |
 | `TRANSFER_DISPATCH_FAILED` | 500 | Transfer could not be dispatched | Target creation / injection / IO failure |
 | `EMPTY_TRANSCRIPT` | 404 | No visible transcript yet | `/transcript` before any turn produced content |

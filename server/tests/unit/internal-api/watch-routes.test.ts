@@ -55,6 +55,7 @@ describe('watch routes — POST/GET/DELETE /sessions/:id/watch', () => {
       addApiObserver: vi.fn((_p: string, o: (e: unknown) => void) => observers.push(o)),
       removeApiObserver: vi.fn(),
       pinSession: vi.fn(() => true),
+      unpinSession: vi.fn(() => true),
     };
     routes = createSessionRoutes({
       claudeService: {} as never,
@@ -87,7 +88,7 @@ describe('watch routes — POST/GET/DELETE /sessions/:id/watch', () => {
     const created = JSON.parse(reg.body);
     expect(created.conditions).toHaveLength(2);
     expect(created.pinned).toBe(true);
-    expect(multiSessionManager.pinSession).toHaveBeenCalledWith('pi-1');
+    expect(multiSessionManager.pinSession).toHaveBeenCalledWith('pi-1', 'watch:watch-pi-1');
 
     // No /events subscriber — only the standing watch observes.
     emit(ev('tool_execution_start', { toolName: 'Bash' }));
@@ -124,6 +125,7 @@ describe('watch routes — POST/GET/DELETE /sessions/:id/watch', () => {
     const del = createMockRes();
     await routes.handleDeleteWatch(createJsonReq('DELETE', '/api/v1/sessions/pi-1/watch'), del, 'pi-1');
     expect(del.statusCode).toBe(200);
+    expect(multiSessionManager.unpinSession).toHaveBeenCalledWith('pi-1', 'watch:watch-pi-1');
 
     const get = createMockRes();
     await routes.handleGetWatch(createJsonReq('GET', '/api/v1/sessions/pi-1/watch'), get, 'pi-1', new URLSearchParams());

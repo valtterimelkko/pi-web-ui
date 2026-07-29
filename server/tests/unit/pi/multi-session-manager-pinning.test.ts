@@ -151,6 +151,18 @@ describe('MultiSessionManager', () => {
     vi.clearAllMocks();
   });
   describe('session pinning', () => {
+    it('notifies retention reapplication whenever a disk session is materialized', async () => {
+      const mockSession = createMockAgentSession({ sessionId: 'rehydrated-id' });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const materialized = vi.fn().mockResolvedValue(undefined);
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      manager.setSessionMaterializedHandler(materialized);
+
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+      expect(materialized).toHaveBeenCalledWith('rehydrated-id', '/path/to/session.jsonl');
+    });
+
     it('should pin a session', async () => {
       const mockSession = createMockAgentSession();
       mockPiService.createSession.mockResolvedValueOnce(mockSession);
@@ -208,6 +220,37 @@ describe('MultiSessionManager', () => {
       expect(manager.pinSession('/path/2.jsonl')).toBe(true);
       expect(manager.pinSession('/path/3.jsonl')).toBe(false); // Exceeds limit
       expect(manager.getPinnedCount()).toBe(2);
+    });
+
+    it('keeps independent API retention when the Web UI releases its own pin claim', async () => {
+      const mockSession = createMockAgentSession();
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast, { maxPinnedSessions: 2 });
+      await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+
+      expect(manager.pinSession('/path/to/session.jsonl')).toBe(true);
+      expect(manager.pinSession('/path/to/session.jsonl', 'internal-api:lease-1')).toBe(true);
+      expect(manager.unpinSession('/path/to/session.jsonl')).toBe(true);
+      expect(manager.isSessionPinned('/path/to/session.jsonl')).toBe(true);
+      expect(manager.unpinSession('/path/to/session.jsonl', 'internal-api:lease-1')).toBe(true);
+      expect(manager.isSessionPinned('/path/to/session.jsonl')).toBe(false);
+    });
+
+    it('does not count Internal API claims against the two-session Web UI pin limit', async () => {
+      const paths = ['/path/1.jsonl', '/path/2.jsonl', '/path/3.jsonl'];
+      mockPiService.createSession
+        .mockResolvedValueOnce(createMockAgentSession({ sessionPath: paths[0] }))
+        .mockResolvedValueOnce(createMockAgentSession({ sessionPath: paths[1] }))
+        .mockResolvedValueOnce(createMockAgentSession({ sessionPath: paths[2] }));
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast, { maxPinnedSessions: 2 });
+      for (const path of paths) await manager.subscribeClient('client-1', path);
+
+      expect(manager.pinSession(paths[0])).toBe(true);
+      expect(manager.pinSession(paths[1])).toBe(true);
+      expect(manager.pinSession(paths[2], 'internal-api:lease-3')).toBe(true);
+      expect(manager.isSessionPinned(paths[2])).toBe(true);
+      expect(manager.pinSession(paths[2])).toBe(false);
     });
 
     it('should allow pinning same session twice without counting twice', async () => {

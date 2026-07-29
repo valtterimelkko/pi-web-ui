@@ -54,7 +54,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.11.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.12.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -82,6 +82,22 @@ export function getInternalApiContractInfo(
 
 // ─── Request types ───────────────────────────────────────────────────────────
 
+export type RetentionMode = 'durable' | 'resident';
+
+export interface RetentionLeaseRequest {
+  mode: RetentionMode;
+  ttlSeconds?: number;
+  ownerId: string;
+  label?: string;
+}
+
+export interface RetentionLeaseResponse {
+  leaseId: string;
+  mode: RetentionMode;
+  ownerId: string;
+  expiresAt: string;
+}
+
 export interface CreateSessionRequest {
   runtime: SessionRuntime;
   cwd?: string;
@@ -99,6 +115,8 @@ export interface CreateSessionRequest {
   pin?: boolean;
   /** Pin lifetime in seconds. Defaults to 24h; clamped to a hard max (7d). */
   pinTtlSeconds?: number;
+  /** Required source-owned retention; failure rolls back the unused session. */
+  retention?: RetentionLeaseRequest;
   /** Claude-specific: select a provider profile by ID. */
   profileId?: string;
 }
@@ -391,7 +409,7 @@ export interface SessionEvidenceResponse {
 }
 
 export interface SessionControlRequest {
-  action: 'set_model' | 'set_thinking_level' | 'pin' | 'unpin';
+  action: 'set_model' | 'set_thinking_level' | 'pin' | 'unpin' | 'acquire_retention' | 'renew_retention' | 'release_retention';
   modelId?: string;
   level?: ThinkingLevel;
   /**
@@ -400,6 +418,9 @@ export interface SessionControlRequest {
    * returned as `pinnedUntil` on the response.
    */
   pinTtlSeconds?: number;
+  retentionLeaseId?: string;
+  ownerId?: string;
+  retention?: RetentionLeaseRequest;
 }
 
 export interface ApprovalResponseRequest {
@@ -438,6 +459,8 @@ export interface CreateSessionResponse {
   pinnedUntil?: string;
   /** Why a requested pin was not granted, when pinned is false. */
   pinReason?: 'PIN_LIMIT_REACHED';
+  /** Source-owned required retention lease, when requested. */
+  retention?: RetentionLeaseResponse;
 }
 
 export interface SessionInfo {
@@ -502,6 +525,7 @@ export interface SessionControlResponse {
   pinnedUntil?: string;
   /** Why a requested pin was not granted, when pinned is false. */
   pinReason?: 'PIN_LIMIT_REACHED';
+  retention?: RetentionLeaseResponse;
 }
 
 export interface ApprovalResponseResult {
@@ -639,6 +663,13 @@ export interface RuntimeCapabilities {
 export interface CapabilitiesResponse {
   status: 'ok' | 'degraded';
   contract: InternalApiContractInfo;
+  features: {
+    retentionLeases: true;
+    durableRetention: true;
+    residentRetention: true;
+    executionAdmission: true;
+    capacityEndpoint: '/api/v1/capacity';
+  };
   runtimes: {
     pi: RuntimeCapabilities;
     claude: RuntimeCapabilities;

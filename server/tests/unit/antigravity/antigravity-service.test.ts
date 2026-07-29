@@ -409,6 +409,21 @@ describe('AntigravityService — durable turn lifecycle', () => {
     );
   }
 
+  it('keeps source-owned claims independent of the Web UI pin limit', async () => {
+    const s1 = await svc.createSession('/tmp/a');
+    const s2 = await svc.createSession('/tmp/b');
+    const s3 = await svc.createSession('/tmp/c');
+
+    expect(await svc.pinSession(s1.sessionId)).toBe(true);
+    expect(await svc.pinSession(s2.sessionId)).toBe(true);
+    expect(await svc.pinSession(s3.sessionId, 'internal-api:lease-3')).toBe(true);
+    expect(await svc.pinSession(s3.sessionId)).toBe(false);
+    expect(svc.unpinSession(s3.sessionId)).toBe(true);
+    expect(svc.isSessionPinned(s3.sessionId)).toBe(true);
+    expect(svc.unpinSession(s3.sessionId, 'internal-api:lease-3')).toBe(true);
+    expect(svc.isSessionPinned(s3.sessionId)).toBe(false);
+  });
+
   it('aborts the exact in-flight subprocess before allowing a replacement turn', async () => {
     const { sessionId } = await svc.createSession(tmp);
     ctrl.gatePromise = new Promise<void>((resolve) => { ctrl.gateResolve = resolve; });

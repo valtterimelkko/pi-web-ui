@@ -67,6 +67,7 @@ beforeEach(async () => {
 
   multiSessionManager = {
     subscribeClient: vi.fn().mockResolvedValue(undefined),
+    unsubscribeClient: vi.fn(),
     getAgentSession: vi.fn(() => ({ setThinkingLevel: vi.fn(), getSessionStats: vi.fn(), sessionFile: '/tmp/p.jsonl' })),
     addApiObserver: vi.fn(),
     removeApiObserver: vi.fn(),

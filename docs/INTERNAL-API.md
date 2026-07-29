@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.11.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.12.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -305,7 +305,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.11.0",
+    "contractVersion": "1.12.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -453,8 +453,12 @@ POST /api/v1/sessions
   "runtime": "claude",
   "cwd": "/home/user/myproject",
   "model": "profile:glm52-claude-sdk",
-  "pin": true,
-  "pinTtlSeconds": 7200
+  "retention": {
+    "mode": "resident",
+    "ttlSeconds": 7200,
+    "ownerId": "attempt-123",
+    "label": "agent-os:work-456"
+  }
 }
 ```
 
@@ -464,8 +468,9 @@ POST /api/v1/sessions
 | `cwd` | string | No | `process.cwd()` | Working directory |
 | `model` | string | No | runtime default | Model ID (from `/models`). For Claude, may be a base alias such as `sonnet` or a specific profile entry such as `profile:glm52-claude-sdk`. |
 | `thinkingLevel` | string | No | runtime default | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use the selected model's `thinkingLevels` from `/models` as the capability source. |
-| `pin` | boolean | No | `false` | Pin the session at creation so it survives idle/timeout cleanup. Time-bounded — see [Session Pinning](#session-pinning-persistent-time-bounded). |
-| `pinTtlSeconds` | number | No | `86400` (24h) | Pin lifetime in seconds when `pin:true`. Clamped to a hard max of 7 days. |
+| `retention` | object | No | — | Required source-owned lease. `durable` preserves recoverability without forcing runtime residency; `resident` additionally keeps the runtime loaded. Requires `ownerId`; optional `ttlSeconds` (default 24h, max 7d) and `label`. Creation rolls back if the guarantee fails. |
+| `pin` | boolean | No | `false` | Legacy Internal API compatibility projection. Mutually exclusive with `retention`; does not consume a human Web UI pin slot. |
+| `pinTtlSeconds` | number | No | `86400` (24h) | Legacy pin lifetime. Clamped to a hard max of 7 days. |
 | `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. Supplying both forms with different ids is rejected. An explicit profile never falls back to another profile/backend when unavailable. |
 
 **Response (201):**
@@ -480,13 +485,20 @@ POST /api/v1/sessions
   "cwd": "/home/user/myproject",
   "createdAt": "2026-04-28T12:00:00.000Z",
   "pinned": true,
-  "pinnedUntil": "2026-04-28T14:00:00.000Z"
+  "pinnedUntil": "2026-04-28T14:00:00.000Z",
+  "retention": {
+    "leaseId": "2ad18d2e-2394-4e56-b6ee-3c26c8b89c0d",
+    "mode": "resident",
+    "ownerId": "attempt-123",
+    "expiresAt": "2026-04-28T14:00:00.000Z"
+  }
 }
 ```
 
-When `pin:true` is requested but the runtime already has its maximum pinned
-sessions (2), the session is still created and returned with `pinned: false`
-and `"pinReason": "PIN_LIMIT_REACHED"` (unpin another session, then re-pin).
+The historical maximum of two applies only to human Web UI claims. Internal API
+and watch claims are independently owned and time-bounded. A required resident
+lease failure returns a structured error and removes the unused session; it does
+not return a half-created unretained success.
 
 **Errors:**
 - `400` — Missing `runtime` field
@@ -858,9 +870,16 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.11.0",
+    "contractVersion": "1.12.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
+  },
+  "features": {
+    "retentionLeases": true,
+    "durableRetention": true,
+    "residentRetention": true,
+    "executionAdmission": true,
+    "capacityEndpoint": "/api/v1/capacity"
   },
   "runtimes": {
     "pi": {
@@ -914,6 +933,22 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
   }
 }
 ```
+
+### Execution capacity
+
+```
+GET /api/v1/capacity
+```
+
+Returns the current process-local Internal API turn budget, active counts by
+runtime, the slot reserved for interactive Web UI work, measured cgroup-v2
+memory usage (or process RSS/host RAM fallback), and `retryAfterSeconds`.
+Conductors should preflight this endpoint, but the prompt route remains the
+atomic authority because capacity can change between reads. A refused prompt
+returns HTTP `429`, code `ADMISSION_CAPACITY_EXHAUSTED`, a stable `reason`
+(`global_limit`, `runtime_limit`, or `memory_pressure`), and `Retry-After`.
+Capacity limits govern active turns, not the number of durable sessions or
+retention leases; no hidden server-side queue is created.
 
 ---
 
@@ -1156,14 +1191,21 @@ Examples:
 { "action": "pin" }
 { "action": "pin", "pinTtlSeconds": 7200 }
 { "action": "unpin" }
+{ "action": "acquire_retention", "retention": { "mode": "durable", "ttlSeconds": 7200, "ownerId": "conductor-b" } }
+{ "action": "renew_retention", "retentionLeaseId": "<uuid>", "ownerId": "attempt-123", "pinTtlSeconds": 7200 }
+{ "action": "release_retention", "retentionLeaseId": "<uuid>", "ownerId": "attempt-123" }
 ```
 
-`pin` grants a **time-bounded** API pin (default 24h, hard max 7d) that protects
-the session from idle/timeout cleanup, and returns the absolute expiry as
-`pinnedUntil`. Re-pinning extends the deadline. If the runtime is already at its
-maximum pinned sessions (2), the response is `pinned: false` with
-`"pinReason": "PIN_LIMIT_REACHED"`. `unpin` revokes the pin and clears its expiry
-record. See [Session Pinning](#session-pinning-persistent-time-bounded).
+`acquire_retention` adds another independent lease to an existing session;
+`renew_retention` and `release_retention` target exactly one source-owned lease.
+`ownerId` is an optional cooperative same-host ownership check, not an RBAC
+boundary. Releasing an API lease never clears a human Web UI or watch claim.
+
+Legacy `pin` grants a **time-bounded** API residency claim (default 24h,
+hard max 7d), returns `pinnedUntil`, and extends its deadline when repeated.
+`unpin` releases all legacy Internal API leases for that session but does not
+touch other sources. The two-session limit belongs only to human Web UI claims.
+See [source-owned session retention](#source-owned-session-retention-persistent-time-bounded).
 
 `set_thinking_level` accepts `off | minimal | low | medium | high | xhigh | max`.
 For Claude, `max` is forwarded to the SDK/direct CLI/channel effort control;
@@ -1574,7 +1616,7 @@ structurally invalid batch is rejected atomically before any session is created.
 ```
 
 Each entry accepts the same fields as `POST /sessions`, including
-`thinkingLevel`, `pin`, and `pinTtlSeconds` (see [Session Pinning](#session-pinning-persistent-time-bounded));
+`thinkingLevel`, legacy `pin`/`pinTtlSeconds`, and required `retention` (see [source-owned session retention](#source-owned-session-retention-persistent-time-bounded));
 each result item echoes `pinned` / `pinnedUntil` when pinned.
 
 **Response (200):**
@@ -1712,9 +1754,10 @@ any connection open.
 The restart guarantee is about the **ledger**, not automatic observer recovery.
 On boot, an `active` watch is reloaded as `detached`: past firings remain
 readable, but new events are not recorded until the caller registers the watch
-again. A watch's default runtime pin is also separate from the time-bounded
-Internal-API pin ledger; deleting a watch does not unpin the subject. Explicitly
-unpin or delete the session when the long task is finished. See
+again. A watch's default residency is a source-owned `watch:<watchId>` claim;
+deleting or replacing the watch releases exactly that claim without affecting
+human UI or API leases. Release any separately owned retention lease when the
+long task is finished. See
 [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
 
 ```
@@ -1771,56 +1814,48 @@ re-register), or `closed`.
 
 ---
 
-### Session Pinning (persistent, time-bounded)
+### Source-owned session retention (persistent, time-bounded)
 
-A **pin** protects a session from idle/timeout eviction so a longer-running task
-isn't cleaned up while it works. The web UI has always pinned sessions (max 2 per
-runtime); the Internal API now exposes the same guarantee as a first-class,
-**standalone** operation — no watch or long-horizon machinery required.
+Retention has three deliberately separate layers:
 
-Use it for the common agent workflow: *"kick off a longer task, make sure it
-survives, and check back later — without being locked into polling."*
+1. **Durable retention** preserves recoverability metadata/files without forcing
+   a runtime object to remain loaded.
+2. **Resident retention** adds a source-keyed runtime keepalive claim.
+3. **Execution admission** is separate again; a retained session still needs a
+   turn permit from the capacity controller.
 
+```text
+POST /api/v1/sessions
+  {"runtime":"claude","retention":{"mode":"resident","ttlSeconds":7200,"ownerId":"attempt-123"}}
+POST /api/v1/sessions/:id/control
+  {"action":"renew_retention","retentionLeaseId":"<uuid>","ownerId":"attempt-123","pinTtlSeconds":3600}
+POST /api/v1/sessions/:id/control
+  {"action":"release_retention","retentionLeaseId":"<uuid>","ownerId":"attempt-123"}
 ```
-POST /api/v1/sessions                       # { "runtime": "claude", "pin": true, "pinTtlSeconds": 7200 }
-POST /api/v1/sessions/:id/control           # { "action": "pin", "pinTtlSeconds": 3600 }
-POST /api/v1/sessions/:id/control           # { "action": "unpin" }
-GET  /api/v1/sessions/:id/info              # reports pinned + pinnedUntil
-```
 
-**Behaviour and rules (read these):**
+Each successful acquisition returns `{leaseId,mode,ownerId,expiresAt}`. Several
+conductors may hold independent leases on one session. Releasing or expiring one
+lease removes only its own runtime claim; the effective `pinned` projection stays
+true while any resident Web UI/API/watch claim remains.
 
-- **Time-bounded by default.** Every API pin carries an absolute expiry returned
-  as `pinnedUntil` (ISO). Default lifetime **24h**; hard maximum **7 days**
-  (longer requests are clamped). This is deliberate: a pin must not hold a slot
-  forever. Configure via `INTERNAL_API_PIN_DEFAULT_TTL_MS` /
-  `INTERNAL_API_PIN_MAX_TTL_MS`.
-- **Renewable.** Calling `pin` again (create-time or control) extends the
-  deadline — re-pin periodically to keep a genuinely long task alive.
-- **Auto-revoked.** A background sweep revokes pins past their `pinnedUntil`, so
-  resources are reclaimed even if the caller disappears.
-- **Restart-safe.** Pin records are persisted to a disk-backed ledger
-  (`~/.pi-web-ui/pins/`). On server restart, still-valid pins are re-applied and
-  already-expired ones are revoked immediately.
-- **Max 2 per runtime per server instance**, same as the web UI. A production
-  server and an isolated validation server each have their own pin slots and
-  durable pin ledger. At the limit, `pin:true` still creates the session but
-  returns `pinned: false`, `pinReason: PIN_LIMIT_REACHED`.
-- **Independent of the watch.** A long-horizon watch also pins by default, but
-  you can pin with no watch at all. Deleting a watch does **not** unpin — pin and
-  watch are separate primitives.
+Leases default to 24 hours, are capped at seven days, persist under
+`~/.pi-web-ui/pins/`, renew by lease id, expire automatically, and survive
+restart. `ownerId` is a cooperative correctness guard for trusted local clients,
+not security isolation. A `resident` lease may be lazily reapplied when a Pi
+session is rehydrated; `durable` never forces eager startup residency.
 
-**Pin-only vs pin+watch vs nothing:**
+The **two-session maximum applies only to human Web UI pins**. API and watch
+claims do not consume those slots. Watch registration owns a separate
+`watch:<watchId>` claim and DELETE watch releases that exact claim. Legacy
+`pin`/`unpin` remain supported as Internal API-owned compatibility leases.
 
-| Goal | Use |
-|---|---|
-| Long task that should survive cleanup; check back whenever | **pin only** (`pin:true` on create, or `control pin`) |
-| Long task where you also want durable, restart-surviving condition detection | **pin + watch** (the watch pins by default) |
-| Short, synchronous task | neither — just `prompt` and read the answer |
+Explicit session DELETE overrides retention: it aborts/disposes the runtime,
+clears API leases, deletes persisted session files, and removes registry state.
 
-Combine pin-only with [detached dispatch](#detached-fire-and-forget-dispatch) for
-the full "set a long task and walk away" pattern: create a pinned session,
-dispatch a detached prompt, then read `/info` + `/transcript` later.
+Combine resident retention with [detached dispatch](#detached-fire-and-forget-dispatch)
+for a bounded "dispatch and check back" workflow, and use `/capacity` before
+prompting. Prefer `durable` when later recovery is enough and permanent residency
+would waste memory.
 
 ---
 
@@ -2090,13 +2125,14 @@ capabilities/models
 # Health (no auth)
 GET /api/v1/health
 
-# Models
+# Capacity and models
+GET /api/v1/capacity                      # current execution-admission snapshot
 GET /api/v1/models                        # all runtimes
 GET /api/v1/models?runtime=claude         # Claude only
 GET /api/v1/models?runtime=antigravity    # Antigravity only
 
 # Sessions
-POST   /api/v1/sessions               # create (optional pin:true, pinTtlSeconds)
+POST   /api/v1/sessions               # create (prefer required retention lease)
 GET    /api/v1/sessions               # list all
 GET    /api/v1/sessions/:id           # get one
 GET    /api/v1/sessions/:id/info      # get one (rich, includes pinned + pinnedUntil)
@@ -2105,11 +2141,11 @@ DELETE /api/v1/sessions/:id           # delete
 # Conversation
 POST /api/v1/sessions/:id/prompt      # send prompt (detach:true → 202 fire-and-forget)
 POST /api/v1/sessions/:id/abort       # abort running
-POST /api/v1/sessions/:id/control     # set_model / set_thinking_level / pin / unpin
+POST /api/v1/sessions/:id/control     # model/thinking + acquire/renew/release retention
 
-# Session pinning (persistent, time-bounded — independent of the watch)
-# pin:true on create, or control {action:"pin", pinTtlSeconds:N} → pinnedUntil
-# default 24h, hard max 7d, renewable, auto-revoked, restart-safe. Max 2/runtime/server.
+# Source-owned retention (persistent, time-bounded, independent of human UI pins)
+# create retention:{mode:"durable"|"resident",ownerId,...} → retention.leaseId
+# renew/release by exact lease id; default 24h, hard max 7d, restart-safe.
 
 # Orchestration
 GET  /api/v1/sessions/:id/events      # persistent SSE event stream

@@ -38,9 +38,17 @@ const thinkingLevelSchema = z
   .string()
   .refine((v) => isThinkingLevel(v), { message: `thinkingLevel must be one of ${THINKING_LEVELS.join(', ')}` });
 
+const ttlSecondsSchema = z.number().int().finite().min(1).max(7 * 24 * 60 * 60);
+const retentionSchema = z.object({
+  mode: z.enum(['durable', 'resident']),
+  ttlSeconds: ttlSecondsSchema.optional(),
+  ownerId: z.string().min(1).max(200),
+  label: z.string().max(200).optional(),
+}).strict();
 const pinFields = {
   pin: z.boolean().optional(),
-  pinTtlSeconds: z.number().int().finite().min(1).max(7 * 24 * 60 * 60).optional(),
+  pinTtlSeconds: ttlSecondsSchema.optional(),
+  retention: retentionSchema.optional(),
 };
 
 export const createSessionBodySchema = z.object({
@@ -54,6 +62,9 @@ export const createSessionBodySchema = z.object({
   profileId: z.string().min(1).max(200).optional(),
   ...pinFields,
 }).strict().superRefine((body, ctx) => {
+  if (body.pin && body.retention) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['retention'], message: 'Use either legacy pin or retention, not both' });
+  }
   if (body.profileId !== undefined && body.runtime !== 'claude') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -85,6 +96,16 @@ const batchCreateEntrySchema = z.object({
     });
   }
 });
+
+export const sessionControlBodySchema = z.object({
+  action: z.enum(['set_model', 'set_thinking_level', 'pin', 'unpin', 'acquire_retention', 'renew_retention', 'release_retention']),
+  modelId: z.string().min(1).optional(),
+  level: z.string().min(1).optional(),
+  pinTtlSeconds: ttlSecondsSchema.optional(),
+  retentionLeaseId: z.string().uuid().optional(),
+  ownerId: z.string().min(1).max(200).optional(),
+  retention: retentionSchema.optional(),
+}).strict();
 
 export const batchCreateBodySchema = z.object({
   sessions: z.array(batchCreateEntrySchema).min(1).max(MAX_BATCH_ITEMS),

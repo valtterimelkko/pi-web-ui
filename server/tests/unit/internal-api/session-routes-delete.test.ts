@@ -109,6 +109,7 @@ describe('createSessionRoutes — DELETE file cleanup', () => {
     multiSessionManager = {
       getAgentSession: vi.fn(() => null),
       unpinSession: vi.fn(() => true),
+      disposeLoadedSession: vi.fn(() => true),
     };
 
     piService = { setModel: vi.fn().mockResolvedValue(undefined) };
@@ -128,11 +129,39 @@ describe('createSessionRoutes — DELETE file cleanup', () => {
       piService,
       internalClientId: 'internal-test',
       watchDir: path.join(dir, 'watches'),
+      pinDir: path.join(dir, 'pins'),
       piSessionDir: piDir,
       claudeSessionDir: claudeDir,
       antigravitySessionDir: antigravityDir,
     });
   }
+
+  it('releases API and watch claims before deleting registry state', async () => {
+    const sessionId = 'claude-claimed';
+    registry.get.mockResolvedValue({ id: sessionId, sdkType: 'claude', path: sessionId, cwd: '/root/proj', status: 'idle' });
+    const routes = makeRoutes();
+    await routes.ready;
+
+    const retentionRes = createMockRes();
+    await routes.handleSessionControl(createJsonReq('POST', '/control', {
+      action: 'acquire_retention',
+      retention: { mode: 'resident', ownerId: 'owner-a' },
+    }), retentionRes, sessionId);
+    const watchRes = createMockRes();
+    await routes.handleRegisterWatch(createJsonReq('POST', '/watch', {
+      conditions: [{ type: 'event_type', eventType: 'agent_end' }], pin: true,
+    }), watchRes, sessionId);
+
+    const deleteRes = createMockRes();
+    await routes.handleDeleteSession(createJsonReq('DELETE', `/api/v1/sessions/${sessionId}`), deleteRes, sessionId);
+
+    expect(deleteRes.statusCode).toBe(200);
+    expect(claudeService.unpinSession).toHaveBeenCalledWith(sessionId, expect.stringMatching(/^internal-api:/));
+    expect(claudeService.unpinSession).toHaveBeenCalledWith(sessionId, `watch:watch-${sessionId}`);
+    const registryDeleteOrder = registry.delete.mock.invocationCallOrder[0];
+    for (const order of claudeService.unpinSession.mock.invocationCallOrder) expect(order).toBeLessThan(registryDeleteOrder);
+    await routes.shutdown();
+  });
 
   it('deletes a Pi session file on DELETE', async () => {
     const sessionId = 'pi-session-1';
@@ -155,6 +184,7 @@ describe('createSessionRoutes — DELETE file cleanup', () => {
     expect(res.statusCode).toBe(200);
     expect(json(res)).toMatchObject({ success: true });
     await expect(fs.stat(sessionFile)).rejects.toThrow();
+    expect(multiSessionManager.disposeLoadedSession).toHaveBeenCalledWith(sessionFile);
     expect(registry.delete).toHaveBeenCalledWith(sessionId);
   });
 

@@ -34,6 +34,13 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
     const body: CapabilitiesResponse = {
       status: 'ok',
       contract: getInternalApiContractInfo(),
+      features: {
+        retentionLeases: true,
+        durableRetention: true,
+        residentRetention: true,
+        executionAdmission: true,
+        capacityEndpoint: '/api/v1/capacity',
+      },
       runtimes: {
         pi: {
           available: true,

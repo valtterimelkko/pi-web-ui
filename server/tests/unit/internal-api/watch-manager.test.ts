@@ -19,13 +19,15 @@ describe('WatchManager — standing observation + durable ledger', () => {
   let dir: string;
   let broker: InternalApiEventBroker;
   let pin: ReturnType<typeof vi.fn>;
+  let unpin: ReturnType<typeof vi.fn>;
   let manager: WatchManager;
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-watch-mgr-'));
     broker = new InternalApiEventBroker({ replayBufferSize: 10 });
     pin = vi.fn(() => true);
-    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin });
+    unpin = vi.fn(() => true);
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin });
   });
 
   afterEach(async () => {
@@ -40,7 +42,7 @@ describe('WatchManager — standing observation + durable ledger', () => {
       request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }, { type: 'tool', toolName: 'Bash' }] },
     });
     expect(watch.pinned).toBe(true);
-    expect(pin).toHaveBeenCalledWith('s1');
+    expect(pin).toHaveBeenCalledWith('s1', 'watch:watch-s1');
 
     // Nobody is subscribed via /events — the standing watch is the only observer.
     broker.publish('s1', ev('tool_execution_start', { toolName: 'Bash' }));
@@ -155,12 +157,27 @@ describe('WatchManager — standing observation + durable ledger', () => {
     }
   });
 
+  it('releases the old claim when replacing a pinned watch with pin=false', async () => {
+    await manager.register({
+      sessionId: 'replace', sessionPath: 'replace', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+    });
+    await manager.register({
+      sessionId: 'replace', sessionPath: 'replace', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }], pin: false },
+    });
+
+    expect(unpin).toHaveBeenCalledWith('replace', 'watch:watch-replace');
+    expect(manager.get('replace')?.pinned).toBe(false);
+  });
+
   it('deletes a watch and stops recording', async () => {
     await manager.register({
       sessionId: 's5', sessionPath: 's5', runtime: 'pi',
       request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
     });
     expect(await manager.delete('s5')).toBe(true);
+    expect(unpin).toHaveBeenCalledWith('s5', 'watch:watch-s5');
     broker.publish('s5', ev('agent_end')); // no subscriber now
     expect(manager.get('s5')).toBeUndefined();
     expect(await manager.delete('s5')).toBe(false);

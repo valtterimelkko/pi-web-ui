@@ -1,11 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { PinExpiryStore, type PersistedApiPin } from '../../../src/internal-api/pin-expiry-store.js';
 
-function samplePin(sessionId: string, pinnedUntil = Date.now() + 60_000): PersistedApiPin {
+function samplePin(sessionId: string, pinnedUntil = Date.now() + 60_000, leaseId = `lease-${sessionId}`): PersistedApiPin {
   return {
+    leaseId,
     sessionId,
     sessionPath: sessionId,
     runtime: 'claude',
@@ -53,6 +54,17 @@ describe('PinExpiryStore — durable API-pin ledger', () => {
     expect(fresh.get('s2')).toBeDefined();
   });
 
+  it('rolls the cache back when a renewal cannot be persisted', async () => {
+    const store = new PinExpiryStore(dir);
+    await store.init();
+    const original = samplePin('rollback', Date.now() + 60_000);
+    await store.save(original);
+    (store as any).writeAtomic = vi.fn().mockRejectedValue(new Error('disk unavailable'));
+
+    await expect(store.save({ ...original, pinnedUntil: original.pinnedUntil + 60_000 })).rejects.toThrow('disk unavailable');
+    expect(store.getByLeaseId(original.leaseId)?.pinnedUntil).toBe(original.pinnedUntil);
+  });
+
   it('deletes a pin file', async () => {
     const store = new PinExpiryStore(dir);
     await store.init();
@@ -72,6 +84,18 @@ describe('PinExpiryStore — durable API-pin ledger', () => {
     const fresh = new PinExpiryStore(dir);
     await fresh.init();
     expect(fresh.get('good')).toBeDefined();
+  });
+
+  it('stores multiple independently releasable leases for the same session', async () => {
+    const store = new PinExpiryStore(dir);
+    await store.init();
+    await store.save(samplePin('shared', Date.now() + 60_000, 'lease-a'));
+    await store.save(samplePin('shared', Date.now() + 120_000, 'lease-b'));
+
+    expect(store.listForSession('shared').map((claim) => claim.leaseId).sort()).toEqual(['lease-a', 'lease-b']);
+    await store.deleteLease('lease-a');
+    expect(store.getByLeaseId('lease-a')).toBeUndefined();
+    expect(store.getByLeaseId('lease-b')?.sessionId).toBe('shared');
   });
 
   it('list() returns every persisted pin', async () => {

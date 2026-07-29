@@ -127,6 +127,10 @@ async function initialize(): Promise<void> {
             pinDefaultTtlMs: config.internalApiPinDefaultTtlMs,
             pinMaxTtlMs: config.internalApiPinMaxTtlMs,
             pinExpiryIntervalMs: config.internalApiPinExpiryIntervalMs,
+            admissionMaxActiveTurns: config.internalApiAdmissionMaxActiveTurns,
+            admissionInteractiveReserve: config.internalApiAdmissionInteractiveReserve,
+            admissionMinimumHeadroomBytes: config.internalApiAdmissionMinimumHeadroomBytes,
+            admissionReservedBytesPerTurn: config.internalApiAdmissionReservedBytesPerTurn,
             enabled: config.internalApiEnabled,
             // Notify all WebSocket clients when a session is created via the API
             onSessionCreated: (sessionId, sessionPath, runtime) => {

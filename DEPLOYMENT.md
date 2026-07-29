@@ -92,7 +92,7 @@ The Internal API is a trusted same-host control surface, not a public or
 multi-tenant API. It listens on a Unix socket and still requires the bearer token;
 any process that can read the token can inspect and control every API session.
 Startup is fail-closed when an enabled socket cannot be created with the expected
-owner/mode. Keep the socket, token, receipts, watches, and API-pin ledger private.
+owner/mode. Keep the socket, token, receipts, watches, and retention-lease ledger private.
 
 | Variable | Default | Purpose |
 |---|---:|---|
@@ -101,12 +101,16 @@ owner/mode. Keep the socket, token, receipts, watches, and API-pin ledger privat
 | `INTERNAL_API_TOKEN_PATH` | `~/.pi-web-ui/internal-api-token` | owner-only generated bearer token |
 | `INTERNAL_API_WATCH_DIR` | `~/.pi-web-ui/watches` | durable long-horizon watch ledgers |
 | `INTERNAL_API_RUN_RECEIPTS_DIR` | `~/.pi-web-ui/run-receipts` | durable prompt run receipts |
-| `INTERNAL_API_PIN_DIR` | `~/.pi-web-ui/pins` | time-bounded API-pin expiry ledger |
+| `INTERNAL_API_PIN_DIR` | `~/.pi-web-ui/pins` | source-owned time-bounded retention leases |
 | `INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS` | `86400000` | prompt retry replay window |
 | `INTERNAL_API_PIN_DEFAULT_TTL_MS` | `86400000` | default API-pin lifetime |
-| `INTERNAL_API_PIN_MAX_TTL_MS` | `604800000` | hard API-pin lifetime cap |
+| `INTERNAL_API_PIN_MAX_TTL_MS` | `604800000` | hard retention-lease lifetime cap |
+| `INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS` | CPU-derived | optional total active-turn budget |
+| `INTERNAL_API_ADMISSION_INTERACTIVE_RESERVE` | `1` | capacity held back from API conductors for Web UI turns |
+| `INTERNAL_API_ADMISSION_MIN_HEADROOM_MB` | `512` | measured memory headroom retained after projected reservations |
+| `INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN` | `256` | conservative projected memory reservation per admitted turn |
 
-Use `GET /api/v1/capabilities`, `GET /api/v1/health`, and
+Use `GET /api/v1/capabilities`, `GET /api/v1/capacity`, `GET /api/v1/health`, and
 `npm run internal-api:wait` to verify the local control plane. For a prompt that
 may outlive its caller, use answer-mode detached dispatch and retain its
 `runId`; streaming `tasks`/`full` requests are supervision streams, not durable
@@ -534,7 +538,7 @@ curl --silent --unix-socket "$SOCKET" \
   | jq '{status, contract: .contract.contractVersion, runtimes}'
 ```
 
-The expected Internal API contract version is `1.11.0`; `1.10.0` introduced session evidence, `1.10.1` corrected Pi completion across auto-compaction, and `1.11.0` added exact fail-closed Claude profile binding with separate selector/runtime-model evidence.
+The expected Internal API contract version is `1.12.0`; `1.11.0` added exact fail-closed Claude profile binding, and `1.12.0` adds source-owned retention leases plus resource-aware execution admission.
 A public readiness check can be run in addition after the Internal API is ready:
 
 ```bash

@@ -34,6 +34,14 @@ export function parsePositiveInteger(raw: string | undefined, fallback: number, 
   return Number(raw);
 }
 
+export function parseNonnegativeInteger(raw: string | undefined, fallback: number, name: string): number {
+  if (raw === undefined) return fallback;
+  if (!/^\d+$/.test(raw.trim())) {
+    throw new Error(`${name} must be a non-negative integer.`);
+  }
+  return Number(raw);
+}
+
 export function parseLogLevel(raw: string | undefined, fallback: LogLevel = 'info'): LogLevel {
   if (!raw) return fallback;
   const value = raw.trim().toLowerCase();
@@ -165,6 +173,14 @@ export interface ServerConfig {
   internalApiPinMaxTtlMs: number;
   /** How often the API-pin expiry sweep runs (ms). */
   internalApiPinExpiryIntervalMs: number;
+  /** Optional total active-turn budget (CPU-derived when unset). */
+  internalApiAdmissionMaxActiveTurns?: number;
+  /** Slots held back from Internal API conductors for interactive Web UI work. */
+  internalApiAdmissionInteractiveReserve?: number;
+  /** Required measured cgroup/host memory headroom before dispatch. */
+  internalApiAdmissionMinimumHeadroomBytes?: number;
+  /** Conservative projected memory reservation per admitted turn. */
+  internalApiAdmissionReservedBytesPerTurn?: number;
   /** Ephemeral validation mode: isolated, disposable instance for live validation (no destructive cleanup). */
   validationMode: boolean;
   validationDefaultCwd: string;
@@ -279,6 +295,18 @@ export const config: ServerConfig = {
   internalApiPinDefaultTtlMs: parseInt(process.env.INTERNAL_API_PIN_DEFAULT_TTL_MS || String(24 * 60 * 60 * 1000), 10),
   internalApiPinMaxTtlMs: parseInt(process.env.INTERNAL_API_PIN_MAX_TTL_MS || String(7 * 24 * 60 * 60 * 1000), 10),
   internalApiPinExpiryIntervalMs: parseInt(process.env.INTERNAL_API_PIN_EXPIRY_INTERVAL_MS || String(5 * 60 * 1000), 10),
+  internalApiAdmissionMaxActiveTurns: process.env.INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS
+    ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS, 1, 'INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS')
+    : undefined,
+  internalApiAdmissionInteractiveReserve: process.env.INTERNAL_API_ADMISSION_INTERACTIVE_RESERVE === undefined
+    ? undefined
+    : parseNonnegativeInteger(process.env.INTERNAL_API_ADMISSION_INTERACTIVE_RESERVE, 1, 'INTERNAL_API_ADMISSION_INTERACTIVE_RESERVE'),
+  internalApiAdmissionMinimumHeadroomBytes: process.env.INTERNAL_API_ADMISSION_MIN_HEADROOM_MB
+    ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_MIN_HEADROOM_MB, 512, 'INTERNAL_API_ADMISSION_MIN_HEADROOM_MB') * 1024 * 1024
+    : undefined,
+  internalApiAdmissionReservedBytesPerTurn: process.env.INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN
+    ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN, 256, 'INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN') * 1024 * 1024
+    : undefined,
   validationMode: process.env.PI_WEB_UI_VALIDATION_MODE === 'true',
   validationDefaultCwd: process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd(),
   dictationOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',

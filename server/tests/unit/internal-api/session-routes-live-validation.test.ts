@@ -105,6 +105,7 @@ describe('createSessionRoutes live-validation extensions', () => {
 
     multiSessionManager = {
       subscribeClient: vi.fn().mockResolvedValue(undefined),
+      unsubscribeClient: vi.fn(),
       getAgentSession: vi.fn(() => agentSession),
       addApiObserver: vi.fn((_sessionPath: string, observer: (event: unknown) => void) => {
         observerSets.push(observer);

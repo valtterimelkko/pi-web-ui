@@ -379,6 +379,7 @@ export function extractNewReply(stdout: string, priorStdoutLength: number, prior
 interface ActiveSessionMeta {
   lastActivity: number;
   pinned: boolean;
+  pinClaims: Set<string>;
   status: 'idle' | 'running' | 'error';
 }
 
@@ -468,7 +469,7 @@ export class AntigravityService {
     }
 
     const sessionId = randomUUID();
-    this.sessionMeta.set(sessionId, { lastActivity: Date.now(), pinned: false, status: 'idle' });
+    this.sessionMeta.set(sessionId, { lastActivity: Date.now(), pinned: false, pinClaims: new Set(), status: 'idle' });
 
     const chosenModel = model || config.antigravityDefaultModel;
     await this.registry.upsert({
@@ -513,7 +514,7 @@ export class AntigravityService {
 
       let meta = this.sessionMeta.get(sessionId);
       if (!meta) {
-        meta = { lastActivity: Date.now(), pinned: false, status: 'idle' };
+        meta = { lastActivity: Date.now(), pinned: false, pinClaims: new Set(), status: 'idle' };
         this.sessionMeta.set(sessionId, meta);
       }
 
@@ -886,6 +887,16 @@ export class AntigravityService {
     this.promptAbortControllers.get(sessionId)?.abort();
   }
 
+  disposeSession(sessionId: string): void {
+    this.abort(sessionId);
+    this.sessionMeta.delete(sessionId);
+    this.runningSessions.delete(sessionId);
+    this.startingSessions.delete(sessionId);
+    this.promptAbortControllers.delete(sessionId);
+    this.promptCallbacks.delete(sessionId);
+    this.apiObservers.delete(sessionId);
+  }
+
   isRunning(sessionId: string): boolean {
     return this.runningSessions.has(sessionId) || this.startingSessions.has(sessionId);
   }
@@ -902,7 +913,7 @@ export class AntigravityService {
     // mid-flight is intentionally NOT reconciled here. replayAntigravityHistory
     // renders it as user-prompt-only (no agent_end) with isStreaming driving the
     // spinner, which is the cheapest correct behavior — no heavy reconciliation.
-    this.sessionMeta.set(sessionId, { lastActivity: Date.now(), pinned: false, status: 'idle' });
+    this.sessionMeta.set(sessionId, { lastActivity: Date.now(), pinned: false, pinClaims: new Set(), status: 'idle' });
     return true;
   }
 
@@ -932,22 +943,26 @@ export class AntigravityService {
     return modelId;
   }
 
-  async pinSession(sessionId: string): Promise<boolean> {
+  async pinSession(sessionId: string, claimId = 'web-ui'): Promise<boolean> {
     await this.ensureSession(sessionId);
     const meta = this.sessionMeta.get(sessionId);
     if (!meta) return false;
-    if (meta.pinned) return true;
-    const pinnedCount = [...this.sessionMeta.values()].filter((m) => m.pinned).length;
-    if (pinnedCount >= this.maxPinnedSessions) return false;
+    if (meta.pinClaims.has(claimId)) return true;
+    if (claimId === 'web-ui') {
+      const humanPinned = [...this.sessionMeta.values()].filter((item) => item.pinClaims.has('web-ui')).length;
+      if (humanPinned >= this.maxPinnedSessions) return false;
+    }
+    meta.pinClaims.add(claimId);
     meta.pinned = true;
     return true;
   }
 
-  unpinSession(sessionId: string): boolean {
+  unpinSession(sessionId: string, claimId = 'web-ui'): boolean {
     const meta = this.sessionMeta.get(sessionId);
     if (!meta) return false;
-    meta.pinned = false;
-    meta.lastActivity = Date.now();
+    meta.pinClaims.delete(claimId);
+    meta.pinned = meta.pinClaims.size > 0;
+    if (!meta.pinned) meta.lastActivity = Date.now();
     return true;
   }
 

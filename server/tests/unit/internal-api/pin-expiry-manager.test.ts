@@ -33,7 +33,8 @@ describe('PinExpiryManager', () => {
     const result = await mgr.applyPin('s1', { runtime: 'claude' });
     expect(result.pinned).toBe(true);
     expect(result.pinnedUntil).toBeGreaterThan(Date.now());
-    expect(pin).toHaveBeenCalledWith('s1');
+    expect(result.retentionLeaseId).toEqual(expect.any(String));
+    expect(pin).toHaveBeenCalledWith('s1', `internal-api:${result.retentionLeaseId}`);
     expect(mgr.getPinnedUntil('s1')).toBe(result.pinnedUntil);
   });
 
@@ -71,6 +72,44 @@ describe('PinExpiryManager', () => {
     expect(mgr.getPinnedUntil('s5')).toBe(second.pinnedUntil);
   });
 
+  it('releases one lease without removing another source-owned lease on the same session', async () => {
+    const mgr = makeManager();
+    await mgr.init();
+    const first = await mgr.acquireLease('shared', { ttlSeconds: 3600, ownerId: 'conductor-a' });
+    const second = await mgr.acquireLease('shared', { ttlSeconds: 3600, ownerId: 'conductor-b' });
+
+    expect(first.retentionLeaseId).not.toBe(second.retentionLeaseId);
+    await mgr.releaseLease('shared', first.retentionLeaseId!, 'conductor-a');
+    expect(unpin).toHaveBeenCalledWith('shared', `internal-api:${first.retentionLeaseId}`);
+    expect(mgr.listLeases('shared').map((lease) => lease.leaseId)).toEqual([second.retentionLeaseId]);
+  });
+
+  it('serializes renewal and release so a released lease cannot reappear', async () => {
+    const mgr = makeManager();
+    await mgr.init();
+    const lease = await mgr.acquireLease('raced', { ownerId: 'owner' });
+
+    await Promise.all([
+      mgr.renewLease('raced', lease.retentionLeaseId!, 3600),
+      mgr.releaseLease('raced', lease.retentionLeaseId!, 'owner'),
+    ]);
+    expect(mgr.listLeases('raced')).toEqual([]);
+
+    const restarted = makeManager();
+    await restarted.init();
+    expect(restarted.listLeases('raced')).toEqual([]);
+  });
+
+  it('supports durable leases without applying runtime residency', async () => {
+    const mgr = makeManager();
+    await mgr.init();
+    const result = await mgr.acquireLease('durable', { mode: 'durable', ownerId: 'conductor-a' });
+    expect(result.pinned).toBe(false);
+    expect(result.retentionMode).toBe('durable');
+    expect(pin).not.toHaveBeenCalled();
+    expect(mgr.listLeases('durable')).toHaveLength(1);
+  });
+
   it('expireNow revokes pins whose deadline has passed', async () => {
     const mgr = makeManager();
     await mgr.init();
@@ -79,8 +118,8 @@ describe('PinExpiryManager', () => {
 
     const result = await mgr.expireNow();
     expect(result.expired).toEqual(['expired']);
-    expect(unpin).toHaveBeenCalledWith('expired');
-    expect(unpin).not.toHaveBeenCalledWith('alive');
+    expect(unpin).toHaveBeenCalledWith('expired', expect.stringMatching(/^internal-api:/));
+    expect(unpin).not.toHaveBeenCalledWith('alive', expect.anything());
     expect(mgr.getPinnedUntil('expired')).toBeUndefined();
     expect(mgr.getPinnedUntil('alive')).toBeDefined();
   });
@@ -106,8 +145,8 @@ describe('PinExpiryManager', () => {
     const restarted = makeManager();
     await restarted.init();
 
-    expect(pin).toHaveBeenCalledWith('survives');
-    expect(unpin).toHaveBeenCalledWith('was-expired');
+    expect(pin).toHaveBeenCalledWith('survives', expect.stringMatching(/^internal-api:/));
+    expect(unpin).toHaveBeenCalledWith('was-expired', expect.stringMatching(/^internal-api:/));
     expect(restarted.getPinnedUntil('survives')).toBeDefined();
     expect(restarted.getPinnedUntil('was-expired')).toBeUndefined();
   });
@@ -122,7 +161,7 @@ describe('PinExpiryManager', () => {
     vi.advanceTimersByTime(1000);
     // The sweep is async; let pending microtasks/timers flush.
     await vi.advanceTimersByTimeAsync(0);
-    expect(unpin).toHaveBeenCalledWith('doomed');
+    expect(unpin).toHaveBeenCalledWith('doomed', expect.stringMatching(/^internal-api:/));
     mgr.stop();
   });
 });

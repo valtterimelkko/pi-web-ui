@@ -67,7 +67,7 @@ These are the main limitations to keep in mind when designing orchestrators:
 - **No true pending-approvals list yet** — use `/events` to observe permission
   requests live; `GET /approvals/pending` is currently informational.
 - **Claude channel `/events` caveat** — see below.
-- **Watch restart semantics** — a watch ledger preserves already-recorded firings, but a watch reloaded after server restart is `detached`; re-register it to resume live observation. Watch registration may apply a runtime pin that is separate from the time-bounded API-pin ledger, so cleanup should explicitly unpin or delete the session.
+- **Watch restart semantics** — a watch ledger preserves already-recorded firings, but a watch reloaded after server restart is `detached`; re-register it to resume live observation. A watch owns a distinct runtime claim, and deleting the watch releases only that claim.
 
 ## Recommended orchestration flow
 
@@ -77,9 +77,10 @@ Always start by asking the server what is available now and which contract versi
 
 - `GET /api/v1/capabilities` — includes `contract.name`, `contract.majorVersion`, and `contract.contractVersion`
 - `GET /api/v1/models`
+- `GET /api/v1/capacity` — process-local turn budget, interactive reserve, and measured memory headroom (contract `1.12.0+`)
 
 Useful debugging/introspection, notification, model-control, run-identity, and
-health, evidence, receipt-correctness, and exact-profile additions landed in contract `1.3.0` through `1.11.0`:
+health, evidence, receipt-correctness, exact-profile, retention, and admission additions landed in contract `1.3.0` through `1.12.0`:
 
 - `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off; `1.9.0` adds `requestId`, `runId`, `runtime`, `component`, and `since` selectors plus a bounded process-local `operational` snapshot.
 - `GET /api/v1/sessions/:id/evidence` — `1.10.0` compact one-call troubleshooting bundle; resolves aliases, returns bounded diagnostics and durable receipt summary, and links to deeper reads. Use this before separate `/info`, `/diagnostics`, and transcript calls.
@@ -115,8 +116,17 @@ For one child:
 For many children at once:
 - `POST /api/v1/sessions/batch`
 
-Track the returned `sessionId`s in your own orchestrator state, because the
-API does not yet store parent-child relationships for you.
+Track returned `sessionId`, `runId`, and `retention.leaseId` values in your own
+orchestrator state, because the API does not store parent-child relationships.
+For long work, request atomic create-time `retention` rather than create then pin:
+
+```json
+{"runtime":"pi","retention":{"mode":"resident","ttlSeconds":7200,"ownerId":"attempt-123"}}
+```
+
+Choose `durable` when recoverability is enough, or `resident` when the loaded
+runtime object must survive idle cleanup. API leases never consume the human
+Web UI's two pin slots.
 
 If the child is a Claude session and you care about the exact backend/provider, choose it at creation time:
 - `model: "profile:<id>"` — easiest if you discovered the profile through `/models`
@@ -132,10 +142,12 @@ That lets one orchestration run compare, for example:
 Use `POST /api/v1/sessions/:id/control` to do things like:
 - switch model
 - set thinking level
-- pin a session
+- renew or release one retention lease by `retentionLeaseId`
+- use legacy pinning only for older compatible callers
 
 Do this before dispatching long work if the runtime supports the setting you
-care about.
+care about. One owner must never use blanket unpin to clear another owner's
+retention.
 
 For Claude, prefer selecting the backend/provider profile at **session creation time** rather than relying on later model switching. Model switching is great within a chosen Claude route, but backend/provider comparisons are usually clearer and safer as one session per profile.
 
@@ -154,7 +166,8 @@ Use:
 For work that may outlive the caller, use:
 
 ```text
-create (optional time-bounded API pin)
+capacity preflight
+  → atomic create with required durable/resident retention
   → prompt with verbosity=answers, detach=true, idempotencyKey=<stable-key>
   → retain sessionId + runId
   → poll GET /runs/:runId or GET /sessions/:id/wait (and /info)
@@ -235,40 +248,30 @@ Use:
 - `POST /api/v1/sessions/:id/abort` to stop a running child
 - `DELETE /api/v1/sessions/:id` to remove a child from the registry
 
-## Pin-and-forget: long tasks without polling
+## Retain-and-forget: long tasks without polling
 
-Sometimes you want to start a child on a longer task, guarantee it **won't be
-cleaned up** while it runs, and check back later — **without** the polling
-contract of a long-horizon watch. This is the lightweight alternative to
-[long-horizon validation](./LONG-HORIZON-VALIDATION.md) for tasks where you don't
-need durable condition detection, just survival.
-
-The flow is two calls and a later read:
+For a long child that does not need durable condition detection, atomically
+request source-owned retention when creating it:
 
 ```text
-1. POST /sessions            { "runtime": "claude", "pin": true }   # pinned at birth
-2. POST /sessions/:id/prompt { "message": "...", "detach": true }   # 202, runs in background
+1. POST /sessions {"runtime":"claude","retention":{"mode":"resident","ttlSeconds":7200,"ownerId":"attempt-123"}}
+2. POST /sessions/:id/prompt {"message":"...","detach":true}
    ...time passes...
-3. GET  /sessions/:id/info          # status: idle|running, pinned, pinnedUntil
-   GET  /sessions/:id/transcript    # the result
+3. GET /sessions/:id/info
+   GET /sessions/:id/transcript
+4. POST /sessions/:id/control {"action":"release_retention","retentionLeaseId":"<uuid>","ownerId":"attempt-123"}
 ```
 
-**What you must know about the pin (it is time-bounded, not permanent):**
-
-- A pin is **time-bounded by default**: 24h lifetime, hard max 7d, returned as
-  `pinnedUntil`. It is auto-revoked at the deadline so a forgotten task can't
-  hog a slot forever. Re-pin (`control {action:"pin"}`) to extend.
-- Max **2 pinned sessions per runtime per server instance**. Production and
-  disposable validation servers have independent pin slots and pin ledgers. At
-  the limit, `pin:true` still creates the session but returns `pinned:false` and
-  `pinReason:"PIN_LIMIT_REACHED"`.
-- Pinning is **independent of the watch**. You can pin with no watch; deleting a
-  watch does not unpin. Use pin-only when you don't need durable condition
-  matching, or pin+watch when you do.
+Use `durable` when restart-safe recovery is enough and `resident` when the
+runtime object must remain loaded. Leases default to 24h, cap at 7d, renew by
+exact lease id, and do not consume the Web UI's two human pin slots. A watch owns
+its own claim; replacing or deleting it releases only that watch claim. Retention
+is not execution admission, so preflight `/capacity` and handle final prompt
+`429` responses.
 
 `detach:true` returns `202` immediately and the turn keeps running server-side
 even after you disconnect — so you can fire the task and close the connection.
-Combine with pin for the full "set and walk away" pattern. This needs a
+This needs a
 **disposable validation server** when validating (`npm run validate:server`),
 never the production instance by default.
 

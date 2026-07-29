@@ -493,6 +493,18 @@ describe('ClaudeChannelService', () => {
       expect(service.isSessionPinned(sid)).toBe(false);
     });
 
+    it('keeps source-owned claims independent of the Web UI limit', () => {
+      for (let i = 0; i < 3; i++) service['sessionsWithHistory'].add(`claim-${i}`);
+      expect(service.pinSession('claim-0')).toBe(true);
+      expect(service.pinSession('claim-1')).toBe(true);
+      expect(service.pinSession('claim-2', 'internal-api:lease-2')).toBe(true);
+      expect(service.pinSession('claim-2')).toBe(false);
+      expect(service.unpinSession('claim-2')).toBe(true);
+      expect(service.isSessionPinned('claim-2')).toBe(true);
+      expect(service.unpinSession('claim-2', 'internal-api:lease-2')).toBe(true);
+      expect(service.isSessionPinned('claim-2')).toBe(false);
+    });
+
     it('should enforce max pinned limit', () => {
       for (let i = 0; i < 3; i++) {
         service['sessionsWithHistory'].add(`pin-${i}`);

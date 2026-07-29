@@ -59,7 +59,8 @@ export class ClaudeService {
 
   /** API observers — receive every normalized event for a session, regardless of which client prompted. */
   private apiObservers: Map<string, Set<(event: NormalizedEvent) => void>> = new Map();
-  private pinnedSessions: Set<string> = new Set();
+  /** Independent residency claims per session; `web-ui` is the human pin. */
+  private pinClaims = new Map<string, Set<string>>();
   private static readonly MAX_PINNED_SESSIONS = 2;
   private channelService: ClaudeChannelService | null = null;
   private sdkService: ClaudeSdkService | null = null;
@@ -171,7 +172,7 @@ export class ClaudeService {
   }
 
   private hasDirectSession(sessionId: string): boolean {
-    return this.pinnedSessions.has(sessionId)
+    return this.pinClaims.has(sessionId)
       || this.processPool.isActive(sessionId)
       || this.sessionsWithHistory.has(sessionId)
       || existsSync(this.sessionStore.getFilePath(sessionId));
@@ -702,29 +703,38 @@ export class ClaudeService {
 
   // ── Pinning ─────────────────────────────────────────────────────────────
 
-  pinSession(sessionId: string): boolean {
+  pinSession(sessionId: string, claimId = 'web-ui'): boolean {
     if (this.hasChannelSession(sessionId)) {
-      return this.channelService!.pinSession(sessionId);
+      return this.channelService!.pinSession(sessionId, claimId);
     }
     if (!this.hasDirectSession(sessionId)) return false;
-    if (this.pinnedSessions.has(sessionId)) return true;
-    if (this.pinnedSessions.size >= ClaudeService.MAX_PINNED_SESSIONS) return false;
-    this.pinnedSessions.add(sessionId);
+    const claims = this.pinClaims.get(sessionId) ?? new Set<string>();
+    if (claims.has(claimId)) return true;
+    if (claimId === 'web-ui') {
+      const humanPinned = [...this.pinClaims.values()].filter((set) => set.has('web-ui')).length;
+      if (humanPinned >= ClaudeService.MAX_PINNED_SESSIONS) return false;
+    }
+    claims.add(claimId);
+    this.pinClaims.set(sessionId, claims);
     return true;
   }
 
-  unpinSession(sessionId: string): boolean {
+  unpinSession(sessionId: string, claimId = 'web-ui'): boolean {
     if (this.hasChannelSession(sessionId)) {
-      return this.channelService!.unpinSession(sessionId);
+      return this.channelService!.unpinSession(sessionId, claimId);
     }
-    return this.pinnedSessions.delete(sessionId);
+    const claims = this.pinClaims.get(sessionId);
+    if (!claims) return false;
+    claims.delete(claimId);
+    if (claims.size === 0) this.pinClaims.delete(sessionId);
+    return true;
   }
 
   isSessionPinned(sessionId: string): boolean {
     if (this.hasChannelSession(sessionId)) {
       return this.channelService!.isSessionPinned(sessionId);
     }
-    return this.pinnedSessions.has(sessionId);
+    return (this.pinClaims.get(sessionId)?.size ?? 0) > 0;
   }
 
   hasSession(sessionId: string): boolean {
@@ -804,7 +814,7 @@ export class ClaudeService {
       totalMessages: userMessages + assistantMessages + toolCalls + toolResults,
       tokens: totalTokens,
       cost: 0,
-      pinned: this.pinnedSessions.has(sessionId),
+      pinned: (this.pinClaims.get(sessionId)?.size ?? 0) > 0,
       lastActivityAt: (this.channelService as ClaudeChannelService | null)?.getLastActivityAt?.() ?? null,
     };
   }

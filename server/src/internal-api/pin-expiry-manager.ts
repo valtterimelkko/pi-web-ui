@@ -1,42 +1,23 @@
 /**
- * Pin Expiry Manager
+ * Durable, source-owned Internal API retention leases.
  *
- * Owns the lifecycle of API-initiated session pins: granting a pin with an
- * absolute TTL, re-applying non-expired pins after a server restart, revoking
- * pins whose deadline has passed, and surfacing the deadline so agents can see
- * when their pin expires.
- *
- * Design notes:
- *  - A pin is *time-bounded by default*. Default 24h, hard cap 7d. This is the
- *    "don't hog a pin slot forever" safety valve the feature exists to provide.
- *  - The deadline is absolute (`pinnedUntil`), not idle-based, so even a pin on
- *    a session that stays busy is guaranteed to be revoked eventually.
- *  - Re-pinning (calling {@link applyPin} again) extends the deadline.
- *  - The disk-backed {@link PinExpiryStore} makes the guarantee survive a
- *    restart: on init, non-expired pins are re-applied in memory and already-
- *    expired ones are revoked immediately.
- *
- * This manager only tracks API-initiated pins. Web-UI pins are managed via the
- * preferences file and their own idle-based auto-unpin, independently.
+ * `durable` protects recoverability metadata only. `resident` additionally
+ * applies an independently keyed runtime keepalive claim. Lease ownership is a
+ * cooperative correctness guard for trusted same-host clients, not RBAC.
  */
 
-import { PinExpiryStore } from './pin-expiry-store.js';
+import { randomUUID } from 'node:crypto';
+import { PinExpiryStore, type PersistedApiPin, type RetentionMode } from './pin-expiry-store.js';
 import type { SessionRuntime } from './types.js';
 
-/** Default pin lifetime: 24 hours. */
 export const DEFAULT_PIN_TTL_MS = 24 * 60 * 60 * 1000;
-/** Hard maximum pin lifetime: 7 days. A longer requested TTL is clamped to this. */
 export const MAX_PIN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-/** How often the expiry sweep runs. */
 export const DEFAULT_PIN_EXPIRY_INTERVAL_MS = 5 * 60 * 1000;
 
 export interface PinExpiryManagerDeps {
-  /** Directory for the durable pin ledger. */
   dir: string;
-  /** Pin a session in its runtime (in-memory). Returns false if at the pin limit. */
-  pin: (sessionId: string) => Promise<boolean> | boolean;
-  /** Revoke a session's pin in its runtime. */
-  unpin: (sessionId: string) => Promise<boolean> | boolean;
+  pin: (sessionId: string, claimId?: string) => Promise<boolean> | boolean;
+  unpin: (sessionId: string, claimId?: string) => Promise<boolean> | boolean;
   defaultTtlMs?: number;
   maxTtlMs?: number;
   intervalMs?: number;
@@ -44,36 +25,37 @@ export interface PinExpiryManagerDeps {
 }
 
 export interface ApplyPinOptions {
-  /** Requested lifetime in seconds. Defaults to {@link DEFAULT_PIN_TTL_MS}; clamped to the max. */
   ttlSeconds?: number;
   sessionPath?: string;
   runtime?: SessionRuntime;
   label?: string;
+  mode?: RetentionMode;
+  ownerId?: string;
 }
 
 export interface ApplyPinResult {
   pinned: boolean;
-  /** Absolute deadline in ms since epoch (only when pinned). */
   pinnedUntil?: number;
-  /** Why a pin was not granted, when pinned is false. */
+  retentionLeaseId?: string;
+  retentionMode?: RetentionMode;
   reason?: 'PIN_LIMIT_REACHED';
 }
 
-export interface ExpiryResult {
-  expired: string[];
-}
+export interface ExpiryResult { expired: string[] }
 
 function noopLogger(): void { /* silent by default */ }
+function runtimeClaim(leaseId: string): string { return `internal-api:${leaseId}`; }
 
 export class PinExpiryManager {
   private readonly store: PinExpiryStore;
-  private readonly pin: (sessionId: string) => Promise<boolean> | boolean;
-  private readonly unpin: (sessionId: string) => Promise<boolean> | boolean;
+  private readonly pin: PinExpiryManagerDeps['pin'];
+  private readonly unpin: PinExpiryManagerDeps['unpin'];
   private readonly defaultTtlMs: number;
   private readonly maxTtlMs: number;
   private readonly intervalMs: number;
   private readonly log: (message: string) => void;
   private timer?: ReturnType<typeof setInterval>;
+  private readonly leaseOperations = new Map<string, Promise<unknown>>();
 
   constructor(deps: PinExpiryManagerDeps) {
     this.store = new PinExpiryStore(deps.dir);
@@ -85,121 +67,203 @@ export class PinExpiryManager {
     this.log = deps.logger ?? noopLogger;
   }
 
-  /**
-   * Load the ledger from disk, revoke any pins that already expired while the
-   * server was down, and re-apply still-valid pins in memory (runtimes lose
-   * their in-memory pin state on restart). Must be called before {@link start}.
-   */
   async init(): Promise<void> {
     await this.store.init();
     const now = Date.now();
     for (const record of this.store.list()) {
       if (record.pinnedUntil <= now) {
-        await this.callUnpin(record.sessionId);
-        await this.store.delete(record.sessionId);
-        this.log(`Revoked expired API pin on restart: ${record.sessionId}`);
-      } else {
-        await this.callPin(record.sessionId);
+        await this.removeLease(record);
+        this.log(`Revoked expired API retention lease on restart: ${record.leaseId}`);
+      } else if ((record.mode ?? 'resident') === 'resident') {
+        // A Pi session may not be materialised yet. Keep the durable lease even
+        // when the runtime claim cannot be applied; reapplyForSession() retries
+        // after lazy hydration.
+        await this.callPin(record.sessionId, runtimeClaim(record.leaseId));
       }
     }
   }
 
-  /** Start the periodic expiry sweep. Safe to call once after {@link init}. */
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      void this.expireNow().catch((err) => {
-        this.log(`Pin expiry sweep error: ${err instanceof Error ? err.message : String(err)}`);
-      });
+      void this.expireNow().catch((error) => this.log(`Retention expiry sweep error: ${error instanceof Error ? error.message : String(error)}`));
     }, this.intervalMs);
-    if (this.timer.unref) {
-      this.timer.unref();
-    }
+    this.timer.unref?.();
   }
 
   stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = undefined;
-    }
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
   }
 
-  /**
-   * Grant (or refresh) an API pin with an absolute deadline and record it.
-   * Re-pinning an already-pinned session extends its deadline.
-   */
+  /** Legacy pin API: one renewable compatibility lease per session. */
   async applyPin(sessionId: string, options: ApplyPinOptions = {}): Promise<ApplyPinResult> {
-    const ttlMs = this.resolveTtlMs(options.ttlSeconds);
-    const pinnedUntil = Date.now() + ttlMs;
+    const existing = this.store.listForSession(sessionId)
+      .find((record) => record.ownerId === 'legacy-internal-api');
+    if (existing) return this.renewLease(sessionId, existing.leaseId, options.ttlSeconds);
+    return this.acquireLease(sessionId, { ...options, mode: 'resident', ownerId: 'legacy-internal-api' });
+  }
 
-    const ok = await this.callPin(sessionId);
-    if (!ok) {
-      return { pinned: false, reason: 'PIN_LIMIT_REACHED' };
+  async acquireLease(sessionId: string, options: ApplyPinOptions = {}): Promise<ApplyPinResult> {
+    const leaseId = randomUUID();
+    const mode = options.mode ?? 'resident';
+    const pinnedUntil = Date.now() + this.resolveTtlMs(options.ttlSeconds);
+    if (mode === 'resident') {
+      const ok = await this.callPin(sessionId, runtimeClaim(leaseId));
+      if (!ok) return { pinned: false, reason: 'PIN_LIMIT_REACHED' };
     }
 
-    await this.store.save({
+    const record: PersistedApiPin = {
+      leaseId,
       sessionId,
       sessionPath: options.sessionPath,
       runtime: options.runtime,
+      mode,
+      ownerId: options.ownerId,
       pinnedAt: Date.now(),
       pinnedUntil,
       label: options.label,
+    };
+    try {
+      await this.store.save(record);
+    } catch (error) {
+      if (mode === 'resident') await this.callUnpin(sessionId, runtimeClaim(leaseId));
+      await this.store.deleteLease(leaseId);
+      throw error;
+    }
+    return {
+      pinned: mode === 'resident',
+      pinnedUntil,
+      retentionLeaseId: leaseId,
+      retentionMode: mode,
+    };
+  }
+
+  renewLease(sessionId: string, leaseId: string, ttlSeconds?: number): Promise<ApplyPinResult> {
+    return this.withLeaseOperation(leaseId, async () => {
+      const record = this.store.getByLeaseId(leaseId);
+      if (!record || record.sessionId !== sessionId) throw new Error('RETENTION_CLAIM_NOT_FOUND');
+      const pinnedUntil = Date.now() + this.resolveTtlMs(ttlSeconds);
+      const updated = { ...record, pinnedUntil };
+      if ((record.mode ?? 'resident') === 'resident') {
+        const ok = await this.callPin(sessionId, runtimeClaim(leaseId));
+        if (!ok) return { pinned: false, reason: 'PIN_LIMIT_REACHED' };
+      }
+      await this.store.save(updated);
+      return {
+        pinned: (record.mode ?? 'resident') === 'resident',
+        pinnedUntil,
+        retentionLeaseId: leaseId,
+        retentionMode: record.mode ?? 'resident',
+      };
     });
-
-    return { pinned: true, pinnedUntil };
   }
 
-  /** Remove a pin's ledger record (e.g. after a manual unpin or session delete). */
+  releaseLease(sessionId: string, leaseId: string, ownerId?: string): Promise<void> {
+    return this.withLeaseOperation(leaseId, async () => {
+      const record = this.store.getByLeaseId(leaseId);
+      if (!record || record.sessionId !== sessionId) throw new Error('RETENTION_CLAIM_NOT_FOUND');
+      if (ownerId !== undefined && record.ownerId !== ownerId) throw new Error('RETENTION_CLAIM_OWNER_MISMATCH');
+      await this.removeLease(record);
+    });
+  }
+
+  /** Legacy unpin releases only its compatibility lease. */
+  async releaseLegacyLease(sessionId: string): Promise<void> {
+    const record = this.store.listForSession(sessionId)
+      .find((candidate) => candidate.ownerId === 'legacy-internal-api');
+    if (record) await this.releaseLease(sessionId, record.leaseId, 'legacy-internal-api');
+  }
+
+  /** Release every Internal API lease for explicit session deletion. */
   async clear(sessionId: string): Promise<void> {
-    await this.store.delete(sessionId);
+    for (const record of this.store.listForSession(sessionId)) {
+      await this.releaseLease(sessionId, record.leaseId);
+    }
   }
 
-  /** The absolute deadline (ms since epoch) for a session's API pin, if any. */
+  listLeases(sessionId: string): PersistedApiPin[] {
+    return this.store.listForSession(sessionId);
+  }
+
+  async reapplyForSession(sessionId: string): Promise<void> {
+    for (const record of this.store.listForSession(sessionId)) {
+      if (record.pinnedUntil > Date.now() && (record.mode ?? 'resident') === 'resident') {
+        await this.callPin(sessionId, runtimeClaim(record.leaseId));
+      }
+    }
+  }
+
   getPinnedUntil(sessionId: string): number | undefined {
-    return this.store.get(sessionId)?.pinnedUntil;
+    const deadlines = this.store.listForSession(sessionId)
+      .filter((record) => (record.mode ?? 'resident') === 'resident')
+      .map((record) => record.pinnedUntil);
+    return deadlines.length ? Math.max(...deadlines) : undefined;
   }
 
-  /** Revoke every pin whose deadline has passed. Runs on the timer; also callable directly. */
   async expireNow(): Promise<ExpiryResult> {
     const now = Date.now();
     const expired: string[] = [];
     for (const record of this.store.list()) {
       if (record.pinnedUntil <= now) {
-        await this.callUnpin(record.sessionId);
-        await this.store.delete(record.sessionId);
-        expired.push(record.sessionId);
-        this.log(`Revoked expired API pin: ${record.sessionId}`);
+        const removed = await this.withLeaseOperation(record.leaseId, async () => {
+          const current = this.store.getByLeaseId(record.leaseId);
+          if (!current || current.pinnedUntil > now) return false;
+          await this.removeLease(current);
+          return true;
+        });
+        if (removed) {
+          expired.push(record.sessionId);
+          this.log(`Revoked expired API retention lease: ${record.leaseId}`);
+        }
       }
     }
     return { expired };
   }
 
-  /** Resolve a requested TTL (seconds) to a clamped millisecond duration. */
+  private withLeaseOperation<T>(leaseId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.leaseOperations.get(leaseId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
+    this.leaseOperations.set(leaseId, next);
+    void next.then(
+      () => { if (this.leaseOperations.get(leaseId) === next) this.leaseOperations.delete(leaseId); },
+      () => { if (this.leaseOperations.get(leaseId) === next) this.leaseOperations.delete(leaseId); },
+    );
+    return next;
+  }
+
   private resolveTtlMs(ttlSeconds?: number): number {
-    let ttlMs: number;
-    if (typeof ttlSeconds === 'number' && Number.isFinite(ttlSeconds)) {
-      ttlMs = Math.max(0, Math.floor(ttlSeconds * 1000));
-    } else {
-      ttlMs = this.defaultTtlMs;
-    }
-    return Math.min(ttlMs, this.maxTtlMs);
+    const requested = typeof ttlSeconds === 'number' && Number.isFinite(ttlSeconds)
+      ? Math.max(0, Math.floor(ttlSeconds * 1000))
+      : this.defaultTtlMs;
+    return Math.min(requested, this.maxTtlMs);
   }
 
-  /** Invoke the pin callback, normalizing sync/async and swallowing errors. */
-  private async callPin(sessionId: string): Promise<boolean> {
+  private async removeLease(record: PersistedApiPin): Promise<void> {
+    await this.revokeRuntimeClaim(record);
     try {
-      return await Promise.resolve(this.pin(sessionId));
-    } catch {
-      return false;
+      await this.store.deleteLease(record.leaseId);
+    } catch (error) {
+      // The durable record still exists, so restore its resident claim rather
+      // than report a release that will silently reappear after restart.
+      if ((record.mode ?? 'resident') === 'resident') {
+        await this.callPin(record.sessionId, runtimeClaim(record.leaseId));
+      }
+      throw error;
     }
   }
 
-  /** Invoke the unpin callback, normalizing sync/async and swallowing errors. */
-  private async callUnpin(sessionId: string): Promise<void> {
-    try {
-      await Promise.resolve(this.unpin(sessionId));
-    } catch {
-      /* session may be gone */
+  private async revokeRuntimeClaim(record: PersistedApiPin): Promise<void> {
+    if ((record.mode ?? 'resident') === 'resident') {
+      await this.callUnpin(record.sessionId, runtimeClaim(record.leaseId));
     }
+  }
+
+  private async callPin(sessionId: string, claimId: string): Promise<boolean> {
+    try { return await Promise.resolve(this.pin(sessionId, claimId)); } catch { return false; }
+  }
+
+  private async callUnpin(sessionId: string, claimId: string): Promise<void> {
+    try { await Promise.resolve(this.unpin(sessionId, claimId)); } catch { /* session may be gone */ }
   }
 }

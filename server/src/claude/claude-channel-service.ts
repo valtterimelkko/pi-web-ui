@@ -98,7 +98,8 @@ export class ClaudeChannelService {
   private latePromptListeners: Map<string, LatePromptListener> = new Map();
   private claudeToInternal: Map<string, string> = new Map();
   private internalToClaude: Map<string, string> = new Map();
-  private pinnedSessions: Set<string> = new Set();
+  /** Independent residency claims per session; `web-ui` is the human pin. */
+  private pinClaims = new Map<string, Set<string>>();
   private sessionsWithHistory: Set<string> = new Set();
   private sessionContextMeta: Map<string, SessionContextMeta> = new Map();
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
@@ -664,7 +665,7 @@ export class ClaudeChannelService {
       totalMessages: userMessages + assistantMessages + toolCalls + toolResults,
       tokens: totalTokens,
       cost: 0,
-      pinned: this.pinnedSessions.has(sessionId),
+      pinned: (this.pinClaims.get(sessionId)?.size ?? 0) > 0,
       lastActivityAt: this.processManager.getLastBusyAt(),
     };
   }
@@ -751,20 +752,29 @@ export class ClaudeChannelService {
     return result;
   }
 
-  pinSession(sessionId: string): boolean {
+  pinSession(sessionId: string, claimId = 'web-ui'): boolean {
     if (!this.hasSession(sessionId)) return false;
-    if (this.pinnedSessions.has(sessionId)) return true;
-    if (this.pinnedSessions.size >= MAX_PINNED_SESSIONS) return false;
-    this.pinnedSessions.add(sessionId);
+    const claims = this.pinClaims.get(sessionId) ?? new Set<string>();
+    if (claims.has(claimId)) return true;
+    if (claimId === 'web-ui') {
+      const humanPinned = [...this.pinClaims.values()].filter((set) => set.has('web-ui')).length;
+      if (humanPinned >= MAX_PINNED_SESSIONS) return false;
+    }
+    claims.add(claimId);
+    this.pinClaims.set(sessionId, claims);
     return true;
   }
 
-  unpinSession(sessionId: string): boolean {
-    return this.pinnedSessions.delete(sessionId);
+  unpinSession(sessionId: string, claimId = 'web-ui'): boolean {
+    const claims = this.pinClaims.get(sessionId);
+    if (!claims) return false;
+    claims.delete(claimId);
+    if (claims.size === 0) this.pinClaims.delete(sessionId);
+    return true;
   }
 
   isSessionPinned(sessionId: string): boolean {
-    return this.pinnedSessions.has(sessionId);
+    return (this.pinClaims.get(sessionId)?.size ?? 0) > 0;
   }
 
   /** Expose the PTY last-busy timestamp for session info display. */
@@ -773,7 +783,7 @@ export class ClaudeChannelService {
   }
 
   hasSession(sessionId: string): boolean {
-    return this.pinnedSessions.has(sessionId)
+    return (this.pinClaims.get(sessionId)?.size ?? 0) > 0
       || this.pendingPrompts.has(sessionId)
       || this.sessionsWithHistory.has(sessionId);
   }
