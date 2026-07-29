@@ -128,6 +128,13 @@ export class InternalApiEventBroker {
     this.replayBuffers.delete(sessionId);
   }
 
+  /** Return a copy of the recent buffered events for a session, oldest first. */
+  getRecentEvents(sessionId: string, limit = this.replayBufferSize): NormalizedEvent[] {
+    const buffer = this.replayBuffers.get(sessionId);
+    if (!buffer) return [];
+    return buffer.slice(-Math.max(0, limit));
+  }
+
   /** Drop everything. */
   clearAll(): void {
     this.subscribers.clear();

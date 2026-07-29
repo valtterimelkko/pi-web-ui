@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.12.0",
+  "contractVersion": "1.13.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,12 @@ Current contract:
 
 ### Changelog
 
+- **1.13.0** (minor, additive with corrected dispatch/approval semantics) — made accepted work and session identity truthful:
+  - idle `follow_up` is promoted to a real turn and reports requested `mode` plus actual `dispatchMode`; strict callers can set `requireActiveTurn:true`;
+  - `follow_up`/`steer` now apply state-aware busy checks, with `SESSION_NOT_STREAMING` and `Retry-After` where applicable;
+  - unknown approval ids return `404 APPROVAL_REQUEST_NOT_FOUND`, `toolCallId` is accepted as an alias, and `/approvals/pending` exposes live Claude SDK questions;
+  - run receipts persist mode/dispatch mode and idle/absolute watchdogs terminalise `TURN_STALLED` runs and release capacity;
+  - Pi rehydration fails closed for missing files or filename/header identity mismatch, while incremental watcher indexing and `debug:where` exact filename fallback improve discoverability.
 - **1.12.0** (minor, additive) — separated source-owned retention from execution admission:
   - `POST /sessions` accepts required `retention: {mode:"durable"|"resident",ttlSeconds?,ownerId,label?}` and returns a lease id; failure is atomic and removes the unused session;
   - `acquire_retention` adds an independent lease to an existing session; `renew_retention` and `release_retention` target one lease id, so Web UI, watch, and concurrent Internal API owners cannot release each other's claims;
@@ -82,7 +88,7 @@ Current contract:
   - `idempotencyKey` on prompt dispatch (including batch entries) with a 24-hour default replay TTL and `(sessionId, idempotencyKey)` scope.
   - `runId` on answers/detached dispatch responses, `X-Run-Id` on streaming responses, and `GET /api/v1/runs/:runId` for receipt lookup.
   - `executionInstanceId` on session list/info projections and receipts (`claudeProfileId` for Claude, stable local defaults for the other runtimes).
-  - receipts persist accepted/started/terminal lifecycle state; server restarts recover in-flight records as `interrupted` with `SERVER_RESTART`, and bounded retention prunes old terminal records.
+  - receipts persist accepted/queued/started/terminal lifecycle state; server restarts recover in-flight records as `interrupted` with `SERVER_RESTART`, and bounded retention prunes old terminal records.
   - reusing a key for a different request returns `IDEMPOTENCY_KEY_CONFLICT` rather than silently swallowing a legitimate prompt. Old clients can ignore the additive fields/endpoints. See [`INTERNAL-API.md`](./INTERNAL-API.md).
 - **1.5.0** (minor, additive) — added notification endpoints for one-way operator notifications and explicit emits:
   - `POST /api/v1/sessions/:id/notifications/opt-in`
@@ -188,12 +194,14 @@ re-introduced.
 | `PAYLOAD_TOO_LARGE` | 413 | Request exceeds bounded parser limit | More than 1 MiB generally or 32 KiB on notification endpoints |
 | `SESSION_NOT_FOUND` | 404 | No session with that id | Wrong/expired id, or session deleted |
 | `SESSION_BUSY` | 409 | Session already processing a prompt | A session runs one prompt at a time |
+| `SESSION_NOT_STREAMING` | 409 | Operation requires an active turn | Idle `steer` or strict idle `follow_up` |
 | `SESSION_CREATE_FAILED` | 500 | Session creation failed | Runtime threw while provisioning |
 | `RUNTIME_UNAVAILABLE` | 503 | Runtime not installed/enabled | Binary missing, disabled via env, or unhealthy |
 | `OPENCODE_UNAVAILABLE` | 503 | OpenCode backend unavailable | OpenCode not enabled, or recycle failed |
 | `RUNTIME_ERROR` | 500 | Runtime failed mid-prompt | Provider/model/tool/abort error |
 | `PROMPT_INJECTION` | 400 | Prompt blocked by safety filter | Injection-like text detected pre-runtime |
 | `ASK_ALREADY_CLOSED` | 409 | `AskUserQuestion` dialog already closed | Answer arrived after timeout/abort/turn-end/disconnect resolution |
+| `APPROVAL_REQUEST_NOT_FOUND` | 404 | No live approval matches the supplied alias | Unknown/wrong-session `requestId` or `toolCallId` |
 | `UNSUPPORTED_OPERATION` | 400 | Op not supported for this runtime/config | e.g. `steer` outside Pi |
 | `NOT_IMPLEMENTED` | 501 | Endpoint exists but runtime path unimplemented | e.g. replay history for unsupported runtime |
 | `INTERNAL_ERROR` | 500 | Unexpected internal error | Unhandled exception in a route |
@@ -206,6 +214,7 @@ re-introduced.
 | `TRANSFER_DISPATCH_FAILED` | 500 | Transfer could not be dispatched | Target creation / injection / IO failure |
 | `EMPTY_TRANSCRIPT` | 404 | No visible transcript yet | `/transcript` before any turn produced content |
 | `RUN_NOT_FOUND` | 404 | No persisted run receipt exists | Unknown or retention-pruned `runId` |
+| `TURN_STALLED` | 500 | Accepted run exceeded its idle/absolute watchdog | Runtime stopped emitting events or queued work could not be correlated |
 | `IDEMPOTENCY_KEY_CONFLICT` | 409 | Key reused for a different request | Same endpoint-scoped key has a different request fingerprint (prompt dispatch or explicit notification payload) |
 
 ### Additive error enrichment (`hint`, `docs`)

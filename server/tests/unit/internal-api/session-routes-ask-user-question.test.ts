@@ -82,6 +82,9 @@ describe('createSessionRoutes — AskUserQuestion approval responses', () => {
       isPendingAskUserQuestion: vi.fn(() => false),
       respondToAskUserQuestion: vi.fn(() => true),
       wasRecentlyResolvedAskUserQuestion: vi.fn(() => false),
+      resolveAskUserQuestionKey: vi.fn(() => undefined),
+      hasChannelSession: vi.fn(() => false),
+      getBackendMode: vi.fn().mockResolvedValue('sdk'),
     };
     opencodeService = {
       isAvailable: vi.fn().mockResolvedValue(true),
@@ -177,8 +180,9 @@ describe('createSessionRoutes — AskUserQuestion approval responses', () => {
     expect(claudeService.respondToAskUserQuestion).not.toHaveBeenCalled();
   });
 
-  it('still routes non-AskUserQuestion Claude approvals via sendPermissionResponse (unchanged)', async () => {
+  it('still routes non-AskUserQuestion Claude approvals via sendPermissionResponse for channel sessions', async () => {
     claudeService.isPendingAskUserQuestion.mockReturnValue(false);
+    claudeService.hasChannelSession.mockReturnValue(true);
     const routes = makeRoutes();
 
     const req = createJsonReq('POST', '/x', { approved: true });
@@ -216,5 +220,110 @@ describe('createSessionRoutes — AskUserQuestion approval responses', () => {
 
     expect(res.statusCode).toBe(409);
     expect(json(res).code).toBe('ASK_ALREADY_CLOSED');
+  });
+
+  it('9. responding with an unknown requestId returns 404 and does not call sendPermissionResponse', async () => {
+    claudeService.isPendingAskUserQuestion.mockReturnValue(false);
+    claudeService.resolveAskUserQuestionKey.mockReturnValue(undefined);
+    claudeService.hasChannelSession.mockReturnValue(false);
+    const routes = makeRoutes();
+
+    const req = createJsonReq('POST', '/api/v1/sessions/sess-1/approvals/unknown-id/respond', {
+      approved: true,
+      answers: { 'Pick a colour?': 'Blue' },
+    });
+    const res = createMockRes();
+    await routes.handleRespondApproval(req, res, 'sess-1', 'unknown-id');
+
+    expect(res.statusCode).toBe(404);
+    expect(json(res).code).toBe('APPROVAL_REQUEST_NOT_FOUND');
+    expect(claudeService.sendPermissionResponse).not.toHaveBeenCalled();
+    expect(claudeService.respondToAskUserQuestion).not.toHaveBeenCalled();
+  });
+
+  it('10. responding with the toolCallId resolves the pending question and forwards answers to the SDK', async () => {
+    claudeService.resolveAskUserQuestionKey.mockReturnValue({
+      requestId: 'req-uuid',
+      toolCallId: 'toolu_01Q3yFLqb2Q4xbgiySCvkdHh',
+      sessionId: 'sess-1',
+    });
+    claudeService.respondToAskUserQuestion.mockReturnValue(true);
+    const routes = makeRoutes();
+
+    const req = createJsonReq('POST', '/api/v1/sessions/sess-1/approvals/toolu_01Q3yFLqb2Q4xbgiySCvkdHh/respond', {
+      approved: true,
+      answers: { 'Pick a colour?': 'Blue' },
+    });
+    const res = createMockRes();
+    await routes.handleRespondApproval(req, res, 'sess-1', 'toolu_01Q3yFLqb2Q4xbgiySCvkdHh');
+
+    expect(res.statusCode).toBe(200);
+    expect(claudeService.respondToAskUserQuestion).toHaveBeenCalledWith('req-uuid', {
+      answers: { 'Pick a colour?': 'Blue' },
+    });
+  });
+
+  it('11. responding with a valid requestId but the wrong sessionId returns 404', async () => {
+    claudeService.resolveAskUserQuestionKey.mockReturnValue({
+      requestId: 'req-uuid',
+      toolCallId: 'toolu_01Q3yFLqb2Q4xbgiySCvkdHh',
+      sessionId: 'other-sess',
+    });
+    const routes = makeRoutes();
+
+    const req = createJsonReq('POST', '/api/v1/sessions/sess-1/approvals/req-uuid/respond', {
+      approved: true,
+      answers: { 'Pick a colour?': 'Blue' },
+    });
+    const res = createMockRes();
+    await routes.handleRespondApproval(req, res, 'sess-1', 'req-uuid');
+
+    expect(res.statusCode).toBe(404);
+    expect(json(res).code).toBe('APPROVAL_REQUEST_NOT_FOUND');
+    expect(claudeService.respondToAskUserQuestion).not.toHaveBeenCalled();
+    expect(claudeService.sendPermissionResponse).not.toHaveBeenCalled();
+  });
+
+  it('12. a channel-backed session still routes non-AskUserQuestion responses to sendPermissionResponse', async () => {
+    claudeService.isPendingAskUserQuestion.mockReturnValue(false);
+    claudeService.resolveAskUserQuestionKey.mockReturnValue(undefined);
+    claudeService.hasChannelSession.mockReturnValue(true);
+    const routes = makeRoutes();
+
+    const req = createJsonReq('POST', '/api/v1/sessions/sess-1/approvals/perm-1/respond', { approved: true });
+    const res = createMockRes();
+    await routes.handleRespondApproval(req, res, 'sess-1', 'perm-1');
+
+    expect(res.statusCode).toBe(200);
+    expect(claudeService.sendPermissionResponse).toHaveBeenCalledWith('sess-1', 'perm-1', true);
+    expect(claudeService.respondToAskUserQuestion).not.toHaveBeenCalled();
+  });
+
+  it('13. success body carries resolved, requestId and toolCallId', async () => {
+    claudeService.resolveAskUserQuestionKey.mockReturnValue({
+      requestId: 'req-uuid',
+      toolCallId: 'toolu_01Q3yFLqb2Q4xbgiySCvkdHh',
+      sessionId: 'sess-1',
+    });
+    claudeService.respondToAskUserQuestion.mockReturnValue(true);
+    const routes = makeRoutes();
+
+    const req = createJsonReq('POST', '/api/v1/sessions/sess-1/approvals/toolu_01Q3yFLqb2Q4xbgiySCvkdHh/respond', {
+      approved: true,
+      answers: { 'Pick a colour?': 'Blue' },
+    });
+    const res = createMockRes();
+    await routes.handleRespondApproval(req, res, 'sess-1', 'toolu_01Q3yFLqb2Q4xbgiySCvkdHh');
+
+    expect(res.statusCode).toBe(200);
+    const body = json(res);
+    expect(body).toMatchObject({
+      success: true,
+      resolved: true,
+      kind: 'ask_user_question',
+      sessionId: 'sess-1',
+      requestId: 'req-uuid',
+      toolCallId: 'toolu_01Q3yFLqb2Q4xbgiySCvkdHh',
+    });
   });
 });

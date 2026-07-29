@@ -328,7 +328,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
     const routes = makeRoutes(admission);
 
     const capacityRes = createMockRes();
-    routes.handleCapacity(createJsonReq('GET', '/api/v1/capacity'), capacityRes);
+    await routes.handleCapacity(createJsonReq('GET', '/api/v1/capacity'), capacityRes);
     expect(json(capacityRes)).toMatchObject({ available: false, activeTurns: 1, apiTurnLimit: 1, interactiveReserve: 1 });
 
     const promptRes = createMockRes();

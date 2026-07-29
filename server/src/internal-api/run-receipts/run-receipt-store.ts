@@ -32,6 +32,8 @@ const ALLOWED_KEYS = new Set([
   'executionInstanceId',
   'model',
   'modelSelector',
+  'mode',
+  'dispatchMode',
   'status',
   'acceptedAt',
   'startedAt',
@@ -101,7 +103,7 @@ export class RunReceiptStore {
     this.ready = true;
     const recoveryAt = new Date(this.now()).toISOString();
     for (const record of this.cache.values()) {
-      if (record.status !== 'accepted' && record.status !== 'started') continue;
+      if (record.status !== 'accepted' && record.status !== 'queued' && record.status !== 'started') continue;
       record.status = 'interrupted';
       record.terminalAt = recoveryAt;
       record.errorCode = 'SERVER_RESTART';
@@ -178,6 +180,21 @@ export class RunReceiptStore {
     await this.persist(next);
     this.cache.set(runId, next);
     await this.prune();
+    return { ...next };
+  }
+
+  async patch(
+    runId: string,
+    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode'>>,
+  ): Promise<PersistedRunReceipt | undefined> {
+    await this.ensureReady();
+    const current = this.cache.get(runId);
+    if (!current) return undefined;
+    if (TERMINAL_STATUSES.has(current.status)) return { ...current };
+    const next = { ...current, ...patch };
+    this.validate(next);
+    await this.persist(next);
+    this.cache.set(runId, next);
     return { ...next };
   }
 
@@ -312,8 +329,14 @@ export class RunReceiptStore {
     if (!['pi', 'claude', 'opencode', 'antigravity'].includes(record.runtime)) {
       throw new Error('Invalid receipt runtime');
     }
-    if (!['accepted', 'started', 'completed', 'failed', 'cancelled', 'interrupted'].includes(record.status)) {
+    if (!['accepted', 'queued', 'started', 'completed', 'failed', 'cancelled', 'interrupted'].includes(record.status)) {
       throw new Error('Invalid receipt status');
+    }
+    if (record.mode !== undefined && !['prompt', 'follow_up', 'steer'].includes(record.mode)) {
+      throw new Error('Invalid receipt mode');
+    }
+    if (record.dispatchMode !== undefined && !['prompt', 'follow_up', 'steer'].includes(record.dispatchMode)) {
+      throw new Error('Invalid receipt dispatch mode');
     }
     if (record.idempotencyKeyDigest !== undefined && !SAFE_DIGEST.test(record.idempotencyKeyDigest)) {
       throw new Error('Invalid idempotency key digest');
@@ -331,7 +354,8 @@ export class RunReceiptStore {
 }
 
 function isLegalTransition(from: RunReceiptStatus, to: RunReceiptStatus): boolean {
-  if (from === 'accepted') return to === 'started' || to === 'failed' || to === 'cancelled';
+  if (from === 'accepted') return to === 'queued' || to === 'started' || to === 'failed' || to === 'cancelled';
+  if (from === 'queued') return to === 'started' || to === 'failed' || to === 'cancelled';
   if (from === 'started') return to === 'completed' || to === 'failed' || to === 'cancelled';
   return false;
 }

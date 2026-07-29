@@ -8,7 +8,12 @@ import {
 } from '../security/websocket.js';
 import { wsMessageLimiter } from '../security/rate-limit.js';
 import { detectPromptInjection } from '../security/prompt-injection.js';
-import { getPiService, type PiService } from '../pi/index.js';
+import {
+  assertPiSessionFileIdentity,
+  getPiService,
+  PiSessionIdentityError,
+  type PiService,
+} from '../pi/index.js';
 import { SessionPool } from '../pi/session-pool.js';
 import { readSessionCwd } from '../pi/session-cwd.js';
 import { parsePiSessionHistory } from '../pi/session-history.js';
@@ -626,6 +631,17 @@ export class WebSocketConnectionManager {
       await this.routeMessage(clientId, message);
     } catch (error) {
       logger.error(`Error handling message from ${clientId}:`, error);
+      if (error instanceof PiSessionIdentityError && message.type === 'switch_session') {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: error.code === 'SESSION_FILE_MISSING'
+            ? 'This session no longer exists.'
+            : 'This session could not be opened because its identity is inconsistent.',
+          code: error.code === 'SESSION_FILE_MISSING' ? 'SESSION_NOT_FOUND' : error.code,
+          sessionPath: message.sessionPath,
+        });
+        return;
+      }
       this.sendMessage(clientId, {
         type: 'error',
         message: error instanceof Error ? error.message : 'Internal error',
@@ -1749,7 +1765,11 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    // Pi session switching
+    // Pi session switching. Validate the on-disk identity before mutating the
+    // client's current subscription or asking the SDK to rehydrate the path.
+    // MultiSessionManager may already hold this path in memory, so relying on
+    // createSession() alone would miss a file deleted after first open.
+    await assertPiSessionFileIdentity(sessionPath);
 
     // Unsubscribe from the old session if different from new session
     // This prevents receiving events from the old session while viewing the new one
@@ -1772,7 +1792,7 @@ export class WebSocketConnectionManager {
     }
     this.clientCwd.set(clientId, cwd);
 
-    // Subscribe to the new session via MultiSessionManager (creates if doesn't exist)
+    // Subscribe to the validated existing session via MultiSessionManager.
     const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath, cwd, this.getWebUIContext(clientId));
 
     // Keep the connection's runtime-neutral view and the Pi session manager's

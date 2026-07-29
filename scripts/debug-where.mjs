@@ -228,6 +228,42 @@ export function buildSessionEvidenceJson(entry, opts = {}) {
   };
 }
 
+export async function findPiSessionOnDisk(query, opts = {}) {
+  // Session IDs are UUID/ULID-like tokens. Refuse glob metacharacters and path
+  // separators so this remains an exact, bounded filename lookup.
+  if (!/^[A-Za-z0-9-]+$/.test(query)) return null;
+  const piAgentDir = opts.piAgentDir ?? process.env.PI_AGENT_DIR ?? path.join(os.homedir(), '.pi', 'agent');
+  const pattern = path.join(piAgentDir, 'sessions', '*', `*_${query}.jsonl`);
+  for await (const sessionPath of fs.glob(pattern)) {
+    let handle;
+    try {
+      handle = await fs.open(sessionPath, 'r');
+      for await (const line of handle.readLines()) {
+        if (!line.trim()) continue;
+        const header = JSON.parse(line);
+        if (header?.type !== 'session' || header.id !== query) break;
+        const stats = await fs.stat(sessionPath);
+        return {
+          id: query,
+          sdkType: 'pi',
+          path: sessionPath,
+          cwd: typeof header.cwd === 'string' ? header.cwd : '',
+          firstMessage: '',
+          messageCount: 0,
+          createdAt: (stats.birthtimeMs > 0 ? stats.birthtime : stats.mtime).toISOString(),
+          lastActivity: stats.mtime.toISOString(),
+          status: 'idle',
+        };
+      }
+    } catch {
+      // Keep searching exact matches if a candidate is unreadable or malformed.
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
+  }
+  return null;
+}
+
 export async function loadRegistry(registryPath = DEFAULT_REGISTRY_PATH) {
   const raw = await fs.readFile(registryPath, 'utf8');
   const parsed = JSON.parse(raw);
@@ -281,7 +317,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 
   const registry = await loadRegistry(registryPath);
-  const entry = findSessionEntry(registry.entries, query);
+  const entry = findSessionEntry(registry.entries, query) ?? await findPiSessionOnDisk(query);
   if (!entry) {
     console.error(`No session entry matched '${query}' in ${registryPath}`);
     console.error('Tip: try the internal session id, runtime-native session id, Antigravity conversation id, or the registry path field.');

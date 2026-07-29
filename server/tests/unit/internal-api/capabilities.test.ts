@@ -63,7 +63,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.12.0',
+        contractVersion: '1.13.0',
       },
       features: {
         retentionLeases: true,
@@ -76,25 +76,55 @@ describe('createCapabilitiesRoutes', () => {
         pi: {
           available: true,
           supportsFollowUp: true,
+          followUpSemantics: 'queue_while_busy',
           supportsSteer: true,
+          supportsSteerWhileBusy: true,
           supportsThinkingLevel: true,
         },
         claude: {
           available: true,
           backendMode: 'channel',
           supportsFollowUp: true,
+          followUpSemantics: 'new_turn',
           supportsSteer: false,
+          supportsSteerWhileBusy: false,
           supportsHeartbeat: true,
           supportsApprovals: true,
           supportsThinkingLevel: true,
         },
         opencode: {
           available: false,
+          followUpSemantics: 'new_turn',
           supportsApprovals: true,
         },
       },
     });
   });
+
+  /* eslint-disable @typescript-eslint/no-explicit-any -- focused service doubles expose only capability methods */
+  it('27. reports structured interactive-question support only for the Claude SDK backend', async () => {
+    const routes = createCapabilitiesRoutes({
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getBackendMode: vi.fn().mockResolvedValue('sdk'),
+        getProfiles: vi.fn().mockReturnValue([]),
+      } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(true) } as any,
+    });
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+    const runtimes = JSON.parse(res.body).runtimes;
+    expect(runtimes.claude).toMatchObject({
+      followUpSemantics: 'new_turn',
+      supportsInteractiveQuestions: true,
+      supportsStructuredQuestionResponse: true,
+    });
+    expect(runtimes.pi.supportsInteractiveQuestions).toBe(false);
+    expect(runtimes.opencode.supportsStructuredQuestionResponse).toBe(false);
+    expect(runtimes.antigravity.followUpSemantics).toBe('new_turn');
+  });
+  /* eslint-enable @typescript-eslint/no-explicit-any */
 
   it('downgrades Claude-specific capability flags in direct mode', async () => {
     const routes = createCapabilitiesRoutes({

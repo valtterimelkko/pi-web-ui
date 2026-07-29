@@ -40,6 +40,7 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
   });
 
   afterEach(async () => {
+    await manager.shutdown();
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
@@ -55,6 +56,15 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     const files = await fs.readdir(dir);
     const stored = await fs.readFile(path.join(dir, files.find((file) => file.endsWith('.json'))!), 'utf8');
     expect(stored).not.toContain('request-1');
+  });
+
+  it('23. round-trips requested mode and actual dispatchMode through durable storage', async () => {
+    const created = await manager.beginRun({ ...baseInput, mode: 'follow_up', dispatchMode: 'prompt' });
+    expect(created.receipt).toMatchObject({ mode: 'follow_up', dispatchMode: 'prompt' });
+    await manager.shutdown();
+    manager = new RunReceiptManager({ store: new RunReceiptStore(dir, { now: () => now }), now: () => now });
+    await manager.init();
+    expect(manager.get(created.receipt.runId)).toMatchObject({ mode: 'follow_up', dispatchMode: 'prompt' });
   });
 
   it('rejects a same-key request with a different execution fingerprint', async () => {

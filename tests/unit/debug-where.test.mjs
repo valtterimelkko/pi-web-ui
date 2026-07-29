@@ -136,6 +136,42 @@ test('buildSessionEvidenceJson is bounded offline locator evidence and omits pro
   assert.equal(JSON.stringify(evidence).includes('private prompt that must not be copied'), false);
 });
 
+test('runCli resolves an on-disk Pi session absent from the registry by exact filename fallback', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'debug-where-pi-fallback-'));
+  const registryPath = path.join(dir, 'session-registry.json');
+  const piAgentDir = path.join(dir, 'pi-agent');
+  const projectDir = path.join(piAgentDir, 'sessions', '--tmp-project--');
+  const sessionId = '019faeda-0000-7000-8000-000000000001';
+  const sessionPath = path.join(projectDir, `2026-07-29T00-00-00_${sessionId}.jsonl`);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(registryPath, JSON.stringify({ version: 1, entries: [] }));
+  fs.writeFileSync(sessionPath, JSON.stringify({ type: 'session', id: sessionId, cwd: '/tmp/project', timestamp: '2026-07-29T00:00:00.000Z' }));
+
+  const output = [];
+  const errors = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  const previousPiAgentDir = process.env.PI_AGENT_DIR;
+  console.log = (...args) => output.push(args.join(' '));
+  console.error = (...args) => errors.push(args.join(' '));
+  process.env.PI_AGENT_DIR = piAgentDir;
+  try {
+    assert.equal(await runCli(['--json', '--registry', registryPath, sessionId]), 0);
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+    if (previousPiAgentDir === undefined) delete process.env.PI_AGENT_DIR;
+    else process.env.PI_AGENT_DIR = previousPiAgentDir;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  assert.deepEqual(errors, []);
+  const evidence = JSON.parse(output.join('\n'));
+  assert.equal(evidence.sessionId, sessionId);
+  assert.equal(evidence.runtime, 'pi');
+  assert.equal(evidence.aliases.path, sessionPath);
+});
+
 test('runCli --json emits machine-readable offline evidence and preserves alias lookup', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'debug-where-json-'));
   const registryPath = path.join(dir, 'session-registry.json');

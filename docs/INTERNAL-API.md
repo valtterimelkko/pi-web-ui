@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.12.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.13.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -153,9 +153,10 @@ The current surface is strong enough for the full Tier-1 orchestration loop:
   prompt has a durable `runId` and receipt, but Pi Web UI still does not expose
   a general-purpose job queue or scheduler. Use `GET /runs/:runId` for a
   detached run's state.
-- **Pending approvals endpoint is informational:**
-  `GET /sessions/:id/approvals/pending` currently reports state and guidance,
-  not a true runtime-backed pending list.
+- **Pending approvals are backend-specific:**
+  `GET /sessions/:id/approvals/pending` reports live Claude SDK
+  `AskUserQuestion` requests; runtimes/backends without a synchronous pending
+  surface return an empty list.
 - **`/history` and `/transcript` serve different needs:** `/history` is closer
   to replay/event reconstruction; `/transcript` is the easier runtime-agnostic
   result-reading surface for agents.
@@ -305,7 +306,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.12.0",
+    "contractVersion": "1.13.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -637,12 +638,19 @@ how much detail you receive.
 | `mode` | string | No | `prompt` | `prompt`, `follow_up`, or `steer` |
 | `detach` | boolean | No | `false` | Fire-and-forget: run the pre-flight checks, start the turn, and return `202 Accepted` immediately without waiting. The turn keeps running server-side; read results later via `/info` + `/transcript`. Only valid with `verbosity=answers`. See [Detached dispatch](#detached-fire-and-forget-dispatch). |
 | `idempotencyKey` | string | No | — | Session-scoped key, 1–128 characters. A matching request reuses the existing run within the default 24-hour TTL; a different request with the same live key returns `IDEMPOTENCY_KEY_CONFLICT`. The raw key is never persisted. |
+| `requireActiveTurn` | boolean | No | `false` | For `follow_up`, require a currently active turn instead of permitting idle promotion. Idle returns `409 SESSION_NOT_STREAMING`. |
 
-You can also set verbosity via header: `X-Verbosity: tasks`
+You can also set verbosity via header: `X-Verbosity: tasks`.
 
-Notes:
-- `follow_up` is supported on runtimes that report `supportsFollowUp=true`
-- `steer` is currently Pi Coding Agent-only and returns `UNSUPPORTED_OPERATION` elsewhere
+`mode` is the requested operation; every successful prompt response/receipt also carries `dispatchMode`, the operation actually performed. In particular, idle `follow_up` is visibly promoted to `dispatchMode: "prompt"`.
+
+| Mode | Meaning | Pi | Claude / OpenCode / Antigravity |
+|---|---|---|---|
+| `prompt` | Start a new turn | `409 SESSION_BUSY` if busy; else run | `409 SESSION_BUSY` if running; else run |
+| `follow_up` | Deliver after the current turn | busy → queue via `followUp()`, receipt status `queued`; idle → **promote** to a new turn, `dispatchMode:"prompt"` | no queue exists → running → `409 SESSION_BUSY` with `Retry-After`; idle → new turn |
+| `steer` | Interrupt the active turn | requires an active turn → idle gives `409 SESSION_NOT_STREAMING` | `UNSUPPORTED_OPERATION` (unchanged) |
+
+`requireActiveTurn: true` turns the `follow_up` idle-promotion into `409 SESSION_NOT_STREAMING` on every runtime. Capability-gate runtime differences with `followUpSemantics`, `supportsSteerWhileBusy`, `supportsInteractiveQuestions`, and `supportsStructuredQuestionResponse` from `/capabilities`.
 
 ---
 
@@ -660,7 +668,9 @@ completes. The caller sees nothing while the agent works.
   "content": "Here is the refactored function using async/await:\n\n```javascript\nasync function fetchData() {\n  const response = await fetch('/api/data');\n  return response.json();\n}\n```",
   "tokens": { "input": 150, "output": 80, "total": 230 },
   "cost": 0.001,
-  "turnComplete": true
+  "turnComplete": true,
+  "mode": "follow_up",
+  "dispatchMode": "prompt"
 }
 ```
 
@@ -807,8 +817,10 @@ The lookup returns the persisted receipt directly:
 }
 ```
 
-Receipt statuses are `accepted`, `started`, `completed`, `failed`,
-`cancelled`, and `interrupted`. For ordinary Pi LLM runs, `completed` is written
+Receipt statuses are `accepted`, `queued`, `started`, `completed`, `failed`,
+`cancelled`, and `interrupted`. `queued` means native Pi accepted a busy-turn
+follow-up but its own user-message delivery has not yet been observed. For
+ordinary Pi LLM runs, `completed` is written
 only after the normalized `agent_end` turn boundary; `agentSession.prompt()` may
 return at auto-compaction while the same session resumes and is therefore not
 terminal evidence. Synchronous Pi extension slash commands are the explicit
@@ -870,7 +882,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.12.0",
+    "contractVersion": "1.13.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -886,7 +898,11 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
       "available": true,
       "backendMode": "native",
       "supportsFollowUp": true,
+      "followUpSemantics": "queue_while_busy",
       "supportsSteer": true,
+      "supportsSteerWhileBusy": true,
+      "supportsInteractiveQuestions": false,
+      "supportsStructuredQuestionResponse": false,
       "supportsModelSwitch": true,
       "supportsThinkingLevel": true,
       "supportsPinning": true,
@@ -896,9 +912,13 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     },
     "claude": {
       "available": true,
-      "backendMode": "channel",
+      "backendMode": "sdk",
       "supportsFollowUp": true,
+      "followUpSemantics": "new_turn",
       "supportsSteer": false,
+      "supportsSteerWhileBusy": false,
+      "supportsInteractiveQuestions": true,
+      "supportsStructuredQuestionResponse": true,
       "supportsModelSwitch": true,
       "supportsThinkingLevel": true,
       "supportsPinning": true,
@@ -910,7 +930,11 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
       "available": true,
       "backendMode": "server",
       "supportsFollowUp": true,
+      "followUpSemantics": "new_turn",
       "supportsSteer": false,
+      "supportsSteerWhileBusy": false,
+      "supportsInteractiveQuestions": false,
+      "supportsStructuredQuestionResponse": false,
       "supportsModelSwitch": true,
       "supportsThinkingLevel": true,
       "supportsPinning": true,
@@ -922,7 +946,11 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
       "available": true,
       "backendMode": "subprocess",
       "supportsFollowUp": true,
+      "followUpSemantics": "new_turn",
       "supportsSteer": false,
+      "supportsSteerWhileBusy": false,
+      "supportsInteractiveQuestions": false,
+      "supportsStructuredQuestionResponse": false,
       "supportsModelSwitch": true,
       "supportsThinkingLevel": false,
       "supportsPinning": true,
@@ -1313,8 +1341,13 @@ body carries structured answers rather than a simple approval:
 | `cancelled` | boolean | no | Set `true` to dismiss the dialog without answering. |
 
 The SDK backend resolves the pending `canUseTool` callback with the answers and
-Claude's turn continues. If the request is no longer pending (e.g. it just
-timed out or the session disconnected), the endpoint returns:
+Claude's turn continues. The path identifier may be either the question
+`requestId` or its `toolCallId`; both identify the same pending SDK callback.
+A successful SDK response includes `resolved: true`, `requestId`, `toolCallId`,
+and `sessionId`. An unknown identifier returns HTTP 404 with
+`APPROVAL_REQUEST_NOT_FOUND`; no response returns 2xx unless a live request was
+actually resolved. If the request was known but is no longer pending (for
+example it timed out or disconnected), the endpoint returns:
 
 ```json
 { "error": "That question already closed, so the answer was not delivered to the assistant.", "code": "ASK_ALREADY_CLOSED" }
@@ -1347,7 +1380,7 @@ any existing endpoint.
 | Reconstruct UI-style event replay | `GET /sessions/:id/history` | Lower-level replay/event shape |
 | Hand child context into another session | `POST /sessions/:id/transfer` | Reuses the same transfer machinery as the web UI |
 | Sum usage/cost across children | `POST /sessions/usage` | Aggregate report |
-| Inspect approval state | `GET /sessions/:id/approvals/pending` | Currently informational only; use `/events` to observe approval requests live |
+| Inspect approval state | `GET /sessions/:id/approvals/pending` | Live Claude SDK question list with both `requestId` and `toolCallId` |
 | Watch for a condition over a long horizon | `POST/GET /sessions/:id/watch` | Durable, restart-surviving ledger; poll instead of holding `/events`. See [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) |
 
 ### Persistent Event Stream
@@ -1753,20 +1786,27 @@ from the totals.
 GET /api/v1/sessions/:sessionId/approvals/pending
 ```
 
-Returns the current pending-approval state for a session. Note: the
-runtime services do not yet expose a synchronous pending list, so the
-`approvals` array is currently always empty. To observe approvals as
-they arise, subscribe to `GET /sessions/:id/events` and watch for
-`permission_request` events.
+Returns the session-scoped live pending list. Claude SDK
+`AskUserQuestion` entries include both accepted aliases and bounded question
+metadata; answered/cancelled/expired entries disappear from the list. Other
+runtime/backend combinations return an empty array.
 
 **Response (200):**
 ```json
 {
   "sessionId": "...",
   "runtime": "claude",
-  "status": "idle",
-  "approvals": [],
-  "note": "Pending approvals must be observed via GET /sessions/:id/events. ..."
+  "status": "running",
+  "approvals": [
+    {
+      "requestId": "question-request-uuid",
+      "toolCallId": "toolu_01ABC",
+      "kind": "ask_user_question",
+      "questions": [{"question":"Which region?","header":"Region","multiSelect":false,"options":[]}],
+      "openedAt": "2026-07-29T18:30:00.000Z",
+      "expiresAt": "2026-07-29T19:00:00.000Z"
+    }
+  ]
 }
 ```
 

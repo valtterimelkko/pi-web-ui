@@ -54,7 +54,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.12.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.13.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -130,6 +130,11 @@ export interface SendPromptRequest {
    * fingerprint reuses the existing run receipt within the documented TTL.
    */
   idempotencyKey?: string;
+  /**
+   * When true, follow_up requires an active streaming turn; idle sessions return
+   * 409 SESSION_NOT_STREAMING instead of being promoted to a new turn.
+   */
+  requireActiveTurn?: boolean;
   /**
    * Fire-and-forget dispatch: run the pre-flight checks, kick off the turn, and
    * return `202 Accepted` immediately without waiting for it to complete. The
@@ -272,10 +277,11 @@ export interface PendingApprovalsResponse {
   status: 'idle' | 'running';
   approvals: Array<{
     requestId: string;
-    toolName?: string;
-    description?: string;
-    args?: unknown;
-    receivedAt?: number;
+    toolCallId: string;
+    kind: 'ask_user_question';
+    questions: unknown[];
+    openedAt: string;
+    expiresAt: string;
   }>;
   note?: string;
 }
@@ -406,6 +412,17 @@ export interface SessionEvidenceResponse {
   screen?: ScreenViewResponse;
   /** Included only when explicitly requested with `expand=runs`. */
   runReceipts?: RunReceipt[];
+  /** Recent interactive-question control events observed for this session. */
+  control?: {
+    askUserQuestions: Array<{
+      type: 'request' | 'closed';
+      requestId: string;
+      toolCallId: string;
+      questions?: unknown[];
+      reason?: 'answered' | 'cancelled' | 'timeout' | 'aborted' | 'disconnected' | 'turn_end';
+      timestamp: number;
+    }>;
+  };
 }
 
 export interface SessionControlRequest {
@@ -531,6 +548,15 @@ export interface SessionControlResponse {
 export interface ApprovalResponseResult {
   success: boolean;
   approved: boolean;
+  /** True when an AskUserQuestion was actually resolved by the SDK. */
+  resolved?: boolean;
+  kind?: 'ask_user_question';
+  /** Session whose pending callback was resolved, when known. */
+  sessionId?: string;
+  /** Canonical requestId of the resolved question, when known. */
+  requestId?: string;
+  /** SDK toolUseId / toolCallId of the resolved question, when known. */
+  toolCallId?: string;
 }
 
 export interface ListSessionsResponse {
@@ -550,10 +576,15 @@ export interface PromptResponse {
   };
   cost?: number;
   turnComplete: boolean;
+  /** Requested prompt mode. */
+  mode?: PromptMode;
+  /** Actual dispatch mode after state-aware decisions. */
+  dispatchMode?: PromptMode;
 }
 
 export type RunReceiptStatus =
   | 'accepted'
+  | 'queued'
   | 'started'
   | 'completed'
   | 'failed'
@@ -569,6 +600,10 @@ export interface RunReceipt {
   model?: string;
   /** Canonical creation selector bound to the run, when distinct from model. */
   modelSelector?: string;
+  /** Requested prompt mode (prompt / follow_up / steer). */
+  mode?: PromptMode;
+  /** Actual dispatch mode after state-aware promotion/rejection decisions. */
+  dispatchMode?: PromptMode;
   status: RunReceiptStatus;
   acceptedAt: string;
   startedAt?: string;
@@ -586,6 +621,10 @@ export interface DetachedPromptResponse {
   runId: string;
   detached: true;
   status: 'accepted';
+  /** Requested prompt mode. */
+  mode?: PromptMode;
+  /** Actual dispatch mode after state-aware decisions. */
+  dispatchMode?: PromptMode;
 }
 
 /** Response returned when a prompt retry reuses an existing idempotent run. */
@@ -651,6 +690,10 @@ export interface RuntimeCapabilities {
   available: boolean;
   backendMode: RuntimeBackendMode;
   supportsFollowUp: boolean;
+  /** Semantics of `mode: "follow_up"` for this runtime. */
+  followUpSemantics?: 'queue_while_busy' | 'new_turn';
+  /** Whether the runtime can steer/interrupt an in-flight turn. */
+  supportsSteerWhileBusy?: boolean;
   supportsSteer: boolean;
   supportsModelSwitch: boolean;
   supportsThinkingLevel: boolean;
@@ -658,6 +701,10 @@ export interface RuntimeCapabilities {
   supportsReplayHistory: boolean;
   supportsApprovals: boolean;
   supportsHeartbeat: boolean;
+  /** Whether the runtime can ask the operator interactive questions mid-turn. */
+  supportsInteractiveQuestions?: boolean;
+  /** Whether the runtime can accept structured answers/annotations to interactive questions. */
+  supportsStructuredQuestionResponse?: boolean;
 }
 
 export interface CapabilitiesResponse {

@@ -115,12 +115,52 @@ function parseEvidenceLimit(raw: string | null): number {
   return Math.min(EVIDENCE_MAX_LIMIT, Math.max(1, Math.floor(parsed)));
 }
 
+class TurnStalledError extends Error {
+  constructor() {
+    super('Accepted run stalled before a terminal runtime event');
+    this.name = 'TurnStalledError';
+  }
+}
+
+function isRuntimeAlreadyRunningError(error: Error): boolean {
+  return /session is already running/i.test(error.message);
+}
+
 function compactEvidenceText(value: string, knownPrompt?: string, maxLength = 320): string {
   let result = value;
   if (knownPrompt && knownPrompt.length > 0) {
     result = result.split(knownPrompt).join('[PROMPT_REDACTED]');
   }
   return result.length > maxLength ? `${result.slice(0, maxLength)}…` : result;
+}
+
+function extractQuestionControlEvents(events: NormalizedEvent[]): NonNullable<SessionEvidenceResponse['control']>['askUserQuestions'] {
+  const toolCallByRequest = new Map<string, string>();
+  const result: NonNullable<SessionEvidenceResponse['control']>['askUserQuestions'] = [];
+  const closeReasons = new Set(['answered', 'cancelled', 'timeout', 'aborted', 'disconnected', 'turn_end']);
+  for (const event of events) {
+    if (event.type !== 'ask_user_question_request' && event.type !== 'ask_user_question_closed') continue;
+    const data = event.data as Record<string, unknown>;
+    const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
+    const explicitToolCallId = typeof data.toolCallId === 'string' ? data.toolCallId : undefined;
+    if (!requestId) continue;
+    if (explicitToolCallId) toolCallByRequest.set(requestId, explicitToolCallId);
+    const toolCallId = explicitToolCallId ?? toolCallByRequest.get(requestId);
+    if (!toolCallId) continue;
+    if (event.type === 'ask_user_question_request') {
+      result.push({
+        type: 'request', requestId, toolCallId,
+        ...(Array.isArray(data.questions) ? { questions: data.questions } : {}),
+        timestamp: event.timestamp,
+      });
+    } else {
+      const reason = typeof data.reason === 'string' && closeReasons.has(data.reason)
+        ? data.reason as 'answered' | 'cancelled' | 'timeout' | 'aborted' | 'disconnected' | 'turn_end'
+        : undefined;
+      result.push({ type: 'closed', requestId, toolCallId, ...(reason ? { reason } : {}), timestamp: event.timestamp });
+    }
+  }
+  return result;
 }
 
 function compactDiagnosticRecord(
@@ -203,7 +243,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     onSessionCreated,
   } = deps;
 
-  const piSessionDir = deps.piSessionDir ?? path.join(config.piAgentDir, 'sessions');
   const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
   const antigravitySessionDir = deps.antigravitySessionDir ?? config.antigravitySessionDir;
   const runReceipts = deps.runReceiptManager ?? new RunReceiptManager({
@@ -211,6 +250,38 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
   });
   const admission = deps.admissionController ?? new AdmissionController();
+  // A synchronous, process-local claim closes the gap between the liveness
+  // pre-flight and runtime dispatch when two Internal API callers race.
+  const activeDirectDispatchTokens = new Map<string, number>();
+  const nextDirectDispatchToken = new Map<string, number>();
+  interface QueuedPiRunCorrelation {
+    runId: string;
+    message: string;
+    delivered: boolean;
+    awaitingMessageStart: boolean;
+    queueIndex?: number;
+    sessionPath: string;
+  }
+  const queuedPiRuns = new Map<string, QueuedPiRunCorrelation[]>();
+  const queuedPiObservers = new Map<string, (event: unknown) => void>();
+  const queuedPiEventChains = new Map<string, Promise<void>>();
+  const queuedPiLastFollowUp = new Map<string, string[]>();
+
+  function claimDirectDispatch(sessionId: string): { token: number; release: () => void } | undefined {
+    if (activeDirectDispatchTokens.has(sessionId)) return undefined;
+    const token = (nextDirectDispatchToken.get(sessionId) ?? 0) + 1;
+    nextDirectDispatchToken.set(sessionId, token);
+    activeDirectDispatchTokens.set(sessionId, token);
+    let released = false;
+    return {
+      token,
+      release: () => {
+        if (released) return;
+        released = true;
+        if (activeDirectDispatchTokens.get(sessionId) === token) activeDirectDispatchTokens.delete(sessionId);
+      },
+    };
+  }
 
   /**
    * Per-session event broker. Long-lived: subscribers added via
@@ -331,6 +402,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   async function shutdown(): Promise<void> {
     await ready.catch(() => { /* startup surfaces the original initialization error */ });
     pinExpiry?.stop();
+    await runReceipts.shutdown();
   }
 
   /** Pin without TTL tracking — the fallback when no PinExpiryManager exists. */
@@ -1001,6 +1073,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           count: receipts.length,
           ...(receipts[0] ? { latest: receipts[0] } : {}),
         },
+        control: {
+          askUserQuestions: extractQuestionControlEvents(broker.getRecentEvents(entry.id, EVIDENCE_MAX_LIMIT)),
+        },
         warnings: [
           'Diagnostics are process-local and reset when the server restarts.',
           'Run receipts and runtime-owned source files are durable; this bundle is intentionally bounded.',
@@ -1233,9 +1308,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     mode: PromptMode,
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
-    admittedLease?: { release: () => void },
+    admittedLease?: { release: () => void; turnToken?: number },
   ): Promise<void> {
     const admissionLease = admittedLease ?? await admission.acquire(runtime);
+    runReceipts.attachLease(runId, admissionLease);
     try {
     let completed = false;
     let completionError: Error | undefined;
@@ -1249,31 +1325,50 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // Keep persistence in the turn's promise chain. The transport callback
       // is deliberately deferred until this write completes, so even an SSE
       // client cannot observe success before its terminal receipt is durable.
-      persistence = runReceipts.finish(runId, error
-        ? { status: 'failed', errorCode: ErrorCode.RUNTIME_ERROR }
-        : {});
+      const busy = error ? isRuntimeAlreadyRunningError(error) : false;
+      persistence = busy
+        ? runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY })
+        : runReceipts.finish(runId, error
+          ? { status: 'failed', errorCode: error instanceof TurnStalledError ? ErrorCode.TURN_STALLED : ErrorCode.RUNTIME_ERROR }
+          : {});
     };
 
     let executionError: Error | undefined;
-    try {
-      await executePrompt(
-        sessionId,
-        runtime,
-        message,
-        mode,
-        (event) => {
-          eventPersistence.push(runReceipts.observeEvent(runId, event));
-          onEvent(event);
-        },
-        complete,
-      );
+    const execution = executePrompt(
+      sessionId,
+      runtime,
+      message,
+      mode,
+      (event) => {
+        eventPersistence.push(runReceipts.observeEvent(runId, event));
+        onEvent(event);
+      },
+      complete,
+      admittedLease?.turnToken,
+    ).then(() => {
       // Existing runtimes normally call onComplete at their turn boundary. The
       // fallback keeps the receipt explicit if a runtime returns without doing
       // so, without inventing a new runtime-specific completion hook.
       if (!completed) complete();
-    } catch (error) {
+    }).catch((error) => {
       executionError = error instanceof Error ? error : new Error(String(error));
       complete(executionError);
+    });
+
+    const winner = await Promise.race([
+      execution.then(() => ({ kind: 'execution' as const })),
+      runReceipts.waitForTerminal(runId).then((receipt) => ({ kind: 'terminal' as const, receipt })),
+    ]);
+    if (winner.kind === 'terminal' && winner.receipt.errorCode === ErrorCode.TURN_STALLED) {
+      const stalled = new TurnStalledError();
+      complete(stalled);
+      await abortRuntimeTurn(sessionId, runtime).catch((error) => {
+        logger.warn(`Failed to abort stalled run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      // The runtime promise may settle later; its handlers above are fenced by
+      // complete() and prevent an unhandled rejection or false success.
+    } else {
+      await execution;
     }
 
     // Wait for agent_end evidence as well as the terminal transition. This
@@ -1304,6 +1399,35 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  function isSessionBusy(entry: RegistryEntry): boolean {
+    if (activeDirectDispatchTokens.has(entry.id)) return true;
+    if (entry.sdkType === 'claude') return claudeService.isRunning(entry.id);
+    if (entry.sdkType === 'opencode') return opencodeService.isRunning(entry.id);
+    if (entry.sdkType === 'antigravity') return antigravityService.isRunning(entry.id);
+    const status = multiSessionManager.getSessionStatus?.(entry.path)?.status;
+    return status === 'busy' || status === 'streaming';
+  }
+
+  function chooseDispatchMode(
+    runtime: SessionRuntime,
+    mode: PromptMode,
+    busy: boolean,
+    requireActiveTurn: boolean,
+  ): { dispatchMode: PromptMode; error?: never } | {
+    dispatchMode?: never;
+    error: typeof ErrorCode.SESSION_BUSY | typeof ErrorCode.SESSION_NOT_STREAMING;
+  } {
+    if (mode === 'steer') {
+      return busy ? { dispatchMode: 'steer' } : { error: ErrorCode.SESSION_NOT_STREAMING };
+    }
+    if (mode === 'follow_up') {
+      if (busy) return runtime === 'pi' ? { dispatchMode: 'follow_up' } : { error: ErrorCode.SESSION_BUSY };
+      if (requireActiveTurn) return { error: ErrorCode.SESSION_NOT_STREAMING };
+      return { dispatchMode: 'prompt' };
+    }
+    return busy ? { error: ErrorCode.SESSION_BUSY } : { dispatchMode: 'prompt' };
+  }
+
   async function handleSendPrompt(
     req: IncomingMessage,
     res: ServerResponse,
@@ -1322,7 +1446,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
 
     const verbosity: Verbosity = body.verbosity || parseVerbosityHeader(req.headers['x-verbosity'] as string | undefined) || 'answers';
-    const mode: PromptMode = body.mode ?? 'prompt';
+    const mode = body.mode ?? 'prompt';
+    if (mode !== 'prompt' && mode !== 'follow_up' && mode !== 'steer') {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'mode must be prompt, follow_up, or steer'));
+      return;
+    }
 
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
@@ -1350,26 +1478,24 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
-      const beginInput = {
-        sessionId,
-        runtime,
-        executionInstanceId: resolveExecutionInstanceId(entry),
-        model: currentRunModel(entry),
-        modelSelector: modelSelectorForEntry(entry),
-        message: body.message,
-        mode,
-        verbosity,
-        detach: body.detach === true,
-        idempotencyKey: body.idempotencyKey,
-      } as const;
-
-      // A retry of an accepted detached/streaming run must be replayable even
-      // while the runtime reports the session busy. Peek before the busy check;
-      // beginRun repeats the check under its key lock for the race where two
-      // callers arrive together.
+      // Idempotent replay precedes liveness checks: a retry must recover its
+      // accepted receipt even while that same run keeps the runtime busy.
       if (body.idempotencyKey !== undefined) {
+        const replayInput = {
+          sessionId,
+          runtime,
+          executionInstanceId: resolveExecutionInstanceId(entry),
+          model: currentRunModel(entry),
+          modelSelector: modelSelectorForEntry(entry),
+          message: body.message,
+          mode,
+          verbosity,
+          detach: body.detach === true,
+          requireActiveTurn: body.requireActiveTurn === true,
+          idempotencyKey: body.idempotencyKey,
+        } as const;
         try {
-          const existing = await runReceipts.findExistingRun(beginInput);
+          const existing = await runReceipts.findExistingRun(replayInput);
           if (existing?.kind === 'conflict') {
             sendJson(res, 409, {
               ...enrichedErrorBody(ErrorCode.IDEMPOTENCY_KEY_CONFLICT, 'Idempotency key was already used for a different prompt'),
@@ -1392,17 +1518,48 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
       }
 
-      const isBusy = runtime === 'claude'
-        ? claudeService.isRunning(sessionId)
-        : runtime === 'opencode'
-          ? opencodeService.isRunning(sessionId)
-          : runtime === 'antigravity'
-            ? antigravityService.isRunning(sessionId)
-            : (() => {
-                const status = multiSessionManager.getSessionStatus?.(entry.path)?.status;
-                return status === 'busy' || status === 'streaming';
-              })();
-      if (isBusy && mode === 'prompt') {
+      let dispatchMode: PromptMode;
+      try {
+        const decision = chooseDispatchMode(runtime, mode, isSessionBusy(entry), body.requireActiveTurn === true);
+        if (decision.error) {
+          if (decision.error === ErrorCode.SESSION_BUSY) {
+            res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
+          }
+          sendJson(res, 409, enrichedErrorBody(
+            decision.error,
+            decision.error === ErrorCode.SESSION_BUSY
+              ? 'Session is currently busy'
+              : 'Session does not have an active turn',
+          ));
+          return;
+        }
+        dispatchMode = decision.dispatchMode;
+      } catch (error) {
+        logger.errorObject('Failed to inspect session state', error);
+        sendJson(res, 500, { error: 'Failed to inspect session state', code: ErrorCode.INTERNAL_ERROR });
+        return;
+      }
+
+      const beginInput = {
+        sessionId,
+        runtime,
+        executionInstanceId: resolveExecutionInstanceId(entry),
+        model: currentRunModel(entry),
+        modelSelector: modelSelectorForEntry(entry),
+        message: body.message,
+        mode,
+        dispatchMode,
+        verbosity,
+        detach: body.detach === true,
+        requireActiveTurn: body.requireActiveTurn === true,
+        idempotencyKey: body.idempotencyKey,
+      } as const;
+
+      // Claim a new-turn slot synchronously before the first reservation await.
+      // This is the route's monotonic per-session turn token.
+      let directClaim = dispatchMode === 'prompt' ? claimDirectDispatch(sessionId) : undefined;
+      if (dispatchMode === 'prompt' && !directClaim) {
+        res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
         sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy'));
         return;
       }
@@ -1411,6 +1568,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       try {
         reservation = await runReceipts.beginRun(beginInput);
       } catch (error) {
+        directClaim?.release();
         if (error instanceof IdempotencyKeyValidationError) {
           sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, error.message));
           return;
@@ -1420,25 +1578,48 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
-      if (reservation.kind === 'conflict') {
-        sendJson(res, 409, {
-          ...enrichedErrorBody(ErrorCode.IDEMPOTENCY_KEY_CONFLICT, 'Idempotency key was already used for a different prompt'),
-          runId: reservation.receipt.runId,
-        });
-        return;
-      }
-
-      if (reservation.kind === 'duplicate') {
-        // A replay is a JSON receipt response even when the original request
-        // was detached; its nested receipt carries the real current status.
-        sendJson(res, 200, duplicatePromptResponse(sessionId, reservation.receipt, body.detach === true));
+      if (reservation.kind !== 'created') {
+        directClaim?.release();
+        if (reservation.kind === 'conflict') {
+          sendJson(res, 409, {
+            ...enrichedErrorBody(ErrorCode.IDEMPOTENCY_KEY_CONFLICT, 'Idempotency key was already used for a different prompt'),
+            runId: reservation.receipt.runId,
+          });
+        } else {
+          sendJson(res, 200, duplicatePromptResponse(sessionId, reservation.receipt, body.detach === true));
+        }
         return;
       }
 
       const runId = reservation.receipt.runId;
-      let busyAfterReservation: boolean;
+
+      // Native Pi follow-up is queue acceptance, not a separately correlated
+      // turn. Persist queued before calling the SDK and never attach this run to
+      // the predecessor's agent_end.
+      if (dispatchMode === 'follow_up') {
+        try {
+          await runReceipts.markQueued(runId);
+          await queuePiFollowUp(sessionId, body.message, runId);
+          sendJson(res, 202, {
+            sessionId,
+            runId,
+            detached: body.detach === true,
+            status: 'accepted',
+            mode,
+            dispatchMode,
+          });
+        } catch {
+          await runReceipts.finish(runId, { status: 'failed', errorCode: ErrorCode.RUNTIME_ERROR });
+          sendJson(res, 500, { error: 'Runtime prompt failed', code: ErrorCode.RUNTIME_ERROR, runId });
+        }
+        return;
+      }
+
+      // Re-check runtime liveness after reservation. Ignore our own process-local
+      // claim; only the runtime state can reveal an external/browser race here.
+      let runtimeBusyAfterReservation: boolean;
       try {
-        busyAfterReservation = runtime === 'claude'
+        runtimeBusyAfterReservation = runtime === 'claude'
           ? claudeService.isRunning(sessionId)
           : runtime === 'opencode'
             ? opencodeService.isRunning(sessionId)
@@ -1449,23 +1630,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
                   return status === 'busy' || status === 'streaming';
                 })();
       } catch (error) {
-        await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
+        directClaim?.release();
+        await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR });
         logger.errorObject(`Failed to re-check session state for run ${runId}`, error);
         sendJson(res, 500, { error: 'Failed to verify session state', code: ErrorCode.INTERNAL_ERROR, runId });
         return;
       }
-      if (busyAfterReservation && mode === 'prompt') {
+      if (dispatchMode === 'prompt' && runtimeBusyAfterReservation) {
+        directClaim?.release();
         await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY });
-        sendJson(res, 409, {
-          ...enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy'),
-          runId,
-        });
+        res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
+        sendJson(res, 409, { ...enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy'), runId });
         return;
       }
-      let admissionLease: { release: () => void };
+
+      let rawAdmissionLease: { release: () => void };
       try {
-        admissionLease = await admission.acquire(runtime);
+        rawAdmissionLease = await admission.acquire(runtime);
       } catch (error) {
+        directClaim?.release();
         await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
         const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
         res.setHeader('Retry-After', String(capacityError.retryAfterSeconds));
@@ -1477,6 +1660,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         });
         return;
       }
+      let leaseReleased = false;
+      const admissionLease = {
+        turnToken: directClaim?.token,
+        release: () => {
+          if (leaseReleased) return;
+          leaseReleased = true;
+          rawAdmissionLease.release();
+          directClaim?.release();
+          directClaim = undefined;
+        },
+      };
+      runReceipts.attachLease(runId, admissionLease);
       try {
         await runReceipts.markStarted(runId);
       } catch (error) {
@@ -1491,7 +1686,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         runId,
         executionInstanceId: beginInput.executionInstanceId,
       }, async () => {
-        logger.info(`[InternalAPI] Prompt dispatched: runtime=${runtime} verbosity=${verbosity} mode=${mode} runId=${runId}`);
+        logger.info(`[InternalAPI] Prompt dispatched: runtime=${runtime} verbosity=${verbosity} mode=${mode} dispatchMode=${dispatchMode} runId=${runId}`);
 
         if (body.detach) {
         void executePromptWithReceipt(
@@ -1499,7 +1694,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           sessionId,
           runtime,
           body.message,
-          mode,
+          dispatchMode,
           () => { /* progress events flow to the broker inside executePrompt */ },
           (err) => {
             if (err) logger.errorObject(`Detached prompt failed for ${sessionId} run=${runId}`, err);
@@ -1508,17 +1703,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         ).catch((error) => {
           logger.errorObject(`Detached prompt error for ${sessionId} run=${runId}`, error);
         });
-        sendJson(res, 202, { sessionId, runId, detached: true, status: 'accepted' } satisfies DetachedPromptResponse);
+        sendJson(res, 202, { sessionId, runId, detached: true, status: 'accepted', mode, dispatchMode } satisfies DetachedPromptResponse);
         return;
       }
 
       try {
         if (verbosity === 'full' || verbosity === 'tasks') {
-          await handleStreamingPrompt(req, res, sessionId, runtime, body.message, verbosity, mode, runId, admissionLease);
+          await handleStreamingPrompt(req, res, sessionId, runtime, body.message, verbosity, mode, dispatchMode, runId, admissionLease);
           return;
         }
 
-        await handleAnswersPrompt(res, sessionId, runtime, body.message, mode, runId, admissionLease);
+        await handleAnswersPrompt(res, sessionId, runtime, body.message, mode, dispatchMode, runId, admissionLease);
       } catch (err) {
         admissionLease.release();
         // executePromptWithReceipt normally terminalizes before rejecting. This
@@ -1544,6 +1739,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     runtime: SessionRuntime,
     message: string,
     mode: PromptMode,
+    dispatchMode: PromptMode,
     runId: string,
     admissionLease: { release: () => void },
   ): Promise<void> {
@@ -1554,7 +1750,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sessionId,
       runtime,
       message,
-      mode,
+      dispatchMode,
       (event) => {
         collectAnswerEvent(collector, event);
       },
@@ -1566,9 +1762,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     );
 
     if (collector.error) {
-      sendJson(res, 500, {
-        error: 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
-        code: ErrorCode.RUNTIME_ERROR,
+      const busy = isRuntimeAlreadyRunningError(collector.error);
+      const stalled = collector.error instanceof TurnStalledError;
+      if (busy) res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
+      sendJson(res, busy ? 409 : 500, {
+        error: busy
+          ? 'Session is currently busy'
+          : stalled ? 'Accepted run stalled before completion' : 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
+        code: busy ? ErrorCode.SESSION_BUSY : stalled ? ErrorCode.TURN_STALLED : ErrorCode.RUNTIME_ERROR,
         runId,
       });
       return;
@@ -1583,6 +1784,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       content: collector.textParts.join(''),
       tokens: collector.usage,
       turnComplete: true,
+      mode,
+      dispatchMode,
     } satisfies PromptResponse);
   }
 
@@ -1594,6 +1797,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     message: string,
     verbosity: Verbosity,
     mode: PromptMode,
+    dispatchMode: PromptMode,
     runId: string,
     admissionLease: { release: () => void },
   ): Promise<void> {
@@ -1638,7 +1842,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sessionId,
       runtime,
       message,
-      mode,
+      dispatchMode,
       (event) => {
         if (verbosity === 'full') {
           writeFullEvent(sse.write, event);
@@ -1651,7 +1855,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         if (error) {
           sse.error(error.message);
         } else {
-          sse.complete({ sessionId, turnComplete: true });
+          sse.complete({ sessionId, turnComplete: true, mode, dispatchMode });
         }
       },
       admissionLease,
@@ -1967,11 +2171,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     try {
       if (entry.sdkType === 'claude') {
-        // SDK AskUserQuestion requests are resolved with structured answers
-        // (or a cancellation). Check this before the channel permission path
-        // so an answer is never misrouted to sendPermissionResponse.
-        if (typeof claudeService.isPendingAskUserQuestion === 'function'
-          && claudeService.isPendingAskUserQuestion(requestId)) {
+        const resolvedKey = typeof claudeService.resolveAskUserQuestionKey === 'function'
+          ? claudeService.resolveAskUserQuestionKey(requestId)
+          : undefined;
+        const pendingByLegacyKey = typeof claudeService.isPendingAskUserQuestion === 'function'
+          && claudeService.isPendingAskUserQuestion(requestId);
+        const questionKey = resolvedKey ?? (pendingByLegacyKey
+          ? { requestId, toolCallId: requestId, sessionId }
+          : undefined);
+
+        if (questionKey) {
+          // A globally valid question id is not authority to answer it through
+          // another session's route.
+          if (questionKey.sessionId !== sessionId) {
+            sendJson(res, 404, enrichedErrorBody(ErrorCode.APPROVAL_REQUEST_NOT_FOUND, 'Approval request not found for this session'));
+            return;
+          }
           const isCancel = body.cancelled === true;
           const answersError = validateStringRecord(body.answers, 'answers');
           const annotationsError = validateAskUserQuestionAnnotations(body.annotations);
@@ -1980,38 +2195,55 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             return;
           }
           const resolution: { answers?: Record<string, string>; annotations?: Record<string, { preview?: string; notes?: string }>; cancelled?: boolean } = {};
-          if (isCancel) {
-            resolution.cancelled = true;
-          } else {
+          if (isCancel) resolution.cancelled = true;
+          else {
             if (body.answers) resolution.answers = body.answers;
             if (body.annotations) resolution.annotations = body.annotations;
           }
-          const resolved = claudeService.respondToAskUserQuestion(requestId, resolution);
+          const resolved = claudeService.respondToAskUserQuestion(questionKey.requestId, resolution);
           if (!resolved) {
-            // Race: the request resolved between the pending check above and the
-            // call (e.g. it just timed out). Return a clear conflict instead of
-            // a silent success so the caller knows the answer was not delivered.
-            logger.warn(`AskUserQuestion response ignored because request is no longer pending: ${requestId}`);
+            logger.warn(`AskUserQuestion response ignored because request is no longer pending: ${questionKey.requestId}`);
             sendJson(res, 409, enrichedErrorBody(ErrorCode.ASK_ALREADY_CLOSED,
               'That question already closed, so the answer was not delivered to the assistant.'));
             return;
           }
+          const closeReason = isCancel ? 'cancelled' : 'answered';
+          broker.publish(sessionId, {
+            type: 'ask_user_question_closed',
+            sessionId,
+            timestamp: Date.now(),
+            data: {
+              requestId: questionKey.requestId,
+              toolCallId: questionKey.toolCallId,
+              reason: closeReason,
+            },
+          });
+          logger.info(`AskUserQuestion resolved: session=${sessionId} requestId=${questionKey.requestId} toolCallId=${questionKey.toolCallId}`);
           sendJson(res, 200, {
             success: true,
             approved: body.approved,
+            resolved: true,
+            kind: 'ask_user_question',
+            sessionId,
+            requestId: questionKey.requestId,
+            toolCallId: questionKey.toolCallId,
           } satisfies ApprovalResponseResult);
           return;
         }
-        // Late answer: the request was an AskUserQuestion that already closed.
-        // Return a clear conflict instead of misrouting to the channel permission
-        // path or answering with a silent 200 (D3).
+
         if (typeof claudeService.wasRecentlyResolvedAskUserQuestion === 'function'
           && claudeService.wasRecentlyResolvedAskUserQuestion(requestId)) {
           sendJson(res, 409, enrichedErrorBody(ErrorCode.ASK_ALREADY_CLOSED,
             'That question already closed, so the answer was not delivered to the assistant.'));
           return;
         }
-        claudeService.sendPermissionResponse(sessionId, requestId, body.approved);
+        if (typeof claudeService.hasChannelSession === 'function'
+          && claudeService.hasChannelSession(sessionId)) {
+          claudeService.sendPermissionResponse(sessionId, requestId, body.approved);
+        } else {
+          sendJson(res, 404, enrichedErrorBody(ErrorCode.APPROVAL_REQUEST_NOT_FOUND, 'Approval request not found for this session'));
+          return;
+        }
       } else if (entry.sdkType === 'opencode') {
         await opencodeService.replyPermission(sessionId, requestId, body.approved);
       } else {
@@ -2029,6 +2261,161 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  async function abortRuntimeTurn(sessionId: string, runtime: SessionRuntime): Promise<void> {
+    if (runtime === 'claude') {
+      claudeService.abort(sessionId);
+      return;
+    }
+    if (runtime === 'opencode') {
+      opencodeService.abort(sessionId);
+      return;
+    }
+    if (runtime === 'antigravity') {
+      antigravityService.abort(sessionId);
+      return;
+    }
+    const entry = await sessionRegistry.get(sessionId);
+    const agentSession = entry ? multiSessionManager.getAgentSession(entry.path) : undefined;
+    await agentSession?.abort().catch(() => { /* best-effort runtime fencing */ });
+  }
+
+  function queuedUserMessageMatches(event: unknown, expected: string): boolean {
+    if (!event || typeof event !== 'object') return false;
+    const candidate = event as {
+      type?: unknown;
+      data?: { message?: { role?: unknown; content?: unknown } };
+    };
+    const message = candidate.data?.message;
+    if (candidate.type !== 'message_start' || message?.role !== 'user') return false;
+    const content = message.content;
+    const text = typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content.map((part) => part && typeof part === 'object' && 'text' in part && typeof part.text === 'string' ? part.text : '').join('')
+        : '';
+    return text === expected;
+  }
+
+  function removeQueuedPiRun(sessionId: string, runId: string): void {
+    const queue = queuedPiRuns.get(sessionId) ?? [];
+    const removed = queue.find((item) => item.runId === runId);
+    const remaining = queue.filter((item) => item.runId !== runId);
+    if (remaining.length > 0) {
+      queuedPiRuns.set(sessionId, remaining);
+      return;
+    }
+    queuedPiRuns.delete(sessionId);
+    queuedPiEventChains.delete(sessionId);
+    queuedPiLastFollowUp.delete(sessionId);
+    const observer = queuedPiObservers.get(sessionId);
+    if (observer) {
+      if (removed) multiSessionManager.removeApiObserver(removed.sessionPath, observer);
+      queuedPiObservers.delete(sessionId);
+    }
+  }
+
+  function ensureQueuedPiObserver(sessionId: string, sessionPath: string): void {
+    if (queuedPiObservers.has(sessionId)) return;
+    const observer = (event: unknown) => {
+      const previous = queuedPiEventChains.get(sessionId) ?? Promise.resolve();
+      const next = previous.then(async () => {
+        const queue = queuedPiRuns.get(sessionId);
+        if (!queue?.length) return;
+        const normalized = event as NormalizedEvent;
+        if (normalized.type === 'queue_update') {
+          const data = normalized.data as { followUp?: unknown } | undefined;
+          if (Array.isArray(data?.followUp) && data.followUp.every((item) => typeof item === 'string')) {
+            const current = data.followUp as string[];
+            const previous = queuedPiLastFollowUp.get(sessionId) ?? current;
+            const removedIndexes: number[] = [];
+            // SDK queue additions append and emit their own queue_update. Only
+            // a shorter ordered snapshot can prove removal; treating growth or
+            // substitution as removal would arm a receipt before delivery.
+            if (current.length < previous.length) {
+              let currentIndex = current.length - 1;
+              for (let previousIndex = previous.length - 1; previousIndex >= 0; previousIndex -= 1) {
+                if (currentIndex >= 0 && previous[previousIndex] === current[currentIndex]) {
+                  currentIndex -= 1;
+                } else {
+                  removedIndexes.unshift(previousIndex);
+                }
+              }
+            }
+            for (const removedIndex of removedIndexes) {
+              for (const pending of queue.filter((item) => !item.delivered && item.queueIndex !== undefined)) {
+                if (pending.queueIndex === removedIndex) pending.awaitingMessageStart = true;
+                else if ((pending.queueIndex as number) > removedIndex) pending.queueIndex = (pending.queueIndex as number) - 1;
+              }
+            }
+            queuedPiLastFollowUp.set(sessionId, [...current]);
+          }
+        }
+        const active = queue.find((item) => item.delivered);
+        if (active) {
+          await runReceipts.observeEvent(active.runId, normalized);
+          if (normalized.type === 'agent_end') {
+            await runReceipts.finish(active.runId, { status: 'completed' });
+            removeQueuedPiRun(sessionId, active.runId);
+          }
+          return;
+        }
+
+        const pending = queue[0];
+        if (!pending?.awaitingMessageStart || !queuedUserMessageMatches(normalized, pending.message)) return;
+        pending.delivered = true;
+        await runReceipts.markStarted(pending.runId);
+        await runReceipts.observeEvent(pending.runId, normalized);
+      }).catch((error) => {
+        logger.warn(`Failed to correlate queued Pi follow-up for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      queuedPiEventChains.set(sessionId, next);
+    };
+    queuedPiObservers.set(sessionId, observer);
+    multiSessionManager.addApiObserver(sessionPath, observer);
+  }
+
+  async function queuePiFollowUp(sessionId: string, message: string, runId: string): Promise<void> {
+    const entry = await sessionRegistry.get(sessionId);
+    if (!entry || entry.sdkType !== 'pi') throw new Error(`Pi session not found: ${sessionId}`);
+    await multiSessionManager.subscribeClient(internalClientId, entry.path);
+    const correlation: QueuedPiRunCorrelation = {
+      runId,
+      message,
+      delivered: false,
+      awaitingMessageStart: false,
+      sessionPath: entry.path,
+    };
+    try {
+      const agentSession = multiSessionManager.getAgentSession(entry.path);
+      if (!agentSession) throw new Error(`Pi session not loaded: ${sessionId}`);
+      attachPiObserverIfNeeded(entry.path);
+      const queue = queuedPiRuns.get(sessionId) ?? [];
+      queue.push(correlation);
+      queuedPiRuns.set(sessionId, queue);
+      ensureQueuedPiObserver(sessionId, entry.path);
+      void runReceipts.waitForTerminal(runId).then(() => {
+        removeQueuedPiRun(sessionId, runId);
+      }).catch(() => {
+        removeQueuedPiRun(sessionId, runId);
+      });
+      await agentSession.followUp(message);
+      const followUpQueue = agentSession.getFollowUpMessages();
+      const queueIndex = followUpQueue.length - 1;
+      const queuedMessage = followUpQueue[queueIndex];
+      if (queueIndex < 0 || typeof queuedMessage !== 'string') {
+        throw new Error(`Pi SDK did not expose the accepted follow-up queue entry for run ${runId}`);
+      }
+      correlation.message = queuedMessage;
+      correlation.queueIndex = queueIndex;
+      queuedPiLastFollowUp.set(sessionId, [...followUpQueue]);
+    } catch (error) {
+      removeQueuedPiRun(sessionId, runId);
+      throw error;
+    } finally {
+      await multiSessionManager.unsubscribeClient(internalClientId, entry.path);
+    }
+  }
+
   async function executePrompt(
     sessionId: string,
     runtime: SessionRuntime,
@@ -2036,6 +2423,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     mode: PromptMode,
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
+    turnToken?: number,
   ): Promise<void> {
     // Wrap onEvent so every event also flows into the broker. This lets
     // long-lived subscribers (e.g. GET /sessions/:id/events) observe the
@@ -2116,7 +2504,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const turnBoundary = new Promise<void>((resolve) => { resolveTurnBoundary = resolve; });
         const endObserver = (event: unknown) => {
           const normalized = event as NormalizedEvent;
-          if (normalized.type === 'agent_end' && !ended) {
+          const ownsTurn = turnToken === undefined || activeDirectDispatchTokens.get(sessionId) === turnToken;
+          if (normalized.type === 'agent_end' && ownsTurn && !ended) {
             ended = true;
             multiSessionManager.removeApiObserver(sessionPath, endObserver);
             multiSessionManager.removeApiObserver(sessionPath, eventObserver);
@@ -2232,6 +2621,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         case 'antigravity':
           return antigravityService.isRunning(sessionId) ? 'running' : 'idle';
         case 'pi': {
+          if (runReceipts.hasActiveRun(sessionId)) return 'running';
           const agentSession = multiSessionManager.getAgentSession(entry.path);
           if (!agentSession) return 'idle';
           // Pi agentSession has no synchronous isStreaming flag we can rely on
@@ -3048,23 +3438,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    // The runtime services do not currently expose a public accessor for
-    // the in-flight permission map. Pending approvals must be observed via
-    // the /events stream as they arise. We return an empty list with the
-    // session status so callers can poll without error and switch to the
-    // event stream when they need live approvals.
     let status: 'idle' | 'running' = 'idle';
     if (entry.sdkType === 'claude') status = claudeService.isRunning(sessionId) ? 'running' : 'idle';
     else if (entry.sdkType === 'opencode') status = opencodeService.isRunning(sessionId) ? 'running' : 'idle';
     else if (entry.sdkType === 'antigravity') status = antigravityService.isRunning(sessionId) ? 'running' : 'idle';
 
+    const approvals = entry.sdkType === 'claude'
+      ? claudeService.listPendingAskUserQuestionsForSession(sessionId)
+      : [];
     sendJson(res, 200, {
       sessionId,
       runtime: entry.sdkType as SessionRuntime,
       status,
-      approvals: [],
-      note: 'Pending approvals must be observed via GET /sessions/:id/events. The runtime services do not yet expose a synchronous pending list.',
-    });
+      approvals,
+    } satisfies PendingApprovalsResponse);
   }
 
   // ─── Watch endpoints (long-horizon validation) ───────────────────────────
@@ -3152,8 +3539,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sendJson(res, 200, { success: true, watchId: `watch-${sessionId}` });
   }
 
-  function handleCapacity(_req: IncomingMessage, res: ServerResponse): void {
-    sendJson(res, 200, admission.snapshot());
+  async function handleCapacity(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await runReceipts.init();
+    sendJson(res, 200, {
+      ...admission.snapshot(),
+      stalledRuns: runReceipts.getStalledRunCount(),
+      oldestActiveRunStartedAt: runReceipts.getOldestActiveRunStartedAt(),
+    });
   }
 
   return {

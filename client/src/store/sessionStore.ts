@@ -1693,6 +1693,21 @@ export const useSessionStore = create<SessionState>()(
               useUIStore.getState().addToast({ type: 'warning', message: errorMessage });
               break;
             }
+            const missingSessionPath = (msg as { sessionPath?: unknown }).sessionPath;
+            if (errorCode === 'SESSION_NOT_FOUND' && typeof missingSessionPath === 'string') {
+              set((state) => {
+                const missing = state.sessions.find((session) => session.path === missingSessionPath);
+                const wasCurrent = missing?.id === state.currentSessionId;
+                return {
+                  sessions: state.sessions.filter((session) => session.path !== missingSessionPath),
+                  ...(wasCurrent ? {
+                    currentSessionId: null,
+                    currentSessionSdkType: null,
+                    messages: [],
+                  } : {}),
+                };
+              });
+            }
             set({
               error: errorMessage,
               isStreaming: false,

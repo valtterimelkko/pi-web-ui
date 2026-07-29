@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,6 +27,29 @@ describe('SessionWatcher canonical metadata', () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
 
     expect(events.find((event) => event.type === 'unlink')?.sessionId).toBe('canonical-race-id');
+    await watcher.stop();
+  });
+
+  it('upserts an exact registry entry on add without triggering a directory-wide scan', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-registry-'));
+    const sessionPath = path.join(tempDir, '2026-07-29T00-00-00_canonical-add-id.jsonl');
+    await writeFile(sessionPath, JSON.stringify({ type: 'session', id: 'canonical-add-id', cwd: '/tmp/add', timestamp: 1 }));
+    const registry = {
+      upsert: vi.fn().mockResolvedValue(undefined),
+      rebuildFromPiSessions: vi.fn().mockResolvedValue(undefined),
+    };
+    const watcher = new SessionWatcher(tempDir, registry);
+    const invoke = watcher as unknown as { emitChange(type: 'add', filePath: string): Promise<void> };
+
+    await invoke.emitChange('add', sessionPath);
+
+    expect(registry.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'canonical-add-id',
+      sdkType: 'pi',
+      path: sessionPath,
+      cwd: '/tmp/add',
+    }));
+    expect(registry.rebuildFromPiSessions).not.toHaveBeenCalled();
     await watcher.stop();
   });
 

@@ -5,7 +5,7 @@ import { PiService, getPiService, initializePiService } from '../../src/pi/pi-se
 // Top-level mocks referenced inside vi.mock() factories must be created with
 // vi.hoisted() so they exist when the (hoisted) factories run during module
 // load — pi-service now imports fs/promises eagerly via its refresh module.
-const { resourceLoaderInstances, accessMock, modelRuntime } = vi.hoisted(() => ({
+const { resourceLoaderInstances, accessMock, readFileMock, modelRuntime } = vi.hoisted(() => ({
   // Track DefaultResourceLoader constructor calls
   resourceLoaderInstances: [] as Array<{ cwd: string; agentDir: string }>,
   // fs.access is non-configurable on Node's fs/promises module, so we mock the
@@ -13,6 +13,7 @@ const { resourceLoaderInstances, accessMock, modelRuntime } = vi.hoisted(() => (
   accessMock: vi.fn().mockRejectedValue(
     Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
   ),
+  readFileMock: vi.fn().mockResolvedValue('{"type":"session","id":"test-session-id"}\n'),
   // The Pi SDK 0.80.8+ integration boundary: one shared asynchronous runtime
   // owns model discovery and credential resolution for every AgentSession.
   modelRuntime: {
@@ -37,6 +38,7 @@ const { resourceLoaderInstances, accessMock, modelRuntime } = vi.hoisted(() => (
 function createMockSessionManager() {
   return {
     flushed: false,
+    getSessionId: vi.fn(() => 'test-session-id'),
     setSessionFile: vi.fn(function (this: { flushed: boolean }) {
       // Real SDK resets flushed=false when switching to a non-existent file
       this.flushed = false;
@@ -47,6 +49,14 @@ function createMockSessionManager() {
 
 vi.mock('fs/promises', () => ({
   access: accessMock,
+  readFile: readFileMock,
+}));
+
+vi.mock('../../src/pi/session-cwd.js', () => ({
+  readSessionIdentity: vi.fn(async () => {
+    const first = String(await readFileMock()).split(/\r?\n/, 1)[0];
+    return JSON.parse(first).id;
+  }),
 }));
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
@@ -132,6 +142,7 @@ describe('PiService', () => {
     // Restore accessMock's default (ENOENT) after per-test overrides
     accessMock.mockClear();
     accessMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    readFileMock.mockResolvedValue('{"type":"session","id":"test-session-id"}\n');
   });
 
   describe('constructor', () => {
@@ -180,10 +191,11 @@ describe('PiService', () => {
       expect(session).toBeDefined();
     });
 
-    it('should create a session with specific path', async () => {
+    it('should create a session with a caller-authorised specific path', async () => {
       const session = await service.createSession({
         clientId: 'client-1',
-        sessionPath: '/path/to/session',
+        sessionPath: '/path/to/2026-07-29T00-00-00_test-session-id.jsonl',
+        allowCreate: true,
       });
       expect(session).toBeDefined();
     });
@@ -332,6 +344,42 @@ describe('PiService', () => {
     });
   });
 
+  describe('createSession — identity integrity', () => {
+    it('28. rejects rehydration of a missing file without creating or writing anything', async () => {
+      const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+      await expect(service.createSession({
+        clientId: 'missing-rehydrate',
+        sessionPath: '/tmp/2026-07-29T00-00-00_missing-id.jsonl',
+      })).rejects.toMatchObject({ code: 'SESSION_FILE_MISSING' });
+      expect(SessionManager.create).not.toHaveBeenCalled();
+    });
+
+    it('29. rejects a header/filename identity mismatch before opening or rewriting the file', async () => {
+      const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+      accessMock.mockResolvedValueOnce(undefined);
+      readFileMock.mockResolvedValueOnce('{"type":"session","id":"different-id"}\n');
+      await expect(service.createSession({
+        clientId: 'mismatch-rehydrate',
+        sessionPath: '/tmp/2026-07-29T00-00-00_expected-id.jsonl',
+      })).rejects.toMatchObject({ code: 'SESSION_IDENTITY_MISMATCH' });
+      expect(SessionManager.open).not.toHaveBeenCalled();
+      expect(SessionManager.create).not.toHaveBeenCalled();
+    });
+
+    it('30. allows explicit creation only when the new session identity matches the filename', async () => {
+      const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+      const mockSm = createMockSessionManager();
+      (SessionManager.create as ReturnType<typeof vi.fn>).mockReturnValueOnce(mockSm);
+      await expect(service.createSession({
+        clientId: 'authorised-create',
+        sessionPath: '/tmp/2026-07-29T00-00-00_test-session-id.jsonl',
+        allowCreate: true,
+      })).resolves.toMatchObject({ sessionId: 'test-session-id' });
+      expect(mockSm.setSessionFile).toHaveBeenCalledWith('/tmp/2026-07-29T00-00-00_test-session-id.jsonl');
+      expect(mockSm._rewriteFile).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('createSession — force-flush (EEXIST defence)', () => {
     /**
      * Regression coverage for the EEXIST bug where the SDK's `_persist()`
@@ -365,11 +413,12 @@ describe('PiService', () => {
       // takes the create + setSessionFile + forceFlush path.
       await service.createSession({
         clientId: 'client-flush-2',
-        sessionPath: '/tmp/does-not-exist-yet.jsonl',
+        sessionPath: '/tmp/2026-07-29T00-00-00_test-session-id.jsonl',
+        allowCreate: true,
       });
 
-      expect(accessMock).toHaveBeenCalledWith('/tmp/does-not-exist-yet.jsonl');
-      expect(mockSm.setSessionFile).toHaveBeenCalledWith('/tmp/does-not-exist-yet.jsonl');
+      expect(accessMock).toHaveBeenCalledWith('/tmp/2026-07-29T00-00-00_test-session-id.jsonl');
+      expect(mockSm.setSessionFile).toHaveBeenCalledWith('/tmp/2026-07-29T00-00-00_test-session-id.jsonl');
       expect(mockSm._rewriteFile).toHaveBeenCalledTimes(1);
       expect(mockSm.flushed).toBe(true);
     });
@@ -384,7 +433,7 @@ describe('PiService', () => {
 
       await service.createSession({
         clientId: 'client-flush-3',
-        sessionPath: '/tmp/already-exists.jsonl',
+        sessionPath: '/tmp/2026-07-29T00-00-00_test-session-id.jsonl',
       });
 
       // SessionManager.open is used for existing files; the force-flush path

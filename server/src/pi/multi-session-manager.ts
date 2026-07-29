@@ -731,6 +731,7 @@ export class MultiSessionManager {
       const agentSession = await this.piService.createSession({
         clientId: `multi-${sessionPath}`,
         sessionPath,
+        allowCreate: false,
         cwd,
         webUIContext: extensionWebUIContext as any,
       });
@@ -882,6 +883,7 @@ export class MultiSessionManager {
       'partialResult', 'step', 'turnIndex', 'sessionId', 'errorMessage',
       'provider', 'model', 'usage', 'reason', 'aborted', 'willRetry',
       'attempt', 'maxAttempts', 'delayMs', 'extensionPath', 'id', 'role',
+      'steering', 'followUp',
     ];
     for (const field of dataFields) {
       if (field in event) {

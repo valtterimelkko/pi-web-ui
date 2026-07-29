@@ -1,12 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ServerResponse } from 'http';
-import { Writable } from 'stream';
+import { PassThrough, Writable } from 'stream';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
 import { pushDiagnosticsRecord, clearDiagnosticsBuffer } from '../../../src/internal-api/diagnostics-buffer.js';
 import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 import type { RegistryEntry } from '../../../src/session-registry.js';
 import type { LogRecord } from '../../../src/logging/logger.js';
+
+function jsonReq(body: unknown): any {
+  const req = new PassThrough();
+  req.method = 'POST';
+  req.url = '/api/v1/sessions/claude-control/prompt';
+  req.headers = { 'content-type': 'application/json' };
+  process.nextTick(() => {
+    req.emit('data', Buffer.from(JSON.stringify(body)));
+    req.emit('end');
+  });
+  return req;
+}
 
 function mockRes(): ServerResponse & { statusCode: number; body: string } {
   const chunks: Buffer[] = [];
@@ -182,6 +194,31 @@ describe('GET /sessions/:id/evidence', () => {
     expect(registry.upsert).not.toHaveBeenCalled();
     expect(claudeService.sendPrompt).not.toHaveBeenCalled();
     expect(multiSessionManager.prompt).not.toHaveBeenCalled();
+  });
+
+  it('24/25. includes AskUserQuestion request and closure control evidence with both identifiers and reason', async () => {
+    const candidate = entry({ id: 'claude-control', sdkType: 'claude', path: '/tmp/claude-control.jsonl' });
+    const { routes, claudeService } = buildRoutes([candidate]);
+    claudeService.sendPrompt.mockImplementation(async (_sid: string, _msg: string, onEvent: (event: any) => void, onComplete: () => void) => {
+      onEvent({
+        type: 'ask_user_question_request', sessionId: 'claude-control', timestamp: 100,
+        data: { requestId: 'req-control', toolCallId: 'toolu-control', questions: [{ question: 'Choose?' }] },
+      });
+      onEvent({
+        type: 'ask_user_question_closed', sessionId: 'claude-control', timestamp: 200,
+        data: { requestId: 'req-control', toolCallId: 'toolu-control', reason: 'answered' },
+      });
+      onEvent({ type: 'agent_end', sessionId: 'claude-control', timestamp: 300, data: {} });
+      onComplete();
+    });
+    const promptRes = mockRes();
+    await routes.handleSendPrompt(jsonReq({ message: 'ask', mode: 'prompt' }), promptRes, 'claude-control');
+
+    const evidenceRes = await callEvidence(routes, 'claude-control');
+    expect(JSON.parse(evidenceRes.body).control.askUserQuestions).toEqual([
+      expect.objectContaining({ type: 'request', requestId: 'req-control', toolCallId: 'toolu-control' }),
+      expect.objectContaining({ type: 'closed', requestId: 'req-control', toolCallId: 'toolu-control', reason: 'answered' }),
+    ]);
   });
 
   it('bridges legacy path-correlated records while returning canonical evidence', async () => {

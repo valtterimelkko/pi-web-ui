@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Dispatch truthfulness and Pi identity integrity (`1.13.0`)**
+  - Idle Pi follow-up now promotes to a real turn and reports its actual dispatch mode; busy/strict modes fail before false acceptance.
+  - Claude question responses accept request/tool-call aliases, unknown ids return 404, and pending questions are observable.
+  - Watchdogs terminalise stalled receipts and release capacity; Pi rehydration fails closed on missing or mismatched files.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
+
 - **Source-owned retention and execution admission (`1.12.0`)**
   - Web UI, Internal API, and watch retention claims are independently owned; API leases do not consume the two human pin slots.
   - Atomic create-time `durable`/`resident` leases renew/release by lease id and expire as crash safety.

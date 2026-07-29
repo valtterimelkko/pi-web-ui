@@ -24,8 +24,12 @@ export interface AdmissionSnapshot {
   interactiveReserve: number;
   apiTurnLimit: number;
   memory: MemoryCapacity & { headroomBytes: number; minimumHeadroomBytes: number; reservedBytesPerTurn: number; projectedHeadroomBytes: number };
-  runtimes: Record<SessionRuntime, { activeTurns: number; maxActiveTurns: number }>;
+  runtimes: Record<SessionRuntime, { activeTurns: number; maxActiveTurns: number; stalledRuns?: number }>;
   retryAfterSeconds: number;
+  /** Number of runs terminalised as stalled by the watchdog. */
+  stalledRuns?: number;
+  /** ISO timestamp of the oldest still-active run's start, when any. */
+  oldestActiveRunStartedAt?: string;
 }
 
 export interface AdmissionControllerOptions {

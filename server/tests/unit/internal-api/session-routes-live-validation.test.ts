@@ -142,6 +142,7 @@ describe('createSessionRoutes live-validation extensions', () => {
       getBackendMode: vi.fn().mockResolvedValue('channel'),
       getReplayEvents: vi.fn().mockResolvedValue([{ type: 'history_start' }]),
       sendPermissionResponse: vi.fn(),
+      hasChannelSession: vi.fn(() => true),
       setModel: vi.fn().mockResolvedValue('opus'),
       setThinkingLevel: vi.fn(),
       pinSession: vi.fn(() => true),
@@ -202,11 +203,14 @@ describe('createSessionRoutes live-validation extensions', () => {
 
     await routes.handleSendPrompt(req, res, 'pi-session');
 
-    expect(multiSessionManager.getAgentSession().followUp).toHaveBeenCalledWith('Continue');
+    expect(multiSessionManager.getAgentSession().prompt).toHaveBeenCalledWith('Continue');
+    expect(multiSessionManager.getAgentSession().followUp).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toMatchObject({
       sessionId: 'pi-session',
       turnComplete: true,
+      mode: 'follow_up',
+      dispatchMode: 'prompt',
     });
   });
 

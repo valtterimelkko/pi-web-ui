@@ -13,6 +13,8 @@ import { getOperationalMetrics, type OperationalMetrics } from '../../observabil
 
 const logger = createLogger('RunReceiptManager');
 const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_TURN_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+const DEFAULT_TURN_MAX_MS = 6 * 60 * 60 * 1000;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
 
 export interface BeginRunInput {
@@ -23,8 +25,10 @@ export interface BeginRunInput {
   modelSelector?: string;
   message: string;
   mode: PromptMode;
+  dispatchMode?: PromptMode;
   verbosity: Verbosity;
   detach: boolean;
+  requireActiveTurn?: boolean;
   idempotencyKey?: string;
 }
 
@@ -39,6 +43,8 @@ export interface RunReceiptManagerDeps {
   idFactory?: () => string;
   idempotencyTtlMs?: number;
   metrics?: OperationalMetrics;
+  turnIdleTimeoutMs?: number;
+  turnMaxMs?: number;
 }
 
 export type ExistingRunResult =
@@ -56,11 +62,20 @@ export class IdempotencyKeyValidationError extends Error {
   }
 }
 
+interface ActiveRun {
+  runId: string;
+  sessionId: string;
+  runtime: SessionRuntime;
+  acceptedAtMs: number;
+  startedAtMs?: number;
+  lastActivityAtMs: number;
+  lease?: { release: () => void };
+}
+
 /**
- * Coordinates a prompt's durable run identity without owning any runtime.
- * Runtime services continue to provide the existing completion callback; this
- * manager records normalized agent_end as evidence and finalizes from that
- * callback so agent_end can never turn an error turn into a success.
+ * Owns durable run identity and the bounded lifetime of every accepted run.
+ * Runtime services remain responsible for execution; this manager guarantees
+ * that a silent runtime cannot retain admission capacity forever.
  */
 export class RunReceiptManager {
   private readonly store: RunReceiptStore;
@@ -68,37 +83,52 @@ export class RunReceiptManager {
   private readonly idFactory: () => string;
   private readonly idempotencyTtlMs: number;
   private readonly metrics: OperationalMetrics;
+  private readonly turnIdleTimeoutMs: number;
+  private readonly turnMaxMs: number;
   private readonly activeBySession = new Map<string, Set<string>>();
+  private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly keyLocks = new Map<string, Promise<void>>();
   private readonly runLocks = new Map<string, Promise<void>>();
+  private readonly terminalWaiters = new Map<string, Set<(receipt: RunReceipt) => void>>();
   private initialized = false;
   private initPromise: Promise<void> | null = null;
+  private watchdogTimer?: NodeJS.Timeout;
+  private stalledRunCount = 0;
 
   constructor(deps: RunReceiptManagerDeps) {
     this.store = deps.store;
     this.now = deps.now ?? Date.now;
     this.idFactory = deps.idFactory ?? (() => randomUUID());
     this.metrics = deps.metrics ?? getOperationalMetrics();
-    this.idempotencyTtlMs = Number.isFinite(deps.idempotencyTtlMs) && (deps.idempotencyTtlMs as number) > 0
-      ? deps.idempotencyTtlMs as number
-      : DEFAULT_IDEMPOTENCY_TTL_MS;
+    this.idempotencyTtlMs = positiveTimeout(deps.idempotencyTtlMs, undefined, DEFAULT_IDEMPOTENCY_TTL_MS);
+    this.turnIdleTimeoutMs = positiveTimeout(
+      deps.turnIdleTimeoutMs,
+      process.env.INTERNAL_API_TURN_IDLE_TIMEOUT_MS,
+      DEFAULT_TURN_IDLE_TIMEOUT_MS,
+    );
+    this.turnMaxMs = positiveTimeout(
+      deps.turnMaxMs,
+      process.env.INTERNAL_API_TURN_MAX_MS,
+      DEFAULT_TURN_MAX_MS,
+    );
   }
 
   async init(): Promise<void> {
-    if (this.initialized) return;
-    if (!this.initPromise) {
-      this.initPromise = this.store.init().then(() => {
-        this.initialized = true;
-      });
+    if (!this.initialized) {
+      if (!this.initPromise) {
+        this.initPromise = this.store.init().then(() => { this.initialized = true; });
+      }
+      await this.initPromise;
     }
-    await this.initPromise;
+    this.startWatchdog();
   }
 
-  /**
-   * Check for an existing idempotent run without reserving a new run. Routes
-   * use this before a session-busy check so a retry of a detached/in-flight
-   * run can still receive its receipt instead of a misleading 409 busy error.
-   */
+  /** Bind an idempotent external lease to this run's terminal lifecycle. */
+  attachLease(runId: string, lease: { release: () => void }): void {
+    const active = this.activeRuns.get(runId);
+    if (active) active.lease = lease;
+  }
+
   async findExistingRun(input: BeginRunInput): Promise<ExistingRunResult | undefined> {
     await this.init();
     const normalizedKey = input.idempotencyKey === undefined
@@ -133,6 +163,8 @@ export class RunReceiptManager {
         executionInstanceId: input.executionInstanceId,
         model: input.model,
         modelSelector: input.modelSelector,
+        mode: input.mode,
+        dispatchMode: input.dispatchMode ?? input.mode,
         status: 'accepted',
         acceptedAt: new Date(acceptedAtMs).toISOString(),
         idempotencyExpiresAt: keyDigest
@@ -143,13 +175,27 @@ export class RunReceiptManager {
       };
       await this.store.create(record);
       this.metrics.recordTurnAccepted(record.runtime);
-      this.addActive(record.sessionId, record.runId);
+      this.addActive(record, acceptedAtMs);
       return { kind: 'created', receipt: toPublicReceipt(record) };
     };
 
-    // The lock is per session-scoped key. Without it, two concurrent retries
-    // can both observe an empty index before either receipt reaches disk.
     return keyDigest ? this.withKeyLock(keyDigest, createOrReplay) : createOrReplay();
+  }
+
+  async setDispatchMode(runId: string, dispatchMode: PromptMode): Promise<RunReceipt | undefined> {
+    await this.init();
+    return this.withRunLock(runId, async () => {
+      const updated = await this.store.patch(runId, { dispatchMode });
+      return updated ? toPublicReceipt(updated) : undefined;
+    });
+  }
+
+  async markQueued(runId: string): Promise<RunReceipt | undefined> {
+    await this.init();
+    return this.withRunLock(runId, async () => {
+      const queued = await this.store.transition(runId, 'queued');
+      return toPublicReceipt(queued);
+    });
   }
 
   async markStarted(runId: string): Promise<RunReceipt | undefined> {
@@ -160,20 +206,28 @@ export class RunReceiptManager {
   private async markStartedUnlocked(runId: string): Promise<RunReceipt | undefined> {
     const current = this.store.get(runId);
     if (!current || isTerminal(current.status)) return current ? toPublicReceipt(current) : undefined;
+    if (current.status === 'started') return toPublicReceipt(current);
+    const startedAtMs = this.now();
     const started = await this.store.transition(runId, 'started', {
-      startedAt: current.startedAt ?? new Date(this.now()).toISOString(),
+      startedAt: current.startedAt ?? new Date(startedAtMs).toISOString(),
     });
+    const active = this.activeRuns.get(runId);
+    if (active) {
+      active.startedAtMs = startedAtMs;
+      active.lastActivityAtMs = startedAtMs;
+    }
     return toPublicReceipt(started);
   }
 
-  /** Record the existing normalized agent_end signal without finalizing success. */
+  /** Every attributed event is activity; agent_end is also durable evidence. */
   observeEvent(runId: string, event: NormalizedEvent): Promise<void> {
+    const active = this.activeRuns.get(runId);
+    if (active) active.lastActivityAtMs = this.now();
     if (event.type !== 'agent_end') return Promise.resolve();
-    const eventTimestamp = typeof event.timestamp === 'number' && Number.isFinite(event.timestamp)
+    const timestampMs = typeof event.timestamp === 'number' && Number.isFinite(event.timestamp)
       ? event.timestamp
       : this.now();
-    const timestamp = new Date(eventTimestamp).toISOString();
-    return this.withRunLock(runId, () => this.store.markAgentEnd(runId, timestamp))
+    return this.withRunLock(runId, () => this.store.markAgentEnd(runId, new Date(timestampMs).toISOString()))
       .then(() => undefined)
       .catch((error) => {
         logger.warn(`failed to persist agent_end for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -190,25 +244,17 @@ export class RunReceiptManager {
     if (!current) return undefined;
     if (isTerminal(current.status)) return toPublicReceipt(current);
 
-    // Be defensive for a runtime that completes synchronously before its caller
-    // has explicitly marked the run started.
-    if (current.status === 'accepted') {
+    const status = outcome.status ?? (outcome.errorCode ? 'failed' : 'completed');
+    if (status === 'completed' && current.status !== 'started') {
       await this.markStartedUnlocked(runId);
       current = this.store.get(runId);
       if (!current) return undefined;
     }
-
-    const status = outcome.status ?? (outcome.errorCode ? 'failed' : 'completed');
     const terminal = await this.store.transition(runId, status, {
       errorCode: outcome.errorCode,
       terminalAt: new Date(this.now()).toISOString(),
     });
-    this.removeActive(terminal.sessionId, terminal.runId);
-    this.metrics.recordTurnFinished(
-      terminal.runtime,
-      terminal.status as Extract<RunReceiptStatus, 'completed' | 'failed' | 'cancelled' | 'interrupted'>,
-      elapsedMs(terminal.acceptedAt, terminal.terminalAt),
-    );
+    this.terminalize(terminal);
     return toPublicReceipt(terminal);
   }
 
@@ -219,15 +265,9 @@ export class RunReceiptManager {
   }
 
   async cancelRun(runId: string): Promise<RunReceipt | undefined> {
-    await this.init();
     return this.finish(runId, { status: 'cancelled' });
   }
 
-  /**
-   * Finalize a reservation that never reached the runtime and release its key.
-   * Retrying the same operation must be allowed: deduplicating against a local
-   * busy/persistence pre-flight failure would silently swallow real work.
-   */
   async rejectBeforeDispatch(
     runId: string,
     outcome: { status: 'failed' | 'cancelled'; errorCode: string },
@@ -245,12 +285,7 @@ export class RunReceiptManager {
         terminalAt: new Date(this.now()).toISOString(),
         clearIdempotency: true,
       });
-      this.removeActive(terminal.sessionId, terminal.runId);
-      this.metrics.recordTurnFinished(
-        terminal.runtime,
-        terminal.status as Extract<RunReceiptStatus, 'completed' | 'failed' | 'cancelled' | 'interrupted'>,
-        elapsedMs(terminal.acceptedAt, terminal.terminalAt),
-      );
+      this.terminalize(terminal);
       return toPublicReceipt(terminal);
     });
   }
@@ -261,37 +296,118 @@ export class RunReceiptManager {
   }
 
   listBySession(sessionId: string): RunReceipt[] {
-    return this.store.list()
-      .filter((record) => record.sessionId === sessionId)
-      .map(toPublicReceipt);
+    return this.store.list().filter((record) => record.sessionId === sessionId).map(toPublicReceipt);
   }
 
-  /** Flush pending receipt writes before the server process is allowed to exit. */
+  async waitForTerminal(runId: string): Promise<RunReceipt> {
+    await this.init();
+    const current = this.get(runId);
+    if (!current) throw new Error(`Run receipt not found: ${runId}`);
+    if (isTerminal(current.status)) return current;
+    return new Promise<RunReceipt>((resolve) => {
+      const waiters = this.terminalWaiters.get(runId) ?? new Set<(receipt: RunReceipt) => void>();
+      waiters.add(resolve);
+      this.terminalWaiters.set(runId, waiters);
+      // Close the race where terminalisation happened between get() and add().
+      const latest = this.get(runId);
+      if (latest && isTerminal(latest.status)) this.resolveTerminalWaiters(latest);
+    });
+  }
+
+  hasActiveRun(sessionId: string): boolean {
+    return (this.activeBySession.get(sessionId)?.size ?? 0) > 0;
+  }
+
+  getStalledRunCount(): number {
+    return this.stalledRunCount;
+  }
+
+  getOldestActiveRunStartedAt(): string | undefined {
+    let oldest: number | undefined;
+    for (const run of this.activeRuns.values()) {
+      const candidate = run.startedAtMs ?? run.acceptedAtMs;
+      if (oldest === undefined || candidate < oldest) oldest = candidate;
+    }
+    return oldest === undefined ? undefined : new Date(oldest).toISOString();
+  }
+
   async shutdown(): Promise<void> {
-    await Promise.allSettled([
-      ...this.keyLocks.values(),
-      ...this.runLocks.values(),
-    ]);
+    this.stopWatchdog();
+    await Promise.allSettled([...this.keyLocks.values(), ...this.runLocks.values()]);
+    for (const active of this.activeRuns.values()) active.lease?.release();
     await this.store.flush();
     this.activeBySession.clear();
+    this.activeRuns.clear();
     this.keyLocks.clear();
     this.runLocks.clear();
+    this.terminalWaiters.clear();
   }
 
-  private addActive(sessionId: string, runId: string): void {
-    let runs = this.activeBySession.get(sessionId);
-    if (!runs) {
-      runs = new Set();
-      this.activeBySession.set(sessionId, runs);
+  private startWatchdog(): void {
+    if (this.watchdogTimer) return;
+    const intervalMs = Math.min(1000, Math.max(10, Math.floor(this.turnIdleTimeoutMs / 4)));
+    this.watchdogTimer = setInterval(() => { void this.reconcileStalledRuns(); }, intervalMs);
+    this.watchdogTimer.unref();
+  }
+
+  private stopWatchdog(): void {
+    if (!this.watchdogTimer) return;
+    clearInterval(this.watchdogTimer);
+    this.watchdogTimer = undefined;
+  }
+
+  private async reconcileStalledRuns(): Promise<void> {
+    const now = this.now();
+    for (const [runId, active] of Array.from(this.activeRuns)) {
+      const idleExceeded = now - active.lastActivityAtMs >= this.turnIdleTimeoutMs;
+      const maxExceeded = now - active.acceptedAtMs >= this.turnMaxMs;
+      if (!idleExceeded && !maxExceeded) continue;
+      const before = this.store.get(runId);
+      if (!before || isTerminal(before.status)) continue;
+      logger.warn(`Run ${runId} stalled: ${maxExceeded ? 'absolute ceiling exceeded' : 'idle timeout exceeded'}`);
+      const terminal = await this.finish(runId, { status: 'failed', errorCode: 'TURN_STALLED' }).catch((error) => {
+        logger.warn(`failed to terminalise stalled run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      });
+      if (terminal?.errorCode === 'TURN_STALLED') this.stalledRunCount += 1;
     }
-    runs.add(runId);
   }
 
-  private removeActive(sessionId: string, runId: string): void {
-    const runs = this.activeBySession.get(sessionId);
-    if (!runs) return;
-    runs.delete(runId);
-    if (runs.size === 0) this.activeBySession.delete(sessionId);
+  private addActive(record: PersistedRunReceipt, acceptedAtMs: number): void {
+    const runs = this.activeBySession.get(record.sessionId) ?? new Set<string>();
+    runs.add(record.runId);
+    this.activeBySession.set(record.sessionId, runs);
+    this.activeRuns.set(record.runId, {
+      runId: record.runId,
+      sessionId: record.sessionId,
+      runtime: record.runtime,
+      acceptedAtMs,
+      startedAtMs: record.startedAt ? Date.parse(record.startedAt) : undefined,
+      lastActivityAtMs: acceptedAtMs,
+    });
+  }
+
+  private terminalize(record: PersistedRunReceipt): void {
+    const active = this.activeRuns.get(record.runId);
+    if (!active) return;
+    active.lease?.release();
+    this.activeRuns.delete(record.runId);
+    const runs = this.activeBySession.get(record.sessionId);
+    runs?.delete(record.runId);
+    if (runs?.size === 0) this.activeBySession.delete(record.sessionId);
+    this.metrics.recordTurnFinished(
+      record.runtime,
+      record.status as Extract<RunReceiptStatus, 'completed' | 'failed' | 'cancelled' | 'interrupted'>,
+      elapsedMs(record.acceptedAt, record.terminalAt),
+    );
+    this.resolveTerminalWaiters(toPublicReceipt(record));
+  }
+
+  private resolveTerminalWaiters(receipt: RunReceipt): void {
+    const waiters = this.terminalWaiters.get(receipt.runId);
+    if (!waiters) return;
+    this.terminalWaiters.delete(receipt.runId);
+    for (const resolve of waiters) resolve(receipt);
   }
 
   private async withRunLock<T>(runId: string, operation: () => Promise<T>): Promise<T> {
@@ -325,22 +441,17 @@ export class RunReceiptManager {
   private findExistingByKey(keyDigest: string, fingerprint: string): ExistingRunResult | undefined {
     const existing = this.store.findByIdempotency(keyDigest, this.now());
     if (!existing) return undefined;
-    const publicReceipt = toPublicReceipt(existing);
-    if (existing.requestFingerprint !== fingerprint) {
-      return { kind: 'conflict', receipt: publicReceipt };
-    }
-    return { kind: 'duplicate', receipt: publicReceipt };
+    const receipt = toPublicReceipt(existing);
+    return existing.requestFingerprint === fingerprint
+      ? { kind: 'duplicate', receipt }
+      : { kind: 'conflict', receipt };
   }
 }
 
 export function validateIdempotencyKey(value: unknown): string {
-  if (typeof value !== 'string') {
-    throw new IdempotencyKeyValidationError('idempotencyKey must be a string');
-  }
+  if (typeof value !== 'string') throw new IdempotencyKeyValidationError('idempotencyKey must be a string');
   const normalized = value.trim();
-  if (normalized.length === 0) {
-    throw new IdempotencyKeyValidationError('idempotencyKey must not be empty');
-  }
+  if (!normalized) throw new IdempotencyKeyValidationError('idempotencyKey must not be empty');
   if (normalized.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
     throw new IdempotencyKeyValidationError(`idempotencyKey must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`);
   }
@@ -348,9 +459,7 @@ export function validateIdempotencyKey(value: unknown): string {
     const code = character.charCodeAt(0);
     return code < 0x20 || code === 0x7f;
   });
-  if (hasControlCharacter) {
-    throw new IdempotencyKeyValidationError('idempotencyKey must not contain control characters');
-  }
+  if (hasControlCharacter) throw new IdempotencyKeyValidationError('idempotencyKey must not contain control characters');
   return normalized;
 }
 
@@ -360,6 +469,7 @@ function requestFingerprint(input: BeginRunInput): string {
     mode: input.mode,
     verbosity: input.verbosity,
     detach: input.detach,
+    requireActiveTurn: input.requireActiveTurn === true,
   }));
 }
 
@@ -379,10 +489,13 @@ function elapsedMs(startIso: string, endIso?: string): number | undefined {
 }
 
 function toPublicReceipt(record: PersistedRunReceipt): RunReceipt {
-  const {
-    idempotencyKeyDigest: _idempotencyKeyDigest,
-    requestFingerprint: _requestFingerprint,
-    ...publicReceipt
-  } = record;
-  return { ...publicReceipt };
+  const publicReceipt = { ...record };
+  delete publicReceipt.idempotencyKeyDigest;
+  delete publicReceipt.requestFingerprint;
+  return publicReceipt;
+}
+
+function positiveTimeout(explicit: number | undefined, envValue: string | undefined, fallback: number): number {
+  const candidate = explicit ?? (envValue === undefined ? undefined : Number(envValue));
+  return Number.isFinite(candidate) && (candidate as number) > 0 ? candidate as number : fallback;
 }

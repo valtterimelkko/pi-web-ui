@@ -1,6 +1,6 @@
 # Internal API — Dispatch Truthfulness and Session-Identity Integrity
 
-**Status:** ready for execution (no code written yet)
+**Status:** completed — see [`INTERNAL-API-DISPATCH-AND-IDENTITY-INTEGRITY-REPORT.md`](./INTERNAL-API-DISPATCH-AND-IDENTITY-INTEGRITY-REPORT.md)
 **Plan baseline:** `1b41f19` (`docs(internal-api): complete retention and admission guidance`)
 **Contract at baseline:** `pi-web-ui-internal-api` v1, contract `1.12.0`
 **Target contract after execution:** `1.13.0`

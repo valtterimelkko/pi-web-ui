@@ -410,6 +410,30 @@ describe('sessionStore', () => {
       expect(req?.expired).toBeFalsy();
     });
 
+    it('removes a missing Pi session after a failed switch instead of retaining an impostor entry', () => {
+      const missing: Session = {
+        id: 'missing-id',
+        path: '/tmp/2026-07-29T00-00-00_missing-id.jsonl',
+        firstMessage: 'Gone',
+        messageCount: 1,
+        cwd: '/tmp',
+        sdkType: 'pi',
+      };
+      const state = useSessionStore.getState();
+      state.setSessions([missing]);
+      state.setCurrentSession(missing.id);
+
+      state.handleServerMessage({
+        type: 'error',
+        code: 'SESSION_NOT_FOUND',
+        sessionPath: missing.path,
+        message: 'This session no longer exists.',
+      });
+
+      expect(useSessionStore.getState().sessions).toEqual([]);
+      expect(useSessionStore.getState().currentSessionId).toBeNull();
+    });
+
     it('shows a non-blocking toast for an ASK_ALREADY_CLOSED error (no global error state)', () => {
       const state = useSessionStore.getState();
       state.setStreaming(true);

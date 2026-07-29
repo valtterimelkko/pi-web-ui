@@ -10,6 +10,7 @@ import type {
   DeleteWatchResponse,
   ListSessionsResponse,
   ModelsResponse,
+  PendingApprovalsResponse,
   PromptDispatchResponse,
   RefreshModelsResponse,
   RegisterWatchRequest,
@@ -59,6 +60,18 @@ function countEvents(events: NormalizedEvent[]): Record<string, number> {
   return counts;
 }
 
+export class InternalApiRequestError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    public readonly code: string | undefined,
+    public readonly responseBody: unknown,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'InternalApiRequestError';
+  }
+}
+
 function parseJsonResponse<T>(raw: string): T {
   if (!raw.trim()) {
     return {} as T;
@@ -89,6 +102,24 @@ function parseSseEvent(chunk: string): NormalizedEvent | null {
   } as NormalizedEvent;
 }
 
+function parseSseCompletion(raw: string): { dispatchMode?: string } {
+  const chunks = raw.split('\n\n').map((chunk) => chunk.trim()).filter(Boolean);
+  for (const chunk of chunks) {
+    if (!chunk.split('\n').some((line) => line.trim() === 'event: complete')) continue;
+    const data = chunk.split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .join('\n');
+    try {
+      const parsed = JSON.parse(data) as { dispatchMode?: unknown };
+      return typeof parsed.dispatchMode === 'string' ? { dispatchMode: parsed.dispatchMode } : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
 function parseSse(raw: string): NormalizedEvent[] {
   const events: NormalizedEvent[] = [];
   const chunks = raw.split('\n\n').map((chunk) => chunk.trim()).filter(Boolean);
@@ -104,7 +135,7 @@ export class InternalApiClient implements InternalApiClientLike {
   private readonly token: string;
   private readonly requestTimeoutMs: number;
   private readonly promptTimeoutMs: number;
-  private readonly promptEvidence = new Map<string, { runId?: string; eventCounts: Record<string, number> }>();
+  private readonly promptEvidence = new Map<string, { runId?: string; eventCounts: Record<string, number>; dispatchMode?: string }>();
 
   constructor(options?: {
     socketPath?: string;
@@ -138,7 +169,15 @@ export class InternalApiClient implements InternalApiClientLike {
         res.on('end', () => {
           clearDeadline();
           if ((res.statusCode ?? 500) >= 400) {
-            reject(new Error(raw || `Internal API request failed: ${res.statusCode}`));
+            let responseBody: unknown;
+            try { responseBody = parseJsonResponse<unknown>(raw); } catch { responseBody = raw; }
+            const body = responseBody && typeof responseBody === 'object' ? responseBody as Record<string, unknown> : undefined;
+            reject(new InternalApiRequestError(
+              res.statusCode ?? 500,
+              typeof body?.code === 'string' ? body.code : undefined,
+              responseBody,
+              typeof body?.message === 'string' ? body.message : raw || `Internal API request failed: ${res.statusCode}`,
+            ));
             return;
           }
           resolve(parseJsonResponse<T>(raw));
@@ -199,7 +238,8 @@ export class InternalApiClient implements InternalApiClientLike {
             return;
           }
           const events = parseSse(raw);
-          this.promptEvidence.set(sessionId, { runId, eventCounts: countEvents(events) });
+          const completion = parseSseCompletion(raw);
+          this.promptEvidence.set(sessionId, { runId, eventCounts: countEvents(events), ...completion });
           resolve(events);
         });
       });
@@ -262,6 +302,7 @@ export class InternalApiClient implements InternalApiClientLike {
           return;
         }
         const events: NormalizedEvent[] = [];
+        let dispatchMode: string | undefined;
         let buffer = '';
         res.on('data', (chunk) => {
           buffer += chunk.toString();
@@ -271,6 +312,7 @@ export class InternalApiClient implements InternalApiClientLike {
           while ((sep = buffer.indexOf('\n\n')) >= 0) {
             const rawChunk = buffer.slice(0, sep);
             buffer = buffer.slice(sep + 2);
+            dispatchMode ??= parseSseCompletion(`${rawChunk}\n\n`).dispatchMode;
             const parsed = parseSseEvent(rawChunk.trim());
             if (parsed) {
               events.push(parsed);
@@ -280,7 +322,7 @@ export class InternalApiClient implements InternalApiClientLike {
         });
         res.on('end', () => {
           clearDeadline();
-          this.promptEvidence.set(sessionId, { runId, eventCounts: countEvents(events) });
+          this.promptEvidence.set(sessionId, { runId, eventCounts: countEvents(events), ...(dispatchMode ? { dispatchMode } : {}) });
           resolve(events);
         });
       });
@@ -294,7 +336,7 @@ export class InternalApiClient implements InternalApiClientLike {
     });
   }
 
-  getLastPromptEvidence(sessionId: string): { runId?: string; eventCounts: Record<string, number> } | undefined {
+  getLastPromptEvidence(sessionId: string): { runId?: string; eventCounts: Record<string, number>; dispatchMode?: string } | undefined {
     const evidence = this.promptEvidence.get(sessionId);
     return evidence ? { ...evidence, eventCounts: { ...evidence.eventCounts } } : undefined;
   }
@@ -335,6 +377,17 @@ export class InternalApiClient implements InternalApiClientLike {
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(requestId)}/respond`,
       body,
     );
+  }
+
+  async getPendingApprovals(sessionId: string): Promise<PendingApprovalsResponse> {
+    return this.request<PendingApprovalsResponse>(
+      'GET',
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/approvals/pending`,
+    );
+  }
+
+  async getCapacity(): Promise<{ activeTurns: number; stalledRuns: number; [key: string]: unknown }> {
+    return this.request('GET', '/api/v1/capacity');
   }
 
   async deleteSession(sessionId: string): Promise<void> {

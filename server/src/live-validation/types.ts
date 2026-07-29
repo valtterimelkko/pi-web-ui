@@ -20,6 +20,7 @@ export interface InternalApiClientLike {
   createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; source?: string; scenarioId?: string; ephemeral?: boolean }): Promise<CreateSessionResponse>;
   promptStream(sessionId: string, input: SendPromptRequest): Promise<NormalizedEvent[]>;
   promptWithIdempotency(sessionId: string, input: SendPromptRequest): Promise<PromptDispatchResponse>;
+  promptDetached?(sessionId: string, message: string): Promise<{ sessionId: string; runId: string; detached: boolean; status: string }>;
   getRunReceipt(runId: string): Promise<RunReceipt>;
   /**
    * Stream a prompt, invoking `onEvent` for each SSE event as it arrives
@@ -36,10 +37,12 @@ export interface InternalApiClientLike {
   getSessionHistory(sessionId: string): Promise<SessionHistoryResponse>;
   /** Answer an approval/permission/AskUserQuestion request. */
   respondToApproval(sessionId: string, requestId: string, body: ApprovalResponseRequest): Promise<unknown>;
+  getPendingApprovals?(sessionId: string): Promise<import('../internal-api/types.js').PendingApprovalsResponse>;
+  getCapacity?(): Promise<{ activeTurns: number; stalledRuns: number; [key: string]: unknown }>;
   deleteSession(sessionId: string): Promise<void>;
   optInNotifications(sessionId: string, label?: string): Promise<unknown>;
   getNotificationState(sessionId: string): Promise<{ optIn: unknown; deliveries: unknown[] }>;
-  getLastPromptEvidence?(sessionId: string): { runId?: string; eventCounts: Record<string, number> } | undefined;
+  getLastPromptEvidence?(sessionId: string): { runId?: string; eventCounts: Record<string, number>; dispatchMode?: string } | undefined;
 }
 
 export interface ValidationAssertion {

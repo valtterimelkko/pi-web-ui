@@ -2,6 +2,8 @@ import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { PassThrough, Writable } from 'stream';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
+import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
+import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 import { getCorrelationContext, type LogContext } from '../../../src/logging/correlation.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
@@ -163,6 +165,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       getBackendMode: vi.fn().mockResolvedValue('channel'),
       getReplayEvents: vi.fn().mockResolvedValue([{ type: 'history_marker' }]),
       sendPermissionResponse: vi.fn(),
+      listPendingAskUserQuestionsForSession: vi.fn(() => []),
       setModel: vi.fn().mockResolvedValue('opus'),
       setThinkingLevel: vi.fn(),
       pinSession: vi.fn(() => true),
@@ -249,12 +252,13 @@ describe('createSessionRoutes orchestration endpoints', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  function makeRoutes() {
+  function makeRoutes(runReceiptManager?: RunReceiptManager) {
     return createSessionRoutes({
       claudeService, opencodeService, antigravityService,
       multiSessionManager, sessionRegistry: registry, piService,
       internalClientId: 'test-client',
       watchDir: path.join(tempDir, 'watches'),
+      runReceiptManager,
     });
   }
 
@@ -414,6 +418,25 @@ describe('createSessionRoutes orchestration endpoints', () => {
       const body = JSON.parse(res.body);
       expect(body.status).toBe('idle');
       expect(body.waitedMs).toBeLessThan(100);
+    });
+
+    it('26. reports running for an idle Pi registry entry with a non-terminal receipt', async () => {
+      registry.get.mockResolvedValue({
+        id: 'pi-receipt', path: '/tmp/pi-receipt.jsonl', sdkType: 'pi', cwd: '/root/proj',
+        model: 'provider/model', firstMessage: '', messageCount: 0, status: 'idle',
+        createdAt: '2026-07-29T12:00:00.000Z', lastActivity: '2026-07-29T12:00:00.000Z',
+      });
+      multiSessionManager.getAgentSession.mockReturnValue(null);
+      const manager = new RunReceiptManager({ store: new RunReceiptStore() });
+      await manager.beginRun({
+        sessionId: 'pi-receipt', runtime: 'pi', executionInstanceId: 'pi-local-default',
+        message: 'work', mode: 'prompt', verbosity: 'answers', detach: true,
+      });
+      const routes = makeRoutes(manager);
+      const res = createMockRes();
+      await routes.handleSessionWait(createJsonReq('GET', '/x'), res, 'pi-receipt', new URLSearchParams('status=running&timeout=0'));
+      expect(JSON.parse(res.body).status).toBe('running');
+      await routes.shutdown();
     });
 
     it('returns timeout when target status is never reached', async () => {
@@ -1090,7 +1113,26 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(res.statusCode).toBe(404);
     });
 
-    it('returns an empty list with a status note', async () => {
+    it('20. returns a pending SDK question with both identifiers and expiry metadata', async () => {
+      registry.get.mockResolvedValue(claudeEntry('ap1'));
+      claudeService.listPendingAskUserQuestionsForSession.mockReturnValue([{
+        requestId: 'req-1',
+        toolCallId: 'toolu-1',
+        kind: 'ask_user_question',
+        questions: [{ question: 'Choose?' }],
+        openedAt: '2026-07-29T12:00:00.000Z',
+        expiresAt: '2026-07-29T12:30:00.000Z',
+      }]);
+      const routes = makeRoutes();
+      const res = createMockRes();
+      await routes.handleListPendingApprovals(createJsonReq('GET', '/x'), res, 'ap1');
+      expect(JSON.parse(res.body).approvals).toEqual([expect.objectContaining({
+        requestId: 'req-1', toolCallId: 'toolu-1', kind: 'ask_user_question',
+        expiresAt: '2026-07-29T12:30:00.000Z',
+      })]);
+    });
+
+    it('22. returns an empty list without the old stub note', async () => {
       registry.get.mockResolvedValue(claudeEntry('ap1'));
       const routes = makeRoutes();
       const req = createJsonReq('GET', '/api/v1/sessions/ap1/approvals/pending');
@@ -1100,7 +1142,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       const body = JSON.parse(res.body);
       expect(body.approvals).toEqual([]);
       expect(body.status).toBe('idle');
-      expect(body.note).toBeTruthy();
+      expect(body).not.toHaveProperty('note');
     });
   });
 

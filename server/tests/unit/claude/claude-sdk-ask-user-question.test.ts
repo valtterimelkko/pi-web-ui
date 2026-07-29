@@ -182,6 +182,38 @@ describe('ClaudeSdkService AskUserQuestion bridge', () => {
     expect(result.updatedInput.questions).toEqual(SAMPLE_QUESTIONS);
   });
 
+  it('20/21. lists pending question metadata by session and removes it after answering by toolCallId', async () => {
+    const { sid, options, events } = await captureOptions(svc, 'dontask-profile');
+    const pending = options.canUseTool('AskUserQuestion', { questions: SAMPLE_QUESTIONS }, {
+      toolUseID: 'toolu_list',
+      signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'ask_user_question_request')).toBe(true));
+    const req = events.find((e) => e.type === 'ask_user_question_request');
+
+    expect(svc.resolveAskUserQuestionKey('toolu_list')).toEqual({
+      requestId: req.data.requestId,
+      toolCallId: 'toolu_list',
+      sessionId: sid,
+    });
+    expect(svc.listPendingAskUserQuestionsForSession(sid)).toEqual([
+      expect.objectContaining({
+        requestId: req.data.requestId,
+        toolCallId: 'toolu_list',
+        kind: 'ask_user_question',
+        questions: SAMPLE_QUESTIONS,
+        openedAt: expect.any(String),
+        expiresAt: expect.any(String),
+      }),
+    ]);
+
+    expect(svc.respondToAskUserQuestion('toolu_list', {
+      answers: { 'Which library should we use?': 'A' },
+    })).toBe(true);
+    await pending;
+    expect(svc.listPendingAskUserQuestionsForSession(sid)).toEqual([]);
+  });
+
   // ── Cancel is graceful (allow, no answers) ──────────────────────────────────
 
   it('maps a cancelled response to allow with no answers and cleans up', async () => {

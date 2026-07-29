@@ -20,7 +20,13 @@ import { open } from 'fs/promises';
  *
  * Returns undefined if the file is missing, unreadable, or has no cwd header.
  */
-export async function readSessionCwd(sessionPath: string): Promise<string | undefined> {
+export interface PiSessionHeader {
+  id?: string;
+  cwd?: string;
+}
+
+/** Read and validate the first non-empty Pi session header line. */
+export async function readSessionHeader(sessionPath: string): Promise<PiSessionHeader | undefined> {
   let handle;
   try {
     handle = await open(sessionPath, 'r');
@@ -35,9 +41,12 @@ export async function readSessionCwd(sessionPath: string): Promise<string | unde
       // isn't a valid Pi session file — bail (matches the SDK's buildSessionInfo,
       // which returns null when the first entry is not type:"session").
       try {
-        const entry = JSON.parse(trimmed) as { type?: unknown; cwd?: unknown };
+        const entry = JSON.parse(trimmed) as { type?: unknown; id?: unknown; cwd?: unknown };
         if (entry.type === 'session') {
-          return typeof entry.cwd === 'string' && entry.cwd.length > 0 ? entry.cwd : undefined;
+          return {
+            ...(typeof entry.id === 'string' && entry.id.length > 0 ? { id: entry.id } : {}),
+            ...(typeof entry.cwd === 'string' && entry.cwd.length > 0 ? { cwd: entry.cwd } : {}),
+          };
         }
       } catch {
         // first line isn't valid JSON → not a session header
@@ -50,4 +59,12 @@ export async function readSessionCwd(sessionPath: string): Promise<string | unde
   } finally {
     await handle.close();
   }
+}
+
+export async function readSessionCwd(sessionPath: string): Promise<string | undefined> {
+  return (await readSessionHeader(sessionPath))?.cwd;
+}
+
+export async function readSessionIdentity(sessionPath: string): Promise<string | undefined> {
+  return (await readSessionHeader(sessionPath))?.id;
 }

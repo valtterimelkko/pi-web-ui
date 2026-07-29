@@ -188,7 +188,7 @@ export interface TreeNode {
 export type ServerMessage =
   | { type: 'authenticated'; sessionId: string }
   | { type: 'connection_status'; status: string }
-  | { type: 'error'; message: string; code?: string }
+  | { type: 'error'; message: string; code?: string; sessionPath?: string }
   | { type: 'sessions_list'; sessions: SessionInfo[] }
   | { type: 'session_created'; sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' }
   | { type: 'session_switched'; sessionId: string; sessionPath: string; model?: string; thinkingLevel?: string; contextWindow?: number; contextUsed?: number; contextPercent?: number; messages?: SessionMessage[]; fileTimestamp?: number; isStreaming?: boolean }

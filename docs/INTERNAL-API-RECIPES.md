@@ -1,6 +1,6 @@
 # Internal API recipes
 
-These recipes complement the canonical endpoint documentation. Capability-gate fields/endpoints through `/health` and `/capabilities`; contract `1.12.0` orchestrators also preflight `/capacity`.
+These recipes complement the canonical endpoint documentation. Capability-gate fields/endpoints through `/health` and `/capabilities`; contract `1.13.0` orchestrators also preflight `/capacity`.
 
 ## Durable, retriable prompt dispatch
 

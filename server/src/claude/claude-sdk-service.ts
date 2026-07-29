@@ -93,6 +93,8 @@ export type AskUserQuestionCloseReason = 'timeout' | 'aborted' | 'turn_end' | 'd
 interface PendingAskUserQuestion {
   sessionId: string;
   toolCallId: string;
+  openedAt: number;
+  expiresAt: number;
   originalInput: Record<string, unknown>;
   resolve: (result: AskUserQuestionResolution) => void;
   timeout: NodeJS.Timeout;
@@ -141,6 +143,9 @@ export class ClaudeSdkService {
   /** Recently-resolved AskUserQuestion requestIds (TTL-evicted) so a late answer
    * can be recognized and surfaced instead of silently dropped (D3). */
   private resolvedAskUserQuestions = new Set<string>();
+  private resolvedAskUserQuestionToolCallIds = new Set<string>();
+  /** Secondary index: toolCallId / toolUseId → requestId for alias lookups. */
+  private askUserQuestionToolCallIdIndex = new Map<string, string>();
 
   constructor(cfg: ClaudeSdkServiceConfig) {
     this.sessionStore = new ClaudeSessionStore(cfg.claudeSessionDir);
@@ -489,6 +494,8 @@ export class ClaudeSdkService {
       this.cancelPendingAskUserQuestionsForSession(sessionId, 'aborted');
     }
     this.resolvedAskUserQuestions.clear();
+    this.resolvedAskUserQuestionToolCallIds.clear();
+    this.askUserQuestionToolCallIdIndex.clear();
   }
 
   isRunning(sessionId: string): boolean {
@@ -505,20 +512,57 @@ export class ClaudeSdkService {
 
   // ── AskUserQuestion bridge ─────────────────────────────────────────────
 
-  /** True iff an AskUserQuestion dialog with this requestId is still pending. */
+  /** True iff an AskUserQuestion dialog with this requestId or toolCallId is still pending. */
   isPendingAskUserQuestion(requestId: string): boolean {
-    return this.pendingAskUserQuestions.has(requestId);
+    return this.pendingAskUserQuestions.has(requestId)
+      || this.askUserQuestionToolCallIdIndex.has(requestId);
+  }
+
+  /**
+   * Resolve the canonical requestId and toolCallId for an identifier, which may
+   * be either the dialog requestId or the SDK toolUseId / toolCallId.
+   */
+  resolveAskUserQuestionKey(idOrToolCallId: string): { requestId: string; toolCallId: string; sessionId: string } | undefined {
+    const requestId = this.askUserQuestionToolCallIdIndex.get(idOrToolCallId) ?? idOrToolCallId;
+    const pending = this.pendingAskUserQuestions.get(requestId);
+    if (pending) {
+      return { requestId, toolCallId: pending.toolCallId, sessionId: pending.sessionId };
+    }
+    return undefined;
+  }
+
+  /** Return a bounded, session-scoped snapshot without exposing resolvers/signals. */
+  listPendingAskUserQuestionsForSession(sessionId: string): Array<{
+    requestId: string;
+    toolCallId: string;
+    kind: 'ask_user_question';
+    questions: unknown[];
+    openedAt: string;
+    expiresAt: string;
+  }> {
+    return Array.from(this.pendingAskUserQuestions.entries())
+      .filter(([, pending]) => pending.sessionId === sessionId)
+      .slice(0, 20)
+      .map(([requestId, pending]) => ({
+        requestId,
+        toolCallId: pending.toolCallId,
+        kind: 'ask_user_question' as const,
+        questions: Array.isArray(pending.originalInput.questions) ? pending.originalInput.questions : [],
+        openedAt: new Date(pending.openedAt).toISOString(),
+        expiresAt: new Date(pending.expiresAt).toISOString(),
+      }));
   }
 
   /**
    * Resolve a pending AskUserQuestion request with structured answers, a
    * freeform response, annotations, or a cancellation. Returns false (no-op)
    * if no pending request exists for `requestId` (e.g. already timed out or
-   * aborted).
+   * aborted). Accepts either requestId or toolCallId.
    */
   respondToAskUserQuestion(requestId: string, response: AskUserQuestionResolution): boolean {
-    if (!this.pendingAskUserQuestions.has(requestId)) return false;
-    return this.resolvePendingAskUserQuestion(requestId, response);
+    const canonical = this.askUserQuestionToolCallIdIndex.get(requestId) ?? requestId;
+    if (!this.pendingAskUserQuestions.has(canonical)) return false;
+    return this.resolvePendingAskUserQuestion(canonical, response);
   }
 
   /**
@@ -549,17 +593,26 @@ export class ClaudeSdkService {
    * Record a requestId as a recently-resolved AskUserQuestion (TTL-evicted), so
    * a late answer arriving after the dialog closed can be recognized.
    */
-  private markAskUserQuestionResolved(requestId: string): void {
+  private markAskUserQuestionResolved(requestId: string, toolCallId?: string): void {
     this.resolvedAskUserQuestions.add(requestId);
+    if (toolCallId) {
+      this.resolvedAskUserQuestionToolCallIds.add(toolCallId);
+    }
     const timer = setTimeout(() => {
       this.resolvedAskUserQuestions.delete(requestId);
+      if (toolCallId) {
+        this.resolvedAskUserQuestionToolCallIds.delete(toolCallId);
+      }
     }, RESOLVED_ASK_USER_TRACKING_TTL_MS);
     timer.unref?.();
   }
 
-  /** True iff `requestId` was an AskUserQuestion that recently closed (not pending). */
+  /** True iff `requestId` or `toolCallId` was an AskUserQuestion that recently closed. */
   wasRecentlyResolvedAskUserQuestion(requestId: string): boolean {
-    return this.resolvedAskUserQuestions.has(requestId);
+    const canonical = this.askUserQuestionToolCallIdIndex.get(requestId) ?? requestId;
+    return this.resolvedAskUserQuestions.has(canonical)
+      || this.resolvedAskUserQuestions.has(requestId)
+      || this.resolvedAskUserQuestionToolCallIds.has(requestId);
   }
 
   // ── Health ──────────────────────────────────────────────────────────────
@@ -806,9 +859,12 @@ export class ClaudeSdkService {
         this.resolvePendingAskUserQuestion(requestId, { cancelled: true }, { notifyClient: true, reason: 'timeout' });
       }, askUserTimeoutMs);
 
+      const openedAt = Date.now();
       this.pendingAskUserQuestions.set(requestId, {
         sessionId,
         toolCallId,
+        openedAt,
+        expiresAt: openedAt + askUserTimeoutMs,
         originalInput: input,
         resolve,
         timeout,
@@ -816,6 +872,7 @@ export class ClaudeSdkService {
         signal: options.signal,
         onEvent,
       });
+      this.askUserQuestionToolCallIdIndex.set(toolCallId, requestId);
 
       options.signal.addEventListener('abort', abortListener, { once: true });
       if (options.signal.aborted) {
@@ -909,16 +966,17 @@ export class ClaudeSdkService {
     clearTimeout(pending.timeout);
     try { pending.signal.removeEventListener('abort', pending.abortListener); } catch { /* noop */ }
     this.pendingAskUserQuestions.delete(requestId);
+    this.askUserQuestionToolCallIdIndex.delete(pending.toolCallId);
     // Remember this requestId was a (now-closed) AskUserQuestion so a late answer
     // can be recognized and surfaced instead of silently dropped (D3).
-    this.markAskUserQuestionResolved(requestId);
+    this.markAskUserQuestionResolved(requestId, pending.toolCallId);
     if (opts?.notifyClient && opts.reason) {
       try {
         pending.onEvent({
           type: 'ask_user_question_closed',
           sessionId: pending.sessionId,
           timestamp: Date.now(),
-          data: { requestId, reason: opts.reason },
+          data: { requestId, toolCallId: pending.toolCallId, reason: opts.reason },
         });
       } catch (err) {
         logger.warn('[ClaudeSdkService] Failed to emit ask_user_question_closed:', err);

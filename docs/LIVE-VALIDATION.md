@@ -207,7 +207,12 @@ verdicts and still run watch/session finalization.
 - `session-info` — verify enriched internal-API session info is available
 - `session-evidence` — verify compact evidence resolves by internal id and registry-path alias without prompt bodies
 - `thinking-level` — verify capability-gated model/thinking-level control and the OpenCode config bridge
-- `follow-up` — verify the runtime accepts a follow-up turn when supported
+- `follow-up` — verify idle follow-up runs a real turn and reports `dispatchMode:"prompt"`
+- `follow-up-strict` — verify strict idle follow-up returns `SESSION_NOT_STREAMING`
+- `prompt-mode-busy` — verify running Claude rejects follow-up with `SESSION_BUSY` and creates no receipt
+- `approval-wrong-id` — verify an unknown approval id returns 404 without closing the pending question
+- `approval-by-toolcall-id` — verify `toolCallId` resolves the question and the assistant resumes
+- `stalled-run-reaped` — verify an admitted silent Pi turn terminalises `TURN_STALLED` and releases capacity; launch both server and validator with `INTERNAL_API_TURN_IDLE_TIMEOUT_MS=2000`
 - `notify-on-agent-end` — opt in, run a real turn, and verify the disposable capture channel records the delivery without contacting Telegram
 - `channel-heartbeat` — verify Claude channel-backed sessions emit `stream_activity`
 - `claude-ask-user-question` — verify the Claude SDK browser question flow, structured answers, and resumed turn
@@ -226,7 +231,12 @@ verdicts and still run watch/session finalization.
 | `session-info` | Pi, Claude, OpenCode; Antigravity when explicitly authorised | enriched runtime/session metadata |
 | `session-evidence` | Pi, Claude, OpenCode disposable server; Antigravity only when explicitly authorised | alias resolution, bounded default evidence, and read-only evidence access |
 | `thinking-level` | OpenCode config bridge; capability-gated | model-aware thinking-level control and provider config mapping |
-| `follow-up` | capability-dependent; Antigravity can run in an authorised workflow | follow-up/resume behaviour |
+| `follow-up` | capability-dependent; Antigravity can run in an authorised workflow | idle promotion, real response, and reported dispatch mode |
+| `follow-up-strict` | Pi/Claude/OpenCode disposable server | strict active-turn requirement rejects idle delivery |
+| `prompt-mode-busy` | Claude SDK backend only | busy rejection precedes receipt reservation |
+| `approval-wrong-id` | Claude SDK backend only | false-success prevention and pending-state preservation |
+| `approval-by-toolcall-id` | Claude SDK backend only | identifier alias resolution and resumed turn |
+| `stalled-run-reaped` | Pi; short watchdog env required | watchdog terminal state and admission release |
 | `notify-on-agent-end` | Pi, Claude, OpenCode disposable capture channel | origin-independent notification observation without Telegram |
 | `channel-heartbeat` | Claude channel backend only | `stream_activity` liveness events |
 | `claude-ask-user-question` | Claude SDK backend only | structured multi-question answer flow and resumed turn |

@@ -49,8 +49,13 @@ async function initialize(): Promise<void> {
       });
     });
 
-    // Initialize CLI session watcher
-    const sessionWatcher = startSessionWatcher(config.sessionDir || path.join(config.piAgentDir, 'sessions'));
+    // Initialize CLI session watcher. Each already-observed add/change is
+    // incrementally indexed; this does not trigger a directory-wide rescan.
+    const watcherRegistry = getSessionRegistry(config.sessionRegistryPath);
+    const sessionWatcher = startSessionWatcher(
+      config.sessionDir || path.join(config.piAgentDir, 'sessions'),
+      watcherRegistry,
+    );
     
     sessionWatcher.on('session_update', (event: SessionChangeEvent & { info?: SessionInfo }) => {
       // Broadcast to all connected WebSocket clients
@@ -79,20 +84,9 @@ async function initialize(): Promise<void> {
 
     logger.info('WebSocket server ready at /ws');
 
-    // Rebuild session registry from disk (ensures Pi sessions are indexed).
-    // Skipped in validation mode so the disposable instance never reads the
-    // real Pi session directory into its (isolated) registry.
-    if (config.validationMode) {
-      logger.info('[Validation] Ephemeral validation mode: skipping real-session registry rebuild.');
-    } else {
-      try {
-        const registry = getSessionRegistry(config.sessionRegistryPath);
-        const piSessionDir = config.sessionDir || path.join(config.piAgentDir, 'sessions');
-        await registry.rebuildFromPiSessions(piSessionDir);
-      } catch (err) {
-        logger.warn('[Startup] Failed to rebuild session registry from Pi sessions:', err instanceof Error ? err.message : String(err));
-      }
-    }
+    // Pi registry discovery is incremental via SessionWatcher add/change.
+    // Existing files remain discoverable through session listing and the exact
+    // debug:where filename fallback; no boot-time directory rescan is allowed.
 
     // Start session cleanup service (auto-unpin after 24h, auto-delete archived
     // after 90 days). DISABLED in validation mode — a disposable validation

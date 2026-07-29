@@ -246,6 +246,17 @@ curl -s --unix-socket ~/.pi-web-ui/internal-api.sock \
 - `GET /api/v1/sessions/:id/history` — best for replay/debug reconstruction
 - `GET /api/v1/sessions/:id/diagnostics` — best for correlated backend/log context
 
+### Run receipt stuck in `started` or `queued`
+
+Fetch `GET /api/v1/runs/:runId`, then compare it with
+`GET /api/v1/capacity`. `activeTurns` shows current admission occupancy and
+`stalledRuns` counts watchdog-terminalised runs. A healthy current server
+bounds every accepted run with an idle timeout and an absolute ceiling; a
+stalled run terminalises as `failed` / `TURN_STALLED` and releases its slot.
+If an old receipt remains nonterminal beyond both configured bounds, record its
+`runId`, session evidence, server version, and diagnostics—it predates or
+bypassed the watchdog and must not be treated as successful work.
+
 ### Important Claude caveat
 
 For **Claude channel-backed sessions**, `GET /api/v1/sessions/:id/events` can
@@ -263,10 +274,11 @@ When correlating failures, distinguish between:
 - **Registry path/file references** — stored in `~/.pi-web-ui/session-registry.json`
 
 `npm run debug:where -- <id>` accepts the registry's internal id, path, Claude
-native id, OpenCode native id, and Antigravity conversation id. If it reports no
-match, the registry may be stale or the identifier may not have been recorded;
-then inspect the runtime-specific source printed by the nearest registry entry,
-not the whole filesystem.
+native id, OpenCode native id, and Antigravity conversation id. For Pi ids
+missing from the registry, it also performs one exact filename glob under the
+configured Pi session root. If that bounded fallback still reports no match,
+the identifier may be stale or malformed; do not begin with a repository-wide
+or home-directory-wide grep.
 
 See also:
 - [`INTERNAL-API.md`](./INTERNAL-API.md)

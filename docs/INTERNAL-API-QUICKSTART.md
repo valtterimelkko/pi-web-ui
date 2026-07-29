@@ -37,7 +37,7 @@ api http://localhost/api/v1/capabilities
 api http://localhost/api/v1/capacity
 ```
 
-Read the advertised contract version and capability-gate optional behavior instead of assuming that every installation has the newest endpoint set. For contract `1.12.0` orchestration, preflight `/capacity`, but still handle prompt-time `429 ADMISSION_CAPACITY_EXHAUSTED` and its `Retry-After` header.
+Read the advertised contract version and capability-gate optional behavior instead of assuming that every installation has the newest endpoint set. For contract `1.13.0` orchestration, preflight `/capacity`, but still handle prompt-time `429 ADMISSION_CAPACITY_EXHAUSTED` and its `Retry-After` header.
 
 ## 2. Discover models
 

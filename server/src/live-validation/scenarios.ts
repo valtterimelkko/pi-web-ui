@@ -1063,7 +1063,15 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
           mode: 'follow_up',
         });
         const summary = collectValidationSummary(events);
-        const assertions = buildAssertions(summary, 'SECOND-VALIDATION-TURN');
+        const evidence = context.client.getLastPromptEvidence?.(sessionId);
+        const assertions = [
+          ...buildAssertions(summary, 'SECOND-VALIDATION-TURN'),
+          {
+            name: 'dispatch_mode_promoted',
+            passed: evidence?.dispatchMode === 'prompt',
+            details: `dispatchMode=${evidence?.dispatchMode ?? 'missing'} (expected prompt)`,
+          },
+        ];
         return {
           scenarioId: 'follow-up',
           runtime: context.runtime,
@@ -1073,7 +1081,212 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
       });
     },
   },
+  'follow-up-strict': {
+    id: 'follow-up-strict',
+    description: 'Verify strict follow-up rejects an idle session instead of promoting it.',
+    async run(context) {
+      return withEphemeralSession(context, async (sessionId) => {
+        let code: string | undefined;
+        try {
+          await context.client.promptWithIdempotency(sessionId, {
+            message: 'This strict idle follow-up must not run.',
+            verbosity: 'answers',
+            mode: 'follow_up',
+            requireActiveTurn: true,
+          });
+        } catch (error) {
+          code = requestErrorCode(error);
+        }
+        const assertions = [{
+          name: 'idle_strict_follow_up_rejected',
+          passed: code === 'SESSION_NOT_STREAMING',
+          details: `code=${code ?? 'missing'} (expected SESSION_NOT_STREAMING)`,
+        }];
+        return { scenarioId: 'follow-up-strict', runtime: context.runtime, passed: assertions.every((a) => a.passed), assertions };
+      });
+    },
+  },
+  'prompt-mode-busy': {
+    id: 'prompt-mode-busy',
+    description: 'Verify Claude refuses follow_up while a question-blocked turn is running and creates no receipt.',
+    async run(context) {
+      if (context.runtime !== 'claude') return skippedScenario('prompt-mode-busy', context.runtime, 'prompt-mode-busy only applies to Claude');
+      return withEphemeralSession(context, async (sessionId) => {
+        let resolveQuestion!: (value: { requestId: string }) => void;
+        const question = new Promise<{ requestId: string }>((resolve) => { resolveQuestion = resolve; });
+        const stream = context.client.promptStreamLive(sessionId, {
+          message: 'Use AskUserQuestion exactly once to ask "Continue?" with options Yes and No. Then finish briefly.',
+          verbosity: 'full',
+          mode: 'prompt',
+        }, (event) => {
+          if (event.type === 'ask_user_question_request') {
+            const data = event.data as { requestId?: string };
+            if (data.requestId) resolveQuestion({ requestId: data.requestId });
+          }
+        });
+        const pending = await withTimeout(question, context.timeoutMs ?? 60_000, 'Claude did not ask a question');
+        const before = await context.client.getSessionEvidence?.(sessionId, ['runs']);
+        let code: string | undefined;
+        try {
+          await context.client.promptWithIdempotency(sessionId, {
+            message: 'This must be rejected while busy.',
+            verbosity: 'answers',
+            mode: 'follow_up',
+            detach: true,
+          });
+        } catch (error) {
+          code = requestErrorCode(error);
+        } finally {
+          await context.client.respondToApproval(sessionId, pending.requestId, { approved: true, cancelled: true }).catch(() => undefined);
+        }
+        await stream;
+        const after = await context.client.getSessionEvidence?.(sessionId, ['runs']);
+        const assertions = [
+          { name: 'busy_follow_up_rejected', passed: code === 'SESSION_BUSY', details: `code=${code ?? 'missing'}` },
+          {
+            name: 'no_receipt_created',
+            passed: before?.receiptSummary.count === after?.receiptSummary.count,
+            details: `before=${before?.receiptSummary.count ?? 'missing'} after=${after?.receiptSummary.count ?? 'missing'}`,
+          },
+        ];
+        return { scenarioId: 'prompt-mode-busy', runtime: context.runtime, passed: assertions.every((a) => a.passed), assertions };
+      });
+    },
+  },
+  'approval-wrong-id': {
+    id: 'approval-wrong-id',
+    description: 'Verify an unknown approval id returns 404 and leaves the live question pending.',
+    async run(context) {
+      if (context.runtime !== 'claude') return skippedScenario('approval-wrong-id', context.runtime, 'approval-wrong-id only applies to Claude');
+      return withEphemeralSession(context, async (sessionId) => {
+        let wrongCode: string | undefined;
+        let remainedPending = false;
+        let requestId = '';
+        let interaction: Promise<void> | undefined;
+        const events = await context.client.promptStreamLive(sessionId, {
+          message: 'Use AskUserQuestion exactly once to ask "Pick one?" with options Alpha and Beta. After the answer reply APPROVAL-WRONG-ID-RESUMED.',
+          verbosity: 'full',
+          mode: 'prompt',
+        }, (event) => {
+          if (event.type !== 'ask_user_question_request' || interaction) return;
+          const data = event.data as { requestId?: string; questions?: Array<{ question: string }> };
+          requestId = data.requestId ?? '';
+          interaction = (async () => {
+            try {
+              await context.client.respondToApproval(sessionId, 'unknown-request-id', { approved: true, answers: {} });
+            } catch (error) {
+              wrongCode = requestErrorCode(error);
+            }
+            const pending = await context.client.getPendingApprovals?.(sessionId);
+            remainedPending = pending?.approvals.some((approval) => approval.requestId === requestId) ?? false;
+            const questionText = data.questions?.[0]?.question ?? 'Pick one?';
+            await context.client.respondToApproval(sessionId, requestId, { approved: true, answers: { [questionText]: 'Alpha' } });
+          })();
+        });
+        await interaction;
+        const summary = collectValidationSummary(events);
+        const assertions = [
+          { name: 'wrong_id_404', passed: wrongCode === 'APPROVAL_REQUEST_NOT_FOUND', details: `code=${wrongCode ?? 'missing'}` },
+          { name: 'question_remained_pending', passed: remainedPending, details: `requestId=${requestId || 'missing'}` },
+          { name: 'assistant_resumed', passed: summary.assistantText.includes('APPROVAL-WRONG-ID-RESUMED'), details: summary.assistantText.slice(-200) },
+        ];
+        return { scenarioId: 'approval-wrong-id', runtime: context.runtime, passed: assertions.every((a) => a.passed), assertions };
+      });
+    },
+  },
+  'approval-by-toolcall-id': {
+    id: 'approval-by-toolcall-id',
+    description: 'Verify toolCallId aliases resolve an AskUserQuestion and the assistant resumes.',
+    async run(context) {
+      if (context.runtime !== 'claude') return skippedScenario('approval-by-toolcall-id', context.runtime, 'approval-by-toolcall-id only applies to Claude');
+      return withEphemeralSession(context, async (sessionId) => {
+        let resolved = false;
+        let toolCallId = '';
+        let interaction: Promise<void> | undefined;
+        const events = await context.client.promptStreamLive(sessionId, {
+          message: 'Use AskUserQuestion exactly once to ask "Pick one?" with options Alpha and Beta. After the answer reply APPROVAL-TOOLCALL-RESUMED.',
+          verbosity: 'full',
+          mode: 'prompt',
+        }, (event) => {
+          if (event.type !== 'ask_user_question_request' || interaction) return;
+          const data = event.data as { toolCallId?: string; questions?: Array<{ question: string }> };
+          toolCallId = data.toolCallId ?? '';
+          interaction = (async () => {
+            const questionText = data.questions?.[0]?.question ?? 'Pick one?';
+            const result = await context.client.respondToApproval(sessionId, toolCallId, {
+              approved: true,
+              answers: { [questionText]: 'Beta' },
+            }) as { resolved?: boolean };
+            resolved = result.resolved === true;
+          })();
+        });
+        await interaction;
+        const summary = collectValidationSummary(events);
+        const assertions = [
+          { name: 'tool_call_id_present', passed: toolCallId.length > 0, details: toolCallId || 'missing' },
+          { name: 'sdk_resolved', passed: resolved, details: `resolved=${resolved}` },
+          { name: 'assistant_resumed', passed: summary.assistantText.includes('APPROVAL-TOOLCALL-RESUMED'), details: summary.assistantText.slice(-200) },
+        ];
+        return { scenarioId: 'approval-by-toolcall-id', runtime: context.runtime, passed: assertions.every((a) => a.passed), assertions };
+      });
+    },
+  },
+  'stalled-run-reaped': {
+    id: 'stalled-run-reaped',
+    description: 'Verify an admitted Pi turn that stops emitting events is reaped and releases capacity.',
+    async run(context) {
+      if (context.runtime !== 'pi') return skippedScenario('stalled-run-reaped', context.runtime, 'stalled-run-reaped only applies to Pi');
+      const timeout = Number.parseInt(process.env.INTERNAL_API_TURN_IDLE_TIMEOUT_MS ?? '', 10);
+      if (!Number.isFinite(timeout) || timeout <= 0 || timeout > 30_000) {
+        return skippedScenario('stalled-run-reaped', context.runtime, 'requires INTERNAL_API_TURN_IDLE_TIMEOUT_MS <= 30000 on the disposable server and validator');
+      }
+      return withEphemeralSession(context, async (sessionId) => {
+        const stalled = await context.client.promptWithIdempotency(sessionId, {
+          message: `Use the bash tool exactly once to run sleep ${Math.max(5, Math.ceil(timeout / 1000) + 3)}, then reply STALL-SHOULD-HAVE-BEEN-REAPED.`,
+          verbosity: 'answers',
+          mode: 'prompt',
+          detach: true,
+        });
+        const runId = stalled.runId;
+        const deadline = Date.now() + Math.max(timeout * 4, 10_000);
+        let receipt = await context.client.getRunReceipt(runId);
+        while (!receipt.terminalAt && Date.now() < deadline) {
+          await sleep(200);
+          receipt = await context.client.getRunReceipt(runId);
+        }
+        const capacity = await context.client.getCapacity?.();
+        const assertions = [
+          { name: 'admitted_prompt_dispatch', passed: receipt.dispatchMode === 'prompt', details: `dispatchMode=${receipt.dispatchMode ?? 'missing'}` },
+          { name: 'turn_stalled_terminal', passed: receipt.status === 'failed' && receipt.errorCode === 'TURN_STALLED', details: `status=${receipt.status} code=${receipt.errorCode ?? 'missing'}` },
+          { name: 'capacity_released', passed: capacity?.activeTurns === 0, details: `activeTurns=${capacity?.activeTurns ?? 'missing'}` },
+        ];
+        return { scenarioId: 'stalled-run-reaped', runtime: context.runtime, passed: assertions.every((a) => a.passed), assertions, runId };
+      });
+    },
+  },
 };
+
+function requestErrorCode(error: unknown): string | undefined {
+  return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : undefined;
+}
+
+function skippedScenario(scenarioId: string, runtime: ValidationRuntime, reason: string): ValidationScenarioResult {
+  return { scenarioId, runtime, passed: true, skipped: true, reason, assertions: [] };
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(message)), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

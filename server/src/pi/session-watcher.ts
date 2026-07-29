@@ -4,6 +4,7 @@ import fs from 'fs/promises';
 import { closeSync, openSync, readSync } from 'node:fs';
 import { EventEmitter } from 'events';
 import { createLogger } from '../logging/logger.js';
+import type { SessionRegistryManager } from '../session-registry.js';
 
 const logger = createLogger('SessionWatcher');
 
@@ -36,7 +37,10 @@ export class SessionWatcher extends EventEmitter {
   /** True once stop() has run; handleChange becomes a no-op so a stopped watcher never broadcasts. */
   private stopped = false;
 
-  constructor(sessionsDir?: string) {
+  constructor(
+    sessionsDir?: string,
+    private readonly registry?: Pick<SessionRegistryManager, 'upsert'>,
+  ) {
     super();
     this.sessionsDir = sessionsDir || path.join(process.env.HOME || '/root', '.pi/agent/sessions');
   }
@@ -54,7 +58,10 @@ export class SessionWatcher extends EventEmitter {
     const pattern = path.join(this.sessionsDir, '**/*.jsonl');
     
     this.watcher = chokidar.watch(pattern, {
-      ignoreInitial: false, // Emit 'add' for existing files
+      // Incremental-only indexing: existing files are resolved lazily by
+      // debug:where and ordinary session listing, not replayed into the
+      // registry as a boot-time rescan.
+      ignoreInitial: true,
       awaitWriteFinish: {
         stabilityThreshold: 300,
         pollInterval: 100,
@@ -179,7 +186,24 @@ export class SessionWatcher extends EventEmitter {
         event.sessionId = info.id;
         event.cwd = info.cwd;
         this.sessionIdsByPath.set(filePath, info.id);
-        
+        if (this.registry) {
+          try {
+            await this.registry.upsert({
+              id: info.id,
+              sdkType: 'pi',
+              path: info.path,
+              cwd: info.cwd,
+              firstMessage: info.firstMessage,
+              messageCount: info.messageCount,
+              createdAt: info.createdAt.toISOString(),
+              lastActivity: info.lastActivity.toISOString(),
+              status: 'idle',
+            });
+          } catch (error) {
+            logger.warn(`Failed to index observed Pi session ${filePath}:`, error);
+          }
+        }
+
         // Emit full session info
         this.emit('session_update', { ...event, info });
       } catch (error) {
@@ -394,15 +418,21 @@ export class SessionWatcher extends EventEmitter {
 // Singleton instance
 let sessionWatcher: SessionWatcher | null = null;
 
-export function getSessionWatcher(sessionsDir?: string): SessionWatcher {
+export function getSessionWatcher(
+  sessionsDir?: string,
+  registry?: Pick<SessionRegistryManager, 'upsert'>,
+): SessionWatcher {
   if (!sessionWatcher) {
-    sessionWatcher = new SessionWatcher(sessionsDir);
+    sessionWatcher = new SessionWatcher(sessionsDir, registry);
   }
   return sessionWatcher;
 }
 
-export function startSessionWatcher(sessionsDir?: string): SessionWatcher {
-  const watcher = getSessionWatcher(sessionsDir);
+export function startSessionWatcher(
+  sessionsDir?: string,
+  registry?: Pick<SessionRegistryManager, 'upsert'>,
+): SessionWatcher {
+  const watcher = getSessionWatcher(sessionsDir, registry);
   watcher.start();
   return watcher;
 }

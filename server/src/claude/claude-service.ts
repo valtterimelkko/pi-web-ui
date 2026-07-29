@@ -134,6 +134,15 @@ export class ClaudeService {
     return this.sdkService?.isPendingAskUserQuestion(requestId) ?? false;
   }
 
+  /** Resolve a pending SDK question identifier to its canonical pair and owner. */
+  resolveAskUserQuestionKey(idOrToolCallId: string): { requestId: string; toolCallId: string; sessionId: string } | undefined {
+    return this.sdkService?.resolveAskUserQuestionKey(idOrToolCallId);
+  }
+
+  listPendingAskUserQuestionsForSession(sessionId: string) {
+    return this.sdkService?.listPendingAskUserQuestionsForSession(sessionId) ?? [];
+  }
+
   /**
    * Resolve a pending SDK AskUserQuestion with structured answers / cancellation.
    * Keyed by requestId (a globally-unique UUID), so the WebSocket path — which
@@ -167,7 +176,7 @@ export class ClaudeService {
     return this.sdkService?.wasRecentlyResolvedAskUserQuestion(requestId) ?? false;
   }
 
-  private hasChannelSession(sessionId: string): boolean {
+  hasChannelSession(sessionId: string): boolean {
     return this.channelService?.hasSession(sessionId) ?? false;
   }
 

@@ -89,6 +89,7 @@ export class SessionPool {
     const session = await this.piService.createSession({
       clientId,
       sessionPath,
+      allowCreate: false,
       webUIContext,
     });
 

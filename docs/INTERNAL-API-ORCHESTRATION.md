@@ -64,8 +64,9 @@ These are the main limitations to keep in mind when designing orchestrators:
   prompt has a durable `runId` and receipt, but there is still no general job
   queue or scheduler. Use `GET /sessions/:id/wait` for live status and
   `GET /runs/:runId` for durable dispatch evidence.
-- **No true pending-approvals list yet** — use `/events` to observe permission
-  requests live; `GET /approvals/pending` is currently informational.
+- **Pending approvals are not universal** — Claude SDK `AskUserQuestion`
+  requests are available through `/approvals/pending`; other runtime/backend
+  permission systems may still require live `/events` observation.
 - **Claude channel `/events` caveat** — see below.
 - **Watch restart semantics** — a watch ledger preserves already-recorded firings, but a watch reloaded after server restart is `detached`; re-register it to resume live observation. A watch owns a distinct runtime claim, and deleting the watch releases only that claim.
 
@@ -80,7 +81,7 @@ Always start by asking the server what is available now and which contract versi
 - `GET /api/v1/capacity` — process-local turn budget, interactive reserve, and measured memory headroom (contract `1.12.0+`)
 
 Useful debugging/introspection, notification, model-control, run-identity, and
-health, evidence, receipt-correctness, exact-profile, retention, and admission additions landed in contract `1.3.0` through `1.12.0`:
+health, evidence, receipt-correctness, exact-profile, retention, admission, and dispatch-integrity additions landed in contract `1.3.0` through `1.13.0`:
 
 - `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off; `1.9.0` adds `requestId`, `runId`, `runtime`, `component`, and `since` selectors plus a bounded process-local `operational` snapshot.
 - `GET /api/v1/sessions/:id/evidence` — `1.10.0` compact one-call troubleshooting bundle; resolves aliases, returns bounded diagnostics and durable receipt summary, and links to deeper reads. Use this before separate `/info`, `/diagnostics`, and transcript calls.
@@ -153,7 +154,23 @@ For Claude, prefer selecting the backend/provider profile at **session creation 
 
 ### 4. Dispatch prompts
 
-There are two main patterns:
+There are two main patterns.
+
+### Continuing a session after a completed turn
+
+Use ordinary `mode:"prompt"` after you have proved the previous turn terminal.
+That starts the next conversational turn directly and records the caller's
+intent accurately:
+
+```json
+{"message":"Continue with the accepted decision.","mode":"prompt","verbosity":"answers","detach":true}
+```
+
+Reserve `mode:"follow_up"` for genuine mid-turn delivery. On Pi it queues while
+the turn is active; on idle Pi it is promoted and reports
+`dispatchMode:"prompt"`. Other runtimes have no mid-turn follow-up queue and
+return `409 SESSION_BUSY` while running. Set `requireActiveTurn:true` when idle
+promotion would be incorrect.
 
 ### Pattern A — final-answer oriented
 Use:
@@ -181,6 +198,20 @@ supervision stream, not a durable job; disconnecting that stream cancels the run
 and aborts the runtime. `GET /sessions/:id/events` is useful supervision and
 can replay a bounded recent buffer, but `/wait` + receipts + transcript are the
 completion evidence for a durable flow.
+
+### Confirming an interactive answer
+
+Do not equate one HTTP 2xx with completed operator intervention. Track the
+answer-delivery ladder as distinct evidence:
+
+1. **accepted** — the HTTP response was accepted;
+2. **resolved** — response body says `resolved:true` for the matching
+   `requestId`/`toolCallId`;
+3. **assistant resumed** — normalized events/transcript show post-answer work;
+4. **turn terminal** — `agent_end` and the run receipt are terminal.
+
+Record timeout/rejection separately. Never set an `ownerAnswerDeliveredAt`-style
+field before step 2, and do not claim the turn succeeded before step 4.
 
 ### 5. Monitor child progress
 

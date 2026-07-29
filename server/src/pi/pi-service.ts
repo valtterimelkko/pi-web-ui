@@ -25,6 +25,7 @@ import {
   type SnapshotDiff,
 } from './pi-openrouter-refresh.js';
 import { createLogger } from '../logging/logger.js';
+import { readSessionIdentity } from './session-cwd.js';
 
 const logger = createLogger('PiService');
 
@@ -68,10 +69,59 @@ function forceFlushSessionManager(sessionManager: SessionManager): void {
   }
 }
 
+export type PiSessionIdentityErrorCode = 'SESSION_FILE_MISSING' | 'SESSION_IDENTITY_MISMATCH';
+
+export class PiSessionIdentityError extends Error {
+  constructor(public readonly code: PiSessionIdentityErrorCode, message: string) {
+    super(message);
+    this.name = 'PiSessionIdentityError';
+  }
+}
+
+function sessionIdFromFilename(sessionPath: string): string | undefined {
+  const filename = sessionPath.split(/[\\/]/).pop();
+  const match = filename?.match(/_([^_]+)\.jsonl$/);
+  return match?.[1];
+}
+
+/**
+ * Fail closed before any SDK session is opened or browser state is switched.
+ * Keeping this preflight outside SessionManager prevents a missing or corrupt
+ * path from being silently replaced with a newly-created session.
+ */
+export async function assertPiSessionFileIdentity(
+  sessionPath: string,
+  options: { knownToExist?: boolean } = {},
+): Promise<string> {
+  if (!options.knownToExist) {
+    const fs = await import('fs/promises');
+    try {
+      await fs.access(sessionPath);
+    } catch {
+      throw new PiSessionIdentityError(
+        'SESSION_FILE_MISSING',
+        `Pi session file no longer exists: ${sessionPath}`,
+      );
+    }
+  }
+
+  const expectedId = sessionIdFromFilename(sessionPath);
+  const headerId = await readSessionIdentity(sessionPath);
+  if (!expectedId || !headerId || headerId !== expectedId) {
+    throw new PiSessionIdentityError(
+      'SESSION_IDENTITY_MISMATCH',
+      `Pi session header identity does not match its canonical filename: ${sessionPath}`,
+    );
+  }
+  return expectedId;
+}
+
 export interface CreateSessionOptions {
   clientId: string;
   cwd?: string;
   sessionPath?: string;
+  /** Explicitly authorize first creation at a caller-supplied path. */
+  allowCreate?: boolean;
   continueRecent?: boolean;
   inMemory?: boolean;
   webUIContext?: WebUIContext;
@@ -192,7 +242,6 @@ export class PiService {
     if (options.inMemory) {
       sessionManager = SessionManager.inMemory();
     } else if (options.sessionPath) {
-      // Check if the session file already exists
       const fs = await import('fs/promises');
       let fileExists = false;
       try {
@@ -201,19 +250,34 @@ export class PiService {
       } catch {
         fileExists = false;
       }
-      
+
       if (fileExists) {
-        // File exists - open it normally
+        const expectedId = await assertPiSessionFileIdentity(options.sessionPath, { knownToExist: true });
         sessionManager = SessionManager.open(options.sessionPath, config.sessionDir);
+        if (sessionManager.getSessionId() !== expectedId) {
+          throw new PiSessionIdentityError(
+            'SESSION_IDENTITY_MISMATCH',
+            `Opened Pi session identity does not match its canonical filename: ${options.sessionPath}`,
+          );
+        }
       } else {
-        // File doesn't exist yet - create with cwd, then set the session file path
-        // Note: setSessionFile() on non-existent file calls newSession() which writes
-        // to an auto-generated path. We need to override the path and force write again.
-        logger.info(`[PiService.createSession] Session file doesn't exist yet, creating with cwd: ${cwd}`);
+        const expectedId = sessionIdFromFilename(options.sessionPath);
+        if (!options.allowCreate) {
+          throw new PiSessionIdentityError(
+            'SESSION_FILE_MISSING',
+            `Pi session file no longer exists: ${options.sessionPath}`,
+          );
+        }
+        logger.info(`[PiService.createSession] Explicitly creating session file with cwd: ${cwd}`);
         sessionManager = SessionManager.create(cwd, config.sessionDir);
+        const createdId = sessionManager.getSessionId();
+        if (!expectedId || createdId !== expectedId) {
+          throw new PiSessionIdentityError(
+            'SESSION_IDENTITY_MISMATCH',
+            `New Pi session identity does not match requested filename: ${options.sessionPath}`,
+          );
+        }
         sessionManager.setSessionFile(options.sessionPath);
-        // Force immediate write to disk using internal _rewriteFile()
-        // (public flush() not yet available in published SDK)
         forceFlushSessionManager(sessionManager);
       }
     } else if (options.continueRecent) {
@@ -233,6 +297,10 @@ export class PiService {
       resourceLoader: sessionResourceLoader,
       cwd,
     });
+
+    // SessionManager identity was validated before createAgentSession. Do not
+    // perform a post-open dispose-on-mismatch check: dispose may persist SDK
+    // state, violating the fail-closed no-write guarantee.
 
     // Store client-to-session mapping
     this.clientSessionMap.set(options.clientId, session.sessionId);
