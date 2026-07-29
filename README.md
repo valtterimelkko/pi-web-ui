@@ -1,6 +1,6 @@
 # Pi Web UI
 
-> **Latest work:** the Internal API now exposes exact fail-closed Claude profile binding with separate selector/runtime-model evidence (`1.11.0`), a compact alias-resolving session evidence bundle (`1.10.0`), and truthful Pi completion across auto-compaction (`1.10.1`) alongside additive runtime-health and filtered diagnostics, while Claude SDK `AskUserQuestion` is supported first-class in the browser, Antigravity has an inactivity stall watchdog with bounded retry, and the Files tab has a Markdown source editor with a GFM live preview (explicit Save, truncated files stay read-only). See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
+> **Latest work:** Internal API `1.12.0` separates source-owned durable/resident retention from execution admission, exposes `/capacity`, and preserves the Web UI's human pin slots. It builds on exact Claude profile binding (`1.11.0`), compact session evidence (`1.10.0`), and truthful Pi completion across auto-compaction (`1.10.1`). See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
 
 Built for a simple reality: **one agent runtime and one subscription is often not enough.**
 

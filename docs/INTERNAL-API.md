@@ -942,13 +942,42 @@ GET /api/v1/capacity
 
 Returns the current process-local Internal API turn budget, active counts by
 runtime, the slot reserved for interactive Web UI work, measured cgroup-v2
-memory usage (or process RSS/host RAM fallback), and `retryAfterSeconds`.
-Conductors should preflight this endpoint, but the prompt route remains the
-atomic authority because capacity can change between reads. A refused prompt
-returns HTTP `429`, code `ADMISSION_CAPACITY_EXHAUSTED`, a stable `reason`
-(`global_limit`, `runtime_limit`, or `memory_pressure`), and `Retry-After`.
-Capacity limits govern active turns, not the number of durable sessions or
-retention leases; no hidden server-side queue is created.
+memory usage (or process RSS/host RAM fallback), projected per-turn reservation,
+and `retryAfterSeconds`.
+
+```json
+{
+  "available": true,
+  "activeTurns": 0,
+  "maxActiveTurns": 8,
+  "interactiveReserve": 1,
+  "apiTurnLimit": 7,
+  "memory": {
+    "currentBytes": 268435456,
+    "limitBytes": 8589934592,
+    "headroomBytes": 8321499136,
+    "minimumHeadroomBytes": 536870912,
+    "reservedBytesPerTurn": 268435456,
+    "projectedHeadroomBytes": 8053063680
+  },
+  "runtimes": {
+    "pi": { "activeTurns": 0, "maxActiveTurns": 7 },
+    "claude": { "activeTurns": 0, "maxActiveTurns": 7 },
+    "opencode": { "activeTurns": 0, "maxActiveTurns": 7 },
+    "antigravity": { "activeTurns": 0, "maxActiveTurns": 7 }
+  },
+  "retryAfterSeconds": 2
+}
+```
+
+`available`/top-level `reason` reflect memory and global checks. Consumers must
+also inspect their runtime counter; the final prompt-time check can still refuse
+for `runtime_limit`. Conductors should preflight, but the prompt route remains
+the atomic authority because capacity can change between reads. A refusal is
+HTTP `429` with code `ADMISSION_CAPACITY_EXHAUSTED`, stable `reason`
+(`global_limit`, `runtime_limit`, or `memory_pressure`), body
+`retryAfterSeconds`, and a `Retry-After` header. Capacity limits active turns,
+not durable sessions or retention leases; no hidden queue is created.
 
 ---
 
@@ -1203,7 +1232,7 @@ boundary. Releasing an API lease never clears a human Web UI or watch claim.
 
 Legacy `pin` grants a **time-bounded** API residency claim (default 24h,
 hard max 7d), returns `pinnedUntil`, and extends its deadline when repeated.
-`unpin` releases all legacy Internal API leases for that session but does not
+`unpin` releases the single legacy compatibility lease for that session but does not
 touch other sources. The two-session limit belongs only to human Web UI claims.
 See [source-owned session retention](#source-owned-session-retention-persistent-time-bounded).
 
@@ -1615,9 +1644,13 @@ structurally invalid batch is rejected atomically before any session is created.
 }
 ```
 
-Each entry accepts the same fields as `POST /sessions`, including
-`thinkingLevel`, legacy `pin`/`pinTtlSeconds`, and required `retention` (see [source-owned session retention](#source-owned-session-retention-persistent-time-bounded));
-each result item echoes `pinned` / `pinnedUntil` when pinned.
+Each entry supports runtime/model/cwd/thinking fields plus legacy
+`pin`/`pinTtlSeconds`; each result echoes `pinned` / `pinnedUntil` when pinned.
+**Batch creation does not currently apply source-owned `retention` leases.** Use
+single-session `POST /sessions` when retention is required atomically, then fan
+out prompt dispatch separately. A `retention` property may pass shared request
+validation for compatibility but must not be treated as accepted or effective
+on this batch route.
 
 **Response (200):**
 ```json
@@ -2062,6 +2095,11 @@ Actionable errors may also include additive `hint` (next step) and `docs`
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
 | `RUN_NOT_FOUND` | 404 | Run receipt is unknown or retention-pruned |
 | `IDEMPOTENCY_KEY_CONFLICT` | 409 | Key reused for a different request |
+| `RETENTION_CLAIM_NOT_FOUND` | 404 | Named lease is absent or belongs to another session |
+| `RETENTION_CLAIM_OWNER_MISMATCH` | 409 | Supplied cooperative owner does not match the lease |
+| `RETENTION_RESIDENT_CAPACITY_EXHAUSTED` | 409 | Required resident claim could not be acquired; create is rolled back |
+| `RETENTION_STORE_UNAVAILABLE` | 503 | Required lease persistence/renewal/release was not durable |
+| `ADMISSION_CAPACITY_EXHAUSTED` | 429 | Prompt-time global/runtime/memory admission refused; respect `Retry-After` |
 
 ## Configuration
 
@@ -2089,15 +2127,27 @@ INTERNAL_API_RUN_RECEIPTS_DIR=
 # Session-scoped idempotency replay window (default 24h, milliseconds)
 INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS=86400000
 
-# Directory for durable API-pin expiry ledger (default: ~/.pi-web-ui/pins)
+# Directory for durable Internal API retention-lease ledger (default: ~/.pi-web-ui/pins)
 INTERNAL_API_PIN_DIR=
 
-# API-pin lifetime: default 24h, hard max 7d (milliseconds)
+# Retention-lease lifetime: default 24h, hard max 7d (milliseconds)
 INTERNAL_API_PIN_DEFAULT_TTL_MS=86400000
 INTERNAL_API_PIN_MAX_TTL_MS=604800000
 
-# How often expired API pins are swept (default 5 min, milliseconds)
+# How often expired API retention leases are swept (default 5 min, milliseconds)
 INTERNAL_API_PIN_EXPIRY_INTERVAL_MS=300000
+
+# Total active-turn budget; default derives from available CPU parallelism
+INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS=
+
+# Slots withheld from Internal API turns for interactive Web UI work (default 1)
+INTERNAL_API_ADMISSION_INTERACTIVE_RESERVE=1
+
+# Minimum projected aggregate memory headroom in MiB (default 512)
+INTERNAL_API_ADMISSION_MIN_HEADROOM_MB=512
+
+# Conservative projected memory reservation per admitted turn in MiB (default 256)
+INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN=256
 ```
 
 The API key is auto-generated on first start and written to

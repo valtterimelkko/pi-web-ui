@@ -34,9 +34,10 @@ api() {
 ```bash
 api http://localhost/api/v1/health
 api http://localhost/api/v1/capabilities
+api http://localhost/api/v1/capacity
 ```
 
-Read the advertised contract version and capability-gate optional behavior instead of assuming that every installation has the newest endpoint set.
+Read the advertised contract version and capability-gate optional behavior instead of assuming that every installation has the newest endpoint set. For contract `1.12.0` orchestration, preflight `/capacity`, but still handle prompt-time `429 ADMISSION_CAPACITY_EXHAUSTED` and its `Retry-After` header.
 
 ## 2. Discover models
 
@@ -52,10 +53,15 @@ Consult the canonical reference for the exact create body supported by the selec
 
 ```bash
 api -X POST http://localhost/api/v1/sessions \
-  -d '{"runtime":"pi","cwd":"/path/to/project"}'
+  -d '{"runtime":"pi","cwd":"/path/to/project","retention":{"mode":"resident","ttlSeconds":3600,"ownerId":"example-runner"}}'
 ```
 
-Store the returned **canonical internal session id**. Runtime-native ids and paths are useful locators, but the Internal API's canonical id is the safest key for follow-up calls.
+Store both the returned **canonical internal session id** and
+`retention.leaseId`. `resident` keeps the runtime loaded; use `durable` when
+restart-safe recoverability is enough. Required create-time retention is atomic:
+if the lease cannot be persisted/applied, the unused new session is removed.
+Runtime-native ids and paths remain useful locators, but the canonical id is the
+safest key for follow-up calls.
 
 ## 4. Send a prompt
 
@@ -64,7 +70,7 @@ Use an idempotency key for retriable automation:
 ```bash
 api -X POST http://localhost/api/v1/sessions/SESSION_ID/prompt \
   -H 'Idempotency-Key: example-run-001' \
-  -d '{"prompt":"Inspect the repository and summarize its architecture."}'
+  -d '{"message":"Inspect the repository and summarize its architecture."}'
 ```
 
 Every accepted dispatch returns or is associated with a durable `runId`. Persist it. It is a better unit for retry and completion tracking than inferring state from a connection.
@@ -99,9 +105,19 @@ Offline alias resolution is also available:
 npm run debug:where -- --json SESSION_ID_OR_PATH
 ```
 
-## 8. Clean up
+## 8. Release retention and clean up
 
-Delete disposable child sessions when the workflow is finished, using the canonical delete endpoint documented in [`INTERNAL-API.md`](./INTERNAL-API.md). Do not delete operator sessions unless the workflow explicitly owns them.
+After positive run quiescence, release the exact lease you own:
+
+```bash
+api -X POST http://localhost/api/v1/sessions/SESSION_ID/control \
+  -d '{"action":"release_retention","retentionLeaseId":"LEASE_ID","ownerId":"example-runner"}'
+```
+
+Delete disposable child sessions when finished using the canonical delete
+endpoint. Explicit deletion also clears API/watch claims and disposes loaded
+runtime state. Do not delete operator sessions unless the workflow explicitly
+owns them.
 
 ## Next recipes
 

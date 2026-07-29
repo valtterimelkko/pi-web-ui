@@ -27,7 +27,7 @@ Quick jump:
 - **The default Unix socket is production.** Live validation must use the socket/token printed by `npm run validate:server`; production requires explicit `--allow-production` (and user authorisation).
 - **`--runtime all` is not all four runtimes in disposable mode.** The runner's current `all` set is Pi, Claude, and OpenCode. Antigravity is disabled by disposable validation because `agy` has no supported isolated conversation directory; validate it only through an explicitly authorised workflow.
 - **A detached prompt is the disconnect-safe path.** `verbosity=answers` with `detach:true` keeps the turn running after the caller disconnects. `tasks`/`full` streaming is supervision, not fire-and-forget: a client disconnect cancels the run and aborts the runtime.
-- **A watch's ledger survives restart, not its observer.** A reloaded watch is `detached`; its past firings remain readable, but it must be registered again to observe new events. Watch pinning is separate from API pins and is not automatically cleared by deleting the watch; explicitly unpin or delete the session when finished.
+- **A watch's ledger survives restart, not its observer.** A reloaded watch is `detached`; past firings remain readable, but it must be registered again to observe new events. A watch owns a distinct `watch:<watchId>` residency claim; replacement/deletion releases exactly that claim without affecting human UI or Internal API lease claims.
 
 ## Notifications
 

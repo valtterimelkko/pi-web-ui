@@ -114,17 +114,18 @@ Reference docs:
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
 
-`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.11.0`) for local consumers such as Agent OS style tooling. Health also exposes additive per-runtime `runtimeHealth`; diagnostics are filtered by correlation/runtime selectors and include a bounded process-local operational snapshot; `/sessions/:id/evidence` provides the one-call troubleshooting bundle.
+`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.12.0`) for local consumers such as Agent OS. Contract `1.12.0` adds source-owned durable/resident retention leases and resource-aware execution admission; health also exposes per-runtime `runtimeHealth`, while diagnostics and `/sessions/:id/evidence` provide bounded troubleshooting evidence.
 
 Important endpoints include:
 - `GET /api/v1/capabilities`
+- `GET /api/v1/capacity` (active-turn limits, interactive reserve, and measured/projected memory headroom)
 - `GET /api/v1/models`
 - `POST /api/v1/models/refresh` (OpenCode and Pi runtime catalogue refresh; Pi uses `{"runtime":"pi"}` for the OpenRouter-backed catalogue)
 - `GET /api/v1/diagnostics`
 - `GET /api/v1/sessions/:id/diagnostics`
 - `GET /api/v1/sessions/:id/evidence` (canonical alias resolution plus bounded diagnostic/receipt evidence)
 - `GET /api/v1/events/types`
-- `POST /api/v1/sessions` (supports Claude `profileId` or `model: "profile:<id>"`)
+- `POST /api/v1/sessions` (supports atomic required `retention:{mode,ownerId,...}` and Claude `profileId` or `model: "profile:<id>"`)
 - `POST /api/v1/sessions/:id/prompt` (`detach:true` supported only with `verbosity=answers`; retain the returned `runId`)
 - `GET /api/v1/sessions/:id/info`
 - `GET /api/v1/sessions/:id/history`
@@ -138,7 +139,7 @@ Important endpoints include:
 - `POST /api/v1/sessions/usage`
 - `GET /api/v1/sessions/:id/approvals/pending`
 - `GET /api/v1/runs/:runId` (durable accepted/started/terminal receipt)
-- `POST /api/v1/sessions/:id/control` (including standalone pin/unpin)
+- `POST /api/v1/sessions/:id/control` (model/thinking controls plus `acquire_retention`, `renew_retention`, and `release_retention`; legacy pin/unpin remains compatible)
 - `POST /api/v1/sessions/:id/approvals/:requestId/respond`
 - `POST /api/v1/sessions/:id/notifications/opt-in`
 - `DELETE /api/v1/sessions/:id/notifications/opt-in`

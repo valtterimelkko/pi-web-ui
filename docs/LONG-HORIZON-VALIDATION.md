@@ -51,7 +51,7 @@ The waiting is a **scheduler** concern, and a scheduler belongs in the validator
 ## Watch API
 
 All endpoints are additive under `/api/v1` (watch support was introduced in
-contract `1.1.0`; the current published contract is `1.9.0`). There is one watch
+contract `1.1.0`; the current published contract is `1.12.0`). There is one watch
 per session.
 
 ### Register a watch
@@ -72,15 +72,15 @@ POST /api/v1/sessions/:sessionId/watch
 }
 ```
 
-Registering **pins the subject by default** so idle/timeout eviction can't kill it while the validator sleeps. This watch pin uses the runtime's watch pin path and is not the time-bounded Internal-API pin ledger; deleting the watch does not unpin the session. Explicitly unpin or delete the subject when finished. Returns the full watch object (`201`). A bad regex or an empty `conditions` array returns `400`.
+Registering owns a `watch:<watchId>` residency claim by default so idle/timeout eviction cannot kill the subject while the validator sleeps. Replacing or deleting the watch releases exactly that watch claim; it cannot release human Web UI or Internal API lease claims. Returns the full watch object (`201`). A bad regex or empty `conditions` array returns `400`.
 
-> **Pinning is also available standalone**, without a watch. If you only need a
-> session to survive cleanup for a long task — and don't need durable condition
-> detection or interval polling — use `pin:true` on `POST /sessions` (or
-> `control {action:"pin"}`) instead of the watch machinery. API pins are
-> time-bounded (default 24h, max 7d, renewable) and auto-revoked. See
-> [Session Pinning](./INTERNAL-API.md#session-pinning-persistent-time-bounded).
-> Note: deleting a watch does **not** unpin — pin and watch are separate primitives.
+> **Retention is also available without a watch.** If you need recoverability or
+> residency but not durable condition detection, request source-owned
+> `retention:{mode:"durable"|"resident",ownerId,...}` atomically on
+> `POST /sessions`. Persist the returned lease id and renew/release that exact
+> lease. Leases default to 24h, cap at 7d, survive restart, and do not consume
+> the Web UI's two human pin slots. See
+> [Source-owned session retention](./INTERNAL-API.md#source-owned-session-retention-persistent-time-bounded).
 
 ### Condition types (generic / function-agnostic)
 

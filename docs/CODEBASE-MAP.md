@@ -157,7 +157,8 @@
 - `run-receipts/` — durable accepted/started/terminal run identity, idempotency, restart interruption recovery, and bounded retention.
 - `watch/` — durable condition watches and restart-aware ledgers for long-horizon validation.
 - `diagnostics-buffer.ts` / `event-broker.ts` / `event-filter.ts` — bounded scrubbed logs, normalized event fan-out, and verbosity projections.
-- `pin-expiry-manager.ts` — separate time-bounded API-pin ledger; do not confuse it with runtime/watch pinning.
+- `pin-expiry-manager.ts` — durable source-owned retention leases (`durable` recovery vs `resident` runtime claim), independent of human Web UI and watch claims.
+- `admission-controller.ts` — process-local active-turn and projected-memory admission behind `/capacity` and prompt-time `429` refusal.
 
 ### Logging / observability
 - `logging/logger.ts` / `logging/correlation.ts` — central structured logger, level/namespace/format controls, and request/run/session correlation.

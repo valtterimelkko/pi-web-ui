@@ -1,6 +1,6 @@
 # Internal API recipes
 
-These recipes complement the canonical endpoint documentation. Capability-gate optional fields and endpoints through `/health` and `/capabilities`.
+These recipes complement the canonical endpoint documentation. Capability-gate fields/endpoints through `/health` and `/capabilities`; contract `1.12.0` orchestrators also preflight `/capacity`.
 
 ## Durable, retriable prompt dispatch
 
@@ -15,21 +15,27 @@ Reusing a key with a different payload is a contract error, not a way to replace
 
 ## Detached long-running work
 
-Use detached/answer-mode behavior documented by the contract when the client should not own the runtime connection. A disconnect must not be treated as proof that the agent stopped. The durable receipt is the source of truth for accepted, started, completed, failed, cancelled, or interrupted state.
+1. Preflight `/capacity`.
+2. Create atomically with owner-bound `retention.mode="resident"` and persist the returned lease id.
+3. Dispatch detached answer mode with an idempotency key; still handle final prompt-time `429` plus `Retry-After`.
+4. Treat the durable receipt—not disconnect or session `idle`—as lifecycle truth.
+5. Prove positive quiescence before releasing the exact lease.
+
+Use `durable` rather than `resident` when later recoverability is sufficient and the runtime need not stay loaded. If lease release and session deletion are both unconfirmed, retain explicit cleanup uncertainty rather than claiming the child is gone.
 
 ## Parallel child sessions
 
 For each child:
 
-1. discover a supported runtime/model;
-2. create a dedicated session;
-3. record the canonical session id and your own parent/child relationship;
-4. dispatch with a unique idempotency key;
-5. keep the `runId`;
-6. wait independently;
+1. discover a supported runtime/model and inspect `/capacity`;
+2. create each dedicated session with an independently owned required retention lease;
+3. record canonical session id, lease id, owner id, and parent/child relationship;
+4. dispatch with a unique idempotency key, respecting prompt-time admission refusal;
+5. keep each `runId`;
+6. wait and prove quiescence independently;
 7. read the screen transcript;
 8. aggregate results;
-9. delete only the child sessions your workflow owns.
+9. release each exact lease and delete only child sessions your workflow owns.
 
 Pi Web UI does not yet provide a parent-session or orchestration-id index. The caller must maintain that graph.
 

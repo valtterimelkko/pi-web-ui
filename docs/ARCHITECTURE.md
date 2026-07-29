@@ -232,7 +232,7 @@ Persistence is deliberately split by runtime and concern:
 - the registry stores cross-runtime metadata and mappings;
 - each runtime owns its native transcript/continuity source, with Pi-owned replay
   projections where the UI needs them;
-- run receipts, watches, API-pin expiry, notification outbox, and preferences
+- run receipts, watch ledgers, source-owned retention leases/expiry, notification outbox, and preferences
   are separate local ledgers with their own retention/restart semantics;
 - diagnostics rings/counters and runtime-health failures are process-local and
   reset on restart, so they are evidence for the current process window rather
@@ -291,7 +291,10 @@ an Internal API over a Unix domain socket for local automation. That API:
 - is authenticated with a bearer token stored on disk
 - can select Claude provider profiles through `profile:<id>` model entries or explicit `profileId`
 - provides runtime-neutral transcripts plus a screen-oriented projection for low-noise operator readback
-- provides durable `runId` receipts/idempotency for accepted prompt dispatches, while keeping diagnostics counters and rings explicitly process-local
+- provides durable `runId` receipts/idempotency for accepted prompt dispatches
+- separates source-owned durable/resident retention from human UI/watch claims
+- admits active turns through process-local global/runtime limits and projected aggregate memory headroom exposed at `/capacity`
+- keeps diagnostics, admission counters, and rings explicitly process-local
 - powers browserless live validation via `scripts/live-validate.ts`, profile validation via `scripts/validate-claude-profiles.ts`, and wire-level validation via `scripts/validation-logging-proxy.ts`
 
 The Internal API is a trusted same-host multi-client boundary, not tenant

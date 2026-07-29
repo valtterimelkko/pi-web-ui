@@ -14,6 +14,8 @@ This page summarizes where state lives and what evidence survives refresh or res
 | In-flight runtime process | Browser disconnect-safe where supported | No process continuity | Receipt/recovery semantics determine final reported state |
 | Internal API run receipt | Yes | Yes | Durable accepted/started/terminal state; recovered after restart |
 | Idempotency reservation | Yes during normal operation | Bounded/reconciled | Contract TTL and rejection rules apply |
+| Internal API retention lease | Yes | Yes until expiry/release | Source-owned durable ledger; `resident` runtime claim is reapplied after materialisation |
+| Execution-admission counters | Process-local | No | Recomputed from active turns and current memory; `/capacity` is advisory until prompt-time admission |
 | Diagnostics ring | Yes | **No** | Process-local bounded buffer |
 | Runtime-health snapshot | Yes | **No historical continuity** | Current process snapshot; durable failures require receipts/files |
 | Session evidence bundle | Recomputed | Recomputed | Combines durable and process-local sources; note warnings |
@@ -30,7 +32,7 @@ This page summarizes where state lives and what evidence survives refresh or res
 ## Operational rules
 
 - Do not use process-local diagnostics as the sole record of a long-running job.
-- Persist `sessionId`, `runId`, and `requestId` in orchestration clients.
+- Persist `sessionId`, `runId`, `requestId`, and every owned `retentionLeaseId` in orchestration clients.
 - After restart, check receipts and transcripts before assuming an interrupted connection means failed work.
 - Treat notification acceptance and Telegram delivery as separate states.
 - Re-register long-horizon observation after restart even when prior evidence remains visible.
