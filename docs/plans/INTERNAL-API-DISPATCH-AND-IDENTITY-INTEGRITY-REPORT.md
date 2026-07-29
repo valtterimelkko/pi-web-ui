@@ -119,7 +119,7 @@ Raw JSON verdicts are retained outside the repository under `/tmp/pi-dispatch-li
 | Lint | pass; 0 errors, 1,224 warnings | 2 below 1,226 baseline |
 | Tests | pass; server 2,670 + client 863 = 3,533 | +37 over 3,496 baseline; exceeds +32 floor |
 | Build | pass; main JS 215.07 kB gzip | +0.08 kB; below +1% ceiling |
-| Agent OS | 404/404 tests; typecheck/docs pass | green |
+| Agent OS | 407/407 tests after integrating current `origin/main`; typecheck/docs pass | green |
 | Live validation | required scenarios and final runtime sweeps pass/skip-with-reason | disposable only |
 | Diff integrity | `git diff --check` passed in both repos; staged-stat and secret/path review repeated immediately before commit | see commit record |
 
