@@ -114,7 +114,7 @@ Reference docs:
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
 
-`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.12.0`) for local consumers such as Agent OS. Contract `1.12.0` adds source-owned durable/resident retention leases and resource-aware execution admission; health also exposes per-runtime `runtimeHealth`, while diagnostics and `/sessions/:id/evidence` provide bounded troubleshooting evidence.
+`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.13.0`) for local consumers such as Agent OS. Contract `1.12.0` added source-owned durable/resident retention leases and resource-aware execution admission; `1.13.0` adds truthful dispatch/approval/watchdog/session-identity semantics. Health also exposes per-runtime `runtimeHealth`, while diagnostics and `/sessions/:id/evidence` provide bounded troubleshooting evidence.
 
 Important endpoints include:
 - `GET /api/v1/capabilities`

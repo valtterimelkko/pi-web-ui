@@ -119,13 +119,27 @@ Raw JSON verdicts are retained outside the repository under `/tmp/pi-dispatch-li
 | Lint | pass; 0 errors, 1,224 warnings | 2 below 1,226 baseline |
 | Tests | pass; server 2,670 + client 863 = 3,533 | +37 over 3,496 baseline; exceeds +32 floor |
 | Build | pass; main JS 215.07 kB gzip | +0.08 kB; below +1% ceiling |
-| Agent OS | 407/407 tests after integrating current `origin/main`; typecheck/docs pass | green |
+| Agent OS | 416/416 tests after integrating current `origin/main` and the post-implementation 1.13 identity/evidence audit; typecheck/docs pass | green |
 | Live validation | required scenarios and final runtime sweeps pass/skip-with-reason | disposable only |
 | Diff integrity | `git diff --check` passed in both repos; staged-stat and secret/path review repeated immediately before commit | see commit record |
 
-## 6. Deferred or intentionally excluded
+## 6. Post-implementation contract audit
 
-- **Production validation/deployment:** not performed because the operator did not authorise production access. This is intentional, not a missing disposable proof.
+A final consumer-side audit found and fixed stale current-version labels plus
+Agent OS evidence-boundary gaps that the original implementation suite did not
+cover. Agent OS now rejects health/capability contract drift, requires advertised
+retention/admission features, validates prompt/session/run/runtime/execution
+identity before persistence or lease release, preserves `mode`/`dispatchMode`
+(including duplicate idempotent responses), treats request/tool identifiers as
+distinct opaque values, handles follow-up admission refusal deterministically,
+and mirrors an identity-bound receipt before exact-deadline timeout handling.
+Regression coverage is in
+`/root/agent-os/tests/conductor-contract-113-integrity.test.ts` and the existing
+Step 7/7B suites.
+
+## 7. Deferred or intentionally excluded
+
+- **Production validation/deployment during implementation:** not performed before the original completion because the operator had not authorised production access. A later explicitly authorised deployment is recorded separately from the disposable scenario evidence.
 - **Antigravity live execution:** skipped because validation mode disables it; the plan explicitly permits this skip.
 - **Boot-time Pi directory rebuild:** intentionally not added. Discoverability is exact-fallback plus incremental watcher upsert, as specified.
 - **Historical production incidents:** not repaired or modified; they remain evidence.

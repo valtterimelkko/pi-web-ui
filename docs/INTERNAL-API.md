@@ -1834,7 +1834,7 @@ long task is finished. See
 [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
 
 ```
-POST   /api/v1/sessions/:sessionId/watch     # register (one per session); pins the subject
+POST   /api/v1/sessions/:sessionId/watch     # register; owns one source-owned watch residency claim
 GET    /api/v1/sessions/:sessionId/watch     # poll: fired conditions + ledger + snapshot
 DELETE /api/v1/sessions/:sessionId/watch     # tear down
 ```
@@ -1855,8 +1855,9 @@ DELETE /api/v1/sessions/:sessionId/watch     # tear down
 Condition types (all generic): `event_type` (`eventType` + optional `dataMatch`),
 `tool` (`toolName`, `phase`, `argIncludes`), `text` (`contains` or
 `pattern`/`patternFlags`, `source`). Common fields: `id` (auto `c0`,`c1`,…),
-`once` (default `true`). Registering pins the subject by default so idle
-eviction can't kill it mid-watch.
+`once` (default `true`). Registering owns a source-owned `watch:<watchId>`
+residency claim by default so idle eviction cannot kill the subject mid-watch;
+it does not consume or release a human Web UI pin slot.
 
 **Poll response (200):**
 ```json
@@ -2256,7 +2257,7 @@ GET  /api/v1/events/types                      # event kinds on the /events stre
 GET  /api/v1/sessions/:id/approvals/pending   # pending-approval state
 
 # Watch (long-horizon validation)
-POST   /api/v1/sessions/:id/watch     # register durable condition watch (pins subject)
+POST   /api/v1/sessions/:id/watch     # register durable watch + source-owned residency claim
 GET    /api/v1/sessions/:id/watch     # poll fired conditions + ledger (?sinceIndex=N)
 DELETE /api/v1/sessions/:id/watch     # tear down
 
