@@ -143,3 +143,16 @@ Step 7/7B suites.
 - **Antigravity live execution:** skipped because validation mode disables it; the plan explicitly permits this skip.
 - **Boot-time Pi directory rebuild:** intentionally not added. Discoverability is exact-fallback plus incremental watcher upsert, as specified.
 - **Historical production incidents:** not repaired or modified; they remain evidence.
+
+## 8. Explicitly authorised production deployment
+
+After the operator explicitly requested that production run the latest code, the
+repository was deployed under `npm run production:lock` from Pi Web UI commit
+`ad8dc0e`. The locked flow completed `npm ci`, lint (0 errors / 1,224 existing
+warnings), typecheck, 3,533 tests, build, service restart, and
+`internal-api:wait`. Before restart, production PID `594347` reported contract
+`1.12.0`; after restart, PID `1411553` reported contract `1.13.0`. Source and
+compiled `server/dist` contract markers both read `1.13.0`, public readiness was
+`status:"ok"`, the retention/admission feature matrix was present, and all four
+runtime families reported available. No production prompt/session scenario was
+run as part of deployment verification.
