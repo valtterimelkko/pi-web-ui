@@ -50,6 +50,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md) — keeping the Pi runtime model list current with the OpenRouter gateway automatically (weekly refresh, no secrets stored)
 - [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md) — RETIRED: the Codex compaction session-ID patch ecosystem (postinstall patch, auto-heal extension probe), why it existed, and how it was retired after OpenAI's server-side fix
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md) — Antigravity / `agy` architecture, logs, and failure modes
+- [`KIMI-CODE-RUNTIME-INTEGRATION-DESIGN.md`](./KIMI-CODE-RUNTIME-INTEGRATION-DESIGN.md) — proposed Kimi Code fifth-runtime feasibility evidence, KAP-first architecture, fidelity findings, risks, and staged delivery plan; not yet implemented
 
 ## 6. Internal API and orchestration
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API reference (including transcript vs screen-view vs history read paths)
