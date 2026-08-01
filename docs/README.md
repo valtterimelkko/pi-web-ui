@@ -59,6 +59,7 @@ Then use the resolved internal id with `GET /api/v1/sessions/<id>/evidence`. Fol
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API documentation
 - [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) — compatibility and versioning rules
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — multi-runtime child-session patterns
+- [`ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md`](./ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md) — design intent for truthful liveness, stalls, late terminal evidence and partial recovery (not a shipped contract)
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — browserless single-turn runtime validation
 - [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watches and autonomous validation
 
