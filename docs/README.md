@@ -1,6 +1,6 @@
 # Pi Web UI Docs
 
-> **What's new?** See [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) for a rolling summary of doc-relevant changes. Recent highlights include Internal API `1.13.0` truthful dispatch, approval, watchdog, and Pi identity semantics; `1.12.0` source-owned retention/admission; exact fail-closed Claude profile binding; durable run-aware troubleshooting; first-class Claude SDK `AskUserQuestion` support; and a Markdown source editor with GFM live preview in the Files tab.
+> **What's new?** See [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) for a rolling summary of doc-relevant changes. Recent highlights include Internal API `1.14.0` durable payload-free liveness and bounded recovery evidence; `1.13.0` truthful dispatch, approval, watchdog, and Pi identity semantics; and `1.12.0` source-owned retention/admission.
 
 This folder supports **four distinct reading paths**. Choose by task instead of reading the documentation linearly.
 
@@ -59,7 +59,7 @@ Then use the resolved internal id with `GET /api/v1/sessions/<id>/evidence`. Fol
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API documentation
 - [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) — compatibility and versioning rules
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — multi-runtime child-session patterns
-- [`ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md`](./ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md) — design intent for truthful liveness, stalls, late terminal evidence and partial recovery (not a shipped contract)
+- [`ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md`](./ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md) — shipped `1.14.0` liveness/recovery semantics, remaining intent, provenance, and ownership boundaries
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — browserless single-turn runtime validation
 - [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watches and autonomous validation
 

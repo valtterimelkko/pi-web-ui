@@ -1657,6 +1657,8 @@ describe('MultiSessionManager', () => {
 
         const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
         await manager.subscribeClient('client-1', '/path/to/session.jsonl');
+        const apiObserver = vi.fn();
+        manager.addApiObserver('/path/to/session.jsonl', apiObserver);
 
         // Start agent turn
         manager.handleAgentEvent('/path/to/session.jsonl', { type: 'agent_start' });
@@ -1690,7 +1692,16 @@ describe('MultiSessionManager', () => {
           (call: any[]) => call[1]?.event?.type === 'agent_end'
         );
         expect(agentEndCalls.length).toBe(1);
-        expect(agentEndCalls[0][1]?.event?.result).toBeNull();
+        expect(agentEndCalls[0][1]?.event).toMatchObject({
+          type: 'agent_end',
+          result: null,
+          synthetic: true,
+          reason: 'api_error_grace',
+        });
+        expect(apiObserver).toHaveBeenCalledWith(expect.objectContaining({
+          type: 'agent_end',
+          data: expect.objectContaining({ synthetic: true, reason: 'api_error_grace' }),
+        }));
       });
 
       it('should cancel grace timer when a new event arrives (SDK retried)', async () => {

@@ -12,13 +12,15 @@ This page summarizes where state lives and what evidence survives refresh or res
 | OpenCode transcript | Yes | Yes | OpenCode backend owns transcript storage |
 | Antigravity turn log | Yes | Yes | Pi Web UI JSONL turn log correlated with agy conversation DB |
 | In-flight runtime process | Browser disconnect-safe where supported | No process continuity | Receipt/recovery semantics determine final reported state |
-| Internal API run receipt | Yes | Yes | Durable accepted/started/terminal state; recovered after restart |
+| Internal API run receipt | Yes | Yes | Durable accepted/started/terminal state plus bounded payload-free liveness evidence; recovered after restart |
+| Run watchdog decision | Yes | Yes | `TURN_STALLED` remains terminal; `liveness.watchdog.reason` distinguishes idle/absolute |
+| Run cessation evidence | Yes | Yes, as last observed | `confirmed`/`unconfirmed`/`unknown` describes gateway evidence only; terminality is not arbitrary process quiescence |
 | Idempotency reservation | Yes during normal operation | Bounded/reconciled | Contract TTL and rejection rules apply |
 | Internal API retention lease | Yes | Yes until expiry/release | Source-owned durable ledger; `resident` runtime claim is reapplied after materialisation |
 | Execution-admission counters | Process-local | No | Recomputed from active turns and current memory; `/capacity` is advisory until prompt-time admission |
 | Diagnostics ring | Yes | **No** | Process-local bounded buffer |
 | Runtime-health snapshot | Yes | **No historical continuity** | Current process snapshot; durable failures require receipts/files |
-| Session evidence bundle | Recomputed | Recomputed | Combines durable and process-local sources; note warnings |
+| Session evidence bundle | Recomputed | Recomputed | Combines durable and process-local sources; retention counts and adapter residency are separate projections |
 | Notification opt-in | Yes | Yes | Durable per-session record |
 | Pending notification outbox | Yes | Yes | Resumes draining after restart |
 | Sent/failed notification log | Yes | Yes, bounded | Terminal ledger is capped |
@@ -34,6 +36,7 @@ This page summarizes where state lives and what evidence survives refresh or res
 - Do not use process-local diagnostics as the sole record of a long-running job.
 - Persist `sessionId`, `runId`, `requestId`, and every owned `retentionLeaseId` in orchestration clients.
 - After restart, check receipts and transcripts before assuming an interrupted connection means failed work.
+- Before overlapping recovery in one workspace, treat a terminal receipt separately from `liveness.cessation`; `unconfirmed`/`unknown` requires additional runtime/repository evidence.
 - Treat notification acceptance and Telegram delivery as separate states.
 - Re-register long-horizon observation after restart even when prior evidence remains visible.
 - Back up operator-owned state before deployment upgrades or storage migrations.

@@ -54,7 +54,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.13.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.14.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -398,6 +398,21 @@ export interface SessionEvidenceResponse {
     count: number;
     latest?: RunReceipt;
   };
+  /** Active source-owned leases only; owner ids and labels are never exposed here. */
+  retention: {
+    durableLeaseCount: number;
+    residentLeaseCount: number;
+    latestExpiryAt?: string;
+  };
+  /** Current adapter materialisation, not task progress or process quiescence. */
+  residency: {
+    state: 'materialized' | 'not_materialized' | 'unknown';
+    observedAt: string;
+  };
+  /** Newest three compact durable run entries, bounded independently of expand=runs. */
+  runChronology: Array<Pick<RunReceipt,
+    'runId' | 'status' | 'acceptedAt' | 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'liveness'
+  >>;
   warnings: string[];
   links: {
     info: string;
@@ -591,6 +606,66 @@ export type RunReceiptStatus =
   | 'cancelled'
   | 'interrupted';
 
+export type RunStallReason = 'idle' | 'absolute';
+export type RunCessationState = 'confirmed' | 'unconfirmed' | 'unknown';
+export const RUN_TERMINAL_REASON_ALLOWLIST: ReadonlySet<string> = new Set(['api_error_grace']);
+
+export type RunCessationBasis =
+  | 'terminal_signal'
+  | 'synthetic_terminal_signal'
+  | 'documented_handler_return'
+  | 'watchdog'
+  | 'server_restart'
+  | 'no_terminal_signal';
+
+/** Low-cardinality, payload-free evidence for the latest eligible run event. */
+export interface RunActivityObservation {
+  eventType: string;
+  /** Runtime event time when valid; otherwise the server observation time. */
+  occurredAt: string;
+  /** Time Pi Web UI observed the event for this accepted run. */
+  observedAt: string;
+}
+
+/** A terminal event observation. It annotates terminal state and never reopens it. */
+export interface RunTerminalObservation {
+  type: 'agent_end';
+  occurredAt: string;
+  observedAt: string;
+  origin: 'runtime_or_adapter' | 'synthetic';
+  reason?: string;
+  /** True when the receipt was already terminal when this evidence arrived. */
+  late: boolean;
+}
+
+export interface RunWatchdogEvidence {
+  reason: RunStallReason;
+  decidedAt: string;
+  idleTimeoutMs: number;
+  absoluteTimeoutMs: number;
+}
+
+export interface RunCessationEvidence {
+  state: RunCessationState;
+  basis: RunCessationBasis;
+  observedAt: string;
+}
+
+/**
+ * Durable, bounded liveness evidence for one accepted Internal API run.
+ * It describes what Pi Web UI observed; it is not semantic task completion or
+ * proof that arbitrary nested/external work has quiesced.
+ */
+export interface RunLivenessEvidence {
+  activityPolicyVersion: 'run-activity-v1';
+  idleTimeoutMs: number;
+  absoluteTimeoutMs: number;
+  lastEligibleActivity?: RunActivityObservation;
+  watchdog?: RunWatchdogEvidence;
+  terminalObservations?: RunTerminalObservation[];
+  cessation: RunCessationEvidence;
+}
+
 export interface RunReceipt {
   runId: string;
   sessionId: string;
@@ -612,6 +687,8 @@ export interface RunReceipt {
   /** Stable wire error code for failed or restart-interrupted runs. */
   errorCode?: string;
   interruptionReason?: 'server_restart';
+  /** Durable, payload-free liveness and recovery evidence (contract >= 1.14.0). */
+  liveness?: RunLivenessEvidence;
   /** End of the idempotency replay window, when a key was supplied. */
   idempotencyExpiresAt?: string;
 }
@@ -715,6 +792,8 @@ export interface CapabilitiesResponse {
     durableRetention: true;
     residentRetention: true;
     executionAdmission: true;
+    runLivenessEvidence: true;
+    sessionRecoveryEvidence: true;
     capacityEndpoint: '/api/v1/capacity';
   };
   runtimes: {

@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.13.0",
+  "contractVersion": "1.14.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,12 @@ Current contract:
 
 ### Changelog
 
+- **1.14.0** (minor, additive run-liveness and recovery evidence) — made watchdog and recovery evidence reconstructable without importing an orchestrator ontology:
+  - run receipts add bounded, payload-free `liveness` evidence with policy version/timeouts, the latest eligible run-correlated activity, idle-versus-absolute watchdog decisions, up to four terminal observations, and explicit cessation state;
+  - blind `stream_activity` heartbeats no longer reset the Internal API run watchdog; polling, retention and observer lifecycle remain ineligible by construction;
+  - late `agent_end` evidence annotates a terminal receipt without reopening it, changing capacity, or claiming arbitrary nested-process quiescence; Pi API-error-grace terminal events are explicitly marked synthetic, reach Internal API observers, and cannot by themselves successfully complete direct or queued Pi work;
+  - `GET /sessions/:id/evidence` adds separate active-lease counts, current adapter materialization, and a bounded three-run chronology; it does not expose lease owners/labels or scan worktree artefacts;
+  - `/capabilities` advertises `runLivenessEvidence` and `sessionRecoveryEvidence`. Old receipts without `liveness` remain readable and mean legacy/unknown evidence.
 - **1.13.0** (minor, additive with corrected dispatch/approval semantics) — made accepted work and session identity truthful:
   - idle `follow_up` is promoted to a real turn and reports requested `mode` plus actual `dispatchMode`; strict callers can set `requireActiveTurn:true`;
   - `follow_up`/`steer` now apply state-aware busy checks, with `SESSION_NOT_STREAMING` and `Retry-After` where applicable;

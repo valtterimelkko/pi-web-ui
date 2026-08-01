@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
+import { RUN_TERMINAL_REASON_ALLOWLIST } from '../types.js';
 import type {
   PromptMode,
+  RunActivityObservation,
   RunReceipt,
   RunReceiptStatus,
+  RunStallReason,
   SessionRuntime,
   Verbosity,
 } from '../types.js';
@@ -16,6 +19,7 @@ const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_TURN_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_TURN_MAX_MS = 6 * 60 * 60 * 1000;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
+const ACTIVITY_PERSIST_INTERVAL_MS = 1_000;
 
 export interface BeginRunInput {
   sessionId: string;
@@ -35,6 +39,10 @@ export interface BeginRunInput {
 export interface RunFinishOutcome {
   status?: Extract<RunReceiptStatus, 'completed' | 'failed' | 'cancelled'>;
   errorCode?: string;
+  /** Internal watchdog classification; public callers continue to use TURN_STALLED. */
+  stallReason?: RunStallReason;
+  /** Explicit adapter-owned completion boundary for synchronous handlers. */
+  cessationBasis?: 'documented_handler_return';
 }
 
 export interface RunReceiptManagerDeps {
@@ -69,6 +77,8 @@ interface ActiveRun {
   acceptedAtMs: number;
   startedAtMs?: number;
   lastActivityAtMs: number;
+  lastEligibleActivity?: RunActivityObservation;
+  lastPersistedActivityAtMs?: number;
   lease?: { release: () => void };
 }
 
@@ -167,6 +177,16 @@ export class RunReceiptManager {
         dispatchMode: input.dispatchMode ?? input.mode,
         status: 'accepted',
         acceptedAt: new Date(acceptedAtMs).toISOString(),
+        liveness: {
+          activityPolicyVersion: 'run-activity-v1',
+          idleTimeoutMs: this.turnIdleTimeoutMs,
+          absoluteTimeoutMs: this.turnMaxMs,
+          cessation: {
+            state: 'unknown',
+            basis: 'no_terminal_signal',
+            observedAt: new Date(acceptedAtMs).toISOString(),
+          },
+        },
         idempotencyExpiresAt: keyDigest
           ? new Date(acceptedAtMs + this.idempotencyTtlMs).toISOString()
           : undefined,
@@ -219,15 +239,60 @@ export class RunReceiptManager {
     return toPublicReceipt(started);
   }
 
-  /** Every attributed event is activity; agent_end is also durable evidence. */
+  /**
+   * Observe one event already correlated to this accepted run by the prompt
+   * route. Only explicit run-activity classes advance the watchdog; blind
+   * heartbeats and observer/session metadata never do.
+   */
   observeEvent(runId: string, event: NormalizedEvent): Promise<void> {
-    const active = this.activeRuns.get(runId);
-    if (active) active.lastActivityAtMs = this.now();
-    if (event.type !== 'agent_end') return Promise.resolve();
-    const timestampMs = typeof event.timestamp === 'number' && Number.isFinite(event.timestamp)
+    const observedAtMs = this.now();
+    const occurredAtMs = typeof event.timestamp === 'number' && Number.isFinite(event.timestamp)
       ? event.timestamp
-      : this.now();
-    return this.withRunLock(runId, () => this.store.markAgentEnd(runId, new Date(timestampMs).toISOString()))
+      : observedAtMs;
+    const active = this.activeRuns.get(runId);
+    let activityToPersist: RunActivityObservation | undefined;
+    if (active && isEligibleRunActivity(event.type)) {
+      active.lastActivityAtMs = observedAtMs;
+      active.lastEligibleActivity = {
+        eventType: event.type,
+        occurredAt: new Date(occurredAtMs).toISOString(),
+        observedAt: new Date(observedAtMs).toISOString(),
+      };
+      const persistenceDue = active.lastPersistedActivityAtMs === undefined
+        || observedAtMs - active.lastPersistedActivityAtMs >= ACTIVITY_PERSIST_INTERVAL_MS
+        || FORCE_PERSIST_ACTIVITY_TYPES.has(event.type);
+      if (persistenceDue) activityToPersist = active.lastEligibleActivity;
+    }
+    if (event.type !== 'agent_end') {
+      if (!activityToPersist || !active) return Promise.resolve();
+      // Reserve the write window synchronously before the queued write starts;
+      // otherwise a burst can enqueue many snapshots while the first is pending.
+      active.lastPersistedActivityAtMs = observedAtMs;
+      return this.withRunLock(runId, async () => {
+        const current = this.store.get(runId);
+        if (!current?.liveness || isTerminal(current.status)) return;
+        await this.store.patch(runId, {
+          liveness: { ...current.liveness, lastEligibleActivity: activityToPersist },
+        });
+      }).catch((error) => {
+        if (active.lastPersistedActivityAtMs === observedAtMs) {
+          active.lastPersistedActivityAtMs = undefined;
+        }
+        logger.warn(`failed to persist activity for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
+    const provenance = terminalProvenance(event);
+    return this.withRunLock(runId, () => this.store.markAgentEnd(
+      runId,
+      new Date(occurredAtMs).toISOString(),
+      {
+        type: 'agent_end',
+        occurredAt: new Date(occurredAtMs).toISOString(),
+        observedAt: new Date(observedAtMs).toISOString(),
+        origin: provenance.origin,
+        ...(provenance.reason ? { reason: provenance.reason } : {}),
+      },
+    ))
       .then(() => undefined)
       .catch((error) => {
         logger.warn(`failed to persist agent_end for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -250,9 +315,41 @@ export class RunReceiptManager {
       current = this.store.get(runId);
       if (!current) return undefined;
     }
+    const terminalAt = new Date(this.now()).toISOString();
+    const active = this.activeRuns.get(runId);
+    const liveness = current.liveness
+      ? {
+          ...current.liveness,
+          ...(active?.lastEligibleActivity ? { lastEligibleActivity: active.lastEligibleActivity } : {}),
+          ...(outcome.stallReason
+            ? {
+                watchdog: {
+                  reason: outcome.stallReason,
+                  decidedAt: terminalAt,
+                  idleTimeoutMs: this.turnIdleTimeoutMs,
+                  absoluteTimeoutMs: this.turnMaxMs,
+                },
+                cessation: {
+                  state: 'unknown' as const,
+                  basis: 'watchdog' as const,
+                  observedAt: terminalAt,
+                },
+              }
+            : outcome.cessationBasis
+              ? {
+                  cessation: {
+                    state: 'confirmed' as const,
+                    basis: outcome.cessationBasis,
+                    observedAt: terminalAt,
+                  },
+                }
+              : {}),
+        }
+      : undefined;
     const terminal = await this.store.transition(runId, status, {
       errorCode: outcome.errorCode,
-      terminalAt: new Date(this.now()).toISOString(),
+      terminalAt,
+      ...(liveness ? { liveness } : {}),
     });
     this.terminalize(terminal);
     return toPublicReceipt(terminal);
@@ -365,7 +462,12 @@ export class RunReceiptManager {
       const before = this.store.get(runId);
       if (!before || isTerminal(before.status)) continue;
       logger.warn(`Run ${runId} stalled: ${maxExceeded ? 'absolute ceiling exceeded' : 'idle timeout exceeded'}`);
-      const terminal = await this.finish(runId, { status: 'failed', errorCode: 'TURN_STALLED' }).catch((error) => {
+      const stallReason: RunStallReason = maxExceeded ? 'absolute' : 'idle';
+      const terminal = await this.finish(runId, {
+        status: 'failed',
+        errorCode: 'TURN_STALLED',
+        stallReason,
+      }).catch((error) => {
         logger.warn(`failed to terminalise stalled run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
         return undefined;
       });
@@ -479,6 +581,49 @@ function digest(value: string): string {
 
 function isTerminal(status: RunReceiptStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'interrupted';
+}
+
+const FORCE_PERSIST_ACTIVITY_TYPES = new Set([
+  'extension_ui_request',
+  'permission_request',
+  'ask_user_question_request',
+]);
+
+const ELIGIBLE_RUN_ACTIVITY_TYPES = new Set([
+  'agent_start',
+  'agent_end',
+  'turn_start',
+  'turn_end',
+  'message_start',
+  'message_update',
+  'message_end',
+  'tool_execution_start',
+  'tool_execution_update',
+  'tool_execution_end',
+  'error',
+  'session_compaction',
+  'permission_request',
+  'extension_ui_request',
+  'ask_user_question_request',
+  'ask_user_question_closed',
+  'api_error',
+]);
+
+function isEligibleRunActivity(eventType: string): boolean {
+  return ELIGIBLE_RUN_ACTIVITY_TYPES.has(eventType);
+}
+
+function terminalProvenance(event: NormalizedEvent): {
+  origin: 'runtime_or_adapter' | 'synthetic';
+  reason?: string;
+} {
+  const data = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+    ? event.data as Record<string, unknown>
+    : {};
+  const origin = data.synthetic === true ? 'synthetic' : 'runtime_or_adapter';
+  const rawReason = typeof data.reason === 'string' ? data.reason : undefined;
+  const reason = rawReason && RUN_TERMINAL_REASON_ALLOWLIST.has(rawReason) ? rawReason : undefined;
+  return { origin, ...(reason ? { reason } : {}) };
 }
 
 function elapsedMs(startIso: string, endIso?: string): number | undefined {

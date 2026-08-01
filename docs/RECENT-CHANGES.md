@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Orchestrated run liveness and recovery evidence (`1.14.0`)**
+  - Run receipts now preserve payload-free eligible activity, idle-versus-absolute watchdog decisions, bounded terminal observations, and explicit cessation uncertainty.
+  - Blind `stream_activity` heartbeats cannot extend the Internal API watchdog; late terminal evidence annotates without reopening capacity or claiming arbitrary process quiescence.
+  - Session evidence now separates retention, adapter materialization, session activity, and a bounded three-run chronology.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md`](./ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md)
+
 - **Dispatch truthfulness and Pi identity integrity (`1.13.0`)**
   - Idle Pi follow-up now promotes to a real turn and reports its actual dispatch mode; busy/strict modes fail before false acceptance.
   - Claude question responses accept request/tool-call aliases, unknown ids return 404, and pending questions are observable.

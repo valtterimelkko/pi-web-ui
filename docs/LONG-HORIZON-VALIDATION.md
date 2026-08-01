@@ -51,7 +51,7 @@ The waiting is a **scheduler** concern, and a scheduler belongs in the validator
 ## Watch API
 
 All endpoints are additive under `/api/v1` (watch support was introduced in
-contract `1.1.0`; the current published contract is `1.13.0`). There is one watch
+contract `1.1.0`; the current published contract is `1.14.0`). There is one watch
 per session.
 
 ### Register a watch

@@ -446,6 +446,52 @@ describe('Internal API run receipt integration', () => {
     }));
   });
 
+  it('records a synthetic Pi agent_end without treating it as successful turn completion', async () => {
+    registry.get.mockResolvedValue(entry({
+      sdkType: 'pi',
+      claudeProfileId: undefined,
+      model: 'openai/gpt-5.6-terra',
+      path: '/tmp/pi-synthetic-end-session.jsonl',
+    }));
+    const observers = new Set<(event: unknown) => void>();
+    multiSessionManager.addApiObserver.mockImplementation((_sessionPath: string, observer: (event: unknown) => void) => { observers.add(observer); });
+    multiSessionManager.removeApiObserver.mockImplementation((_sessionPath: string, observer: (event: unknown) => void) => { observers.delete(observer); });
+    multiSessionManager.getAgentSession.mockReturnValue({
+      model: { provider: 'openai-codex', id: 'gpt-5.6-terra' },
+      prompt: vi.fn(() => new Promise<void>(() => {})),
+    });
+
+    const response = mockRes();
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'keep working', detach: true }),
+      response,
+      'session-1',
+    );
+    const { runId } = JSON.parse(response.body);
+    await vi.waitFor(() => {
+      expect(manager.get(runId)?.status).toBe('started');
+      expect(observers.size).toBeGreaterThanOrEqual(3);
+    });
+
+    const endedAt = Date.now();
+    for (const observer of [...observers]) observer({
+      type: 'agent_end',
+      sessionId: 'session-1',
+      timestamp: endedAt,
+      data: { synthetic: true, reason: 'api_error_grace' },
+    });
+    await vi.waitFor(() => expect(manager.get(runId)?.agentEndAt).toBe(new Date(endedAt).toISOString()));
+
+    expect(manager.get(runId)).toMatchObject({
+      status: 'started',
+      agentEndAt: new Date(endedAt).toISOString(),
+      liveness: {
+        terminalObservations: [{ origin: 'synthetic', late: false }],
+        cessation: { state: 'unconfirmed', basis: 'synthetic_terminal_signal' },
+      },
+    });
+  });
+
   it('completes a Pi slash command when its handler returns without agent_end', async () => {
     registry.get.mockResolvedValue(entry({ sdkType: 'pi', claudeProfileId: undefined, model: 'openai/gpt-5.6-terra', path: '/tmp/pi-command-session.jsonl' }));
     multiSessionManager.getAgentSession.mockReturnValue({
@@ -464,6 +510,10 @@ describe('Internal API run receipt integration', () => {
     await vi.waitFor(() => expect(manager.get(runId)?.status).toBe('completed'));
     expect(manager.get(runId)?.agentEndAt).toBeUndefined();
     expect(manager.get(runId)?.terminalAt).toEqual(expect.any(String));
+    expect(manager.get(runId)?.liveness?.cessation).toMatchObject({
+      state: 'confirmed',
+      basis: 'documented_handler_return',
+    });
   });
 
   it('returns a runId for detached dispatches', async () => {

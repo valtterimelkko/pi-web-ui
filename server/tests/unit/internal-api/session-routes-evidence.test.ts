@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ServerResponse } from 'http';
 import { PassThrough, Writable } from 'stream';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
 import { pushDiagnosticsRecord, clearDiagnosticsBuffer } from '../../../src/internal-api/diagnostics-buffer.js';
 import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
@@ -69,7 +72,7 @@ function entry(over: Partial<RegistryEntry> = {}): RegistryEntry {
   };
 }
 
-function buildRoutes(entries: RegistryEntry[]) {
+function buildRoutes(entries: RegistryEntry[], pinDir?: string) {
   const registry = {
     get: vi.fn(async (id: string) => entries.find((candidate) => candidate.id === id)),
     listAll: vi.fn(async () => entries),
@@ -86,6 +89,7 @@ function buildRoutes(entries: RegistryEntry[]) {
     isRunning: vi.fn(() => false),
     isAvailable: vi.fn().mockResolvedValue(true),
     sendPrompt: vi.fn(),
+    hasSession: vi.fn(() => false),
   };
   const opencodeService: any = {
     getReplayEvents: vi.fn().mockResolvedValue([]),
@@ -93,6 +97,7 @@ function buildRoutes(entries: RegistryEntry[]) {
     getContextUsage: vi.fn().mockReturnValue(null),
     isRunning: vi.fn(() => false),
     isAvailable: vi.fn().mockResolvedValue(true),
+    hasSession: vi.fn(() => false),
   };
   const antigravityService: any = {
     getReplayEvents: vi.fn().mockResolvedValue([]),
@@ -100,6 +105,7 @@ function buildRoutes(entries: RegistryEntry[]) {
     getContextUsage: vi.fn().mockResolvedValue(null),
     isRunning: vi.fn(() => false),
     isAvailable: vi.fn().mockResolvedValue(true),
+    hasSession: vi.fn(() => false),
   };
   const multiSessionManager: any = {
     getAllSessionStatuses: vi.fn(() => []),
@@ -108,6 +114,9 @@ function buildRoutes(entries: RegistryEntry[]) {
     addApiObserver: vi.fn(),
     removeApiObserver: vi.fn(),
     prompt: vi.fn(),
+    hasSession: vi.fn(() => true),
+    pinSession: vi.fn(() => true),
+    unpinSession: vi.fn(() => true),
   };
   const runReceipts = new RunReceiptManager({ store: new RunReceiptStore() });
   const routes = createSessionRoutes({
@@ -120,6 +129,7 @@ function buildRoutes(entries: RegistryEntry[]) {
     internalClientId: 'evidence-test-client',
     watchDir: '/tmp/evidence-test-watch',
     runReceiptManager: runReceipts,
+    pinDir,
   });
   return { routes, registry, claudeService, opencodeService, antigravityService, multiSessionManager, runReceipts };
 }
@@ -148,6 +158,9 @@ describe('GET /sessions/:id/evidence', () => {
     expect(body.aliases).toMatchObject({ internalId: 'internal-pi-id', path: '/tmp/pi-session.jsonl' });
     expect(body.diagnostics.processLocal).toBe(true);
     expect(body.diagnostics.records).toHaveLength(1);
+    expect(body.retention).toEqual({ durableLeaseCount: 0, residentLeaseCount: 0 });
+    expect(body.residency).toMatchObject({ state: 'materialized' });
+    expect(body.runChronology).toEqual([]);
     expect(body.diagnostics.records[0]).toMatchObject({ requestId: 'req-1', msg: 'a useful log line' });
     expect(body).not.toHaveProperty('firstMessage');
     expect(body).not.toHaveProperty('screenView');
@@ -189,11 +202,44 @@ describe('GET /sessions/:id/evidence', () => {
     expect(body.transcript).toMatchObject({ scope: 'visible_recent' });
     expect(body.screen).toMatchObject({ view: 'screen' });
     expect(body.runReceipts).toHaveLength(1);
+    expect(body.runChronology).toHaveLength(1);
+    expect(body.runChronology[0]).toMatchObject({ runId: expect.any(String), status: 'accepted' });
+    expect(body.runChronology[0]).not.toHaveProperty('sessionId');
     expect(body.receiptSummary).toMatchObject({ durable: true, count: 1 });
     expect(res.body).not.toContain('hidden prompt');
     expect(registry.upsert).not.toHaveBeenCalled();
     expect(claudeService.sendPrompt).not.toHaveBeenCalled();
     expect(multiSessionManager.prompt).not.toHaveBeenCalled();
+  });
+
+  it('projects active durable/resident retention separately from adapter residency', async () => {
+    const pinDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-evidence-retention-'));
+    try {
+      const { routes } = buildRoutes([entry()], pinDir);
+      await routes.ready;
+      const durableRes = mockRes();
+      await routes.handleSessionControl(jsonReq({
+        action: 'acquire_retention',
+        retention: { mode: 'durable', ownerId: 'evidence-test', ttlSeconds: 60 },
+      }), durableRes, 'internal-pi-id');
+      expect(durableRes.statusCode).toBe(200);
+      const residentRes = mockRes();
+      await routes.handleSessionControl(jsonReq({
+        action: 'acquire_retention',
+        retention: { mode: 'resident', ownerId: 'evidence-test', ttlSeconds: 120 },
+      }), residentRes, 'internal-pi-id');
+      expect(residentRes.statusCode).toBe(200);
+
+      const evidenceRes = await callEvidence(routes, 'internal-pi-id');
+      const body = JSON.parse(evidenceRes.body);
+      expect(body.retention).toMatchObject({ durableLeaseCount: 1, residentLeaseCount: 1 });
+      expect(body.retention.latestExpiryAt).toEqual(expect.any(String));
+      expect(body.residency).toMatchObject({ state: 'materialized' });
+      expect(body.retention).not.toHaveProperty('ownerId');
+      await routes.shutdown();
+    } finally {
+      await fs.rm(pinDir, { recursive: true, force: true });
+    }
   });
 
   it('24/25. includes AskUserQuestion request and closure control evidence with both identifiers and reason', async () => {
@@ -243,6 +289,35 @@ describe('GET /sessions/:id/evidence', () => {
     const body = JSON.parse(res.body);
     expect(body.diagnostics.records.length).toBeLessThanOrEqual(12);
     expect(Buffer.byteLength(res.body)).toBeLessThan(5_000);
+  });
+
+  it('keeps the noisy default bundle below its bound with three liveness-rich receipts', async () => {
+    const { routes, runReceipts } = buildRoutes([entry()]);
+    for (let index = 0; index < 100; index += 1) {
+      pushDiagnosticsRecord(record({ sessionId: 'internal-pi-id', requestId: `receipt-req-${index}`, msg: 'x'.repeat(2_000) }));
+    }
+    for (let index = 0; index < 3; index += 1) {
+      const run = await runReceipts.beginRun({
+        sessionId: 'internal-pi-id',
+        runtime: 'pi',
+        executionInstanceId: 'pi-local-default',
+        message: `hidden-${index}`,
+        mode: 'prompt',
+        verbosity: 'answers',
+        detach: false,
+      });
+      await runReceipts.markStarted(run.receipt.runId);
+      await runReceipts.observeEvent(run.receipt.runId, {
+        type: 'agent_end', sessionId: 'internal-pi-id', timestamp: Date.now() + index, data: {},
+      });
+      await runReceipts.finish(run.receipt.runId);
+    }
+
+    const res = await callEvidence(routes, 'internal-pi-id');
+    const body = JSON.parse(res.body);
+    expect(body.runChronology).toHaveLength(3);
+    expect(Buffer.byteLength(res.body)).toBeLessThan(5_000);
+    expect(res.body).not.toContain('hidden-');
   });
 
   it('returns a stable not-found error for an unknown identifier', async () => {

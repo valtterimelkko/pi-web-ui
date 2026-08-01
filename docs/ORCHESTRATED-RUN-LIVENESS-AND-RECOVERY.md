@@ -1,6 +1,6 @@
 # Orchestrated run liveness and recovery — intent and rationale
 
-> **Status:** design intent and rationale; not a shipped contract, schema, implementation plan, or release commitment
+> **Status:** design intent beyond the shipped `1.14.0` baseline; this document is not itself the contract, schema, implementation plan, or release commitment
 >
 > **Audience:** Pi Web UI maintainers, runtime-adapter authors, Internal API consumers, and orchestration clients
 >
@@ -12,7 +12,21 @@
 
 Pi Web UI is increasingly used as a runtime gateway for work that outlives one HTTP request, one event-stream connection, or one attentive human watch. Its current durable run receipts, detached dispatch, retention leases, normalized events, diagnostics and watchdogs provide a strong base. Lived orchestration use has nevertheless exposed a gap: a consumer can often determine that a run stopped, but not always reconstruct **why it appeared idle, what the runtime last proved, whether later terminal evidence arrived, and what partial output may remain recoverable**.
 
-This document records the intended direction for improving that generic runtime evidence. It explains why the distinctions matter and the qualities a future design should preserve. It deliberately does not choose endpoint fields, storage layouts, migration steps, timeout defaults or release sequencing. Any shipped change must be specified separately, reflected in the versioned Internal API contract and capabilities, and validated per runtime.
+These patterns were first observed through Agent OS acting as an external consumer of the Pi Web UI Internal API. They are generalized here as runtime-gateway evidence requirements. They are not requirements for upstream Pi Coding Agent core, and they do not import Agent OS work objects, leases, authority, or acceptance policy into Pi Web UI.
+
+This document records the intended direction for improving that generic runtime evidence. It explains why the distinctions matter and the qualities a future design should preserve. It deliberately does not make unshipped endpoint fields, storage layouts, migration steps, timeout defaults or release sequencing authoritative. Any shipped change must be specified separately, reflected in the versioned Internal API contract and capabilities, and validated per runtime.
+
+### 1.1 Shipped baseline versus remaining intent
+
+Contract `1.14.0` ships the first bounded slice: payload-free run activity evidence, idle-versus-absolute watchdog classification, bounded terminal observations, explicit cessation uncertainty, and separate retention/residency projections in the session evidence bundle. The remaining sections continue to describe broader design intent.
+
+| Concern | Shipped `1.14.0` baseline | Remaining intent |
+|---|---|---|
+| Activity | A run-correlated allowlist advances the watchdog; blind `stream_activity` does not. Receipts persist bounded activity snapshots (at most once per second unless a control request must be durable) and the terminal receipt preserves the latest eligible observation. | Richer source quality where an adapter can prove it without inventing runtime guarantees. |
+| Stall decision | `TURN_STALLED` remains the stable error code, with durable `watchdog.reason` of `idle` or `absolute`. | More runtime-specific policy evidence only when capability-gated. |
+| Late terminal evidence | Up to four payload-free terminal observations annotate a receipt without reopening it. | Stronger compatibility/contradiction semantics if real cases justify them. |
+| Cessation | `confirmed`, `unconfirmed`, or `unknown` is representable; ordinary and synthetic terminal signals do not overclaim arbitrary nested-process quiescence. | Runtime-specific confirmation only where the adapter can actually prove cessation. |
+| Recovery doorway | `/sessions/:id/evidence` separates retention, adapter materialization, session activity, and a compact three-run chronology. | Additional bounded runtime-owned locators where privacy and provenance remain clear. |
 
 ## 2. The motivating incident pattern
 
@@ -64,7 +78,16 @@ It should not acquire an external orchestrator's ontology or authority. In parti
 
 A consumer such as Agent OS may combine Pi Web UI evidence with repository state, work objects and owner decisions. Pi Web UI's responsibility is to make its portion generic, durable and honest—not to decide the consumer's verdict.
 
+| Boundary | Owns | Does not own |
+|---|---|---|
+| Pi Web UI Internal API | dispatch identity, receipts, watchdog decisions, bounded recovery projections | semantic acceptance, worktree locks, retry/merge authority |
+| Pi Web UI runtime adapter | classification of evidence it directly observes and current adapter materialization | claims about hidden child work or external side effects |
+| Upstream runtime / Pi core | native event, cancellation, transcript and child-process semantics it chooses to expose | Agent OS orchestration policy or Pi Web UI receipt chronology |
+| External orchestrator | workspace exclusivity, acceptance criteria, recovery and owner decisions | rewriting runtime history or treating retention as execution |
+
 ## 4. Core intent
+
+In this document, **activity** means an attributable observation eligible under a named watchdog policy; **liveness** means only what those observations support; **progress** remains a semantic judgement that a tool/log signal cannot prove; **terminality** is the monotonic receipt decision; and **quiescence** asks whether further runtime or external side effects are known to have ceased.
 
 ### 4.1 Report evidence, not confidence theatre
 
@@ -76,7 +99,7 @@ Future surfaces should prefer statements such as “last normalized tool event a
 
 An **idle/inactivity bound** answers: “How long has it been since attributable run activity?”
 
-An **absolute execution bound** answers: “How long may this accepted run consume capacity regardless of activity?”
+An **absolute accepted-run bound** answers: “How long may this accepted run consume capacity regardless of activity?” In the shipped contract this clock begins at `acceptedAt`, so queue/admission time is included; it is not synonymous with time since `startedAt`.
 
 They serve different safety goals. A healthy long turn might repeatedly show attributable activity and still exceed an absolute policy limit. A dead turn might hit the idle limit quickly. A future model should preserve that distinction—for example through a conceptual `stallReason` of `idle` versus `absolute`—without this document prescribing the exact field name or wire shape.
 
@@ -108,23 +131,29 @@ The desired behaviour is an auditable chronology:
 
 The exact representation is open. The invariant is not: history should be additive and truthful, and contradictory terminal evidence should be diagnosable rather than overwritten.
 
-### 4.5 Keep retention separate from execution liveness
+### 4.5 Keep terminality separate from quiescence
+
+A terminal receipt releases Internal API capacity and fixes the canonical run outcome. It does not by itself prove that every runtime-local worker, background process, nested agent or external side effect has ceased. This distinction matters before overlapping recovery is dispatched into the same workspace.
+
+Pi Web UI should expose cessation evidence only where its adapter can support it and otherwise report `unconfirmed` or `unknown`. The external orchestrator remains responsible for worktree exclusivity and for refusing overlapping recovery when the available receipt, session and repository evidence conflicts.
+
+### 4.6 Keep retention separate from execution liveness
 
 A retention lease protects source-owned recoverability for a bounded interval. Durable retention and current runtime residency are separate: a retained session need not be materialized or loaded, while a resident claim says only that Pi Web UI currently holds that runtime resource. Neither authorises unlimited execution, resets inactivity, or proves progress. Explicit session deletion remains a stronger destructive operation and may remove files despite prior retention, according to the current contract. Conversely, a stalled or terminal run may still need short-lived retention so a consumer can inspect transcripts, evidence or recovered artefacts.
 
 Any future liveness surface should therefore display durable retention, current residency and execution as separate dimensions. This prevents a dangerous failure mode in which an orchestrator believes “retained” means “live” or “safe to wait indefinitely”.
 
-### 4.6 Admit uncertainty explicitly
+### 4.7 Admit uncertainty explicitly
 
 Some runtimes expose rich native events; others expose a batch subprocess and heuristic activity. Nested agents may not surface child events to the parent adapter. Server restart can preserve receipts while losing process-local diagnostics. A truthful generic contract must support `unknown` and explain why evidence is incomplete.
 
 Unknown is preferable to a synthetic heartbeat that hides a deadlock or to a terminal label that implies no useful output exists.
 
-### 4.7 Make partial artefact survivability honest
+### 4.8 Make partial artefact survivability honest
 
 A terminal run receipt is an execution record, not a transaction over the filesystem. A stalled or aborted turn can leave useful edits, generated files, logs or runtime-native transcript evidence. Pi Web UI should not judge those artefacts semantically, but a future evidence surface may help an orchestrator locate and inspect what survived.
 
-The intent is to expose bounded, privacy-safe facts such as known runtime output locators, transcript availability, worktree/session path identity already permitted by the contract, and whether a final bounded evidence snapshot could be produced. Locators are source-specific observations, not existence guarantees: cleanup, retention expiry, explicit deletion, runtime-native pruning or later filesystem change can invalidate them. It is not to claim that files still exist, or that they are correct, complete, committed, accepted or safe to reuse.
+The intent is to expose bounded, privacy-safe facts such as known runtime-owned transcript/session/log locators, transcript availability, the configured `cwd` and session identity already permitted by the contract, and whether a final bounded evidence snapshot could be produced. Pi Web UI should not scan or inventory arbitrary repository changes. Locators are source-specific observations, not existence guarantees: cleanup, retention expiry, explicit deletion, runtime-native pruning or later filesystem change can invalidate them. They do not prove provenance, ownership, correctness, completeness, commit state, acceptance or safety to reuse.
 
 ## 5. Conceptual run lifecycle
 
@@ -134,8 +163,9 @@ The current versioned receipt contract remains authoritative. For future reasoni
 2. **Execution** — did the runtime start, and what attributable activity was observed?
 3. **Supervision** — did an idle or absolute watchdog decision occur, under which policy and evidence?
 4. **Terminal observation** — which runtime/adapter terminal signal was observed, and when?
-5. **Recovery evidence** — what durable transcript, diagnostics or bounded artefact locators remain available?
-6. **Retention/residency** — which source preserves recoverability, whether a resident claim currently keeps the runtime loaded, and until when?
+5. **Cessation evidence** — is further activity known to have ceased, merely unconfirmed, or unknown?
+6. **Recovery evidence** — what durable transcript, diagnostics or bounded runtime-owned locators remain available?
+7. **Retention/residency** — which source preserves recoverability, whether the adapter is currently materialized, and until when?
 
 These dimensions should be correlatable through stable run/session/request/execution-instance identities. They should not imply an external consumer's semantic completion, acceptance or authority.
 
@@ -157,7 +187,7 @@ OpenCode provides SSE-backed events but requires deduplication and careful obser
 
 ### Antigravity
 
-Antigravity output is batch-shaped and currently relies on bounded log/activity evidence plus a stall watchdog and retry policy. Periodic `stream_activity` is live UI activity, not durable run progress; Antigravity's actual stall watchdog is grounded in subprocess/log activity. The UI signal must never reset a durable run watchdog, be described as completion, or become a blind keepalive. The distinction between subprocess/log movement and user-visible output is especially important here.
+Antigravity output is batch-shaped and currently relies on bounded log/activity evidence plus a stall watchdog and retry policy. Periodic `stream_activity` is live UI activity, not durable run progress; Antigravity's actual stall watchdog is grounded in subprocess/log activity. Contract `1.14.0` explicitly excludes `stream_activity` from the generic run-activity clock; older contracts counted every run-correlated normalized event. The UI signal must not be described as completion or become a blind keepalive. The distinction between subprocess/log movement and user-visible output is especially important here.
 
 A future design may therefore expose a common minimum plus runtime-specific evidence metadata. Uniform field names are useful only when their semantics remain honest.
 
@@ -217,15 +247,16 @@ Richer recovery evidence can increase leakage risk. The existing trust boundary 
 When a run appears stuck, an operator or agent should be able to answer, with bounded reads:
 
 1. Was the prompt admitted, and under which run/session/execution identity?
-2. What was the last attributable activity, from which source, and when?
+2. What was the last attributable activity, under which policy, and when? If source quality is unavailable, does the contract say so rather than infer it?
 3. Did an idle or absolute watchdog act, and using which policy?
 4. Was a terminal signal observed before or after that decision?
-5. Did later evidence arrive?
-6. What transcript/diagnostic/artefact evidence survives?
-7. Is the session retained, by which source, and until when?
-8. Which facts are unknown because the adapter or restart boundary cannot prove them?
+5. What cessation evidence exists, and is it confirmed, unconfirmed or unknown?
+6. Did later evidence arrive?
+7. What transcript/diagnostic/runtime-owned locator evidence survives?
+8. Is the session retained, is its adapter materialized, and until when?
+9. Which facts are unknown because the adapter or restart boundary cannot prove them?
 
-The session evidence bundle is the natural diagnostic doorway, but this document does not prescribe whether future evidence belongs there, in run receipts, in event metadata, or in an additive endpoint. The versioned design should avoid forcing callers to reconstruct liveness from unbounded logs.
+The session evidence bundle is the natural diagnostic doorway. Contract `1.14.0` places canonical run liveness on receipts and projects a bounded chronology plus retention/residency into that bundle; future evidence may extend those surfaces additively. The versioned design should avoid forcing callers to reconstruct liveness from unbounded logs.
 
 ## 11. Relationship to notifications and frontend state
 
@@ -235,7 +266,7 @@ The browser's `agent_end` handling remains a UI unlock mechanism. A late or synt
 
 ## 12. Compatibility and capability discovery
 
-Any future fields or endpoints should be additive, versioned and advertised through `GET /api/v1/capabilities`. Existing consumers must continue to operate against older receipts. New consumers must not infer support from server version strings alone or assume undocumented fields.
+Any future fields or endpoints should be additive, versioned and advertised through `GET /api/v1/capabilities`. Existing consumers must continue to operate against older receipts. New consumers must capability-gate support and treat an absent capability or absent evidence as unsupported/unknown, never as healthy silence. They must not assume undocumented fields. Additive public response fields are safe for old clients to ignore; persisted receipt compatibility across software downgrades is a separate concern because older binaries may reject newer allowlisted storage fields.
 
 Potential conceptual capabilities include:
 
@@ -253,8 +284,8 @@ A future improvement is successful if it makes the following statements reliably
 - “no attributable activity was available” versus “activity was observed”;
 - “idle bound fired” versus “absolute bound fired”;
 - “watcher observed after its own deadline” versus “runtime stopped at that time”;
-- “receipt terminal” versus “external acceptance complete”;
-- “session retained” versus “turn live”;
+- “receipt terminal” versus “runtime quiescence” versus “external acceptance complete”;
+- “session retained” versus “adapter materialized” versus “turn live”;
 - “partial evidence survives” versus “work is correct and complete”;
 - “late compatible evidence arrived” versus “terminal evidence conflicts”;
 - “known unsupported evidence” versus “healthy silence”.
@@ -282,14 +313,14 @@ This direction does not seek to:
 The following questions should remain open until runtime-specific evidence and negative controls support a contract decision:
 
 1. Which normalized event classes are sufficiently attributable to reset an idle clock for each backend?
-2. Should activity chronology live inside each run receipt, in a bounded adjacent ledger, or as a derived evidence-bundle view?
-3. How much chronology is needed to explain a stall without creating an unbounded event store?
-4. How should a late terminal signal interact with an already persisted `TURN_STALLED` terminal state while preserving compatibility and capacity accounting?
+2. Does evidence beyond `1.14.0`'s terminal receipt snapshot justify a bounded adjacent ledger, or is the receipt plus derived evidence-bundle view sufficient?
+3. How much additional chronology is needed to explain a stall without creating an unbounded event store?
+4. Do late terminal observations need a stronger compatible/supplemental/contradictory relation than the shipped monotonic annotation?
 5. Which contradictions require a new terminal substate, and which are best represented as additive annotations/evidence?
 6. Can Pi runtime-local subagent activity be attributed safely to the parent accepted run without making each child a first-class run?
 7. What evidence can distinguish a quiet long model call from a dead worker without blind keepalives?
 8. Should absolute execution bounds be global, runtime-specific, request-selectable within policy, or some combination?
-9. Which activity evidence deserves durability, and what retention/privacy bound should apply?
+9. Which additional activity evidence, if any, deserves durability beyond the shipped payload-free receipt snapshots, and what retention/privacy bound should apply?
 10. What bounded artefact locators can be exposed consistently without leaking arbitrary filesystem state?
 11. How should notifications communicate a later terminal update after an earlier stall notification?
 12. How should restart reconciliation handle a receipt that was active while its runtime process did not survive?
@@ -303,7 +334,7 @@ A later implementation proposal should be grounded in synthetic, disposable scen
 - normal long work with genuine attributed activity;
 - silent/dead work stopped by an idle bound;
 - continuously active work stopped by an absolute bound;
-- a late terminal signal after `TURN_STALLED`;
+- a late terminal signal after `TURN_STALLED`, proving the receipt remains terminal and cessation is not overclaimed;
 - server restart between accepted, started and terminal phases;
 - duplicate/out-of-order events;
 - runtime-local nested activity that is visible, invisible or contradictory;
@@ -312,7 +343,7 @@ A later implementation proposal should be grounded in synthetic, disposable scen
 - event-stream client disconnect during detached execution;
 - secret-bearing tool output that does not leak into recovery metadata.
 
-Negative controls must prove that browser polling, receipt reads, retention, observer attachment, health checks and blind heartbeats do not reset liveness. Validation should use disposable servers and synthetic workspaces, never production sessions or private transcripts.
+Negative controls must prove that browser polling, receipt reads, retention, observer attachment, health checks and blind heartbeats do not reset liveness. They must also prove that terminal receipt state alone is not projected as confirmed quiescence. Validation should use disposable servers and synthetic workspaces, never production sessions or private transcripts.
 
 ## 17. Canonical implementation touchpoints
 

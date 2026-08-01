@@ -39,6 +39,8 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
         durableRetention: true,
         residentRetention: true,
         executionAdmission: true,
+        runLivenessEvidence: true,
+        sessionRecoveryEvidence: true,
         capacityEndpoint: '/api/v1/capacity',
       },
       runtimes: {

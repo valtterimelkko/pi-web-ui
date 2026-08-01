@@ -63,13 +63,15 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.13.0',
+        contractVersion: '1.14.0',
       },
       features: {
         retentionLeases: true,
         durableRetention: true,
         residentRetention: true,
         executionAdmission: true,
+        runLivenessEvidence: true,
+        sessionRecoveryEvidence: true,
         capacityEndpoint: '/api/v1/capacity',
       },
       runtimes: {

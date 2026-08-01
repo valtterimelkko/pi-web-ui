@@ -114,7 +114,7 @@ Reference docs:
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
 
-`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.13.0`) for local consumers such as Agent OS. Contract `1.12.0` added source-owned durable/resident retention leases and resource-aware execution admission; `1.13.0` adds truthful dispatch/approval/watchdog/session-identity semantics. Health also exposes per-runtime `runtimeHealth`, while diagnostics and `/sessions/:id/evidence` provide bounded troubleshooting evidence.
+`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.14.0`) for local consumers such as Agent OS. Contract `1.12.0` added source-owned durable/resident retention leases and resource-aware execution admission; `1.13.0` added truthful dispatch/approval/watchdog/session-identity semantics; `1.14.0` adds payload-free run-liveness, watchdog-cause, cessation, and bounded recovery evidence. Health also exposes per-runtime `runtimeHealth`, while diagnostics and `/sessions/:id/evidence` provide bounded troubleshooting evidence.
 
 Important endpoints include:
 - `GET /api/v1/capabilities`
@@ -123,7 +123,7 @@ Important endpoints include:
 - `POST /api/v1/models/refresh` (OpenCode and Pi runtime catalogue refresh; Pi uses `{"runtime":"pi"}` for the OpenRouter-backed catalogue)
 - `GET /api/v1/diagnostics`
 - `GET /api/v1/sessions/:id/diagnostics`
-- `GET /api/v1/sessions/:id/evidence` (canonical alias resolution plus bounded diagnostic/receipt evidence)
+- `GET /api/v1/sessions/:id/evidence` (canonical alias resolution plus bounded diagnostic, run-liveness, retention, and residency evidence)
 - `GET /api/v1/events/types`
 - `POST /api/v1/sessions` (supports atomic required `retention:{mode,ownerId,...}` and Claude `profileId` or `model: "profile:<id>"`)
 - `POST /api/v1/sessions/:id/prompt` (`detach:true` supported only with `verbosity=answers`; retain the returned `runId`)

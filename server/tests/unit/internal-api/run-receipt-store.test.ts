@@ -70,7 +70,22 @@ describe('RunReceiptStore — durable run ledger', () => {
     const first = new RunReceiptStore(dir);
     await first.init();
     await first.create(receipt({ runId: 'accepted' }));
-    await first.create(receipt({ runId: 'started', status: 'started', startedAt: '2026-07-15T12:00:01.000Z' }));
+    await first.create(receipt({
+      runId: 'started',
+      status: 'started',
+      startedAt: '2026-07-15T12:00:01.000Z',
+      liveness: {
+        activityPolicyVersion: 'run-activity-v1',
+        idleTimeoutMs: 1_000,
+        absoluteTimeoutMs: 10_000,
+        lastEligibleActivity: {
+          eventType: 'extension_ui_request',
+          occurredAt: '2026-07-15T12:00:30.000Z',
+          observedAt: '2026-07-15T12:00:30.000Z',
+        },
+        cessation: { state: 'unknown', basis: 'no_terminal_signal', observedAt: '2026-07-15T12:00:00.000Z' },
+      },
+    }));
 
     const restarted = new RunReceiptStore(dir, {
       now: () => Date.parse('2026-07-15T12:01:00.000Z'),
@@ -86,6 +101,10 @@ describe('RunReceiptStore — durable run ledger', () => {
     expect(restarted.get('started')).toMatchObject({
       status: 'interrupted',
       interruptionReason: 'server_restart',
+      liveness: {
+        lastEligibleActivity: { eventType: 'extension_ui_request' },
+        cessation: { state: 'unknown', basis: 'server_restart' },
+      },
     });
   });
 
@@ -122,7 +141,82 @@ describe('RunReceiptStore — durable run ledger', () => {
     expect(store.list()).toHaveLength(2);
   });
 
-  it('rejects unsafe receipt fields so prompts and credentials cannot be persisted', async () => {
+  it('round-trips bounded liveness evidence while keeping legacy receipts readable', async () => {
+    const store = new RunReceiptStore(dir);
+    await store.init();
+    await store.create(receipt({
+      status: 'failed',
+      terminalAt: '2026-07-15T12:00:02.000Z',
+      errorCode: 'TURN_STALLED',
+      liveness: {
+        activityPolicyVersion: 'run-activity-v1',
+        idleTimeoutMs: 1_000,
+        absoluteTimeoutMs: 10_000,
+        lastEligibleActivity: {
+          eventType: 'tool_execution_end',
+          occurredAt: '2026-07-15T12:00:01.000Z',
+          observedAt: '2026-07-15T12:00:01.100Z',
+        },
+        watchdog: {
+          reason: 'idle',
+          decidedAt: '2026-07-15T12:00:02.000Z',
+          idleTimeoutMs: 1_000,
+          absoluteTimeoutMs: 10_000,
+        },
+        cessation: {
+          state: 'unknown',
+          basis: 'watchdog',
+          observedAt: '2026-07-15T12:00:02.000Z',
+        },
+      },
+    }));
+
+    const restarted = new RunReceiptStore(dir);
+    await restarted.init();
+    expect(restarted.get('run-1')?.liveness).toMatchObject({
+      activityPolicyVersion: 'run-activity-v1',
+      watchdog: { reason: 'idle' },
+      cessation: { state: 'unknown', basis: 'watchdog' },
+    });
+
+    await restarted.create(receipt({ runId: 'legacy-run' }));
+    expect(restarted.get('legacy-run')).not.toHaveProperty('liveness');
+  });
+
+  it('does not expose mutable references to nested liveness evidence', async () => {
+    const store = new RunReceiptStore(dir);
+    await store.init();
+    await store.create(receipt({
+      liveness: {
+        activityPolicyVersion: 'run-activity-v1',
+        idleTimeoutMs: 1_000,
+        absoluteTimeoutMs: 10_000,
+        terminalObservations: [{
+          type: 'agent_end',
+          occurredAt: '2026-07-15T12:00:01.000Z',
+          observedAt: '2026-07-15T12:00:01.000Z',
+          origin: 'runtime_or_adapter',
+          late: false,
+        }],
+        cessation: { state: 'unconfirmed', basis: 'terminal_signal', observedAt: '2026-07-15T12:00:01.000Z' },
+      },
+    }));
+
+    const exposed = store.get('run-1')!;
+    exposed.liveness!.cessation.state = 'confirmed';
+    exposed.liveness!.terminalObservations!.push({
+      type: 'agent_end', occurredAt: '2026-07-15T12:00:02.000Z', observedAt: '2026-07-15T12:00:02.000Z',
+      origin: 'synthetic', late: true,
+    });
+
+    expect(store.get('run-1')?.liveness).toMatchObject({
+      cessation: { state: 'unconfirmed' },
+      terminalObservations: [{ origin: 'runtime_or_adapter' }],
+    });
+    expect(store.get('run-1')?.liveness?.terminalObservations).toHaveLength(1);
+  });
+
+  it('rejects unsafe receipt and nested liveness fields so payloads and credentials cannot be persisted', async () => {
     const store = new RunReceiptStore(dir);
     await store.init();
 
@@ -130,5 +224,32 @@ describe('RunReceiptStore — durable run ledger', () => {
     await expect(store.create({ ...receipt(), apiKey: 'secret' } as never)).rejects.toThrow(/unsupported|unsafe/i);
     await expect(store.create({ ...receipt(), token: 'secret' } as never)).rejects.toThrow(/unsupported|unsafe/i);
     await expect(store.create({ ...receipt(), transcript: [] } as never)).rejects.toThrow(/unsupported|unsafe/i);
+    await expect(store.create({
+      ...receipt(),
+      liveness: {
+        activityPolicyVersion: 'run-activity-v1',
+        idleTimeoutMs: 1_000,
+        absoluteTimeoutMs: 10_000,
+        prompt: 'nested prompt leak',
+        cessation: { state: 'unknown', basis: 'no_terminal_signal', observedAt: '2026-07-15T12:00:00.000Z' },
+      },
+    } as never)).rejects.toThrow(/unsupported|unsafe/i);
+    await expect(store.create(receipt({
+      runId: 'unsafe-reason',
+      liveness: {
+        activityPolicyVersion: 'run-activity-v1',
+        idleTimeoutMs: 1_000,
+        absoluteTimeoutMs: 10_000,
+        terminalObservations: [{
+          type: 'agent_end',
+          occurredAt: '2026-07-15T12:00:01.000Z',
+          observedAt: '2026-07-15T12:00:01.000Z',
+          origin: 'synthetic',
+          reason: 'token_sk:livesecret',
+          late: false,
+        }],
+        cessation: { state: 'unconfirmed', basis: 'synthetic_terminal_signal', observedAt: '2026-07-15T12:00:01.000Z' },
+      },
+    }))).rejects.toThrow(/reason/i);
   });
 });

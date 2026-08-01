@@ -1,7 +1,13 @@
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { RunReceipt, RunReceiptStatus } from '../types.js';
+import { RUN_TERMINAL_REASON_ALLOWLIST } from '../types.js';
+import type {
+  RunLivenessEvidence,
+  RunReceipt,
+  RunReceiptStatus,
+  RunTerminalObservation,
+} from '../types.js';
 import { createLogger } from '../../logging/logger.js';
 
 const logger = createLogger('RunReceiptStore');
@@ -41,6 +47,7 @@ const ALLOWED_KEYS = new Set([
   'terminalAt',
   'errorCode',
   'interruptionReason',
+  'liveness',
   'idempotencyExpiresAt',
   'idempotencyKeyDigest',
   'requestFingerprint',
@@ -108,6 +115,16 @@ export class RunReceiptStore {
       record.terminalAt = recoveryAt;
       record.errorCode = 'SERVER_RESTART';
       record.interruptionReason = 'server_restart';
+      if (record.liveness) {
+        record.liveness = {
+          ...record.liveness,
+          cessation: {
+            state: 'unknown',
+            basis: 'server_restart',
+            observedAt: recoveryAt,
+          },
+        };
+      }
       this.recoveryProtected.add(record.runId);
       await this.persist(record);
     }
@@ -117,11 +134,11 @@ export class RunReceiptStore {
 
   get(runId: string): PersistedRunReceipt | undefined {
     const record = this.cache.get(runId);
-    return record ? { ...record } : undefined;
+    return record ? cloneReceipt(record) : undefined;
   }
 
   list(): PersistedRunReceipt[] {
-    return Array.from(this.cache.values(), (record) => ({ ...record }));
+    return Array.from(this.cache.values(), cloneReceipt);
   }
 
   /** Return the newest unexpired receipt for a session-scoped key digest. */
@@ -133,7 +150,7 @@ export class RunReceiptStore {
         return expiresAt > now;
       })
       .sort((a, b) => Date.parse(b.acceptedAt) - Date.parse(a.acceptedAt));
-    return matches[0] ? { ...matches[0] } : undefined;
+    return matches[0] ? cloneReceipt(matches[0]) : undefined;
   }
 
   async create(record: PersistedRunReceipt): Promise<void> {
@@ -143,14 +160,14 @@ export class RunReceiptStore {
       throw new Error(`Run receipt already exists: ${record.runId}`);
     }
     await this.persist(record);
-    this.cache.set(record.runId, { ...record });
+    this.cache.set(record.runId, cloneReceipt(record));
     await this.prune();
   }
 
   async transition(
     runId: string,
     status: RunReceiptStatus,
-    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason'>> & {
+    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness'>> & {
       /** Release a reservation that failed before runtime dispatch. */
       clearIdempotency?: boolean;
     } = {},
@@ -178,24 +195,24 @@ export class RunReceiptStore {
     }
     this.validate(next);
     await this.persist(next);
-    this.cache.set(runId, next);
+    this.cache.set(runId, cloneReceipt(next));
     await this.prune();
-    return { ...next };
+    return cloneReceipt(next);
   }
 
   async patch(
     runId: string,
-    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode'>>,
+    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode' | 'liveness'>>,
   ): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
     if (!current) return undefined;
-    if (TERMINAL_STATUSES.has(current.status)) return { ...current };
+    if (TERMINAL_STATUSES.has(current.status)) return cloneReceipt(current);
     const next = { ...current, ...patch };
     this.validate(next);
     await this.persist(next);
-    this.cache.set(runId, next);
-    return { ...next };
+    this.cache.set(runId, cloneReceipt(next));
+    return cloneReceipt(next);
   }
 
   async releaseIdempotency(runId: string): Promise<PersistedRunReceipt | undefined> {
@@ -203,7 +220,7 @@ export class RunReceiptStore {
     const current = this.cache.get(runId);
     if (!current) return undefined;
     if (!current.idempotencyKeyDigest && !current.requestFingerprint && !current.idempotencyExpiresAt) {
-      return { ...current };
+      return cloneReceipt(current);
     }
     const next = { ...current };
     delete next.idempotencyKeyDigest;
@@ -211,25 +228,58 @@ export class RunReceiptStore {
     delete next.idempotencyExpiresAt;
     this.validate(next);
     await this.persist(next);
-    this.cache.set(runId, next);
-    return { ...next };
+    this.cache.set(runId, cloneReceipt(next));
+    return cloneReceipt(next);
   }
 
-  async markAgentEnd(runId: string, timestamp: string): Promise<PersistedRunReceipt | undefined> {
+  async markAgentEnd(
+    runId: string,
+    timestamp: string,
+    observation?: Omit<RunTerminalObservation, 'late'>,
+  ): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
     if (!current) return undefined;
     // The runtime completion callback and the agent_end event can arrive in
     // either order. Keep the evidence even when the receipt is already
     // terminal; this update is observational and does not reopen the run.
-    if (!current.agentEndAt) {
-      const next = { ...current, agentEndAt: timestamp };
-      this.validate(next);
-      await this.persist(next);
-      this.cache.set(runId, next);
-      return { ...next };
+    const next: PersistedRunReceipt = { ...current, agentEndAt: current.agentEndAt ?? timestamp };
+    if (observation && current.liveness) {
+      const terminalObservation: RunTerminalObservation = {
+        ...observation,
+        late: TERMINAL_STATUSES.has(current.status),
+      };
+      const observations = [...(current.liveness.terminalObservations ?? [])];
+      const duplicate = observations.some((candidate) =>
+        candidate.type === terminalObservation.type
+        && candidate.occurredAt === terminalObservation.occurredAt
+        && candidate.origin === terminalObservation.origin
+        && candidate.reason === terminalObservation.reason);
+      if (!duplicate) observations.push(terminalObservation);
+      const preserveTerminalCessation = TERMINAL_STATUSES.has(current.status)
+        && (current.liveness.cessation.basis === 'watchdog'
+          || current.liveness.cessation.basis === 'server_restart');
+      next.liveness = {
+        ...current.liveness,
+        lastEligibleActivity: {
+          eventType: 'agent_end',
+          occurredAt: observation.occurredAt,
+          observedAt: observation.observedAt,
+        },
+        terminalObservations: observations.slice(-4),
+        cessation: preserveTerminalCessation
+          ? current.liveness.cessation
+          : {
+              state: 'unconfirmed',
+              basis: observation.origin === 'synthetic' ? 'synthetic_terminal_signal' : 'terminal_signal',
+              observedAt: observation.observedAt,
+            },
+      };
     }
-    return { ...current };
+    this.validate(next);
+    await this.persist(next);
+    this.cache.set(runId, cloneReceipt(next));
+    return cloneReceipt(next);
   }
 
   /** Wait for atomic writes already queued for any receipt. */
@@ -350,7 +400,74 @@ export class RunReceiptStore {
     if (record.interruptionReason !== undefined && record.interruptionReason !== 'server_restart') {
       throw new Error('Invalid interruption reason');
     }
+    if (record.liveness !== undefined) validateLiveness(record.liveness);
   }
+}
+
+const LIVENESS_KEYS = new Set([
+  'activityPolicyVersion',
+  'idleTimeoutMs',
+  'absoluteTimeoutMs',
+  'lastEligibleActivity',
+  'watchdog',
+  'terminalObservations',
+  'cessation',
+]);
+const ACTIVITY_KEYS = new Set(['eventType', 'occurredAt', 'observedAt']);
+const WATCHDOG_KEYS = new Set(['reason', 'decidedAt', 'idleTimeoutMs', 'absoluteTimeoutMs']);
+const TERMINAL_OBSERVATION_KEYS = new Set(['type', 'occurredAt', 'observedAt', 'origin', 'reason', 'late']);
+const CESSATION_KEYS = new Set(['state', 'basis', 'observedAt']);
+const SAFE_EVENT_TYPE = /^[a-z][a-z0-9_]{0,63}$/;
+
+function assertOnlyKeys(value: object, allowed: Set<string>, label: string): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) throw new Error(`Unsupported or unsafe ${label} field: ${key}`);
+  }
+}
+
+function assertIsoTimestamp(value: string, label: string): void {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) throw new Error(`Invalid ${label}`);
+}
+
+function validateLiveness(value: RunLivenessEvidence): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid liveness evidence');
+  assertOnlyKeys(value, LIVENESS_KEYS, 'liveness');
+  if (value.activityPolicyVersion !== 'run-activity-v1') throw new Error('Invalid activity policy version');
+  if (!Number.isFinite(value.idleTimeoutMs) || value.idleTimeoutMs <= 0) throw new Error('Invalid liveness idle timeout');
+  if (!Number.isFinite(value.absoluteTimeoutMs) || value.absoluteTimeoutMs <= 0) throw new Error('Invalid liveness absolute timeout');
+  if (value.lastEligibleActivity) {
+    assertOnlyKeys(value.lastEligibleActivity, ACTIVITY_KEYS, 'activity');
+    if (!SAFE_EVENT_TYPE.test(value.lastEligibleActivity.eventType)) throw new Error('Invalid activity event type');
+    assertIsoTimestamp(value.lastEligibleActivity.occurredAt, 'activity occurredAt');
+    assertIsoTimestamp(value.lastEligibleActivity.observedAt, 'activity observedAt');
+  }
+  if (value.watchdog) {
+    assertOnlyKeys(value.watchdog, WATCHDOG_KEYS, 'watchdog');
+    if (!['idle', 'absolute'].includes(value.watchdog.reason)) throw new Error('Invalid watchdog reason');
+    assertIsoTimestamp(value.watchdog.decidedAt, 'watchdog decidedAt');
+    if (!Number.isFinite(value.watchdog.idleTimeoutMs) || value.watchdog.idleTimeoutMs <= 0) throw new Error('Invalid watchdog idle timeout');
+    if (!Number.isFinite(value.watchdog.absoluteTimeoutMs) || value.watchdog.absoluteTimeoutMs <= 0) throw new Error('Invalid watchdog absolute timeout');
+  }
+  if (value.terminalObservations) {
+    if (!Array.isArray(value.terminalObservations) || value.terminalObservations.length > 4) throw new Error('Invalid terminal observations');
+    for (const observation of value.terminalObservations) {
+      assertOnlyKeys(observation, TERMINAL_OBSERVATION_KEYS, 'terminal observation');
+      if (observation.type !== 'agent_end') throw new Error('Invalid terminal observation type');
+      if (!['runtime_or_adapter', 'synthetic'].includes(observation.origin)) throw new Error('Invalid terminal observation origin');
+      if (observation.reason !== undefined && !RUN_TERMINAL_REASON_ALLOWLIST.has(observation.reason)) throw new Error('Invalid terminal observation reason');
+      if (typeof observation.late !== 'boolean') throw new Error('Invalid terminal observation late flag');
+      assertIsoTimestamp(observation.occurredAt, 'terminal observation occurredAt');
+      assertIsoTimestamp(observation.observedAt, 'terminal observation observedAt');
+    }
+  }
+  assertOnlyKeys(value.cessation, CESSATION_KEYS, 'cessation');
+  if (!['confirmed', 'unconfirmed', 'unknown'].includes(value.cessation.state)) throw new Error('Invalid cessation state');
+  if (!['terminal_signal', 'synthetic_terminal_signal', 'documented_handler_return', 'watchdog', 'server_restart', 'no_terminal_signal'].includes(value.cessation.basis)) throw new Error('Invalid cessation basis');
+  assertIsoTimestamp(value.cessation.observedAt, 'cessation observedAt');
+}
+
+function cloneReceipt(record: PersistedRunReceipt): PersistedRunReceipt {
+  return structuredClone(record);
 }
 
 function isLegalTransition(from: RunReceiptStatus, to: RunReceiptStatus): boolean {

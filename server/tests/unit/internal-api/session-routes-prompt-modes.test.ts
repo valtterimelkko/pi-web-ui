@@ -409,9 +409,17 @@ describe('Internal API prompt mode dispatch semantics', () => {
       timestamp: now + 1,
       data: { message: deliveredUserMessage },
     }));
-    observers.forEach((observer) => observer({ type: 'agent_end', timestamp: now + 2, data: {} }));
+    observers.forEach((observer) => observer({
+      type: 'agent_end', timestamp: now + 2, data: { synthetic: true, reason: 'api_error_grace' },
+    }));
+    await vi.waitFor(() => expect(manager.get(runId)?.agentEndAt).toBeDefined());
+    expect(manager.get(runId)).toMatchObject({
+      status: 'started',
+      liveness: { cessation: { state: 'unconfirmed', basis: 'synthetic_terminal_signal' } },
+    });
+
+    observers.forEach((observer) => observer({ type: 'agent_end', timestamp: now + 3, data: {} }));
     await vi.waitFor(() => expect(manager.get(runId)?.status).toBe('completed'));
-    expect(manager.get(runId)?.agentEndAt).toBeDefined();
   });
 
   it('15c. duplicate queued prompt text is correlated FIFO to one receipt per delivered turn', async () => {

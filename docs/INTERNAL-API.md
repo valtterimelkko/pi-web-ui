@@ -98,7 +98,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.13.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.14.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -306,7 +306,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.13.0",
+    "contractVersion": "1.14.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -813,6 +813,28 @@ The lookup returns the persisted receipt directly:
   "startedAt": "2026-07-15T12:00:00.100Z",
   "agentEndAt": "2026-07-15T12:00:03.000Z",
   "terminalAt": "2026-07-15T12:00:03.000Z",
+  "liveness": {
+    "activityPolicyVersion": "run-activity-v1",
+    "idleTimeoutMs": 900000,
+    "absoluteTimeoutMs": 21600000,
+    "lastEligibleActivity": {
+      "eventType": "agent_end",
+      "occurredAt": "2026-07-15T12:00:03.000Z",
+      "observedAt": "2026-07-15T12:00:03.005Z"
+    },
+    "terminalObservations": [{
+      "type": "agent_end",
+      "occurredAt": "2026-07-15T12:00:03.000Z",
+      "observedAt": "2026-07-15T12:00:03.005Z",
+      "origin": "runtime_or_adapter",
+      "late": false
+    }],
+    "cessation": {
+      "state": "unconfirmed",
+      "basis": "terminal_signal",
+      "observedAt": "2026-07-15T12:00:03.005Z"
+    }
+  },
   "idempotencyExpiresAt": "2026-07-16T12:00:00.000Z"
 }
 ```
@@ -830,8 +852,9 @@ should not trust an ordinary Pi `completed` receipt whose `agentEndAt` is absent
 `interrupted` is written during startup
 recovery when a process died or was restarted while a run was accepted or
 started; its `errorCode` is `SERVER_RESTART` and it is not automatically
-retried. Receipts contain identity, timestamps, status, and stable error codes
-only — never prompt text, transcript bodies, credentials, cookies, or tokens.
+retried. Receipts contain identity, timestamps, status, stable error codes, and bounded payload-free liveness evidence only — never prompt text, transcript bodies, event payloads, credentials, cookies, or tokens.
+
+Contract `1.14.0` records the `run-activity-v1` policy and timeouts on new receipts. Only run-correlated agent/message/tool/control event classes advance the inactivity clock; this includes Pi `extension_ui_request` interactions, while `stream_activity` and observer/polling/retention activity do not. Bounded activity snapshots are persisted at most once per second, except attribution-critical control requests, and the latest observation is persisted again at terminalisation. A `TURN_STALLED` receipt retains its stable error code and adds `liveness.watchdog.reason` (`idle` or `absolute`) plus the last eligible observation. Up to four `agent_end` observations may be retained, including observations that arrive after terminalisation. Terminal reasons are an explicit low-cardinality allowlist (`api_error_grace` currently); arbitrary runtime reason strings are omitted. Observations never reopen the receipt or reacquire capacity, and synthetic `agent_end` does not itself make either direct or queued Pi work successful. `cessation` is deliberately separate: a terminal signal may be `unconfirmed`, watchdog/restart boundaries remain `unknown`, and a synchronous Pi slash-handler return is `confirmed` only for that documented handler boundary; consumers must not infer arbitrary worker or external-side-effect quiescence.
 
 Idempotency is scoped to `(sessionId, idempotencyKey)` and defaults to 24 hours
 from acceptance (`INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS`). A same-key retry with
@@ -882,7 +905,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.13.0",
+    "contractVersion": "1.14.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -891,6 +914,8 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "durableRetention": true,
     "residentRetention": true,
     "executionAdmission": true,
+    "runLivenessEvidence": true,
+    "sessionRecoveryEvidence": true,
     "capacityEndpoint": "/api/v1/capacity"
   },
   "runtimes": {
@@ -1030,8 +1055,9 @@ The default response includes:
 - aliases, runtime/status/backend/model/CWD/activity metadata, and execution identity;
 - exact registry/runtime source locators and bounded journal commands;
 - one compact, secret-scrubbed process-local diagnostics slice;
-- a durable run-receipt summary, warnings, and links to `/info`, diagnostics,
-  transcript, screen view, and history.
+- a durable run-receipt summary plus a bounded three-run chronology;
+- separate active durable/resident lease counts and current adapter materialization;
+- warnings and links to `/info`, diagnostics, transcript, screen view, and history.
 
 `expand` is opt-in and bounded. `diagnostics` increases the log slice,
 `transcript` adds the visible-recent transcript, `screen` adds the UI-faithful
@@ -1051,6 +1077,9 @@ source locators for durable evidence.
   "executionInstanceId": "pi-local-default",
   "diagnostics": { "processLocal": true, "expanded": false, "records": [] },
   "receiptSummary": { "durable": true, "count": 1 },
+  "retention": { "durableLeaseCount": 0, "residentLeaseCount": 1, "latestExpiryAt": "2026-07-16T12:00:00.000Z" },
+  "residency": { "state": "materialized", "observedAt": "2026-07-15T12:00:04.000Z" },
+  "runChronology": [{ "runId": "7d7b...", "status": "completed", "liveness": { "activityPolicyVersion": "run-activity-v1" } }],
   "warnings": ["Diagnostics are process-local and reset when the server restarts."]
 }
 ```
@@ -1064,14 +1093,18 @@ The default response has these stable groups:
 | `aliases` | canonical internal id, registry path, and available native ids | always present; the response `sessionId` is the canonical internal id |
 | session metadata | `runtime`, `status`, `backendMode`, `model`, `cwd`, timestamps, message count, activity, and `executionInstanceId` | registry/service metadata only; no message body |
 | `sources` | registry path, runtime-specific locators, and bounded journal/API commands | exact locators; commands are hints, not executed by the endpoint |
-| `diagnostics` | compact structured records (`ts`, level, component, message, correlation ids, scrubbed error summary) | process-local; 10 records by default and `expanded: false` |
-| `receiptSummary` | count plus the newest public run receipt when one exists | durable; receipts contain lifecycle identity/timestamps, never prompt bodies |
+| `diagnostics` | compact structured records (`ts`, level, component, message, correlation ids, scrubbed error summary) | process-local; up to 10 records by default, dynamically trimmed to protect the default bundle budget, and `expanded: false` |
+| `receiptSummary` | count plus the newest public run receipt when one exists | durable; receipts contain lifecycle identity/timestamps and payload-free liveness, never prompt bodies |
+| `retention` | active durable/resident lease counts and latest expiry | excludes lease owner ids and labels; retention is not execution |
+| `residency` | current adapter materialization (`materialized`, `not_materialized`, or `unknown`) | process observation; not progress or quiescence |
+| `runChronology` | newest three compact run entries (identity/status/timestamps/error/liveness) | bounded durable chronology; independent of full `expand=runs` receipts |
 | `warnings` / `links` | process-local/durable caveats and links to deeper reads | always present |
 
 The default diagnostic message is truncated to 180 characters. `limit=N` is
 clamped to 1–50; `expand=diagnostics` permits up to 50 bounded records with
-messages truncated to 320 characters. The default fixture bundle is kept below
-5 KB. Exact host paths are retained as locators, so unusually long custom paths
+messages truncated to 320 characters. Without expansions, oldest diagnostic
+records are removed as needed to keep the serialized default fixture bundle
+below 4.9 KB. Exact host paths are retained as locators, so unusually long custom paths
 can contribute to the serialized size. Unknown expansion names are ignored.
 
 Optional fields are included only when explicitly requested:

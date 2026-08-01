@@ -5,6 +5,7 @@ import os from 'node:os';
 import { RunReceiptManager, type BeginRunInput } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
+import type { NormalizedEvent } from '@pi-web-ui/shared';
 
 const baseInput: BeginRunInput = {
   sessionId: 'session-1',
@@ -22,6 +23,7 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
   let now: number;
   let nextId: number;
   let manager: RunReceiptManager;
+  let store: RunReceiptStore;
   let metrics: OperationalMetrics;
 
   beforeEach(async () => {
@@ -29,8 +31,9 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     now = Date.parse('2026-07-15T12:00:00.000Z');
     nextId = 0;
     metrics = new OperationalMetrics({ now: () => now });
+    store = new RunReceiptStore(dir, { now: () => now });
     manager = new RunReceiptManager({
-      store: new RunReceiptStore(dir, { now: () => now }),
+      store,
       now: () => now,
       idFactory: () => `run-${++nextId}`,
       idempotencyTtlMs: 1_000,
@@ -171,22 +174,218 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     });
   });
 
-  it('records a late agent_end signal even when the terminal callback won the race', async () => {
+  it('records a late agent_end signal without reopening terminality or claiming quiescence', async () => {
     const run = await manager.beginRun(baseInput);
     await manager.markStarted(run.receipt.runId);
     await manager.finish(run.receipt.runId);
 
+    now += 5;
     await manager.observeEvent(run.receipt.runId, {
       type: 'agent_end',
       sessionId: baseInput.sessionId,
-      timestamp: now + 5,
+      timestamp: now,
       data: {},
     });
 
     expect(manager.get(run.receipt.runId)).toMatchObject({
       status: 'completed',
-      agentEndAt: new Date(now + 5).toISOString(),
+      agentEndAt: new Date(now).toISOString(),
+      liveness: {
+        terminalObservations: [{
+          type: 'agent_end',
+          occurredAt: new Date(now).toISOString(),
+          observedAt: new Date(now).toISOString(),
+          origin: 'runtime_or_adapter',
+          late: true,
+        }],
+        cessation: {
+          state: 'unconfirmed',
+          basis: 'terminal_signal',
+          observedAt: new Date(now).toISOString(),
+        },
+      },
     });
+  });
+
+  it('coalesces ordinary durable activity snapshots to at most one write per second', async () => {
+    const run = await manager.beginRun(baseInput);
+    await manager.markStarted(run.receipt.runId);
+    const patch = vi.spyOn(store, 'patch');
+
+    const observations = Array.from({ length: 10 }, (_, index) => manager.observeEvent(run.receipt.runId, {
+      type: 'message_update',
+      sessionId: baseInput.sessionId,
+      timestamp: now + index,
+      data: {},
+    }));
+    await Promise.all(observations);
+
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(manager.get(run.receipt.runId)?.liveness?.lastEligibleActivity?.eventType).toBe('message_update');
+  });
+
+  it('persists only allowlisted low-cardinality terminal reasons', async () => {
+    const run = await manager.beginRun(baseInput);
+    await manager.markStarted(run.receipt.runId);
+    await manager.observeEvent(run.receipt.runId, {
+      type: 'agent_end',
+      sessionId: baseInput.sessionId,
+      timestamp: now,
+      data: { synthetic: true, reason: 'token_sk:livesecret' },
+    });
+
+    expect(manager.get(run.receipt.runId)?.liveness?.terminalObservations?.[0]).toMatchObject({
+      origin: 'synthetic',
+    });
+    expect(manager.get(run.receipt.runId)?.liveness?.terminalObservations?.[0]).not.toHaveProperty('reason');
+  });
+
+  it('ignores synthetic stream_activity heartbeats and records an idle watchdog decision', async () => {
+    await manager.shutdown();
+    manager = new RunReceiptManager({
+      store: new RunReceiptStore(dir, { now: () => now }),
+      now: () => now,
+      idFactory: () => `run-${++nextId}`,
+      metrics,
+      turnIdleTimeoutMs: 1_000,
+      turnMaxMs: 10_000,
+    });
+    await manager.init();
+    const run = await manager.beginRun(baseInput);
+    await manager.markStarted(run.receipt.runId);
+
+    now += 900;
+    await manager.observeEvent(run.receipt.runId, {
+      type: 'stream_activity',
+      sessionId: baseInput.sessionId,
+      timestamp: now,
+      data: { elapsedMs: 900 },
+    });
+    now += 100;
+    await (manager as any).reconcileStalledRuns();
+
+    expect(manager.get(run.receipt.runId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'TURN_STALLED',
+      liveness: {
+        watchdog: {
+          reason: 'idle',
+          decidedAt: new Date(now).toISOString(),
+          idleTimeoutMs: 1_000,
+          absoluteTimeoutMs: 10_000,
+        },
+        cessation: {
+          state: 'unknown',
+          basis: 'watchdog',
+          observedAt: new Date(now).toISOString(),
+        },
+      },
+    });
+    expect(manager.get(run.receipt.runId)?.liveness?.lastEligibleActivity?.eventType).not.toBe('stream_activity');
+  });
+
+  it('counts Pi extension UI requests as attributable run activity', async () => {
+    await manager.shutdown();
+    manager = new RunReceiptManager({
+      store: new RunReceiptStore(dir, { now: () => now }),
+      now: () => now,
+      idFactory: () => `run-${++nextId}`,
+      metrics,
+      turnIdleTimeoutMs: 1_000,
+      turnMaxMs: 10_000,
+    });
+    await manager.init();
+    const run = await manager.beginRun(baseInput);
+    await manager.markStarted(run.receipt.runId);
+
+    now += 900;
+    await manager.observeEvent(run.receipt.runId, {
+      type: 'extension_ui_request',
+      sessionId: baseInput.sessionId,
+      timestamp: now,
+      data: { id: 'ui-1', method: 'confirm' },
+    } as NormalizedEvent);
+    now += 200;
+    await (manager as any).reconcileStalledRuns();
+
+    expect(manager.get(run.receipt.runId)).toMatchObject({
+      status: 'started',
+      liveness: { lastEligibleActivity: { eventType: 'extension_ui_request' } },
+    });
+  });
+
+  it('preserves watchdog cessation provenance when terminal evidence arrives late', async () => {
+    await manager.shutdown();
+    manager = new RunReceiptManager({
+      store: new RunReceiptStore(dir, { now: () => now }),
+      now: () => now,
+      idFactory: () => `run-${++nextId}`,
+      metrics,
+      turnIdleTimeoutMs: 1_000,
+      turnMaxMs: 10_000,
+    });
+    await manager.init();
+    const run = await manager.beginRun(baseInput);
+    await manager.markStarted(run.receipt.runId);
+    now += 1_000;
+    await (manager as any).reconcileStalledRuns();
+
+    now += 5;
+    await manager.observeEvent(run.receipt.runId, {
+      type: 'agent_end', sessionId: baseInput.sessionId, timestamp: now, data: {},
+    });
+
+    expect(manager.get(run.receipt.runId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'TURN_STALLED',
+      liveness: {
+        watchdog: { reason: 'idle' },
+        terminalObservations: [{ late: true, origin: 'runtime_or_adapter' }],
+        cessation: { state: 'unknown', basis: 'watchdog' },
+      },
+    });
+  });
+
+  it('records an absolute watchdog decision even when recent attributable activity exists', async () => {
+    await manager.shutdown();
+    manager = new RunReceiptManager({
+      store: new RunReceiptStore(dir, { now: () => now }),
+      now: () => now,
+      idFactory: () => `run-${++nextId}`,
+      metrics,
+      turnIdleTimeoutMs: 2_000,
+      turnMaxMs: 1_000,
+    });
+    await manager.init();
+    const run = await manager.beginRun(baseInput);
+    await manager.markStarted(run.receipt.runId);
+
+    now += 900;
+    await manager.observeEvent(run.receipt.runId, {
+      type: 'tool_execution_end',
+      sessionId: baseInput.sessionId,
+      timestamp: now,
+      data: { result: 'must not be persisted' },
+    });
+    now += 100;
+    await (manager as any).reconcileStalledRuns();
+
+    expect(manager.get(run.receipt.runId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'TURN_STALLED',
+      liveness: {
+        lastEligibleActivity: {
+          eventType: 'tool_execution_end',
+          occurredAt: new Date(now - 100).toISOString(),
+          observedAt: new Date(now - 100).toISOString(),
+        },
+        watchdog: {
+          reason: 'absolute',
+          decidedAt: new Date(now).toISOString(),
+        },
+      },
+    });
+    expect(JSON.stringify(manager.get(run.receipt.runId))).not.toContain('must not be persisted');
   });
 
   it('serializes competing terminal callbacks without throwing', async () => {

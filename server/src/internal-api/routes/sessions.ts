@@ -102,6 +102,7 @@ const logger = createLogger('InternalAPI');
 
 const EVIDENCE_DEFAULT_LIMIT = 10;
 const EVIDENCE_MAX_LIMIT = 50;
+const EVIDENCE_DEFAULT_MAX_BYTES = 4_900;
 const EVIDENCE_EXPANSIONS = new Set(['diagnostics', 'transcript', 'screen', 'runs']);
 
 function parseEvidenceExpansions(raw: string | null): Set<string> {
@@ -452,6 +453,33 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return running ? 'running' : entry.status;
     } catch {
       return entry.status;
+    }
+  }
+
+  function evidenceRetention(sessionId: string): SessionEvidenceResponse['retention'] {
+    const now = Date.now();
+    const leases = (pinExpiry?.listLeases(sessionId) ?? []).filter((lease) => lease.pinnedUntil > now);
+    const expiries = leases.map((lease) => lease.pinnedUntil);
+    return {
+      durableLeaseCount: leases.filter((lease) => (lease.mode ?? 'resident') === 'durable').length,
+      residentLeaseCount: leases.filter((lease) => (lease.mode ?? 'resident') === 'resident').length,
+      ...(expiries.length ? { latestExpiryAt: new Date(Math.max(...expiries)).toISOString() } : {}),
+    };
+  }
+
+  function evidenceResidency(entry: RegistryEntry): SessionEvidenceResponse['residency'] {
+    const observedAt = new Date().toISOString();
+    try {
+      const materialized = entry.sdkType === 'pi'
+        ? multiSessionManager.hasSession(entry.path)
+        : entry.sdkType === 'claude'
+          ? claudeService.hasSession(entry.id)
+          : entry.sdkType === 'opencode'
+            ? opencodeService.hasSession(entry.id)
+            : antigravityService.hasSession(entry.id);
+      return { state: materialized ? 'materialized' : 'not_materialized', observedAt };
+    } catch {
+      return { state: 'unknown', observedAt };
     }
   }
 
@@ -1073,12 +1101,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           count: receipts.length,
           ...(receipts[0] ? { latest: receipts[0] } : {}),
         },
+        retention: evidenceRetention(entry.id),
+        residency: evidenceResidency(entry),
+        runChronology: receipts.slice(0, 3).map((receipt) => ({
+          runId: receipt.runId,
+          status: receipt.status,
+          acceptedAt: receipt.acceptedAt,
+          ...(receipt.startedAt ? { startedAt: receipt.startedAt } : {}),
+          ...(receipt.agentEndAt ? { agentEndAt: receipt.agentEndAt } : {}),
+          ...(receipt.terminalAt ? { terminalAt: receipt.terminalAt } : {}),
+          ...(receipt.errorCode ? { errorCode: receipt.errorCode } : {}),
+          ...(receipt.liveness ? { liveness: receipt.liveness } : {}),
+        })),
         control: {
           askUserQuestions: extractQuestionControlEvents(broker.getRecentEvents(entry.id, EVIDENCE_MAX_LIMIT)),
         },
         warnings: [
           'Diagnostics are process-local and reset when the server restarts.',
           'Run receipts and runtime-owned source files are durable; this bundle is intentionally bounded.',
+          'Residency means adapter materialisation only; it does not prove execution progress, process quiescence, or semantic completion.',
         ],
         links: evidenceLinks(entry.id),
       };
@@ -1115,6 +1156,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             lastActivity: entry.lastActivity,
           },
         };
+      }
+
+      if (expansions.size === 0) {
+        while (
+          response.diagnostics.records.length > 0
+          && Buffer.byteLength(JSON.stringify(response)) > EVIDENCE_DEFAULT_MAX_BYTES
+        ) {
+          response.diagnostics.records.shift();
+        }
       }
 
       sendJson(res, 200, response);
@@ -1318,7 +1368,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     let persistence: Promise<unknown> = Promise.resolve();
     const eventPersistence: Promise<void>[] = [];
 
-    const complete = (error?: Error): void => {
+    const complete = (error?: Error, cessationBasis?: 'documented_handler_return'): void => {
       if (completed) return;
       completed = true;
       completionError = error;
@@ -1330,7 +1380,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         ? runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY })
         : runReceipts.finish(runId, error
           ? { status: 'failed', errorCode: error instanceof TurnStalledError ? ErrorCode.TURN_STALLED : ErrorCode.RUNTIME_ERROR }
-          : {});
+          : cessationBasis
+            ? { status: 'completed', cessationBasis }
+            : {});
     };
 
     let executionError: Error | undefined;
@@ -2279,6 +2331,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     await agentSession?.abort().catch(() => { /* best-effort runtime fencing */ });
   }
 
+  function isSyntheticTerminalEvent(event: NormalizedEvent): boolean {
+    return event.type === 'agent_end'
+      && event.data !== null
+      && typeof event.data === 'object'
+      && !Array.isArray(event.data)
+      && (event.data as Record<string, unknown>).synthetic === true;
+  }
+
   function queuedUserMessageMatches(event: unknown, expected: string): boolean {
     if (!event || typeof event !== 'object') return false;
     const candidate = event as {
@@ -2353,7 +2413,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const active = queue.find((item) => item.delivered);
         if (active) {
           await runReceipts.observeEvent(active.runId, normalized);
-          if (normalized.type === 'agent_end') {
+          if (normalized.type === 'agent_end' && !isSyntheticTerminalEvent(normalized)) {
             await runReceipts.finish(active.runId, { status: 'completed' });
             removeQueuedPiRun(sessionId, active.runId);
           }
@@ -2422,7 +2482,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     message: string,
     mode: PromptMode,
     onEvent: (event: NormalizedEvent) => void,
-    onComplete: (error?: Error) => void,
+    onComplete: (error?: Error, cessationBasis?: 'documented_handler_return') => void,
     turnToken?: number,
   ): Promise<void> {
     // Wrap onEvent so every event also flows into the broker. This lets
@@ -2505,7 +2565,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const endObserver = (event: unknown) => {
           const normalized = event as NormalizedEvent;
           const ownsTurn = turnToken === undefined || activeDirectDispatchTokens.get(sessionId) === turnToken;
-          if (normalized.type === 'agent_end' && ownsTurn && !ended) {
+          if (normalized.type === 'agent_end' && !isSyntheticTerminalEvent(normalized) && ownsTurn && !ended) {
             ended = true;
             multiSessionManager.removeApiObserver(sessionPath, endObserver);
             multiSessionManager.removeApiObserver(sessionPath, eventObserver);
@@ -2530,7 +2590,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             ended = true;
             multiSessionManager.removeApiObserver(sessionPath, endObserver);
             multiSessionManager.removeApiObserver(sessionPath, eventObserver);
-            onComplete();
+            onComplete(undefined, 'documented_handler_return');
             resolveTurnBoundary();
           }
         } catch (err) {

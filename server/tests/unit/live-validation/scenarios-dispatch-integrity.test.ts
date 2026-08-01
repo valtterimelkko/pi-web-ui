@@ -23,6 +23,58 @@ describe('dispatch-integrity live scenarios', () => {
     ]));
   });
 
+  it('stalled-run-reaped requires durable idle-watchdog and cessation evidence', async () => {
+    const previousTimeout = process.env.INTERNAL_API_TURN_IDLE_TIMEOUT_MS;
+    process.env.INTERNAL_API_TURN_IDLE_TIMEOUT_MS = '2000';
+    try {
+      const client = {
+        createSession: vi.fn().mockResolvedValue({ sessionId: 'pi-1' }),
+        promptWithIdempotency: vi.fn().mockResolvedValue({ runId: 'run-stalled' }),
+        getRunReceipt: vi.fn().mockResolvedValue({
+          runId: 'run-stalled',
+          sessionId: 'pi-1',
+          runtime: 'pi',
+          executionInstanceId: 'pi-local-default',
+          status: 'failed',
+          acceptedAt: '2026-08-01T12:00:00.000Z',
+          terminalAt: '2026-08-01T12:00:02.000Z',
+          errorCode: 'TURN_STALLED',
+          dispatchMode: 'prompt',
+          liveness: {
+            activityPolicyVersion: 'run-activity-v1',
+            idleTimeoutMs: 2000,
+            absoluteTimeoutMs: 10000,
+            watchdog: {
+              reason: 'idle',
+              decidedAt: '2026-08-01T12:00:02.000Z',
+              idleTimeoutMs: 2000,
+              absoluteTimeoutMs: 10000,
+            },
+            cessation: { state: 'unknown', basis: 'watchdog', observedAt: '2026-08-01T12:00:02.000Z' },
+          },
+        }),
+        getCapacity: vi.fn().mockResolvedValue({ activeTurns: 0 }),
+        getSessionInfo: vi.fn().mockResolvedValue({}),
+        deleteSession: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const result = await scenarioRegistry['stalled-run-reaped'].run({
+        client,
+        runtime: 'pi',
+        capabilities,
+        cwd: '/tmp',
+      });
+
+      expect(result.assertions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'idle_watchdog_evidence', passed: true }),
+        expect.objectContaining({ name: 'cessation_not_overclaimed', passed: true }),
+      ]));
+    } finally {
+      if (previousTimeout === undefined) delete process.env.INTERNAL_API_TURN_IDLE_TIMEOUT_MS;
+      else process.env.INTERNAL_API_TURN_IDLE_TIMEOUT_MS = previousTimeout;
+    }
+  });
+
   it('follow-up proves idle promotion through the reported dispatch mode', async () => {
     const client = {
       createSession: vi.fn().mockResolvedValue({ sessionId: 'pi-1' }),

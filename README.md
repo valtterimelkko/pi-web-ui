@@ -1,6 +1,6 @@
 # Pi Web UI
 
-> **Latest work:** Internal API `1.13.0` makes dispatch modes, approval resolution, stalled-run cleanup, and Pi session identity truthful. It builds on source-owned retention and execution admission (`1.12.0`), exact Claude profile binding (`1.11.0`), compact session evidence (`1.10.0`), and truthful Pi completion across auto-compaction (`1.10.1`). See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
+> **Latest work:** Internal API `1.14.0` adds durable payload-free run-liveness, watchdog-cause, cessation, and bounded recovery evidence. It builds on truthful dispatch, approval, watchdog, and Pi identity semantics (`1.13.0`) plus source-owned retention and execution admission (`1.12.0`). See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
 
 Built for a simple reality: **one agent runtime and one subscription is often not enough.**
 

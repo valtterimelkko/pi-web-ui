@@ -81,16 +81,16 @@ Always start by asking the server what is available now and which contract versi
 - `GET /api/v1/capacity` — process-local turn budget, interactive reserve, and measured memory headroom (contract `1.12.0+`)
 
 Useful debugging/introspection, notification, model-control, run-identity, and
-health, evidence, receipt-correctness, exact-profile, retention, admission, and dispatch-integrity additions landed in contract `1.3.0` through `1.13.0`:
+health, evidence, receipt-correctness, exact-profile, retention, admission, dispatch-integrity, and run-liveness additions landed in contract `1.3.0` through `1.14.0`:
 
 - `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off; `1.9.0` adds `requestId`, `runId`, `runtime`, `component`, and `since` selectors plus a bounded process-local `operational` snapshot.
-- `GET /api/v1/sessions/:id/evidence` — `1.10.0` compact one-call troubleshooting bundle; resolves aliases, returns bounded diagnostics and durable receipt summary, and links to deeper reads. Use this before separate `/info`, `/diagnostics`, and transcript calls.
+- `GET /api/v1/sessions/:id/evidence` — `1.10.0` compact one-call troubleshooting bundle; resolves aliases, returns bounded diagnostics and durable receipt summary, and links to deeper reads. Contract `1.14.0` adds separate retention/residency projections and a bounded three-run liveness chronology. Use this before separate `/info`, `/diagnostics`, and transcript calls.
 - `GET /api/v1/health` — use the additive `runtimeHealth` matrix for per-runtime checks; the legacy `runtimes` strings/top-level status are compatibility projections.
 - `GET /api/v1/events/types` — machine-readable catalogue of normalized event kinds on the `/events` stream.
 - `GET /api/v1/sessions/:id/transcript?view=screen` — a read-only “what the user sees” projection for a finished or in-progress session, without browser automation.
 - `POST /api/v1/notifications`, `GET /api/v1/notifications/:id`, and `GET /api/v1/notifications` — durable explicit acceptance, pollable delivery status, and recent delivery history. Reuse one `Idempotency-Key` across retries (contract `1.8.0+`).
 - `POST/DELETE/GET /api/v1/sessions/:id/notifications...` — opt a child session into `agent_end` notifications and verify the opt-in/delivery state.
-- `GET /api/v1/runs/:runId` — durable run receipt lookup for accepted, detached, or retried dispatches. Contract `1.10.1` ensures Pi completion waits for `agent_end` across auto-compaction; on older servers, treat Pi `completed` without `agentEndAt` as contradictory/nonterminal evidence. Contract `1.11.0` adds `modelSelector` for exact profile-backed Claude evidence while retaining effective `model` separately.
+- `GET /api/v1/runs/:runId` — durable run receipt lookup for accepted, detached, or retried dispatches. Contract `1.10.1` ensures Pi completion waits for `agent_end` across auto-compaction; on older servers, treat Pi `completed` without `agentEndAt` as contradictory/nonterminal evidence. Contract `1.11.0` adds `modelSelector`; `1.14.0` adds payload-free activity/watchdog/terminal/cessation evidence. A terminal receipt releases capacity but does not by itself prove nested-process or workspace quiescence.
 - `GET /api/v1/models` — model-specific `thinkingLevels`; use this before requesting `max` for Claude or Pi sessions.
 - `POST /api/v1/sessions/:id/control` with `{action:"set_thinking_level",level:"max"}` — available when the selected model advertises `max` (contract `1.7.0+`).
 
@@ -208,7 +208,8 @@ answer-delivery ladder as distinct evidence:
 2. **resolved** — response body says `resolved:true` for the matching
    `requestId`/`toolCallId`;
 3. **assistant resumed** — normalized events/transcript show post-answer work;
-4. **turn terminal** — `agent_end` and the run receipt are terminal.
+4. **turn terminal** — `agent_end` and the run receipt are terminal;
+5. **cessation evidence** — inspect `receipt.liveness.cessation` and repository/runtime evidence before overlapping recovery. `unconfirmed` or `unknown` requires additional runtime/repository evidence before same-workspace recovery; it is not permission to infer quiescence.
 
 Record timeout/rejection separately. Never set an `ownerAnswerDeliveredAt`-style
 field before step 2, and do not claim the turn succeeded before step 4.

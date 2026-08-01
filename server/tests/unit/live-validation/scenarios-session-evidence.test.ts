@@ -14,6 +14,15 @@ describe('session-evidence live-validation scenario', () => {
       runtime: 'pi',
       aliases: { internalId: 'canonical-id', path: '/tmp/pi-session.jsonl' },
       diagnostics: { processLocal: true, records: [] },
+      retention: { durableLeaseCount: 0, residentLeaseCount: 0 },
+      residency: { state: 'materialized', observedAt: '2026-07-18T12:00:01.000Z' },
+      runChronology: [{
+        runId: 'run-1', status: 'completed', acceptedAt: '2026-07-18T12:00:00.000Z', terminalAt: '2026-07-18T12:00:01.000Z',
+        liveness: {
+          activityPolicyVersion: 'run-activity-v1', idleTimeoutMs: 1000, absoluteTimeoutMs: 10000,
+          cessation: { state: 'unconfirmed', basis: 'terminal_signal', observedAt: '2026-07-18T12:00:01.000Z' },
+        },
+      }],
       warnings: ['diagnostics are process-local'],
     };
     const client = {
@@ -62,6 +71,9 @@ describe('session-evidence live-validation scenario', () => {
       expect.objectContaining({ name: 'canonical_id', passed: true }),
       expect.objectContaining({ name: 'path_alias', passed: true }),
       expect.objectContaining({ name: 'process_local_label', passed: true }),
+      expect.objectContaining({ name: 'retention_liveness_separated', passed: true }),
+      expect.objectContaining({ name: 'residency_bounded', passed: true }),
+      expect.objectContaining({ name: 'run_liveness_evidence', passed: true }),
     ]));
   });
 });

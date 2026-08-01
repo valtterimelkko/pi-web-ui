@@ -1180,12 +1180,28 @@ export class MultiSessionManager {
       activeSession.status = 'idle';
       activeSession.lastActivity = new Date();
 
+      const syntheticEvent = {
+        type: 'agent_end',
+        sessionId: activeSession.sessionId,
+        timestamp: Date.now(),
+        data: { result: null, usage: {}, synthetic: true, reason: 'api_error_grace' },
+      };
       this.broadcastToSubscribers(sessionPath, {
         type: 'session_event',
         sessionId: activeSession.sessionId,
         sessionPath: activeSession.sessionPath,
-        event: { type: 'agent_end', result: null, usage: {} },
+        event: { type: 'agent_end', result: null, usage: {}, synthetic: true, reason: 'api_error_grace' },
       });
+      const observers = this.apiObservers.get(sessionPath);
+      if (observers) {
+        for (const observer of observers) {
+          try {
+            observer(syntheticEvent);
+          } catch {
+            // Non-fatal: synthetic recovery must not fail because an observer did.
+          }
+        }
+      }
 
       this.broadcastToSubscribers(sessionPath, {
         type: 'session_status',

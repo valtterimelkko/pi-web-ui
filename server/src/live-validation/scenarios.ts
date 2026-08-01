@@ -359,6 +359,24 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
             details: String(byId.diagnostics.processLocal),
           },
           {
+            name: 'retention_liveness_separated',
+            passed: Number.isInteger(byId.retention.durableLeaseCount)
+              && Number.isInteger(byId.retention.residentLeaseCount),
+            details: `durable=${byId.retention.durableLeaseCount} resident=${byId.retention.residentLeaseCount}`,
+          },
+          {
+            name: 'residency_bounded',
+            passed: ['materialized', 'not_materialized', 'unknown'].includes(byId.residency.state),
+            details: byId.residency.state,
+          },
+          {
+            name: 'run_liveness_evidence',
+            passed: byId.runChronology.some((receipt) =>
+              receipt.liveness?.activityPolicyVersion === 'run-activity-v1'
+              && receipt.liveness.cessation !== undefined),
+            details: `runs=${byId.runChronology.length}`,
+          },
+          {
             name: 'default_bundle_bounded',
             passed: Buffer.byteLength(serialized) < 5_000,
             details: `${Buffer.byteLength(serialized)} bytes`,
@@ -1258,6 +1276,12 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
         const assertions = [
           { name: 'admitted_prompt_dispatch', passed: receipt.dispatchMode === 'prompt', details: `dispatchMode=${receipt.dispatchMode ?? 'missing'}` },
           { name: 'turn_stalled_terminal', passed: receipt.status === 'failed' && receipt.errorCode === 'TURN_STALLED', details: `status=${receipt.status} code=${receipt.errorCode ?? 'missing'}` },
+          { name: 'idle_watchdog_evidence', passed: receipt.liveness?.watchdog?.reason === 'idle', details: `reason=${receipt.liveness?.watchdog?.reason ?? 'missing'}` },
+          {
+            name: 'cessation_not_overclaimed',
+            passed: receipt.liveness?.cessation?.state === 'unknown' && receipt.liveness.cessation.basis === 'watchdog',
+            details: `state=${receipt.liveness?.cessation?.state ?? 'missing'} basis=${receipt.liveness?.cessation?.basis ?? 'missing'}`,
+          },
           { name: 'capacity_released', passed: capacity?.activeTurns === 0, details: `activeTurns=${capacity?.activeTurns ?? 'missing'}` },
         ];
         return { scenarioId: 'stalled-run-reaped', runtime: context.runtime, passed: assertions.every((a) => a.passed), assertions, runId };
