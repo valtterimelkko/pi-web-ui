@@ -1,0 +1,100 @@
+{
+  "durationMs": 1817390,
+  "model": "gpt-5.6-luna",
+  "p2concurrency": 6,
+  "completions": 855,
+  "completionsPerHour": 1694,
+  "turnWallMs": {
+    "n": 855,
+    "mean": 12660,
+    "p50": 16215,
+    "p95": 20714,
+    "max": 26261
+  },
+  "p1ProbeMs": {
+    "n": 1194,
+    "mean": 8,
+    "p50": 5,
+    "p95": 24,
+    "max": 33
+  },
+  "refusals": 52,
+  "refusalSample": [
+    {
+      "status": 429,
+      "retryAfter": "2",
+      "reason": "global_limit"
+    },
+    {
+      "status": 429,
+      "retryAfter": "2",
+      "reason": "global_limit"
+    },
+    {
+      "status": 429,
+      "retryAfter": "2",
+      "reason": "global_limit"
+    },
+    {
+      "status": 429,
+      "retryAfter": "2",
+      "reason": "global_limit"
+    },
+    {
+      "status": 429,
+      "retryAfter": "2",
+      "reason": "global_limit"
+    }
+  ],
+  "errors": 0,
+  "maxActiveTurnsObserved": 3,
+  "admissionBaselineAfter": {
+    "P0": {
+      "active": 0
+    },
+    "P1": {
+      "active": 0
+    },
+    "P2": {
+      "active": 0
+    },
+    "P3": {
+      "active": 0
+    }
+  },
+  "cgroupStart": {
+    "memory": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    },
+    "pids": {
+      "max": 0
+    },
+    "current": "295014400",
+    "pidsCurrent": "62"
+  },
+  "cgroupEnd": {
+    "memory": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    },
+    "pids": {
+      "max": 0
+    },
+    "current": "473583616",
+    "pidsCurrent": "62"
+  },
+  "capacityEnd": {
+    "executionCapacity": 3,
+    "activeTurns": 0,
+    "available": true
+  }
+}

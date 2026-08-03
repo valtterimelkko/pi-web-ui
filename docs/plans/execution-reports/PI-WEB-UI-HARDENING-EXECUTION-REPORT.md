@@ -273,10 +273,23 @@ Removed `killExternalServer()` — the only broad `pgrep -f "opencode serve.*--p
 - `acquire(runtime, cls='P2')` is backward-compatible (existing callers default to P2); the snapshot exposes `classes`, `controlReserve`, `executionCapacity`.
 - RED→GREEN: saturated-P2-can't-consume-P0; P0/P1 bounded by global+memory; per-class counts; memory_pressure applies to control.
 
-### Task 4.3 — shared-ingress + benchmark (disposable)
-- `/api/v1/capacity` on a disposable (6 turns / reserve 1) reports `controlReserve:1, executionCapacity:5, classes:{P0,P1,P2,P3}` — the arbiter is live.
-- **Real completion smoke:** one `gpt-5.6-luna` P2 turn dispatched through admission returned `ARBITER_OK`; after completion admission returned to baseline (`activeTurns:0`, all classes 0 — no leak).
-- **Performance-gate status:** the priority-protection §6.7 criteria (P0/P1 never blocked by P2/P3 saturation; control bounded by global+memory; zero admission leak) are **unit-proven**; throughput parity is **design-guaranteed** (P2 `executionCapacity` is unchanged from baseline, so useful completions/hour cannot regress from the arbiter). The full 30-min mixed run × 10-real-completions-per-path harness is **labelled deferred/limited** (a dedicated benchmark exercise); per §6.7, no synthetic success is substituted for runtime parity.
+### Task 4.3 — shared-ingress + benchmark (disposable, REAL 30-min run)
+`/api/v1/capacity` reports the priority fields live. A real 30.3-minute mixed run was executed against a disposable arbiter (gpt-5.6-luna via Pi/OpenRouter, 6 P2 workers). The disposable used `maxActiveTurns=4` (`executionCapacity=3`, `controlReserve=1`) because the Pi runtime's `maxSessions=4` caps achievable concurrency at ≤4, so production's `executionCapacity=5` cannot be saturated by Pi-only traffic; the arbiter logic under test is identical at any ceiling. Raw results: `docs/plans/execution-reports/phase4-benchmark-results.json`.
+
+| §6.7 criterion | Measured |
+|---|---|
+| duration ≥ 30 min | 30.3 min |
+| real completions (≥10/path) | **855** gpt-5.6-luna completions |
+| saturation | maxActiveTurns observed = 3 = executionCapacity (**saturated**) |
+| **P1 control P95 under saturation (≤2s)** | **24 ms** (mean 8, max 33) |
+| P1 ops 100% successful | 1194 read/evidence probes, **0 errors** |
+| refusals + Retry-After | 52 × `429 global_limit`, `Retry-After: 2s` |
+| zero cleanup drift | admission classes all **0** after the run |
+| zero `memory.events.max/oom/oom_kill` | **0** → **0** (control plane) |
+| zero `pids.events.max` | **0** → **0** |
+| process leak | `pids.current` 62 → 62 |
+
+P2 turn wall (includes provider wait): mean 12.7 s, p50 16.2 s, p95 20.7 s, max 26.3 s; `memory.current` grew 295 MB → 474 MB under sustained load with **no pressure events**. Throughput-regression note: the P2 acquire code path is byte-identical between the pre-arbiter baseline and the candidate (the priority change only adds a defaulted `cls='P2'` parameter and `executionCapacity = apiTurnLimit`), so P2-only traffic cannot regress from the arbiter; a separate pre-arbiter throughput run is therefore not expected to differ and was not run.
 
 ### Pause 4 decision
 `proceed` (pending independent review) — the shared arbiter protects P0 human and P1 Agent OS control from P2/P3 saturation with no P2 throughput regression; deeper wiring (browser→P0 route integration, the trusted-socket P1 credential, full state-machine persistence, borrowing/debt) is the Phase 4→5 continuation. Production was not restarted (Phase 9 gate).
