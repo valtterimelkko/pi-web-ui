@@ -34,21 +34,27 @@ export type EventBrokerSubscriber = (event: NormalizedEvent) => void;
 export interface EventBrokerOptions {
   /** How many recent events to buffer per session for late subscribers. 0 disables. */
   replayBufferSize?: number;
+  /** Max total bytes of the per-session replay buffer (defense against large-event memory growth). */
+  replayBufferMaxBytes?: number;
   /** Injected low-cardinality metrics seam (primarily for tests). */
   metrics?: OperationalMetrics;
 }
 
 const DEFAULT_REPLAY_BUFFER_SIZE = 50;
+const DEFAULT_REPLAY_BUFFER_MAX_BYTES = 8 * 1024 * 1024;
 
 export class InternalApiEventBroker {
   private subscribers: Map<string, Set<EventBrokerSubscriber>> = new Map();
   private subscriberClasses = new WeakMap<EventBrokerSubscriber, string>();
   private replayBuffers: Map<string, NormalizedEvent[]> = new Map();
+  private replayBufferBytes: Map<string, number> = new Map();
   private readonly replayBufferSize: number;
+  private readonly replayBufferMaxBytes: number;
   private readonly metrics: OperationalMetrics;
 
   constructor(options: EventBrokerOptions = {}) {
     this.replayBufferSize = Math.max(0, options.replayBufferSize ?? DEFAULT_REPLAY_BUFFER_SIZE);
+    this.replayBufferMaxBytes = Math.max(0, options.replayBufferMaxBytes ?? DEFAULT_REPLAY_BUFFER_MAX_BYTES);
     this.metrics = options.metrics ?? getOperationalMetrics();
   }
 
@@ -97,17 +103,18 @@ export class InternalApiEventBroker {
   /** Publish an event to all subscribers for a session. */
   publish(sessionId: string, event: NormalizedEvent): void {
     this.metrics.recordEvent(event.timestamp);
-    if (this.replayBufferSize > 0) {
+    if (this.replayBufferSize > 0 || this.replayBufferMaxBytes > 0) {
       let buffer = this.replayBuffers.get(sessionId);
       if (!buffer) {
         buffer = [];
         this.replayBuffers.set(sessionId, buffer);
       }
       buffer.push(event);
-      if (buffer.length > this.replayBufferSize) {
-        const overflow = buffer.length - this.replayBufferSize;
-        buffer.splice(0, overflow);
-      }
+      // Bound by count AND bytes: trim oldest events that exceed either cap.
+      let bytes = (this.replayBufferBytes.get(sessionId) ?? 0) + JSON.stringify(event).length;
+      while (buffer.length > this.replayBufferSize) { const old = buffer.shift(); if (old) bytes -= JSON.stringify(old).length; }
+      while (bytes > this.replayBufferMaxBytes && buffer.length > 0) { const old = buffer.shift(); if (old) bytes -= JSON.stringify(old).length; }
+      this.replayBufferBytes.set(sessionId, Math.max(0, bytes));
     }
 
     const set = this.subscribers.get(sessionId);
@@ -126,6 +133,7 @@ export class InternalApiEventBroker {
   clear(sessionId: string): void {
     this.subscribers.delete(sessionId);
     this.replayBuffers.delete(sessionId);
+    this.replayBufferBytes.delete(sessionId);
   }
 
   /** Return a copy of the recent buffered events for a session, oldest first. */
@@ -139,6 +147,7 @@ export class InternalApiEventBroker {
   clearAll(): void {
     this.subscribers.clear();
     this.replayBuffers.clear();
+    this.replayBufferBytes.clear();
   }
 
   /** Number of active subscribers for a session. */

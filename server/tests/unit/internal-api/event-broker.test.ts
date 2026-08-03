@@ -94,6 +94,16 @@ describe('InternalApiEventBroker', () => {
     expect(types).toEqual(['e3', 'e4', 'e5']);
   });
 
+  it('bounds the replay buffer by total bytes (trims oldest large events)', () => {
+    const broker = new InternalApiEventBroker({ replayBufferSize: 100, replayBufferMaxBytes: 500 });
+    const big = { type: 'message_update', timestamp: 1, data: { huge: 'x'.repeat(400) } } as unknown as NormalizedEvent;
+    for (let i = 0; i < 10; i += 1) broker.publish('s1', big);
+    const recent = broker.getRecentEvents('s1', 100);
+    const totalBytes = recent.reduce((sum, e) => sum + JSON.stringify(e).length, 0);
+    expect(recent.length).toBeLessThan(10); // byte cap trims well below the count cap of 100
+    expect(totalBytes).toBeLessThanOrEqual(500);
+  });
+
   it('supports disabling the replay buffer entirely', () => {
     const noBuffer = new InternalApiEventBroker({ replayBufferSize: 0 });
     noBuffer.publish('s1', makeEvent('agent_start'));
