@@ -265,6 +265,8 @@ Phase 3 was driven through an execute → self-critique → Luna-critical-review
 
 **Out of Phase 3 (accepted, deferred to Phase 4/6):** formal epoch-token assignment state machine + persisted quarantined-debt across restart (Phase 4); per-session cgroup isolation (Phase 6); per-session lease COUNT cap (TTL-bounded only); the full disposable live-validation matrix (stalled-reaped, restart-mid-drain) — relied on unit + route tests for those.
 
+**Luna (gpt-5.5) critical verdict: EXCELLENT.** After five review rounds, Luna confirmed the structural lifecycle-ownership story is coherent (early delete tombstone; idempotent per-session disposal; late registrations cannot repopulate; broker publish/subscribe fenced; Pi broker-key alias tombstoned; Pi/OpenCode broker-feeding observers disposal-owned; queued Pi run correlations disposal-owned; live `/events` SSE + heartbeat disposal-owned; dispose robust to throwing handles and mid-disposal unregister mutation; generic `disposeAll()` shutdown path) and stated it "cannot name a remaining concrete correctness/ownership hole that is both material and clearly achievable within Phase 3 without moving into the deferred Phase 4/6 work."
+
 ---
 
 ## Phase 4 — One execution arbiter and priority reservations
