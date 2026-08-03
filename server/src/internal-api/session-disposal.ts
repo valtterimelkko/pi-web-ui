@@ -42,11 +42,16 @@ export class SessionDisposalRegistry {
   dispose(sessionId: string): void {
     if (this.tombstones.has(sessionId)) return;
     this.tombstones.add(sessionId);
-    const list = this.owners.get(sessionId) ?? [];
+    // Snapshot + detach BEFORE invoking handles: a handle may synchronously
+    // call its own unregister() (which splices the live array), or trigger a
+    // close/error cleanup that does. Iterating the live array would then skip
+    // later handles. The snapshot is immutable and the map entry is already
+    // gone, so any mid-disposal unregister becomes a harmless no-op.
+    const list = [...(this.owners.get(sessionId) ?? [])];
+    this.owners.delete(sessionId);
     for (const h of list) {
       try { h.dispose(); } catch { /* one owner failing must not skip the rest */ }
     }
-    this.owners.delete(sessionId);
   }
 
   /** Dispose all sessions (process shutdown). */

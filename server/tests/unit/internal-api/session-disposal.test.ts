@@ -57,4 +57,17 @@ describe('SessionDisposalRegistry', () => {
     reg.dispose('z');
     expect(b).toHaveBeenCalledTimes(1);
   });
+
+  it('dispose is robust to a handle unregistering itself during disposal (no handle skipped)', () => {
+    const reg = new SessionDisposalRegistry();
+    let unregA: () => void = () => {};
+    const a = vi.fn(() => { unregA(); }); // A unregisters itself mid-disposal (mutates the live array)
+    const b = vi.fn();
+    unregA = reg.register('s3', 'a', a);
+    reg.register('s3', 'b', b);
+    reg.dispose('s3');
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledTimes(1); // MUST not be skipped by the mid-iteration splice
+    expect(reg.isDisposed('s3')).toBe(true);
+  });
 });
