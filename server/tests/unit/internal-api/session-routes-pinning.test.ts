@@ -7,6 +7,8 @@ import os from 'os';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
 import { AdmissionController } from '../../../src/internal-api/admission-controller.js';
 import { BoundedControlLane } from '../../../src/internal-api/control-lane.js';
+import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
+import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 
 function createJsonReq(method: string, url: string, body?: unknown): IncomingMessage {
@@ -108,7 +110,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
-  function makeRoutes(admissionController?: AdmissionController, controlLane?: BoundedControlLane) {
+  function makeRoutes(admissionController?: AdmissionController, controlLane?: BoundedControlLane, runReceiptManager?: RunReceiptManager) {
     return createSessionRoutes({
       claudeService,
       opencodeService,
@@ -123,6 +125,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
       pinExpiryIntervalMs: 60_000,
       admissionController,
       controlLane,
+      runReceiptManager,
     });
   }
 
@@ -417,6 +420,37 @@ describe('createSessionRoutes — API pinning + detach', () => {
     expect(observedInFlight).toBe(1);                  // cancel ran inside the control lane
     expect(lane.inFlight).toBe(0);                     // and released it
     expect(admission.snapshot().activeTurns).toBe(before); // cancel acquired no execution slot
+    a.release(); b.release();
+  });
+
+  it('cancel is lifecycle-safe under P2 saturation: late terminal is evidence-only, cancel is idempotent, no drift', async () => {
+    const runReceipts = new RunReceiptManager({ store: new RunReceiptStore(), idFactory: () => 'run-lc-1', idempotencyTtlMs: 60_000 });
+    await runReceipts.init();
+    const admission = new AdmissionController({
+      maxActiveTurns: 3, interactiveReserve: 1, runtimeMaxActiveTurns: { claude: 3 },
+      memory: () => ({ currentBytes: 0, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 1, reservedBytesPerTurn: 1,
+    });
+    const routes = makeRoutes(admission, undefined, runReceipts);
+    registry.get.mockResolvedValue({ id: 'claude-1', path: 'claude-1', sdkType: 'claude', cwd: '/x', status: 'running' });
+    const begun = await runReceipts.beginRun({ sessionId: 'claude-1', runtime: 'claude', executionInstanceId: 'x', model: 'm', message: 'go', mode: 'prompt', verbosity: 'answers', detach: false });
+    const runId = begun.receipt.runId;
+    const a = await admission.acquire('claude', 'P2');
+    const b = await admission.acquire('claude', 'P2'); // saturated
+    // cancel under saturation
+    const res1 = createMockRes();
+    await routes.handleAbort(createJsonReq('POST', '/x'), res1, 'claude-1');
+    expect(res1.statusCode).toBe(200);
+    expect(runReceipts.get(runId)?.status).toBe('cancelled');
+    // LATE terminal event after cancel: evidence-only — receipt must NOT reopen to success
+    await runReceipts.observeEvent(runId, { type: 'agent_end', sessionId: 'claude-1', timestamp: 1, data: {} });
+    expect(runReceipts.get(runId)?.status).toBe('cancelled');
+    // no execution-admission drift from the late event
+    expect(admission.snapshot().activeTurns).toBe(2);
+    // repeated cancel is idempotent/safe (already-terminal)
+    const res2 = createMockRes();
+    await routes.handleAbort(createJsonReq('POST', '/x'), res2, 'claude-1');
+    expect(res2.statusCode).toBe(200);
     a.release(); b.release();
   });
 
