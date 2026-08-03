@@ -1,5 +1,10 @@
-import { readFileSync } from 'fs';
-import { availableParallelism, totalmem } from 'os';
+import { availableParallelism } from 'os';
+import {
+  readServiceMemoryCapacity,
+  readServicePidsCapacity,
+  type CgroupMemorySource,
+  type ResolvedPidsCapacity,
+} from './cgroup-capacity.js';
 import type { SessionRuntime } from './types.js';
 
 export type AdmissionRefusalReason = 'global_limit' | 'runtime_limit' | 'memory_pressure';
@@ -14,6 +19,10 @@ export class AdmissionCapacityError extends Error {
 export interface MemoryCapacity {
   currentBytes: number;
   limitBytes: number;
+  /** Memory.high soft boundary when readable from the cgroup. */
+  highBytes?: number;
+  /** Where current/limit were read from: the service cgroup, the cgroup root, or process RSS. */
+  source?: CgroupMemorySource;
 }
 
 export interface AdmissionSnapshot {
@@ -25,6 +34,8 @@ export interface AdmissionSnapshot {
   apiTurnLimit: number;
   memory: MemoryCapacity & { headroomBytes: number; minimumHeadroomBytes: number; reservedBytesPerTurn: number; projectedHeadroomBytes: number };
   runtimes: Record<SessionRuntime, { activeTurns: number; maxActiveTurns: number; stalledRuns?: number }>;
+  /** Task/PID capacity from the service cgroup, when available. */
+  pids?: { current?: number; max?: number; source?: CgroupMemorySource };
   retryAfterSeconds: number;
   /** Number of runs terminalised as stalled by the watchdog. */
   stalledRuns?: number;
@@ -41,6 +52,8 @@ export interface AdmissionControllerOptions {
   /** Conservative memory reservation applied before each admitted turn. */
   reservedBytesPerTurn?: number;
   memory?: () => MemoryCapacity;
+  /** Injectable PID/task capacity reader for the snapshot; defaults to the service cgroup. */
+  readPids?: () => ResolvedPidsCapacity;
   retryAfterSeconds?: number;
 }
 
@@ -52,23 +65,12 @@ function positiveInteger(value: number | undefined, fallback: number): number {
   return Number.isFinite(value) && (value as number) > 0 ? Math.floor(value as number) : fallback;
 }
 
-function readNumber(path: string): number | undefined {
-  try {
-    const value = readFileSync(path, 'utf8').trim();
-    if (value === 'max') return undefined;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Uses cgroup-v2 aggregate memory when available, otherwise process RSS/host RAM. */
+/**
+ * Resolves this process's actual memory capacity from its nested service cgroup
+ * (preferred) rather than the cgroup-root/host aggregate. See `cgroup-capacity.ts`.
+ */
 export function readMemoryCapacity(): MemoryCapacity {
-  const current = readNumber('/sys/fs/cgroup/memory.current');
-  const limit = readNumber('/sys/fs/cgroup/memory.max');
-  if (current !== undefined && limit !== undefined) return { currentBytes: current, limitBytes: limit };
-  return { currentBytes: process.memoryUsage().rss, limitBytes: totalmem() };
+  return readServiceMemoryCapacity();
 }
 
 export class AdmissionController {
@@ -82,6 +84,7 @@ export class AdmissionController {
   private readonly runtimeLimits: Record<SessionRuntime, number>;
   private readonly minimumHeadroomBytes: number;
   private readonly memory: () => MemoryCapacity;
+  private readonly readPids: () => ResolvedPidsCapacity;
   private readonly reservedBytesPerTurn: number;
   private readonly retryAfterSeconds: number;
 
@@ -101,6 +104,7 @@ export class AdmissionController {
     this.minimumHeadroomBytes = positiveInteger(options.minimumHeadroomBytes, DEFAULT_MINIMUM_HEADROOM_BYTES);
     this.reservedBytesPerTurn = positiveInteger(options.reservedBytesPerTurn, DEFAULT_RESERVED_BYTES_PER_TURN);
     this.memory = options.memory ?? readMemoryCapacity;
+    this.readPids = options.readPids ?? readServicePidsCapacity;
     this.retryAfterSeconds = positiveInteger(options.retryAfterSeconds, 2);
   }
 
@@ -139,6 +143,7 @@ export class AdmissionController {
       interactiveReserve: this.interactiveReserve,
       apiTurnLimit: this.apiTurnLimit,
       memory: { ...memory, headroomBytes, minimumHeadroomBytes: this.minimumHeadroomBytes, reservedBytesPerTurn: this.reservedBytesPerTurn, projectedHeadroomBytes },
+      pids: this.readPids(),
       runtimes: Object.fromEntries(RUNTIMES.map((runtime) => [runtime, {
         activeTurns: this.activeByRuntime[runtime],
         maxActiveTurns: this.runtimeLimits[runtime],

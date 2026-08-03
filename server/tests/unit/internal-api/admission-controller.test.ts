@@ -61,4 +61,43 @@ describe('AdmissionController', () => {
     lease.release();
     expect(controller.snapshot().activeTurns).toBe(0);
   });
+
+  // Phase 2.3 — locks in the conservative production admission config so a future
+  // change cannot silently drift back to a CPU-derived 15+ turn default.
+  it('projects the conservative production admission config (6 / 1 / 1536 MiB / 768 MiB)', async () => {
+    const MiB = 1024 * 1024;
+    const controller = new AdmissionController({
+      maxActiveTurns: 6,
+      interactiveReserve: 1,
+      minimumHeadroomBytes: 1536 * MiB,
+      reservedBytesPerTurn: 768 * MiB,
+      memory: () => ({ currentBytes: 0, limitBytes: 12 * 1024 * MiB }),
+    });
+    const snap = controller.snapshot();
+    expect(snap.maxActiveTurns).toBe(6);
+    expect(snap.apiTurnLimit).toBe(5); // 6 minus 1 interactive reserve
+    expect(snap.interactiveReserve).toBe(1);
+    expect(snap.memory.minimumHeadroomBytes).toBe(1536 * MiB);
+    expect(snap.memory.reservedBytesPerTurn).toBe(768 * MiB);
+
+    for (let i = 0; i < 5; i += 1) await controller.acquire('pi');
+    await expect(controller.acquire('pi')).rejects.toMatchObject({
+      reason: 'global_limit',
+      retryAfterSeconds: expect.any(Number),
+    });
+  });
+
+  it('exposes the memory source and PID capacity in the snapshot', () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 3,
+      memory: () => ({ currentBytes: 100, limitBytes: 10_000, source: 'service', highBytes: 8_000 }),
+      readPids: () => ({ current: 5, max: 768, source: 'service' }),
+      minimumHeadroomBytes: 100,
+      reservedBytesPerTurn: 1,
+    });
+    const snap = controller.snapshot();
+    expect(snap.memory.source).toBe('service');
+    expect(snap.memory.highBytes).toBe(8_000);
+    expect(snap.pids).toMatchObject({ current: 5, max: 768, source: 'service' });
+  });
 });
