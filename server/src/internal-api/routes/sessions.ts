@@ -258,6 +258,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   //        (one active turn per WS session) and by the runtime's maxSessions cap;
   //        they do NOT go through this Internal API arbiter. The arbiter's role re:
   //        P0 is to cap P2/P3 so the shared service keeps capacity for the browser.
+  //        CAVEAT: Phase 4 preserves GLOBAL service slack for P0 but does NOT
+  //        guarantee runtime-specific P0 admission under same-runtime P2/P3
+  //        saturation (P2/P3 share the runtime's maxSessions); per-runtime priority
+  //        isolation is Phase 6.
   //   P1 — Agent OS control operations (cancel, evidence, run-receipt, session
   //        control, approval response, delete): run through the bounded controlLane
   //        (concurrency cap + queue), NOT execution admission, so P2/P3 saturation
@@ -3676,6 +3680,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   const wrapControl = <A extends unknown[]>(h: (...a: A) => Promise<void>) =>
     async (...a: A): Promise<void> => {
       const res = a[1] as ServerResponse;
+      // Emergency floor: control bypasses execution admission, but at the critical
+      // memory floor (controlAvailable=false) even control is refused to preserve
+      // the process. Below that, control stays available under P2/P3 saturation.
+      if (!admission.snapshot().controlAvailable) {
+        try { sendJson(res, 503, { error: 'Control unavailable at critical memory', code: 'CONTROL_CRITICAL', retryAfterSeconds: 2 }); } catch { /* response closed */ }
+        return;
+      }
       let slot: { release: () => void };
       try {
         slot = await controlLane.acquire();

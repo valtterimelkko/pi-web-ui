@@ -364,6 +364,35 @@ describe('createSessionRoutes — API pinning + detach', () => {
     expect(lane.inFlight).toBe(0);    // and released it (try/finally, even on error)
   });
 
+  it('control is refused at the critical memory floor (controlAvailable=false)', async () => {
+    const admission = new AdmissionController({
+      maxActiveTurns: 4, interactiveReserve: 1,
+      memory: () => ({ currentBytes: 9_990, limitBytes: 10_000 }), // projected 9 < critical floor 25
+      minimumHeadroomBytes: 100, reservedBytesPerTurn: 1,
+    });
+    const routes = makeRoutes(admission);
+    const res = createMockRes();
+    await routes.handleGetSessionEvidence(createJsonReq('GET', '/x'), res, 'claude-1');
+    expect(res.statusCode).toBe(503);
+    expect(JSON.parse(res.body).code).toBe('CONTROL_CRITICAL');
+  });
+
+  it('a wrapped control op succeeds under P2 saturation without acquiring execution admission', async () => {
+    const admission = new AdmissionController({
+      maxActiveTurns: 3, interactiveReserve: 1, runtimeMaxActiveTurns: { claude: 3 },
+      memory: () => ({ currentBytes: 0, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 1, reservedBytesPerTurn: 1,
+    });
+    const routes = makeRoutes(admission);
+    registry.get.mockResolvedValue({ id: 'claude-1', path: 'claude-1', sdkType: 'claude', cwd: '/x', status: 'idle' });
+    const a = await admission.acquire('claude', 'P2');
+    const b = await admission.acquire('claude', 'P2'); // execution saturated (executionCapacity=2)
+    const before = admission.snapshot().activeTurns;
+    await routes.handleGetSessionEvidence(createJsonReq('GET', '/x'), createMockRes(), 'claude-1');
+    expect(admission.snapshot().activeTurns).toBe(before); // control touched no execution slot
+    a.release(); b.release();
+  });
+
   it('detach=true returns 202 immediately and runs the turn in the background', async () => {
     const routes = makeRoutes();
     const req = createJsonReq('POST', '/api/v1/sessions/claude-1/prompt', {
