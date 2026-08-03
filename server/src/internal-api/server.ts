@@ -166,6 +166,16 @@ export class InternalApiServer {
     const runReceiptManager = new RunReceiptManager({
       store: new RunReceiptStore(this.config.runReceiptDir || DEFAULT_RUN_RECEIPT_DIR),
       idempotencyTtlMs: this.config.runReceiptIdempotencyTtlMs ?? config.internalApiRunIdempotencyTtlMs,
+      onStalled: (receipt) => {
+        // Quarantine signal: a run was terminalised TURN_STALLED without confirmed
+        // runtime cessation. Informational operator ping only — the admission slot
+        // is already released by terminalisation, so no action is required.
+        const runId = receipt.runId;
+        void this.notificationManager?.emitExplicit({
+          title: `⚠️ Run quarantined (TURN_STALLED): ${runId}`,
+          body: `Run ${runId} was terminalised by the watchdog without confirmed runtime cessation. The admission slot is already released; no action required — informational, check for orphan processes only if you wish.`,
+        }).catch(() => { /* best-effort; a failed ping must not affect terminalisation */ });
+      },
     });
     await runReceiptManager.init();
     this.runReceiptManager = runReceiptManager;

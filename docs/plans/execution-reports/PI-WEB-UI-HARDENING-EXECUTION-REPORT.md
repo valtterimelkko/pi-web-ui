@@ -218,6 +218,41 @@ Both gates pass; Phase 0–2 is complete and may be committed.
 
 ---
 
+## Phase 3 — Lifecycle ownership, fencing, shutdown, readiness
+
+**Evidence label:** code `unit-validated` (2709 tests, +9); disposable `live-validated-disposable` (readiness + clean shutdown).
+
+### Task 3.1 — delete-path ownership (TDD)
+Mapping found `handleDeleteSession` never cleared the broker replay tail and never removed the persistent broker-feeding observer (Pi/OpenCode), leaking one closure + idempotency key + ≤100-event buffer per session for the process lifetime. Fix: the attach functions now retain the exact callback (`piObserverByPath`/`opencodeObserverById`); `handleDeleteSession` calls `broker.clear(sessionId)` (+sessionPath) and removes the precise observer + idempotency key. Existing delete/lease/watch suites stay green (61/61).
+
+### Task 3.2 — quarantine signal on stalled runs (TDD)
+`RunReceiptManager` gains an `onStalled` hook fired when the watchdog terminalises a run as `TURN_STALLED`; the Internal API server wires it to `notificationManager.emitExplicit(...)` — an informational Telegram ping (no operator action required; the admission slot is already released by terminalisation). RED→GREEN (`run-receipt-manager.test.ts`).
+**Documented 3.2 refinements (deferred within Phase 3, risk already bounded by 6-turn admission + 12G/9G memory + TasksMax=1024):** (a) admission-release-before-runtime-ack ordering on cancel/stall; (b) a 30 s→unknown reconciler pass over `store.list()`; (c) follow-up admission-lease + Pi-SDK queue-cancel fence. These are subtle behavioural changes needing their own live validation; the conservative bounds mitigate the residual over-subscription window.
+
+### Task 3.3 — single-flight, clean shutdown (TDD)
+New `server/src/shutdown-coordinator.ts` (single-flight shared promise; every owner attempted even if an earlier step throws; clean `exit(0)` with the force timer cancelled; hard `exit(1)` only after a 25 s deadline < systemd's 30 s). `index.ts` `shutdown()` now delegates to it, replacing the unguarded re-runnable teardown that stacked 5 s `Forced shutdown`/`exit(1)` timers. 4 coordinator unit tests; **live-validated**: SIGTERM of a disposable server → exit 0, log `[Server] Shutting down...` with no `Forced shutdown`.
+
+### Task 3.4 — truthful readiness (TDD)
+`/api/health/ready` previously flipped `allHealthy=false` (HTTP 503) on `heapUsed/heapTotal > 90%` — a false positive, since V8 grows the committed heap toward full under load by design. Fix: the ratio is now a **warning, never a readiness failure**, and the message carries RSS and the real V8 `heap_size_limit` for context. **Live-validated**: `/api/health/ready` → HTTP 200, `status:'ok'`, `memory:'ok'` (`Heap: % of committed; RSS; V8 heap_size_limit`).
+
+### Task 3.5 — OpenCode ownership safety (TDD)
+Removed `killExternalServer()` — the only broad `pgrep -f "opencode serve.*--port …"` + `process.kill`-by-name in the repo, previously called from `recycle()` on an attached-external server the manager does not own. `recycle()` now detaches + re-attaches an attached-external server without killing it; only a managed child is stopped. Re-enable is therefore safe (no broad external kill).
+
+### Validation & rollback
+- `npm test --workspace=server` → **2709 passed / 0 failed** (+9). typecheck + build + lint (0 errors) clean.
+- Disposable: readiness 200/ok + clean shutdown exit 0 / no `Forced shutdown`.
+- Rollback: each change is a narrow code revert (coordinator removal restores the prior `shutdown()`; heap check restored to error; `killExternalServer` removal is the safe direction). No state is deleted.
+- Production was NOT restarted for Phase 3 code (the plan reserves controlled production rollout for Phase 9); the running prod service remains on the Phase-2 build until an explicit rollout decision.
+
+### Pause 3 decision
+`proceed` — lifecycle ownership, clean shutdown, truthful readiness, and OpenCode ownership safety are implemented and unit/disposable-validated; deeper 3.2 fences are documented as bounded refinements.
+
+**Independent review (fresh agent):** verdict `proceed`, no critical/high findings. Verified 3.3 (single-flight + every-owner + clean exit(0) + 25 s deadline, `index.ts` faithful), 3.5 (`killExternalServer` fully removed, recycle detaches), 3.1 (exact-key observer removal confirmed: Pi keyed on `entry.path`, OpenCode on `sessionId`), 3.4 (heap>90 % no longer 503), 3.2 (onStalled gated on TURN_STALLED, best-effort, non-blocking). 46/46 focused tests pass; typecheck clean; 0 lint errors introduced; rollback is narrow per change; **no prod regression risk** (Phase 3 is uncommitted working-tree only; prod still runs the Phase-2 build until the Phase-9 rollout gate).
+
+**Accepted gap (MEDIUM, non-blocking):** Task 3.1's delete-path cleanup ships **reviewer-verified-correct code** but without a focused §6.2 unit test asserting `broker.clear` + exact-observer `removeApiObserver` on delete. The existing delete/lease/watch suites (61/61) cover non-regression; the no-growth proof is the live cleanup-loop validation; the focused test is a documented follow-up (needs light harness work to expose the attach/detach seam — the prompt harness attaches but isn't wired for the full delete path; the delete harness has the delete mocks but no attach trigger). Two LOW findings (no explicit late-callback-after-teardown test; emoji in the quarantine title) are non-blocking.
+
+---
+
 ## RED → GREEN evidence (per §6.4 ledger)
 
 Recorded failure output before each implementation (commands run with `npx vitest run <file>`):

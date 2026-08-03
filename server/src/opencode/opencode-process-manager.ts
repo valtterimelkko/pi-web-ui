@@ -195,39 +195,16 @@ export class OpenCodeProcessManager {
     if (this.process) {
       await this.stop();
     } else if (this.attachedExternal) {
-      this.killExternalServer();
+      // Attached to an external server this manager did NOT spawn: never kill it
+      // (no broad pgrep/pkill). Detach and let start() re-attach to the
+      // still-running external server. Only a managed child (this.process) is stopped.
       this.healthy = false;
       this.serverStartedAt = null;
       this.attachedExternal = false;
-      await new Promise(r => setTimeout(r, 1000));
     }
 
     this.shuttingDown = false;
     await this.start();
-  }
-
-  private killExternalServer(): void {
-    const pattern = `opencode serve.*--port ${this.config.port}`;
-    let output = '';
-    try {
-      output = execSync(`pgrep -f ${JSON.stringify(pattern)}`, { timeout: 2000, encoding: 'utf-8' });
-    } catch {
-      return;
-    }
-
-    const currentPid = process.pid;
-    const pids = output
-      .split(/\s+/)
-      .map(pid => Number(pid))
-      .filter(pid => Number.isInteger(pid) && pid > 0 && pid !== currentPid);
-
-    for (const pid of pids) {
-      try {
-        process.kill(pid, 'SIGTERM');
-      } catch {
-        // Already exited or not permitted; best effort.
-      }
-    }
   }
 
   getBaseUrl(): string {

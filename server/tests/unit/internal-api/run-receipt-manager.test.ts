@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -45,6 +45,31 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
   afterEach(async () => {
     await manager.shutdown();
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  // Phase 3.2 — a watchdog-terminalised TURN_STALLED run fires onStalled so the
+  // operator can be notified of a quarantined/unknown run (no required action;
+  // the slot is held conservatively until terminalisation).
+  it('invokes onStalled when the watchdog terminalises a stalled run', async () => {
+    const stalled = vi.fn();
+    const localStore = new RunReceiptStore(dir, { now: () => now });
+    const m = new RunReceiptManager({
+      store: localStore,
+      now: () => now,
+      idFactory: () => `stall-${++nextId}`,
+      idempotencyTtlMs: 1_000,
+      metrics,
+      turnIdleTimeoutMs: 1000,
+      turnMaxMs: 60_000,
+      onStalled: stalled,
+    });
+    await m.init();
+    await m.beginRun({ ...baseInput, idempotencyKey: 'stall-1' });
+    now += 2000; // exceed the 1s idle timeout
+    await (m as unknown as { reconcileStalledRuns: () => Promise<void> }).reconcileStalledRuns();
+    expect(stalled).toHaveBeenCalledTimes(1);
+    expect(stalled.mock.calls[0][0]).toMatchObject({ errorCode: 'TURN_STALLED' });
+    await m.shutdown();
   });
 
   it('creates one run for a key and returns the same receipt on a duplicate request', async () => {

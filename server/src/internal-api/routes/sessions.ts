@@ -295,6 +295,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   /** Track Pi/OpenCode sessions we have already attached a long-lived observer to. */
   const piObservedSessions = new Set<string>();
   const opencodeObservedSessions = new Set<string>();
+  /**
+   * The exact long-lived broker-feeding callback attached for a session, keyed
+   * by the broker key (Pi: sessionPath; OpenCode: sessionId). Retained so
+   * handleDeleteSession can remove the precise callback on unload/delete instead
+   * of leaking it (and its idempotency key) for the process lifetime.
+   */
+  const piObserverByPath = new Map<string, (event: unknown) => void>();
+  const opencodeObserverById = new Map<string, (event: NormalizedEvent) => void>();
 
   /**
    * Attach a long-lived api observer to a Pi session so events emitted by
@@ -313,6 +321,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       multiSessionManager.addApiObserver(sessionPath, observer);
       piObservedSessions.add(sessionPath);
+      piObserverByPath.set(sessionPath, observer);
     } catch {
       /* session may not be loaded yet; retry on next prompt */
     }
@@ -335,6 +344,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       opencodeService.addApiObserver(sessionId, observer);
       opencodeObservedSessions.add(sessionId);
+      opencodeObserverById.set(sessionId, observer);
     } catch {
       /* session may not be loaded yet; retry on next prompt/watch */
     }
@@ -1326,6 +1336,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         if (agentSession) {
           await agentSession.abort().catch(() => { /* non-fatal */ });
         }
+      }
+
+      // Drop the persistent broker-feeding observer for this session and prune
+      // its broker replay tail, so a deleted session leaves no live observer,
+      // idempotency key, or event buffer behind (lifecycle ownership).
+      broker.clear(sessionId);
+      if (entry.path && entry.path !== sessionId) broker.clear(entry.path);
+      if (entry.sdkType === 'pi') {
+        const attached = piObserverByPath.get(entry.path);
+        if (attached) {
+          multiSessionManager.removeApiObserver?.(entry.path, attached);
+          piObserverByPath.delete(entry.path);
+        }
+        piObservedSessions.delete(entry.path);
+      } else if (entry.sdkType === 'opencode') {
+        const attached = opencodeObserverById.get(sessionId);
+        if (attached) {
+          opencodeService.removeApiObserver?.(sessionId, attached);
+          opencodeObserverById.delete(sessionId);
+        }
+        opencodeObservedSessions.delete(sessionId);
       }
 
       // Release every source-owned claim while the registry/runtime object is

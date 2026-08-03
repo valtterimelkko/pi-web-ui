@@ -177,6 +177,28 @@ describe('OpenCodeProcessManager', () => {
       expect(secondProc).not.toBeNull();
       expect(spawnMock).toHaveBeenCalledTimes(2);
     });
+
+    // Phase 3.5 — an attached-external server is NOT owned by this manager.
+    // recycle() must detach + re-attach, never pgrep/kill the external process.
+    it('does not kill an attached-external server on recycle (ownership boundary)', async () => {
+      const { execSync } = await import('node:child_process');
+      const execSyncMock = execSync as unknown as ReturnType<typeof vi.fn>;
+      const killSpy = vi.spyOn(process, 'kill');
+      // start() attaches to an already-healthy external server (no spawn).
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+      await manager.start();
+      expect(manager.getStatus()).toMatchObject({ managed: false, healthy: true });
+
+      execSyncMock.mockClear();
+      killSpy.mockClear();
+      await manager.recycle('external ownership test');
+
+      const pgrepCalls = execSyncMock.mock.calls.filter(([cmd]) => typeof cmd === 'string' && cmd.includes('pgrep'));
+      expect(pgrepCalls).toHaveLength(0);
+      expect(killSpy).not.toHaveBeenCalled();
+      // Re-attached to the still-running external server.
+      expect(manager.getStatus()).toMatchObject({ managed: false, healthy: true });
+    });
   });
 
   describe('stop', () => {

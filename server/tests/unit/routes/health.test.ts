@@ -57,9 +57,30 @@ describe('Health Routes', () => {
 
     it('should include uptime and version', async () => {
       const response = await request(app).get('/api/health/ready');
-      
+
       expect(response.body).toHaveProperty('uptime');
       expect(response.body).toHaveProperty('nodeEnv');
+    });
+
+    // Phase 3.4 — a high heapUsed/heapTotal ratio alone must not make the server
+    // unready: V8 grows the committed heap toward full under sustained load by
+    // design, so the ratio is a GC-pressure proxy, not an OOM/capacity signal.
+    it('stays ready when heapUsed/heapTotal is high (warning, not 503)', async () => {
+      const spy = vi.spyOn(process, 'memoryUsage').mockReturnValue({
+        rss: 200 * 1024 * 1024,
+        heapTotal: 100 * 1024 * 1024,
+        heapUsed: 95 * 1024 * 1024,
+        external: 10 * 1024 * 1024,
+        arrayBuffers: 1024 * 1024,
+      } as NodeJS.MemoryUsage);
+      try {
+        const response = await request(app).get('/api/health/ready');
+        expect(response.status).toBe(200);
+        expect(response.body.status).toBe('ok');
+        expect(response.body.checks.memory.status).toBe('warning');
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 

@@ -1,7 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import fs from 'fs/promises';
-import os from 'os';
 import { getWorkerPool } from './sessions.js';
 import { getCrashLogger } from '../workers/crash-logger.js';
 import { getOpenCodeService } from '../opencode/index.js';
@@ -70,19 +69,24 @@ router.get('/ready', async (_req: Request, res: Response) => {
     checks.envConfig = { status: 'ok', message: 'Development mode - env vars optional' };
   }
 
-  // Check 3: Memory usage (warn if > 90%)
+  // Check 3: V8 heap pressure. heapUsed/heapTotal is a GC-pressure proxy — V8
+  // grows the committed heap toward full under sustained load by design — so a
+  // high ratio alone must NOT make the server unready. Report it as a warning
+  // with RSS and the real V8 heap_size_limit for context; never a readiness failure.
   const memUsage = process.memoryUsage();
-  const totalMem = os.totalmem();
-  const heapUsedPercent = (memUsage.heapUsed / memUsage.heapTotal) * 100;
-  
-  checks.memory = {
-    status: heapUsedPercent > 90 ? 'error' : 'ok',
-    message: `Heap usage: ${heapUsedPercent.toFixed(1)}% (${(memUsage.heapUsed / 1024 / 1024).toFixed(1)}MB / ${(memUsage.heapTotal / 1024 / 1024).toFixed(1)}MB)`,
-  };
-  
-  if (heapUsedPercent > 90) {
-    allHealthy = false;
+  let heapLimitMb = 0;
+  try {
+    const { getHeapStatistics } = await import('node:v8');
+    heapLimitMb = getHeapStatistics().heap_size_limit / 1024 / 1024;
+  } catch {
+    /* keep readiness resilient if v8 statistics are unavailable */
   }
+  const heapUsedPercent = memUsage.heapTotal > 0 ? (memUsage.heapUsed / memUsage.heapTotal) * 100 : 0;
+  const rssMb = memUsage.rss / 1024 / 1024;
+  checks.memory = {
+    status: heapUsedPercent > 90 ? 'warning' : 'ok',
+    message: `Heap: ${heapUsedPercent.toFixed(1)}% of committed (${(memUsage.heapUsed / 1024 / 1024).toFixed(1)}MB / ${(memUsage.heapTotal / 1024 / 1024).toFixed(1)}MB); RSS ${rssMb.toFixed(1)}MB${heapLimitMb ? `; V8 heap_size_limit ${heapLimitMb.toFixed(0)}MB` : ''}`,
+  };
 
   // Check 4: Worker pool status
   let workerStats = null;

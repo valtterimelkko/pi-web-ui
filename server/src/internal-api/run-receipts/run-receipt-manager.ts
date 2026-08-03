@@ -53,6 +53,8 @@ export interface RunReceiptManagerDeps {
   metrics?: OperationalMetrics;
   turnIdleTimeoutMs?: number;
   turnMaxMs?: number;
+  /** Fired when the watchdog terminalises a run as TURN_STALLED (quarantine signal). */
+  onStalled?: (receipt: RunReceipt) => void;
 }
 
 export type ExistingRunResult =
@@ -104,6 +106,7 @@ export class RunReceiptManager {
   private initPromise: Promise<void> | null = null;
   private watchdogTimer?: NodeJS.Timeout;
   private stalledRunCount = 0;
+  private readonly onStalled?: (receipt: RunReceipt) => void;
 
   constructor(deps: RunReceiptManagerDeps) {
     this.store = deps.store;
@@ -121,6 +124,7 @@ export class RunReceiptManager {
       process.env.INTERNAL_API_TURN_MAX_MS,
       DEFAULT_TURN_MAX_MS,
     );
+    this.onStalled = deps.onStalled;
   }
 
   async init(): Promise<void> {
@@ -471,7 +475,13 @@ export class RunReceiptManager {
         logger.warn(`failed to terminalise stalled run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
         return undefined;
       });
-      if (terminal?.errorCode === 'TURN_STALLED') this.stalledRunCount += 1;
+      if (terminal?.errorCode === 'TURN_STALLED') {
+        this.stalledRunCount += 1;
+        // Quarantine signal: the run is terminalised without confirmed runtime
+        // cessation. The slot is already released by terminalisation; this only
+        // notifies (e.g. operator Telegram ping). No caller action is required.
+        this.onStalled?.(terminal);
+      }
     }
   }
 

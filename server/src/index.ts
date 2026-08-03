@@ -15,6 +15,7 @@ import { initializePiService, startSessionWatcher, getPiService, type SessionCha
 import { SessionCleanupService } from './session-cleanup.js';
 import { getSessionRegistry } from './session-registry.js';
 import { createFatalErrorHandlers } from './fatal-error-handlers.js';
+import { ShutdownCoordinator } from './shutdown-coordinator.js';
 
 // State used by createApp's lazy notification-router getters. Declared before
 // createApp() (which runs at module load) so the getters close over initialized
@@ -179,36 +180,24 @@ async function start(): Promise<void> {
   });
 }
 
-// Graceful shutdown
-async function shutdown(): Promise<void> {
+// Graceful shutdown — single-flight, resilient (every owner is attempted even
+// if an earlier step throws), clean exit(0) with the force timer cancelled.
+// The hard exit(1) deadline stays below systemd's TimeoutStopSec window.
+const shutdownCoordinator = new ShutdownCoordinator({
+  steps: [
+    { name: 'session-watcher', run: async () => { const { stopSessionWatcher } = await import('./pi/index.js'); await stopSessionWatcher(); } },
+    { name: 'websocket-clients', run: async () => { if (wsManager) await wsManager.close(); } },
+    { name: 'session-cleanup', run: () => { sessionCleanup?.stop(); } },
+    { name: 'internal-api', run: async () => { if (internalApiServer) await internalApiServer.stop(); } },
+    { name: 'http-server', run: () => new Promise<void>((resolve) => { server.close(() => resolve()); }) },
+  ],
+  onStepError: (name, err) => logger.errorObject(`Shutdown step '${name}' failed`, err),
+  onForceExit: () => logger.error('Forced shutdown: teardown exceeded the deadline'),
+});
+
+function shutdown(): void {
   logger.info('Shutting down...');
-
-  // Stop session watcher
-  const { stopSessionWatcher } = await import('./pi/index.js');
-  await stopSessionWatcher();
-
-  if (wsManager) {
-    await wsManager.close();
-  }
-
-  if (sessionCleanup) {
-    sessionCleanup.stop();
-  }
-
-  if (internalApiServer) {
-    await internalApiServer.stop();
-  }
-
-  server.close(() => {
-    logger.info('Server closed');
-    process.exit(0);
-  });
-
-  // Force exit after timeout
-  setTimeout(() => {
-    logger.error('Forced shutdown');
-    process.exit(1);
-  }, 5000);
+  void shutdownCoordinator.shutdown();
 }
 
 process.on('SIGTERM', shutdown);
