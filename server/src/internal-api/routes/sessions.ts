@@ -3672,6 +3672,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sendJson(res, 200, {
       ...admission.snapshot(),
       stalledRuns: runReceipts.getStalledRunCount(),
+      quarantinedRuns: runReceipts.getQuarantinedCount(),
       oldestActiveRunStartedAt: runReceipts.getOldestActiveRunStartedAt(),
       control: { inFlight: controlLane.inFlight, queued: controlLane.queued },
     });

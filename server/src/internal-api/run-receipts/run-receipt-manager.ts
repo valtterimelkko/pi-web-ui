@@ -120,7 +120,7 @@ export class RunReceiptManager {
   private readonly drainTimeoutMs: number;
   private readonly drainPollMs: number;
   /** Draining runs: terminal but admission slot held pending runtime cessation. */
-  private readonly draining = new Map<string, { release: () => void; timer: NodeJS.Timeout }>();
+  private readonly draining = new Map<string, { release: () => void; timer: NodeJS.Timeout; quarantined: boolean }>();
 
   constructor(deps: RunReceiptManagerDeps) {
     this.store = deps.store;
@@ -552,12 +552,13 @@ export class RunReceiptManager {
     const deadline = Date.now() + this.drainTimeoutMs;
     const timer = setInterval(() => {
       Promise.resolve(this.isRuntimeQuiescent!(sessionId))
-        .then((quiescent) => { if (quiescent || Date.now() >= deadline) this.finishDrain(runId); })
-        .catch(() => { if (Date.now() >= deadline) this.finishDrain(runId); });
+        .then((quiescent) => { if (quiescent) this.finishDrain(runId); else if (Date.now() >= deadline) this.quarantine(runId); })
+        .catch(() => { if (Date.now() >= deadline) this.quarantine(runId); });
     }, this.drainPollMs);
-    this.draining.set(runId, { release: lease.release, timer });
+    this.draining.set(runId, { release: lease.release, timer, quarantined: false });
   }
 
+  /** Cessation confirmed -> release the slot. */
   private finishDrain(runId: string): void {
     const entry = this.draining.get(runId);
     if (!entry) return;
@@ -566,9 +567,28 @@ export class RunReceiptManager {
     entry.release();
   }
 
+  /**
+   * Drain timeout elapsed without confirmed cessation: the admission slot is NOT
+   * released (no false capacity release). It is held as quarantined capacity-debt
+   * until restart/operator recovery, surfaced via getQuarantinedCount().
+   */
+  private quarantine(runId: string): void {
+    const entry = this.draining.get(runId);
+    if (!entry || entry.quarantined) return;
+    clearInterval(entry.timer);
+    entry.quarantined = true;
+  }
+
   /** Number of runs terminal but still holding an admission slot pending cessation. */
   getDrainingCount(): number {
     return this.draining.size;
+  }
+
+  /** Number of runs quarantined (cessation never confirmed; slot held as debt). */
+  getQuarantinedCount(): number {
+    let n = 0;
+    for (const e of this.draining.values()) if (e.quarantined) n += 1;
+    return n;
   }
 
   private resolveTerminalWaiters(receipt: RunReceipt): void {

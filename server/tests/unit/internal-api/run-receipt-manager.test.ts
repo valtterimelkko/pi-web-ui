@@ -94,7 +94,7 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     await m.shutdown();
   });
 
-  it('releases at the drain timeout if cessation is never confirmed (bounded quarantine)', async () => {
+  it('quarantines (holds the slot as debt) at the drain timeout if cessation is never confirmed — no false capacity release', async () => {
     const release = vi.fn();
     const localStore = new RunReceiptStore(dir, { now: () => now });
     const m = new RunReceiptManager({
@@ -107,7 +107,28 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     await m.cancelRun(begun.receipt.runId);
     expect(release).not.toHaveBeenCalled();
     await new Promise((r) => setTimeout(r, 150)); // past the 50ms drain timeout
-    expect(release).toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled(); // NOT released — held as quarantined capacity-debt
+    expect(m.getQuarantinedCount()).toBe(1);
+    await m.shutdown(); // shutdown releases all (incl. quarantined) for cleanup
+  });
+
+  it('a late agent_end for a cancelled run does not release capacity twice', async () => {
+    const release = vi.fn();
+    const localStore = new RunReceiptStore(dir, { now: () => now });
+    const m = new RunReceiptManager({
+      store: localStore, now: () => now, idFactory: () => `late-${++nextId}`, idempotencyTtlMs: 1_000, metrics,
+      drainPollMs: 5, drainTimeoutMs: 200, isRuntimeQuiescent: async () => true,
+    });
+    await m.init();
+    const begun = await m.beginRun({ ...baseInput, sessionId: 'late-1', idempotencyKey: 'a1' });
+    m.attachLease(begun.receipt.runId, { release });
+    await m.cancelRun(begun.receipt.runId); // terminal -> drain; quiescent -> release
+    await new Promise((r) => setTimeout(r, 20)); // drain poll fires + releases once
+    const releasedCount = release.mock.calls.length;
+    expect(releasedCount).toBe(1);
+    // late agent_end for the already-terminal run: evidence-only, must not release again
+    await m.observeEvent(begun.receipt.runId, { type: 'agent_end', sessionId: 'late-1', timestamp: now, data: {} });
+    expect(release.mock.calls.length).toBe(releasedCount); // no double release
     await m.shutdown();
   });
 
