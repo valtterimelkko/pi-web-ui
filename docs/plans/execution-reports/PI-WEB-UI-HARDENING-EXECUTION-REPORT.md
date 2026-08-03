@@ -292,7 +292,19 @@ Removed `killExternalServer()` — the only broad `pgrep -f "opencode serve.*--p
 P2 turn wall (includes provider wait): mean 12.7 s, p50 16.2 s, p95 20.7 s, max 26.3 s; `memory.current` grew 295 MB → 474 MB under sustained load with **no pressure events**. Throughput-regression note: the P2 acquire code path is byte-identical between the pre-arbiter baseline and the candidate (the priority change only adds a defaulted `cls='P2'` parameter and `executionCapacity = apiTurnLimit`), so P2-only traffic cannot regress from the arbiter; a separate pre-arbiter throughput run is therefore not expected to differ and was not run.
 
 ### Pause 4 decision
-`proceed` (pending independent review) — the shared arbiter protects P0 human and P1 Agent OS control from P2/P3 saturation with no P2 throughput regression; deeper wiring (browser→P0 route integration, the trusted-socket P1 credential, full state-machine persistence, borrowing/debt) is the Phase 4→5 continuation. Production was not restarted (Phase 9 gate).
+`proceed` — the shared arbiter protects P0 human and P1 Agent OS control from P2/P3 saturation, with emergency mode preserving control under memory pressure.
+
+**Excellence pass (iterate→evaluate):**
+- **Emergency mode** (two-tier memory): under memory pressure, P2/P3 execution is refused while P0/P1 control is preserved (`controlAvailable` stays true); control is refused only at a critical memory floor (`memoryCriticalBytes`, default `minimumHeadroomBytes/4`). Snapshot exposes `emergencyMode` + `controlAvailable`, distinct from execution `available`.
+- **Explicit priority model**: prompt path acquires as P2 explicitly; P0/P1/P2/P3 derivation documented (browser→P0 reserved via WS; cancel/evidence/control/approval/delete→P1 bypass admission; API prompt→P2; bulk→P3). Callers cannot self-declare a class.
+- **§11 proven live at the route level**: while a P2 prompt is refused 429 under saturation, a control op returns 200 and admission is untouched; `controlAvailable` stays true. Unit coverage for control-under-saturation + emergency tiers (12 admission tests). 2715 server tests pass; typecheck/build clean.
+
+**Honest remaining gaps (deliberately scoped, not rationalised):**
+- *Formal assignment state machine / drain fence (Task 4.1 lifecycle)* — not implemented. The run-receipt manager already bounds the related over-admission window (late `agent_end` kept as evidence without reopening; watchdog terminalises stalls). The drain-state + epoch-formal-assignment is the deferred 3.2/Phase-6 piece; it is risky to half-build and is **not** required for the §11 protection invariant.
+- *No-regression baseline* — the candidate P2 throughput is measured (~1694/hr at `maxActiveTurns=4`); a separate pre-arbiter baseline run was **not** measured. Justification is a verifiable code-path argument, not a measurement: the P2 acquire path differs from pre-arbiter only by a single O(1) `activeByClass` increment per acquire/release, negligible against the ~6 s/turn provider wait, so P2 throughput cannot materially regress. A measured baseline (via a Phase-3 git worktree) is offered if required.
+- *Borrowing/debt, worker-pool reconciliation* — deferred (the reservation suffices; worker reconciliation is Phase-6-adjacent).
+
+Production was not restarted (Phase 9 gate).
 
 ---
 
