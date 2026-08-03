@@ -97,6 +97,7 @@ import { config } from '../../config.js';
 import { createLogger, type LogRecord } from '../../logging/logger.js';
 import { getRecentLogs } from '../diagnostics-buffer.js';
 import { AdmissionCapacityError, AdmissionController } from '../admission-controller.js';
+import { BoundedControlLane } from '../control-lane.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -230,6 +231,8 @@ export interface SessionRoutesDeps {
   antigravitySessionDir?: string;
   /** Shared process-local execution admission authority. */
   admissionController?: AdmissionController;
+  /** Optional bounded control lane for P0/P1 handlers (defaults to a bounded instance). */
+  controlLane?: BoundedControlLane;
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps) {
@@ -251,16 +254,24 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
   });
   // Priority model (server-derived; callers cannot self-declare a class):
-  //   P0 — human/browser control: enters via WebSocket, NOT through this
-  //        admission arbiter; it relies on the reserved controlReserve slot.
+  //   P0 — human/browser control: enters via WebSocket, NOT through this arbiter.
   //   P1 — Agent OS control operations (cancel, evidence, run-receipt, session
-  //        control, approval response, delete): these handlers do NOT acquire
-  //        execution admission, so P2/P3 saturation can never block them.
+  //        control, approval response, delete): run through the bounded controlLane
+  //        (concurrency cap + queue), NOT execution admission, so P2/P3 saturation
+  //        cannot block them at the admission layer.
   //   P2 — ordinary Internal API prompt execution: acquires below, bounded by
   //        executionCapacity (= maxActiveTurns - controlReserve).
   //   P3 — server/config-assigned bulk work.
-  // The controlReserve guarantees P0/P1 headroom even when P2/P3 are saturated.
+  // SCOPE: this caps P2/P3 execution capacity and bounds control concurrency. It
+  // does NOT, by itself, protect control from shared-resource contention (event
+  // loop, memory, sockets) caused by in-flight P2 turns — that requires process
+  // isolation (Phase 6 per-session cgroups).
   const admission = deps.admissionController ?? new AdmissionController();
+  // Bounded control lane (P0/P1 guardrail): control operations bypass execution
+  // admission but are NOT unbounded — this caps concurrent control-handler
+  // executions and queues excess (up to a timeout), so a control flood cannot
+  // monopolise the shared event loop/memory/sockets that P0/P1 also depend on.
+  const controlLane = deps.controlLane ?? new BoundedControlLane(8, 5000);
   // A synchronous, process-local claim closes the gap between the liveness
   // pre-flight and runtime dispatch when two Internal API callers race.
   const activeDirectDispatchTokens = new Map<string, number>();
@@ -3650,25 +3661,33 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       ...admission.snapshot(),
       stalledRuns: runReceipts.getStalledRunCount(),
       oldestActiveRunStartedAt: runReceipts.getOldestActiveRunStartedAt(),
+      control: { inFlight: controlLane.inFlight, queued: controlLane.queued },
     });
   }
+
+  const wrapControl = <A extends unknown[]>(h: (...a: A) => Promise<void>) =>
+    async (...a: A): Promise<void> => {
+      const slot = await controlLane.acquire();
+      try { await h(...a); } finally { slot.release(); }
+    };
 
   return {
     ready,
     shutdown,
+    controlLane,
     reapplyRetentionForSession: (sessionId: string) => pinExpiry?.reapplyForSession(sessionId) ?? Promise.resolve(),
     handleCreateSession,
     handleListSessions,
     handleGetSession,
     handleGetSessionInfo,
-    handleGetSessionEvidence,
-    handleGetRunReceipt,
-    handleGetSessionHistory,
-    handleDeleteSession,
+    handleGetSessionEvidence: wrapControl(handleGetSessionEvidence),
+    handleGetRunReceipt: wrapControl(handleGetRunReceipt),
+    handleGetSessionHistory: wrapControl(handleGetSessionHistory),
+    handleDeleteSession: wrapControl(handleDeleteSession),
     handleSendPrompt,
-    handleAbort,
-    handleSessionControl,
-    handleRespondApproval,
+    handleAbort: wrapControl(handleAbort),
+    handleSessionControl: wrapControl(handleSessionControl),
+    handleRespondApproval: wrapControl(handleRespondApproval),
     // Orchestration endpoints
     handleSessionEvents,
     handleSessionWait,

@@ -6,6 +6,7 @@ import path from 'path';
 import os from 'os';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
 import { AdmissionController } from '../../../src/internal-api/admission-controller.js';
+import { BoundedControlLane } from '../../../src/internal-api/control-lane.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 
 function createJsonReq(method: string, url: string, body?: unknown): IncomingMessage {
@@ -107,7 +108,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
-  function makeRoutes(admissionController?: AdmissionController) {
+  function makeRoutes(admissionController?: AdmissionController, controlLane?: BoundedControlLane) {
     return createSessionRoutes({
       claudeService,
       opencodeService,
@@ -121,6 +122,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
       // Make the expiry sweep inert during these fast tests.
       pinExpiryIntervalMs: 60_000,
       admissionController,
+      controlLane,
     });
   }
 
@@ -346,6 +348,20 @@ describe('createSessionRoutes — API pinning + detach', () => {
     expect(controlRes.statusCode).toBe(200);
     expect(admission.snapshot().activeTurns).toBe(1); // control acquired nothing
     held.release();
+  });
+
+  it('control handlers acquire and release the bounded control lane', async () => {
+    const lane = new BoundedControlLane(1, 5000);
+    const routes = makeRoutes(undefined, lane);
+    let observedInFlight = 0;
+    registry.get.mockImplementation(async () => {
+      // Captured inside the handler body, which runs inside the lane (wrapControl).
+      observedInFlight = lane.inFlight;
+      return { id: 'claude-1', path: 'claude-1', sdkType: 'claude', cwd: '/root/proj', status: 'idle' };
+    });
+    await routes.handleGetSessionEvidence(createJsonReq('GET', '/x'), createMockRes(), 'claude-1');
+    expect(observedInFlight).toBe(1); // the wrapped handler held the lane while running
+    expect(lane.inFlight).toBe(0);    // and released it (try/finally, even on error)
   });
 
   it('detach=true returns 202 immediately and runs the turn in the background', async () => {
