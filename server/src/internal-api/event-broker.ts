@@ -38,6 +38,10 @@ export interface EventBrokerOptions {
   replayBufferMaxBytes?: number;
   /** Injected low-cardinality metrics seam (primarily for tests). */
   metrics?: OperationalMetrics;
+  /** Optional disposal predicate: when set and it returns true for a session
+   * key, publish/subscribe are dropped so a late runtime callback cannot
+   * recreate the replay buffer or subscribers for a deleted session. */
+  isSessionDisposed?: (sessionId: string) => boolean;
 }
 
 const DEFAULT_REPLAY_BUFFER_SIZE = 50;
@@ -51,11 +55,13 @@ export class InternalApiEventBroker {
   private readonly replayBufferSize: number;
   private readonly replayBufferMaxBytes: number;
   private readonly metrics: OperationalMetrics;
+  private readonly disposedCheck?: (sessionId: string) => boolean;
 
   constructor(options: EventBrokerOptions = {}) {
     this.replayBufferSize = Math.max(0, options.replayBufferSize ?? DEFAULT_REPLAY_BUFFER_SIZE);
     this.replayBufferMaxBytes = Math.max(0, options.replayBufferMaxBytes ?? DEFAULT_REPLAY_BUFFER_MAX_BYTES);
     this.metrics = options.metrics ?? getOperationalMetrics();
+    this.disposedCheck = options.isSessionDisposed;
   }
 
   /**
@@ -70,6 +76,8 @@ export class InternalApiEventBroker {
     replay = true,
     subscriberClass = 'subscriber',
   ): () => void {
+    // A disposed session cannot gain new subscribers or replay buffers.
+    if (this.disposedCheck?.(sessionId)) return () => { /* no-op */ };
     let set = this.subscribers.get(sessionId);
     if (!set) {
       set = new Set();
@@ -102,6 +110,10 @@ export class InternalApiEventBroker {
 
   /** Publish an event to all subscribers for a session. */
   publish(sessionId: string, event: NormalizedEvent): void {
+    // Drop late runtime callbacks for a deleted session: this is the fence that
+    // prevents a late event from recreating the replay buffer or notifying
+    // subscribers after handleDeleteSession has tombstoned the session.
+    if (this.disposedCheck?.(sessionId)) return;
     this.metrics.recordEvent(event.timestamp);
     if (this.replayBufferSize > 0 || this.replayBufferMaxBytes > 0) {
       let buffer = this.replayBuffers.get(sessionId);

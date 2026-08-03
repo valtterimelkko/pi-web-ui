@@ -329,4 +329,41 @@ describe('createSessionRoutes — DELETE file cleanup', () => {
     expect(late).toHaveBeenCalledTimes(1);
     expect(routes.disposal.getCounts()[sessionId]).toBeUndefined();
   });
+
+  it('a late broker.publish after DELETE cannot recreate the replay buffer (deletion fence)', async () => {
+    const sessionId = 'claude-fence';
+    registry.get.mockResolvedValue({
+      id: sessionId,
+      sdkType: 'claude',
+      path: sessionId,
+      cwd: '/root/proj',
+      status: 'idle',
+    });
+
+    const routes = makeRoutes();
+    await routes.ready;
+
+    // Pre-delete: a real event is buffered for the session.
+    const before = { type: 'agent_start', sessionId, timestamp: 1, data: {} } as any;
+    routes.broker.publish(sessionId, before);
+    expect(routes.broker.getRecentEvents(sessionId)).toHaveLength(1);
+
+    // Delete the session — tombstones it in the disposal registry, which the
+    // broker consults via its isSessionDisposed predicate.
+    const res = createMockRes();
+    await routes.handleDeleteSession(createJsonReq('DELETE', `/api/v1/sessions/${sessionId}`), res, sessionId);
+    expect(res.statusCode).toBe(200);
+
+    // A LATE runtime callback (race: event in flight when delete ran) publishes
+    // after deletion. It MUST be dropped — the replay buffer must not be
+    // recreated, and no subscriber can be notified.
+    const lateSub = vi.fn();
+    routes.broker.subscribe(sessionId, lateSub);
+    const lateEvent = { type: 'agent_end', sessionId, timestamp: 2, data: {} } as any;
+    routes.broker.publish(sessionId, lateEvent);
+
+    expect(routes.broker.getRecentEvents(sessionId)).toHaveLength(0); // cleared on delete, not recreated
+    expect(lateSub).not.toHaveBeenCalled(); // late subscriber sees nothing
+    expect(routes.broker.subscriberCount(sessionId)).toBe(0);
+  });
 });

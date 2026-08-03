@@ -333,7 +333,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
    * Every Internal-API prompt path publishes events here so any open
    * subscriber sees them in real time.
    */
-  const broker = new InternalApiEventBroker({ replayBufferSize: 100 });
+  const broker = new InternalApiEventBroker({
+    replayBufferSize: 100,
+    // Deletion fence: once a session is tombstoned in the disposal registry,
+    // a late runtime event cannot recreate the broker replay buffer or notify
+    // subscribers. The predicate is keyed on the broker key, which for Pi is
+    // the sessionPath — handleDeleteSession tombstones that alias too.
+    isSessionDisposed: (key) => disposal.isDisposed(key),
+  });
 
   /** Track Pi/OpenCode sessions we have already attached a long-lived observer to. */
   const piObservedSessions = new Set<string>();
@@ -365,6 +372,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       multiSessionManager.addApiObserver(sessionPath, observer);
       piObservedSessions.add(sessionPath);
       piObserverByPath.set(sessionPath, observer);
+      // Own the observer teardown in the disposal registry (broker key = path)
+      // so handleDeleteSession/shutdown detach it, not just the manual path.
+      disposal.register(sessionPath, 'pi-broker-observer', () => {
+        multiSessionManager.removeApiObserver?.(sessionPath, observer);
+        piObserverByPath.delete(sessionPath);
+        piObservedSessions.delete(sessionPath);
+      });
     } catch {
       /* session may not be loaded yet; retry on next prompt */
     }
@@ -388,6 +402,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       opencodeService.addApiObserver(sessionId, observer);
       opencodeObservedSessions.add(sessionId);
       opencodeObserverById.set(sessionId, observer);
+      // Own the observer teardown in the disposal registry (broker key = id).
+      disposal.register(sessionId, 'opencode-broker-observer', () => {
+        opencodeService.removeApiObserver?.(sessionId, observer);
+        opencodeObserverById.delete(sessionId);
+        opencodeObservedSessions.delete(sessionId);
+      });
     } catch {
       /* session may not be loaded yet; retry on next prompt/watch */
     }
@@ -1373,6 +1393,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // handle (queued-run correlations, timers, snapshots, drain handles) so
       // late runtime callbacks cannot repopulate broker/state after deletion.
       disposal.dispose(sessionId);
+      // Tombstone the broker-key alias too (Pi publishes under entry.path, not
+      // the canonical sessionId), so the broker's deletion fence covers Pi.
+      // Idempotent; runs no handles unless a surface registered under the path.
+      if (entry.path && entry.path !== sessionId) disposal.dispose(entry.path);
 
       if (entry.sdkType === 'claude') {
         claudeService.abort(sessionId);
@@ -3749,6 +3773,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     shutdown,
     controlLane,
     disposal,
+    broker,
     reapplyRetentionForSession: (sessionId: string) => pinExpiry?.reapplyForSession(sessionId) ?? Promise.resolve(),
     handleCreateSession,
     handleListSessions,

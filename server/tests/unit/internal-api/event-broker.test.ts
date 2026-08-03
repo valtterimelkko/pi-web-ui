@@ -180,4 +180,21 @@ describe('InternalApiEventBroker', () => {
     broker.subscribe('s1', subB, true); // should get no replay after clearAll
     expect(subB).not.toHaveBeenCalled();
   });
+
+  it('drops publish for a disposed session so a late callback cannot recreate the replay buffer', () => {
+    let disposed = false;
+    const b = new InternalApiEventBroker({
+      replayBufferSize: 100,
+      isSessionDisposed: () => disposed,
+    });
+    b.publish('s1', makeEvent('agent_start')); // before dispose: buffered
+    expect(b.getRecentEvents('s1')).toHaveLength(1);
+    disposed = true; // session deleted after this point
+    const sub = vi.fn();
+    b.subscribe('s1', sub); // a late subscriber for a disposed session registers nothing
+    b.publish('s1', makeEvent('agent_end')); // late runtime callback: MUST be dropped
+    expect(b.getRecentEvents('s1')).toHaveLength(1); // not recreated to 2
+    expect(sub).not.toHaveBeenCalled(); // late subscriber sees nothing
+    expect(b.subscriberCount('s1')).toBe(0);
+  });
 });
