@@ -30,14 +30,16 @@ describe('BoundedControlLane', () => {
   });
 
   it('fails fast (ControlLaneFullError) once the queue cap is reached', async () => {
-    const lane = new BoundedControlLane(1, 5000, 2);
+    const lane = new BoundedControlLane(1, 50, 2); // short timeout so queued waiters settle cleanly
     const a = await lane.acquire(); // active=1
-    lane.acquire(); // queued #1
-    lane.acquire(); // queued #2 (== maxQueued)
+    const queued = [lane.acquire(), lane.acquire()]; // queued #1, #2 (== maxQueued)
+    await new Promise((r) => setImmediate(r));
     expect(lane.queued).toBe(2);
     // one more must fail fast, not grow the queue
     await expect(lane.acquire()).rejects.toBeInstanceOf(ControlLaneFullError);
     expect(lane.queued).toBe(2);
+    // let the queued waiters time out (settle their timers; no dangling rejection)
+    await Promise.allSettled(queued);
     a.release();
   });
 
