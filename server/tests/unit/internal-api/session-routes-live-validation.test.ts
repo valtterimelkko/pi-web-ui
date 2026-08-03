@@ -181,7 +181,35 @@ describe('createSessionRoutes live-validation extensions', () => {
       sendPrompt: vi.fn(),
       abort: vi.fn(),
       isAvailable: vi.fn().mockResolvedValue(true),
+      isEnabled: vi.fn().mockReturnValue(true),
+      createSession: vi.fn().mockResolvedValue({ sessionId: 'oc-new-session' }),
     };
+  });
+
+  it('refuses OpenCode session creation with RUNTIME_UNAVAILABLE when disabled (fail closed)', async () => {
+    opencodeService.isEnabled = vi.fn().mockReturnValue(false);
+    opencodeService.createSession = vi.fn().mockResolvedValue({ sessionId: 'must-not-be-created' });
+
+    const routes = createSessionRoutes({
+      claudeService,
+      opencodeService,
+      multiSessionManager,
+      sessionRegistry: registry,
+      piService,
+      internalClientId: 'internal-test',
+    });
+
+    const req = createJsonReq('POST', '/api/v1/sessions', {
+      runtime: 'opencode',
+      cwd: '/tmp/oc-disabled-test',
+    });
+    const res = createMockRes();
+
+    await routes.handleCreateSession(req, res);
+
+    expect(res.statusCode).toBe(503);
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'RUNTIME_UNAVAILABLE' });
+    expect(opencodeService.createSession).not.toHaveBeenCalled();
   });
 
   it('supports follow_up mode for Pi sessions', async () => {

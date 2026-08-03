@@ -56,6 +56,7 @@ function makeClaudeServiceMock() {
 function makeOpenCodeServiceMock() {
   return {
     isRunning: vi.fn().mockReturnValue(false),
+    isEnabled: vi.fn().mockReturnValue(true),
     createSession: vi.fn().mockResolvedValue({ sessionId: 'new-oc-1', opencodeSessionId: 'oc-abc' }),
     sendPrompt: vi.fn((_sessionId, _prompt, onEvent, onComplete) => {
       onEvent({ type: 'agent_start' });
@@ -439,6 +440,29 @@ describe('TransferService', () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.code).toBe(TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE);
+    });
+
+    it('rejects OpenCode new-target transfer when OpenCode is disabled (fail closed)', async () => {
+      const config = makeConfig();
+      (config.registry.get as ReturnType<typeof vi.fn>).mockResolvedValue(makeRegistryEntry());
+      const claudeMock = makeClaudeServiceMock();
+      config.claudeService = claudeMock as unknown as import('../../../src/claude/claude-service.js').ClaudeService;
+      const ocMock = makeOpenCodeServiceMock();
+      ocMock.isEnabled = vi.fn().mockReturnValue(false);
+      config.opencodeService = ocMock as unknown as import('../../../src/opencode/opencode-service.js').OpenCodeService;
+
+      const service = new TransferService(config);
+      const result = await service.executeTransfer({
+        sourceSessionId: 'src-1',
+        createNew: true,
+        targetSdkType: 'opencode',
+        targetCwd: '/home/user',
+        scope: 'visible_full',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe(TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE);
+      expect(ocMock.createSession).not.toHaveBeenCalled();
     });
 
     it('uses the Pi session header cwd when resolving a fallback session path', async () => {

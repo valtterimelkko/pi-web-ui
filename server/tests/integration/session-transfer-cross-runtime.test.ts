@@ -41,6 +41,7 @@ function makeClaudeService() {
 function makeOpenCodeService() {
   return {
     isRunning: vi.fn().mockReturnValue(false),
+    isEnabled: vi.fn().mockReturnValue(true),
     createSession: vi.fn().mockResolvedValue({ sessionId: 'new-oc-1', opencodeSessionId: 'oc-abc' }),
     sendPrompt: vi.fn((_sid, _prompt, onEvent, onComplete) => {
       onEvent({ type: 'agent_start' });

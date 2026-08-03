@@ -24,6 +24,17 @@ Its job is to let Pi Web UI remain the browser interface while a **real OpenCode
 
 This is especially important for supported OpenCode/Z.AI GLM workflows: Pi Web UI should integrate with OpenCode, not pretend to be OpenCode.
 
+## Temporary inactivation
+
+OpenCode can be **temporarily inactivated** in production with `OPENCODE_ENABLED=false` without removing its implementation, tests, registry history, or historical sessions:
+
+- `/api/v1/capabilities` reports OpenCode as `enabled:false` together with `available:false`; automation clients must treat it as unavailable and must not silently substitute another runtime. `/api/v1/health` reports `checkStatus:'disabled'`, `enabled:false`.
+- New OpenCode session creation and cross-runtime transfer to an OpenCode target fail closed with `RUNTIME_UNAVAILABLE` (transfer: `TRANSFER_RUNTIME_UNAVAILABLE`) before any managed `opencode serve` is spawned or attached. Historical OpenCode sessions remain listable; operations requiring the disabled backend fail read-only with the contracted error.
+- The Pi-Web-UI-managed `opencode serve` backend is not started while disabled. External or tmux-owned `opencode serve` processes are **not** Pi Web UI-owned and are never killed by inactivation; their cleanup is a separate, exact-scope, operator-authorised operation.
+- Re-enable with `OPENCODE_ENABLED=true` plus a controlled restart of `pi-web-ui.service`.
+
+This is an operator capacity/availability decision, not a removal. See [`docs/INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) §1.15.0 for the contract.
+
 ## Why This Path Exists
 
 Pi Web UI has four runtime paths:

@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.14.0",
+  "contractVersion": "1.15.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,11 @@ Current contract:
 
 ### Changelog
 
+- **1.15.0** (minor, additive disabled-runtime contract) — made an operator-disabled runtime truthfully distinct from an uninstalled/unhealthy one:
+  - `/capabilities` adds an additive `enabled` boolean to every runtime entry; OpenCode reports `enabled:false` together with `available:false` when `OPENCODE_ENABLED=false`, while an installed-and-enabled runtime reports `enabled:true`; automation clients must treat a disabled runtime as unavailable and must not silently substitute another runtime;
+  - OpenCode session creation and cross-runtime transfer to a new or existing OpenCode target fail closed with `RUNTIME_UNAVAILABLE` (transfer surface: `TRANSFER_RUNTIME_UNAVAILABLE`) when the runtime is disabled, before any managed `opencode serve` is spawned or attached;
+  - historical OpenCode sessions and registry entries are preserved and remain listable; operations that require the disabled backend fail read-only with the contracted error and do not mutate state;
+  - re-enabling is `OPENCODE_ENABLED=true` plus a controlled restart; no implementation, tests, or historical state are removed. Old clients can ignore the additive `enabled` field.
 - **1.14.0** (minor, additive run-liveness and recovery evidence) — made watchdog and recovery evidence reconstructable without importing an orchestrator ontology:
   - run receipts add bounded, payload-free `liveness` evidence with policy version/timeouts, the latest eligible run-correlated activity, idle-versus-absolute watchdog decisions, up to four terminal observations, and explicit cessation state;
   - blind `stream_activity` heartbeats no longer reset the Internal API run watchdog; polling, retention and observer lifecycle remain ineligible by construction;

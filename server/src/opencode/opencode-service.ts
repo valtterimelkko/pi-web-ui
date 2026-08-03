@@ -495,6 +495,17 @@ export class OpenCodeService {
     return this.processManager.isAvailable();
   }
 
+  /**
+   * Whether the operator has enabled the OpenCode runtime (`OPENCODE_ENABLED`).
+   * Distinct from {@link isAvailable}, which only reports whether the `opencode`
+   * binary is installed/on PATH and its server healthy. A disabled-but-installed
+   * runtime must be advertised as unavailable without silently substituting
+   * another runtime or spawning/attaching a managed `opencode serve`.
+   */
+  isEnabled(): boolean {
+    return config.opencodeServerEnabled;
+  }
+
   async validateSetup(): Promise<{ ok: boolean; error?: string }> {
     const available = await this.isAvailable();
     if (!available) {

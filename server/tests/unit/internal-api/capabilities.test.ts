@@ -46,6 +46,7 @@ describe('createCapabilitiesRoutes', () => {
       } as any,
       opencodeService: {
         isAvailable: vi.fn().mockResolvedValue(false),
+        isEnabled: vi.fn().mockReturnValue(true),
       } as any,
       antigravityService: {
         isAvailable: vi.fn().mockResolvedValue(false),
@@ -63,7 +64,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.14.0',
+        contractVersion: '1.15.0',
       },
       features: {
         retentionLeases: true,
@@ -111,7 +112,7 @@ describe('createCapabilitiesRoutes', () => {
         getBackendMode: vi.fn().mockResolvedValue('sdk'),
         getProfiles: vi.fn().mockReturnValue([]),
       } as any,
-      opencodeService: { isAvailable: vi.fn().mockResolvedValue(true) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(true), isEnabled: vi.fn().mockReturnValue(true) } as any,
       antigravityService: { isAvailable: vi.fn().mockResolvedValue(true) } as any,
     });
     const res = createMockRes();
@@ -137,6 +138,7 @@ describe('createCapabilitiesRoutes', () => {
       } as any,
       opencodeService: {
         isAvailable: vi.fn().mockResolvedValue(true),
+        isEnabled: vi.fn().mockReturnValue(true),
       } as any,
       antigravityService: {
         isAvailable: vi.fn().mockResolvedValue(true),
@@ -160,5 +162,36 @@ describe('createCapabilitiesRoutes', () => {
       supportsFollowUp: true,
       supportsModelSwitch: true,
     });
+  });
+
+  // Phase 1.1 — disabled runtime must be advertised as enabled:false AND
+  // available:false distinctly from "not installed", without silently
+  // substituting another runtime. The opencode binary remains on PATH
+  // (isAvailable() true) but OPENCODE_ENABLED=false (isEnabled() false).
+  it('advertises OpenCode as enabled:false / available:false when disabled but installed', async () => {
+    const routes = createCapabilitiesRoutes({
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getBackendMode: vi.fn().mockResolvedValue('direct'),
+        getProfiles: vi.fn().mockReturnValue([]),
+      } as any,
+      opencodeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        isEnabled: vi.fn().mockReturnValue(false),
+      } as any,
+      antigravityService: {
+        isAvailable: vi.fn().mockResolvedValue(false),
+      } as any,
+    });
+
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+
+    const body = JSON.parse(res.body);
+    expect(body.runtimes.opencode).toMatchObject({ enabled: false, available: false });
+    // Other runtimes remain enabled and are not silently substituted.
+    expect(body.runtimes.claude.enabled).toBe(true);
+    expect(body.runtimes.pi.enabled).toBe(true);
+    expect(body.runtimes.antigravity.enabled).toBe(true);
   });
 });

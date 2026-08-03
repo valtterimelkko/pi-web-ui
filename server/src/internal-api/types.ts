@@ -54,7 +54,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.14.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.15.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -765,6 +765,15 @@ export interface RefreshModelsResponse {
 
 export interface RuntimeCapabilities {
   available: boolean;
+  /**
+   * Whether the operator has enabled this runtime (e.g. OpenCode via
+   * `OPENCODE_ENABLED`). Distinct from `available`: a runtime can be installed
+   * and healthy yet intentionally disabled. When `enabled` is `false` the
+   * runtime is advertised as unavailable and new work is refused rather than
+   * silently substituted. Optional only for backward-compatible decoding;
+   * responses always include it. Added in contract 1.15.0.
+   */
+  enabled?: boolean;
   backendMode: RuntimeBackendMode;
   supportsFollowUp: boolean;
   /** Semantics of `mode: "follow_up"` for this runtime. */

@@ -190,6 +190,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
 
     opencodeService = {
       isRunning: vi.fn(() => false),
+      isEnabled: vi.fn().mockReturnValue(true),
       getContextUsage: vi.fn(() => ({ contextWindow: 128000, tokens: 200, percent: 0 })),
       getSessionStats: vi.fn().mockResolvedValue({
         sessionId: 'oc-native', cwd: '/root/x',

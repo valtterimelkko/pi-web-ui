@@ -665,6 +665,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
 
         case 'opencode': {
+          if (!opencodeService.isEnabled()) {
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)'));
+            return;
+          }
           if (!(await opencodeService.isAvailable())) {
             sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'OpenCode runtime is not available'));
             return;

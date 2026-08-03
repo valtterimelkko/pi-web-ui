@@ -30,6 +30,10 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
       opencodeService.isAvailable().catch(() => false),
       antigravityService.isAvailable().catch(() => false),
     ]);
+    // Operator enablement is distinct from installed/healthy availability.
+    // A disabled-but-installed runtime is advertised as unavailable and its
+    // new work is refused rather than silently substituted.
+    const opencodeEnabled = opencodeService.isEnabled();
 
     const body: CapabilitiesResponse = {
       status: 'ok',
@@ -46,6 +50,7 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
       runtimes: {
         pi: {
           available: true,
+          enabled: true,
           backendMode: 'native',
           supportsFollowUp: true,
           followUpSemantics: 'queue_while_busy',
@@ -62,6 +67,7 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
         },
         claude: {
           available: claudeAvailable,
+          enabled: true,
           backendMode: claudeBackendMode,
           supportsFollowUp: true,
           followUpSemantics: 'new_turn',
@@ -77,7 +83,8 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsStructuredQuestionResponse: claudeBackendMode === 'sdk',
         },
         opencode: {
-          available: opencodeAvailable,
+          available: opencodeEnabled && opencodeAvailable,
+          enabled: opencodeEnabled,
           backendMode: 'server',
           supportsFollowUp: true,
           followUpSemantics: 'new_turn',
@@ -94,6 +101,7 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
         },
         antigravity: {
           available: antigravityAvailable,
+          enabled: true,
           backendMode: 'subprocess',
           supportsFollowUp: true,
           followUpSemantics: 'new_turn',

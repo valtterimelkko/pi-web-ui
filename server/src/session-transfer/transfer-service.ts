@@ -497,6 +497,13 @@ export class TransferService {
             error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'OpenCode Direct is not available' },
           };
         }
+        if (!this.config.opencodeService.isEnabled()) {
+          return {
+            success: false,
+            sessionId: '',
+            error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'OpenCode is disabled (OPENCODE_ENABLED=false)' },
+          };
+        }
         try {
           const result = await this.config.opencodeService.createSession(cwd);
           return { success: true, sessionId: result.sessionId };
@@ -644,6 +651,9 @@ export class TransferService {
       case 'opencode': {
         if (!this.config.opencodeService) {
           return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'OpenCode service unavailable' } };
+        }
+        if (!this.config.opencodeService.isEnabled()) {
+          return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'OpenCode is disabled (OPENCODE_ENABLED=false)' } };
         }
         try {
           await this.awaitTargetAcceptance((onEvent, onComplete) =>
