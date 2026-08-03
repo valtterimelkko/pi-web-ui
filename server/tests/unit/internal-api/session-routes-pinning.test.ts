@@ -329,7 +329,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
 
     const capacityRes = createMockRes();
     await routes.handleCapacity(createJsonReq('GET', '/api/v1/capacity'), capacityRes);
-    expect(json(capacityRes)).toMatchObject({ available: false, activeTurns: 1, apiTurnLimit: 1, interactiveReserve: 1 });
+    expect(json(capacityRes)).toMatchObject({ available: false, activeTurns: 1, apiTurnLimit: 1, interactiveReserve: 1, controlAvailable: true });
 
     const promptRes = createMockRes();
     await routes.handleSendPrompt(createJsonReq('POST', '/x', { message: 'hello' }), promptRes, 'claude-1');
@@ -337,6 +337,14 @@ describe('createSessionRoutes — API pinning + detach', () => {
     expect(json(promptRes)).toMatchObject({ code: 'ADMISSION_CAPACITY_EXHAUSTED', reason: 'global_limit' });
     expect(promptRes.setHeader).toHaveBeenCalledWith('Retry-After', '2');
     expect(claudeService.sendPrompt).not.toHaveBeenCalled();
+
+    // §11 invariant at the route level: while execution admission is saturated
+    // (a P2 prompt is refused 429), a P1 control/read operation still succeeds
+    // and does NOT touch execution admission (control bypasses it).
+    const controlRes = createMockRes();
+    await routes.handleGetSessionInfo(createJsonReq('GET', '/x'), controlRes, 'claude-1');
+    expect(controlRes.statusCode).toBe(200);
+    expect(admission.snapshot().activeTurns).toBe(1); // control acquired nothing
     held.release();
   });
 

@@ -139,15 +139,28 @@ describe('AdmissionController — Phase 4 priority classes', () => {
     a.release(); b.release(); c.release();
   });
 
-  it('P0/P1 still respect memory pressure', async () => {
-    const controller = new AdmissionController({
-      maxActiveTurns: 6,
-      interactiveReserve: 1,
+  it('P0/P1 control is preserved under memory pressure and refused only at the critical floor (emergency mode)', async () => {
+    // Mere pressure (projected 49 < minHeadroom 100, but > critical 25): execution
+    // refused, control preserved (emergency mode).
+    const pressured = new AdmissionController({
+      maxActiveTurns: 6, interactiveReserve: 1, runtimeMaxActiveTurns: { pi: 6 },
       memory: () => ({ currentBytes: 9_950, limitBytes: 10_000 }),
-      minimumHeadroomBytes: 100,
-      reservedBytesPerTurn: 1,
+      minimumHeadroomBytes: 100, reservedBytesPerTurn: 1,
     });
-    await expect(controller.acquire('pi', 'P0')).rejects.toMatchObject({ reason: 'memory_pressure' });
+    await expect(pressured.acquire('pi', 'P2')).rejects.toMatchObject({ reason: 'memory_pressure' });
+    const ctrl = await pressured.acquire('pi', 'P0');
+    expect(ctrl).toBeDefined();
+    expect(pressured.snapshot().emergencyMode).toBe(true);
+    expect(pressured.snapshot().controlAvailable).toBe(true);
+    ctrl.release();
+    // Critical floor (projected < 25): control is refused too.
+    const critical = new AdmissionController({
+      maxActiveTurns: 6, interactiveReserve: 1,
+      memory: () => ({ currentBytes: 9_980, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 100, reservedBytesPerTurn: 1,
+    });
+    await expect(critical.acquire('pi', 'P0')).rejects.toMatchObject({ reason: 'memory_pressure' });
+    expect(critical.snapshot().controlAvailable).toBe(false);
   });
 
   it('exposes per-class counts, controlReserve, and executionCapacity in the snapshot', () => {
@@ -164,5 +177,38 @@ describe('AdmissionController — Phase 4 priority classes', () => {
     });
     expect(snap.controlReserve).toBe(1);
     expect(snap.executionCapacity).toBe(5);
+  });
+
+  it('reports controlAvailable=true under P2 saturation and a P1 control acquire still succeeds', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 6,
+      interactiveReserve: 1,
+      runtimeMaxActiveTurns: { pi: 6 },
+      memory: () => ({ currentBytes: 0, limitBytes: 12 * GiB }),
+      minimumHeadroomBytes: 100,
+      reservedBytesPerTurn: 1,
+    });
+    for (let i = 0; i < 5; i += 1) await controller.acquire('pi', 'P2'); // saturate execution
+    const snap = controller.snapshot();
+    expect(snap.available).toBe(false);        // P2/P3 execution saturated ...
+    expect(snap.controlAvailable).toBe(true);  // ... yet control is still served
+    const control = await controller.acquire('pi', 'P1');
+    expect(control).toBeDefined();
+    control.release();
+  });
+
+  it('controlAvailable is false only at the critical memory floor', () => {
+    const ok = new AdmissionController({
+      maxActiveTurns: 6, interactiveReserve: 1,
+      memory: () => ({ currentBytes: 0, limitBytes: 12 * GiB }),
+      minimumHeadroomBytes: 100, reservedBytesPerTurn: 1,
+    });
+    expect(ok.snapshot().controlAvailable).toBe(true);
+    const critical = new AdmissionController({
+      maxActiveTurns: 6, interactiveReserve: 1,
+      memory: () => ({ currentBytes: 9_980, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 100, reservedBytesPerTurn: 1,
+    });
+    expect(critical.snapshot().controlAvailable).toBe(false);
   });
 });

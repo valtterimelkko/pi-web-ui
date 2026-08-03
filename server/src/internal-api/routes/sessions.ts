@@ -250,6 +250,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     store: new RunReceiptStore(deps.runReceiptDir),
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
   });
+  // Priority model (server-derived; callers cannot self-declare a class):
+  //   P0 — human/browser control: enters via WebSocket, NOT through this
+  //        admission arbiter; it relies on the reserved controlReserve slot.
+  //   P1 — Agent OS control operations (cancel, evidence, run-receipt, session
+  //        control, approval response, delete): these handlers do NOT acquire
+  //        execution admission, so P2/P3 saturation can never block them.
+  //   P2 — ordinary Internal API prompt execution: acquires below, bounded by
+  //        executionCapacity (= maxActiveTurns - controlReserve).
+  //   P3 — server/config-assigned bulk work.
+  // The controlReserve guarantees P0/P1 headroom even when P2/P3 are saturated.
   const admission = deps.admissionController ?? new AdmissionController();
   // A synchronous, process-local claim closes the gap between the liveness
   // pre-flight and runtime dispatch when two Internal API callers race.
@@ -1395,7 +1405,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     onComplete: (error?: Error) => void,
     admittedLease?: { release: () => void; turnToken?: number },
   ): Promise<void> {
-    const admissionLease = admittedLease ?? await admission.acquire(runtime);
+    const admissionLease = admittedLease ?? await admission.acquire(runtime, 'P2');
     runReceipts.attachLease(runId, admissionLease);
     try {
     let completed = false;
@@ -1733,7 +1743,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       let rawAdmissionLease: { release: () => void };
       try {
-        rawAdmissionLease = await admission.acquire(runtime);
+        rawAdmissionLease = await admission.acquire(runtime, 'P2');
       } catch (error) {
         directClaim?.release();
         await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });

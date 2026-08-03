@@ -47,6 +47,15 @@ export interface AdmissionSnapshot {
   executionCapacity: number;
   /** Per-class active-turn counts (low cardinality, for diagnostics). */
   classes: Record<AdmissionClass, { active: number }>;
+  /**
+   * Whether P0/P1 control work can be served right now. Control bypasses the
+   * execution capacity (it is never blocked by P2/P3 saturation) and is bounded
+   * only by memory pressure. Distinct from `available`, which reflects P2/P3
+   * execution availability.
+   */
+  controlAvailable: boolean;
+  /** Emergency mode: memory pressure refusing new execution while control is still preserved. */
+  emergencyMode: boolean;
   memory: MemoryCapacity & { headroomBytes: number; minimumHeadroomBytes: number; reservedBytesPerTurn: number; projectedHeadroomBytes: number };
   runtimes: Record<SessionRuntime, { activeTurns: number; maxActiveTurns: number; stalledRuns?: number }>;
   /** Task/PID capacity from the service cgroup, when available. */
@@ -64,6 +73,13 @@ export interface AdmissionControllerOptions {
   interactiveReserve?: number;
   /** Slots reserved for P0/P1 control (defaults to interactiveReserve). P2/P3 cannot consume them. */
   controlReserve?: number;
+  /**
+   * Headroom floor below which even P0/P1 control is refused (emergency floor).
+   * Defaults to minimumHeadroomBytes/4 — control stays available under ordinary
+   * memory pressure (emergency mode: execution refused, control preserved) and is
+   * refused only at this critical floor.
+   */
+  memoryCriticalBytes?: number;
   runtimeMaxActiveTurns?: Partial<Record<SessionRuntime, number>>;
   minimumHeadroomBytes?: number;
   /** Conservative memory reservation applied before each admitted turn. */
@@ -100,6 +116,7 @@ export class AdmissionController {
   private readonly apiTurnLimit: number;
   private readonly controlReserve: number;
   private readonly executionCapacity: number;
+  private readonly memoryCriticalBytes: number;
   private readonly activeByClass: Record<AdmissionClass, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
   private readonly runtimeLimits: Record<SessionRuntime, number>;
   private readonly minimumHeadroomBytes: number;
@@ -127,6 +144,7 @@ export class AdmissionController {
       positiveInteger(options.runtimeMaxActiveTurns?.[runtime], this.apiTurnLimit),
     ])) as Record<SessionRuntime, number>;
     this.minimumHeadroomBytes = positiveInteger(options.minimumHeadroomBytes, DEFAULT_MINIMUM_HEADROOM_BYTES);
+    this.memoryCriticalBytes = positiveInteger(options.memoryCriticalBytes, Math.max(1, Math.floor(this.minimumHeadroomBytes / 4)));
     this.reservedBytesPerTurn = positiveInteger(options.reservedBytesPerTurn, DEFAULT_RESERVED_BYTES_PER_TURN);
     this.memory = options.memory ?? readMemoryCapacity;
     this.readPids = options.readPids ?? readServicePidsCapacity;
@@ -153,11 +171,22 @@ export class AdmissionController {
     };
   }
 
-  snapshot(): AdmissionSnapshot {
+  /** Projected memory headroom for one more turn, with pressure + critical flags. */
+  private memoryState(): { headroomBytes: number; projectedHeadroomBytes: number; pressure: boolean; critical: boolean } {
     const memory = this.memory();
     const headroomBytes = Math.max(0, memory.limitBytes - memory.currentBytes);
     const projectedHeadroomBytes = Math.max(0, headroomBytes - ((this.activeTurns + 1) * this.reservedBytesPerTurn));
-    const memoryPressure = projectedHeadroomBytes < this.minimumHeadroomBytes;
+    return {
+      headroomBytes,
+      projectedHeadroomBytes,
+      pressure: projectedHeadroomBytes < this.minimumHeadroomBytes,
+      critical: projectedHeadroomBytes < this.memoryCriticalBytes,
+    };
+  }
+
+  snapshot(): AdmissionSnapshot {
+    const memory = this.memory();
+    const { headroomBytes, projectedHeadroomBytes, pressure: memoryPressure, critical: memoryCritical } = this.memoryState();
     const executionActive = this.activeByClass.P2 + this.activeByClass.P3;
     const executionFull = executionActive >= this.executionCapacity;
     const reason: AdmissionRefusalReason | undefined = memoryPressure
@@ -173,6 +202,10 @@ export class AdmissionController {
       controlReserve: this.controlReserve,
       executionCapacity: this.executionCapacity,
       classes: Object.fromEntries(ADMISSION_CLASSES.map((cls) => [cls, { active: this.activeByClass[cls] }])) as Record<AdmissionClass, { active: number }>,
+      // Emergency mode: under memory pressure execution is refused, but control
+      // stays available unless the critical floor is breached.
+      controlAvailable: !memoryCritical,
+      emergencyMode: memoryPressure && !memoryCritical,
       memory: { ...memory, headroomBytes, minimumHeadroomBytes: this.minimumHeadroomBytes, reservedBytesPerTurn: this.reservedBytesPerTurn, projectedHeadroomBytes },
       pids: this.readPids(),
       runtimes: Object.fromEntries(RUNTIMES.map((runtime) => [runtime, {
@@ -184,17 +217,19 @@ export class AdmissionController {
   }
 
   private refusalReason(runtime: SessionRuntime, cls: AdmissionClass): AdmissionRefusalReason | undefined {
-    const snapshot = this.snapshot();
-    // Memory pressure bounds every class, including control (P0/P1).
-    if (snapshot.reason === 'memory_pressure') return 'memory_pressure';
+    const { pressure, critical } = this.memoryState();
     if (CONTROL_CLASSES.has(cls)) {
-      // P0/P1 control is protected from P2/P3 execution saturation: bounded only
-      // by the global turn ceiling, never by the execution capacity or per-runtime
-      // limits. (snapshot global_limit reflects execution saturation, which control bypasses.)
+      // P0/P1 control is preserved under ordinary memory pressure (emergency mode:
+      // execution is refused, control is kept) and refused only at the critical
+      // memory floor or the global turn ceiling. It bypasses the execution
+      // capacity and per-runtime limits.
+      if (critical) return 'memory_pressure';
       if (this.activeTurns >= this.maxActiveTurns) return 'global_limit';
     } else {
-      // P2/P3 execution: refused when execution capacity is saturated, plus the per-runtime ceiling.
-      if (snapshot.reason === 'global_limit') return 'global_limit';
+      // P2/P3 execution: refused under memory pressure, execution saturation, or per-runtime ceiling.
+      if (pressure) return 'memory_pressure';
+      const executionActive = this.activeByClass.P2 + this.activeByClass.P3;
+      if (executionActive >= this.executionCapacity) return 'global_limit';
       if (this.activeByRuntime[runtime] >= this.runtimeLimits[runtime]) return 'runtime_limit';
     }
     return undefined;
