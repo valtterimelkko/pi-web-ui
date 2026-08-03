@@ -393,6 +393,33 @@ describe('createSessionRoutes — API pinning + detach', () => {
     a.release(); b.release();
   });
 
+  it('cancel (handleAbort) works under active P2 saturation via the control lane, bypassing execution admission', async () => {
+    const admission = new AdmissionController({
+      maxActiveTurns: 3, interactiveReserve: 1, runtimeMaxActiveTurns: { claude: 3 },
+      memory: () => ({ currentBytes: 0, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 1, reservedBytesPerTurn: 1,
+    });
+    const lane = new BoundedControlLane(8, 5000, 16);
+    const routes = makeRoutes(admission, lane);
+    let observedInFlight = 0;
+    registry.get.mockImplementation(async () => {
+      observedInFlight = lane.inFlight; // captured inside handleAbort's body, inside the lane
+      return { id: 'claude-1', path: 'claude-1', sdkType: 'claude', cwd: '/x', status: 'running' };
+    });
+    // Saturate execution capacity with active P2 turns.
+    const a = await admission.acquire('claude', 'P2');
+    const b = await admission.acquire('claude', 'P2'); // executionCapacity=2 -> saturated
+    const before = admission.snapshot().activeTurns;
+    const res = createMockRes();
+    await routes.handleAbort(createJsonReq('POST', '/x'), res, 'claude-1');
+    expect(res.statusCode).toBe(200);                  // cancel completed
+    expect(claudeService.abort).toHaveBeenCalledWith('claude-1'); // control regained
+    expect(observedInFlight).toBe(1);                  // cancel ran inside the control lane
+    expect(lane.inFlight).toBe(0);                     // and released it
+    expect(admission.snapshot().activeTurns).toBe(before); // cancel acquired no execution slot
+    a.release(); b.release();
+  });
+
   it('detach=true returns 202 immediately and runs the turn in the background', async () => {
     const routes = makeRoutes();
     const req = createJsonReq('POST', '/api/v1/sessions/claude-1/prompt', {
