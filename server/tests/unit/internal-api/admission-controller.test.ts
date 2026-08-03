@@ -101,3 +101,68 @@ describe('AdmissionController', () => {
     expect(snap.pids).toMatchObject({ current: 5, max: 768, source: 'service' });
   });
 });
+
+describe('AdmissionController — Phase 4 priority classes', () => {
+  const GiB = 1024 * 1024 * 1024;
+
+  it('saturated P2/P3 cannot consume the reserved P0/P1 control slot', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 6,
+      interactiveReserve: 1,
+      memory: () => ({ currentBytes: 0, limitBytes: 12 * GiB }),
+      minimumHeadroomBytes: 100,
+      reservedBytesPerTurn: 1,
+    });
+    // P2/P3 execution capacity = 6 - controlReserve(1) = 5.
+    for (let i = 0; i < 5; i += 1) await controller.acquire('pi'); // default class P2
+    // A 6th P2 is refused (execution capacity exhausted) ...
+    await expect(controller.acquire('pi')).rejects.toMatchObject({ reason: 'global_limit' });
+    // ... but a P0 control acquire still succeeds on the reserved control slot.
+    const control = await controller.acquire('pi', 'P0');
+    expect(control).toBeDefined();
+    expect(controller.snapshot().classes?.P0.active).toBe(1);
+    control.release();
+  });
+
+  it('bounds P0/P1 by the global turn cap (control cannot starve execution beyond the ceiling)', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 3,
+      interactiveReserve: 1,
+      memory: () => ({ currentBytes: 0, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 100,
+      reservedBytesPerTurn: 1,
+    });
+    const a = await controller.acquire('pi', 'P0');
+    const b = await controller.acquire('pi', 'P1');
+    const c = await controller.acquire('pi', 'P0'); // totalActive = 3 = maxActiveTurns
+    await expect(controller.acquire('pi', 'P0')).rejects.toMatchObject({ reason: 'global_limit' });
+    a.release(); b.release(); c.release();
+  });
+
+  it('P0/P1 still respect memory pressure', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 6,
+      interactiveReserve: 1,
+      memory: () => ({ currentBytes: 9_950, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 100,
+      reservedBytesPerTurn: 1,
+    });
+    await expect(controller.acquire('pi', 'P0')).rejects.toMatchObject({ reason: 'memory_pressure' });
+  });
+
+  it('exposes per-class counts, controlReserve, and executionCapacity in the snapshot', () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 6,
+      interactiveReserve: 1,
+      memory: () => ({ currentBytes: 0, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 100,
+      reservedBytesPerTurn: 1,
+    });
+    const snap = controller.snapshot();
+    expect(snap.classes).toMatchObject({
+      P0: { active: 0 }, P1: { active: 0 }, P2: { active: 0 }, P3: { active: 0 },
+    });
+    expect(snap.controlReserve).toBe(1);
+    expect(snap.executionCapacity).toBe(5);
+  });
+});

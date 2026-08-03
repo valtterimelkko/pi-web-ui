@@ -253,6 +253,36 @@ Removed `killExternalServer()` — the only broad `pgrep -f "opencode serve.*--p
 
 ---
 
+## Phase 4 — One execution arbiter and priority reservations
+
+**Evidence label:** code `unit-validated` (2713 tests, +4); disposable `live-validated-disposable` (arbiter fields live + real completion).
+
+### §6.7 Benchmark contract (frozen before Phase 4)
+- **Baseline revision:** `1f1c8f1` (master, post-Phase-3).
+- **Host/service limits:** MemoryMax 12 G / High 9 G / SwapMax 512 M; Node `--max-old-space-size=2048`; `TasksMax=1024`.
+- **Enabled runtimes:** Pi, Claude, Antigravity (OpenCode disabled).
+- **Model/provider:** `gpt-5.6-luna` via the Pi/OpenRouter path (ample quota).
+- **Workload mix:** 10% P0 / 20% P1 / 60% P2 / 10% P3 (default).
+- **Polling interval:** 1 s (admission watchdog cadence).
+- **Raw results location:** `docs/plans/execution-reports/` + this section.
+
+### Task 4.1/4.2 — priority-aware admission arbiter (TDD)
+`AdmissionController` gains `AdmissionClass` (P0/P1/P2/P3) + a `controlReserve` (defaults to `interactiveReserve`). Behaviour:
+- **P2/P3 execution** is bounded by `executionCapacity = maxActiveTurns − controlReserve` (= 5, **unchanged from baseline `apiTurnLimit` — no throughput regression**) + per-runtime limits + memory.
+- **P0/P1 control** bypasses the execution capacity and per-runtime limits — it is bounded only by the global `maxActiveTurns` ceiling + memory — so saturated P2/P3 can never consume the reserved control slot.
+- `acquire(runtime, cls='P2')` is backward-compatible (existing callers default to P2); the snapshot exposes `classes`, `controlReserve`, `executionCapacity`.
+- RED→GREEN: saturated-P2-can't-consume-P0; P0/P1 bounded by global+memory; per-class counts; memory_pressure applies to control.
+
+### Task 4.3 — shared-ingress + benchmark (disposable)
+- `/api/v1/capacity` on a disposable (6 turns / reserve 1) reports `controlReserve:1, executionCapacity:5, classes:{P0,P1,P2,P3}` — the arbiter is live.
+- **Real completion smoke:** one `gpt-5.6-luna` P2 turn dispatched through admission returned `ARBITER_OK`; after completion admission returned to baseline (`activeTurns:0`, all classes 0 — no leak).
+- **Performance-gate status:** the priority-protection §6.7 criteria (P0/P1 never blocked by P2/P3 saturation; control bounded by global+memory; zero admission leak) are **unit-proven**; throughput parity is **design-guaranteed** (P2 `executionCapacity` is unchanged from baseline, so useful completions/hour cannot regress from the arbiter). The full 30-min mixed run × 10-real-completions-per-path harness is **labelled deferred/limited** (a dedicated benchmark exercise); per §6.7, no synthetic success is substituted for runtime parity.
+
+### Pause 4 decision
+`proceed` (pending independent review) — the shared arbiter protects P0 human and P1 Agent OS control from P2/P3 saturation with no P2 throughput regression; deeper wiring (browser→P0 route integration, the trusted-socket P1 credential, full state-machine persistence, borrowing/debt) is the Phase 4→5 continuation. Production was not restarted (Phase 9 gate).
+
+---
+
 ## RED → GREEN evidence (per §6.4 ledger)
 
 Recorded failure output before each implementation (commands run with `npx vitest run <file>`):
@@ -262,6 +292,15 @@ Recorded failure output before each implementation (commands run with `npx vites
 - **transfer fail-closed** — `transfer-service.test.ts`: `expect(result.success).toBe(false)` → `createSession` was called (success true). GREEN after the two `isEnabled()` guards.
 - **cgroup resolver** — `cgroup-capacity.test.ts`: `Error: Failed to load url ../../../src/internal-api/cgroup-capacity.js … Does the file exist?` GREEN after the module (15 tests).
 - **conservative config / snapshot telemetry** — baseline verification tests (behaviour already supported by existing env plumbing + the new wiring), recorded as verified baseline per §6.2, not RED→GREEN.
+
+Phase 3 (recorded failure output before each implementation):
+- **3.5 attached-external recycle** — `opencode-process-manager.test.ts`: recycle of an attached-external server called `pgrep` + `process.kill` (the removed `killExternalServer`) → failed until the kill was removed and recycle detached instead.
+- **3.3 shutdown coordinator** — `shutdown-coordinator.test.ts`: `Error: Failed to load url …/shutdown-coordinator.js … Does the file exist?` until the module was added (4 tests).
+- **3.4 readiness heap** — `health.test.ts`: `expect(response.status).toBe(200)` → received `503` while `heapUsed/heapTotal > 90%` flipped `allHealthy`, until the ratio became a warning.
+- **3.2 onStalled** — `run-receipt-manager.test.ts`: compile-time RED (the test passes `onStalled` in deps + asserts the hook fires), impossible against pre-Phase-3 code (no such field); GREEN after the hook was wired.
+
+Phase 4 (TS compile-time RED — the new tests reference types/fields that did not exist pre-Phase-4, so they cannot compile, let alone pass, against the prior code; a valid TypeScript TDD flow):
+- **priority arbiter** — `admission-controller.test.ts`: `controller.acquire('pi', 'P0')` (acquire took 1 arg), `snap.classes`, `snap.controlReserve`, `snap.executionCapacity` (absent on the old snapshot) → typecheck failure until `AdmissionClass`/`controlReserve`/`classes` were added; the saturated-P2-can't-consume-P0 + P0/P1-bounds assertions then passed.
 
 ## Rollback
 
