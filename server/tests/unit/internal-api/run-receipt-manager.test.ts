@@ -72,6 +72,60 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     await m.shutdown();
   });
 
+  // Phase 3.2 §11 fence: admission capacity must NOT be reusable while runtime
+  // cessation is unconfirmed. Cancel/stall defers the lease release until the
+  // runtime confirms it has stopped (or a bounded drain timeout -> release).
+  it('defers admission release on cancel until runtime cessation is confirmed', async () => {
+    let quiescent = false;
+    const release = vi.fn();
+    const localStore = new RunReceiptStore(dir, { now: () => now });
+    const m = new RunReceiptManager({
+      store: localStore, now: () => now, idFactory: () => `fence-${++nextId}`, idempotencyTtlMs: 1_000, metrics,
+      drainPollMs: 5, drainTimeoutMs: 200, isRuntimeQuiescent: async () => quiescent,
+    });
+    await m.init();
+    const begun = await m.beginRun({ ...baseInput, sessionId: 'fence-1', idempotencyKey: 'f1' });
+    m.attachLease(begun.receipt.runId, { release });
+    await m.cancelRun(begun.receipt.runId);
+    expect(release).not.toHaveBeenCalled(); // draining — slot held, capacity not reusable
+    quiescent = true;
+    await new Promise((r) => setTimeout(r, 30)); // drain poll fires
+    expect(release).toHaveBeenCalled();
+    await m.shutdown();
+  });
+
+  it('releases at the drain timeout if cessation is never confirmed (bounded quarantine)', async () => {
+    const release = vi.fn();
+    const localStore = new RunReceiptStore(dir, { now: () => now });
+    const m = new RunReceiptManager({
+      store: localStore, now: () => now, idFactory: () => `to-${++nextId}`, idempotencyTtlMs: 1_000, metrics,
+      drainPollMs: 5, drainTimeoutMs: 50, isRuntimeQuiescent: async () => false,
+    });
+    await m.init();
+    const begun = await m.beginRun({ ...baseInput, sessionId: 'to-1', idempotencyKey: 't1' });
+    m.attachLease(begun.receipt.runId, { release });
+    await m.cancelRun(begun.receipt.runId);
+    expect(release).not.toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 150)); // past the 50ms drain timeout
+    expect(release).toHaveBeenCalled();
+    await m.shutdown();
+  });
+
+  it('releases the lease immediately on normal completion (cessation confirmed by agent_end)', async () => {
+    const release = vi.fn();
+    const localStore = new RunReceiptStore(dir, { now: () => now });
+    const m = new RunReceiptManager({
+      store: localStore, now: () => now, idFactory: () => `ok-${++nextId}`, idempotencyTtlMs: 1_000, metrics,
+      drainPollMs: 5, drainTimeoutMs: 200, isRuntimeQuiescent: async () => false,
+    });
+    await m.init();
+    const begun = await m.beginRun({ ...baseInput, sessionId: 'ok-1', idempotencyKey: 'ok1' });
+    m.attachLease(begun.receipt.runId, { release });
+    await m.finish(begun.receipt.runId, { status: 'completed' });
+    expect(release).toHaveBeenCalled(); // immediate — no drain for normal completion
+    await m.shutdown();
+  });
+
   it('creates one run for a key and returns the same receipt on a duplicate request', async () => {
     const first = await manager.beginRun({ ...baseInput, idempotencyKey: 'request-1' });
     const second = await manager.beginRun({ ...baseInput, idempotencyKey: 'request-1' });

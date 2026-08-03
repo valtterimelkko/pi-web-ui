@@ -18,6 +18,8 @@ const logger = createLogger('RunReceiptManager');
 const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_TURN_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_TURN_MAX_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
+const DEFAULT_DRAIN_POLL_MS = 1_000;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
 const ACTIVITY_PERSIST_INTERVAL_MS = 1_000;
 
@@ -55,6 +57,13 @@ export interface RunReceiptManagerDeps {
   turnMaxMs?: number;
   /** Fired when the watchdog terminalises a run as TURN_STALLED (quarantine signal). */
   onStalled?: (receipt: RunReceipt) => void;
+  /** If set, cancel/stall defers admission release until this resolves true (runtime
+   *  confirmed quiescent) or drainTimeoutMs elapses (quarantine). §11 fence. */
+  isRuntimeQuiescent?: (sessionId: string) => Promise<boolean>;
+  /** Hard cap on the drain hold before a forced release (quarantine). Default 30000. */
+  drainTimeoutMs?: number;
+  /** Drain quiescence poll interval. Default 1000. */
+  drainPollMs?: number;
 }
 
 export type ExistingRunResult =
@@ -107,6 +116,11 @@ export class RunReceiptManager {
   private watchdogTimer?: NodeJS.Timeout;
   private stalledRunCount = 0;
   private readonly onStalled?: (receipt: RunReceipt) => void;
+  private readonly isRuntimeQuiescent?: (sessionId: string) => Promise<boolean>;
+  private readonly drainTimeoutMs: number;
+  private readonly drainPollMs: number;
+  /** Draining runs: terminal but admission slot held pending runtime cessation. */
+  private readonly draining = new Map<string, { release: () => void; timer: NodeJS.Timeout }>();
 
   constructor(deps: RunReceiptManagerDeps) {
     this.store = deps.store;
@@ -125,6 +139,9 @@ export class RunReceiptManager {
       DEFAULT_TURN_MAX_MS,
     );
     this.onStalled = deps.onStalled;
+    this.isRuntimeQuiescent = deps.isRuntimeQuiescent;
+    this.drainTimeoutMs = positiveTimeout(deps.drainTimeoutMs, undefined, DEFAULT_DRAIN_TIMEOUT_MS);
+    this.drainPollMs = positiveTimeout(deps.drainPollMs, undefined, DEFAULT_DRAIN_POLL_MS);
   }
 
   async init(): Promise<void> {
@@ -436,6 +453,8 @@ export class RunReceiptManager {
     this.stopWatchdog();
     await Promise.allSettled([...this.keyLocks.values(), ...this.runLocks.values()]);
     for (const active of this.activeRuns.values()) active.lease?.release();
+    for (const entry of this.draining.values()) { clearInterval(entry.timer); entry.release(); }
+    this.draining.clear();
     await this.store.flush();
     this.activeBySession.clear();
     this.activeRuns.clear();
@@ -502,7 +521,7 @@ export class RunReceiptManager {
   private terminalize(record: PersistedRunReceipt): void {
     const active = this.activeRuns.get(record.runId);
     if (!active) return;
-    active.lease?.release();
+    const lease = active.lease;
     this.activeRuns.delete(record.runId);
     const runs = this.activeBySession.get(record.sessionId);
     runs?.delete(record.runId);
@@ -513,6 +532,43 @@ export class RunReceiptManager {
       elapsedMs(record.acceptedAt, record.terminalAt),
     );
     this.resolveTerminalWaiters(toPublicReceipt(record));
+    // §11 fence: cancellation/stall leaves runtime cessation unconfirmed, so the
+    // admission slot is held (not reusable) until the runtime confirms quiescent
+    // or the drain timeout elapses (bounded quarantine). Normal completion
+    // (agent_end) already confirms cessation, so it releases immediately.
+    if (lease && this.isRuntimeQuiescent && (record.status === 'cancelled' || record.status === 'failed')) {
+      this.drainAndRelease(record.runId, record.sessionId, lease);
+    } else {
+      lease?.release();
+    }
+  }
+
+  /**
+   * Hold an admission lease while polling the runtime for cessation; release as
+   * soon as quiescence is confirmed, or at drainTimeoutMs (real-time, bounded
+   * quarantine so a missing acknowledgement can never leak a slot permanently).
+   */
+  private drainAndRelease(runId: string, sessionId: string, lease: { release: () => void }): void {
+    const deadline = Date.now() + this.drainTimeoutMs;
+    const timer = setInterval(() => {
+      Promise.resolve(this.isRuntimeQuiescent!(sessionId))
+        .then((quiescent) => { if (quiescent || Date.now() >= deadline) this.finishDrain(runId); })
+        .catch(() => { if (Date.now() >= deadline) this.finishDrain(runId); });
+    }, this.drainPollMs);
+    this.draining.set(runId, { release: lease.release, timer });
+  }
+
+  private finishDrain(runId: string): void {
+    const entry = this.draining.get(runId);
+    if (!entry) return;
+    clearInterval(entry.timer);
+    this.draining.delete(runId);
+    entry.release();
+  }
+
+  /** Number of runs terminal but still holding an admission slot pending cessation. */
+  getDrainingCount(): number {
+    return this.draining.size;
   }
 
   private resolveTerminalWaiters(receipt: RunReceipt): void {

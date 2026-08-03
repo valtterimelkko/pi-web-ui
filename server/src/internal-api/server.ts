@@ -173,8 +173,23 @@ export class InternalApiServer {
         const runId = receipt.runId;
         void this.notificationManager?.emitExplicit({
           title: `⚠️ Run quarantined (TURN_STALLED): ${runId}`,
-          body: `Run ${runId} was terminalised by the watchdog without confirmed runtime cessation. The admission slot is already released; no action required — informational, check for orphan processes only if you wish.`,
+          body: `Run ${runId} was terminalised by the watchdog without confirmed runtime cessation. The admission slot is held until the runtime confirms cessation (or a 30s drain quarantine); no action required — informational, check for orphan processes only if you wish.`,
         }).catch(() => { /* best-effort; a failed ping must not affect terminalisation */ });
+      },
+      // §11 fence: on cancel/stall the admission slot is held (not reusable) until
+      // the runtime confirms it has stopped, or a 30s drain timeout (quarantine).
+      isRuntimeQuiescent: async (sessionId) => {
+        try {
+          const entry = await this.sessionRegistry.get(sessionId);
+          if (!entry) return true; // session gone -> quiescent
+          if (entry.sdkType === 'claude') return !this.claudeService.isRunning(sessionId);
+          if (entry.sdkType === 'opencode') return !this.opencodeService.isRunning(sessionId);
+          if (entry.sdkType === 'antigravity') return !this.antigravityService.isRunning(sessionId);
+          const status = this.multiSessionManager.getSessionStatus(entry.path);
+          return status?.status !== 'busy'; // 'busy' = actively streaming; else quiescent
+        } catch {
+          return true; // lookup failure -> treat as quiescent (never hold a slot forever)
+        }
       },
     });
     await runReceiptManager.init();
