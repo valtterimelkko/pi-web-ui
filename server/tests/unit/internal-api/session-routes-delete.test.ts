@@ -48,6 +48,36 @@ function json(res: { body: string }): any {
   return JSON.parse(res.body);
 }
 
+/** SSE-capable mock res: captures streamed chunks and the 'close' callback so a
+ * test can simulate Node firing 'close' after res.end(). */
+function createSSERes(): ServerResponse & { chunks: string[]; isClosed: boolean; _closeCb?: () => void } {
+  const chunks: Buffer[] = [];
+  const res = new Writable({
+    write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void) {
+      chunks.push(chunk);
+      callback();
+    },
+  }) as unknown as ServerResponse & { chunks: string[]; isClosed: boolean; _closeCb?: () => void };
+  res.statusCode = 200;
+  res.isClosed = false;
+  res.setHeader = vi.fn();
+  res.writeHead = vi.fn(function (this: typeof res, code: number) { res.statusCode = code; return this; });
+  res.write = vi.fn(function (this: typeof res, chunk: Buffer | string) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    res.chunks = chunks.map((c) => c.toString());
+    return true;
+  }) as any;
+  res.end = vi.fn(function (this: typeof res, data?: string | Buffer) {
+    if (data) chunks.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+    res.chunks = chunks.map((c) => c.toString());
+    res.isClosed = true;
+    return this;
+  }) as any;
+  res.getHeader = vi.fn();
+  res.on = vi.fn((event: string, cb: () => void) => { if (event === 'close') res._closeCb = cb; return res; });
+  return res;
+}
+
 describe('createSessionRoutes — DELETE file cleanup', () => {
   let dir: string;
   let piDir: string;
@@ -365,5 +395,47 @@ describe('createSessionRoutes — DELETE file cleanup', () => {
     expect(routes.broker.getRecentEvents(sessionId)).toHaveLength(0); // cleared on delete, not recreated
     expect(lateSub).not.toHaveBeenCalled(); // late subscriber sees nothing
     expect(routes.broker.subscriberCount(sessionId)).toBe(0);
+  });
+
+  it('DELETE closes an active /events SSE stream and clears its ownership (disposal-owned)', async () => {
+    const sessionId = 'claude-sse';
+    registry.get.mockResolvedValue({
+      id: sessionId,
+      sdkType: 'claude',
+      path: sessionId,
+      cwd: '/root/proj',
+      status: 'idle',
+    });
+
+    const routes = makeRoutes();
+    await routes.ready;
+
+    // Open the SSE stream. handleSessionEvents stays open until the client
+    // disconnects, so do NOT await it; hold the promise to assert it resolves.
+    const eventsReq = new PassThrough() as IncomingMessage;
+    (eventsReq as any).method = 'GET';
+    (eventsReq as any).url = `/api/v1/sessions/${sessionId}/events`;
+    (eventsReq as any).headers = {};
+    const sseRes = createSSERes();
+    const eventsDone = routes.handleSessionEvents(eventsReq, sseRes, sessionId);
+    await new Promise((r) => setImmediate(r)); // let the subscribe/register sync run
+
+    // The SSE stream is now owned by the disposal registry.
+    expect(routes.disposal.getCounts()[sessionId]).toBeGreaterThanOrEqual(1);
+    expect(sseRes.isClosed).toBe(false);
+
+    // Delete the session. The disposal handle must close the live SSE response
+    // (broker.clear alone cannot — it holds no req/res) and drop ownership.
+    const res = createMockRes();
+    await routes.handleDeleteSession(createJsonReq('DELETE', `/api/v1/sessions/${sessionId}`), res, sessionId);
+    expect(res.statusCode).toBe(200);
+
+    expect(sseRes.isClosed).toBe(true); // stream closed + heartbeat cleared by sse.complete
+    expect(routes.disposal.getCounts()[sessionId]).toBeUndefined(); // ownership cleared
+
+    // Simulate Node firing 'close' after res.end (the mock doesn't auto-fire it);
+    // the handler's promise must then resolve (no leaked pending handler).
+    sseRes._closeCb?.();
+    await expect(eventsDone).resolves.toBeUndefined();
   });
 });

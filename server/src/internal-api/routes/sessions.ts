@@ -2769,6 +2769,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sse.write(event.type, event);
     }, true, 'sse');
 
+    // Own the live SSE stream + its heartbeat timer in the disposal registry.
+    // broker.clear() drops broker subscribers but CANNOT close this HTTP
+    // response (the broker holds no req/res), so without this handle a deleted
+    // session would leave an open SSE connection + 15s heartbeat until the
+    // client disconnects. On delete, disposal closes the stream cleanly.
+    const unregisterDispose = disposal.register(sessionId, 'sse-events-stream', () => {
+      unsub();
+      try { sse.complete({ reason: 'session_deleted' }); } catch { /* already closed */ }
+    });
+
     // Keep this handler alive until the client disconnects. Without this,
     // Node may consider the GET request "complete" (it has no body) and
     // garbage-collect the response, closing the SSE stream prematurely.
@@ -2777,6 +2787,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     await new Promise<void>((resolve) => {
       const cleanup = () => {
         unsub();
+        unregisterDispose(); // normal client disconnect removes the handle (no stale handle)
         resolve();
       };
       sse.res.on('close', cleanup);
