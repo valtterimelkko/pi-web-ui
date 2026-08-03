@@ -13,6 +13,13 @@
  * in-flight P2 turns (that requires process isolation, Phase 6); it bounds the
  * control side of that shared surface.
  */
+export class ControlLaneFullError extends Error {
+  constructor() {
+    super('control lane full');
+    this.name = 'ControlLaneFullError';
+  }
+}
+
 export class BoundedControlLane {
   private active = 0;
   private readonly waiters: Array<{ resolve: () => void; reject: (e: Error) => void; timer: NodeJS.Timeout }> = [];
@@ -20,12 +27,16 @@ export class BoundedControlLane {
   /**
    * @param maxConcurrent hard cap on simultaneous in-flight control operations.
    * @param queueTimeoutMs how long an excess request waits for a slot before failing.
+   * @param maxQueued hard cap on queued waiters; excess requests fail fast
+   *   (ControlLaneFullError) instead of growing the queue without bound.
    */
   constructor(
     private readonly maxConcurrent: number,
     private readonly queueTimeoutMs: number,
+    private readonly maxQueued: number,
   ) {
     if (maxConcurrent < 1) throw new Error('BoundedControlLane maxConcurrent must be >= 1');
+    if (maxQueued < 0) throw new Error('BoundedControlLane maxQueued must be >= 0');
   }
 
   /** Current in-flight control operations (diagnostics). */
@@ -40,6 +51,7 @@ export class BoundedControlLane {
 
   async acquire(): Promise<{ release: () => void }> {
     if (this.active >= this.maxConcurrent) {
+      if (this.waiters.length >= this.maxQueued) throw new ControlLaneFullError();
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
           const idx = this.waiters.findIndex((w) => w.resolve === resolve);

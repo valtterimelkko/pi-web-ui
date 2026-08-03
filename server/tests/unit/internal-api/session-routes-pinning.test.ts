@@ -351,7 +351,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
   });
 
   it('control handlers acquire and release the bounded control lane', async () => {
-    const lane = new BoundedControlLane(1, 5000);
+    const lane = new BoundedControlLane(1, 5000, 4);
     const routes = makeRoutes(undefined, lane);
     let observedInFlight = 0;
     registry.get.mockImplementation(async () => {

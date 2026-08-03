@@ -97,7 +97,7 @@ import { config } from '../../config.js';
 import { createLogger, type LogRecord } from '../../logging/logger.js';
 import { getRecentLogs } from '../diagnostics-buffer.js';
 import { AdmissionCapacityError, AdmissionController } from '../admission-controller.js';
-import { BoundedControlLane } from '../control-lane.js';
+import { BoundedControlLane, ControlLaneFullError } from '../control-lane.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -254,7 +254,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
   });
   // Priority model (server-derived; callers cannot self-declare a class):
-  //   P0 — human/browser control: enters via WebSocket, NOT through this arbiter.
+  //   P0 — human/browser prompts: enter via WebSocket and are bounded per-session
+  //        (one active turn per WS session) and by the runtime's maxSessions cap;
+  //        they do NOT go through this Internal API arbiter. The arbiter's role re:
+  //        P0 is to cap P2/P3 so the shared service keeps capacity for the browser.
   //   P1 — Agent OS control operations (cancel, evidence, run-receipt, session
   //        control, approval response, delete): run through the bounded controlLane
   //        (concurrency cap + queue), NOT execution admission, so P2/P3 saturation
@@ -271,7 +274,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   // admission but are NOT unbounded — this caps concurrent control-handler
   // executions and queues excess (up to a timeout), so a control flood cannot
   // monopolise the shared event loop/memory/sockets that P0/P1 also depend on.
-  const controlLane = deps.controlLane ?? new BoundedControlLane(8, 5000);
+  // maxConcurrent=8 is sized well above the expected control-op rate (cancel/
+  // evidence/receipt/control/approval/delete are lightweight read/state ops);
+  // maxQueued=16 bounds a flood with fail-fast 503 + Retry-After. Both tunable
+  // via deps.controlLane. (emergency/control ops bypass execution admission but
+  // must NOT be unbounded — this lane is their guardrail.)
+  const controlLane = deps.controlLane ?? new BoundedControlLane(8, 5000, 16);
   // A synchronous, process-local claim closes the gap between the liveness
   // pre-flight and runtime dispatch when two Internal API callers race.
   const activeDirectDispatchTokens = new Map<string, number>();
@@ -3667,7 +3675,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   const wrapControl = <A extends unknown[]>(h: (...a: A) => Promise<void>) =>
     async (...a: A): Promise<void> => {
-      const slot = await controlLane.acquire();
+      const res = a[1] as ServerResponse;
+      let slot: { release: () => void };
+      try {
+        slot = await controlLane.acquire();
+      } catch (err) {
+        if (err instanceof ControlLaneFullError) {
+          // Control flood: fail fast with Retry-After rather than growing the queue.
+          try {
+            res.setHeader('Retry-After', '2');
+            sendJson(res, 503, { error: 'Control lane saturated; retry shortly', code: 'CONTROL_LANE_FULL', retryAfterSeconds: 2 });
+          } catch { /* response already closed */ }
+          return;
+        }
+        throw err;
+      }
       try { await h(...a); } finally { slot.release(); }
     };
 
