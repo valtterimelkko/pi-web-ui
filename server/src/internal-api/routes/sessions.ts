@@ -98,6 +98,7 @@ import { createLogger, type LogRecord } from '../../logging/logger.js';
 import { getRecentLogs } from '../diagnostics-buffer.js';
 import { AdmissionCapacityError, AdmissionController } from '../admission-controller.js';
 import { BoundedControlLane, ControlLaneFullError } from '../control-lane.js';
+import { SessionDisposalRegistry } from '../session-disposal.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -233,6 +234,8 @@ export interface SessionRoutesDeps {
   admissionController?: AdmissionController;
   /** Optional bounded control lane for P0/P1 handlers (defaults to a bounded instance). */
   controlLane?: BoundedControlLane;
+  /** Optional per-session disposal registry (defaults to a new instance). */
+  disposal?: SessionDisposalRegistry;
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps) {
@@ -284,6 +287,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   // via deps.controlLane. (emergency/control ops bypass execution admission but
   // must NOT be unbounded — this lane is their guardrail.)
   const controlLane = deps.controlLane ?? new BoundedControlLane(8, 5000, 16);
+  // Per-session disposal registry: every per-session resource (queued-run
+  // correlations, observers, timers, snapshots, drain handles) registers a
+  // dispose handle here so handleDeleteSession and shutdown tear them all down
+  // in one place, and late callbacks are tombstoned. This is the ownership seam
+  // that prevents deleted sessions from leaving live timers/queues/observers.
+  const disposal = deps.disposal ?? new SessionDisposalRegistry();
   // A synchronous, process-local claim closes the gap between the liveness
   // pre-flight and runtime dispatch when two Internal API callers race.
   const activeDirectDispatchTokens = new Map<string, number>();
@@ -300,6 +309,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   const queuedPiObservers = new Map<string, (event: unknown) => void>();
   const queuedPiEventChains = new Map<string, Promise<void>>();
   const queuedPiLastFollowUp = new Map<string, string[]>();
+  const queuedRunDisposalRegistered = new Set<string>();
 
   function claimDirectDispatch(sessionId: string): { token: number; release: () => void } | undefined {
     if (activeDirectDispatchTokens.has(sessionId)) return undefined;
@@ -447,6 +457,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     await ready.catch(() => { /* startup surfaces the original initialization error */ });
     pinExpiry?.stop();
     await runReceipts.shutdown();
+    disposal.disposeAll();
   }
 
   /** Pin without TTL tracking — the fallback when no PinExpiryManager exists. */
@@ -1357,6 +1368,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // Mark the accepted run cancelled before asking the runtime to abort.
       // Late runtime callbacks cannot overwrite an explicit user deletion.
       await runReceipts.cancelSession(sessionId);
+
+      // Tombstone the session and run every registered per-session dispose
+      // handle (queued-run correlations, timers, snapshots, drain handles) so
+      // late runtime callbacks cannot repopulate broker/state after deletion.
+      disposal.dispose(sessionId);
 
       if (entry.sdkType === 'claude') {
         claudeService.abort(sessionId);
@@ -2442,6 +2458,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  /** Register the per-session queued-run correlation cleanup with the disposal
+   * registry (once per session) so handleDeleteSession/shutdown drop the queue,
+   * observer, follow-up snapshot, and direct-dispatch tokens in one place. */
+  function ensureQueuedRunDisposal(sessionId: string): void {
+    if (queuedRunDisposalRegistered.has(sessionId)) return;
+    queuedRunDisposalRegistered.add(sessionId);
+    disposal.register(sessionId, 'pi-queued-run-correlation', () => {
+      const obs = queuedPiObservers.get(sessionId);
+      const queue = queuedPiRuns.get(sessionId);
+      if (obs && queue) {
+        for (const item of queue) multiSessionManager.removeApiObserver(item.sessionPath, obs);
+      }
+      queuedPiRuns.delete(sessionId);
+      queuedPiObservers.delete(sessionId);
+      queuedPiEventChains.delete(sessionId);
+      queuedPiLastFollowUp.delete(sessionId);
+      activeDirectDispatchTokens.delete(sessionId);
+      nextDirectDispatchToken.delete(sessionId);
+    });
+  }
+
   function ensureQueuedPiObserver(sessionId: string, sessionPath: string): void {
     if (queuedPiObservers.has(sessionId)) return;
     const observer = (event: unknown) => {
@@ -2520,6 +2557,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       const queue = queuedPiRuns.get(sessionId) ?? [];
       queue.push(correlation);
       queuedPiRuns.set(sessionId, queue);
+      ensureQueuedRunDisposal(sessionId);
       ensureQueuedPiObserver(sessionId, entry.path);
       void runReceipts.waitForTerminal(runId).then(() => {
         removeQueuedPiRun(sessionId, runId);
@@ -3675,6 +3713,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       quarantinedRuns: runReceipts.getQuarantinedCount(),
       oldestActiveRunStartedAt: runReceipts.getOldestActiveRunStartedAt(),
       control: { inFlight: controlLane.inFlight, queued: controlLane.queued },
+      disposalOwners: disposal.getCounts(),
     });
   }
 
@@ -3709,6 +3748,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     ready,
     shutdown,
     controlLane,
+    disposal,
     reapplyRetentionForSession: (sessionId: string) => pinExpiry?.reapplyForSession(sessionId) ?? Promise.resolve(),
     handleCreateSession,
     handleListSessions,

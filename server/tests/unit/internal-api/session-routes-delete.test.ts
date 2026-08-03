@@ -285,4 +285,48 @@ describe('createSessionRoutes — DELETE file cleanup', () => {
     expect(res.statusCode).toBe(200);
     expect(json(res)).toMatchObject({ success: true });
   });
+
+  it('disposes every registered per-session handle on DELETE and tombstones late callbacks', async () => {
+    const sessionId = 'claude-disposal';
+    registry.get.mockResolvedValue({
+      id: sessionId,
+      sdkType: 'claude',
+      path: sessionId,
+      cwd: '/root/proj',
+      status: 'idle',
+    });
+
+    const routes = makeRoutes();
+    await routes.ready;
+
+    // Simulate the per-session surfaces (AUQ timer, extension snapshot,
+    // queue correlation, drain-like handle) registering ownership.
+    const timer = vi.fn();
+    const snapshot = vi.fn();
+    const correlation = vi.fn();
+    const drain = vi.fn();
+    routes.disposal.register(sessionId, 'ask-user-question-timer', timer);
+    routes.disposal.register(sessionId, 'extension-snapshot', snapshot);
+    routes.disposal.register(sessionId, 'queue-correlation', correlation);
+    routes.disposal.register(sessionId, 'drain-handle', drain);
+    expect(routes.disposal.getCounts()[sessionId]).toBe(4);
+
+    const res = createMockRes();
+    await routes.handleDeleteSession(createJsonReq('DELETE', `/api/v1/sessions/${sessionId}`), res, sessionId);
+
+    expect(res.statusCode).toBe(200);
+    expect(timer).toHaveBeenCalledTimes(1);
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(correlation).toHaveBeenCalledTimes(1);
+    expect(drain).toHaveBeenCalledTimes(1);
+    expect(routes.disposal.getCounts()[sessionId]).toBeUndefined();
+    expect(routes.disposal.isDisposed(sessionId)).toBe(true);
+
+    // A late runtime callback attempting to re-register after deletion runs
+    // immediately and cannot repopulate the owner map (tombstone).
+    const late = vi.fn();
+    routes.disposal.register(sessionId, 'late-callback', late);
+    expect(late).toHaveBeenCalledTimes(1);
+    expect(routes.disposal.getCounts()[sessionId]).toBeUndefined();
+  });
 });
