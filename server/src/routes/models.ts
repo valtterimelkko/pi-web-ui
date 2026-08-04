@@ -23,6 +23,13 @@ router.get('/', async (req: Request, res: Response) => {
 
     if (sdkType === 'opencode') {
       const opencodeService = getOpenCodeService();
+      // Fail-closed before touching the runtime: a disabled OpenCode must not
+      // call getAvailableModels (-> ensureServer) — return an empty list rather
+      // than rely on doStart's late throw surfacing as a generic 500.
+      if (!opencodeService.isEnabled()) {
+        res.json({ models: [] });
+        return;
+      }
       const models = await opencodeService.getAvailableModels();
       res.json({ models });
       return;

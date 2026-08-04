@@ -3,10 +3,12 @@ import express from 'express';
 import request from 'supertest';
 
 const mockGetAvailableModels = vi.fn();
+const mockIsEnabled = vi.fn().mockReturnValue(true);
 
 vi.mock('../../../src/opencode/index.js', () => ({
   getOpenCodeService: vi.fn().mockReturnValue({
     getAvailableModels: mockGetAvailableModels,
+    isEnabled: mockIsEnabled,
   }),
 }));
 
@@ -85,5 +87,17 @@ describe('Models API — OpenCode branch', () => {
       .expect(200);
 
     expect(response.body.models).toEqual([]);
+  });
+
+  it('returns an empty list and does not touch the runtime when OpenCode is disabled', async () => {
+    mockIsEnabled.mockReturnValueOnce(false);
+
+    const response = await request(app)
+      .get('/api/models?sdkType=opencode')
+      .expect(200);
+
+    expect(response.body.models).toEqual([]);
+    // No ensureServer / getAvailableModels call when disabled.
+    expect(mockGetAvailableModels).not.toHaveBeenCalled();
   });
 });
