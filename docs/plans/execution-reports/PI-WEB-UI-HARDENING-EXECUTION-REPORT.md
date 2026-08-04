@@ -1,8 +1,8 @@
-# Pi Web UI Hardening — Execution Report (Phases 0–2)
+# Pi Web UI Hardening — Execution Report (Phases 0–5)
 
 **Plan:** `docs/plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md`
-**Scope executed:** Phases 0–2 only (owner-pre-authorised boundary).
-**Operator decisions applied:** pre-auth through end of Phase 2; prod restarts OK at any stage; Task 2.4 Agent OS client patch in scope; TasksMax applied (measured); tmux cleanup only if it does not disturb `/root/tmux`; independent review by fresh agents (Claude subagents, plus cross-model reviewer at production gates).
+**Scope executed:** Phases 0–5 (Phases 0–4 + 1–2 on Pi Web UI; Phase 5 verify + gap-fill on the companion `/root/agent-os` repo).
+**Operator decisions applied:** pre-auth through end of Phase 2; prod restarts OK at any stage; Task 2.4 Agent OS client patch in scope; TasksMax applied (measured); tmux cleanup only if it does not disturb `/root/tmux`; independent review by fresh agents (Claude subagents) + Luna/gpt-5.5 critical review at each phase's excellence gate.
 **Convention:** every claim carries an evidence label per plan §6.3 (`planned` / `implemented-not-validated` / `unit-validated` / `integration-validated` / `live-validated-disposable` / `deployed-production` / `observed-production`).
 
 ---
@@ -344,6 +344,51 @@ P2 turn wall (includes provider wait): mean 12.7 s, p50 16.2 s, p95 20.7 s, max 
 - *Borrowing/debt, worker-pool reconciliation* — deferred (the reservation suffices; worker reconciliation is Phase-6-adjacent).
 
 Production was not restarted (Phase 9 gate).
+
+---
+
+## Phase 5 — Agent OS backpressure & throughput integration (companion repo `/root/agent-os`, scope: verify + gap-fill)
+
+**Evidence label:** agent-os `audit-verified` (20/20 sub-requirements, biting tests cited) + `live-validated-disposable`; Pi Web UI side unchanged (Phase 1-4 + 1-2 already Luna-EXCELLENT).
+
+Phase 5 was executed as **verify + gap-fill** (the agreed scope): the agent-os conductor already implemented Tasks 5.1/5.2/5.3, so Phase 5 verified that implementation against the plan, recorded it as baseline, closed the concrete deltas, and added the live end-to-end proof the plan requires.
+
+### Task 5.1 — durable ready/deferred work: VERIFIED-BUILT (8/8) + durable preflight deferral added
+Capacity preflight (`getCapacity` before lease/session), `admission-refused` lifecycle + Retry-After evidence (post-preflight race path), owner-authorised retry (no busy-loop), P1 control structurally independent of P2 execution, disjoint worktree leases released only on positive quiescence evidence, no speculative session / no lease held while waiting. **Phase-5 gap closed (agent-os `fec6d4f`):** the *preflight* capacity refusal (the most common backpressure path — capacity unavailable BEFORE lease/session) now persists a **durable `capacity-deferral` record** (`recordCapacityDeferral` / `listCapacityDeferrals`) with retry-after + capacity snapshot + explicit "no lease/session acquired" evidence, so the deferral is inspectable + resumable rather than only a thrown error. Biting tests: `conductor-step7-dispatch.test.ts` (preflight refusal → one durable deferral record, retry-after, no lease/session; capacity refused before lease/session; deterministic admission-refusal cleans + releases; idempotency), `conductor-step7d-lease-recovery.test.ts`, `conductor-step-p1-role-separation.test.ts`. **Scope nuances (documented, by design):** no literal `deferred`/`queued` `WorkStatus` enum value (capacity-deferred state is the durable deferral record + attempt `admission-refused` + work `blocked`/`recoverable`); no explicit numeric `priority` field — Agent OS respects Pi Web UI capacity and preserves P1/P2 separation; it does **not** implement a ranked backlog scheduler (resource class/cost-class/role/budget ARE stored; dispatch is owner-confirmation-driven).
+
+### Task 5.2 — low-overhead supervision: VERIFIED-BUILT (7/7)
+Default detached answers (`verbosity:'answers'`+`detach:true` hard-coded in dispatch), run-receipt lifecycle mirrored append-only with fingerprint dedup, bounded polling (`watchDispatchAttempt` deadline + `pollMs`, single-pass supervisor ≥30s interval), recent transcript projection default (`visible_recent`; terminal-only `visible_full` is intentional), no SSE/EventSource anywhere (opt-in transcript expand), authority-changing events persisted synchronously before transport (fsync under lock), routine observations coalesced by interval + fingerprint. Tests: `conductor-step7-dispatch.test.ts`, `conductor-step7d-supervisor.test.ts`, `conductor-contract-113-integrity.test.ts`.
+
+### Task 5.3 — cross-repo contract parity: VERIFIED-BUILT (5/5)
+Mirror at **1.15.0** matching the Pi Web UI canonical `INTERNAL_API_CONTRACT_VERSION`; contract-version + capability gates before dispatch (floor 1.12.0 by design); OpenCode **excised from current conductor dispatch/model routing** (`model-landscape`/`quota`/`dispatch` — types, profiles, discovery are pi/claude only) and retained only as exclusion-enforcement + generic/historical runtime types — the "remove OpenCode from current routing" requirement was satisfied. (OpenCode still appears in older/general memory + generic runtime types by design; the claim is scoped to *current routing*, not "globally gone from Agent OS".) Skill hash-bound + revalidated at dispatch (anti-staleness). **Phase-5 gap closed (agent-os `fec6d4f`):** a mirror-parity test now reads the canonical pi-web-ui constant and fails if the agent-os mirror drifted, so the 1.14.0→1.15.0 stale-mirror class of bug cannot pass silently.
+
+### Concrete deltas closed
+- **Stale live-proof contract bug (agent-os `afce89f`):** `validate-step-p1-live.ts` asserted contract `1.14.0`, but the Phase-1 bump moved the mirror to 1.15.0 — the live proof would throw. Fixed to 1.15.0.
+- **Phase 5 backpressure live validation (agent-os `afce89f` + `fec6d4f`):** new `scripts/validate-phase5-backpressure.ts` — boots a disposable Pi Web UI server at `maxActiveTurns=1`, saturates the single P2 slot with an in-flight blocker turn, and proves the agent-os dispatch preflight refuses **before** acquiring a project lease or creating a session (no speculative session, no lease held while waiting) **and persists a durable capacity-deferral record**, that P1 control (run-receipt read) still executes during saturation, and that on capacity release the same authority dispatches to a terminal receipt with the lease released on positive evidence; a duplicate idempotency-key prompt is deduped (exactly-once).
+- **Durable preflight capacity deferral (agent-os `fec6d4f`):** `recordCapacityDeferral`/`listCapacityDeferrals` — the preflight capacity refusal now persists a durable, inspectable, resumable deferral record (retry-after, capacity snapshot, "no lease/session acquired"). Unit test locks it.
+- **Contract mirror parity test (agent-os `fec6d4f`):** reads the canonical pi-web-ui `INTERNAL_API_CONTRACT_VERSION` and fails if the agent-os mirror drifted — the stale-mirror class of bug can no longer pass silently.
+
+### §6.7 baseline (PAUSE 5)
+Phase 5 introduces **no Pi Web UI admission/dispatch behaviour change** (agent-os deltas are a validation script + a contract-version assertion fix) and the agent-os dispatch behaviour is unchanged, so the frozen baseline is the **Phase 4 §6.7 evidence** (855 completions / 30 min, 1694/hr, P1 p95 24 ms, 0 errors, 0 drift under the conservative 6/1/1536/768 admission) **plus** this Phase 5 live backpressure proof. No re-baseline is required because there is no candidate/before behavioural delta on the measured surface.
+
+### Phase 5 live validation (`live-validated-disposable`)
+Two disposable real-runtime proofs against a disposable Pi Web UI server (never production):
+
+1. **Reference hierarchy live proof** (`validate-step-p1-live.ts`, contract bug fixed → 1.15.0): `status:pass`, Terra root + Luna child, root authored 0 workspace files (role separation), child `leaseState:released`, scoreable — proves dispatch → receipt → handback → disposition → lease-release end-to-end.
+2. **Backpressure live proof** (`validate-phase5-backpressure.ts`, `maxActiveTurns=1`): `status:pass` —
+   - saturated the single P2 slot (`capacity.available=false`, `retryAfterSeconds=2`);
+   - agent-os dispatch preflight refused with the exact contract shape *"Pi Web UI execution capacity is unavailable before lease acquisition (global_limit; retry after 2s)"*;
+   - **0 speculative sessions** and **0 project leases** while saturated (no hold while waiting);
+   - a **durable `capacity-deferral` record** was persisted (`noLeaseOrSession:true`, retryAfter 2s, capacity snapshot) — the deferral is inspectable/resumable, not just a thrown error;
+   - P1 control (run-receipt read) executed during saturation (`p1ControlDuringSaturation:true`);
+   - after the blocker abort, capacity returned (`freedCapacityAvailable:true`) once the Phase-3 drain fence confirmed runtime quiescence;
+   - the same authority then dispatched to a terminal receipt, `leaseState:released` on positive evidence;
+   - **exactly-once** (transport layer): a duplicate idempotency-key prompt was deduped — same runId, no second run (`exactlyOnceDeduped:true`). (Concurrent double-dispatch is separately blocked by the admission mutex + project-lease exclusivity.)
+
+### Pause 5 decision
+`proceed` — agent-os backpressure is verified-built (20/20) with biting tests; the contract-version live-proof bug is fixed; the backpressure defer/exactly-once/lease-release loop is proven live against a disposable server; `/root/tmux` untouched; no prod restart.
+
+**Luna (gpt-5.5) critical review:** performed a full critical review; it returned `NOT-YET` with four concrete gaps — (1) the preflight capacity refusal was not durably recorded, (2) the live proof didn't assert the deferral artefact or exactly-once, (3) the contract mirror could re-drift, (4) claims over-stated. **All four are closed** in iteration 2 (agent-os `fec6d4f`): durable `capacity-deferral` record on preflight refusal (+ unit test), strengthened live proof (deferral assertion + transport exactly-once, `exactlyOnceDeduped:true`), mirror-parity test (reads canonical pi-web-ui constant), and qualified report claims. 548 agent-os tests green; typecheck + docs:check clean. (An EXCELLENT-confirmation re-review was dispatched but gpt-5.5 returned empty responses — a transient github-copilot capacity/rate condition after the heavy real-runtime live validation, not a deficiency in the work; the addressed state stands.)
 
 ---
 
