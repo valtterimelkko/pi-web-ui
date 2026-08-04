@@ -1626,6 +1626,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const runtime = entry.sdkType;
 
+    // Fail-closed BEFORE any receipt/admission/runtime call: a disabled OpenCode
+    // must reject with the contracted error, not proceed to dispatch (which
+    // spawn/attaches via ensureServer) or leave a started receipt behind.
+    if (runtime === 'opencode' && !opencodeService.isEnabled()) {
+      sendJson(res, 503, enrichedErrorBody(ErrorCode.OPENCODE_UNAVAILABLE, 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)'));
+      return;
+    }
+
     // Stamp a per-prompt correlation id on every log line emitted during this
     // prompt's lifecycle (requestId + sessionId + runtime), so an agent can
     // `grep <requestId>` to reconstruct the whole causal chain in one pass.
@@ -1813,7 +1821,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
         const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
         res.setHeader('Retry-After', String(capacityError.retryAfterSeconds));
-        sendJson(res, 429, {
+        // Pressure refusals (memory/pid/host) are 503 service-unavailable — the
+        // server is under resource pressure and genuinely cannot service the
+        // turn. Capacity refusals (global/runtime limit) are 429 — retryable
+        // admission throttling. Both carry ADMISSION_CAPACITY_EXHAUSTED + reason.
+        const pressureStatus = capacityError.reason.endsWith('_pressure') ? 503 : 429;
+        sendJson(res, pressureStatus, {
           ...enrichedErrorBody(ErrorCode.ADMISSION_CAPACITY_EXHAUSTED, capacityError.message),
           reason: capacityError.reason,
           retryAfterSeconds: capacityError.retryAfterSeconds,
@@ -2088,6 +2101,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sendJson(res, 400, { error: 'modelId is required for set_model', code: ErrorCode.INVALID_REQUEST });
             return;
           }
+          if (entry.sdkType === 'opencode' && !opencodeService.isEnabled()) {
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.OPENCODE_UNAVAILABLE, 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)'));
+            return;
+          }
 
           if (entry.sdkType === 'claude') {
             const normalizedModel = await claudeService.setModel(sessionId, body.modelId);
@@ -2112,6 +2129,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           }
           if (!isThinkingLevel(body.level)) {
             sendJson(res, 400, { error: 'level is invalid for set_thinking_level', code: ErrorCode.INVALID_REQUEST });
+            return;
+          }
+          if (entry.sdkType === 'opencode' && !opencodeService.isEnabled()) {
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.OPENCODE_UNAVAILABLE, 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)'));
             return;
           }
 
@@ -3356,6 +3377,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           };
         }
 
+        // Fail-closed BEFORE any receipt/admission/runtime call: a disabled
+        // OpenCode must reject with the contracted error, not proceed to
+        // dispatch (spawn/attach via ensureServer) or leave a started receipt.
+        if (reg.sdkType === 'opencode' && !opencodeService.isEnabled()) {
+          return {
+            index,
+            sessionId: entry.sessionId,
+            success: false,
+            error: { code: ErrorCode.OPENCODE_UNAVAILABLE, message: 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)' },
+          };
+        }
+
         const beginInput = {
           sessionId: entry.sessionId,
           runtime: reg.sdkType as SessionRuntime,
@@ -3502,9 +3535,34 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             error: { code: ErrorCode.SESSION_BUSY, message: 'Session is currently busy' },
           };
         }
+        // Acquire admission BEFORE marking the run started: an admission refusal
+        // must reject the reserved receipt cleanly (not leave it 'started') and
+        // surface the contracted ADMISSION_CAPACITY_EXHAUSTED + reason — never a
+        // generic RUNTIME_ERROR or a stranded started receipt. The lease is
+        // passed through to executePromptWithReceipt so it is not re-acquired.
+        let batchAdmissionLease: { release: () => void };
+        try {
+          batchAdmissionLease = await admission.acquire(reg.sdkType as SessionRuntime, 'P2');
+        } catch (error) {
+          const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
+          await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED }).catch(() => undefined);
+          return {
+            index,
+            sessionId: entry.sessionId,
+            success: false,
+            runId,
+            error: {
+              code: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED,
+              reason: capacityError.reason,
+              message: capacityError.message,
+              retryAfterSeconds: capacityError.retryAfterSeconds,
+            },
+          };
+        }
         try {
           await runReceipts.markStarted(runId);
         } catch (error) {
+          batchAdmissionLease.release();
           await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
           logger.errorObject(`Failed to start batch run receipt ${runId}`, error);
           return {
@@ -3532,6 +3590,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             if (error) collector.error = error;
             collector.complete = true;
           },
+          batchAdmissionLease,
         ));
         if (collector.error) {
           return {

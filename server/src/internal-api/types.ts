@@ -238,7 +238,7 @@ export interface BatchPromptResultItem {
   runId?: string;
   duplicate?: boolean;
   receipt?: RunReceipt;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; reason?: string; retryAfterSeconds?: number };
 }
 
 export interface BatchPromptResponse {

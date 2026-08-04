@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { PassThrough, Writable } from 'stream';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
+import { AdmissionController } from '../../../src/internal-api/admission-controller.js';
 import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
@@ -253,13 +254,14 @@ describe('createSessionRoutes orchestration endpoints', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  function makeRoutes(runReceiptManager?: RunReceiptManager) {
+  function makeRoutes(runReceiptManager?: RunReceiptManager, admissionController?: any) {
     return createSessionRoutes({
       claudeService, opencodeService, antigravityService,
       multiSessionManager, sessionRegistry: registry, piService,
       internalClientId: 'test-client',
       watchDir: path.join(tempDir, 'watches'),
       runReceiptManager,
+      admissionController,
     });
   }
 
@@ -904,6 +906,38 @@ describe('createSessionRoutes orchestration endpoints', () => {
 
       expect(res.statusCode).toBe(400);
       expect(JSON.parse(res.body).error).toMatch(/at most 50/i);
+    });
+
+    it('rejects a batch prompt under admission pressure with ADMISSION_CAPACITY_EXHAUSTED + reason (no started receipt, no dispatch)', async () => {
+      // An admission controller that always refuses on memory pressure.
+      const refusing = new AdmissionController({
+        maxActiveTurns: 1,
+        memory: () => ({ currentBytes: 9_990, limitBytes: 10_000 }),
+        minimumHeadroomBytes: 1_000,
+        reservedBytesPerTurn: 1,
+      });
+      const routes = makeRoutes(undefined, refusing);
+      registry.get.mockResolvedValue(claudeEntry('claude-press'));
+      claudeService.isRunning.mockReturnValue(false);
+      claudeService.sendPrompt.mockResolvedValue(undefined);
+
+      const req = createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
+        prompts: [{ sessionId: 'claude-press', message: 'hi' }],
+      });
+      const res = createMockRes();
+      await routes.handleBatchPrompt(req, res);
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.failedCount).toBe(1);
+      expect(body.results[0]).toMatchObject({
+        success: false,
+        sessionId: 'claude-press',
+        error: { code: 'ADMISSION_CAPACITY_EXHAUSTED', reason: 'memory_pressure' },
+      });
+      expect(body.results[0].error.retryAfterSeconds).toBeGreaterThanOrEqual(1);
+      // Admission refused before dispatch — the runtime was never called.
+      expect(claudeService.sendPrompt).not.toHaveBeenCalled();
     });
 
     it('runs prompts with independent structured correlation and returns per-session content', async () => {

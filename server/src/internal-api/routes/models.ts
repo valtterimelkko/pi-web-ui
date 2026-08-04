@@ -120,7 +120,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
 
       // OpenCode models
       if (!runtimeFilter || runtimeFilter === 'opencode') {
-        if (await opencodeService.isAvailable()) {
+        if (opencodeService.isEnabled() && await opencodeService.isAvailable()) {
           try {
             const ocModels = await opencodeService.getAvailableModels();
             result.opencode = ocModels.map((m) => ({
@@ -191,6 +191,10 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
       const warmCache = typeof body.warmCache === 'boolean' ? body.warmCache : undefined;
       const recycle = typeof body.recycle === 'boolean' ? body.recycle : undefined;
 
+      if (!opencodeService.isEnabled()) {
+        sendJson(res, 503, enrichedErrorBody(ErrorCode.OPENCODE_UNAVAILABLE, 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)'));
+        return;
+      }
       if (!(await opencodeService.isAvailable())) {
         sendJson(res, 503, enrichedErrorBody(ErrorCode.OPENCODE_UNAVAILABLE, 'OpenCode is not available'));
         return;

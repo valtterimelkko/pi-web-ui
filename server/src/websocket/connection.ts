@@ -2369,6 +2369,14 @@ export class WebSocketConnectionManager {
     }
 
     if (this.opencodeSessionIds.has(sessionPath)) {
+      if (!this.opencodeService.isEnabled()) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)',
+          code: 'OPENCODE_UNAVAILABLE',
+        });
+        return;
+      }
       try {
         const normalizedModel = await this.opencodeService.setModel(sessionPath, message.modelId);
         this.sendMessage(clientId, { type: 'model_changed', modelId: normalizedModel });
@@ -2444,6 +2452,14 @@ export class WebSocketConnectionManager {
     }
 
     if (this.opencodeSessionIds.has(sessionPath)) {
+      if (!this.opencodeService.isEnabled()) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)',
+          code: 'OPENCODE_UNAVAILABLE',
+        });
+        return;
+      }
       try {
         await this.opencodeService.setThinkingLevel(sessionPath, message.level);
         this.sendMessage(clientId, {

@@ -988,6 +988,13 @@ export class OpenCodeService {
     const recycle = opts.recycle ?? true;
     const snapshotPath = opts.snapshotPath ?? config.opencodeModelSnapshotPath;
 
+    // Defence-in-depth: never spawn/attach the managed `opencode` server when
+    // the runtime is disabled, even if a caller bypasses the route guard. This
+    // is the load-bearing no-spawn-when-disabled guarantee for warmModelCache
+    // (execFile('opencode', ['models'])) and recycle (start()).
+    if (!this.isEnabled()) {
+      throw new Error('OpenCode is disabled (OPENCODE_ENABLED=false); cannot refresh models');
+    }
     if (!(await this.isAvailable())) {
       throw new Error('OpenCode is not available; cannot refresh models');
     }

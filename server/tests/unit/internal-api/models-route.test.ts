@@ -47,6 +47,7 @@ function makeDeps(opencodeOverrides: Record<string, unknown>) {
     antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) },
     opencodeService: {
       isAvailable: vi.fn().mockResolvedValue(true),
+      isEnabled: vi.fn().mockReturnValue(true),
       ...opencodeOverrides,
     },
   } as any;
@@ -154,6 +155,20 @@ describe('createModelsRoutes — handleRefreshModels', () => {
   it('returns 503 when OpenCode is unavailable', async () => {
     const refreshModels = vi.fn();
     const routes = createModelsRoutes(makeDeps({ isAvailable: vi.fn().mockResolvedValue(false), refreshModels }));
+    const res = createMockRes();
+
+    await routes.handleRefreshModels(createMockReq(), res);
+
+    expect(res.statusCode).toBe(503);
+    expect(JSON.parse(res.body).code).toBe('OPENCODE_UNAVAILABLE');
+    expect(refreshModels).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 OPENCODE_UNAVAILABLE and does NOT spawn when OpenCode is disabled', async () => {
+    // The no-spawn-when-disabled guarantee: refreshModels -> warmModelCache
+    // would execFile('opencode'); the isEnabled guard must reject before that.
+    const refreshModels = vi.fn();
+    const routes = createModelsRoutes(makeDeps({ isEnabled: vi.fn().mockReturnValue(false), refreshModels }));
     const res = createMockRes();
 
     await routes.handleRefreshModels(createMockReq(), res);
