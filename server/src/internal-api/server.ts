@@ -207,9 +207,9 @@ export class InternalApiServer {
       reservedBytesPerTurn: this.config.admissionReservedBytesPerTurn,
       reservedPidsPerTurn: this.config.admissionReservedPidsPerTurn,
     };
-    // Surface the resolved admission config at startup and fail loud (warn) if
-    // production is running on the non-conservative CPU-derived defaults — the
-    // INTERNAL_API_ADMISSION_* env not being loaded must not stay silent.
+    // Resolve + apply conservative production defaults for any unset safety knob
+    // (a missing/mis-loaded .env.production cannot make the server run
+    // non-conservative CPU-derived admission), and surface the result at startup.
     const admissionStatus = admissionStartupStatus({
       ...admissionOptions,
       isProduction: process.env.NODE_ENV === 'production',
@@ -220,10 +220,18 @@ export class InternalApiServer {
       `interactiveReserve=${r.interactiveReserve} controlReserve=${r.controlReserve} ` +
       `executionCapacity=${r.executionCapacity} minHeadroom=${r.minimumHeadroomBytes} ` +
       `reserved/turn=${r.reservedBytesPerTurn} reservedPids/turn=${r.reservedPidsPerTurn} ` +
-      `hostHeadroom=${r.hostMinimumHeadroomBytes}${admissionStatus.usingDefaults ? ' [DEFAULTS]' : ''}`,
+      `hostHeadroom=${r.hostMinimumHeadroomBytes}` +
+      (admissionStatus.prodFallbackKnobs.length ? ` [prod-fallback: ${admissionStatus.prodFallbackKnobs.join(',')}]` : '') +
+      (admissionStatus.usingDefaults ? ' [CPU-defaults]' : ''),
     );
     if (admissionStatus.warning) logger.warn(`[InternalAPI] ${admissionStatus.warning}`);
-    const admissionController = new AdmissionController(admissionOptions);
+    const admissionController = new AdmissionController({
+      ...admissionStatus.options,
+      configExplicitness: {
+        explicitKnobs: admissionStatus.explicitKnobs,
+        prodFallbackKnobs: admissionStatus.prodFallbackKnobs,
+      },
+    });
 
     // Create routes
     const sessionRoutes = createSessionRoutes({

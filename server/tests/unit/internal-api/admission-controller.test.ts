@@ -164,6 +164,29 @@ describe('AdmissionController — PID admission guard', () => {
     expect(control).toBeDefined();
     control.release();
   });
+
+  it('projects admitted-but-not-yet-realised turns: blocks before pids.current moves (race)', async () => {
+    // pids.current stays low (100) throughout; several turns are admitted
+    // before the runtime's child/task usage shows up. The projected guard must
+    // still block once accumulated reservations would breach the ceiling.
+    const controller = new AdmissionController({
+      maxActiveTurns: 8,
+      memory: () => ({ currentBytes: 100, limitBytes: 10_000 }),
+      readPids: () => ({ current: 100, max: 1024, source: 'service' }),
+      reservedPidsPerTurn: 256,
+      minimumHeadroomBytes: 1,
+      reservedBytesPerTurn: 1,
+    });
+    const held: Array<{ release: () => void }> = [];
+    // 100 + (0+1)*256=356, +512=612, +768=868 → all admit; +(3+1)*256=1124 >= 1024 → block.
+    for (let i = 0; i < 3; i += 1) held.push(await controller.acquire('pi'));
+    await expect(controller.acquire('pi')).rejects.toMatchObject({ reason: 'pid_pressure' });
+    for (const lease of held) lease.release();
+    // After release, admission opens again.
+    const again = await controller.acquire('pi');
+    expect(again).toBeDefined();
+    again.release();
+  });
 });
 
 describe('AdmissionController — host-memory-pressure gate', () => {
@@ -331,27 +354,39 @@ describe('AdmissionController — Phase 4 priority classes', () => {
 });
 
 describe('admissionStartupStatus', () => {
-  it('flags a loud warning when production runs on CPU-derived defaults', () => {
-    const { resolved, warning, usingDefaults } = admissionStartupStatus({ isProduction: true });
-    expect(usingDefaults).toBe(true);
-    expect(resolved.maxActiveTurns).toBeGreaterThanOrEqual(2);
-    expect(resolved.usingDefaults).toBe(true);
-    expect(warning).toMatch(/CPU-derived DEFAULTS/i);
-    expect(warning).toMatch(/production/i);
+  it('applies conservative production defaults for unset knobs (env-lost-in-prod is SAFE)', () => {
+    const { resolved, warning, usingDefaults, explicitKnobs, prodFallbackKnobs, options } = admissionStartupStatus({ isProduction: true });
+    // Conservative prod defaults applied — not CPU-derived.
+    expect(usingDefaults).toBe(false);
+    expect(resolved.maxActiveTurns).toBe(6);
+    expect(resolved.apiTurnLimit).toBe(5);
+    expect(resolved.minimumHeadroomBytes).toBe(1536 * 1024 * 1024);
+    expect(resolved.reservedBytesPerTurn).toBe(768 * 1024 * 1024);
+    expect(explicitKnobs).toEqual([]);
+    expect(prodFallbackKnobs).toContain('maxActiveTurns');
+    expect(prodFallbackKnobs).toContain('hostMinimumHeadroomBytes');
+    // The controller is constructed from the defaulted options.
+    expect(options.maxActiveTurns).toBe(6);
+    expect(warning).toMatch(/conservative fallback/i);
   });
 
-  it('does not warn when the capacity knob is explicitly configured', () => {
-    const { resolved, warning, usingDefaults } = admissionStartupStatus({
+  it('does not apply fallback when the knobs are explicitly configured in production', () => {
+    const { resolved, warning, usingDefaults, explicitKnobs, prodFallbackKnobs } = admissionStartupStatus({
       maxActiveTurns: 6, interactiveReserve: 1, minimumHeadroomBytes: 1536 * 1024 * 1024,
-      reservedBytesPerTurn: 768 * 1024 * 1024, isProduction: true,
+      reservedBytesPerTurn: 768 * 1024 * 1024, reservedPidsPerTurn: 256,
+      hostMinimumHeadroomBytes: 512 * 1024 * 1024, isProduction: true,
     });
     expect(usingDefaults).toBe(false);
+    expect(prodFallbackKnobs).toEqual([]);
+    expect(explicitKnobs).toContain('maxActiveTurns');
     expect(warning).toBeUndefined();
     expect(resolved).toMatchObject({ maxActiveTurns: 6, apiTurnLimit: 5, interactiveReserve: 1 });
   });
 
-  it('does not warn outside production even on defaults', () => {
-    const { warning } = admissionStartupStatus({ isProduction: false });
+  it('outside production uses CPU-derived defaults (no fallback, no warning)', () => {
+    const { warning, usingDefaults, prodFallbackKnobs } = admissionStartupStatus({ isProduction: false });
+    expect(usingDefaults).toBe(true);
+    expect(prodFallbackKnobs).toEqual([]);
     expect(warning).toBeUndefined();
   });
 

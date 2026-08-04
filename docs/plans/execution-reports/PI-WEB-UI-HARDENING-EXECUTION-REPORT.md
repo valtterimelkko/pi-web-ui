@@ -216,6 +216,17 @@ Contract still `1.15.0`; opencode still `enabled:false/available:false`; tmux-we
 
 Both gates pass; Phase 0–2 is complete and may be committed.
 
+### Phase 1–2 excellence-loop refinements (Luna/gpt-5.5 critical re-review)
+
+A re-review with the stricter excellence bar applied to Phases 3–4 surfaced four Phase 1–2 gaps that the initial "proceed" reviews had deferred-and-never-closed. All four are closed (commits `d19c347` + `e7034d8`; TDD RED→GREEN; suite 2738 → **2759** passing / 0 failed).
+
+- **PID admission guard (commit d19c347, closes the "Phase 3–4 refinement" deferral above):** `refusalReason` now consults `pids.current + reservedPidsPerTurn > pids.max` and refuses P2/P3 execution with a new reason `pid_pressure` (503 + Retry-After) instead of letting a turn near the `TasksMax=1024` ceiling surface as in-tool fork errors. Control bypasses (control ops don't fork). Snapshot exposes `pids.pressure` + `reservedPidsPerTurn`; config `INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN` (default 256).
+- **Host-memory-pressure gate + PSI/events truth (commit d19c347, Task 2.2 completion):** the service cgroup bounds only this process; tmux/external work sits outside it, so the service could show headroom while the host is exhausted. New `host-pressure.ts` reads `/proc/meminfo` + PSI (`/proc/pressure/{memory,cpu,io}`); admission refuses P2/P3 with `host_memory_pressure` when host `MemAvailable < hostMinimumHeadroomBytes`. `cgroup-capacity.ts` gains `readServiceMemoryEvents` (oom/oom_kill/high). PSI + memory.events surfaced in `/capacity`; host-gate config `INTERNAL_API_ADMISSION_HOST_MIN_HEADROOM_MB` (default 512).
+- **Startup safety assertion (commit d19c347):** `resolveAdmissionConfig` is now the single source of truth shared by the constructor and a new `admissionStartupStatus`; at boot the resolved config is logged, and if `NODE_ENV=production` while the capacity knob is unset (CPU-derived defaults) a LOUD warn fires — the conservative config silently reverting if `.env.production` is mis-loaded no longer stays invisible.
+- **Contract consistency on batch + WS paths (commit e7034d8):** `createOneSession` (batch) guards opencode with `isEnabled()` → typed `RuntimeOpError(RUNTIME_UNAVAILABLE)`; `handleBatchCreate` surfaces that code. WebSocket `handleNewSession(opencode)` + `handleOpencodePrompt` each gain an `isEnabled()` guard sending `OPENCODE_UNAVAILABLE`. No-spawn safety already held (`doStart` throws before spawn on all paths); this makes the contracted error stable and consistent across every entry point.
+
+**Out of Phase 1–2 (accepted, deferred):** ancestor-cgroup fallback walk (Phase 6 per-session cgroups); PSI-threshold admission (PSI surfaced as observability; gating on avg thresholds is a tuning decision, host-mem is the clear correctness gate); `memory.events` delta tracking (cumulative counters surfaced); Phase 4 assignment state-machine/epoch; Phase 6 cgroup isolation.
+
 ---
 
 ## Phase 3 — Lifecycle ownership, fencing, shutdown, readiness

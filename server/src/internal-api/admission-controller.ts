@@ -64,9 +64,11 @@ export interface AdmissionSnapshot {
   /** Task/PID capacity from the service cgroup, when available. */
   pids?: { current?: number; max?: number; source?: CgroupMemorySource; pressure?: boolean; reservedPidsPerTurn?: number };
   /** Host-level memory + PSI truth (separate from the service cgroup). */
-  host?: ResolvedHostPressure & { hostPressure?: boolean; hostMinimumHeadroomBytes?: number };
+  host?: ResolvedHostPressure & { hostPressure?: boolean; hostMinimumHeadroomBytes?: number; telemetryAvailable?: boolean };
   /** Service cgroup memory.events counters (oom/oom_kill/high), when available. */
   memoryEvents?: ResolvedMemoryEvents;
+  /** Which safety knobs were set explicitly vs applied as conservative prod fallback. */
+  admissionConfig?: { explicitKnobs: string[]; prodFallbackKnobs: string[] };
   retryAfterSeconds: number;
   /** Number of runs terminalised as stalled by the watchdog. */
   stalledRuns?: number;
@@ -107,6 +109,9 @@ export interface AdmissionControllerOptions {
    * is refused with `host_memory_pressure` (separate from the service cgroup,
    * which bounds only this process; tmux/external work sits outside it). */
   hostMinimumHeadroomBytes?: number;
+  /** Per-knob explicitness (set by the startup wiring) surfaced in the snapshot
+   * so /capacity shows which safety knobs came from env vs conservative fallback. */
+  configExplicitness?: { explicitKnobs: string[]; prodFallbackKnobs: string[] };
   retryAfterSeconds?: number;
 }
 
@@ -171,19 +176,61 @@ export function resolveAdmissionConfig(options: AdmissionControllerOptions): Res
   };
 }
 
-/** Startup status for the admission layer: the resolved config plus a loud
- * warning when production is running on the non-conservative CPU-derived
- * defaults (e.g. the INTERNAL_API_ADMISSION_* env was not loaded). */
+/** Conservative admission defaults forced in production when an env knob is
+ * unset, so a missing/mis-loaded .env.production cannot make the server run
+ * non-conservative CPU-derived admission. Outside production the looser
+ * CPU-derived defaults still apply (dev/test convenience). */
+export const PRODUCTION_ADMISSION_DEFAULTS: Required<Pick<AdmissionControllerOptions,
+  'maxActiveTurns' | 'interactiveReserve' | 'minimumHeadroomBytes' | 'reservedBytesPerTurn' | 'reservedPidsPerTurn' | 'hostMinimumHeadroomBytes'>> = {
+  maxActiveTurns: 6,
+  interactiveReserve: 1,
+  minimumHeadroomBytes: 1536 * 1024 * 1024,
+  reservedBytesPerTurn: 768 * 1024 * 1024,
+  reservedPidsPerTurn: 256,
+  hostMinimumHeadroomBytes: 512 * 1024 * 1024,
+};
+
+const SAFETY_KNOBS = [
+  'maxActiveTurns', 'interactiveReserve', 'minimumHeadroomBytes',
+  'reservedBytesPerTurn', 'reservedPidsPerTurn', 'hostMinimumHeadroomBytes',
+] as const;
+
+/** Startup status for the admission layer. In production, any unset safety knob
+ * is filled with a conservative default (so the server never silently runs
+ * CPU-derived admission) and the result reports per-knob explicitness. Outside
+ * production the CPU-derived defaults apply. */
 export function admissionStartupStatus(options: AdmissionControllerOptions & { isProduction?: boolean }): {
   resolved: ResolvedAdmissionConfig;
+  /** Options with production defaults applied where unset (construct the controller from this). */
+  options: AdmissionControllerOptions;
+  explicitKnobs: string[];
+  prodFallbackKnobs: string[];
+  /** True when NOT in production and the capacity knob was unset (CPU-derived). */
   usingDefaults: boolean;
   warning: string | undefined;
 } {
-  const resolved = resolveAdmissionConfig(options);
-  const warning = options.isProduction && resolved.usingDefaults
-    ? `admission is running on CPU-derived DEFAULTS (maxActiveTurns=${resolved.maxActiveTurns}, apiTurnLimit=${resolved.apiTurnLimit}) in production — INTERNAL_API_ADMISSION_* environment is not set, so admission is NOT conservative. Set INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS (and related knobs) before relying on it.`
+  const isProduction = options.isProduction === true;
+  const explicitKnobs: string[] = [];
+  const prodFallbackKnobs: string[] = [];
+  const resolvedOptions: AdmissionControllerOptions = { ...options };
+  for (const key of SAFETY_KNOBS) {
+    const explicit = (options as Record<string, unknown>)[key] !== undefined;
+    if (explicit) {
+      explicitKnobs.push(key);
+    } else if (isProduction) {
+      (resolvedOptions as Record<string, unknown>)[key] = (PRODUCTION_ADMISSION_DEFAULTS as Record<string, unknown>)[key];
+      prodFallbackKnobs.push(key);
+    }
+  }
+  const resolved = resolveAdmissionConfig(resolvedOptions);
+  const usingDefaults = !isProduction && options.maxActiveTurns === undefined;
+  // In production with fallbacks applied the server is SAFE (conservative), so
+  // this is informational, not alarming. The scary case (non-conservative in
+  // prod) can no longer happen because prod defaults are applied above.
+  const warning = isProduction && prodFallbackKnobs.length > 0
+    ? `admission: production safety knobs not set via env — applied conservative fallback for [${prodFallbackKnobs.join(', ')}]. Set INTERNAL_API_ADMISSION_* explicitly to tune.`
     : undefined;
-  return { resolved, usingDefaults: resolved.usingDefaults, warning };
+  return { resolved, options: resolvedOptions, explicitKnobs, prodFallbackKnobs, usingDefaults, warning };
 }
 
 /**
@@ -215,6 +262,7 @@ export class AdmissionController {
   private readonly hostMinimumHeadroomBytes: number;
   private readonly host: () => ResolvedHostPressure;
   private readonly readMemoryEvents: () => ResolvedMemoryEvents | undefined;
+  private readonly configExplicitness?: { explicitKnobs: string[]; prodFallbackKnobs: string[] };
   private readonly retryAfterSeconds: number;
 
   constructor(options: AdmissionControllerOptions = {}) {
@@ -237,6 +285,7 @@ export class AdmissionController {
     this.readPids = options.readPids ?? readServicePidsCapacity;
     this.host = options.host ?? readHostPressure;
     this.readMemoryEvents = options.readMemoryEvents ?? readServiceMemoryEvents;
+    this.configExplicitness = options.configExplicitness;
     this.retryAfterSeconds = c.retryAfterSeconds;
   }
 
@@ -260,44 +309,48 @@ export class AdmissionController {
     };
   }
 
-  /** Projected memory headroom for one more turn, with pressure + critical flags. */
-  private memoryState(): { headroomBytes: number; projectedHeadroomBytes: number; pressure: boolean; critical: boolean } {
+  /** Read every capacity source ONCE and derive all pressure flags from that
+   * single consistent view. Previously snapshot()/refusalReason() read memory,
+   * pids, and host telemetry multiple times each, which could produce an
+   * internally inconsistent snapshot under pressure (a value changing between
+   * reads). Memory projects against ALL active turns; PID/host project against
+   * execution turns only (control ops are lightweight and don't fork/reserve
+   * the heavy per-turn budget). */
+  private evaluatePressure(): {
+    memory: MemoryCapacity;
+    headroomBytes: number;
+    projectedHeadroomBytes: number;
+    memoryPressure: boolean;
+    memoryCritical: boolean;
+    pids: ResolvedPidsCapacity;
+    pidPressure: boolean;
+    host: ResolvedHostPressure;
+    hostPressure: boolean | undefined;
+  } {
     const memory = this.memory();
+    const pids = this.readPids();
+    const host = this.host();
+    const activeExecutionTurns = this.activeByClass.P2 + this.activeByClass.P3;
     const headroomBytes = Math.max(0, memory.limitBytes - memory.currentBytes);
     const projectedHeadroomBytes = Math.max(0, headroomBytes - ((this.activeTurns + 1) * this.reservedBytesPerTurn));
-    return {
-      headroomBytes,
-      projectedHeadroomBytes,
-      pressure: projectedHeadroomBytes < this.minimumHeadroomBytes,
-      critical: projectedHeadroomBytes < this.memoryCriticalBytes,
-    };
-  }
-
-  /** Whether admitting one more turn would breach the PID/task ceiling. Only
-   * meaningful when `pids.max` is a finite number (an unbounded cgroup cannot
-   * pressure on PIDs). */
-  private pidPressure(): boolean {
-    const pids = this.readPids();
-    return pids.max !== undefined
-      && pids.current !== undefined
-      && pids.current + this.reservedPidsPerTurn > pids.max;
-  }
-
-  /** Whether host-available memory is below the gate. The service cgroup bounds
-   * only this process; tmux/external work sits outside it, so the service can
-   * show headroom while the host is exhausted. Only meaningful when host
-   * MemAvailable is readable. */
-  private hostMemoryPressure(): boolean {
-    const host = this.host();
-    return host.memAvailableBytes !== undefined
-      && host.memAvailableBytes < this.hostMinimumHeadroomBytes;
+    // Pressure also when the cgroup has reached its soft memory.high boundary
+    // (the kernel is reclaiming aggressively) — catches pressure earlier than
+    // the headroom floor alone and makes the surfaced memory.high truth actionable.
+    const highPressure = memory.highBytes !== undefined && memory.currentBytes >= memory.highBytes;
+    const memoryPressure = projectedHeadroomBytes < this.minimumHeadroomBytes || highPressure;
+    const memoryCritical = projectedHeadroomBytes < this.memoryCriticalBytes;
+    const pidPressure = pids.max !== undefined && pids.current !== undefined
+      && pids.current + ((activeExecutionTurns + 1) * this.reservedPidsPerTurn) >= pids.max;
+    // hostPressure is undefined (not false) when host telemetry is unreadable,
+    // so /capacity distinguishes "no pressure" from "unknown".
+    const hostPressure = host.memAvailableBytes === undefined
+      ? undefined
+      : host.memAvailableBytes - ((activeExecutionTurns + 1) * this.reservedBytesPerTurn) < this.hostMinimumHeadroomBytes;
+    return { memory, headroomBytes, projectedHeadroomBytes, memoryPressure, memoryCritical, pids, pidPressure, host, hostPressure };
   }
 
   snapshot(): AdmissionSnapshot {
-    const memory = this.memory();
-    const { headroomBytes, projectedHeadroomBytes, pressure: memoryPressure, critical: memoryCritical } = this.memoryState();
-    const pidPressure = this.pidPressure();
-    const hostPressure = this.hostMemoryPressure();
+    const { memory, headroomBytes, projectedHeadroomBytes, memoryPressure, memoryCritical, pids, pidPressure, host, hostPressure } = this.evaluatePressure();
     const executionActive = this.activeByClass.P2 + this.activeByClass.P3;
     const executionFull = executionActive >= this.executionCapacity;
     const reason: AdmissionRefusalReason | undefined = memoryPressure
@@ -320,9 +373,12 @@ export class AdmissionController {
       controlAvailable: !memoryCritical,
       emergencyMode: memoryPressure && !memoryCritical,
       memory: { ...memory, headroomBytes, minimumHeadroomBytes: this.minimumHeadroomBytes, reservedBytesPerTurn: this.reservedBytesPerTurn, projectedHeadroomBytes },
-      pids: { ...this.readPids(), pressure: pidPressure, reservedPidsPerTurn: this.reservedPidsPerTurn },
-      host: { ...this.host(), hostPressure, hostMinimumHeadroomBytes: this.hostMinimumHeadroomBytes },
+      pids: { ...pids, pressure: pidPressure, reservedPidsPerTurn: this.reservedPidsPerTurn },
+      host: { ...host, hostPressure, telemetryAvailable: host.memAvailableBytes !== undefined, hostMinimumHeadroomBytes: this.hostMinimumHeadroomBytes },
       memoryEvents: this.readMemoryEvents(),
+      admissionConfig: this.configExplicitness
+        ? { explicitKnobs: this.configExplicitness.explicitKnobs, prodFallbackKnobs: this.configExplicitness.prodFallbackKnobs }
+        : undefined,
       runtimes: Object.fromEntries(RUNTIMES.map((runtime) => [runtime, {
         activeTurns: this.activeByRuntime[runtime],
         maxActiveTurns: this.runtimeLimits[runtime],
@@ -332,19 +388,19 @@ export class AdmissionController {
   }
 
   private refusalReason(runtime: SessionRuntime, cls: AdmissionClass): AdmissionRefusalReason | undefined {
-    const { pressure, critical } = this.memoryState();
+    const { memoryPressure, memoryCritical, pidPressure, hostPressure } = this.evaluatePressure();
     if (CONTROL_CLASSES.has(cls)) {
       // P0/P1 control is preserved under ordinary memory pressure (emergency mode:
       // execution is refused, control is kept) and refused only at the critical
       // memory floor or the global turn ceiling. It bypasses the execution
       // capacity and per-runtime limits.
-      if (critical) return 'memory_pressure';
+      if (memoryCritical) return 'memory_pressure';
       if (this.activeTurns >= this.maxActiveTurns) return 'global_limit';
     } else {
       // P2/P3 execution: refused under memory pressure, host-memory pressure, PID pressure, execution saturation, or per-runtime ceiling.
-      if (pressure) return 'memory_pressure';
-      if (this.hostMemoryPressure()) return 'host_memory_pressure';
-      if (this.pidPressure()) return 'pid_pressure';
+      if (memoryPressure) return 'memory_pressure';
+      if (hostPressure) return 'host_memory_pressure';
+      if (pidPressure) return 'pid_pressure';
       const executionActive = this.activeByClass.P2 + this.activeByClass.P3;
       if (executionActive >= this.executionCapacity) return 'global_limit';
       if (this.activeByRuntime[runtime] >= this.runtimeLimits[runtime]) return 'runtime_limit';
