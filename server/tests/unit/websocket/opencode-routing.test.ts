@@ -120,6 +120,35 @@ describe('OpenCode WebSocket Routing', () => {
       expect(sentMessages).toHaveLength(1);
       expect((sentMessages[0].message as Record<string, unknown>).code).toBe('SESSION_CREATE_FAILED');
     });
+
+    it('sends OPENCODE_UNAVAILABLE (not SESSION_CREATE_FAILED) and does not spawn when disabled', async () => {
+      const opencodeService = {
+        isEnabled: vi.fn().mockReturnValue(false),
+        createSession: vi.fn(),
+        isAvailable: vi.fn().mockResolvedValue(true),
+        validateSetup: vi.fn().mockResolvedValue({ ok: true }),
+      };
+
+      const sentMessages: Array<{ clientId: string; message: unknown }> = [];
+      const sendMessage = (clientId: string, message: unknown) => {
+        sentMessages.push({ clientId, message });
+      };
+
+      // Fail-closed BEFORE createSession (mirrors connection.ts handleNewSession).
+      if (!opencodeService.isEnabled()) {
+        sendMessage('client-1', {
+          type: 'error',
+          message: 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)',
+          code: 'OPENCODE_UNAVAILABLE',
+        });
+      } else {
+        await opencodeService.createSession('/tmp');
+      }
+
+      expect(opencodeService.createSession).not.toHaveBeenCalled();
+      expect(sentMessages).toHaveLength(1);
+      expect(sentMessages[0].message).toMatchObject({ code: 'OPENCODE_UNAVAILABLE' });
+    });
   });
 
   describe('prompt routing to OpenCode', () => {

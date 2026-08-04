@@ -800,6 +800,29 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(multiSessionManager.getAgentSession().setThinkingLevel).toHaveBeenCalledWith('max');
     });
 
+    it('rejects a disabled OpenCode batch entry with the contracted RUNTIME_UNAVAILABLE (not a generic create failure)', async () => {
+      opencodeService.isEnabled.mockReturnValue(false);
+      const routes = makeRoutes();
+      const req = createJsonReq('POST', '/api/v1/sessions/batch', {
+        sessions: [{ runtime: 'opencode', model: 'zai-coding-plan/glm-5.2' }],
+      });
+      const res = createMockRes();
+
+      await routes.handleBatchCreate(req, res);
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.failedCount).toBe(1);
+      expect(body.created[0]).toMatchObject({
+        success: false,
+        runtime: 'opencode',
+        error: { code: 'RUNTIME_UNAVAILABLE' },
+      });
+      // No session is spawned/created when disabled.
+      expect(opencodeService.createSession).not.toHaveBeenCalled();
+      opencodeService.isEnabled.mockReturnValue(true);
+    });
+
     it('rejects empty sessions array', async () => {
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions/batch', { sessions: [] });

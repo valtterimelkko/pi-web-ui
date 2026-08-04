@@ -1202,6 +1202,18 @@ export class WebSocketConnectionManager {
     _images?: ImageContent[],
     agent?: string,
   ): Promise<void> {
+    // Fail-closed with the contracted stable error before touching the runtime:
+    // a disabled OpenCode must not surface a generic 'OpenCode integration is
+    // disabled' from a late sendPrompt->doStart throw. (doStart still refuses to
+    // spawn as defence-in-depth; this makes the browser error stable + truthful.)
+    if (!this.opencodeService.isEnabled()) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)',
+        code: 'OPENCODE_UNAVAILABLE',
+      });
+      return;
+    }
     // Intercept `/goal …` commands and drive goal state directly instead of
     // forwarding the text to the model (OpenCode has no slash-command layer).
     const goalCmd = parseGoalCommand(prompt);
@@ -1570,6 +1582,18 @@ export class WebSocketConnectionManager {
     }
 
     if (sdkType === 'opencode') {
+      // Fail-closed with the contracted stable error before createSession (which
+      // would otherwise throw a generic 'OpenCode integration is disabled' from
+      // doStart, surfaced as SESSION_CREATE_FAILED). doStart still refuses to
+      // spawn as defence-in-depth.
+      if (!this.opencodeService.isEnabled()) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)',
+          code: 'OPENCODE_UNAVAILABLE',
+        });
+        return;
+      }
       try {
         const { sessionId } = await this.opencodeService.createSession(cwd);
         this.opencodeSessionIds.add(sessionId);

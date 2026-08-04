@@ -99,6 +99,7 @@ import { getRecentLogs } from '../diagnostics-buffer.js';
 import { AdmissionCapacityError, AdmissionController } from '../admission-controller.js';
 import { BoundedControlLane, ControlLaneFullError } from '../control-lane.js';
 import { SessionDisposalRegistry } from '../session-disposal.js';
+import { RuntimeOpError } from './batch-helpers.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -3297,7 +3298,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           success: false,
           runtime: entry.runtime,
           error: {
-            code: ErrorCode.SESSION_CREATE_FAILED,
+            code: err instanceof RuntimeOpError ? err.code : ErrorCode.SESSION_CREATE_FAILED,
             message: err instanceof Error ? err.message : 'Failed to create session',
           },
         };

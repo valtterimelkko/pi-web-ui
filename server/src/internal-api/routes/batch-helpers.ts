@@ -15,6 +15,17 @@ import type { SessionRegistryManager } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
 import type { BatchCreateEntry, SessionRuntime } from '../types.js';
 import { config } from '../../config.js';
+import { ErrorCode } from '../error-codes.js';
+
+/** A runtime-level error with a stable contract code, thrown from batch
+ * creation so the batch result surfaces the contracted code (e.g.
+ * RUNTIME_UNAVAILABLE) rather than a generic SESSION_CREATE_FAILED. */
+export class RuntimeOpError extends Error {
+  constructor(public readonly code: string, message: string) {
+    super(message);
+    this.name = 'RuntimeOpError';
+  }
+}
 
 export interface BatchCreateDeps {
   claudeService: ClaudeService;
@@ -78,8 +89,11 @@ export async function createOneSession(params: {
     }
 
     case 'opencode': {
+      if (!deps.opencodeService.isEnabled()) {
+        throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)');
+      }
       if (!(await deps.opencodeService.isAvailable())) {
-        throw new Error('OpenCode runtime is not available');
+        throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'OpenCode runtime is not available');
       }
       const { sessionId } = await deps.opencodeService.createSession(cwd);
       if (entry.model) {
