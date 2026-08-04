@@ -2,12 +2,15 @@ import { availableParallelism } from 'os';
 import {
   readServiceMemoryCapacity,
   readServicePidsCapacity,
+  readServiceMemoryEvents,
   type CgroupMemorySource,
   type ResolvedPidsCapacity,
+  type ResolvedMemoryEvents,
 } from './cgroup-capacity.js';
+import { readHostPressure, type ResolvedHostPressure } from './host-pressure.js';
 import type { SessionRuntime } from './types.js';
 
-export type AdmissionRefusalReason = 'global_limit' | 'runtime_limit' | 'memory_pressure';
+export type AdmissionRefusalReason = 'global_limit' | 'runtime_limit' | 'memory_pressure' | 'pid_pressure' | 'host_memory_pressure';
 
 /**
  * Execution priority class. P0 (browser) and P1 (Agent OS control) are
@@ -59,7 +62,11 @@ export interface AdmissionSnapshot {
   memory: MemoryCapacity & { headroomBytes: number; minimumHeadroomBytes: number; reservedBytesPerTurn: number; projectedHeadroomBytes: number };
   runtimes: Record<SessionRuntime, { activeTurns: number; maxActiveTurns: number; stalledRuns?: number }>;
   /** Task/PID capacity from the service cgroup, when available. */
-  pids?: { current?: number; max?: number; source?: CgroupMemorySource };
+  pids?: { current?: number; max?: number; source?: CgroupMemorySource; pressure?: boolean; reservedPidsPerTurn?: number };
+  /** Host-level memory + PSI truth (separate from the service cgroup). */
+  host?: ResolvedHostPressure & { hostPressure?: boolean; hostMinimumHeadroomBytes?: number };
+  /** Service cgroup memory.events counters (oom/oom_kill/high), when available. */
+  memoryEvents?: ResolvedMemoryEvents;
   retryAfterSeconds: number;
   /** Number of runs terminalised as stalled by the watchdog. */
   stalledRuns?: number;
@@ -87,15 +94,96 @@ export interface AdmissionControllerOptions {
   memory?: () => MemoryCapacity;
   /** Injectable PID/task capacity reader for the snapshot; defaults to the service cgroup. */
   readPids?: () => ResolvedPidsCapacity;
+  /** Injectable host-pressure reader (host mem + PSI); defaults to readHostPressure. */
+  host?: () => ResolvedHostPressure;
+  /** Injectable service cgroup memory.events reader; defaults to readServiceMemoryEvents. */
+  readMemoryEvents?: () => ResolvedMemoryEvents | undefined;
+  /** Conservative PID/task reservation applied before each admitted turn. When
+   * `pids.current + reservedPidsPerTurn > pids.max`, execution is refused with
+   * `pid_pressure` so a turn near the TasksMax ceiling fails gracefully (503)
+   * rather than surfacing as in-tool fork errors. Defaults to 256. */
+  reservedPidsPerTurn?: number;
+  /** Host-available-memory floor. When host MemAvailable is below this, execution
+   * is refused with `host_memory_pressure` (separate from the service cgroup,
+   * which bounds only this process; tmux/external work sits outside it). */
+  hostMinimumHeadroomBytes?: number;
   retryAfterSeconds?: number;
 }
 
 const RUNTIMES: SessionRuntime[] = ['pi', 'claude', 'opencode', 'antigravity'];
 const DEFAULT_MINIMUM_HEADROOM_BYTES = 512 * 1024 * 1024;
 const DEFAULT_RESERVED_BYTES_PER_TURN = 256 * 1024 * 1024;
+const DEFAULT_RESERVED_PIDS_PER_TURN = 256;
+const DEFAULT_HOST_MINIMUM_HEADROOM_BYTES = 512 * 1024 * 1024;
 
 function positiveInteger(value: number | undefined, fallback: number): number {
   return Number.isFinite(value) && (value as number) > 0 ? Math.floor(value as number) : fallback;
+}
+
+/** Fully-resolved admission configuration (the single source of truth used by
+ * both the {@link AdmissionController} constructor and {@link admissionStartupStatus}). */
+export interface ResolvedAdmissionConfig {
+  maxActiveTurns: number;
+  interactiveReserve: number;
+  apiTurnLimit: number;
+  controlReserve: number;
+  executionCapacity: number;
+  minimumHeadroomBytes: number;
+  memoryCriticalBytes: number;
+  reservedBytesPerTurn: number;
+  reservedPidsPerTurn: number;
+  hostMinimumHeadroomBytes: number;
+  retryAfterSeconds: number;
+  /** Whether the primary capacity knob was NOT explicitly provided (CPU-derived default in effect). */
+  usingDefaults: boolean;
+}
+
+/** Resolve admission options into concrete numbers + a `usingDefaults` flag.
+ * Centralised so the controller and the startup logger cannot drift. */
+export function resolveAdmissionConfig(options: AdmissionControllerOptions): ResolvedAdmissionConfig {
+  // CPU-derived by default rather than a fixed child/session count. Operators
+  // can lower this explicitly; measured memory pressure remains authoritative.
+  const maxActiveTurns = positiveInteger(options.maxActiveTurns, Math.max(2, availableParallelism()));
+  const interactiveReserve = Math.min(
+    Math.max(0, Math.floor(options.interactiveReserve ?? 1)),
+    Math.max(0, maxActiveTurns - 1),
+  );
+  const apiTurnLimit = Math.max(1, maxActiveTurns - interactiveReserve);
+  const controlReserve = Math.min(
+    Math.max(0, Math.floor(options.controlReserve ?? interactiveReserve)),
+    Math.max(0, maxActiveTurns - 1),
+  );
+  const executionCapacity = Math.max(0, maxActiveTurns - controlReserve);
+  const minimumHeadroomBytes = positiveInteger(options.minimumHeadroomBytes, DEFAULT_MINIMUM_HEADROOM_BYTES);
+  return {
+    maxActiveTurns,
+    interactiveReserve,
+    apiTurnLimit,
+    controlReserve,
+    executionCapacity,
+    minimumHeadroomBytes,
+    memoryCriticalBytes: positiveInteger(options.memoryCriticalBytes, Math.max(1, Math.floor(minimumHeadroomBytes / 4))),
+    reservedBytesPerTurn: positiveInteger(options.reservedBytesPerTurn, DEFAULT_RESERVED_BYTES_PER_TURN),
+    reservedPidsPerTurn: positiveInteger(options.reservedPidsPerTurn, DEFAULT_RESERVED_PIDS_PER_TURN),
+    hostMinimumHeadroomBytes: positiveInteger(options.hostMinimumHeadroomBytes, DEFAULT_HOST_MINIMUM_HEADROOM_BYTES),
+    retryAfterSeconds: positiveInteger(options.retryAfterSeconds, 2),
+    usingDefaults: options.maxActiveTurns === undefined,
+  };
+}
+
+/** Startup status for the admission layer: the resolved config plus a loud
+ * warning when production is running on the non-conservative CPU-derived
+ * defaults (e.g. the INTERNAL_API_ADMISSION_* env was not loaded). */
+export function admissionStartupStatus(options: AdmissionControllerOptions & { isProduction?: boolean }): {
+  resolved: ResolvedAdmissionConfig;
+  usingDefaults: boolean;
+  warning: string | undefined;
+} {
+  const resolved = resolveAdmissionConfig(options);
+  const warning = options.isProduction && resolved.usingDefaults
+    ? `admission is running on CPU-derived DEFAULTS (maxActiveTurns=${resolved.maxActiveTurns}, apiTurnLimit=${resolved.apiTurnLimit}) in production — INTERNAL_API_ADMISSION_* environment is not set, so admission is NOT conservative. Set INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS (and related knobs) before relying on it.`
+    : undefined;
+  return { resolved, usingDefaults: resolved.usingDefaults, warning };
 }
 
 /**
@@ -123,32 +211,33 @@ export class AdmissionController {
   private readonly memory: () => MemoryCapacity;
   private readonly readPids: () => ResolvedPidsCapacity;
   private readonly reservedBytesPerTurn: number;
+  private readonly reservedPidsPerTurn: number;
+  private readonly hostMinimumHeadroomBytes: number;
+  private readonly host: () => ResolvedHostPressure;
+  private readonly readMemoryEvents: () => ResolvedMemoryEvents | undefined;
   private readonly retryAfterSeconds: number;
 
   constructor(options: AdmissionControllerOptions = {}) {
-    // CPU-derived by default rather than a fixed child/session count. Operators
-    // can lower this explicitly; measured memory pressure remains authoritative.
-    this.maxActiveTurns = positiveInteger(options.maxActiveTurns, Math.max(2, availableParallelism()));
-    this.interactiveReserve = Math.min(
-      Math.max(0, Math.floor(options.interactiveReserve ?? 1)),
-      Math.max(0, this.maxActiveTurns - 1),
-    );
-    this.apiTurnLimit = Math.max(1, this.maxActiveTurns - this.interactiveReserve);
-    this.controlReserve = Math.min(
-      Math.max(0, Math.floor(options.controlReserve ?? this.interactiveReserve)),
-      Math.max(0, this.maxActiveTurns - 1),
-    );
-    this.executionCapacity = Math.max(0, this.maxActiveTurns - this.controlReserve);
+    const c = resolveAdmissionConfig(options);
+    this.maxActiveTurns = c.maxActiveTurns;
+    this.interactiveReserve = c.interactiveReserve;
+    this.apiTurnLimit = c.apiTurnLimit;
+    this.controlReserve = c.controlReserve;
+    this.executionCapacity = c.executionCapacity;
     this.runtimeLimits = Object.fromEntries(RUNTIMES.map((runtime) => [
       runtime,
-      positiveInteger(options.runtimeMaxActiveTurns?.[runtime], this.apiTurnLimit),
+      positiveInteger(options.runtimeMaxActiveTurns?.[runtime], c.apiTurnLimit),
     ])) as Record<SessionRuntime, number>;
-    this.minimumHeadroomBytes = positiveInteger(options.minimumHeadroomBytes, DEFAULT_MINIMUM_HEADROOM_BYTES);
-    this.memoryCriticalBytes = positiveInteger(options.memoryCriticalBytes, Math.max(1, Math.floor(this.minimumHeadroomBytes / 4)));
-    this.reservedBytesPerTurn = positiveInteger(options.reservedBytesPerTurn, DEFAULT_RESERVED_BYTES_PER_TURN);
+    this.minimumHeadroomBytes = c.minimumHeadroomBytes;
+    this.memoryCriticalBytes = c.memoryCriticalBytes;
+    this.reservedBytesPerTurn = c.reservedBytesPerTurn;
+    this.reservedPidsPerTurn = c.reservedPidsPerTurn;
+    this.hostMinimumHeadroomBytes = c.hostMinimumHeadroomBytes;
     this.memory = options.memory ?? readMemoryCapacity;
     this.readPids = options.readPids ?? readServicePidsCapacity;
-    this.retryAfterSeconds = positiveInteger(options.retryAfterSeconds, 2);
+    this.host = options.host ?? readHostPressure;
+    this.readMemoryEvents = options.readMemoryEvents ?? readServiceMemoryEvents;
+    this.retryAfterSeconds = c.retryAfterSeconds;
   }
 
   async acquire(runtime: SessionRuntime, cls: AdmissionClass = 'P2'): Promise<{ release: () => void }> {
@@ -184,14 +273,38 @@ export class AdmissionController {
     };
   }
 
+  /** Whether admitting one more turn would breach the PID/task ceiling. Only
+   * meaningful when `pids.max` is a finite number (an unbounded cgroup cannot
+   * pressure on PIDs). */
+  private pidPressure(): boolean {
+    const pids = this.readPids();
+    return pids.max !== undefined
+      && pids.current !== undefined
+      && pids.current + this.reservedPidsPerTurn > pids.max;
+  }
+
+  /** Whether host-available memory is below the gate. The service cgroup bounds
+   * only this process; tmux/external work sits outside it, so the service can
+   * show headroom while the host is exhausted. Only meaningful when host
+   * MemAvailable is readable. */
+  private hostMemoryPressure(): boolean {
+    const host = this.host();
+    return host.memAvailableBytes !== undefined
+      && host.memAvailableBytes < this.hostMinimumHeadroomBytes;
+  }
+
   snapshot(): AdmissionSnapshot {
     const memory = this.memory();
     const { headroomBytes, projectedHeadroomBytes, pressure: memoryPressure, critical: memoryCritical } = this.memoryState();
+    const pidPressure = this.pidPressure();
+    const hostPressure = this.hostMemoryPressure();
     const executionActive = this.activeByClass.P2 + this.activeByClass.P3;
     const executionFull = executionActive >= this.executionCapacity;
     const reason: AdmissionRefusalReason | undefined = memoryPressure
       ? 'memory_pressure'
-      : executionFull ? 'global_limit' : undefined;
+      : hostPressure ? 'host_memory_pressure'
+        : pidPressure ? 'pid_pressure'
+          : executionFull ? 'global_limit' : undefined;
     return {
       available: reason === undefined,
       reason,
@@ -207,7 +320,9 @@ export class AdmissionController {
       controlAvailable: !memoryCritical,
       emergencyMode: memoryPressure && !memoryCritical,
       memory: { ...memory, headroomBytes, minimumHeadroomBytes: this.minimumHeadroomBytes, reservedBytesPerTurn: this.reservedBytesPerTurn, projectedHeadroomBytes },
-      pids: this.readPids(),
+      pids: { ...this.readPids(), pressure: pidPressure, reservedPidsPerTurn: this.reservedPidsPerTurn },
+      host: { ...this.host(), hostPressure, hostMinimumHeadroomBytes: this.hostMinimumHeadroomBytes },
+      memoryEvents: this.readMemoryEvents(),
       runtimes: Object.fromEntries(RUNTIMES.map((runtime) => [runtime, {
         activeTurns: this.activeByRuntime[runtime],
         maxActiveTurns: this.runtimeLimits[runtime],
@@ -226,8 +341,10 @@ export class AdmissionController {
       if (critical) return 'memory_pressure';
       if (this.activeTurns >= this.maxActiveTurns) return 'global_limit';
     } else {
-      // P2/P3 execution: refused under memory pressure, execution saturation, or per-runtime ceiling.
+      // P2/P3 execution: refused under memory pressure, host-memory pressure, PID pressure, execution saturation, or per-runtime ceiling.
       if (pressure) return 'memory_pressure';
+      if (this.hostMemoryPressure()) return 'host_memory_pressure';
+      if (this.pidPressure()) return 'pid_pressure';
       const executionActive = this.activeByClass.P2 + this.activeByClass.P3;
       if (executionActive >= this.executionCapacity) return 'global_limit';
       if (this.activeByRuntime[runtime] >= this.runtimeLimits[runtime]) return 'runtime_limit';

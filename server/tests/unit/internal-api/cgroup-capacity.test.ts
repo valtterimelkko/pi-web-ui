@@ -4,6 +4,7 @@ import {
   resolveCgroupFsPath,
   readServiceMemoryCapacity,
   readServicePidsCapacity,
+  readServiceMemoryEvents,
 } from '../../../src/internal-api/cgroup-capacity.js';
 
 const G = 1024 * 1024 * 1024;
@@ -155,5 +156,29 @@ describe('readServicePidsCapacity', () => {
   it('returns process-rss source when no PID telemetry exists', () => {
     const r = readServicePidsCapacity({ selfCgroup: undefined, cgroupRoot: ROOT, read: () => undefined });
     expect(r.source).toBe('process-rss');
+  });
+});
+
+describe('readServiceMemoryEvents', () => {
+  it('parses oom / oom_kill / high counters from the service cgroup', () => {
+    const r = readServiceMemoryEvents({
+      selfCgroup: '0::/system.slice/pi-web-ui.service',
+      cgroupRoot: ROOT,
+      read: fakeRead({ [`${SVC}/memory.events`]: 'low 0\nhigh 12\noom 5\noom_kill 3\n' }),
+    });
+    expect(r).toMatchObject({ oom: 5, oomKill: 3, high: 12, source: 'service' });
+  });
+
+  it('returns undefined when the service cgroup cannot be resolved', () => {
+    expect(readServiceMemoryEvents({ selfCgroup: undefined, cgroupRoot: ROOT, read: () => undefined })).toBeUndefined();
+  });
+
+  it('does not fabricate counters when memory.events is missing', () => {
+    const r = readServiceMemoryEvents({
+      selfCgroup: '0::/system.slice/pi-web-ui.service',
+      cgroupRoot: ROOT,
+      read: () => undefined,
+    });
+    expect(r).toBeUndefined();
   });
 });

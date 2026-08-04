@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AdmissionController } from '../../../src/internal-api/admission-controller.js';
+import { AdmissionController, admissionStartupStatus, resolveAdmissionConfig } from '../../../src/internal-api/admission-controller.js';
 
 describe('AdmissionController', () => {
   it('atomically limits concurrent Internal API turns and releases permits', async () => {
@@ -99,6 +99,123 @@ describe('AdmissionController', () => {
     expect(snap.memory.source).toBe('service');
     expect(snap.memory.highBytes).toBe(8_000);
     expect(snap.pids).toMatchObject({ current: 5, max: 768, source: 'service' });
+  });
+});
+
+describe('AdmissionController — PID admission guard', () => {
+  it('refuses P2/P3 execution when pids.current + reservedPidsPerTurn would exceed pids.max', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 8,
+      memory: () => ({ currentBytes: 100, limitBytes: 10_000 }),
+      readPids: () => ({ current: 800, max: 1024, source: 'service' }),
+      reservedPidsPerTurn: 256,
+      minimumHeadroomBytes: 1,
+      reservedBytesPerTurn: 1,
+    });
+    await expect(controller.acquire('pi')).rejects.toMatchObject({ reason: 'pid_pressure' });
+    const snap = controller.snapshot();
+    expect(snap.available).toBe(false);
+    expect(snap.reason).toBe('pid_pressure');
+    expect(snap.pids).toMatchObject({ current: 800, max: 1024 });
+  });
+
+  it('admits when enough PID headroom remains below the ceiling', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 8,
+      memory: () => ({ currentBytes: 100, limitBytes: 10_000 }),
+      readPids: () => ({ current: 100, max: 1024, source: 'service' }),
+      reservedPidsPerTurn: 256,
+      minimumHeadroomBytes: 1,
+      reservedBytesPerTurn: 1,
+    });
+    const lease = await controller.acquire('pi');
+    expect(lease).toBeDefined();
+    expect(controller.snapshot().activeTurns).toBe(1);
+    lease.release();
+  });
+
+  it('does not block on PID when pids.max is undefined (unbounded)', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 8,
+      memory: () => ({ currentBytes: 100, limitBytes: 10_000 }),
+      readPids: () => ({ current: 50_000, source: 'service' }),
+      reservedPidsPerTurn: 256,
+      minimumHeadroomBytes: 1,
+      reservedBytesPerTurn: 1,
+    });
+    const lease = await controller.acquire('pi');
+    expect(lease).toBeDefined();
+    lease.release();
+  });
+
+  it('preserves P0/P1 control under PID pressure (control does not fork)', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 8,
+      memory: () => ({ currentBytes: 100, limitBytes: 10_000 }),
+      readPids: () => ({ current: 800, max: 1024, source: 'service' }),
+      reservedPidsPerTurn: 256,
+      minimumHeadroomBytes: 1,
+      reservedBytesPerTurn: 1,
+    });
+    // P2 execution is refused...
+    await expect(controller.acquire('pi')).rejects.toMatchObject({ reason: 'pid_pressure' });
+    // ...but P0 control still succeeds.
+    const control = await controller.acquire('pi', 'P0');
+    expect(control).toBeDefined();
+    control.release();
+  });
+});
+
+describe('AdmissionController — host-memory-pressure gate', () => {
+  // The service cgroup bounds only THIS process; tmux/external work sits outside
+  // it, so the service can show headroom while the host is exhausted.
+  it('refuses P2/P3 execution when host-available memory is below the gate', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 8,
+      memory: () => ({ currentBytes: 100, limitBytes: 12 * 1024 * 1024 * 1024 }), // service cgroup fine
+      host: () => ({ memAvailableBytes: 100 * 1024 * 1024, memTotalBytes: 32 * 1024 * 1024 * 1024, source: 'host' }), // host low
+      hostMinimumHeadroomBytes: 512 * 1024 * 1024,
+      readPids: () => ({ current: 10, max: 1024, source: 'service' }),
+      minimumHeadroomBytes: 1,
+      reservedBytesPerTurn: 1,
+    });
+    await expect(controller.acquire('pi')).rejects.toMatchObject({ reason: 'host_memory_pressure' });
+    const snap = controller.snapshot();
+    expect(snap.available).toBe(false);
+    expect(snap.reason).toBe('host_memory_pressure');
+    expect(snap.host?.memAvailableBytes).toBe(100 * 1024 * 1024);
+    expect(snap.host?.hostPressure).toBe(true);
+  });
+
+  it('admits when host-available memory is healthy', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 8,
+      memory: () => ({ currentBytes: 100, limitBytes: 12 * 1024 * 1024 * 1024 }),
+      host: () => ({ memAvailableBytes: 8 * 1024 * 1024 * 1024, source: 'host' }),
+      hostMinimumHeadroomBytes: 512 * 1024 * 1024,
+      readPids: () => ({ current: 10, max: 1024, source: 'service' }),
+      minimumHeadroomBytes: 1,
+      reservedBytesPerTurn: 1,
+    });
+    const lease = await controller.acquire('pi');
+    expect(lease).toBeDefined();
+    expect(controller.snapshot().host?.hostPressure).toBe(false);
+    lease.release();
+  });
+
+  it('does not gate on host when host telemetry is unavailable', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 8,
+      memory: () => ({ currentBytes: 100, limitBytes: 12 * 1024 * 1024 * 1024 }),
+      host: () => ({ source: 'host' }), // memAvailableBytes undefined
+      hostMinimumHeadroomBytes: 512 * 1024 * 1024,
+      readPids: () => ({ current: 10, max: 1024, source: 'service' }),
+      minimumHeadroomBytes: 1,
+      reservedBytesPerTurn: 1,
+    });
+    const lease = await controller.acquire('pi');
+    expect(lease).toBeDefined();
+    lease.release();
   });
 });
 
@@ -210,5 +327,42 @@ describe('AdmissionController — Phase 4 priority classes', () => {
       minimumHeadroomBytes: 100, reservedBytesPerTurn: 1,
     });
     expect(critical.snapshot().controlAvailable).toBe(false);
+  });
+});
+
+describe('admissionStartupStatus', () => {
+  it('flags a loud warning when production runs on CPU-derived defaults', () => {
+    const { resolved, warning, usingDefaults } = admissionStartupStatus({ isProduction: true });
+    expect(usingDefaults).toBe(true);
+    expect(resolved.maxActiveTurns).toBeGreaterThanOrEqual(2);
+    expect(resolved.usingDefaults).toBe(true);
+    expect(warning).toMatch(/CPU-derived DEFAULTS/i);
+    expect(warning).toMatch(/production/i);
+  });
+
+  it('does not warn when the capacity knob is explicitly configured', () => {
+    const { resolved, warning, usingDefaults } = admissionStartupStatus({
+      maxActiveTurns: 6, interactiveReserve: 1, minimumHeadroomBytes: 1536 * 1024 * 1024,
+      reservedBytesPerTurn: 768 * 1024 * 1024, isProduction: true,
+    });
+    expect(usingDefaults).toBe(false);
+    expect(warning).toBeUndefined();
+    expect(resolved).toMatchObject({ maxActiveTurns: 6, apiTurnLimit: 5, interactiveReserve: 1 });
+  });
+
+  it('does not warn outside production even on defaults', () => {
+    const { warning } = admissionStartupStatus({ isProduction: false });
+    expect(warning).toBeUndefined();
+  });
+
+  it('resolveAdmissionConfig matches the controller constructor (single source of truth)', () => {
+    const opts = { maxActiveTurns: 4, interactiveReserve: 1, minimumHeadroomBytes: 1000, reservedBytesPerTurn: 100 };
+    const resolved = resolveAdmissionConfig(opts);
+    const controller = new AdmissionController(opts);
+    const snap = controller.snapshot();
+    expect(resolved.maxActiveTurns).toBe(snap.maxActiveTurns);
+    expect(resolved.apiTurnLimit).toBe(snap.apiTurnLimit);
+    expect(resolved.minimumHeadroomBytes).toBe(snap.memory.minimumHeadroomBytes);
+    expect(resolved.reservedBytesPerTurn).toBe(snap.memory.reservedBytesPerTurn);
   });
 });

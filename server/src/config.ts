@@ -179,8 +179,13 @@ export interface ServerConfig {
   internalApiAdmissionInteractiveReserve?: number;
   /** Required measured cgroup/host memory headroom before dispatch. */
   internalApiAdmissionMinimumHeadroomBytes?: number;
+  /** Host-available-memory floor; below it execution is refused with host_memory_pressure. */
+  internalApiAdmissionHostMinimumHeadroomBytes?: number;
   /** Conservative projected memory reservation per admitted turn. */
   internalApiAdmissionReservedBytesPerTurn?: number;
+  /** Conservative projected PID/task reservation per admitted turn. When
+   * `pids.current + this > pids.max`, execution is refused with `pid_pressure`. */
+  internalApiAdmissionReservedPidsPerTurn?: number;
   /** Ephemeral validation mode: isolated, disposable instance for live validation (no destructive cleanup). */
   validationMode: boolean;
   validationDefaultCwd: string;
@@ -304,8 +309,14 @@ export const config: ServerConfig = {
   internalApiAdmissionMinimumHeadroomBytes: process.env.INTERNAL_API_ADMISSION_MIN_HEADROOM_MB
     ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_MIN_HEADROOM_MB, 512, 'INTERNAL_API_ADMISSION_MIN_HEADROOM_MB') * 1024 * 1024
     : undefined,
+  internalApiAdmissionHostMinimumHeadroomBytes: process.env.INTERNAL_API_ADMISSION_HOST_MIN_HEADROOM_MB
+    ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_HOST_MIN_HEADROOM_MB, 512, 'INTERNAL_API_ADMISSION_HOST_MIN_HEADROOM_MB') * 1024 * 1024
+    : undefined,
   internalApiAdmissionReservedBytesPerTurn: process.env.INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN
     ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN, 256, 'INTERNAL_API_ADMISSION_RESERVED_MB_PER_TURN') * 1024 * 1024
+    : undefined,
+  internalApiAdmissionReservedPidsPerTurn: process.env.INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN
+    ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN, 256, 'INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN')
     : undefined,
   validationMode: process.env.PI_WEB_UI_VALIDATION_MODE === 'true',
   validationDefaultCwd: process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd(),

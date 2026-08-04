@@ -50,7 +50,7 @@ import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
 import { bindOwnerOnlyUnixSocket, UnixSocketOwner } from './unix-socket-owner.js';
 import { getWorkerPool } from '../routes/sessions.js';
-import { AdmissionController } from './admission-controller.js';
+import { AdmissionController, admissionStartupStatus } from './admission-controller.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -90,7 +90,9 @@ export interface InternalApiConfig {
   admissionMaxActiveTurns?: number;
   admissionInteractiveReserve?: number;
   admissionMinimumHeadroomBytes?: number;
+  admissionHostMinimumHeadroomBytes?: number;
   admissionReservedBytesPerTurn?: number;
+  admissionReservedPidsPerTurn?: number;
 }
 
 const DEFAULT_SOCKET_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api.sock');
@@ -197,12 +199,31 @@ export class InternalApiServer {
 
     // One process-local admission authority sees all Internal API conductors.
     // It preserves explicit headroom for interactive Web UI turns.
-    const admissionController = new AdmissionController({
+    const admissionOptions = {
       maxActiveTurns: this.config.admissionMaxActiveTurns,
       interactiveReserve: this.config.admissionInteractiveReserve,
       minimumHeadroomBytes: this.config.admissionMinimumHeadroomBytes,
+      hostMinimumHeadroomBytes: this.config.admissionHostMinimumHeadroomBytes,
       reservedBytesPerTurn: this.config.admissionReservedBytesPerTurn,
+      reservedPidsPerTurn: this.config.admissionReservedPidsPerTurn,
+    };
+    // Surface the resolved admission config at startup and fail loud (warn) if
+    // production is running on the non-conservative CPU-derived defaults — the
+    // INTERNAL_API_ADMISSION_* env not being loaded must not stay silent.
+    const admissionStatus = admissionStartupStatus({
+      ...admissionOptions,
+      isProduction: process.env.NODE_ENV === 'production',
     });
+    const r = admissionStatus.resolved;
+    logger.info(
+      `[InternalAPI] admission: maxActiveTurns=${r.maxActiveTurns} apiTurnLimit=${r.apiTurnLimit} ` +
+      `interactiveReserve=${r.interactiveReserve} controlReserve=${r.controlReserve} ` +
+      `executionCapacity=${r.executionCapacity} minHeadroom=${r.minimumHeadroomBytes} ` +
+      `reserved/turn=${r.reservedBytesPerTurn} reservedPids/turn=${r.reservedPidsPerTurn} ` +
+      `hostHeadroom=${r.hostMinimumHeadroomBytes}${admissionStatus.usingDefaults ? ' [DEFAULTS]' : ''}`,
+    );
+    if (admissionStatus.warning) logger.warn(`[InternalAPI] ${admissionStatus.warning}`);
+    const admissionController = new AdmissionController(admissionOptions);
 
     // Create routes
     const sessionRoutes = createSessionRoutes({

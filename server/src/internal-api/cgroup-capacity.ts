@@ -31,6 +31,16 @@ export interface ResolvedPidsCapacity {
   source: CgroupMemorySource;
 }
 
+export interface ResolvedMemoryEvents {
+  /** OOM events (cgroup ran out of memory). */
+  oom?: number;
+  /** Tasks killed by the cgroup OOM killer. */
+  oomKill?: number;
+  /** Times memory crossed the `memory.high` boundary. */
+  high?: number;
+  source: CgroupMemorySource;
+}
+
 export interface CgroupResolverOptions {
   /** Injected `/proc/self/cgroup` contents. Defaults to the real file. */
   selfCgroup?: string;
@@ -143,4 +153,32 @@ export function readServicePidsCapacity(options: CgroupResolverOptions = {}): Re
 function readRealFileSafe(path: string): string | undefined {
   // Kept as a named seam so the default resolver can be audited without an extra closure.
   return readRealFile(path);
+}
+
+/**
+ * Read `memory.events` (oom / oom_kill / high) from the service cgroup. Returns
+ * `undefined` when the cgroup cannot be resolved or the file is missing — never
+ * fabricates counters. Counters are cumulative since cgroup creation; callers
+ * diff them for rates.
+ */
+export function readServiceMemoryEvents(options: CgroupResolverOptions = {}): ResolvedMemoryEvents | undefined {
+  const read = options.read ?? readRealFile;
+  const root = (options.cgroupRoot ?? DEFAULT_CGROUP_ROOT).replace(/\/+$/, '');
+  const selfPath = parseSelfCgroupV2(options.selfCgroup ?? readRealFileSafe('/proc/self/cgroup'));
+  const serviceFsPath = selfPath ? resolveCgroupFsPath(root, selfPath) : undefined;
+  if (!serviceFsPath) return undefined;
+  const events = read(`${serviceFsPath}/memory.events`);
+  if (events === undefined) return undefined;
+  const oom = readEventCounter(events, 'oom');
+  const oomKill = readEventCounter(events, 'oom_kill');
+  const high = readEventCounter(events, 'high');
+  if (oom === undefined && oomKill === undefined && high === undefined) return undefined;
+  return { oom, oomKill, high, source: 'service' };
+}
+
+function readEventCounter(events: string, key: string): number | undefined {
+  const m = events.match(new RegExp(`^${key}\\s+(\\d+)`, 'm'));
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
