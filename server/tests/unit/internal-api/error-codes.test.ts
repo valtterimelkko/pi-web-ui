@@ -35,6 +35,7 @@ describe('Internal API error-code catalog (Task 9)', () => {
       'WATCH_NOT_FOUND',
       'TRANSFER_DISPATCH_FAILED',
       'EMPTY_TRANSCRIPT',
+      'PROVIDER_NOT_ALLOWED',
     ]) {
       expect(codes.has(expected as never)).toBe(true);
     }

@@ -44,6 +44,7 @@ function makeRuntime(models: Array<{ id: string; name: string; provider: string 
     setRuntimeApiKey: vi.fn().mockResolvedValue(undefined),
     getError: vi.fn().mockReturnValue(undefined),
     getModels: vi.fn().mockReturnValue(models),
+    getModel: vi.fn((provider: string, id: string) => models.find((model) => model.provider === provider && model.id === id)),
     getAvailable: vi.fn().mockResolvedValue(models),
     hasConfiguredAuth: vi.fn().mockReturnValue(false),
     registerProvider: vi.fn(),
@@ -108,5 +109,51 @@ describe('R1: PiService initialize concurrency + retry', () => {
     expect(ctrl.createCalls).toBe(1);
     const models = await service.getAvailableModels();
     expect(models).toEqual([]);
+  });
+
+  it('allows overlapping model-stable execution leases while model changes wait for all readers', async () => {
+    const service = new PiService();
+    await service.initialize();
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    let secondEntered = false;
+    const first = service.withSessionModelLock('s1', async () => firstGate);
+    const second = service.withSessionModelLock('s1', async () => {
+      secondEntered = true;
+      await secondGate;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(secondEntered).toBe(true);
+    releaseFirst();
+    releaseSecond();
+    await Promise.all([first, second]);
+  });
+
+  it('serializes model changes behind a same-session execution boundary', async () => {
+    const service = new PiService();
+    await service.initialize();
+    let releaseExecution!: () => void;
+    const executionGate = new Promise<void>((resolve) => { releaseExecution = resolve; });
+    const session = {
+      sessionId: 's1',
+      sessionFile: '/tmp/s1.jsonl',
+      model: { provider: 'p', id: 'm1' },
+      setModel: vi.fn(async (model: { provider: string; id: string }) => { session.model = model; }),
+    };
+    (service as unknown as { sessions: Map<string, typeof session> }).sessions.set('s1', session);
+
+    const execution = service.withSessionModelLock('s1', async () => executionGate);
+    await Promise.resolve();
+    const modelChange = service.setModel('s1', 'p/m1');
+    await Promise.resolve();
+
+    expect(session.setModel).not.toHaveBeenCalled();
+    releaseExecution();
+    await Promise.all([execution, modelChange]);
+    expect(session.setModel).toHaveBeenCalledTimes(1);
   });
 });

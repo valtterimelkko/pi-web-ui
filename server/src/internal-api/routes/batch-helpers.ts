@@ -14,8 +14,14 @@ import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
 import type { BatchCreateEntry, SessionRuntime } from '../types.js';
+import { unlink } from 'fs/promises';
 import { config } from '../../config.js';
 import { ErrorCode } from '../error-codes.js';
+import {
+  assertPiModelAllowed,
+  assertResolvedPiModelAllowed,
+  PiProviderNotAllowedError,
+} from '../pi-provider-policy.js';
 
 /** A runtime-level error with a stable contract code, thrown from batch
  * creation so the batch result surfaces the contracted code (e.g.
@@ -36,6 +42,7 @@ export interface BatchCreateDeps {
   piService: PiService;
   internalClientId: string;
   cleanupRejectedSession(sessionId: string): Promise<void>;
+  blockedPiProviders?: readonly string[];
 }
 
 export interface CreatedSession {
@@ -114,6 +121,14 @@ export async function createOneSession(params: {
     }
 
     case 'pi': {
+      try {
+        assertPiModelAllowed(entry.model, deps.blockedPiProviders ?? config.internalApiBlockedPiProviders);
+      } catch (error) {
+        if (error instanceof PiProviderNotAllowedError) {
+          throw new RuntimeOpError(error.code, error.message);
+        }
+        throw error;
+      }
       const status = await deps.multiSessionManager.createAndSubscribe(deps.internalClientId, cwd);
       await deps.sessionRegistry.upsert({
         id: status.sessionId,
@@ -126,6 +141,22 @@ export async function createOneSession(params: {
       });
       if (entry.model) {
         await deps.piService.setModel(status.sessionId, entry.model).catch(() => { /* non-fatal */ });
+      }
+      const effectiveModel = deps.multiSessionManager.getAgentSession(status.sessionPath)?.model;
+      try {
+        assertResolvedPiModelAllowed(
+          effectiveModel ? `${effectiveModel.provider}/${effectiveModel.id}` : entry.model,
+          deps.blockedPiProviders ?? config.internalApiBlockedPiProviders,
+        );
+      } catch (error) {
+        deps.multiSessionManager.unsubscribeClient(deps.internalClientId, status.sessionPath);
+        deps.multiSessionManager.disposeLoadedSession(status.sessionPath);
+        await unlink(status.sessionPath).catch(() => undefined);
+        await deps.sessionRegistry.delete(status.sessionId);
+        if (error instanceof PiProviderNotAllowedError) {
+          throw new RuntimeOpError(error.code, error.message);
+        }
+        throw error;
       }
       if (entry.thinkingLevel) {
         const agentSession = deps.multiSessionManager.getAgentSession(status.sessionPath);

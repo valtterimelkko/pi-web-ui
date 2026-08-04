@@ -98,11 +98,13 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.14.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.16.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
-  from each runtime. New models appear immediately — no restart needed.
+  from each runtime. New models appear immediately — no restart needed. Pi
+  providers denied by the Internal API execution policy are intentionally
+  omitted from this automation-facing list; the browser model list is separate.
 - **Unified sessions:** Sessions appear in both the API and the web UI. You
   can create a session via the API, then open it in the web UI.
 - **Auth:** A shared API key stored at `~/.pi-web-ui/internal-api-token`.
@@ -306,7 +308,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.14.0",
+    "contractVersion": "1.16.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -386,6 +388,28 @@ For Claude, automation clients can either:
 - select a specific provider profile via `model: "profile:<id>"`
 
 Profile-backed Claude entries may include `backend` and `claudeModel` metadata so callers can deliberately choose SDK vs direct vs channel-backed sessions.
+
+### Pi provider execution policy
+
+The Internal API has an automation-only Pi-provider policy to prevent accidental
+metered agent spend. `INTERNAL_API_BLOCKED_PI_PROVIDERS` defaults to the exact
+provider ids `openai,openrouter`. Those providers are omitted from this endpoint
+and rejected with HTTP `403` / `PROVIDER_NOT_ALLOWED` before any Internal API
+agent execution or model switch can reach the runtime. Enforcement covers
+single/batch creation, existing browser-created sessions prompted through the
+Internal API, prompt/follow-up/steer/detached/batch dispatch, and transfer
+targets. The final Pi execution boundary is serialized with Pi model changes,
+so a concurrent browser switch cannot race between the live-model check and
+dispatch. Idempotent replay of an already accepted receipt remains a read of
+existing evidence and does not dispatch again.
+
+Provider matching is exact: `openai-codex` is the subscription provider and
+remains available. This policy does not change the browser `/api/models` route,
+browser WebSocket sessions, `/api/dictation` (including Drive Mode dictation),
+or `/api/tts` read-aloud. Set the env value explicitly empty only when the
+operator intentionally wants no Internal API provider restriction. The effective
+list is published at
+`/capabilities.features.piProviderPolicy.blockedProviders`.
 
 For OpenCode, which providers appear is governed by the `OPENCODE_MODEL_PROVIDERS`
 allowlist (default `zai-coding-plan,kilo,opencode`; set `all` for every
@@ -905,7 +929,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.14.0",
+    "contractVersion": "1.16.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -916,7 +940,10 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "executionAdmission": true,
     "runLivenessEvidence": true,
     "sessionRecoveryEvidence": true,
-    "capacityEndpoint": "/api/v1/capacity"
+    "capacityEndpoint": "/api/v1/capacity",
+    "piProviderPolicy": {
+      "blockedProviders": ["openai", "openrouter"]
+    }
   },
   "runtimes": {
     "pi": {
@@ -2174,6 +2201,7 @@ Actionable errors may also include additive `hint` (next step) and `docs`
 | `RETENTION_RESIDENT_CAPACITY_EXHAUSTED` | 409 | Required resident claim could not be acquired; create is rolled back |
 | `RETENTION_STORE_UNAVAILABLE` | 503 | Required lease persistence/renewal/release was not durable |
 | `ADMISSION_CAPACITY_EXHAUSTED` | 429 | Prompt-time global/runtime/memory admission refused; respect `Retry-After` |
+| `PROVIDER_NOT_ALLOWED` | 403 | Pi provider is disabled for Internal API agent execution |
 
 ## Configuration
 
@@ -2210,6 +2238,10 @@ INTERNAL_API_PIN_MAX_TTL_MS=604800000
 
 # How often expired API retention leases are swept (default 5 min, milliseconds)
 INTERNAL_API_PIN_EXPIRY_INTERVAL_MS=300000
+
+# Pi providers blocked for Internal API agent execution only (exact ids).
+# Browser models, dictation/Drive Mode dictation, and TTS are unaffected.
+INTERNAL_API_BLOCKED_PI_PROVIDERS=openai,openrouter
 
 # Total active-turn budget; default derives from available CPU parallelism
 INTERNAL_API_ADMISSION_MAX_ACTIVE_TURNS=
@@ -2318,7 +2350,8 @@ A: Both see the abort. The session becomes idle.
 
 **Q: Do I need to restart when models change?**
 A: No. `/api/v1/models` always queries live. The response reflects the
-current state.
+current state after applying the Internal API provider policy. The browser model
+picker uses its separate `/api/models` route and retains browser-allowed models.
 
 **Q: Can I have two APIs sending prompts to the same session?**
 A: No. A session can only process one prompt at a time. The second caller

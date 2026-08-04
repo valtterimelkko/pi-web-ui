@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.15.0",
+  "contractVersion": "1.16.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,12 @@ Current contract:
 
 ### Changelog
 
+- **1.16.0** (minor, additive Internal API Pi-provider execution policy) — prevents accidental metered-provider agent spend on the local automation surface while preserving browser features:
+  - Pi providers configured by `INTERNAL_API_BLOCKED_PI_PROVIDERS` (default `openai,openrouter`) are omitted from `GET /api/v1/models` and rejected with `403 PROVIDER_NOT_ALLOWED` before Internal API session creation, model switching, prompt/follow-up/steer/detached/batch dispatch, or transfer dispatch can invoke them;
+  - the policy compares exact provider ids, so the subscription-backed `openai-codex` provider remains available; `/capabilities.features.piProviderPolicy.blockedProviders` exposes the effective list;
+  - enforcement re-checks the live Pi session model at dispatch, including browser-created sessions used later through the Internal API, and serializes that execution boundary with Pi model changes so an in-flight browser switch cannot win between check and dispatch; idempotent receipt replay and read/control operations that do not execute a model remain available;
+  - browser REST/WebSocket model use and the separate `/api/dictation` and `/api/tts` routes are unchanged. An explicitly empty env value disables the policy for operators who intentionally want those providers on the Internal API.
+  Old clients can ignore the additive capability field and handle the new stable 403 code as an ordinary refusal.
 - **1.15.0** (minor, additive disabled-runtime contract) — made an operator-disabled runtime truthfully distinct from an uninstalled/unhealthy one:
   - `/capabilities` adds an additive `enabled` boolean to every runtime entry; OpenCode reports `enabled:false` together with `available:false` when `OPENCODE_ENABLED=false`, while an installed-and-enabled runtime reports `enabled:true`; automation clients must treat a disabled runtime as unavailable and must not silently substitute another runtime;
   - OpenCode session creation and cross-runtime transfer to a new or existing OpenCode target fail closed with `RUNTIME_UNAVAILABLE` (transfer surface: `TRANSFER_RUNTIME_UNAVAILABLE`) when the runtime is disabled, before any managed `opencode serve` is spawned or attached;
@@ -227,6 +233,7 @@ re-introduced.
 | `RUN_NOT_FOUND` | 404 | No persisted run receipt exists | Unknown or retention-pruned `runId` |
 | `TURN_STALLED` | 500 | Accepted run exceeded its idle/absolute watchdog | Runtime stopped emitting events or queued work could not be correlated |
 | `IDEMPOTENCY_KEY_CONFLICT` | 409 | Key reused for a different request | Same endpoint-scoped key has a different request fingerprint (prompt dispatch or explicit notification payload) |
+| `PROVIDER_NOT_ALLOWED` | 403 | Pi provider blocked on the Internal API | Operator policy prevents agent execution through a metered provider |
 
 ### Additive error enrichment (`hint`, `docs`)
 

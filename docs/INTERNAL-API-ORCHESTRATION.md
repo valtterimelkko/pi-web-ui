@@ -91,7 +91,7 @@ health, evidence, receipt-correctness, exact-profile, retention, admission, disp
 - `POST /api/v1/notifications`, `GET /api/v1/notifications/:id`, and `GET /api/v1/notifications` — durable explicit acceptance, pollable delivery status, and recent delivery history. Reuse one `Idempotency-Key` across retries (contract `1.8.0+`).
 - `POST/DELETE/GET /api/v1/sessions/:id/notifications...` — opt a child session into `agent_end` notifications and verify the opt-in/delivery state.
 - `GET /api/v1/runs/:runId` — durable run receipt lookup for accepted, detached, or retried dispatches. Contract `1.10.1` ensures Pi completion waits for `agent_end` across auto-compaction; on older servers, treat Pi `completed` without `agentEndAt` as contradictory/nonterminal evidence. Contract `1.11.0` adds `modelSelector`; `1.14.0` adds payload-free activity/watchdog/terminal/cessation evidence. A terminal receipt releases capacity but does not by itself prove nested-process or workspace quiescence.
-- `GET /api/v1/models` — model-specific `thinkingLevels`; use this before requesting `max` for Claude or Pi sessions.
+- `GET /api/v1/models` — model-specific `thinkingLevels`; use this before requesting `max` for Claude or Pi sessions. Contract `1.16.0` also applies the Internal API Pi-provider execution policy: blocked providers are omitted here and exposed at `/capabilities.features.piProviderPolicy.blockedProviders`.
 - `POST /api/v1/sessions/:id/control` with `{action:"set_thinking_level",level:"max"}` — available when the selected model advertises `max` (contract `1.7.0+`).
 
 These are especially helpful during orchestration setup or when a child session behaves unexpectedly, because they let you inspect the server without shell access.
@@ -100,6 +100,14 @@ This is a trusted same-host multi-client API, not a multi-tenant boundary: every
 client with the shared bearer token can inspect and control every session. Keep
 per-orchestration ownership in your caller state rather than assuming server-side
 RBAC.
+
+The Internal API refuses Pi agent execution through providers blocked by the
+operator policy (default exact ids: `openai`, `openrouter`) even when the target
+session was originally created in the browser. `openai-codex` is a distinct
+subscription provider and remains eligible. Do not work around a
+`PROVIDER_NOT_ALLOWED` response by guessing an omitted model; choose from the
+returned model list. This automation-only policy does not affect browser
+sessions, dictation/Drive Mode dictation, or TTS.
 
 This lets you decide:
 - which runtimes are installed and healthy

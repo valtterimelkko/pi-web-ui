@@ -518,6 +518,38 @@ describe('TransferService', () => {
       }
     });
 
+    it('preserves a stable Pi startup rejection code', async () => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-stable-error-test-'));
+      try {
+        const sourcePath = path.join(tmpDir, 'source.jsonl');
+        const targetPath = path.join(tmpDir, 'target.jsonl');
+        await fs.writeFile(sourcePath, [
+          JSON.stringify({ type: 'session', id: 'source', cwd: '/tmp' }),
+          JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'handoff' }] } }),
+        ].join('\n') + '\n');
+        await fs.writeFile(targetPath, JSON.stringify({ type: 'session', id: 'target', cwd: '/tmp' }) + '\n');
+        const policyError = Object.assign(new Error('provider blocked'), { code: 'PROVIDER_NOT_ALLOWED' });
+        const config = makeConfig({
+          piSessionDir: tmpDir,
+          sendPiPrompt: vi.fn().mockRejectedValue(policyError),
+        });
+        (config.registry.get as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => {
+          if (id === 'source') return makeRegistryEntry({ id, sdkType: 'pi', path: sourcePath });
+          if (id === 'target') return makeRegistryEntry({ id, sdkType: 'pi', path: targetPath });
+          return undefined;
+        });
+
+        const result = await new TransferService(config).executeTransfer({
+          sourceSessionId: 'source', targetSessionId: 'target', scope: 'visible_full',
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it('rejects a registry-backed Pi entry whose header id disagrees with the registry', async () => {
       const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-registry-id-test-'));
       try {

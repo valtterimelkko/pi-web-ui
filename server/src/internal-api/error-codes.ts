@@ -52,6 +52,7 @@ export const ErrorCode = {
   RETENTION_RESIDENT_CAPACITY_EXHAUSTED: 'RETENTION_RESIDENT_CAPACITY_EXHAUSTED',
   RETENTION_STORE_UNAVAILABLE: 'RETENTION_STORE_UNAVAILABLE',
   ADMISSION_CAPACITY_EXHAUSTED: 'ADMISSION_CAPACITY_EXHAUSTED',
+  PROVIDER_NOT_ALLOWED: 'PROVIDER_NOT_ALLOWED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -277,6 +278,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'A runtime/global turn cap or memory-headroom guard refused new work.',
     hint: 'Respect Retry-After, inspect GET /api/v1/capacity, and retry later.',
     docs: 'docs/INTERNAL-API.md#execution-admission-and-capacity',
+  },
+  [ErrorCode.PROVIDER_NOT_ALLOWED]: {
+    httpStatus: 403,
+    description: 'The selected Pi provider is disabled for Internal API agent execution.',
+    cause: 'Operator policy blocks this provider on the local automation surface to prevent unintended usage charges.',
+    hint: 'Choose a model returned by GET /api/v1/models; subscription provider openai-codex remains distinct from direct openai.',
+    docs: 'docs/INTERNAL-API.md#pi-provider-execution-policy',
   },
   [ErrorCode.IDEMPOTENCY_KEY_CONFLICT]: {
     httpStatus: 409,

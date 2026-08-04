@@ -68,7 +68,13 @@ beforeEach(async () => {
   multiSessionManager = {
     subscribeClient: vi.fn().mockResolvedValue(undefined),
     unsubscribeClient: vi.fn(),
-    getAgentSession: vi.fn(() => ({ setThinkingLevel: vi.fn(), getSessionStats: vi.fn(), sessionFile: '/tmp/p.jsonl' })),
+    getAgentSession: vi.fn(() => ({
+      setThinkingLevel: vi.fn(),
+      getSessionStats: vi.fn(),
+      sessionFile: '/tmp/p.jsonl',
+      sessionId: 'pi-test',
+      model: { provider: 'openai-codex', id: 'gpt-5.4' },
+    })),
     addApiObserver: vi.fn(),
     removeApiObserver: vi.fn(),
     createAndSubscribe: vi.fn(async () => {

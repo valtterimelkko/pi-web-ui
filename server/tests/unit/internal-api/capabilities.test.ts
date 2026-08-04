@@ -51,6 +51,7 @@ describe('createCapabilitiesRoutes', () => {
       antigravityService: {
         isAvailable: vi.fn().mockResolvedValue(false),
       } as any,
+      blockedPiProviders: ['openai', 'openrouter'],
     });
 
     const req = createMockReq();
@@ -64,7 +65,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.15.0',
+        contractVersion: '1.16.0',
       },
       features: {
         retentionLeases: true,
@@ -74,6 +75,9 @@ describe('createCapabilitiesRoutes', () => {
         runLivenessEvidence: true,
         sessionRecoveryEvidence: true,
         capacityEndpoint: '/api/v1/capacity',
+        piProviderPolicy: {
+          blockedProviders: ['openai', 'openrouter'],
+        },
       },
       runtimes: {
         pi: {

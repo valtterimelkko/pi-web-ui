@@ -10,15 +10,18 @@ import { getInternalApiContractInfo, type CapabilitiesResponse } from '../types.
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
+import { config } from '../../config.js';
 
 export interface CapabilitiesRoutesDeps {
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
   antigravityService: AntigravityService;
+  blockedPiProviders?: readonly string[];
 }
 
 export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
   const { claudeService, opencodeService, antigravityService } = deps;
+  const blockedPiProviders = [...(deps.blockedPiProviders ?? config.internalApiBlockedPiProviders)];
 
   async function handleGetCapabilities(
     _req: IncomingMessage,
@@ -46,6 +49,7 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
         runLivenessEvidence: true,
         sessionRecoveryEvidence: true,
         capacityEndpoint: '/api/v1/capacity',
+        piProviderPolicy: { blockedProviders: blockedPiProviders },
       },
       runtimes: {
         pi: {

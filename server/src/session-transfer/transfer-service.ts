@@ -25,10 +25,20 @@ const MAX_HANDOFF_BYTES = 1024 * 1024;
 const reservedTargetIds = new Set<string>();
 
 class TargetAcceptanceError extends Error {
-  constructor(message: string, readonly startRejected = false) {
+  constructor(
+    message: string,
+    readonly startRejected = false,
+    readonly code?: string,
+  ) {
     super(message);
     this.name = 'TargetAcceptanceError';
   }
+}
+
+function stableErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && code.length > 0 ? code : undefined;
 }
 
 interface SafePiCandidate {
@@ -553,7 +563,10 @@ export class TransferService {
           return {
             success: false,
             sessionId: '',
-            error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Failed to create Pi session: ${err instanceof Error ? err.message : String(err)}` },
+            error: {
+              code: stableErrorCode(err) ?? TRANSFER_ERROR_CODES.DISPATCH_FAILED,
+              message: `Failed to create Pi session: ${err instanceof Error ? err.message : String(err)}`,
+            },
           };
         }
       }
@@ -618,10 +631,18 @@ export class TransferService {
 
       try {
         Promise.resolve(start(onEvent, onComplete)).catch((error) => {
-          settle(new TargetAcceptanceError(error instanceof Error ? error.message : String(error), true));
+          settle(new TargetAcceptanceError(
+            error instanceof Error ? error.message : String(error),
+            true,
+            stableErrorCode(error),
+          ));
         });
       } catch (error) {
-        settle(new TargetAcceptanceError(error instanceof Error ? error.message : String(error), true));
+        settle(new TargetAcceptanceError(
+          error instanceof Error ? error.message : String(error),
+          true,
+          stableErrorCode(error),
+        ));
       }
     });
   }
@@ -718,7 +739,13 @@ export class TransferService {
           };
         } catch (err) {
           if (!(err instanceof TargetAcceptanceError && err.startRejected) && directPath) await this.config.abortPiPrompt?.(directPath);
-          return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Pi dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
+          return {
+            success: false,
+            error: {
+              code: stableErrorCode(err) ?? TRANSFER_ERROR_CODES.DISPATCH_FAILED,
+              message: `Pi dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          };
         }
       }
 

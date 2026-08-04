@@ -100,6 +100,12 @@ import { AdmissionCapacityError, AdmissionController } from '../admission-contro
 import { BoundedControlLane, ControlLaneFullError } from '../control-lane.js';
 import { SessionDisposalRegistry } from '../session-disposal.js';
 import { RuntimeOpError } from './batch-helpers.js';
+import {
+  assertPiModelAllowed,
+  assertResolvedPiModelAllowed,
+  blockedPiProvider,
+  PiProviderNotAllowedError,
+} from '../pi-provider-policy.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -237,6 +243,8 @@ export interface SessionRoutesDeps {
   controlLane?: BoundedControlLane;
   /** Optional per-session disposal registry (defaults to a new instance). */
   disposal?: SessionDisposalRegistry;
+  /** Pi providers denied for Internal API agent execution. */
+  blockedPiProviders?: readonly string[];
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps) {
@@ -253,6 +261,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
   const antigravitySessionDir = deps.antigravitySessionDir ?? config.antigravitySessionDir;
+  const blockedPiProviders = deps.blockedPiProviders ?? config.internalApiBlockedPiProviders;
   const runReceipts = deps.runReceiptManager ?? new RunReceiptManager({
     store: new RunReceiptStore(deps.runReceiptDir),
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
@@ -499,6 +508,28 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     return currentModel ? `${currentModel.provider}/${currentModel.id}` : entry.model;
   }
 
+  function piProviderPolicyError(entry: RegistryEntry): PiProviderNotAllowedError | undefined {
+    if (entry.sdkType !== 'pi') return undefined;
+    const provider = blockedPiProvider(currentRunModel(entry), blockedPiProviders);
+    return provider ? new PiProviderNotAllowedError(provider) : undefined;
+  }
+
+  function sendPiProviderPolicyError(res: ServerResponse, error: PiProviderNotAllowedError): void {
+    sendJson(res, 403, enrichedErrorBody(ErrorCode.PROVIDER_NOT_ALLOWED, error.message));
+  }
+
+  function withPiModelLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    return typeof piService.withSessionModelLock === 'function'
+      ? piService.withSessionModelLock(sessionId, operation)
+      : operation();
+  }
+
+  function acquirePiModelLock(sessionId: string): Promise<() => void> {
+    return typeof piService.acquireSessionModelLock === 'function'
+      ? piService.acquireSessionModelLock(sessionId)
+      : Promise.resolve(() => undefined);
+  }
+
   function modelSelectorForEntry(entry: RegistryEntry): string | undefined {
     return entry.sdkType === 'claude' && entry.claudeProfileId
       ? `profile:${entry.claudeProfileId}`
@@ -687,6 +718,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const runtime: SessionRuntime = parsed.data.runtime;
     const cwd = parsed.data.cwd || process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd();
+    if (runtime === 'pi') {
+      try {
+        assertPiModelAllowed(body.model, blockedPiProviders);
+      } catch (error) {
+        if (error instanceof PiProviderNotAllowedError) {
+          sendPiProviderPolicyError(res, error);
+          return;
+        }
+        throw error;
+      }
+    }
     let base: CreateSessionResponse | null = null;
     let createdPiSessionPath: string | undefined;
 
@@ -797,6 +839,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           });
           if (body.model) {
             await piService.setModel(status.sessionId, body.model).catch(() => { /* non-fatal */ });
+          }
+          const effectiveModel = multiSessionManager.getAgentSession(status.sessionPath)?.model;
+          try {
+            assertResolvedPiModelAllowed(
+              effectiveModel ? `${effectiveModel.provider}/${effectiveModel.id}` : body.model,
+              blockedPiProviders,
+            );
+          } catch (error) {
+            if (error instanceof PiProviderNotAllowedError) {
+              multiSessionManager.disposeLoadedSession(status.sessionPath);
+              await deleteSessionFiles({ sdkType: 'pi', path: status.sessionPath, id: status.sessionId });
+              await sessionRegistry.delete(status.sessionId);
+              sendPiProviderPolicyError(res, error);
+              return;
+            }
+            throw error;
           }
           if (body.thinkingLevel) {
             const agentSession = multiSessionManager.getAgentSession(status.sessionPath);
@@ -1488,7 +1546,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       persistence = busy
         ? runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY })
         : runReceipts.finish(runId, error
-          ? { status: 'failed', errorCode: error instanceof TurnStalledError ? ErrorCode.TURN_STALLED : ErrorCode.RUNTIME_ERROR }
+          ? {
+              status: 'failed',
+              errorCode: error instanceof TurnStalledError
+                ? ErrorCode.TURN_STALLED
+                : error instanceof PiProviderNotAllowedError
+                  ? ErrorCode.PROVIDER_NOT_ALLOWED
+                  : ErrorCode.RUNTIME_ERROR,
+            }
           : cessationBasis
             ? { status: 'completed', cessationBasis }
             : {});
@@ -1687,6 +1752,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
       }
 
+      const providerPolicyError = piProviderPolicyError(entry);
+      if (providerPolicyError) {
+        sendPiProviderPolicyError(res, providerPolicyError);
+        return;
+      }
+
       let dispatchMode: PromptMode;
       try {
         const decision = chooseDispatchMode(runtime, mode, isSessionBusy(entry), body.requireActiveTurn === true);
@@ -1777,9 +1848,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             mode,
             dispatchMode,
           });
-        } catch {
-          await runReceipts.finish(runId, { status: 'failed', errorCode: ErrorCode.RUNTIME_ERROR });
-          sendJson(res, 500, { error: 'Runtime prompt failed', code: ErrorCode.RUNTIME_ERROR, runId });
+        } catch (error) {
+          const providerError = error instanceof PiProviderNotAllowedError ? error : undefined;
+          await runReceipts.finish(runId, {
+            status: 'failed',
+            errorCode: providerError ? ErrorCode.PROVIDER_NOT_ALLOWED : ErrorCode.RUNTIME_ERROR,
+          });
+          if (providerError) sendPiProviderPolicyError(res, providerError);
+          else sendJson(res, 500, { error: 'Runtime prompt failed', code: ErrorCode.RUNTIME_ERROR, runId });
         }
         return;
       }
@@ -1890,17 +1966,24 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         await handleAnswersPrompt(res, sessionId, runtime, body.message, mode, dispatchMode, runId, admissionLease);
       } catch (err) {
         admissionLease.release();
+        const providerError = err instanceof PiProviderNotAllowedError ? err : undefined;
         // executePromptWithReceipt normally terminalizes before rejecting. This
         // defensive finalizer covers failures in response/stream setup that can
         // occur after markStarted but before the runtime is invoked.
-        await runReceipts.finish(runId, { status: 'failed', errorCode: ErrorCode.RUNTIME_ERROR }).catch(() => undefined);
+        await runReceipts.finish(runId, {
+          status: 'failed',
+          errorCode: providerError ? ErrorCode.PROVIDER_NOT_ALLOWED : ErrorCode.RUNTIME_ERROR,
+        }).catch(() => undefined);
         logger.errorObject('Prompt failed', err);
           if (!res.headersSent) {
-            sendJson(res, 500, {
-              error: 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
-              code: ErrorCode.RUNTIME_ERROR,
-              runId,
-            });
+            if (providerError) sendPiProviderPolicyError(res, providerError);
+            else {
+              sendJson(res, 500, {
+                error: 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
+                code: ErrorCode.RUNTIME_ERROR,
+                runId,
+              });
+            }
           }
         }
       });
@@ -2116,6 +2199,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             const normalizedModel = await antigravityService.setModel(sessionId, body.modelId);
             response = { success: true, action: 'set_model', modelId: normalizedModel };
           } else {
+            try {
+              assertPiModelAllowed(body.modelId, blockedPiProviders);
+            } catch (error) {
+              if (error instanceof PiProviderNotAllowedError) {
+                sendPiProviderPolicyError(res, error);
+                return;
+              }
+              throw error;
+            }
             await piService.setModel(sessionId, body.modelId);
             response = { success: true, action: 'set_model', modelId: body.modelId };
           }
@@ -2596,20 +2688,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       awaitingMessageStart: false,
       sessionPath: entry.path,
     };
+    const releaseModelLock = await acquirePiModelLock(sessionId);
+    let modelLockOwnedByRun = false;
     try {
       const agentSession = multiSessionManager.getAgentSession(entry.path);
       if (!agentSession) throw new Error(`Pi session not loaded: ${sessionId}`);
+      assertResolvedPiModelAllowed(
+        agentSession.model ? `${agentSession.model.provider}/${agentSession.model.id}` : entry.model,
+        blockedPiProviders,
+      );
       attachPiObserverIfNeeded(entry.path);
       const queue = queuedPiRuns.get(sessionId) ?? [];
       queue.push(correlation);
       queuedPiRuns.set(sessionId, queue);
       ensureQueuedRunDisposal(sessionId);
       ensureQueuedPiObserver(sessionId, entry.path);
-      void runReceipts.waitForTerminal(runId).then(() => {
-        removeQueuedPiRun(sessionId, runId);
-      }).catch(() => {
-        removeQueuedPiRun(sessionId, runId);
-      });
       await agentSession.followUp(message);
       const followUpQueue = agentSession.getFollowUpMessages();
       const queueIndex = followUpQueue.length - 1;
@@ -2620,10 +2713,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       correlation.message = queuedMessage;
       correlation.queueIndex = queueIndex;
       queuedPiLastFollowUp.set(sessionId, [...followUpQueue]);
+      modelLockOwnedByRun = true;
+      void runReceipts.waitForTerminal(runId).then(() => {
+        removeQueuedPiRun(sessionId, runId);
+        releaseModelLock();
+      }).catch(() => {
+        removeQueuedPiRun(sessionId, runId);
+        releaseModelLock();
+      });
     } catch (error) {
       removeQueuedPiRun(sessionId, runId);
       throw error;
     } finally {
+      if (!modelLockOwnedByRun) releaseModelLock();
       await multiSessionManager.unsubscribeClient(internalClientId, entry.path);
     }
   }
@@ -2695,10 +2797,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         await multiSessionManager.subscribeClient(internalClientId, sessionPath);
         await pinExpiry?.reapplyForSession(sessionId);
         try {
+        await withPiModelLock(sessionId, async () => {
         const agentSession = multiSessionManager.getAgentSession(sessionPath);
         if (!agentSession) {
           throw new Error(`Pi session not loaded: ${sessionId}`);
         }
+        assertResolvedPiModelAllowed(
+          agentSession.model ? `${agentSession.model.provider}/${agentSession.model.id}` : entry.model,
+          blockedPiProviders,
+        );
 
         // Attach a long-lived observer so broker subscribers receive events
         // even if a future prompt is started by another client.
@@ -2758,6 +2865,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         // the same AgentSession resumes asynchronously. The normalized
         // agent_end event—not prompt() return—is the true terminal turn signal.
         await turnBoundary;
+        });
         } finally {
           multiSessionManager.unsubscribeClient(internalClientId, sessionPath);
         }
@@ -3186,6 +3294,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       abortPiPrompt: (sessionPath: string) => multiSessionManager.abort(sessionPath),
       createPiSession: async (cwd: string) => {
         const status = await multiSessionManager.createAndSubscribe(internalClientId, cwd);
+        const createdModel = multiSessionManager.getAgentSession(status.sessionPath)?.model;
+        try {
+          assertResolvedPiModelAllowed(
+            createdModel ? `${createdModel.provider}/${createdModel.id}` : undefined,
+            blockedPiProviders,
+          );
+        } catch (error) {
+          multiSessionManager.unsubscribeClient(internalClientId, status.sessionPath);
+          multiSessionManager.disposeLoadedSession?.(status.sessionPath);
+          await unlink(status.sessionPath).catch(() => undefined);
+          await sessionRegistry.delete(status.sessionId);
+          throw error;
+        }
         return { sessionId: status.sessionId, sessionPath: status.sessionPath };
       },
       sendPiPrompt: async (sessionPath: string, message: string, onEvent: (event: unknown) => void, cwd?: string) => {
@@ -3195,27 +3316,62 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           await multiSessionManager.subscribeClient(transferClientId, sessionPath, cwd);
           hydrated = true;
         }
-        let observing = true;
-        const transferObserver = (event: unknown) => {
-          onEvent(event);
-          if (typeof event === 'object' && event !== null && (event as { type?: unknown }).type === 'agent_start') {
-            // The transfer response is acceptance-based, so do not retain an
-            // observer for a later/stalled target turn.
-            multiSessionManager.removeApiObserver(sessionPath, transferObserver);
-            observing = false;
-          }
-        };
-        multiSessionManager.addApiObserver(sessionPath, transferObserver);
+        const targetSessionId = multiSessionManager.getAgentSession(sessionPath)?.sessionId;
+        if (!targetSessionId) {
+          if (hydrated) multiSessionManager.unsubscribeClient(transferClientId, sessionPath);
+          throw new Error(`Pi session not loaded: ${sessionPath}`);
+        }
         try {
-          await multiSessionManager.prompt(sessionPath, message);
+          await withPiModelLock(targetSessionId, async () => {
+            const targetModel = multiSessionManager.getAgentSession(sessionPath)?.model;
+            assertResolvedPiModelAllowed(
+              targetModel ? `${targetModel.provider}/${targetModel.id}` : undefined,
+              blockedPiProviders,
+            );
+            let observing = true;
+            const transferObserver = (event: unknown) => {
+              onEvent(event);
+              if (typeof event === 'object' && event !== null && (event as { type?: unknown }).type === 'agent_start') {
+                // The transfer response is acceptance-based, so do not retain
+                // an observer for a later/stalled target turn.
+                multiSessionManager.removeApiObserver(sessionPath, transferObserver);
+                observing = false;
+              }
+            };
+            multiSessionManager.addApiObserver(sessionPath, transferObserver);
+            try {
+              await multiSessionManager.prompt(sessionPath, message);
+            } finally {
+              if (observing) multiSessionManager.removeApiObserver(sessionPath, transferObserver);
+            }
+          });
         } finally {
-          if (observing) multiSessionManager.removeApiObserver(sessionPath, transferObserver);
           if (hydrated) multiSessionManager.unsubscribeClient(transferClientId, sessionPath);
         }
       },
     });
 
     try {
+      if (!body.createNew && body.targetSessionId) {
+        const targetEntry = await sessionRegistry.get(body.targetSessionId)
+          ?? await sessionRegistry.getByPath(body.targetSessionId);
+        if (targetEntry) {
+          const policyError = piProviderPolicyError(targetEntry);
+          if (policyError) {
+            const response: TransferSessionResponse = {
+              success: false,
+              sourceSessionId: sessionId,
+              targetSessionId: targetEntry.id,
+              createdNewSession: false,
+              targetRuntime: 'pi',
+              error: { code: policyError.code, message: policyError.message },
+            };
+            sendJson(res, 403, response);
+            return;
+          }
+        }
+      }
+
       const result = await transferService.executeTransfer({
         sourceSessionId: sessionId,
         targetSessionId: body.targetSessionId,
@@ -3239,7 +3395,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         targetRuntime: (result.targetSdkType as SessionRuntime | undefined) ?? (targetSdk as SessionRuntime | undefined),
         error: result.error,
       };
-      sendJson(res, result.success ? 200 : 400, response);
+      const responseStatus = result.success
+        ? 200
+        : result.error?.code === ErrorCode.PROVIDER_NOT_ALLOWED
+          ? 403
+          : 400;
+      sendJson(res, responseStatus, response);
     } catch (err) {
       logger.errorObject('Transfer failed', err);
       sendJson(res, 500, {
@@ -3286,6 +3447,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             piService,
             internalClientId,
             cleanupRejectedSession: cleanupRejectedCreatedSession,
+            blockedPiProviders,
           },
         });
         onSessionCreated?.(created.sessionId, created.sessionPath, created.runtime);
@@ -3443,6 +3605,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             };
           }
           throw error;
+        }
+
+        const providerPolicyError = piProviderPolicyError(reg);
+        if (providerPolicyError) {
+          return {
+            index,
+            sessionId: entry.sessionId,
+            success: false,
+            error: { code: providerPolicyError.code, message: providerPolicyError.message },
+          };
         }
 
         const isBusy = reg.sdkType === 'claude'
@@ -3609,15 +3781,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           content: collector.textParts.join(''),
           tokens: collector.usage,
         };
-      } catch {
+      } catch (error) {
+        const providerError = error instanceof PiProviderNotAllowedError ? error : undefined;
         return {
           index,
           sessionId: entry.sessionId,
           success: false,
           runId: reservedRunId,
           error: {
-            code: ErrorCode.RUNTIME_ERROR,
-            message: 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
+            code: providerError ? ErrorCode.PROVIDER_NOT_ALLOWED : ErrorCode.RUNTIME_ERROR,
+            message: providerError?.message ?? 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
           },
         };
       }

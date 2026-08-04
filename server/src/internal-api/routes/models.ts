@@ -15,6 +15,7 @@ import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
 import { readBoundedJsonBody } from '../request-body.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { createLogger } from '../../logging/logger.js';
+import { config } from '../../config.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -34,10 +35,14 @@ export interface ModelsRoutesDeps {
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
   antigravityService: AntigravityService;
+  blockedPiProviders?: readonly string[];
 }
 
 export function createModelsRoutes(deps: ModelsRoutesDeps) {
   const { piService, claudeService, opencodeService, antigravityService } = deps;
+  const blockedPiProviders = new Set(
+    (deps.blockedPiProviders ?? config.internalApiBlockedPiProviders).map((provider) => provider.toLowerCase()),
+  );
 
   async function handleListModels(
     req: IncomingMessage,
@@ -58,14 +63,16 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
       if (!runtimeFilter || runtimeFilter === 'pi') {
         try {
           const piModels = await piService.getAvailableModels();
-          result.pi = piModels.map((m) => ({
-            id: m.id,
-            displayName: m.name || m.id,
-            provider: m.provider,
-            contextWindow: m.contextWindow,
-            reasoning: m.reasoning,
-            thinkingLevels: getSupportedThinkingLevels(m),
-          }));
+          result.pi = piModels
+            .filter((model) => !blockedPiProviders.has(model.provider.toLowerCase()))
+            .map((m) => ({
+              id: m.id,
+              displayName: m.name || m.id,
+              provider: m.provider,
+              contextWindow: m.contextWindow,
+              reasoning: m.reasoning,
+              thinkingLevels: getSupportedThinkingLevels(m),
+            }));
         } catch {
           // Pi SDK may not be available — return empty list
         }

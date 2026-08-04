@@ -253,6 +253,7 @@ export class InternalApiServer {
       claudeSessionDir: config.claudeSessionDir,
       antigravitySessionDir: config.antigravitySessionDir,
       admissionController,
+      blockedPiProviders: config.internalApiBlockedPiProviders,
     });
     this.sessionRoutesShutdown = sessionRoutes.shutdown;
     await sessionRoutes.ready;
@@ -263,6 +264,7 @@ export class InternalApiServer {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      blockedPiProviders: config.internalApiBlockedPiProviders,
     };
     const modelsRoutes = createModelsRoutes(modelsDeps);
 
@@ -283,6 +285,7 @@ export class InternalApiServer {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      blockedPiProviders: config.internalApiBlockedPiProviders,
     };
     const capabilitiesRoutes = createCapabilitiesRoutes(capabilitiesDeps);
 

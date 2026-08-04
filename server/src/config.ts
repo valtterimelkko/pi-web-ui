@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import { parseBlockedPiProviders } from './internal-api/pi-provider-policy.js';
 import os from 'os';
 
 dotenv.config();
@@ -186,6 +187,8 @@ export interface ServerConfig {
   /** Conservative projected PID/task reservation per admitted turn. When
    * `pids.current + this > pids.max`, execution is refused with `pid_pressure`. */
   internalApiAdmissionReservedPidsPerTurn?: number;
+  /** Pi providers hidden and denied for agent execution on the Internal API only. */
+  internalApiBlockedPiProviders: string[];
   /** Ephemeral validation mode: isolated, disposable instance for live validation (no destructive cleanup). */
   validationMode: boolean;
   validationDefaultCwd: string;
@@ -318,6 +321,7 @@ export const config: ServerConfig = {
   internalApiAdmissionReservedPidsPerTurn: process.env.INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN
     ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN, 256, 'INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN')
     : undefined,
+  internalApiBlockedPiProviders: parseBlockedPiProviders(process.env.INTERNAL_API_BLOCKED_PI_PROVIDERS),
   validationMode: process.env.PI_WEB_UI_VALIDATION_MODE === 'true',
   validationDefaultCwd: process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd(),
   dictationOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',

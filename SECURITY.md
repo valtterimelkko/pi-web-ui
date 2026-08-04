@@ -86,13 +86,26 @@ This repo is not documented as a turnkey multi-tenant SaaS product.
   - `server/src/internal-api/server.ts`
   - `server/src/internal-api/middleware/auth.ts`
 
-### 8. Notification secrets and browser route protection
+### 8. Internal API metered-provider policy
+
+- Pi providers in `INTERNAL_API_BLOCKED_PI_PROVIDERS` (default exact ids
+  `openai,openrouter`) are hidden from Internal API discovery and rejected again
+  at every Internal API execution boundary.
+- The dispatch-time check is authoritative because browser-created sessions can
+  later be addressed through the shared Internal API registry.
+- Provider matching is exact: `openai-codex` remains available as the distinct
+  subscription-backed provider.
+- This policy is intentionally scoped to the Unix-socket automation surface. It
+  must not disable browser model selection or the separately authenticated
+  dictation/TTS REST routes.
+
+### 9. Notification secrets and browser route protection
 
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are operational secrets/config values and must never be committed.
 - The browser-facing notification opt-in routes are protected with `cookieAuthMiddleware`; do not bypass that just because the deeper notification manager also exists behind the Internal API.
 - Notification/logging paths should preserve token redaction and must not leak Telegram credentials in thrown errors or diagnostics.
 
-### 9. Rate limiting
+### 10. Rate limiting
 
 - HTTP and WebSocket surfaces are rate-limited.
 - Relevant code:

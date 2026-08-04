@@ -54,6 +54,35 @@ function makeDeps(opencodeOverrides: Record<string, unknown>) {
 }
 
 describe('createModelsRoutes — handleListModels', () => {
+  it('hides Internal-API-blocked Pi providers while retaining openai-codex', async () => {
+    const routes = createModelsRoutes({
+      piService: {
+        getAvailableModels: vi.fn().mockResolvedValue([
+          { id: 'gpt-5.5', name: 'GPT-5.5', provider: 'openai' },
+          { id: 'openai/gpt-5.5', name: 'GPT-5.5 via OpenRouter', provider: 'openrouter' },
+          { id: 'gpt-5.5', name: 'GPT-5.5 Codex', provider: 'openai-codex' },
+          { id: 'claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'anthropic' },
+        ]),
+      } as any,
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      blockedPiProviders: ['openai', 'openrouter'],
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(
+      createMockReq(undefined, 'GET', '/api/v1/models?runtime=pi'),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).models.pi.map((model: { provider: string }) => model.provider)).toEqual([
+      'openai-codex',
+      'anthropic',
+    ]);
+  });
+
   it('publishes Pi SDK thinking levels including max for GPT-5.6 models', async () => {
     const routes = createModelsRoutes({
       piService: {

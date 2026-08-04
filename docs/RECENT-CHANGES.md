@@ -4,6 +4,16 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Internal API Pi-provider execution policy (`1.16.0`)**
+  - The automation surface omits and rejects exact Pi providers `openai` and `openrouter` by default while retaining the distinct subscription-backed `openai-codex` provider.
+  - Enforcement covers discovery, create/batch-create, model switching, all prompt modes, batch prompt, existing browser-created sessions addressed through the Internal API, and transfer targets.
+  - Browser model use, dictation/Drive Mode dictation, and TTS remain unchanged; operators can inspect the effective policy through `/api/v1/capabilities`.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`SECURITY.md`](../SECURITY.md)
+
+- **Operator-disabled runtime truthfulness (`1.15.0`)**
+  - Capabilities distinguish a runtime that the operator intentionally disabled from one that is missing or unhealthy.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`OPENCODE-DIRECT-INTEGRATION.md`](./OPENCODE-DIRECT-INTEGRATION.md)
+
 - **Orchestrated run liveness and recovery evidence (`1.14.0`)**
   - Run receipts now preserve payload-free eligible activity, idle-versus-absolute watchdog decisions, bounded terminal observations, and explicit cessation uncertainty.
   - Blind `stream_activity` heartbeats cannot extend the Internal API watchdog; late terminal evidence annotates without reopening capacity or claiming arbitrary process quiescence.

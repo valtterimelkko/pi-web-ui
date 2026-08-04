@@ -125,6 +125,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         }
       }),
       followUp: vi.fn(),
+      getFollowUpMessages: vi.fn(() => ['queued follow-up']),
       steer: vi.fn(),
       setThinkingLevel: vi.fn(),
       getSessionStats: vi.fn(() => ({
@@ -147,12 +148,17 @@ describe('createSessionRoutes orchestration endpoints', () => {
       }),
       createAndSubscribe: vi.fn().mockResolvedValue({ sessionId: 'new-pi', sessionPath: '/tmp/new-pi.jsonl' }),
       prompt: vi.fn().mockResolvedValue(undefined),
+      disposeLoadedSession: vi.fn(),
       pinSession: vi.fn(() => true),
       unpinSession: vi.fn(() => true),
       isSessionPinned: vi.fn(() => false),
     };
 
-    piService = { setModel: vi.fn().mockResolvedValue(undefined) };
+    piService = {
+      setModel: vi.fn().mockResolvedValue(undefined),
+      withSessionModelLock: vi.fn(async (_sessionId: string, operation: () => Promise<unknown>) => operation()),
+      acquireSessionModelLock: vi.fn().mockResolvedValue(() => undefined),
+    };
 
     claudeService = {
       isRunning: vi.fn(() => false),
@@ -254,7 +260,11 @@ describe('createSessionRoutes orchestration endpoints', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  function makeRoutes(runReceiptManager?: RunReceiptManager, admissionController?: any) {
+  function makeRoutes(
+    runReceiptManager?: RunReceiptManager,
+    admissionController?: any,
+    blockedPiProviders = ['openai', 'openrouter'],
+  ) {
     return createSessionRoutes({
       claudeService, opencodeService, antigravityService,
       multiSessionManager, sessionRegistry: registry, piService,
@@ -262,6 +272,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       watchDir: path.join(tempDir, 'watches'),
       runReceiptManager,
       admissionController,
+      blockedPiProviders,
     });
   }
 
@@ -575,6 +586,358 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(body.createdNewSession).toBe(true);
       expect(body.targetSessionId).toBe('new-claude');
       expect(claudeService.createSession).toHaveBeenCalledWith('/root/proj');
+    });
+  });
+
+  describe('Internal API Pi provider execution policy', () => {
+    const piEntry = (id: string, model: string) => ({
+      id,
+      path: `/tmp/${id}.jsonl`,
+      sdkType: 'pi',
+      cwd: '/root/proj',
+      model,
+      firstMessage: '',
+      messageCount: 0,
+      status: 'idle',
+      createdAt: '2026-05-01T00:00:00.000Z',
+      lastActivity: '2026-05-01T00:10:00.000Z',
+    });
+
+    it.each(['openai/gpt-5.5', 'openrouter/openai/gpt-5.5'])(
+      'rejects Pi session creation with blocked model %s before creating a runtime session',
+      async (model) => {
+        const routes = makeRoutes();
+        const res = createMockRes();
+
+        await routes.handleCreateSession(
+          createJsonReq('POST', '/api/v1/sessions', { runtime: 'pi', model }),
+          res,
+          'internal-test',
+        );
+
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(res.body)).toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
+        expect(multiSessionManager.createAndSubscribe).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects Pi session creation when the effective default model is blocked', async () => {
+      multiSessionManager.getAgentSession().model = { provider: 'openai', id: 'gpt-5.5' };
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleCreateSession(
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'pi' }),
+        res,
+        'internal-test',
+      );
+
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
+      expect(multiSessionManager.disposeLoadedSession).toHaveBeenCalledWith('/tmp/new-pi.jsonl');
+      expect(registry.delete).toHaveBeenCalledWith('new-pi');
+    });
+
+    it('allows openai-codex Pi session creation', async () => {
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleCreateSession(
+        createJsonReq('POST', '/api/v1/sessions', { runtime: 'pi', model: 'openai-codex/gpt-5.5' }),
+        res,
+        'internal-test',
+      );
+
+      expect(res.statusCode).toBe(201);
+      expect(piService.setModel).toHaveBeenCalledWith('new-pi', 'openai-codex/gpt-5.5');
+    });
+
+    it('rejects an Internal API model switch to a blocked Pi provider', async () => {
+      registry.get.mockResolvedValue(piEntry('pi-control', 'openai-codex/gpt-5.5'));
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSessionControl(
+        createJsonReq('POST', '/api/v1/sessions/pi-control/control', {
+          action: 'set_model',
+          modelId: 'openai/gpt-5.5',
+        }),
+        res,
+        'pi-control',
+      );
+
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
+      expect(piService.setModel).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { mode: 'prompt' },
+      { mode: 'prompt', detach: true },
+      { mode: 'follow_up' },
+      { mode: 'steer' },
+    ])('rejects $mode dispatch to an existing browser-created blocked Pi session', async (request) => {
+      registry.get.mockResolvedValue(piEntry('pi-paid', 'openai/gpt-5.5'));
+      multiSessionManager.getAgentSession.mockReturnValue({
+        ...multiSessionManager.getAgentSession(),
+        model: { provider: 'openai', id: 'gpt-5.5' },
+      });
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSendPrompt(
+        createJsonReq('POST', '/api/v1/sessions/pi-paid/prompt', {
+          message: 'Do not call the provider',
+          verbosity: 'answers',
+          ...request,
+        }),
+        res,
+        'pi-paid',
+      );
+
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
+      expect(multiSessionManager.getAgentSession().prompt).not.toHaveBeenCalled();
+      expect(multiSessionManager.getAgentSession().followUp).not.toHaveBeenCalled();
+      expect(multiSessionManager.getAgentSession().steer).not.toHaveBeenCalled();
+    });
+
+    it('rejects a blocked model discovered only after an unloaded Pi session is rehydrated', async () => {
+      registry.get.mockResolvedValue(piEntry('pi-unloaded', undefined as unknown as string));
+      const agentSession = multiSessionManager.getAgentSession();
+      let hydrated = false;
+      multiSessionManager.getAgentSession.mockImplementation(() => hydrated ? agentSession : null);
+      multiSessionManager.subscribeClient.mockImplementation(async () => {
+        hydrated = true;
+        agentSession.model = { provider: 'openai', id: 'gpt-5.5' };
+      });
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSendPrompt(
+        createJsonReq('POST', '/api/v1/sessions/pi-unloaded/prompt', { message: 'Do not dispatch', verbosity: 'answers' }),
+        res,
+        'pi-unloaded',
+      );
+
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
+      expect(agentSession.prompt).not.toHaveBeenCalled();
+    });
+
+    it('rejects a follow-up when a browser model switch wins the race before queue insertion', async () => {
+      registry.get.mockResolvedValue(piEntry('pi-race', 'openai-codex/gpt-5.5'));
+      const agentSession = multiSessionManager.getAgentSession();
+      agentSession.model = { provider: 'openai-codex', id: 'gpt-5.5' };
+      multiSessionManager.getSessionStatus = vi.fn(() => ({ status: 'busy' }));
+      multiSessionManager.subscribeClient.mockImplementation(async () => {
+        agentSession.model = { provider: 'openrouter', id: 'openai/gpt-5.5' };
+      });
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSendPrompt(
+        createJsonReq('POST', '/api/v1/sessions/pi-race/prompt', {
+          message: 'Do not queue', mode: 'follow_up', verbosity: 'answers',
+        }),
+        res,
+        'pi-race',
+      );
+
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
+      expect(agentSession.followUp).not.toHaveBeenCalled();
+    });
+
+    it('retains the model-stability lease after accepting a queued follow-up', async () => {
+      registry.get.mockResolvedValue(piEntry('pi-queued-lock', 'openai-codex/gpt-5.5'));
+      const agentSession = multiSessionManager.getAgentSession();
+      agentSession.model = { provider: 'openai-codex', id: 'gpt-5.5' };
+      multiSessionManager.getSessionStatus = vi.fn(() => ({ status: 'busy' }));
+      const releaseModelLock = vi.fn();
+      piService.acquireSessionModelLock.mockResolvedValue(releaseModelLock);
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSendPrompt(
+        createJsonReq('POST', '/api/v1/sessions/pi-queued-lock/prompt', {
+          message: 'queued follow-up', mode: 'follow_up', verbosity: 'answers',
+        }),
+        res,
+        'pi-queued-lock',
+      );
+
+      expect(res.statusCode).toBe(202);
+      expect(agentSession.followUp).toHaveBeenCalledWith('queued follow-up');
+      expect(piService.acquireSessionModelLock).toHaveBeenCalledWith('pi-queued-lock');
+      expect(releaseModelLock).not.toHaveBeenCalled();
+    });
+
+    it('allows Internal API prompts through openai-codex', async () => {
+      registry.get.mockResolvedValue(piEntry('pi-codex', 'openai-codex/gpt-5.5'));
+      const agentSession = multiSessionManager.getAgentSession();
+      agentSession.model = { provider: 'openai-codex', id: 'gpt-5.5' };
+      agentSession.prompt.mockImplementation(async () => {
+        for (const observer of [...piObserverSets]) {
+          observer({ type: 'agent_end', sessionId: 'pi-codex', timestamp: Date.now(), data: {} });
+        }
+      });
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSendPrompt(
+        createJsonReq('POST', '/api/v1/sessions/pi-codex/prompt', { message: 'Allowed', verbosity: 'answers' }),
+        res,
+        'pi-codex',
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(agentSession.prompt).toHaveBeenCalled();
+    });
+
+    it('rejects batch Pi creation when the effective default model is blocked', async () => {
+      multiSessionManager.getAgentSession().model = { provider: 'openrouter', id: 'openai/gpt-5.5' };
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleBatchCreate(
+        createJsonReq('POST', '/api/v1/sessions/batch', { sessions: [{ runtime: 'pi' }] }),
+        res,
+      );
+
+      expect(JSON.parse(res.body).created[0]).toMatchObject({
+        success: false,
+        error: { code: 'PROVIDER_NOT_ALLOWED' },
+      });
+      expect(multiSessionManager.disposeLoadedSession).toHaveBeenCalledWith('/tmp/new-pi.jsonl');
+      expect(registry.delete).toHaveBeenCalledWith('new-pi');
+    });
+
+    it('reports blocked and allowed Pi models independently in batch creation', async () => {
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleBatchCreate(
+        createJsonReq('POST', '/api/v1/sessions/batch', {
+          sessions: [
+            { runtime: 'pi', model: 'openrouter/openai/gpt-5.5' },
+            { runtime: 'pi', model: 'openai-codex/gpt-5.5' },
+          ],
+        }),
+        res,
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).created).toMatchObject([
+        { index: 0, success: false, error: { code: 'PROVIDER_NOT_ALLOWED' } },
+        { index: 1, success: true, model: 'openai-codex/gpt-5.5' },
+      ]);
+      expect(multiSessionManager.createAndSubscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects blocked existing Pi sessions per item in batch prompt dispatch', async () => {
+      registry.get.mockResolvedValue(piEntry('pi-batch-paid', 'openrouter/openai/gpt-5.5'));
+      multiSessionManager.getAgentSession.mockReturnValue({
+        ...multiSessionManager.getAgentSession(),
+        model: { provider: 'openrouter', id: 'openai/gpt-5.5' },
+      });
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleBatchPrompt(
+        createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
+          prompts: [{ sessionId: 'pi-batch-paid', message: 'Do not spend' }],
+        }),
+        res,
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).results[0]).toMatchObject({
+        success: false,
+        error: { code: 'PROVIDER_NOT_ALLOWED' },
+      });
+      expect(multiSessionManager.getAgentSession().prompt).not.toHaveBeenCalled();
+    });
+
+    it('rejects a blocked model discovered only at the batch prompt execution boundary', async () => {
+      registry.get.mockResolvedValue(piEntry('pi-batch-unloaded', undefined as unknown as string));
+      const agentSession = multiSessionManager.getAgentSession();
+      let hydrated = false;
+      multiSessionManager.getAgentSession.mockImplementation(() => hydrated ? agentSession : null);
+      multiSessionManager.subscribeClient.mockImplementation(async () => {
+        hydrated = true;
+        agentSession.model = { provider: 'openrouter', id: 'openai/gpt-5.5' };
+      });
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleBatchPrompt(
+        createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
+          prompts: [{ sessionId: 'pi-batch-unloaded', message: 'Do not dispatch' }],
+        }),
+        res,
+      );
+
+      expect(JSON.parse(res.body).results[0]).toMatchObject({
+        success: false,
+        error: { code: 'PROVIDER_NOT_ALLOWED' },
+      });
+      expect(agentSession.prompt).not.toHaveBeenCalled();
+    });
+
+    it('rejects transfer dispatch into an existing blocked Pi target without blocking a paid-model source read', async () => {
+      const source = claudeEntry('transfer-source');
+      const target = piEntry('transfer-target', 'openai/gpt-5.5');
+      registry.get.mockImplementation(async (id: string) => id === source.id ? source : id === target.id ? target : undefined);
+      registry.getByPath.mockResolvedValue(undefined);
+      multiSessionManager.getAgentSession.mockReturnValue({
+        ...multiSessionManager.getAgentSession(),
+        model: { provider: 'openai', id: 'gpt-5.5' },
+      });
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSessionTransfer(
+        createJsonReq('POST', '/api/v1/sessions/transfer-source/transfer', {
+          targetSessionId: 'transfer-target',
+          scope: 'visible_recent',
+        }),
+        res,
+        'transfer-source',
+      );
+
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body).error).toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
+      expect(multiSessionManager.prompt).not.toHaveBeenCalled();
+    });
+
+    it('rejects a new Pi transfer target whose default model uses a blocked provider before dispatch', async () => {
+      const source = claudeEntry('transfer-new-source');
+      registry.get.mockImplementation(async (id: string) => id === source.id ? source : undefined);
+      registry.getByPath.mockResolvedValue(undefined);
+      multiSessionManager.getAgentSession.mockReturnValue({
+        ...multiSessionManager.getAgentSession(),
+        model: { provider: 'openrouter', id: 'openai/gpt-5.5' },
+      });
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSessionTransfer(
+        createJsonReq('POST', '/api/v1/sessions/transfer-new-source/transfer', {
+          createNew: true,
+          targetRuntime: 'pi',
+          targetCwd: '/root/proj',
+          scope: 'visible_recent',
+        }),
+        res,
+        'transfer-new-source',
+      );
+
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body).error).toMatchObject({ code: 'PROVIDER_NOT_ALLOWED' });
+      expect(multiSessionManager.prompt).not.toHaveBeenCalled();
+      expect(multiSessionManager.disposeLoadedSession).toHaveBeenCalledWith('/tmp/new-pi.jsonl');
+      expect(registry.delete).toHaveBeenCalledWith('new-pi');
     });
   });
 

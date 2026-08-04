@@ -127,6 +127,13 @@ export interface CreateSessionOptions {
   webUIContext?: WebUIContext;
 }
 
+interface SessionModelLockState {
+  readers: number;
+  writer: boolean;
+  waitingReaders: Array<(release: () => void) => void>;
+  waitingWriters: Array<(release: () => void) => void>;
+}
+
 export class PiService {
   private modelRuntime: ModelRuntime | null = null;
   private initialization: Promise<void> | null = null;
@@ -136,6 +143,91 @@ export class PiService {
   private eventHandlers: Map<string, (event: AgentSessionEvent) => void> = new Map();
   private sessionPool: SessionPool | null = null;
   private clientWebUIContexts: Map<string, WebUIContext> = new Map(); // clientId -> WebUIContext
+  private sessionModelLocks = new Map<string, SessionModelLockState>();
+
+  private modelLockState(sessionId: string): SessionModelLockState {
+    let state = this.sessionModelLocks.get(sessionId);
+    if (!state) {
+      state = { readers: 0, writer: false, waitingReaders: [], waitingWriters: [] };
+      this.sessionModelLocks.set(sessionId, state);
+    }
+    return state;
+  }
+
+  private drainModelLock(sessionId: string, state: SessionModelLockState): void {
+    if (state.writer) return;
+    if (state.readers === 0 && state.waitingWriters.length > 0) {
+      state.writer = true;
+      const grant = state.waitingWriters.shift() as (release: () => void) => void;
+      grant(this.modelLockRelease(sessionId, state, 'write'));
+      return;
+    }
+    if (state.waitingWriters.length === 0 && state.waitingReaders.length > 0) {
+      const readers = state.waitingReaders.splice(0);
+      state.readers += readers.length;
+      for (const grant of readers) grant(this.modelLockRelease(sessionId, state, 'read'));
+      return;
+    }
+    if (state.readers === 0 && state.waitingReaders.length === 0 && state.waitingWriters.length === 0) {
+      this.sessionModelLocks.delete(sessionId);
+    }
+  }
+
+  private modelLockRelease(
+    sessionId: string,
+    state: SessionModelLockState,
+    kind: 'read' | 'write',
+  ): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (kind === 'read') state.readers -= 1;
+      else state.writer = false;
+      this.drainModelLock(sessionId, state);
+    };
+  }
+
+  /** Acquire a shared lease that keeps this session's selected model stable. */
+  async acquireSessionModelLock(sessionId: string): Promise<() => void> {
+    const state = this.modelLockState(sessionId);
+    if (!state.writer && state.waitingWriters.length === 0) {
+      state.readers += 1;
+      return this.modelLockRelease(sessionId, state, 'read');
+    }
+    return new Promise<() => void>((resolve) => state.waitingReaders.push(resolve));
+  }
+
+  private async acquireSessionModelChangeLock(sessionId: string): Promise<() => void> {
+    const state = this.modelLockState(sessionId);
+    if (!state.writer && state.readers === 0) {
+      state.writer = true;
+      return this.modelLockRelease(sessionId, state, 'write');
+    }
+    return new Promise<() => void>((resolve) => state.waitingWriters.push(resolve));
+  }
+
+  /**
+   * Run an operation under a shared model-stability lease. Model changes use an
+   * exclusive lease, while overlapping prompt/follow-up leases may coexist.
+   */
+  async withSessionModelLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const release = await this.acquireSessionModelLock(sessionId);
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private async withSessionModelChangeLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const release = await this.acquireSessionModelChangeLock(sessionId);
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
 
   setSessionPool(sessionPool: SessionPool): void {
     this.sessionPool = sessionPool;
@@ -622,59 +714,61 @@ export class PiService {
 
   async setModel(sessionId: string, modelId: string): Promise<void> {
     await this.initialize();
-    logger.info(`[PiService.setModel] Setting model for session ${sessionId} to ${modelId}`);
-    
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      logger.error(`[PiService.setModel] Session not found: ${sessionId}`);
-      throw new Error(`Session not found: ${sessionId}`);
-    }
-    
-    logger.info(`[PiService.setModel] Found session: ${session.sessionId}, file: ${session.sessionFile || 'N/A'}`);
-    logger.info(`[PiService.setModel] Current model before change: ${session.model ? `${session.model.provider}/${session.model.id}` : 'none'}`);
-    
-    // Parse modelId format "provider/model-name"
-    const [provider, ...modelParts] = modelId.split('/');
-    const modelName = modelParts.join('/');
-    
-    if (!provider || !modelName) {
-      logger.error(`[PiService.setModel] Invalid model ID format: ${modelId}`);
-      throw new Error(`Invalid model ID format: ${modelId}. Expected "provider/model-name"`);
-    }
-    
-    logger.info(`[PiService.setModel] Looking up model: provider=${provider}, name=${modelName}`);
-    
-    const model = this.getModelRuntime().getModel(provider, modelName);
-    if (!model) {
-      logger.error(`[PiService.setModel] Model not found in runtime: ${modelId}`);
-      logger.info(`[PiService.setModel] Available models will be logged on next getAvailableModels call`);
-      throw new Error(`Model not found: ${modelId}`);
-    }
-    
-    logger.info(`[PiService.setModel] Found model in registry: ${JSON.stringify(model)}`);
-    
-    try {
-      await session.setModel(model);
-      logger.info(`[PiService.setModel] session.setModel() completed successfully`);
-      
-      // Verification: read back the model to confirm it was set
-      const verifiedModel = session.model;
-      if (!verifiedModel) {
-        logger.error(`[PiService.setModel] Verification failed: session.model is null after setModel`);
-        throw new Error('Model change verification failed: session.model is null after setModel');
+    return this.withSessionModelChangeLock(sessionId, async () => {
+      logger.info(`[PiService.setModel] Setting model for session ${sessionId} to ${modelId}`);
+
+      const session = this.sessions.get(sessionId);
+      if (!session) {
+        logger.error(`[PiService.setModel] Session not found: ${sessionId}`);
+        throw new Error(`Session not found: ${sessionId}`);
       }
-      
-      const expectedModelId = model.id || modelName;
-      if (verifiedModel.id !== expectedModelId || verifiedModel.provider !== provider) {
-        logger.error(`[PiService.setModel] Verification failed: expected ${provider}/${expectedModelId}, got ${verifiedModel.provider}/${verifiedModel.id}`);
-        throw new Error(`Model change verification failed: expected ${provider}/${expectedModelId}, got ${verifiedModel.provider}/${verifiedModel.id}`);
+
+      logger.info(`[PiService.setModel] Found session: ${session.sessionId}, file: ${session.sessionFile || 'N/A'}`);
+      logger.info(`[PiService.setModel] Current model before change: ${session.model ? `${session.model.provider}/${session.model.id}` : 'none'}`);
+
+      // Parse modelId format "provider/model-name"
+      const [provider, ...modelParts] = modelId.split('/');
+      const modelName = modelParts.join('/');
+
+      if (!provider || !modelName) {
+        logger.error(`[PiService.setModel] Invalid model ID format: ${modelId}`);
+        throw new Error(`Invalid model ID format: ${modelId}. Expected "provider/model-name"`);
       }
-      
-      logger.info(`[PiService.setModel] Verification passed: model is now ${verifiedModel.provider}/${verifiedModel.id}`);
-    } catch (error) {
-      logger.error(`[PiService.setModel] Error during session.setModel() or verification:`, error);
-      throw error;
-    }
+
+      logger.info(`[PiService.setModel] Looking up model: provider=${provider}, name=${modelName}`);
+
+      const model = this.getModelRuntime().getModel(provider, modelName);
+      if (!model) {
+        logger.error(`[PiService.setModel] Model not found in runtime: ${modelId}`);
+        logger.info(`[PiService.setModel] Available models will be logged on next getAvailableModels call`);
+        throw new Error(`Model not found: ${modelId}`);
+      }
+
+      logger.info(`[PiService.setModel] Found model in registry: ${JSON.stringify(model)}`);
+
+      try {
+        await session.setModel(model);
+        logger.info(`[PiService.setModel] session.setModel() completed successfully`);
+
+        // Verification: read back the model to confirm it was set
+        const verifiedModel = session.model;
+        if (!verifiedModel) {
+          logger.error(`[PiService.setModel] Verification failed: session.model is null after setModel`);
+          throw new Error('Model change verification failed: session.model is null after setModel');
+        }
+
+        const expectedModelId = model.id || modelName;
+        if (verifiedModel.id !== expectedModelId || verifiedModel.provider !== provider) {
+          logger.error(`[PiService.setModel] Verification failed: expected ${provider}/${expectedModelId}, got ${verifiedModel.provider}/${verifiedModel.id}`);
+          throw new Error(`Model change verification failed: expected ${provider}/${expectedModelId}, got ${verifiedModel.provider}/${verifiedModel.id}`);
+        }
+
+        logger.info(`[PiService.setModel] Verification passed: model is now ${verifiedModel.provider}/${verifiedModel.id}`);
+      } catch (error) {
+        logger.error(`[PiService.setModel] Error during session.setModel() or verification:`, error);
+        throw error;
+      }
+    });
   }
 
   removeClient(clientId: string): void {
