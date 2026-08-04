@@ -1477,6 +1477,19 @@ export class WebSocketConnectionManager {
       if (entry?.sdkType !== 'opencode') return;
     }
 
+    // Fail-closed before any goal mutation: a disabled OpenCode must not have
+    // pauseGoal/clearGoal/resumeGoal touch its (historical) runtime state —
+    // resumeGoal would otherwise flip goal state to 'running' before a later
+    // prompt rejects, leaving an inconsistent state while disabled.
+    if (!this.opencodeService.isEnabled()) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)',
+        code: 'OPENCODE_UNAVAILABLE',
+      });
+      return;
+    }
+
     const subscribers = this.opencodeSubs.getSubscribers(sessionPath);
     const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
 

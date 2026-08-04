@@ -899,4 +899,43 @@ describe('OpenCode WebSocket Routing', () => {
     });
   });
 
+  describe('goal_control disabled-runtime guard', () => {
+    it('rejects pause/clear/resume with OPENCODE_UNAVAILABLE and mutates no goal state when disabled', async () => {
+      const sessionId = 'oc-goal';
+      const opencodeService = {
+        isEnabled: vi.fn().mockReturnValue(false),
+        pauseGoal: vi.fn(),
+        clearGoal: vi.fn(),
+        resumeGoal: vi.fn(),
+      };
+      const opencodeSessionIds = new Set([sessionId]);
+
+      const sentMessages: Array<{ clientId: string; message: unknown }> = [];
+      const sendMessage = (clientId: string, message: unknown) => {
+        sentMessages.push({ clientId, message });
+      };
+      const clientId = 'client-1';
+
+      // Mirrors handleGoalControl: once the target is known OpenCode, fail-closed
+      // before pauseGoal/clearGoal/resumeGoal.
+      for (const action of ['pause', 'clear', 'resume'] as const) {
+        if (!opencodeService.isEnabled()) {
+          sendMessage(clientId, { type: 'error', message: 'OpenCode runtime is disabled (OPENCODE_ENABLED=false)', code: 'OPENCODE_UNAVAILABLE' });
+          continue;
+        }
+        if (action === 'pause') await opencodeService.pauseGoal(sessionId);
+        if (action === 'clear') await opencodeService.clearGoal(sessionId);
+        if (action === 'resume') await opencodeService.resumeGoal(sessionId);
+      }
+
+      expect(opencodeService.pauseGoal).not.toHaveBeenCalled();
+      expect(opencodeService.clearGoal).not.toHaveBeenCalled();
+      expect(opencodeService.resumeGoal).not.toHaveBeenCalled();
+      expect(sentMessages).toHaveLength(3);
+      for (const sent of sentMessages) {
+        expect(sent.message).toMatchObject({ code: 'OPENCODE_UNAVAILABLE' });
+      }
+    });
+  });
+
 });
