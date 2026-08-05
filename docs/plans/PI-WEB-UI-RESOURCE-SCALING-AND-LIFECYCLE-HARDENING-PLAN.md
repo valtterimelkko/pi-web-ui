@@ -1195,7 +1195,12 @@ threshold or recovery-correctness gate fails.
 
 ### Phase 6 pre-execution record — `worker-cgroup-conformance` fixture v1
 
-**Status: proposed; owner approval is required before implementation or live execution.**
+**Status: owner-approved; implementation and live execution have not started.**
+
+**Approval record:** The operator approved the complete `worker-cgroup-conformance/v1`
+fixture, settings and implementation boundary on 2026-08-05. The settings are
+now frozen for Phase 6 and 8A. Any change requires a new proposal, approval,
+fixture version and re-baseline.
 
 #### Preflight finding that fixes the implementation boundary
 
