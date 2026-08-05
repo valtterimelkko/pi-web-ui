@@ -1,19 +1,20 @@
 # Pi Web UI Agent OS-First Resource Scaling and Runtime Lifecycle Hardening
 
-**Status:** Phases 1–5 **COMPLETE**; Phase 0 baseline recorded; Phases 6–9 remain planned
+**Status:** Phases 0–6 **COMPLETE**; PAUSE 6 recorded as bounded `hybrid`; Phases 7–9 remain planned
 **Supersedes:** the original plan at commit `b8d9109`
-**Revision basis:** production evidence gathered 3–4 August 2026
+**Revision basis:** production evidence gathered 3–5 August 2026
 **Execution report:** [`PI-WEB-UI-HARDENING-EXECUTION-REPORT.md`](./execution-reports/PI-WEB-UI-HARDENING-EXECUTION-REPORT.md)
 **Primary repository:** `/root/pi-web-ui`
 **Companion repository when explicitly named:** `/root/agent-os`
 **Production service:** `pi-web-ui.service` on port `3456`
 **Production operation rule:** use `npm run production:lock -- ...`; Caddy and unrelated services are out of scope and must not be restarted.
 
-> **Completion boundary:** Phases 1–5 have been fully executed, validated, and
-> recorded with a `proceed` decision in the execution report. This is not a
-> claim that the conditional Phase 6–8 work or the final Phase 9 production
-> rollout/observation is complete. Phase 3–5 production rollout remains
-> intentionally gated by Phase 9.
+> **Completion boundary:** Phases 1–6 have been fully executed, validated, and
+> recorded in the execution report. PAUSE 6 authorises only a bounded hybrid
+> direction for later design and evidence: it does not enable a production
+> route, create a second public API, or pre-authorise Phase 7–9 rollout. Phase 7
+> remains conditional and Phase 9 retains the production rollout/observation
+> gate.
 >
 > The execution report is the evidence record; this document retains the
 > original acceptance criteria and remains the forward-looking plan for the
@@ -32,10 +33,11 @@
 | 0 — Re-baseline | **BASELINE RECORDED** | `observed-production`; topology, ownership, rollback values, and safety gates captured. |
 | 1 — OpenCode inactivation | **COMPLETE** | Disabled-runtime contract, disposable validation, and authorised production inactivation are recorded as `deployed-production`/`observed-production`. Task 1.4 was explicitly held: `/root/tmux` scopes were not touched. |
 | 2 — Capacity and admission | **COMPLETE** | Service-cgroup truth, conservative admission, PID/host-pressure guards, bounded `TasksMax`, disposable validation, and production correction are recorded. |
-| 3 — Lifecycle and readiness | **COMPLETE** | Ownership/fencing refinements, clean shutdown, truthful readiness, and OpenCode ownership safety are unit- and disposable-live validated. Production rollout is intentionally deferred to Phase 9. |
-| 4 — Execution arbiter | **COMPLETE** | Priority reservations, bounded control lane, emergency mode, and the frozen benchmark/live evidence are recorded. Production rollout is intentionally deferred to Phase 9. |
+| 3 — Lifecycle and readiness | **COMPLETE** | Ownership/fencing refinements, clean shutdown, truthful readiness, and OpenCode ownership safety are unit- and disposable-live validated. The phase itself did not restart production; a later operator-requested latest-code restart brought the committed Phase 3/4 generation into service. |
+| 4 — Execution arbiter | **COMPLETE** | Priority reservations, bounded control lane, emergency mode, and the frozen benchmark/live evidence are recorded. Read-only production recheck on 5 August observed contract 1.16.0, `controlReserve=1`, `maxActiveTurns=6`, service-cgroup memory truth and `TasksMax=1024`; the binary does not embed an exact Git revision, so do not overstate provenance. |
 | 5 — Agent OS integration | **COMPLETE** | Companion-repo verify + gap-fill, contract parity, durable capacity deferral, backpressure, P1 control, and exactly-once disposable live proof are recorded. |
-| 6–9 | **PLANNED / NOT STARTED** | Worker-cgroup pilot, conditional expansion, capacity ramp/soak, and final production rollout remain future work. |
+| 6 — Worker-cgroup pilot | **COMPLETE — BOUNDED HYBRID** | Frozen fixture, contained-heavy boundary, adversarial validation, final review and cleanup passed. The pilot remains off outside disposable validation; the decision constrains any later expansion to one canonical API and automatic server-owned policy. |
+| 7–9 | **PLANNED / NOT STARTED** | Conditional expansion, capacity ramp/soak, representative Agent OS/browser proof and final production rollout remain future work. |
 
 All phase-level completion claims above are backed by the linked execution report. A phase being complete does not waive its later production rollout or observation gate where the report explicitly leaves that gate for Phase 9.
 
@@ -57,6 +59,34 @@ The plan therefore optimises for both:
 The goal is not the largest possible simultaneous session count. The goal is
 maximum **completed useful work per hour** while retaining deterministic
 recovery, bounded failure domains, and responsive operator/conductor control.
+
+### 1.1 Operational story and decision lens
+
+This plan began after repeated real use, not as an abstract isolation project.
+As Agent OS Internal API traffic and very long ordinary Web UI sessions grew,
+the service became heavy enough that the operator sometimes had to restart Pi
+Web UI, approximately daily during the worst period. The original service
+budget was approximately 4 GiB max / 3 GiB high. Raising it to 12 GiB max /
+9 GiB high provided necessary headroom, but the triggering evidence also showed
+that one accepted turn could create hundreds of tasks and place the main Node
+process under shared-cgroup pressure. A larger budget alone could delay rather
+than contain the same failure.
+
+The roadmap therefore has two related but distinct hypotheses:
+
+1. truthful capacity, conservative admission, lifecycle ownership and P0/P1
+   reservations can reduce avoidable overload and preserve control; and
+2. selected session runtimes/process trees may need their own failure boundary
+   so one tool-heavy or state-heavy session cannot make the whole Web UI require
+   restart.
+
+Neither hypothesis should be converted into a claim that every long session is
+resource-heavy, that containment reduces total memory, or that Agent OS caused
+all observed pressure. Long-lived browser sessions are an explicit part of the
+original problem statement and must remain in the evidence programme. Future
+agents should use this history when deciding whether to expand, hold or reverse
+containment: optimise for a Web UI that stays available under real work, not for
+shipping a second execution path merely because the pilot exists.
 
 The central invariants are:
 
@@ -364,15 +394,16 @@ priority workload hierarchy
   └─ tmux-web-ui.service + independently owned tmux scopes
 ```
 
-Pi already has a process-per-active-session worker architecture through
-`server/src/workers/worker-pool.ts`; it is not an embedded single-process runtime.
-The missing boundary is an **exact per-worker/session cgroup and cross-process
-resource assignment protocol**. The pilot therefore hardens the existing worker
-path rather than creating a second executor system. The worker owns the
-persistent `AgentSession`, queued follow-ups, extension/events, and descendants,
-while the control process alone owns admission and assignment. Runs within that
-worker use run identity and fencing epochs. Dormant historical sessions do not
-retain a process.
+The repository contains a worker-oriented architecture through
+`server/src/workers/worker-pool.ts`, but it is **not the current production Pi
+prompt authority**. Ordinary `/ws`, `/ws/sessions/:id` and Internal API Pi
+traffic still resolve through `MultiSessionManager` and an in-process Pi SDK
+`AgentSession`; the Phase 6 adapter/worker route is dormant outside its
+conformance harness. The pilot hardens that candidate worker boundary without
+claiming it is already the live architecture. If later activated, the worker
+would own one persistent `AgentSession`, queued follow-ups, extension/events and
+descendants, while the control process remains authoritative for admission and
+assignment. Dormant historical sessions must not retain a process.
 
 OpenCode remains disabled in Pi Web UI. If re-enabled later, managed OpenCode
 servers must be explicit shard/fault domains. External or tmux-owned servers are
@@ -1160,7 +1191,9 @@ threshold or recovery-correctness gate fails.
 
 ---
 
-## Phase 6 — Per-session cgroup hardening pilot for the existing Pi worker path (P1 architecture) — PLANNED / NOT STARTED
+## Phase 6 — Per-session cgroup hardening pilot for the existing Pi worker path (P1 architecture) — COMPLETE / BOUNDED HYBRID
+
+> **Execution record (2026-08-05):** the frozen fixture passed unit, integration and disposable live validation. Final evidence is `/tmp/pi-web-ui-phase6-8YjMEM/summary.json`; independent final review returned GO. The owner recorded PAUSE 6 as the bounded `hybrid` defined below. Ordinary Pi traffic remains unchanged and the pilot remains off outside validation. See [`execution-reports/PI-WEB-UI-HARDENING-EXECUTION-REPORT.md`](./execution-reports/PI-WEB-UI-HARDENING-EXECUTION-REPORT.md#phase-6--per-session-cgroup-hardening-pilot).
 
 > **Agent OS dependency:** Phase 6 does not need to wait for the Agent OS MVP or
 > for Step 7C/7F. Step 7C/7F is conductor/model-comparison evidence, not the
@@ -1193,9 +1226,9 @@ threshold or recovery-correctness gate fails.
 > approval, version and re-baseline. This does not remove the owner's separate
 > PAUSE 6 choice about promote, hybrid, hold or rollback.
 
-### Phase 6 pre-execution record — `worker-cgroup-conformance` fixture v1
+### Phase 6 executed fixture/evidence record — `worker-cgroup-conformance` v1
 
-**Status: owner-approved; implementation and live execution have not started.**
+**Status: owner-approved fixture executed successfully; PAUSE 6 bounded `hybrid` recorded.**
 
 **Approval record:** The operator approved the complete `worker-cgroup-conformance/v1`
 fixture, settings and implementation boundary on 2026-08-05. The settings are
@@ -1352,10 +1385,12 @@ Phase 6 cannot pass unless all of the following are true:
   WebSocket-parity and churn cases meet the matrix above;
 - every accepted run is terminal or explicitly `interrupted`/
   `unknown`/quarantined, with no false success or duplicate terminalisation;
-- no admission, project, retention, observer, broker, timer or cgroup release
+- no pilot-owned admission, receipt, event subscription, timer or cgroup release
   occurs while the owned assignment still has non-quiescent active work; a warm
   idle worker may remain populated only when its idle ownership is explicit, and
-  full disposal still requires an empty cgroup;
+  full disposal still requires an empty cgroup. Agent OS project/worktree and
+  retention leases, and generic broker ownership, are outside this deterministic
+  fixture and remain required representative Phase 8B evidence;
 - all contained descendants remain in the assigned worker cgroup and a target
   crash/pressure event cannot damage a sibling or the controller;
 - control-plane `memory.events` (`high`, `max`, `oom`, `oom_kill`) and
@@ -1377,9 +1412,10 @@ inputs for 8A. A change to scenario text, helper count/duration, cgroup budget,
 receipt/admission timeout, sampling count, or launch mode requires a new
 proposal, owner approval, fixture version, and Phase 6 re-baseline.
 
-Pi already uses process-per-session workers. This is deliberately a containment
-and assignment pilot on that existing architecture, not a new parallel executor
-system or immediate migration of every worker.
+Pi contains a dormant worker-oriented path, but ordinary production Pi traffic
+is in-process. This is deliberately a containment and assignment pilot on the
+candidate worker boundary, not evidence of current process isolation or
+permission to create a second executor authority.
 
 ### Task 6.1 — Inventory and harden the existing worker boundary
 
@@ -1490,6 +1526,77 @@ Compare the current worker path versus exact-cgroup heavy workers:
 - `hold` — keep pilot off and fix measured problems;
 - `rollback` — remove pilot routing while retaining evidence.
 
+**Recorded owner decision (2026-08-05): bounded `hybrid`.** This means:
+
+- one canonical Internal API remains the product surface; do not create a
+  separate operator-selected “heavy API”;
+- Agent OS and browser users must not need to remember a special invocation;
+- a versioned, server-owned policy selects an execution profile from validated
+  workload facts and observed resource behaviour; callers may not select raw
+  limits or promote their own priority;
+- begin with shadow classification and reason-code evidence before real routing;
+- as a future Phase 7 entry criterion, persist selected profile, policy version,
+  reason, affinity and resource identity in receipts/diagnostics; Phase 6's
+  hard-coded fixture-only `heavy` assignment does not yet provide this public
+  metadata contract;
+- preserve session affinity and migrate, if supported, only at a positively
+  quiescent turn boundary with one fenced owner;
+- no production contained-heavy routing is authorised by this decision; real Pi
+  correlation/parity, 8A, representative 8B and Phase 9 gates still apply; and
+- ordinary long-running Web UI sessions remain in scope rather than assuming
+  only Agent OS work can become resource-heavy.
+
+**What Phase 6 does not prove:** the short deterministic fixture does not measure
+several-hour sessions, large real JSONL transcripts, provider/model behaviour,
+real tool distributions, generic production restart recovery, classification
+accuracy, the share of work that would use containment, or whether the original
+restart pressure came mainly from Agent OS, long browser sessions, or both. It
+proves the contained boundary and its low warm-path overhead, not that the
+production problem is solved.
+
+**Stop/reverse criteria for the bounded hybrid direction:** Phase 7 must freeze
+its exact shadow thresholds before implementation. Unless the owner approves a
+better evidence-based sample, the default decision floor is at least 20
+naturally arising Agent OS implementation/tool turns, three owned ordinary Web
+UI sessions observed for at least two hours with growing transcripts, and one
+bounded known fork/memory-heavy case. An insufficient sample means `continue
+shadow`, never promotion. Apply the following action mapping:
+
+- `continue shadow` while the sample is incomplete or classification uncertainty
+  remains material;
+- `hold expansion` when fewer than 5% of eligible turns are automatically
+  identified and no resource-pressure candidate is observed, when more than 10%
+  of classified turns are false positives, or when any known bounded
+  fork/memory-heavy case is missed;
+- `rollback routed traffic` immediately on false success/dual ownership,
+  control-plane OOM/restart, unreconciled cgroup identity, or sustained §6.7
+  control-SLO breach; retain evidence and return eligible work only after
+  positive quiescence; and
+- otherwise continue only one bounded runtime/path gate at a time.
+
+Also recommend `hold` or `rollback` rather than further expansion if
+representative evidence shows any of the following after one bounded remediation
+cycle:
+
+- the automatic classifier cannot identify useful candidates without routine
+  operator labelling;
+- maintaining the contained executor requires a divergent public API, replay,
+  event, retention, cancellation or receipt authority;
+- real Pi correlation, follow-up, extension/notification parity, rehydration or
+  turn-boundary handoff cannot be made fail-closed;
+- useful attempts/hour regresses by more than 10%, P0/P1/browser latency breaches
+  §6.7, cold-start/idle RSS materially reduces safe throughput, or queue age and
+  starvation become unbounded;
+- several-hour Agent OS or ordinary Web UI sessions still drive control-plane
+  pressure/restarts because the relevant state remains in-process;
+- false-positive containment causes more bounded worker failures than it prevents
+  control-plane incidents, or false negatives leave known fork/memory-heavy work
+  uncontained;
+- cleanup, drain, cgroup identity or capacity-debt cannot reliably return to a
+  truthful bounded state; or
+- operational evidence shows the simpler admission/lifecycle/memory posture has
+  already solved the real problem and the extra path has no compensating value.
+
 A green unit/live suite is insufficient if any §6.7 throughput or conductor
 latency threshold fails.
 
@@ -1497,7 +1604,11 @@ latency threshold fails.
 
 ## Phase 7 — Conditional broader worker/runtime containment rollout (P2, not pre-authorised by earlier phases) — PLANNED / NOT STARTED
 
-Execute only after PAUSE 6 records `promote` or a bounded `hybrid` expansion.
+PAUSE 6's bounded `hybrid` selects a direction, not execution authority. Before
+Phase 7 mutates code or routes any real work, present a separate owner-confirmed
+Phase 7 scope stating the exact runtime/path, shadow classifier, mutable
+repositories, evidence window, rollback and whether any production observation
+is requested. The current decision supplies no production permission.
 
 Possible work:
 
@@ -1575,13 +1686,24 @@ bespoke task for every test stage.
 #### 8B.1 Representative workload and soak
 
 Run the relevant mixed P0/P1/P2 ramp and a bounded several-hour soak with actual
-Agent OS dispatch, defer/backpressure, recovery and long-running work. Long-
-horizon watches must expire/release claims, restart as detached evidence, and be
-re-registered explicitly.
+Agent OS dispatch, defer/backpressure, recovery and long-running work. In the
+same evidence track, include at least one owned representative long-running
+ordinary Web UI Pi session with a growing transcript and bounded real tool work;
+exercise follow-up, replay/reconnect, browser responsiveness, turn-boundary
+profile/affinity decisions, cleanup and restart-safe recovery. This session must
+use sanitised owned work and must not be treated as “heavy” merely because it is
+old: record transcript/runtime memory, descendants, latency and classifier
+reason codes so the evidence can distinguish duration from actual pressure.
+Long-horizon watches must expire/release claims, restart as detached evidence,
+and be re-registered explicitly.
 
 #### 8B.2 Product acceptance targets
 
 - Agent OS queue/defer age and retry behaviour remain bounded;
+- the representative long-running Web UI session remains usable without
+  control-plane pressure, replay/follow-up drift, dual ownership or forced
+  service restart, and its selected profile is justified by recorded policy
+  evidence rather than operator labelling;
 - P1 recovery and browser control meet the §6.7 absolute/P95 thresholds;
 - no Agent OS project/class starvation;
 - useful attempts/hour stays within the §6.7 regression threshold versus the
@@ -1805,24 +1927,31 @@ The critical milestone is complete only when:
 - independent review has no unresolved critical/high findings; and
 - production observation, not only restart, is recorded.
 
-### 11.2 Agent OS scaling milestone complete
+### 11.2 Pilot milestone and Agent OS scaling milestone
 
-The scaling milestone is complete only when:
+The **Phase 6 pilot milestone** is complete when the frozen contained-worker
+boundary, lifecycle matrix, performance gate, cleanup, review and owner pause
+decision are recorded. That milestone is complete with bounded `hybrid`; it is
+not a production or Agent OS scaling claim.
+
+The broader **Agent OS scaling milestone** remains incomplete until:
 
 - Agent OS owns durable ready/deferred work and handles Pi Web UI backpressure
   without duplicate dispatch or busy-looping;
 - P1 conductor/recovery remains available under P2 saturation;
 - the heavy Pi worker-cgroup pilot contains descendants and proves
   drain/quarantine;
-- event/replay/follow-up/extension/notification parity is live-validated;
-- measured Agent OS useful throughput and control latency meet the Phase 6
-  acceptance gate;
-- the owner has recorded `promote` or an explicitly bounded `hybrid`; and
+- real Pi event/replay/follow-up/extension/notification parity is live-validated;
+- representative Phase 8B Agent OS and ordinary long-running Web UI evidence
+  passes the recorded classifier, throughput, control-latency and cleanup gates;
+- the owner has separately authorised and accepted each bounded runtime/path
+  expansion; and
 - no broader executor migration is claimed complete unless its separate pause
   gate passed.
 
-A `hold` or `rollback` is a valid safe pilot outcome but means the scaling
-milestone remains paused/incomplete; it must never be reported as completion.
+A `hold` or `rollback` remains a valid safe later outcome. Neither the bounded
+`hybrid` direction nor the completed fixture may be reported as completion of
+the scaling milestone.
 
 ### 11.3 Final report requirements
 

@@ -23,6 +23,7 @@
     "validate:long-horizon": "npx tsx scripts/long-horizon-validate.ts",
     "validate:server": "npx tsx scripts/validation-server.ts",
     "validate:claude-profiles": "npx tsx scripts/validate-claude-profiles.ts",
+    "validate:phase6-worker-cgroup": "npx tsx scripts/validate-worker-cgroup-conformance.ts",
     "opencode:refresh-models": "npx tsx scripts/opencode-refresh-models.ts",
     "pi:refresh-models": "npx tsx scripts/pi-refresh-openrouter-models.ts",
     "debug:where": "node scripts/debug-where.mjs",

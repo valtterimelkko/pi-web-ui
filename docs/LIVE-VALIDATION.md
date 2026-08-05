@@ -498,6 +498,18 @@ Keep scenarios:
 - small and readable
 - cleanup-safe (delete their sessions)
 
+## Phase 6 worker-cgroup conformance
+
+The frozen `worker-cgroup-conformance/v1` boundary test is a specialised, provider-free disposable validation:
+
+```bash
+npm run validate:phase6-worker-cgroup
+```
+
+It creates a fresh mode-0700 evidence directory, one nonce-owned transient controller/slice and only nonce-matched worker units. It runs the plain baseline, exact-cgroup candidate, adversarial lifecycle/resource matrix and restart recovery, then verifies collection and removes temporary receipt/session directories after writing bounded archives. It never targets the production socket/service or tmux scopes. Missing systemd/cgroup-v2 capability is a failure, not a simulated pass.
+
+See [`PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md) and the frozen Phase 6 contract in [`plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md`](./plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md).
+
 ## Related docs
 
 - [`INTERNAL-API.md`](./INTERNAL-API.md)

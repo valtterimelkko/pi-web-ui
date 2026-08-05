@@ -5,33 +5,74 @@
 
 import { SessionWorker } from './session-worker.js';
 import type { WorkerOptions, WorkerManagerConfig } from './types.js';
+import type { WorkerAssignmentIdentity, WorkerLauncher } from './worker-launcher.js';
 import { WorkerPoolStats, WorkerInfo } from '@pi-web-ui/shared';
 import { getCrashLogger, CrashStats } from './crash-logger.js';
+
+type WorkerOwnershipKind = 'plain' | 'contained';
+
+interface GlobalWorkerOwner {
+  poolId: symbol;
+  kind: WorkerOwnershipKind;
+}
+
+const globalWorkerOwners = new Map<string, GlobalWorkerOwner>();
+
+export interface WorkerPoolConfig extends WorkerManagerConfig {
+  /** Internal launcher policy; never populated from a request body. */
+  workerLauncher?: WorkerLauncher;
+  commandTimeoutMs?: number;
+  readinessFallbackMs?: number;
+  ownershipKind?: WorkerOwnershipKind;
+}
 
 export class WorkerPool {
   private workers: Map<string, SessionWorker> = new Map();
   private config: Required<WorkerManagerConfig>;
   private cleanupInterval: NodeJS.Timeout | null = null;
   private readonly terminationUnsubscribers = new Map<SessionWorker, () => void>();
+  private readonly creating = new Map<string, Promise<SessionWorker>>();
+  private readonly terminating = new Map<string, Promise<void>>();
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
+  private readonly workerLauncher?: WorkerLauncher;
+  private readonly commandTimeoutMs?: number;
+  private readonly readinessFallbackMs?: number;
+  private readonly poolId = Symbol('worker-pool');
+  private readonly ownershipKind: WorkerOwnershipKind;
 
-  constructor(config: WorkerManagerConfig = {}) {
+  constructor(config: WorkerPoolConfig = {}) {
     this.config = {
       maxWorkers: config.maxWorkers ?? 15,
       idleTimeoutMs: config.idleTimeoutMs ?? 30 * 60 * 1000, // 30 minutes
       maxOldSpaceSize: config.maxOldSpaceSize ?? 512,
       piPath: config.piPath ?? 'pi',
     };
+    this.workerLauncher = config.workerLauncher;
+    this.commandTimeoutMs = config.commandTimeoutMs;
+    this.readinessFallbackMs = config.readinessFallbackMs;
+    this.ownershipKind = config.ownershipKind ?? (config.workerLauncher ? 'contained' : 'plain');
   }
 
   /**
    * Get or create a worker for a session.
    */
-  async getOrCreate(sessionPath: string, options?: Partial<WorkerOptions>): Promise<SessionWorker> {
+  async getOrCreate(
+    sessionPath: string,
+    options?: Partial<WorkerOptions>,
+    assignment?: WorkerAssignmentIdentity,
+  ): Promise<SessionWorker> {
     if (this.shuttingDown) {
       throw new Error('Worker pool is shutting down');
     }
+
+    const pendingTermination = this.terminating.get(sessionPath);
+    if (pendingTermination) {
+      await pendingTermination;
+      return this.getOrCreate(sessionPath, options, assignment);
+    }
+    const pendingCreation = this.creating.get(sessionPath);
+    if (pendingCreation) return pendingCreation;
 
     // Sweep any workers whose process has exited/crashed (status 'terminated')
     // so they no longer occupy capacity. This is the lazy half of the unified
@@ -42,10 +83,15 @@ export class WorkerPool {
     // Check if worker already exists
     const existing = this.workers.get(sessionPath);
     if (existing && existing.status !== 'terminated') {
+      this.validateWarmAssignment(existing, assignment);
       return existing;
     }
-    // Existing entry is terminated -> release it before recreating.
+    // A terminated process remains owned until its launcher proves the full
+    // resource boundary empty/collected. Quarantine blocks unsafe re-creation.
     if (existing) {
+      if (existing.resourceLifecycle !== 'released') {
+        throw new Error(`Worker session resource is quarantined or reconciling: ${sessionPath}`);
+      }
       this.release(sessionPath, existing);
     }
 
@@ -60,6 +106,8 @@ export class WorkerPool {
       }
     }
 
+    this.claimOwnership(sessionPath);
+
     // Create new worker
     const workerOptions: WorkerOptions = {
       sessionPath,
@@ -67,21 +115,41 @@ export class WorkerPool {
       ...options,
     };
 
-    const worker = new SessionWorker(workerOptions);
+    let worker: SessionWorker;
+    try {
+      worker = new SessionWorker(workerOptions, {
+        executable: this.config.piPath,
+        launcher: this.workerLauncher,
+        assignment,
+        commandTimeoutMs: this.commandTimeoutMs,
+        readinessFallbackMs: this.readinessFallbackMs,
+      });
+    } catch (error) {
+      const owner = globalWorkerOwners.get(sessionPath);
+      if (owner?.poolId === this.poolId) globalWorkerOwners.delete(sessionPath);
+      throw error;
+    }
     this.workers.set(sessionPath, worker);
     const unsubscribeTermination = worker.onTerminated(() => {
       this.release(sessionPath, worker);
     });
     this.terminationUnsubscribers.set(worker, unsubscribeTermination);
 
+    const creation = (async () => {
+      try {
+        await worker.spawn();
+        return worker;
+      } catch (error) {
+        await worker.terminate();
+        this.release(sessionPath, worker);
+        throw error;
+      }
+    })();
+    this.creating.set(sessionPath, creation);
     try {
-      // Spawn the worker process
-      await worker.spawn();
-      return worker;
-    } catch (error) {
-      this.release(sessionPath, worker);
-      await worker.terminate();
-      throw error;
+      return await creation;
+    } finally {
+      if (this.creating.get(sessionPath) === creation) this.creating.delete(sessionPath);
     }
   }
 
@@ -103,13 +171,42 @@ export class WorkerPool {
     if (!current || (expected !== undefined && current !== expected)) {
       return false;
     }
+    if (current.resourceLifecycle !== undefined && current.resourceLifecycle !== 'released') return false;
     this.workers.delete(sessionPath);
+    const owner = globalWorkerOwners.get(sessionPath);
+    if (owner?.poolId === this.poolId) globalWorkerOwners.delete(sessionPath);
     const unsubscribeTermination = this.terminationUnsubscribers.get(current);
     if (unsubscribeTermination) {
       unsubscribeTermination();
       this.terminationUnsubscribers.delete(current);
     }
     return true;
+  }
+
+  private validateWarmAssignment(worker: SessionWorker, requested?: WorkerAssignmentIdentity): void {
+    const bound = worker.assignmentIdentity;
+    if (!bound && !requested) return;
+    if (!bound || !requested) {
+      throw new Error('Worker assignment identity cannot change between plain and contained ownership');
+    }
+    if (
+      bound.sessionId !== requested.sessionId
+      || bound.sessionPath !== requested.sessionPath
+      || bound.executionInstanceId !== requested.executionInstanceId
+      || bound.profile !== requested.profile
+      || requested.attemptEpoch < bound.attemptEpoch
+      || (requested.attemptEpoch === bound.attemptEpoch && requested.runId !== bound.runId)
+    ) {
+      throw new Error(`Warm worker assignment owner identity mismatch: ${requested.sessionId}`);
+    }
+  }
+
+  private claimOwnership(sessionPath: string): void {
+    const existing = globalWorkerOwners.get(sessionPath);
+    if (existing && existing.poolId !== this.poolId) {
+      throw new Error(`Worker session is already owned by ${existing.kind} path: ${sessionPath}`);
+    }
+    globalWorkerOwners.set(sessionPath, { poolId: this.poolId, kind: this.ownershipKind });
   }
 
   /**
@@ -121,9 +218,8 @@ export class WorkerPool {
   private cleanupTerminated(): number {
     let removed = 0;
     for (const [path, worker] of this.workers) {
-      if (worker.status === 'terminated') {
-        this.release(path, worker);
-        removed++;
+      if (worker.status === 'terminated' && worker.resourceLifecycle === 'released') {
+        if (this.release(path, worker)) removed++;
       }
     }
     return removed;
@@ -142,8 +238,7 @@ export class WorkerPool {
       const isIdle = worker.status === 'idle' || worker.status === 'ready';
 
       if (isIdle && idleTime > idleThreshold) {
-        terminations.push(worker.terminate());
-        this.release(path, worker);
+        terminations.push(this.terminateOwned(path, worker));
       }
     }
 
@@ -158,11 +253,24 @@ export class WorkerPool {
    * Terminate a specific worker.
    */
   async terminate(sessionPath: string): Promise<void> {
+    const pending = this.terminating.get(sessionPath);
+    if (pending) return pending;
     const worker = this.workers.get(sessionPath);
-    if (worker) {
+    if (worker) await this.terminateOwned(sessionPath, worker);
+  }
+
+  private terminateOwned(sessionPath: string, worker: SessionWorker): Promise<void> {
+    const pending = this.terminating.get(sessionPath);
+    if (pending) return pending;
+    const termination = (async () => {
       await worker.terminate();
       this.release(sessionPath, worker);
-    }
+    })();
+    this.terminating.set(sessionPath, termination);
+    void termination.finally(() => {
+      if (this.terminating.get(sessionPath) === termination) this.terminating.delete(sessionPath);
+    }).catch(() => undefined);
+    return termination;
   }
 
   /**
@@ -209,6 +317,23 @@ export class WorkerPool {
     };
   }
 
+  /** Bounded lifecycle cardinality for cleanup/reconciliation evidence. */
+  getLifecycleCardinality(): {
+    workers: number;
+    creating: number;
+    terminating: number;
+    terminationObservers: number;
+    cleanupTimers: number;
+  } {
+    return {
+      workers: this.workers.size,
+      creating: this.creating.size,
+      terminating: this.terminating.size,
+      terminationObservers: this.terminationUnsubscribers.size,
+      cleanupTimers: this.cleanupInterval ? 1 : 0,
+    };
+  }
+
   /**
    * Get info for all workers.
    */
@@ -252,13 +377,21 @@ export class WorkerPool {
     this.stopCleanupInterval();
 
     const entries = Array.from(this.workers.entries());
-    this.shutdownPromise = Promise.all(entries.map(async ([sessionPath, worker]) => {
-      try {
+    this.shutdownPromise = (async () => {
+      const teardownResults = await Promise.allSettled(entries.map(async ([sessionPath, worker]) => {
         await worker.terminate();
-      } finally {
         this.release(sessionPath, worker);
+      }));
+      await Promise.allSettled(this.creating.values());
+      this.creating.clear();
+      const failures = teardownResults
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason);
+      if (failures.length > 0) {
+        const detail = failures.map((failure) => failure instanceof Error ? failure.message : String(failure)).join('; ');
+        throw new AggregateError(failures, `Worker pool shutdown failed after all owners settled: ${detail}`);
       }
-    })).then(() => undefined);
+    })();
 
     return this.shutdownPromise;
   }

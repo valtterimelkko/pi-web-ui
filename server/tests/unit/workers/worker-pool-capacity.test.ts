@@ -4,6 +4,8 @@ import { WorkerPool } from '../../../src/workers/worker-pool.js';
 // Mock SessionWorker with MUTABLE status so tests can simulate a process
 // exit/crash (status -> 'terminated') without spawning a real `pi` process.
 let nextSpawnError: Error | undefined;
+let nextSpawnGate: Promise<void> | undefined;
+let nextTerminateError: Error | undefined;
 const created: Array<{
   sessionPath: string;
   status: string;
@@ -13,6 +15,7 @@ const created: Array<{
   spawn: ReturnType<typeof vi.fn>;
   terminate: ReturnType<typeof vi.fn>;
   onTerminated: ReturnType<typeof vi.fn>;
+  resourceLifecycle: string;
   simulateExit: () => void;
 }> = [];
 
@@ -21,6 +24,7 @@ vi.mock('../../../src/workers/session-worker.js', () => ({
     const w = {
       sessionPath: options.sessionPath,
       status: 'ready',
+      resourceLifecycle: 'owned',
       pid: 1000 + created.length,
       lastActivity: Date.now(),
       spawnedAt: 123456789 + created.length, // distinct, stable timestamp
@@ -30,9 +34,18 @@ vi.mock('../../../src/workers/session-worker.js', () => ({
           nextSpawnError = undefined;
           throw error;
         }
+        await nextSpawnGate;
       }),
       terminate: vi.fn(async function (this: typeof w) {
         this.status = 'terminated';
+        if (nextTerminateError) {
+          this.resourceLifecycle = 'quarantined';
+          const error = nextTerminateError;
+          nextTerminateError = undefined;
+          throw error;
+        }
+        this.resourceLifecycle = 'released';
+        (this as typeof w & { terminatedHandler?: () => void }).terminatedHandler?.();
       }),
       onTerminated: vi.fn((handler: () => void) => {
         (w as typeof w & { terminatedHandler?: () => void }).terminatedHandler = handler;
@@ -42,6 +55,7 @@ vi.mock('../../../src/workers/session-worker.js', () => ({
       }),
       simulateExit() {
         w.status = 'terminated';
+        w.resourceLifecycle = 'released';
         (w as typeof w & { terminatedHandler?: () => void }).terminatedHandler?.();
       },
     };
@@ -56,11 +70,44 @@ describe('L2: WorkerPool capacity release + idempotent cleanup', () => {
   beforeEach(() => {
     created.length = 0;
     nextSpawnError = undefined;
+    nextSpawnGate = undefined;
+    nextTerminateError = undefined;
     pool = new WorkerPool({ maxWorkers: 1, idleTimeoutMs: 5000 });
   });
 
   afterEach(async () => {
     await pool.shutdownAll();
+  });
+
+  it('single-flights concurrent same-session creation until the one worker is ready', async () => {
+    let release!: () => void;
+    nextSpawnGate = new Promise<void>((resolve) => { release = resolve; });
+
+    const a = pool.getOrCreate('/s/gated');
+    await Promise.resolve();
+    let bSettled = false;
+    const b = pool.getOrCreate('/s/gated').then((worker) => { bSettled = true; return worker; });
+    await Promise.resolve();
+
+    expect(bSettled).toBe(false);
+    release();
+    const [workerA, workerB] = await Promise.all([a, b]);
+    expect(workerB).toBe(workerA);
+    expect(created).toHaveLength(1);
+  });
+
+  it('retains quarantined ownership when exact teardown fails', async () => {
+    await pool.getOrCreate('/s/quarantined');
+    nextTerminateError = new Error('cgroup remained populated');
+
+    await expect(pool.terminate('/s/quarantined')).rejects.toThrow(/cgroup remained populated/i);
+    expect(pool.get('/s/quarantined')).toBe(created[0]);
+    expect(pool.getStats().total).toBe(1);
+    await expect(pool.getOrCreate('/s/new')).rejects.toThrow(/Maximum worker limit/i);
+
+    // Test-only recovery lets afterEach prove normal shutdown does not leak.
+    created[0].resourceLifecycle = 'owned';
+    await pool.terminate('/s/quarantined');
   });
 
   it('releases capacity when a worker exits, allowing a new spawn at maxWorkers=1', async () => {
@@ -139,7 +186,10 @@ describe('L2: WorkerPool capacity release + idempotent cleanup', () => {
     await pool.getOrCreate('/s/a');
     let releaseTermination!: () => void;
     created[0].terminate.mockImplementationOnce(() => new Promise<void>((resolve) => {
-      releaseTermination = resolve;
+      releaseTermination = () => {
+        created[0].resourceLifecycle = 'released';
+        resolve();
+      };
     }));
 
     const shutdown = pool.shutdownAll();

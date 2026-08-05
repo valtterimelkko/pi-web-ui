@@ -9,8 +9,14 @@ import type { WorkerOptions, WorkerStatus, WorkerInfo } from '@pi-web-ui/shared'
 export type { WorkerOptions, WorkerStatus, WorkerInfo };
 
 // RPC types from Pi SDK (redefined here since they're not exported from main package)
+export interface PilotEventCorrelation {
+  runId: string;
+  executionInstanceId: string;
+  attemptEpoch: number;
+}
+
 export type RpcCommand =
-  | { id?: string; type: 'prompt'; message: string; images?: unknown[]; streamingBehavior?: 'steer' | 'followUp' }
+  | { id?: string; type: 'prompt'; message: string; images?: unknown[]; streamingBehavior?: 'steer' | 'followUp'; pilotCorrelation?: PilotEventCorrelation }
   | { id?: string; type: 'steer'; message: string; images?: unknown[] }
   | { id?: string; type: 'abort' }
   | { id?: string; type: 'get_state' }
@@ -42,8 +48,9 @@ export interface SessionWorkerState {
   error?: string;
 }
 
-// RPC event types (from Pi SDK stdout)
-export type RPCEvent = 
+// RPC event types (from Pi SDK stdout). The deterministic contained pilot
+// requires the worker to echo pilotCorrelation on every lifecycle event.
+type UncorrelatedRPCEvent =
   | RpcResponse
   | { type: 'message_start'; id: string; role: string }
   | { type: 'message_update'; id: string; delta: unknown }
@@ -55,7 +62,11 @@ export type RPCEvent =
   | { type: 'session_compaction'; messageCount: number; removedCount: number }
   | { type: 'error'; message: string }
   | { type: 'streaming_started' }
-  | { type: 'streaming_ended' };
+  | { type: 'streaming_ended' }
+  | { type: 'agent_start' }
+  | { type: 'agent_end' };
+
+export type RPCEvent = UncorrelatedRPCEvent & { pilotCorrelation?: PilotEventCorrelation };
 
 // Event handler type
 export type EventHandler = (event: RPCEvent) => void;

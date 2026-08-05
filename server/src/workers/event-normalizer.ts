@@ -11,6 +11,7 @@ export class EventNormalizer {
    * Normalize an RPC event to internal format.
    */
   normalize(event: RPCEvent, sessionId?: string): NormalizedEvent {
+    const pilotCorrelation = event.pilotCorrelation ? { pilotCorrelation: event.pilotCorrelation } : {};
     const base: NormalizedEvent = {
       type: event.type,
       sessionId,
@@ -18,90 +19,26 @@ export class EventNormalizer {
       data: event,
     };
 
-    // Add type-specific normalization
+    // Add type-specific normalization without dropping pilot epoch identity.
     switch (event.type) {
       case 'message_start':
-        return {
-          ...base,
-          data: {
-            id: (event as any).id,
-            role: (event as any).role,
-          },
-        };
-
+        return { ...base, data: { id: event.id, role: event.role, ...pilotCorrelation } };
       case 'message_update':
-        return {
-          ...base,
-          data: {
-            id: (event as any).id,
-            delta: (event as any).delta,
-          },
-        };
-
+        return { ...base, data: { id: event.id, delta: event.delta, ...pilotCorrelation } };
       case 'message_end':
-        return {
-          ...base,
-          data: {
-            id: (event as any).id,
-          },
-        };
-
+        return { ...base, data: { id: event.id, ...pilotCorrelation } };
       case 'tool_execution_start':
-        return {
-          ...base,
-          data: {
-            id: (event as any).id,
-            name: (event as any).name,
-            input: (event as any).input,
-          },
-        };
-
+        return { ...base, data: { id: event.id, name: event.name, input: event.input, ...pilotCorrelation } };
       case 'tool_execution_update':
-        return {
-          ...base,
-          data: {
-            id: (event as any).id,
-            delta: (event as any).delta,
-          },
-        };
-
+        return { ...base, data: { id: event.id, delta: event.delta, ...pilotCorrelation } };
       case 'tool_execution_end':
-        return {
-          ...base,
-          data: {
-            id: (event as any).id,
-            result: (event as any).result,
-            isError: (event as any).isError,
-          },
-        };
-
+        return { ...base, data: { id: event.id, result: event.result, isError: event.isError, ...pilotCorrelation } };
       case 'extension_ui_request':
-        return {
-          ...base,
-          data: {
-            id: (event as any).id,
-            method: (event as any).method,
-            ...(event as any),
-          },
-        };
-
+        return { ...base, data: { ...event, ...pilotCorrelation } };
       case 'session_compaction':
-        return {
-          ...base,
-          data: {
-            messageCount: (event as any).messageCount,
-            removedCount: (event as any).removedCount,
-          },
-        };
-
+        return { ...base, data: { messageCount: event.messageCount, removedCount: event.removedCount, ...pilotCorrelation } };
       case 'error':
-        return {
-          ...base,
-          data: {
-            message: (event as any).message,
-          },
-        };
-
+        return { ...base, data: { message: event.message, ...pilotCorrelation } };
       default:
         return base;
     }

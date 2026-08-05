@@ -94,6 +94,27 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     await m.shutdown();
   });
 
+  it('accepts explicit positive runtime quiescence evidence without waiting for the next drain poll', async () => {
+    const release = vi.fn();
+    const localStore = new RunReceiptStore(dir, { now: () => now });
+    const m = new RunReceiptManager({
+      store: localStore, now: () => now, idFactory: () => `confirm-${++nextId}`, idempotencyTtlMs: 1_000, metrics,
+      drainPollMs: 1_000, drainTimeoutMs: 2_000, isRuntimeQuiescent: async () => false,
+    });
+    await m.init();
+    const begun = await m.beginRun({ ...baseInput, sessionId: 'confirm-1', idempotencyKey: 'confirm-1' });
+    m.attachLease(begun.receipt.runId, { release });
+    await m.cancelRun(begun.receipt.runId);
+    expect(release).not.toHaveBeenCalled();
+    await expect(m.confirmRuntimeQuiescent(begun.receipt.runId)).resolves.toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(m.get(begun.receipt.runId)?.liveness?.cessation).toMatchObject({
+      state: 'confirmed', basis: 'resource_quiescence',
+    });
+    await expect(m.confirmRuntimeQuiescent(begun.receipt.runId)).resolves.toBe(false);
+    await m.shutdown();
+  });
+
   it('quarantines (holds the slot as debt) at the drain timeout if cessation is never confirmed — no false capacity release', async () => {
     const release = vi.fn();
     const localStore = new RunReceiptStore(dir, { now: () => now });

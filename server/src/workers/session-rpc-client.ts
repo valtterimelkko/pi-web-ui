@@ -5,7 +5,7 @@
 
 import { SessionWorker } from './session-worker.js';
 import { RPCProtocolBridge } from './rpc-protocol-bridge.js';
-import type { RPCEvent } from './types.js';
+import type { PilotEventCorrelation, RPCEvent } from './types.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { ImageContent } from '@earendil-works/pi-ai';
 import { createLogger } from '../logging/logger.js';
@@ -54,11 +54,12 @@ export class SessionRPCClient {
   /**
    * Send a prompt to the session.
    */
-  async prompt(message: string, images?: ImageContent[]): Promise<void> {
+  async prompt(message: string, images?: ImageContent[], pilotCorrelation?: PilotEventCorrelation): Promise<void> {
     await this.worker.sendCommand({
       type: 'prompt',
       message,
       images,
+      pilotCorrelation,
     });
   }
 

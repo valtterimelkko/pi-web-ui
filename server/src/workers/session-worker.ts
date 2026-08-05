@@ -3,7 +3,6 @@
  * Manages a single Pi SDK RPC process for session isolation.
  */
 
-import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import type { SessionWorkerState, WorkerOptions, RPCEvent, RpcResponse, EventHandler } from './types.js';
 import { RPCProtocolBridge } from './rpc-protocol-bridge.js';
@@ -11,6 +10,14 @@ import type { WorkerStatus } from '@pi-web-ui/shared';
 import { getCrashLogger } from './crash-logger.js';
 import { createLogger } from '../logging/logger.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
+import {
+  PlainWorkerLauncher,
+  type WorkerAssignmentIdentity,
+  type WorkerLaunchHandle,
+  type WorkerLauncher,
+  type WorkerResourceIdentity,
+  type WorkerResourceSnapshot,
+} from './worker-launcher.js';
 
 const logger = createLogger('SessionWorker');
 
@@ -21,6 +28,12 @@ export interface SessionWorkerObservabilityOptions {
   metrics?: OperationalMetrics;
   readinessFallbackMs?: number;
   commandTimeoutMs?: number;
+  /** Server-selected executable. Request payloads never control this value. */
+  executable?: string;
+  /** Process/resource launcher seam; plain child spawn is the compatibility default. */
+  launcher?: WorkerLauncher;
+  /** Immutable control-process assignment for the contained worker generation. */
+  assignment?: WorkerAssignmentIdentity;
 }
 
 interface PendingRequest {
@@ -43,7 +56,15 @@ export class SessionWorker {
   private readonly readinessFallbackMs: number;
   private readonly commandTimeoutMs: number;
   private readonly pendingRequests = new Map<string, PendingRequest>();
+  private readonly executable: string;
+  private readonly launcher: WorkerLauncher;
+  private launchHandle: WorkerLaunchHandle | null = null;
+  private readonly assignment?: WorkerAssignmentIdentity;
   private readonly terminatedHandlers = new Set<() => void>();
+  private resourceSettlement: Promise<void> | null = null;
+  private launchPromise: Promise<WorkerLaunchHandle> | null = null;
+  private terminationRequested = false;
+  private resourceLifecycleState: 'unlaunched' | 'owned' | 'reconciling' | 'released' | 'quarantined' = 'unlaunched';
   private requestSequence = 0;
   private crashRecorded = false;
 
@@ -51,6 +72,12 @@ export class SessionWorker {
     this.metrics = observability.metrics ?? getOperationalMetrics();
     this.readinessFallbackMs = observability.readinessFallbackMs ?? 1_000;
     this.commandTimeoutMs = observability.commandTimeoutMs ?? 30_000;
+    this.executable = observability.executable ?? 'pi';
+    this.launcher = observability.launcher ?? new PlainWorkerLauncher();
+    this.assignment = observability.assignment;
+    if (this.assignment && this.assignment.sessionPath !== options.sessionPath) {
+      throw new Error('Worker assignment sessionPath does not match the worker session path');
+    }
     this.state = {
       process: null,
       sessionPath: options.sessionPath,
@@ -83,17 +110,27 @@ export class SessionWorker {
       args.push('--thinking', thinkingLevel);
     }
 
-    // Spawn with memory limit
-    this.state.process = spawn('pi', args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
+    this.launchPromise = this.launcher.launch({
+      executable: this.executable,
+      args,
       env: {
         ...process.env,
         NODE_OPTIONS: `--max-old-space-size=${maxOldSpaceSize}`,
       },
+      assignment: this.assignment,
     });
+    const launched = await this.launchPromise;
+    this.launchHandle = launched;
+    this.resourceLifecycleState = 'owned';
+    this.state.process = launched.process;
+
+    if (this.terminationRequested) {
+      await this.terminatePromise;
+      throw new Error('Worker termination was requested while launch was in flight');
+    }
 
     this.state.status = 'spawning';
-    this.state.pid = this.state.process.pid;
+    this.state.pid = launched.resourceIdentity.mainPid;
     this.state.spawnedAt = Date.now();
 
     // Handle stdout (JSONL events) — attach handlers (extracted for testability).
@@ -151,7 +188,7 @@ export class SessionWorker {
     return () => this.eventHandlers.delete(handler);
   }
 
-  /** Subscribe to process termination so owners can release capacity eagerly. */
+  /** Subscribe only after process exit and exact resource reconciliation succeed. */
   onTerminated(handler: () => void): () => void {
     this.terminatedHandlers.add(handler);
     return () => this.terminatedHandlers.delete(handler);
@@ -174,6 +211,24 @@ export class SessionWorker {
    */
   get pid(): number | undefined {
     return this.state.pid;
+  }
+
+  get resourceLifecycle(): 'unlaunched' | 'owned' | 'reconciling' | 'released' | 'quarantined' {
+    return this.resourceLifecycleState;
+  }
+
+  /** Immutable server assignment that created this worker generation. */
+  get assignmentIdentity(): WorkerAssignmentIdentity | undefined {
+    return this.assignment;
+  }
+
+  /** Immutable launcher-observed resource owner for this worker generation. */
+  get resourceIdentity(): WorkerResourceIdentity | undefined {
+    return this.launchHandle?.resourceIdentity;
+  }
+
+  async snapshotResource(): Promise<WorkerResourceSnapshot | undefined> {
+    return this.launchHandle?.snapshot();
   }
 
   /**
@@ -200,48 +255,94 @@ export class SessionWorker {
    */
   terminate(): Promise<void> {
     this.rejectPendingRequests(new Error('Worker terminated before responding'));
-
-    // Idempotent: a second call returns the same in-flight promise (exact same
-    // object) and does not re-kill or stack another exit listener.
+    this.terminationRequested = true;
     if (this.terminatePromise) return this.terminatePromise;
+    this.terminatePromise = this.launchPromise
+      ? this.launchPromise.catch(() => undefined).then(() => this.performTermination())
+      : this.performTermination();
+    return this.terminatePromise;
+  }
+
+  private async performTermination(): Promise<void> {
     const proc = this.state.process;
-    if (!proc || this.state.status === 'terminated') {
-      this.terminatePromise = Promise.resolve();
-      return this.terminatePromise;
+    if (!proc) {
+      await this.settleResourceOwnership();
+      return;
     }
 
-    this.terminatePromise = new Promise((resolve) => {
+    const closed = this.waitForProcessClose(proc);
+    if (this.launchHandle) {
+      const resourceSettled = this.settleResourceOwnership();
+      await Promise.all([closed, resourceSettled]);
+      return;
+    }
+
+    // Compatibility for tests/legacy callers that install a process directly:
+    // preserve the historical synchronous SIGTERM request.
+    try {
+      proc.kill('SIGTERM');
+    } catch {
+      // A close/exit may already have happened; waitForProcessClose handles it.
+    }
+    await closed;
+    await this.settleResourceOwnership();
+  }
+
+  private waitForProcessClose(proc: NonNullable<SessionWorkerState['process']>): Promise<void> {
+    if (this.state.status === 'terminated' || proc.exitCode != null || proc.signalCode != null) return Promise.resolve();
+    return new Promise((resolve, reject) => {
       let settled = false;
-      const onClosed = () => {
+      const finish = (error?: Error) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
+        clearTimeout(killTimeout);
+        clearTimeout(failTimeout);
         proc.off('exit', onClosed);
         proc.off('close', onClosed);
-        resolve();
+        if (error) reject(error); else resolve();
       };
-      // A failed child-process spawn emits `error` then `close`, but no `exit`.
-      // Observe both terminal events so shutdown cannot hang on ENOENT/EACCES.
+      const onClosed = () => finish();
       proc.once('exit', onClosed);
       proc.once('close', onClosed);
-
-      const timeout = setTimeout(() => {
-        try {
-          proc.kill('SIGKILL');
-        } catch {
-          // Process may have already exited; resolve on the exit event below.
-        }
-      }, 5000);
-      timeout.unref?.();
-
-      try {
-        proc.kill('SIGTERM');
-      } catch {
-        // Process may have already exited; the once('exit') listener still
-        // resolves if the event has yet to fire.
-      }
+      const killTimeout = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch { /* wait for close or bounded failure */ }
+      }, 5_000);
+      const failTimeout = setTimeout(() => finish(new Error('Worker process did not exit after SIGKILL')), 6_000);
+      killTimeout.unref?.();
+      failTimeout.unref?.();
     });
-    return this.terminatePromise;
+  }
+
+  private settleResourceOwnership(): Promise<void> {
+    if (this.resourceSettlement) return this.resourceSettlement;
+    this.resourceLifecycleState = 'reconciling';
+    if (!this.launchHandle) {
+      this.resourceLifecycleState = 'released';
+      this.notifyResourceReleased();
+      this.resourceSettlement = Promise.resolve();
+      return this.resourceSettlement;
+    }
+    // Defer invocation by one microtask so resourceSettlement is assigned
+    // before a synchronous fake/child exit can re-enter through handleExit().
+    this.resourceSettlement = Promise.resolve()
+      .then(() => this.launchHandle?.terminate())
+      .then(() => {
+        this.resourceLifecycleState = 'released';
+        this.notifyResourceReleased();
+      })
+      .catch((error) => {
+        this.resourceLifecycleState = 'quarantined';
+        logger.errorObject(`Failed to reconcile worker resource for ${this.state.sessionPath}`, error);
+        throw error;
+      });
+    return this.resourceSettlement;
+  }
+
+  private notifyResourceReleased(): void {
+    for (const handler of [...this.terminatedHandlers]) {
+      try { handler(); } catch (error) { logger.error('[SessionWorker] Termination handler error:', error); }
+    }
+    this.terminatedHandlers.clear();
   }
 
   /**
@@ -400,14 +501,9 @@ export class SessionWorker {
     this.state.status = 'terminated';
     this.rejectPendingRequests(new Error(`Worker process exited (code=${code}, signal=${signal})`));
 
-    for (const handler of [...this.terminatedHandlers]) {
-      try {
-        handler();
-      } catch (error) {
-        logger.error('[SessionWorker] Termination handler error:', error);
-      }
-    }
-    this.terminatedHandlers.clear();
+    // Resource ownership is not releasable on process exit alone. The launcher
+    // must prove the process tree/cgroup is empty and the unit collected.
+    void this.settleResourceOwnership().catch(() => undefined);
 
     // Log basic exit info
     logger.info(`[SessionWorker:${this.state.pid}] Exited with code=${code}, signal=${signal}`);

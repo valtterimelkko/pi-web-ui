@@ -215,6 +215,24 @@ export class RunReceiptStore {
     return cloneReceipt(next);
   }
 
+  /** Persist positive resource cessation evidence even after terminalisation. */
+  async markResourceQuiescent(runId: string, observedAt: string): Promise<PersistedRunReceipt | undefined> {
+    await this.ensureReady();
+    const current = this.cache.get(runId);
+    if (!current || !current.liveness) return current ? cloneReceipt(current) : undefined;
+    const next: PersistedRunReceipt = {
+      ...current,
+      liveness: {
+        ...current.liveness,
+        cessation: { state: 'confirmed', basis: 'resource_quiescence', observedAt },
+      },
+    };
+    this.validate(next);
+    await this.persist(next);
+    this.cache.set(runId, cloneReceipt(next));
+    return cloneReceipt(next);
+  }
+
   async releaseIdempotency(runId: string): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
@@ -462,7 +480,7 @@ function validateLiveness(value: RunLivenessEvidence): void {
   }
   assertOnlyKeys(value.cessation, CESSATION_KEYS, 'cessation');
   if (!['confirmed', 'unconfirmed', 'unknown'].includes(value.cessation.state)) throw new Error('Invalid cessation state');
-  if (!['terminal_signal', 'synthetic_terminal_signal', 'documented_handler_return', 'watchdog', 'server_restart', 'no_terminal_signal'].includes(value.cessation.basis)) throw new Error('Invalid cessation basis');
+  if (!['terminal_signal', 'synthetic_terminal_signal', 'documented_handler_return', 'resource_quiescence', 'watchdog', 'server_restart', 'no_terminal_signal'].includes(value.cessation.basis)) throw new Error('Invalid cessation basis');
   assertIsoTimestamp(value.cessation.observedAt, 'cessation observedAt');
 }
 

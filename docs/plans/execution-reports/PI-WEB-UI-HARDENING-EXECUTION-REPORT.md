@@ -1,9 +1,31 @@
-# Pi Web UI Hardening — Execution Report (Phases 0–5)
+# Pi Web UI Hardening — Execution Report (Phases 0–6)
 
 **Plan:** `docs/plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md`
-**Scope executed:** Phases 0–5 (Phases 0–4 + 1–2 on Pi Web UI; Phase 5 verify + gap-fill on the companion `/root/agent-os` repo).
+**Scope executed:** Phases 0–6 (Phases 0–4 and Phase 6 on Pi Web UI; Phase 5 verify + gap-fill on the companion `/root/agent-os` repo). Phase 6 is complete with a bounded `hybrid` decision, but remains a disposable contained-heavy pilot only; ordinary Pi traffic remains unchanged.
 **Operator decisions applied:** pre-auth through end of Phase 2; prod restarts OK at any stage; Task 2.4 Agent OS client patch in scope; TasksMax applied (measured); tmux cleanup only if it does not disturb `/root/tmux`; independent review by fresh agents (Claude subagents) + Luna/gpt-5.5 critical review at each phase's excellence gate.
 **Convention:** every claim carries an evidence label per plan §6.3 (`planned` / `implemented-not-validated` / `unit-validated` / `integration-validated` / `live-validated-disposable` / `deployed-production` / `observed-production`).
+
+## Operator rationale retained for future decisions
+
+The programme began after real scaling pressure: increasing Agent OS/Internal
+API use and very long ordinary Web UI sessions coincided with a service that
+sometimes became heavy enough to require restart, approximately daily during
+the worst period. The former approximately 4 GiB max / 3 GiB high budget was
+raised to 12/9 GiB and helped, but incident evidence also showed one accepted
+turn producing hundreds of tasks and placing the shared control process under
+memory pressure. The plan therefore combines headroom, truthful admission,
+lifecycle ownership and control reservations with a conditional per-session
+failure boundary. It does not assume Agent OS was the sole cause, that session
+age equals resource intensity, or that cgroups reduce total resource use.
+
+The intended product outcome is a responsive, recoverable Web UI under real
+Agent OS and ordinary browser work—not a second API that the operator must
+remember to select. Phase 6 evidence proves the contained worker boundary and
+low warm-path overhead. It does not prove several-hour real sessions, large
+transcripts, classification accuracy, real-provider/tool parity, generic
+production restart recovery, expected utilisation of the route, or resolution
+of the original restart pattern. These limits and the stop/reverse criteria are
+canonical in the plan's PAUSE 6 section.
 
 ---
 
@@ -264,12 +286,12 @@ Removed `killExternalServer()` — the only broad `pgrep -f "opencode serve.*--p
 - `npm test --workspace=server` → **2709 passed / 0 failed** (+9). typecheck + build + lint (0 errors) clean.
 - Disposable: readiness 200/ok + clean shutdown exit 0 / no `Forced shutdown`.
 - Rollback: each change is a narrow code revert (coordinator removal restores the prior `shutdown()`; heap check restored to error; `killExternalServer` removal is the safe direction). No state is deleted.
-- Production was NOT restarted for Phase 3 code (the plan reserves controlled production rollout for Phase 9); the running prod service remains on the Phase-2 build until an explicit rollout decision.
+- At the Phase 3 gate, production had not yet been restarted for this code. This was a historical point-in-time statement, not the current production state; see the later production-generation recheck below.
 
 ### Pause 3 decision
 `proceed` — lifecycle ownership, clean shutdown, truthful readiness, and OpenCode ownership safety are implemented and unit/disposable-validated; deeper 3.2 fences are documented as bounded refinements.
 
-**Independent review (fresh agent):** verdict `proceed`, no critical/high findings. Verified 3.3 (single-flight + every-owner + clean exit(0) + 25 s deadline, `index.ts` faithful), 3.5 (`killExternalServer` fully removed, recycle detaches), 3.1 (exact-key observer removal confirmed: Pi keyed on `entry.path`, OpenCode on `sessionId`), 3.4 (heap>90 % no longer 503), 3.2 (onStalled gated on TURN_STALLED, best-effort, non-blocking). 46/46 focused tests pass; typecheck clean; 0 lint errors introduced; rollback is narrow per change; **no prod regression risk** (Phase 3 is uncommitted working-tree only; prod still runs the Phase-2 build until the Phase-9 rollout gate).
+**Independent review (fresh agent):** verdict `proceed`, no critical/high findings. Verified 3.3 (single-flight + every-owner + clean exit(0) + 25 s deadline, `index.ts` faithful), 3.5 (`killExternalServer` fully removed, recycle detaches), 3.1 (exact-key observer removal confirmed: Pi keyed on `entry.path`, OpenCode on `sessionId`), 3.4 (heap>90 % no longer 503), 3.2 (onStalled gated on TURN_STALLED, best-effort, non-blocking). 46/46 focused tests pass; typecheck clean; 0 lint errors introduced; rollback is narrow per change. The original review correctly described production at that time; a later operator-requested latest-code restart superseded the old “Phase-2 build” statement.
 
 **Accepted gap (MEDIUM, non-blocking):** Task 3.1's delete-path cleanup ships **reviewer-verified-correct code** but without a focused §6.2 unit test asserting `broker.clear` + exact-observer `removeApiObserver` on delete. The existing delete/lease/watch suites (61/61) cover non-regression; the no-growth proof is the live cleanup-loop validation; the focused test is a documented follow-up (needs light harness work to expose the attach/detach seam — the prompt harness attaches but isn't wired for the full delete path; the delete harness has the delete mocks but no attach trigger). Two LOW findings (no explicit late-callback-after-teardown test; emoji in the quarantine title) are non-blocking.
 
@@ -343,7 +365,7 @@ P2 turn wall (includes provider wait): mean 12.7 s, p50 16.2 s, p95 20.7 s, max 
 - *No-regression baseline* — the candidate P2 throughput is measured (~1694/hr at `maxActiveTurns=4`); a separate pre-arbiter baseline run was **not** measured. Justification is a verifiable code-path argument, not a measurement: the P2 acquire path differs from pre-arbiter only by a single O(1) `activeByClass` increment per acquire/release, negligible against the ~6 s/turn provider wait, so P2 throughput cannot materially regress. A measured baseline (via a Phase-3 git worktree) is offered if required.
 - *Borrowing/debt, worker-pool reconciliation* — deferred (the reservation suffices; worker reconciliation is Phase-6-adjacent).
 
-Production was not restarted (Phase 9 gate).
+Production was not restarted as part of the Phase 4 gate. A later operator-requested latest-code restart superseded that point-in-time state; it did not deploy the still-uncommitted Phase 6 pilot.
 
 ---
 
@@ -390,6 +412,112 @@ Two disposable real-runtime proofs against a disposable Pi Web UI server (never 
 
 **Luna (gpt-5.5) critical review:** performed a full critical review; it returned `NOT-YET` with four concrete gaps — (1) the preflight capacity refusal was not durably recorded, (2) the live proof didn't assert the deferral artefact or exactly-once, (3) the contract mirror could re-drift, (4) claims over-stated. **All four are closed** in iteration 2 (agent-os `fec6d4f`): durable `capacity-deferral` record on preflight refusal (+ unit test), strengthened live proof (deferral assertion + transport exactly-once, `exactlyOnceDeduped:true`), mirror-parity test (reads canonical pi-web-ui constant), and qualified report claims. 548 agent-os tests green; typecheck + docs:check clean. (An EXCELLENT-confirmation re-review was dispatched but gpt-5.5 returned empty responses — a transient github-copilot capacity/rate condition after the heavy real-runtime live validation, not a deficiency in the work; the addressed state stands.)
 
+### Current production-generation correction (read-only recheck, 2026-08-05)
+
+The earlier Phase 3/4 statements that production still ran the Phase 2 build
+were true at those gates but were later superseded by an operator-requested
+latest-code build/restart. The current service started at 2026-08-04 18:36 UTC,
+after committed Phase 3/4 and Phase 5 work and after repository commit
+`a77bb7e` at 18:30 UTC. Read-only probes observed:
+
+- active `pi-web-ui.service`, PID 4115268, running from `/root/pi-web-ui`;
+- Internal API contract 1.16.0;
+- `maxActiveTurns=6`, `interactiveReserve=1`, `controlReserve=1`,
+  `apiTurnLimit=5`;
+- service-cgroup memory truth at 12 GiB max / 9 GiB high with 1536 MiB minimum
+  headroom and 768 MiB reserved per turn; and
+- service `TasksMax=1024`, OpenCode unavailable, Pi/Claude/Antigravity available.
+
+This proves the observable committed Phase 3/4 generation is running and
+corrects the stale “Phase-2 build” description. It does **not** prove the exact
+binary Git revision because the build does not embed one and the tracked build
+output was subsequently overwritten by local validation. It also does not
+claim that uncommitted Phase 6 code is deployed; the service predates the Phase
+6 candidate and no contained-heavy production route is configured.
+
+---
+
+## Phase 6 — Per-session cgroup hardening pilot
+
+**Evidence label:** code `unit-validated`; deterministic boundary `integration-validated`; complete frozen matrix `live-validated-disposable`. No production route, unit, process, Caddy configuration, or tmux scope was changed.
+
+### Implemented boundary
+
+Phase 6 adds a contained-heavy policy seam over the existing worker path without migrating ordinary Pi prompts:
+
+- `PlainWorkerLauncher` preserves direct-child behaviour only for the labelled baseline; heavy assignments otherwise fail closed.
+- `TransientSystemdWorkerLauncher` creates one nonce-owned transient unit per worker generation with the frozen v1 limits. It requires prelaunch absence and verifies a launch-token hash, `InvocationID`, real `MainPID`, cgroup path, `/proc` membership and observed properties. Failed launches, including `MainPID=0`, are identity-revalidated, stopped, drained and collected.
+- `SessionWorker` serialises spawn/terminate, reconciles late launcher handles, exposes resource snapshots and quarantines teardown uncertainty.
+- `WorkerPool` single-flights creation, serialises termination/recreation, validates warm assignment ownership, prevents plain/contained dual ownership and awaits every teardown before surfacing aggregate failure.
+- `PilotExecutorAdapter` binds server-derived heavy assignments to P2 admission and durable receipts, serialises follow-ups, propagates run/execution/epoch correlation and fences stale events. `agent_end` is evidence only: release follows `ready`/`idle` plus a cgroup snapshot containing only the immutable warm-worker PID, with durable `resource_quiescence` persisted first.
+- `PilotSessionWebSocketAdapter` projects the same normalised sequence into session-event envelopes and notification capture without creating another executor authority.
+
+Canonical architecture and limitations: [`PROCESS-ISOLATION-DESIGN.md`](../../PROCESS-ISOLATION-DESIGN.md).
+
+### Frozen fixture and evidence identity
+
+Fixture: **`worker-cgroup-conformance/v1`**. Final raw evidence:
+
+- summary: `/tmp/pi-web-ui-phase6-8YjMEM/summary.json`
+- controller log: `/tmp/pi-web-ui-phase6-8YjMEM/controller.log`
+- bounded receipt/session evidence: the `plain/`, `contained/`, `adversarial/` and `restart/` `*-evidence.json` files beneath `/tmp/pi-web-ui-phase6-8YjMEM/`
+
+The summary records every owner-approved setting and these SHA-256 hashes:
+
+| Input | SHA-256 |
+|---|---|
+| fixture | `9ded5478dc2abd054f0fdff7cf1f01b73bac74b4ef2bfd4878adb800e4151a6b` |
+| runner | `739a22ff31bfd7b8fd783da680eaeba0daa7542e7e29f2134adcaa5e2eaec6b4` |
+| harness | `85a2d0be6e859190f21b95c42d76195c84fa8d5ec79f571b02a212e2b16b5573` |
+| launcher | `8667e3d02085b57e030956ba9b02e745768c3f1fcb90ececbd736da38a6b1b06` |
+| pool | `aa024ca1dcbced348415c89a1974d32f6fe78b8f52306ddaa1154e8f49c24c07` |
+| session worker | `5d5a5f6217867b3de6437fc7e78eb5ba123aba1be52e87f413a0c365539907ef` |
+| adapter | `8de2e26c1bce3f0cc51444b2e845a79d8880511591446de4bfa26ccd1236849c` |
+| settings | `9bcf00a64d9438952d340f814574747153916a7a75beccbb4c9721035b306267` |
+
+The summary also binds the RPC client/bridge, receipt manager/store and WebSocket adapter hashes. Revision is the pre-commit base `429528ad41bd1cd153bb20bcb32a86f9e60162c5`; source hashes bind the uncommitted candidate actually executed.
+
+### Baseline/candidate result
+
+| Metric | Plain baseline | Contained candidate | Gate |
+|---|---:|---:|---|
+| measured warm turns | 30 | 30 | exact frozen count |
+| warm mean | 109.532 ms | 110.586 ms | useful throughput −0.95%, within −10% |
+| useful attempts/hour | 32,867 | 32,554 | within gate |
+| cold mean (5 samples) | 170.556 ms | 439.256 ms | retained startup-cost evidence; no cold gate |
+| completed normal receipts | 37 | 37 | parity |
+| event counts | exactly 37/type | exactly 37/type | parity |
+| P1 health/evidence/cancel p95 | 3.724 ms | 3.823 ms | below 24 ms baseline and 28.8 ms ceiling |
+| final lifecycle cardinality | all zero | all zero | pass |
+
+The adversarial P1 p95 was **4.470 ms** with one active heavy hold. Cancel/drain p95 was **768.363 ms** (below 10 s). Each of three memory-pressure runs failed boundedly and observed worker `memory.events high` (max samples 535/671/586). Each PID-pressure run failed boundedly at `pids.current=64` with `pids.events max=7`. Controller deltas for `memory.events high/max/oom/oom_kill` and `pids.events max` were all zero.
+
+The matrix also passed bounded fan-out, cancel/drain, target-only crash, sibling survival, 20-way single-flight rehydrate, cancelled→completed queued follow-up with maximum one P2 turn, three WebSocket/notification parity turns, explicit old-epoch terminal fencing, and 20 churn cycles. Restart recovery persisted `interrupted` + `SERVER_RESTART`, stopped the exact prior unit, observed an empty cgroup and verified collection.
+
+Final cleanup recorded zero workers, creations, terminations, observers, timers, reserved/queued sessions, known paths, active/admission/draining/quarantined receipts and nonce units. Temporary receipt/session directories were removed after bounded archives were written. `pi-web-ui.service` and `tmux-web-ui.service` remained active; no `pi-web-ui-phase6-*` unit remained.
+
+### RED → GREEN chronology and critical review
+
+Focused RED failures were captured before fixes for launcher teardown/snapshot absence, pool creation readiness, cancellation/drain ownership, direct same-session races, stale-event attribution, path validation, failed-launch cleanup, resource reconciliation/quarantine, descendant-aware quiescence, spawn-vs-terminate, all-settled shutdown, warm assignment mismatch and terminate-vs-recreate. Live REDs additionally found (and then locked with tests) pretty-JSON evidence archival and a cancelled-follow-up admission-release race.
+
+The first independent review returned **HOLD** for launch/reconciliation, ownership-release, correlation, shutdown and evidence gaps. Those were fixed and revalidated. A final reviewer found two remaining races (terminate/recreate and teardown invocation identity); both received regression tests and fail-closed fixes. Final revalidation verdict: **GO — no frozen Phase 6 contract-level blocker remains**.
+
+### Limitations and rollback state
+
+- Ordinary `/ws` and Internal API Pi prompts still use `MultiSessionManager`/Pi SDK in the server process. The pilot has no production configuration or public request-body switch.
+- The deterministic fixture echoes explicit correlation; a real Pi worker must preserve that contract before any promotion.
+- Frozen restart proof uses the disposable controller manifest/reconciler; generic production worker-pool restart persistence is not claimed.
+- The short deterministic run does not measure several-hour sessions, growing real JSONL transcripts, provider/model behaviour, real tool distributions, classifier accuracy, expected route utilisation or the relative contribution of Agent OS versus ordinary long browser sessions to historical pressure.
+- The evidence therefore does not establish that the historical restart problem is solved; it establishes a contained failure boundary with low warm overhead under the frozen workload.
+- Cold transient startup is ~2.58× plain cold startup; warm useful throughput and control latency pass.
+- Rollback is the current state: leave the pilot unconfigured/off and retain the plain ordinary route. Removing the internal pilot/launcher/harness files reverts the candidate without touching production runtime behaviour.
+
+### PAUSE 6 — recorded decision
+
+**Owner decision (2026-08-05): bounded `hybrid`.** Phase 6 is complete. The decision retains ordinary traffic and permits later conditional work only if it preserves one canonical API, uses versioned server-owned shadow-first profile selection rather than manual operator labelling, records reasons/affinity/resource identity, and passes real Pi parity plus Phase 8A/8B before production routing. It does not authorise deployment or raw caller-selected cgroup values.
+
+The decision must be reconsidered toward `hold` or `rollback` if representative evidence shows negligible automatic use, requires a divergent API/lifecycle authority, cannot preserve real Pi correlation and fail-closed handoff, breaches throughput/control gates, leaves ordinary long sessions pressuring the controller, produces harmful classifier error, or cannot drain and reconcile resources truthfully. The canonical detailed stop/reverse criteria are in the plan's PAUSE 6 section.
+
 ---
 
 ## RED → GREEN evidence (per §6.4 ledger)
@@ -419,5 +547,5 @@ Phase 4 (TS compile-time RED — the new tests reference types/fields that did n
 
 ## Observation window & limitations
 
-- `observed-production` rests on a short post-restart window (~minutes). Adequate for the narrow Phase 1/2 disable + capacity scope; a longer soak must precede any §11 final hardening sign-off.
+- The original `observed-production` window was short (~minutes) for the narrow Phase 1/2 disable + capacity scope. A later latest-code restart made the committed Phase 3/4 generation observable as recorded above, but no sustained Phase 8B/9 soak has occurred; a longer representative soak must precede any §11 final hardening sign-off.
 - Pi/Claude live smoke was covered by the disposable boot (server healthy, `/capacity`/`/capabilities`/`/health` truthful) + the 2702-test unit suite incl. receipt-idempotency and capacity handling; no credential-bearing runtime smoke was run against production.

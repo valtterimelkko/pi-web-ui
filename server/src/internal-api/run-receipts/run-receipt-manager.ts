@@ -44,7 +44,7 @@ export interface RunFinishOutcome {
   /** Internal watchdog classification; public callers continue to use TURN_STALLED. */
   stallReason?: RunStallReason;
   /** Explicit adapter-owned completion boundary for synchronous handlers. */
-  cessationBasis?: 'documented_handler_return';
+  cessationBasis?: 'documented_handler_return' | 'resource_quiescence';
 }
 
 export interface RunReceiptManagerDeps {
@@ -577,6 +577,21 @@ export class RunReceiptManager {
     if (!entry || entry.quarantined) return;
     clearInterval(entry.timer);
     entry.quarantined = true;
+  }
+
+  /**
+   * Positive runtime/resource cessation evidence from an owning adapter. This
+   * closes a draining or quarantined lease immediately; callers must not invoke
+   * it from a terminal receipt alone.
+   */
+  async confirmRuntimeQuiescent(runId: string): Promise<boolean> {
+    if (!this.draining.has(runId)) return false;
+    const persisted = await this.store.markResourceQuiescent(runId, new Date(this.now()).toISOString());
+    if (!persisted || persisted.liveness?.cessation.basis !== 'resource_quiescence') {
+      throw new Error(`Failed to persist resource-quiescence evidence for run ${runId}`);
+    }
+    this.finishDrain(runId);
+    return true;
   }
 
   /** Number of runs terminal but still holding an admission slot pending cessation. */

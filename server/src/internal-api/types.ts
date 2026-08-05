@@ -614,6 +614,7 @@ export type RunCessationBasis =
   | 'terminal_signal'
   | 'synthetic_terminal_signal'
   | 'documented_handler_return'
+  | 'resource_quiescence'
   | 'watchdog'
   | 'server_restart'
   | 'no_terminal_signal';

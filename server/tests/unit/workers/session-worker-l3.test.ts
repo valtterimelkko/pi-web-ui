@@ -218,15 +218,10 @@ describe('L3: session-worker framing + lifecycle', () => {
       let settled = false;
       const termination = worker.terminate().then(() => { settled = true; });
 
-      try {
-        proc.emit('close', -2, null);
-        await Promise.resolve();
-        expect(settled).toBe(true);
-        expect(getCrashLogger().getStats().totalCrashes).toBe(1);
-      } finally {
-        proc.emit('exit', -2, null);
-        await termination;
-      }
+      proc.emit('close', -2, null);
+      await termination;
+      expect(settled).toBe(true);
+      expect(getCrashLogger().getStats().totalCrashes).toBe(1);
     });
 
     it('1000 terminate cycles do not accumulate exit listeners', async () => {

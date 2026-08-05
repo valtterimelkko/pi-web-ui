@@ -3,7 +3,7 @@
  * Translates between Pi SDK RPC protocol and internal formats.
  */
 
-import type { RPCEvent, EventHandler } from './types.js';
+import type { RPCEvent, EventHandler, PilotEventCorrelation } from './types.js';
 import type { InternalCommand, NormalizedEvent } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
 
@@ -32,7 +32,10 @@ export class RPCProtocolBridge {
   /**
    * Format an internal command as a JSONL line for worker stdin.
    */
-  formatRPCCommand(command: InternalCommand, requestId = this.generateId()): string {
+  formatRPCCommand(
+    command: InternalCommand & { pilotCorrelation?: PilotEventCorrelation },
+    requestId = this.generateId(),
+  ): string {
     // Map internal command to RPC command format. Callers that correlate
     // responses provide the request id; standalone callers still get one.
     const rpcCommand = {
