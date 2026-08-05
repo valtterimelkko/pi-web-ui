@@ -1,6 +1,6 @@
 # Pi Web UI Agent OS-First Resource Scaling and Runtime Lifecycle Hardening
 
-**Status:** Phases 0–6 **COMPLETE**; PAUSE 6 recorded as bounded `hybrid`; Phases 7–9 remain planned
+**Status:** Phases 0–6 **COMPLETE**; PAUSE 6 recorded as bounded `hybrid`; the Phase 7 shadow gate is owner-approved; Phase 7 implementation and Phases 8–9 remain planned
 **Supersedes:** the original plan at commit `b8d9109`
 **Revision basis:** production evidence gathered 3–5 August 2026
 **Execution report:** [`PI-WEB-UI-HARDENING-EXECUTION-REPORT.md`](./execution-reports/PI-WEB-UI-HARDENING-EXECUTION-REPORT.md)
@@ -37,7 +37,8 @@
 | 4 — Execution arbiter | **COMPLETE** | Priority reservations, bounded control lane, emergency mode, and the frozen benchmark/live evidence are recorded. Read-only production recheck on 5 August observed contract 1.16.0, `controlReserve=1`, `maxActiveTurns=6`, service-cgroup memory truth and `TasksMax=1024`; the binary does not embed an exact Git revision, so do not overstate provenance. |
 | 5 — Agent OS integration | **COMPLETE** | Companion-repo verify + gap-fill, contract parity, durable capacity deferral, backpressure, P1 control, and exactly-once disposable live proof are recorded. |
 | 6 — Worker-cgroup pilot | **COMPLETE — BOUNDED HYBRID** | Frozen fixture, contained-heavy boundary, adversarial validation, final review and cleanup passed. The pilot remains off outside disposable validation; the decision constrains any later expansion to one canonical API and automatic server-owned policy. |
-| 7–9 | **PLANNED / NOT STARTED** | Conditional expansion, capacity ramp/soak, representative Agent OS/browser proof and final production rollout remain future work. |
+| 7 — shadow gate | **OWNER-APPROVED / NOT STARTED** | Lowest-risk Pi/Agent OS Internal API shadow scope is approved; no contained routing or production observation is authorised. |
+| 8–9 | **PLANNED / NOT STARTED** | Conditional expansion, capacity ramp/soak, representative Agent OS/browser proof and final production rollout remain future work. |
 
 All phase-level completion claims above are backed by the linked execution report. A phase being complete does not waive its later production rollout or observation gate where the report explicitly leaves that gate for Phase 9.
 
@@ -1602,13 +1603,44 @@ latency threshold fails.
 
 ---
 
-## Phase 7 — Conditional broader worker/runtime containment rollout (P2, not pre-authorised by earlier phases) — PLANNED / NOT STARTED
+## Phase 7 — Conditional broader worker/runtime containment rollout (P2, separately owner-authorised shadow gate) — APPROVED SCOPE / IMPLEMENTATION NOT STARTED
 
-PAUSE 6's bounded `hybrid` selects a direction, not execution authority. Before
-Phase 7 mutates code or routes any real work, present a separate owner-confirmed
-Phase 7 scope stating the exact runtime/path, shadow classifier, mutable
-repositories, evidence window, rollback and whether any production observation
-is requested. The current decision supplies no production permission.
+PAUSE 6's bounded `hybrid` selects a direction, not general rollout authority.
+The owner approved the following lowest-risk Phase 7 entry scope on **2026-08-05**:
+
+- **Runtime/path:** Pi runtime, Agent OS → Pi Web UI Internal API prompts. The
+  ordinary browser/WebSocket path remains the proven route; ordinary long Web UI
+  sessions may be observed as an evidence cohort but are not routed by this
+  scope. Claude, Antigravity and OpenCode are out of scope.
+- **Mode:** shadow-only. Existing execution and ownership remain unchanged; no
+  real turn is moved into a contained worker. Disposable shadow evidence is
+  authorised, but no production observation, configuration change or routing is
+  authorised.
+- **Policy:** use the proposed server-owned `phase7-pi-shadow/v1` policy
+  identifier. The execution agent may propose reason codes and per-turn
+  classifier thresholds, constrained by the PAUSE 6 evidence floors and
+  stop/reverse criteria. Callers cannot select profiles, limits, affinity or
+  priority.
+- **Mutable repositories:** `/root/pi-web-ui` only. `/root/agent-os` is
+  read-only context/validation unless a separately approved contract change is
+  demonstrated as necessary. `/root/tmux`, Caddy and unrelated services remain
+  untouched.
+- **Evidence floor:** at least 20 naturally arising Agent OS implementation/tool
+  turns, three ordinary Web UI sessions observed for at least two hours with
+  growing transcripts, and one bounded known fork- or memory-heavy case. An
+  incomplete or materially uncertain sample means continue shadow.
+- **Acceptance and rollback:** preserve one canonical API, persist the selected
+  or shadow profile, policy version, reason, affinity and honest resource
+  identity in receipts/diagnostics, and prove no P0/P1, lifecycle or cleanup
+  regression. Disable only the shadow policy if the gate fails; preserve all
+  receipts and evidence. Any future contained routing, production observation or
+  Phase 7 scope/settings change requires a new owner pause and approval.
+
+This approval allows the execution agent to begin Phase 7 shadow implementation,
+red-first validation and disposable evidence collection immediately. It does
+not authorise a contained route, production access, Phase 8A/8B, or Phase 9.
+The broader options below remain unapproved possibilities for later PAUSE 7
+review; this entry scope selects none of them.
 
 Possible work:
 
