@@ -311,6 +311,28 @@ Canonical docs:
 - [`./OBSERVABILITY.md`](./OBSERVABILITY.md)
 - [`./LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
 
+### Cross-repo strategic dependency with Agent OS
+
+Agent OS is a separate durable scheduler/conductor, but its useful throughput and
+runtime recovery depend on this control plane's truthful admission, receipts,
+cessation/lifecycle and resource boundaries. Conversely, representative Agent OS
+workload/product proof needs naturally arising work after the conductor is
+reliable enough; deterministic Pi Web UI platform fixture validation can proceed
+independently, but fixture success alone cannot supply that product evidence.
+Ordinary long-running browser sessions remain a separate required workload
+because not all historical pressure was proven to originate in Agent OS.
+
+Before strategic changes to dispatch capacity, session retention, long-horizon
+supervision, worker isolation or production rollout, read the current sibling
+truth at `/root/agent-os/docs/CURRENT-STATE.md` and
+`/root/agent-os/docs/ARCHITECTURE-BOUNDARIES.md`, then follow the canonical
+roadmap/status links from those files. On this side, use
+[`PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md) and the
+[resource scaling plan](./plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md).
+Do not duplicate current Agent OS step status here: cross-repo readiness must be
+resolved from each repository at decision time, and neither repository may treat
+the other's plan or fixture as proof of current readiness.
+
 ## Security Architecture
 
 Important server-side protections sit in front of all runtime routing:

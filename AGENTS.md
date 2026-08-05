@@ -35,6 +35,25 @@ Canonical runbook: [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md#session
 - **Observability (logging/diagnostics/errors):** [`docs/OBSERVABILITY.md`](./docs/OBSERVABILITY.md)
 - **Sharp edges:** [`docs/SHARP-EDGES.md`](./docs/SHARP-EDGES.md)
 
+## Cross-repo strategic context
+
+Pi Web UI and `/root/agent-os` are separate systems with a shared scaling story:
+Agent OS drives increasingly substantial orchestration through this runtime
+control plane, while Pi Web UI capacity, lifecycle and containment determine how
+safely that conductor can scale. For strategic work involving Internal API
+capacity, long-running sessions, dispatch, supervision, admission, retention,
+worker isolation or production rollout, read both sides before deciding:
+
+- this repo: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md), [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md), and the [resource scaling plan](./docs/plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md);
+- Agent OS: `/root/agent-os/docs/CURRENT-STATE.md`, `/root/agent-os/docs/ARCHITECTURE-BOUNDARIES.md`, and its canonical roadmap/status docs linked there.
+
+Do not copy the sibling repo's current step/phase status here; follow those
+canonical files so cross-references do not become stale. Agent OS maturity is
+needed for representative Agent OS workload/product evidence, not deterministic
+platform fixture validation; Pi Web UI resource truth and control availability
+constrain Agent OS scaling claims. Neither repo may self-certify the other's
+readiness.
+
 ## What this repo is now
 
 Pi Web UI is a **runtime-agnostic browser UI** over four runtime families:
