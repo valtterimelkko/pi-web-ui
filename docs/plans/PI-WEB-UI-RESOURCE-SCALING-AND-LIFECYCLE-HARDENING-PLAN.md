@@ -1,20 +1,43 @@
 # Pi Web UI Agent OS-First Resource Scaling and Runtime Lifecycle Hardening
 
-**Status:** Ready for execution — implementation not begun; independently reviewed 3 August 2026
+**Status:** Phases 1–5 **COMPLETE**; Phase 0 baseline recorded; Phases 6–9 remain planned
 **Supersedes:** the original plan at commit `b8d9109`
-**Revision basis:** production evidence gathered 3 August 2026
+**Revision basis:** production evidence gathered 3–4 August 2026
+**Execution report:** [`PI-WEB-UI-HARDENING-EXECUTION-REPORT.md`](./execution-reports/PI-WEB-UI-HARDENING-EXECUTION-REPORT.md)
 **Primary repository:** `/root/pi-web-ui`
 **Companion repository when explicitly named:** `/root/agent-os`
 **Production service:** `pi-web-ui.service` on port `3456`
 **Production operation rule:** use `npm run production:lock -- ...`; Caddy and unrelated services are out of scope and must not be restarted.
 
-> This is an execution plan, not an implementation report. An execution agent
-> must not convert a planned or unit-tested behaviour into a completion claim.
+> **Completion boundary:** Phases 1–5 have been fully executed, validated, and
+> recorded with a `proceed` decision in the execution report. This is not a
+> claim that the conditional Phase 6–8 work or the final Phase 9 production
+> rollout/observation is complete. Phase 3–5 production rollout remains
+> intentionally gated by Phase 9.
+>
+> The execution report is the evidence record; this document retains the
+> original acceptance criteria and remains the forward-looking plan for the
+> phases that have not yet started. Do not convert a planned or unit-tested
+> behaviour into a completion claim.
 > Every production behaviour change requires recorded RED → GREEN evidence,
 > affected-suite validation, disposable live validation where the behaviour can
 > be exercised live, and the explicit pause/review gates below.
 
 ---
+
+## Current execution status
+
+| Phase | Status | Recorded evidence / boundary |
+|---|---|---|
+| 0 — Re-baseline | **BASELINE RECORDED** | `observed-production`; topology, ownership, rollback values, and safety gates captured. |
+| 1 — OpenCode inactivation | **COMPLETE** | Disabled-runtime contract, disposable validation, and authorised production inactivation are recorded as `deployed-production`/`observed-production`. Task 1.4 was explicitly held: `/root/tmux` scopes were not touched. |
+| 2 — Capacity and admission | **COMPLETE** | Service-cgroup truth, conservative admission, PID/host-pressure guards, bounded `TasksMax`, disposable validation, and production correction are recorded. |
+| 3 — Lifecycle and readiness | **COMPLETE** | Ownership/fencing refinements, clean shutdown, truthful readiness, and OpenCode ownership safety are unit- and disposable-live validated. Production rollout is intentionally deferred to Phase 9. |
+| 4 — Execution arbiter | **COMPLETE** | Priority reservations, bounded control lane, emergency mode, and the frozen benchmark/live evidence are recorded. Production rollout is intentionally deferred to Phase 9. |
+| 5 — Agent OS integration | **COMPLETE** | Companion-repo verify + gap-fill, contract parity, durable capacity deferral, backpressure, P1 control, and exactly-once disposable live proof are recorded. |
+| 6–9 | **PLANNED / NOT STARTED** | Worker-cgroup pilot, conditional expansion, capacity ramp/soak, and final production rollout remain future work. |
+
+All phase-level completion claims above are backed by the linked execution report. A phase being complete does not waive its later production rollout or observation gate where the report explicitly leaves that gate for Phase 9.
 
 ## 1. Intent and operating priority
 
@@ -567,7 +590,9 @@ blocked or limited; do not substitute synthetic success for runtime parity.
 
 ## 7. Phased execution plan
 
-## Phase 0 — Re-baseline, topology freeze, and execution safety (P0)
+## Phase 0 — Re-baseline, topology freeze, and execution safety (P0) — BASELINE RECORDED
+
+**Status:** Baseline recorded as `observed-production`; no production code/config change. See the execution report for the captured topology, ownership classification, and Gate 0 decision.
 
 **No production code change.**
 
@@ -618,7 +643,13 @@ production change may begin before `proceed` is recorded.
 
 ---
 
-## Phase 1 — Temporarily inactivate Pi Web UI OpenCode and reclaim only proven stale scopes (P0 operational)
+## Phase 1 — Temporarily inactivate Pi Web UI OpenCode and reclaim only proven stale scopes (P0 operational) — COMPLETE
+
+> **Phase status: COMPLETE (`proceed`).** The disabled-runtime contract, disposable
+> validation, and authorised production inactivation passed their recorded gates.
+> The stale tmux-scope cleanup was correctly **held/no-op** because those scopes
+> belong to `/root/tmux`; no current tmux work or historical OpenCode state was
+> touched. See the execution report for evidence and rollback state.
 
 ### Task 1.1 — Preserve product support while documenting temporary inactivation
 
@@ -734,7 +765,12 @@ Do not call the broader hardening plan complete.
 
 ---
 
-## Phase 2 — Truthful cgroup/host capacity and conservative admission (P0 code)
+## Phase 2 — Truthful cgroup/host capacity and conservative admission (P0 code) — COMPLETE
+
+> **Phase status: COMPLETE (`proceed`).** Capacity now resolves the actual service
+> cgroup, admission is conservative and pressure-aware, `TasksMax` is bounded,
+> disposable nested-cgroup validation passed, and the production correction was
+> observed with direct cgroup/API parity. See the execution report for evidence.
 
 ### Task 2.1 — Resolve actual process cgroup
 
@@ -841,7 +877,13 @@ OS ceiling or pause automated P2 fan-out.
 
 ---
 
-## Phase 3 — Lifecycle ownership, fencing, shutdown, and readiness (P0 code)
+## Phase 3 — Lifecycle ownership, fencing, shutdown, and readiness (P0 code) — COMPLETE
+
+> **Phase status: COMPLETE (`proceed`).** Lifecycle ownership, drain/quarantine
+> safeguards, clean shutdown, truthful readiness, and managed-versus-attached
+> OpenCode safety are unit- and disposable-live validated. Production rollout of
+> this code remains intentionally reserved for Phase 9; that is not a Phase 3
+> incompleteness. See the execution report for the accepted deferrals and evidence.
 
 ### Task 3.1 — Observer, broker, watch, and retention ownership
 
@@ -961,7 +1003,12 @@ resource-count growth.
 
 ---
 
-## Phase 4 — One execution arbiter and priority reservations (P0/P1 code)
+## Phase 4 — One execution arbiter and priority reservations (P0/P1 code) — COMPLETE
+
+> **Phase status: COMPLETE (`proceed`).** The shared priority arbiter, bounded
+> control lane, emergency mode, and frozen benchmark/live validation are complete.
+> Production rollout remains intentionally gated by Phase 9. See the execution
+> report for the measured acceptance evidence and explicitly deferred work.
 
 ### Task 4.1 — Define one admission and assignment authority
 
@@ -1053,7 +1100,13 @@ cgroup changes to hide an arbiter regression.
 
 ---
 
-## Phase 5 — Agent OS backpressure and throughput integration (companion repo)
+## Phase 5 — Agent OS backpressure and throughput integration (companion repo) — COMPLETE
+
+> **Phase status: COMPLETE (`proceed`).** The companion-repo verify + gap-fill
+> closed the Phase 5 deltas, including durable preflight deferrals, contract
+> mirror parity, backpressure, P1 control, lease release, and exactly-once
+> disposable live proof. No production dispatch or restart was claimed. See the
+> execution report for the complete evidence record.
 
 This phase changes `/root/agent-os` only after the Pi Web UI contract required
 by Phase 4 is implemented and documented. Use a separate branch/commit and the
@@ -1107,7 +1160,38 @@ threshold or recovery-correctness gate fails.
 
 ---
 
-## Phase 6 — Per-session cgroup hardening pilot for the existing Pi worker path (P1 architecture)
+## Phase 6 — Per-session cgroup hardening pilot for the existing Pi worker path (P1 architecture) — PLANNED / NOT STARTED
+
+> **Agent OS dependency:** Phase 6 does not need to wait for the Agent OS MVP or
+> for Step 7C/7F. Step 7C/7F is conductor/model-comparison evidence, not the
+> primary resource-containment test. Use an owned disposable heavy-work fixture
+> that exercises the real Pi worker path, descendants, cancellation and drain;
+> later Agent OS conductor missions may provide representative workload evidence
+> but must not be the only way to test the boundary.
+>
+> **Recommended Phase 6 shape — executor-containment conformance harness:** this
+> is not a hand-authored set of realistic Agent OS tasks and not a mock of the
+> worker/cgroup boundary. Build one reusable deterministic fixture that drives
+> the real worker/RPC/arbiter/event/receipt path while substituting only the
+> workload/provider behaviour. Its scenarios should cover: a normal tool turn;
+> bounded child-process fan-out; bounded memory/PID pressure; cancellation while
+> active; intentional worker failure and rehydration; late-event fencing; server
+> restart with unknown/draining state; and repeated start→drain→dispose cycles.
+> Run it at low pilot concurrency first. The fixture supplies repeatable
+> lifecycle/resource evidence without requiring the operator to invent a new
+> real-world task for every development iteration.
+>
+> **Execution ownership:** the execution agent is responsible for forming the
+> fixture proposal and the exact disposable test setting, including scenario
+> parameters, resource bounds, concurrency, safety limits and evidence to
+> collect. The operator's role in test design is only to approve or decline the
+> proposal; the execution agent owns any revision and the operator does not
+> invent the task or tune every stage. The execution agent must freeze the
+> approved fixture version and settings in the Phase 6 evidence. Phase 8A must
+> reuse that exact approved fixture/settings as its baseline; any change requires
+> a new proposal,
+> approval, version and re-baseline. This does not remove the owner's separate
+> PAUSE 6 choice about promote, hybrid, hold or rollback.
 
 Pi already uses process-per-session workers. This is deliberately a containment
 and assignment pilot on that existing architecture, not a new parallel executor
@@ -1225,7 +1309,7 @@ latency threshold fails.
 
 ---
 
-## Phase 7 — Conditional broader worker/runtime containment rollout (P2, not pre-authorised by earlier phases)
+## Phase 7 — Conditional broader worker/runtime containment rollout (P2, not pre-authorised by earlier phases) — PLANNED / NOT STARTED
 
 Execute only after PAUSE 6 records `promote` or a bounded `hybrid` expansion.
 
@@ -1249,58 +1333,106 @@ recovery, and rollback before enabling the next runtime/path.
 
 ---
 
-## Phase 8 — Capacity ramp, observability, and sustained proof (P1/P2)
+## Phase 8 — Capacity ramp, observability, and sustained proof (P1/P2) — PLANNED / NOT STARTED
 
-### 8.1 Concurrency ladder
+Phase 8 has two formal evidence tracks, **8A** and **8B**. They are not extra
+numbered roadmap phases, but they have different workloads, acceptance claims
+and maturity dependencies.
 
-Run 1, 3, 5, and 6 concurrent active turns across enabled production-relevant
-paths on disposable infrastructure. Increase one P2 slot only after the prior
-level passes. Do not include disabled OpenCode in production capacity claims.
+### 8A — Platform ramp/soak (maturity-independent)
+
+Use the exact operator-approved Phase 6 fixture version and exact test settings
+at increasing concurrency on disposable infrastructure. Do not redesign the
+workload for 8A: the frozen Phase 6 fixture is the comparison baseline. This can
+proceed before Agent OS MVP and does not require the operator to invent bespoke
+real-world tasks. Any necessary change is an execution-agent proposal requiring
+operator approval, followed by a new fixture version and re-baseline.
+
+### 8A.1 Concurrency ladder
+
+Run 1, 3, 5, and 6 concurrent fixture turns across the enabled pilot paths.
+Increase one P2 slot only after the prior level passes. Do not include disabled
+OpenCode in any capacity claim.
 
 At each level sample:
 
 - service and executor cgroup memory/PID/pressure/events;
 - host headroom/PSI and tmux workload pressure;
 - `/capacity`, readiness, receipt and class counts;
-- queue/defer age and retry count in Agent OS;
 - broker/observer/watch/lease/timer counts;
 - first-event and completion latency;
-- useful attempts/hour;
-- P0 browser and P1 conductor/control latency; and
+- P0 browser and P1 control latency; and
 - cleanup/drain time.
 
-### 8.2 Acceptance targets
+#### 8A.2 Platform acceptance targets
 
 - no control-plane `oom`, `oom_kill`, `max`, or unexpected sustained `high`;
 - resource exhaustion is contained to the assigned executor and recorded;
+- every accepted fixture run reaches terminal or explicit unknown/quarantined
+  state;
+- no capacity release while its executor remains populated;
+- no duplicate terminalisation or false success;
+- no unbounded process, observer, broker, timer, lease, or watch growth;
+- P0/P1 control meets the §6.7 absolute/P95 thresholds; and
+- all task-owned disposable state/processes are cleaned.
+
+### 8B — Representative Agent OS proof (maturity-gated)
+
+Begin 8B only when the owner considers the conductor reliable enough for
+representative workflows. This does not require waiting for a formal Agent OS
+MVP label, and the MVP label alone is not sufficient evidence. Use naturally
+arising owner work or a small bounded owner-selected sample; do not invent a new
+bespoke task for every test stage.
+
+#### 8B.1 Representative workload and soak
+
+Run the relevant mixed P0/P1/P2 ramp and a bounded several-hour soak with actual
+Agent OS dispatch, defer/backpressure, recovery and long-running work. Long-
+horizon watches must expire/release claims, restart as detached evidence, and be
+re-registered explicitly.
+
+#### 8B.2 Product acceptance targets
+
+- Agent OS queue/defer age and retry behaviour remain bounded;
+- P1 recovery and browser control meet the §6.7 absolute/P95 thresholds;
+- no Agent OS project/class starvation;
+- useful attempts/hour stays within the §6.7 regression threshold versus the
+  prior safe level;
 - every accepted run reaches terminal or explicit unknown/quarantined state;
 - no capacity/worktree release while its executor remains populated;
 - no duplicate terminalisation or false success;
-- no unbounded process, observer, broker, timer, lease, or watch growth;
-- P1 recovery and browser control meet the §6.7 absolute/P95 thresholds;
-- no Agent OS project/class starvation;
-- useful throughput stays within the §6.7 regression threshold versus the prior
-  safe level; and
+- no unbounded process, observer, broker, timer, lease, or watch growth; and
 - all task-owned disposable state/processes are cleaned.
 
-### 8.3 Sustained soak
-
-Run a bounded several-hour mixed P0/P1/P2 workload on disposable or explicitly
-authorised isolated infrastructure. Long-horizon watches must expire/release
-claims, restart as detached evidence, and be re-registered explicitly.
-
-**PAUSE 8 — capacity promotion:** record measured P95 per-turn/executor cost and
-promote at most one slot. On disposable infrastructure, stop/roll back the harness automatically on
-pressure, stalls, control-SLO breach, or cleanup drift. Production rollback is
-never an unlocked autonomous mutation: it must use the pre-authorised threshold,
-recorded rollback values, Agent OS maintenance handshake, and production lock.
+**PAUSE 8 — capacity promotion:** 8A may promote at most one platform slot
+within the tested fixture and its evidence boundary. Any Agent OS real-workload
+capacity promotion requires 8B. On disposable infrastructure, stop or roll
+back the harness automatically on pressure, stalls, control-SLO breach or
+cleanup drift. Production rollback is never an unlocked autonomous mutation: it
+must use the pre-authorised threshold, recorded rollback values, Agent OS
+maintenance handshake and production lock.
 
 ---
 
-## Phase 9 — Controlled production rollout and observation
+## Phase 9 — Controlled production rollout and observation — PLANNED / NOT STARTED
 
-Production code/config rollout requires explicit operator authorisation after
-all applicable prior gates.
+**Phase 9 is the final numbered phase in this Pi Web UI plan.** Its rollout
+sequence is explicit:
+
+1. **8A passes** using the frozen Phase 6 fixture/settings.
+2. A **limited safety rollout follows 8A**, under the existing conservative
+   capacity and with a bounded observation window. This is an interim safety
+   observation, not completion of Phase 9 and not an Agent OS scaling claim.
+3. **8B completes** once the conductor is reliable enough for representative
+   owner workflows.
+4. **Full Phase 9 remains pending until 8B is complete.** Full Phase 9 includes
+   any production capacity promotion, increased-concurrency claim, or mature
+   Agent OS real-workload rollout/observation.
+
+If 8B is not yet justified, full Phase 9 must remain pending and the limited
+rollout must remain strictly bounded; it cannot be used to promote concurrency
+or claim mature Agent OS scaling. Production code/config rollout requires
+explicit operator authorisation after all applicable gates.
 
 ### Preflight
 
@@ -1365,7 +1497,7 @@ observation window, not merely startup health.
 | 5 Agent OS | Agent OS RED→GREEN | contract mirror/client | disposable end-to-end defer→dispatch | none required | no production dispatch by default |
 | 6 worker-cgroup pilot | adapter/worker/cgroup RED→GREEN | event/replay/follow-up | heavy/fork-bounded/crash/drain matrix | WS parity | pilot only after owner choice |
 | 7 expansion | per-runtime RED→GREEN | full affected runtime | per-runtime live matrix | as affected | one path at a time |
-| 8 ramp/soak | harness tests | load harness | concurrency/soak | latency regression | only explicitly authorised |
+| 8A platform / 8B Agent OS proof | fixture/harness tests | load harness + Agent OS integration when mature | concurrency/soak | latency regression | 8A/8B only as applicable and explicitly authorised |
 | 9 rollout | prior gates retained | full suite | prior evidence | smoke | locked deploy + observation |
 
 A capability skip is evidence of missing coverage, not a pass. Antigravity live
