@@ -1193,6 +1193,185 @@ threshold or recovery-correctness gate fails.
 > approval, version and re-baseline. This does not remove the owner's separate
 > PAUSE 6 choice about promote, hybrid, hold or rollback.
 
+### Phase 6 pre-execution record — `worker-cgroup-conformance` fixture v1
+
+**Status: proposed; owner approval is required before implementation or live execution.**
+
+#### Preflight finding that fixes the implementation boundary
+
+The repository currently contains two different Pi execution shapes, and they must
+not be conflated in the evidence:
+
+- the live browser WebSocket and Internal API Pi prompt paths call
+  `MultiSessionManager`/`AgentSession` in the server process;
+- `WorkerPool`, `SessionWorker`, `SessionRPCClient`, and the new
+  `SessionWebSocketHandler` are present, but the main WebSocket upgrade path and
+  Internal API prompt path do not use them; and
+- `SessionWorker.spawn()` currently invokes the literal `pi` command and does not
+  apply a cgroup launcher, assignment identity, run/epoch fence, or receipt
+  lifecycle. `WorkerManagerConfig.piPath` is not currently used by that spawn
+  path.
+
+Therefore a test that merely instantiates `WorkerPool` would not prove the stated
+worker/RPC/arbiter/event/receipt boundary, and a production Pi prompt would not
+prove per-worker containment. Phase 6 Task 6.1/6.3 must first add one minimal,
+server-derived pilot adapter/launcher seam and wire the explicit `heavy` pilot
+profile through that seam. Ordinary interactive Pi work remains on the current
+path until a later gate. If the seam cannot create an exact disposable cgroup,
+the heavy route must fail closed; it must never silently fall back to an
+uncontained heavy worker.
+
+This is a prerequisite for truthful Phase 6 evidence, not permission to migrate
+all Pi sessions or to claim that the current worker classes are already the live
+Pi architecture. The canonical process-isolation design must be corrected or
+made precise in the same task before any pilot result is described as production
+parity. The existing `RunReceiptManager` only defers release for cancelled or
+failed runs, so the pilot adapter must also wait for the worker's active-turn
+quiescence before treating a normal `agent_end` as the terminal capacity
+boundary (or add that behaviour test-first). A raw `agent_end` while the worker
+still reports active work is evidence, not permission to release the turn.
+
+#### Fixture identity and invariant settings
+
+| Field | Frozen v1 value |
+|---|---|
+| Fixture name/version | `worker-cgroup-conformance/v1` |
+| Semantic workload | A local deterministic JSONL worker fixture; no provider, network, model, repository, or real Agent OS task. Only provider/workload semantics are substituted. |
+| Real boundaries exercised | The pilot adapter's real assignment, `WorkerPool`/`SessionWorker`, RPC framing, `SessionRPCClient`, normalized event sink, `AdmissionController`, `RunReceiptManager`, cgroup launcher, cancellation/drain, crash recovery, and disposal paths. |
+| Pilot profile | Server-derived `heavy`; no caller-supplied raw cgroup values. The ordinary/default Pi path is unchanged in the pilot run. |
+| Initial concurrency | One worker/run at a time; one independent sibling worker is created only for the isolation/crash scenario. |
+| Worker pool | `maxWorkers=2`, explicit disposal, `idleTimeoutMs=60000`, cleanup interval disabled in the fixture and stopped in teardown. |
+| RPC/readiness | `commandTimeoutMs=2000`, `readinessFallbackMs=250`; every command has a correlated response and every run has an event-derived terminal boundary. |
+| Receipt/admission | `maxActiveTurns=2`, `interactiveReserve=1`, `controlReserve=1` (one P2 execution slot), `retryAfterSeconds=1`, `turnIdleTimeoutMs=2000`, `turnMaxMs=10000`, `drainTimeoutMs=2000`, `drainPollMs=50`; receipt directory is a mode-0700 temporary directory. |
+| Worker runtime budget | `maxOldSpaceSize=128` MB. The worker unit uses cgroup-v2 `MemoryHigh=128M`, `MemoryMax=384M`, `MemorySwapMax=0`, `TasksMax=64`, `CPUWeight=100`, `KillMode=control-group`, and `TimeoutStopSec=10s`. `CPUQuota` is unset. |
+| Control runtime budget | The disposable controller/server is a separate transient unit with `MemoryHigh=768M`, `MemoryMax=1G`, `MemorySwapMax=0`, `TasksMax=256`, and `KillMode=control-group`. No production unit is reused. |
+| Sampling | Two warm-up normal turns, then 30 measured warm turns and five cold start/dispose samples for each plain-spawn baseline and contained-worker candidate. Adversarial scenarios run three times each; churn runs 20 cycles. |
+| Evidence cadence | Sample cgroup memory/PID/events and process membership every 100 ms; poll drain/quiescence every 50 ms; record raw JSON evidence under the disposable run directory, never in tracked fixtures. |
+
+The worker launch must use a unique transient service/unit (for example
+`pi-web-ui-phase6-<nonce>-worker-<session>.service`) in a disposable
+`pi-web-ui-phase6-<nonce>.slice`, created with `systemd-run --pipe --wait
+--collect` or an equivalent exact cgroup launcher. The unit name and the actual
+worker cgroup path resolved from `/proc/<worker-pid>/cgroup` are evidence, not
+inputs. The implementation must not mistake the `systemd-run` client PID for the
+worker PID, and must record the complete descendant PID set. Cgroup-v2 or
+transient-unit capability failure is `blocked`, not a simulated pass. Teardown
+must stop only the nonce-matched units, verify `cgroup.events:populated=0` and
+an empty member set, then verify the units were collected. It must not touch
+`pi-web-ui.service`, `tmux-web-ui.service`, `twui-*` scopes, or any existing
+production process.
+
+#### Implementation order for the later execution agent
+
+Keep the first implementation slice narrow and test-first:
+
+1. Add characterization RED tests for the current Pi prompt ownership and for
+   `WorkerManagerConfig.piPath`; make the live-vs-dormant worker distinction
+   explicit rather than silently changing the default route.
+2. Introduce an internal `WorkerLauncher`/`WorkerResourceIdentity` seam. The
+   plain launcher preserves the existing child-process behaviour for the
+   baseline; the transient-unit launcher owns unit creation, actual worker PID
+   discovery, stop, cgroup snapshots and fail-closed teardown. No request body
+   may supply an executable, unit name, cgroup path or raw limit.
+3. Make `SessionWorker` and `WorkerPool` consume that seam, carry the immutable
+   assignment/session identity, and release stale workers idempotently. A
+   `systemd-run` client process is never reported as the worker resource owner.
+4. Add the pilot executor adapter that binds server-derived `heavy` assignment
+   to admission, receipts, event correlation and attempt epochs. It must own
+   one session at a time, wait for active-turn quiescence, reject a second owner,
+   fence late events, and expose bounded reconciliation/cardinality evidence.
+5. Add the deterministic worker fixture and unit/integration tests for the
+   matrix below. The fixture may substitute only provider/workload semantics;
+   worker, launcher, RPC, receipt, arbiter and event code must be the real
+   implementation under test.
+6. Add one disposable live runner that starts a uniquely named control unit,
+   launches only nonce-matched worker units, runs baseline then candidate, writes
+   bounded evidence, and always performs identity-checked teardown. Wire the
+   pilot profile only in the disposable validation configuration first.
+7. Reconcile `docs/PROCESS-ISOLATION-DESIGN.md`, the worker API comments and the
+   Phase 6 execution report so they distinguish the current in-process Pi path,
+   the dormant worker classes, and the measured pilot route.
+
+Each behaviour-changing row requires focused RED output before production code,
+then focused GREEN, affected worker/internal-API suites, disposable evidence,
+and independent review. A live runner failure or missing cgroup capability is
+reported as blocked; it is not repaired by weakening assertions or by routing
+back to the uncontained path.
+
+#### Deterministic worker protocol and scenario matrix
+
+The fixture worker speaks the same newline-delimited RPC shape consumed by
+`SessionWorker`. A prompt selects one named scenario; the worker emits the
+normalised lifecycle/tool events, records a small session marker in the
+fixture-owned JSONL file, and returns a correlated response. It never executes
+shell input from a prompt and has hard-coded finite child counts/durations.
+The pilot adapter, not the fixture worker, owns `{sessionId, runId,
+executionInstanceId, attemptEpoch}` correlation and fencing metadata.
+
+| Scenario | Frozen parameters | Required proof |
+|---|---|---|
+| `normal-turn` | 100 ms deterministic tool interval; two warm-ups, then 30 measured warm turns | Exactly one ordered lifecycle/event sequence, one `agent_end`, durable session marker, completed receipt, one lease release. |
+| `bounded-fanout` | Four child helpers, 250 ms each, maximum four descendants | All helpers and their descendants remain in the assigned worker cgroup; no worker descendant appears in the control cgroup (the short-lived launcher client is accounted separately); event/replay sequence remains exactly once. |
+| `memory-high` | One helper allocates 160 MiB and holds it for 1500 ms under the fixed worker budget | A worker-scoped `memory.events high` delta or an explicit bounded allocation failure is recorded; control remains healthy; no control-cgroup `high`, `max`, `oom`, or `oom_kill` delta. |
+| `pid-pressure` | At most 64 child-spawn attempts, each held for 500 ms, under `TasksMax=64` | Worker-scoped `pids.events max` or bounded `EAGAIN` is recorded; no unbounded fan-out, host/control failure, or false successful receipt. |
+| `cancel-drain` | One helper holds for 5000 ms; P1 cancel at 250 ms | Receipt becomes cancelled/failed only through the documented path; admission release is not observable while active turn work remains non-quiescent; active descendants drain or are explicitly quarantined within the 2 s fixture drain bound. A warm idle worker may remain populated only with an explicit idle state. |
+| `intentional-crash` | Persist marker, emit no terminal success, exit with code 42 | Only the target assignment fails; crash evidence is recorded; sibling worker/control remains usable; session JSONL survives. |
+| `rehydrate` | 20 concurrent rehydrate requests for the crashed session, then one normal turn | Single-flight ownership returns one worker; no duplicate cgroup/observer/receipt owner; the new run completes from the preserved session identity. |
+| `late-event-fence` | Deliver one old-epoch `agent_end` 500 ms after cancellation and 50 ms after a new epoch starts | The old event is evidence only; it cannot complete the new receipt, release its lease, or produce a duplicate notification. |
+| `restart-unknown` | Start a 3000 ms hold, terminate the disposable controller at 250 ms, restart it after 500 ms | Persisted run is `interrupted` with `SERVER_RESTART`/unknown cessation; the old worker unit is reconciled and stopped; recovery is explicit and never a false completion. |
+| `ws-parity` | Three normal turns through the pilot session-WebSocket adapter | WebSocket event envelopes match the internal normalised event sequence and session identity; no duplicate subscriber or observer remains. |
+| `churn` | 20 serial start → normal/cancel → drain → dispose cycles | Worker/cgroup/receipt/observer/timer cardinalities return to baseline after every cycle and after final teardown. |
+| `p1-under-load` | One active bounded-fanout or hold worker; ten P1 health/evidence/cancel probes at 100 ms intervals | P1 control remains responsive and the worker pressure is not misreported as control-plane capacity; compare P1 P95 with the plain-spawn baseline. |
+
+The `intentional-crash`, `memory-high`, and `pid-pressure` cases are expected to
+produce worker-side failure/pressure evidence when the kernel enforces the
+limit. They are not allowed to produce control-plane `oom`, `oom_kill`, or
+unbounded `pids.events max`; an absent expected worker pressure signal is a
+failed containment probe, not a pass by omission.
+
+#### Baseline, acceptance, and evidence ledger
+
+Run the same deterministic normal fixture in two modes: plain child spawn
+(baseline) and the exact transient worker cgroup (candidate). Do not compare a
+real provider run with the synthetic fixture. Record dispatch-to-admission,
+admission-to-first-event, terminal completion, cold-start, warm-turn and P1
+probe timings separately, plus worker/control RSS, PID high-water, cgroup event
+counters, event counts, receipt state transitions, release timestamps and
+cleanup cardinalities.
+
+Phase 6 cannot pass unless all of the following are true:
+
+- the pilot route is selected by server policy and the exact cgroup properties
+  and worker/session identity are observed, not merely configured;
+- normal, fan-out, cancellation, crash, rehydration, late-event, restart,
+  WebSocket-parity and churn cases meet the matrix above;
+- every accepted run is terminal or explicitly `interrupted`/
+  `unknown`/quarantined, with no false success or duplicate terminalisation;
+- no admission, project, retention, observer, broker, timer or cgroup release
+  occurs while the owned assignment still has non-quiescent active work; a warm
+  idle worker may remain populated only when its idle ownership is explicit, and
+  full disposal still requires an empty cgroup;
+- all contained descendants remain in the assigned worker cgroup and a target
+  crash/pressure event cannot damage a sibling or the controller;
+- control-plane `memory.events` (`high`, `max`, `oom`, `oom_kill`) and
+  `pids.events max` remain zero outside the deliberately pressured worker
+  scenario; worker pressure is bounded and recorded;
+- control/P1 P95 is no worse than both the frozen safe baseline and the §6.7
+  absolute/20% limits; useful deterministic completions/hour are no more than
+  10% below baseline; drain P95 is at most 10 s and never exceeds 30 s; and
+- all transient units, descendants, temporary receipt/session files, event
+  subscriptions and timers are cleaned, with a final zero/empty cardinality
+  snapshot.
+
+The Phase 6 report must include the exact fixture version and hashes, every
+setting in the tables above, the actual unit/cgroup identities, raw evidence
+paths, RED/GREEN chronology for each new behaviour, baseline/candidate results,
+limitations, reviewer findings, rollback state, and the explicit PAUSE 6 choice.
+The approved fixture and settings become immutable `worker-cgroup-conformance/v1`
+inputs for 8A. A change to scenario text, helper count/duration, cgroup budget,
+receipt/admission timeout, sampling count, or launch mode requires a new
+proposal, owner approval, fixture version, and Phase 6 re-baseline.
+
 Pi already uses process-per-session workers. This is deliberately a containment
 and assignment pilot on that existing architecture, not a new parallel executor
 system or immediate migration of every worker.
@@ -1247,7 +1426,9 @@ TDD RED cases:
 - a bounded fork/test fixture reaches only that executor's PID/memory boundary;
 - control-plane health/browser/P1 cancellation remain responsive;
 - cancellation empties the executor cgroup or records quarantine/unknown;
-- terminal receipt cannot release capacity while the cgroup remains populated;
+- terminal receipt cannot release active-turn capacity while the assignment
+  remains non-quiescent; a warm idle worker is not active-turn work and is
+  tracked separately;
 - worker crash/OOM affects one session, records resource failure, and preserves
   durable session state;
 - rehydration is single-flight and identity-safe;
@@ -1341,8 +1522,9 @@ and maturity dependencies.
 
 ### 8A — Platform ramp/soak (maturity-independent)
 
-Use the exact operator-approved Phase 6 fixture version and exact test settings
-at increasing concurrency on disposable infrastructure. Do not redesign the
+Use the exact operator-approved `worker-cgroup-conformance/v1` Phase 6
+fixture version and every exact test setting recorded in its Phase 6 evidence at
+increasing concurrency on disposable infrastructure. Do not redesign the
 workload for 8A: the frozen Phase 6 fixture is the comparison baseline. This can
 proceed before Agent OS MVP and does not require the operator to invent bespoke
 real-world tasks. Any necessary change is an execution-agent proposal requiring
@@ -1370,7 +1552,8 @@ At each level sample:
 - resource exhaustion is contained to the assigned executor and recorded;
 - every accepted fixture run reaches terminal or explicit unknown/quarantined
   state;
-- no capacity release while its executor remains populated;
+- no active-turn capacity release while its executor remains non-quiescent;
+  an explicitly tracked warm idle executor may remain populated;
 - no duplicate terminalisation or false success;
 - no unbounded process, observer, broker, timer, lease, or watch growth;
 - P0/P1 control meets the §6.7 absolute/P95 thresholds; and
@@ -1399,7 +1582,8 @@ re-registered explicitly.
 - useful attempts/hour stays within the §6.7 regression threshold versus the
   prior safe level;
 - every accepted run reaches terminal or explicit unknown/quarantined state;
-- no capacity/worktree release while its executor remains populated;
+- no capacity/worktree release while its executor remains non-quiescent; an
+  explicitly tracked warm idle executor may remain populated;
 - no duplicate terminalisation or false success;
 - no unbounded process, observer, broker, timer, lease, or watch growth; and
 - all task-owned disposable state/processes are cleaned.
