@@ -1,6 +1,6 @@
 # Pi Web UI Agent OS-First Resource Scaling and Runtime Lifecycle Hardening
 
-**Status:** Phases 0–6 **COMPLETE**; Phase 7 Pi/Internal API shadow implementation **COMPLETE — PAUSE 7 recorded**; contained routing, production observation and Phases 8–9 remain planned
+**Status:** Phases 0–6 **COMPLETE**; Phase 7 Pi/Internal API shadow implementation **COMPLETE — PAUSE 7: CONTINUE SHADOW**; contained routing, production observation and Phases 8–9 remain planned
 **Supersedes:** the original plan at commit `b8d9109`
 **Revision basis:** production evidence gathered 3–5 August 2026
 **Execution report:** [`PI-WEB-UI-HARDENING-EXECUTION-REPORT.md`](./execution-reports/PI-WEB-UI-HARDENING-EXECUTION-REPORT.md)
@@ -37,7 +37,7 @@
 | 4 — Execution arbiter | **COMPLETE** | Priority reservations, bounded control lane, emergency mode, and the frozen benchmark/live evidence are recorded. Read-only production recheck on 5 August observed contract 1.16.0, `controlReserve=1`, `maxActiveTurns=6`, service-cgroup memory truth and `TasksMax=1024`; the binary does not embed an exact Git revision, so do not overstate provenance. |
 | 5 — Agent OS integration | **COMPLETE** | Companion-repo verify + gap-fill, contract parity, durable capacity deferral, backpressure, P1 control, and exactly-once disposable live proof are recorded. |
 | 6 — Worker-cgroup pilot | **COMPLETE — BOUNDED HYBRID** | Frozen fixture, contained-heavy boundary, adversarial validation, final review and cleanup passed. The pilot remains off outside disposable validation; the decision constrains any later expansion to one canonical API and automatic server-owned policy. |
-| 7 — shadow gate | **SHADOW IMPLEMENTED / PAUSE 7 RECORDED** | Pi/Internal API shadow classification is implemented and disposable-live validated; no contained routing or production observation is authorised. |
+| 7 — shadow gate | **SHADOW IMPLEMENTED / PAUSE 7: CONTINUE SHADOW** | Pi/Internal API shadow classification is implemented and disposable-live validated; owner chose continued shadow evidence; no contained routing or production observation is authorised. |
 | 8–9 | **PLANNED / NOT STARTED** | Conditional expansion, capacity ramp/soak, representative Agent OS/browser proof and final production rollout remain future work. |
 
 All phase-level completion claims above are backed by the linked execution report. A phase being complete does not waive its later production rollout or observation gate where the report explicitly leaves that gate for Phase 9.
@@ -1665,6 +1665,11 @@ existing uncontained Pi path remains the only execution path; no contained
 routing, production observation, Phase 8A/8B, or Phase 9 work is authorised by
 this record. Further expansion requires a new owner decision after the plan's
 sample, parity, throughput, control-latency, recovery and rollback gates.
+
+**Owner PAUSE 7 decision (2026-08-05): `continue shadow`.** The owner chose to
+continue collecting the approved shadow evidence. This is not approval for
+contained routing, production observation, Phase 8A/8B or Phase 9; those remain
+separate gates requiring fresh evidence and explicit owner decisions.
 
 This approval allowed the execution agent to begin Phase 7 shadow
 implementation, red-first validation and disposable evidence collection. It did

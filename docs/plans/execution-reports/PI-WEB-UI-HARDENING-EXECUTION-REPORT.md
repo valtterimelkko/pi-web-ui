@@ -615,13 +615,18 @@ material blocker; its two remaining hardening suggestions (manager-level
 validation-mode defense-in-depth and explicit event-session attribution) were
 considered, and the attribution suggestion was also locked with a test.
 
-### PAUSE 7 — recorded
+### PAUSE 7 — recorded: CONTINUE SHADOW
 
 The shadow implementation stops here. The existing uncontained Pi path remains
 the only execution path. No contained routing, production observation, Phase
 8A/8B, or Phase 9 work was started or authorised. Further expansion requires a
 new owner pause after the plan's evidence-floor, parity, throughput,
 control-latency, recovery and rollback gates.
+
+**Owner decision (2026-08-05): `continue shadow`.** The owner chose to continue
+collecting the approved shadow evidence. This does not authorise contained
+routing, production observation, Phase 8A/8B or Phase 9; each remains a
+separate evidence and approval gate.
 
 ### Rollback state
 
