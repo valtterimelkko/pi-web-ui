@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RUN_TERMINAL_REASON_ALLOWLIST } from '../types.js';
 import type {
+  Phase7PiShadowClassification,
   RunLivenessEvidence,
   RunReceipt,
   RunReceiptStatus,
@@ -48,6 +49,7 @@ const ALLOWED_KEYS = new Set([
   'errorCode',
   'interruptionReason',
   'liveness',
+  'phase7Shadow',
   'idempotencyExpiresAt',
   'idempotencyKeyDigest',
   'requestFingerprint',
@@ -167,7 +169,7 @@ export class RunReceiptStore {
   async transition(
     runId: string,
     status: RunReceiptStatus,
-    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness'>> & {
+    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness' | 'phase7Shadow'>> & {
       /** Release a reservation that failed before runtime dispatch. */
       clearIdempotency?: boolean;
     } = {},
@@ -202,7 +204,7 @@ export class RunReceiptStore {
 
   async patch(
     runId: string,
-    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode' | 'liveness'>>,
+    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode' | 'liveness' | 'phase7Shadow'>>,
   ): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
@@ -419,8 +421,34 @@ export class RunReceiptStore {
       throw new Error('Invalid interruption reason');
     }
     if (record.liveness !== undefined) validateLiveness(record.liveness);
+    if (record.phase7Shadow !== undefined) {
+      if (record.runtime !== 'pi') throw new Error('Phase 7 shadow evidence requires the Pi runtime');
+      validatePhase7Shadow(record.phase7Shadow);
+      if (record.phase7Shadow.affinity.sessionId !== record.sessionId) throw new Error('Phase 7 shadow affinity does not match receipt session');
+    }
   }
 }
+
+const PHASE7_SHADOW_REASON_CODES = new Set([
+  'default_standard',
+  'message_tool_signal',
+  'message_fork_or_memory_signal',
+  'prompt_size_threshold',
+  'tool_event_threshold',
+  'turn_duration_threshold',
+]);
+const PHASE7_SHADOW_KEYS = new Set([
+  'policyVersion',
+  'mode',
+  'profile',
+  'reasonCodes',
+  'affinity',
+  'resourceIdentity',
+  'evidence',
+]);
+const PHASE7_AFFINITY_KEYS = new Set(['kind', 'sessionId', 'ownership']);
+const PHASE7_RESOURCE_KEYS = new Set(['kind', 'boundary', 'ownership', 'sessionScoped']);
+const PHASE7_EVIDENCE_KEYS = new Set(['promptBytes', 'toolEventCount', 'durationMs']);
 
 const LIVENESS_KEYS = new Set([
   'activityPolicyVersion',
@@ -445,6 +473,45 @@ function assertOnlyKeys(value: object, allowed: Set<string>, label: string): voi
 
 function assertIsoTimestamp(value: string, label: string): void {
   if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) throw new Error(`Invalid ${label}`);
+}
+
+function validatePhase7Shadow(value: Phase7PiShadowClassification): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid Phase 7 shadow evidence');
+  assertOnlyKeys(value, PHASE7_SHADOW_KEYS, 'Phase 7 shadow');
+  if (value.policyVersion !== 'phase7-pi-shadow/v1') throw new Error('Invalid Phase 7 shadow policy version');
+  if (value.mode !== 'shadow') throw new Error('Invalid Phase 7 shadow mode');
+  if (!['standard', 'heavy', 'long-horizon'].includes(value.profile)) throw new Error('Invalid Phase 7 shadow profile');
+  if (!Array.isArray(value.reasonCodes) || value.reasonCodes.length < 1 || value.reasonCodes.length > 8) {
+    throw new Error('Invalid Phase 7 shadow reason codes');
+  }
+  for (const reason of value.reasonCodes) {
+    if (!PHASE7_SHADOW_REASON_CODES.has(reason)) throw new Error('Invalid Phase 7 shadow reason code');
+  }
+  if (new Set(value.reasonCodes).size !== value.reasonCodes.length) throw new Error('Duplicate Phase 7 shadow reason code');
+  if (!value.affinity || typeof value.affinity !== 'object' || Array.isArray(value.affinity)) throw new Error('Invalid Phase 7 shadow affinity');
+  assertOnlyKeys(value.affinity, PHASE7_AFFINITY_KEYS, 'Phase 7 shadow affinity');
+  if (value.affinity.kind !== 'session' || !value.affinity.sessionId || value.affinity.ownership !== 'server-owned') {
+    throw new Error('Invalid Phase 7 shadow affinity identity');
+  }
+  if (!value.resourceIdentity || typeof value.resourceIdentity !== 'object' || Array.isArray(value.resourceIdentity)) throw new Error('Invalid Phase 7 shadow resource identity');
+  assertOnlyKeys(value.resourceIdentity, PHASE7_RESOURCE_KEYS, 'Phase 7 shadow resource identity');
+  if (
+    value.resourceIdentity.kind !== 'shared-service'
+    || value.resourceIdentity.boundary !== 'pi-control-process'
+    || value.resourceIdentity.ownership !== 'server-owned'
+    || value.resourceIdentity.sessionScoped !== false
+  ) throw new Error('Invalid Phase 7 shadow resource identity');
+  if (!value.evidence || typeof value.evidence !== 'object' || Array.isArray(value.evidence)) throw new Error('Invalid Phase 7 shadow evidence metrics');
+  assertOnlyKeys(value.evidence, PHASE7_EVIDENCE_KEYS, 'Phase 7 shadow evidence metrics');
+  if (!Number.isSafeInteger(value.evidence.promptBytes) || value.evidence.promptBytes < 0 || value.evidence.promptBytes > 10_000_000) {
+    throw new Error('Invalid Phase 7 shadow prompt byte count');
+  }
+  if (!Number.isSafeInteger(value.evidence.toolEventCount) || value.evidence.toolEventCount < 0 || value.evidence.toolEventCount > 10_000) {
+    throw new Error('Invalid Phase 7 shadow tool event count');
+  }
+  if (value.evidence.durationMs !== undefined && (!Number.isSafeInteger(value.evidence.durationMs) || value.evidence.durationMs < 0 || value.evidence.durationMs > 7 * 24 * 60 * 60 * 1000)) {
+    throw new Error('Invalid Phase 7 shadow duration');
+  }
 }
 
 function validateLiveness(value: RunLivenessEvidence): void {

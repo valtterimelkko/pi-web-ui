@@ -202,6 +202,7 @@ verdicts and still run watch/session finalization.
 
 - `smoke` — create a session and verify a minimal turn completes
 - `run-receipt-idempotency` — verify `runId`, terminal receipt lookup, execution-instance attribution, and same-key deduplication
+- `phase7-pi-shadow` — disposable Pi-only proof that an Internal API receipt persists the server-owned `phase7-pi-shadow/v1` classification, session affinity, and honest shared-service resource identity without changing routing
 - `model-smoke` — create a session with an explicit `--model` and verify the selected model is reflected; requires `--model <provider/id>`
 - `tool-visibility` — verify tool execution is surfaced in the full stream
 - `session-info` — verify enriched internal-API session info is available
@@ -226,6 +227,7 @@ verdicts and still run watch/session finalization.
 |---|---|---|
 | `smoke` | Pi, Claude, OpenCode; Antigravity only when explicitly authorised | session creation and a minimal completed turn |
 | `run-receipt-idempotency` | Pi, Claude, OpenCode | durable `runId`, terminal receipt, execution identity, and same-key deduplication |
+| `phase7-pi-shadow` | Pi disposable server only | shadow policy/profile/reason codes, session affinity, prompt-free receipt metadata, and explicit non-contained shared-service identity |
 | `model-smoke` | capability/runtime dependent; explicit model required | create-time model selection and reported model identity |
 | `tool-visibility` | capability-dependent; normally Pi/Claude/OpenCode | normalized tool events in the full stream |
 | `session-info` | Pi, Claude, OpenCode; Antigravity when explicitly authorised | enriched runtime/session metadata |

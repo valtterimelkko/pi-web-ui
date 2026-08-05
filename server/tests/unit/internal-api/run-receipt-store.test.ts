@@ -6,6 +6,7 @@ import {
   RunReceiptStore,
   type PersistedRunReceipt,
 } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
+import { classifyPhase7PiShadow } from '../../../src/internal-api/phase7-pi-shadow.js';
 
 function receipt(overrides: Partial<PersistedRunReceipt> = {}): PersistedRunReceipt {
   return {
@@ -224,6 +225,10 @@ describe('RunReceiptStore — durable run ledger', () => {
     await expect(store.create({ ...receipt(), apiKey: 'secret' } as never)).rejects.toThrow(/unsupported|unsafe/i);
     await expect(store.create({ ...receipt(), token: 'secret' } as never)).rejects.toThrow(/unsupported|unsafe/i);
     await expect(store.create({ ...receipt(), transcript: [] } as never)).rejects.toThrow(/unsupported|unsafe/i);
+    await expect(store.create(receipt({
+      runtime: 'claude',
+      phase7Shadow: classifyPhase7PiShadow({ sessionId: 'session-1', message: 'Keep working.' }),
+    }))).rejects.toThrow(/Pi runtime/i);
     await expect(store.create({
       ...receipt(),
       liveness: {

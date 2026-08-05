@@ -140,6 +140,15 @@ identity and `requestId` for the originating HTTP request. The session-scoped
 route narrows records but still returns the same process-level operational
 snapshot.
 
+On the disposable `validationMode` server only, Phase 7 shadow records add
+bounded `phase7PolicyVersion`, `phase7Profile`, `phase7ReasonCodes`,
+`phase7Affinity`, `phase7AffinitySessionId`, and `phase7ResourceIdentity` fields
+to Pi Internal API prompt diagnostics. Normal development/production servers do
+not enable this observation. The resource identity remains
+`shared-service`/`pi-control-process` with `sessionScoped:false`; these fields do
+not claim a per-session cgroup or contained worker and never include prompt
+text.
+
 For the shortest troubleshooting path, use the additive session evidence bundle:
 
 ```text

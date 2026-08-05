@@ -256,6 +256,89 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
       });
     },
   },
+  'phase7-pi-shadow': {
+    id: 'phase7-pi-shadow',
+    description: 'Verify the disposable Pi Internal API prompt path persists owner-only shadow classification without changing routing or claiming containment.',
+    async run(context) {
+      if (context.runtime !== 'pi') {
+        return {
+          scenarioId: 'phase7-pi-shadow',
+          runtime: context.runtime,
+          passed: true,
+          skipped: true,
+          reason: 'Phase 7 shadow scope is limited to Pi Internal API prompts',
+          assertions: [],
+        };
+      }
+      return withEphemeralSession(context, async (sessionId) => {
+        const first = await context.client.promptWithIdempotency(sessionId, {
+          message: 'Reply with the exact text PHASE7-SHADOW-LIVE-OK and nothing else.',
+          verbosity: 'answers',
+          mode: 'prompt',
+          idempotencyKey: `phase7-shadow-${Date.now()}`,
+        });
+        const receipt = await context.client.getRunReceipt(first.runId);
+        const evidence = context.client.getSessionEvidence
+          ? await context.client.getSessionEvidence(sessionId, ['diagnostics', 'runs'])
+          : undefined;
+        const shadow = receipt.phase7Shadow;
+        const evidenceShadow = evidence?.receiptSummary.latest?.phase7Shadow;
+        const evidenceDiagnostic = evidence?.diagnostics.records.some((record) => (
+          record.runId === first.runId
+          && record.msg.includes('[Phase7Shadow]')
+          && record.phase7PolicyVersion === 'phase7-pi-shadow/v1'
+          && record.phase7AffinitySessionId === sessionId
+          && record.phase7ResourceIdentity === 'shared-service'
+        )) === true;
+        const assertions: ValidationAssertion[] = [
+          {
+            name: 'receipt_completed',
+            passed: receipt.status === 'completed',
+            details: receipt.status,
+          },
+          {
+            name: 'shadow_policy',
+            passed: shadow?.policyVersion === 'phase7-pi-shadow/v1' && shadow.mode === 'shadow',
+            details: shadow?.policyVersion ?? 'missing',
+          },
+          {
+            name: 'evidence_bundle_persistence',
+            passed: evidenceShadow?.policyVersion === 'phase7-pi-shadow/v1' && evidenceDiagnostic,
+            details: evidenceDiagnostic ? 'receipt and diagnostic projection present' : 'missing evidence projection',
+          },
+          {
+            name: 'server_profile',
+            passed: shadow?.profile === 'standard' && shadow.reasonCodes.includes('default_standard'),
+            details: shadow?.profile ?? 'missing',
+          },
+          {
+            name: 'session_affinity',
+            passed: shadow?.affinity.kind === 'session' && shadow.affinity.sessionId === sessionId && shadow.affinity.ownership === 'server-owned',
+            details: shadow?.affinity.sessionId ?? 'missing',
+          },
+          {
+            name: 'honest_shared_resource_identity',
+            passed: shadow?.resourceIdentity.kind === 'shared-service'
+              && shadow.resourceIdentity.boundary === 'pi-control-process'
+              && shadow.resourceIdentity.sessionScoped === false,
+            details: shadow?.resourceIdentity.kind ?? 'missing',
+          },
+          {
+            name: 'prompt_body_omitted',
+            passed: !JSON.stringify(receipt).includes('PHASE7-SHADOW-LIVE-OK'),
+            details: 'receipt contains bounded metadata only',
+          },
+        ];
+        return {
+          scenarioId: 'phase7-pi-shadow',
+          runtime: context.runtime,
+          passed: assertions.every((assertion) => assertion.passed),
+          assertions,
+          runId: first.runId,
+        };
+      });
+    },
+  },
   'notify-on-agent-end': {
     id: 'notify-on-agent-end',
     description:

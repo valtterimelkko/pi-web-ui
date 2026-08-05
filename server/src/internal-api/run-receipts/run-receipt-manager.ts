@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { RUN_TERMINAL_REASON_ALLOWLIST } from '../types.js';
 import type {
+  Phase7PiShadowClassification,
   PromptMode,
   RunActivityObservation,
   RunReceipt,
@@ -10,6 +11,13 @@ import type {
   SessionRuntime,
   Verbosity,
 } from '../types.js';
+import {
+  classifyPhase7PiShadow,
+  createPhase7PiShadowState,
+  finalizePhase7PiShadow,
+  observePhase7PiShadowEvent,
+  type Phase7PiShadowState,
+} from '../phase7-pi-shadow.js';
 import { RunReceiptStore, type PersistedRunReceipt } from './run-receipt-store.js';
 import { createLogger } from '../../logging/logger.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../../observability/operational-metrics.js';
@@ -36,6 +44,8 @@ export interface BeginRunInput {
   detach: boolean;
   requireActiveTurn?: boolean;
   idempotencyKey?: string;
+  /** Server-derived Pi-only shadow evidence; callers cannot provide this field. */
+  phase7Shadow?: Phase7PiShadowClassification;
 }
 
 export interface RunFinishOutcome {
@@ -91,6 +101,7 @@ interface ActiveRun {
   lastEligibleActivity?: RunActivityObservation;
   lastPersistedActivityAtMs?: number;
   lease?: { release: () => void };
+  phase7Shadow?: Phase7PiShadowState;
 }
 
 /**
@@ -173,6 +184,18 @@ export class RunReceiptManager {
   }
 
   async beginRun(input: BeginRunInput): Promise<BeginRunResult> {
+    if (input.phase7Shadow && input.runtime !== 'pi') {
+      throw new Error('Phase 7 shadow evidence is limited to Pi Internal API runs');
+    }
+    if (input.phase7Shadow && input.phase7Shadow.affinity.sessionId !== input.sessionId) {
+      throw new Error('Phase 7 shadow affinity must match the run session');
+    }
+    if (input.phase7Shadow) {
+      const expectedShadow = classifyPhase7PiShadow({ sessionId: input.sessionId, message: input.message });
+      if (JSON.stringify(input.phase7Shadow) !== JSON.stringify(expectedShadow)) {
+        throw new Error('Phase 7 shadow evidence does not match the server classifier');
+      }
+    }
     await this.init();
     const normalizedKey = input.idempotencyKey === undefined
       ? undefined
@@ -213,6 +236,7 @@ export class RunReceiptManager {
           : undefined,
         idempotencyKeyDigest: keyDigest,
         requestFingerprint: keyDigest ? fingerprint : undefined,
+        ...(input.phase7Shadow ? { phase7Shadow: input.phase7Shadow } : {}),
       };
       await this.store.create(record);
       this.metrics.recordTurnAccepted(record.runtime);
@@ -271,6 +295,13 @@ export class RunReceiptManager {
       ? event.timestamp
       : observedAtMs;
     const active = this.activeRuns.get(runId);
+    const persistPhase7Shadow = Boolean(active?.phase7Shadow && (
+      event.type === 'tool_execution_start' || event.type === 'agent_end'
+    ));
+    if (active?.phase7Shadow) observePhase7PiShadowEvent(active.phase7Shadow, event, observedAtMs);
+    const phase7ShadowToPersist = persistPhase7Shadow && active?.phase7Shadow
+      ? finalizePhase7PiShadow(active.phase7Shadow, observedAtMs)
+      : undefined;
     let activityToPersist: RunActivityObservation | undefined;
     if (active && isEligibleRunActivity(event.type)) {
       active.lastActivityAtMs = observedAtMs;
@@ -285,35 +316,41 @@ export class RunReceiptManager {
       if (persistenceDue) activityToPersist = active.lastEligibleActivity;
     }
     if (event.type !== 'agent_end') {
-      if (!activityToPersist || !active) return Promise.resolve();
+      if ((!activityToPersist && !phase7ShadowToPersist) || !active) return Promise.resolve();
       // Reserve the write window synchronously before the queued write starts;
       // otherwise a burst can enqueue many snapshots while the first is pending.
-      active.lastPersistedActivityAtMs = observedAtMs;
+      if (activityToPersist) active.lastPersistedActivityAtMs = observedAtMs;
       return this.withRunLock(runId, async () => {
         const current = this.store.get(runId);
-        if (!current?.liveness || isTerminal(current.status)) return;
-        await this.store.patch(runId, {
-          liveness: { ...current.liveness, lastEligibleActivity: activityToPersist },
-        });
+        if (!current || isTerminal(current.status)) return;
+        const patch: Parameters<RunReceiptStore['patch']>[1] = {};
+        if (current.liveness && activityToPersist) {
+          patch.liveness = { ...current.liveness, lastEligibleActivity: activityToPersist };
+        }
+        if (phase7ShadowToPersist) patch.phase7Shadow = phase7ShadowToPersist;
+        if (Object.keys(patch).length > 0) await this.store.patch(runId, patch);
       }).catch((error) => {
-        if (active.lastPersistedActivityAtMs === observedAtMs) {
+        if (activityToPersist && active.lastPersistedActivityAtMs === observedAtMs) {
           active.lastPersistedActivityAtMs = undefined;
         }
         logger.warn(`failed to persist activity for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
       });
     }
     const provenance = terminalProvenance(event);
-    return this.withRunLock(runId, () => this.store.markAgentEnd(
-      runId,
-      new Date(occurredAtMs).toISOString(),
-      {
-        type: 'agent_end',
-        occurredAt: new Date(occurredAtMs).toISOString(),
-        observedAt: new Date(observedAtMs).toISOString(),
-        origin: provenance.origin,
-        ...(provenance.reason ? { reason: provenance.reason } : {}),
-      },
-    ))
+    return this.withRunLock(runId, async () => {
+      if (phase7ShadowToPersist) await this.store.patch(runId, { phase7Shadow: phase7ShadowToPersist });
+      await this.store.markAgentEnd(
+        runId,
+        new Date(occurredAtMs).toISOString(),
+        {
+          type: 'agent_end',
+          occurredAt: new Date(occurredAtMs).toISOString(),
+          observedAt: new Date(observedAtMs).toISOString(),
+          origin: provenance.origin,
+          ...(provenance.reason ? { reason: provenance.reason } : {}),
+        },
+      );
+    })
       .then(() => undefined)
       .catch((error) => {
         logger.warn(`failed to persist agent_end for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -336,8 +373,12 @@ export class RunReceiptManager {
       current = this.store.get(runId);
       if (!current) return undefined;
     }
-    const terminalAt = new Date(this.now()).toISOString();
+    const terminalAtMs = this.now();
+    const terminalAt = new Date(terminalAtMs).toISOString();
     const active = this.activeRuns.get(runId);
+    const phase7Shadow = active?.phase7Shadow
+      ? finalizePhase7PiShadow(active.phase7Shadow, terminalAtMs)
+      : current.phase7Shadow;
     const liveness = current.liveness
       ? {
           ...current.liveness,
@@ -371,6 +412,7 @@ export class RunReceiptManager {
       errorCode: outcome.errorCode,
       terminalAt,
       ...(liveness ? { liveness } : {}),
+      ...(phase7Shadow ? { phase7Shadow } : {}),
     });
     this.terminalize(terminal);
     return toPublicReceipt(terminal);
@@ -515,6 +557,7 @@ export class RunReceiptManager {
       acceptedAtMs,
       startedAtMs: record.startedAt ? Date.parse(record.startedAt) : undefined,
       lastActivityAtMs: acceptedAtMs,
+      ...(record.phase7Shadow ? { phase7Shadow: createPhase7PiShadowState(record.phase7Shadow, acceptedAtMs) } : {}),
     });
   }
 

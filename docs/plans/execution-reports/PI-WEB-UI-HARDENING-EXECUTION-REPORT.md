@@ -1,7 +1,7 @@
-# Pi Web UI Hardening — Execution Report (Phases 0–6)
+# Pi Web UI Hardening — Execution Report (Phases 0–7 shadow)
 
 **Plan:** `docs/plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md`
-**Scope executed:** Phases 0–6 (Phases 0–4 and Phase 6 on Pi Web UI; Phase 5 verify + gap-fill on the companion `/root/agent-os` repo). Phase 6 is complete with a bounded `hybrid` decision, but remains a disposable contained-heavy pilot only; ordinary Pi traffic remains unchanged.
+**Scope executed:** Phases 0–6 (Phases 0–4 and Phase 6 on Pi Web UI; Phase 5 verify + gap-fill on the companion `/root/agent-os` repo), plus the owner-approved Phase 7 Pi/Internal API shadow implementation on Pi Web UI only. Phase 6 remains a disposable contained-heavy pilot; Phase 7 remains disposable shadow evidence only; ordinary Pi traffic remains unchanged.
 **Operator decisions applied:** pre-auth through end of Phase 2; prod restarts OK at any stage; Task 2.4 Agent OS client patch in scope; TasksMax applied (measured); tmux cleanup only if it does not disturb `/root/tmux`; independent review by fresh agents (Claude subagents) + Luna/gpt-5.5 critical review at each phase's excellence gate.
 **Convention:** every claim carries an evidence label per plan §6.3 (`planned` / `implemented-not-validated` / `unit-validated` / `integration-validated` / `live-validated-disposable` / `deployed-production` / `observed-production`).
 
@@ -517,6 +517,119 @@ The first independent review returned **HOLD** for launch/reconciliation, owners
 **Owner decision (2026-08-05): bounded `hybrid`.** Phase 6 is complete. The decision retains ordinary traffic and permits later conditional work only if it preserves one canonical API, uses versioned server-owned shadow-first profile selection rather than manual operator labelling, records reasons/affinity/resource identity, and passes real Pi parity plus Phase 8A/8B before production routing. It does not authorise deployment or raw caller-selected cgroup values.
 
 The decision must be reconsidered toward `hold` or `rollback` if representative evidence shows negligible automatic use, requires a divergent API/lifecycle authority, cannot preserve real Pi correlation and fail-closed handoff, breaches throughput/control gates, leaves ordinary long sessions pressuring the controller, produces harmful classifier error, or cannot drain and reconcile resources truthfully. The canonical detailed stop/reverse criteria are in the plan's PAUSE 6 section.
+
+---
+
+## Phase 7 — Pi/Internal API shadow classification
+
+**Evidence label:** `unit-validated` + `integration-validated` +
+`live-validated-disposable`. This is the owner-approved narrow scope only:
+Pi Internal API prompt and batch-prompt paths, disposable `validationMode`
+server, policy `phase7-pi-shadow/v1`. No production observation, service
+restart, configuration change, contained route, browser path, non-Pi runtime,
+or `/root/agent-os` mutation occurred.
+
+### Implementation and truth boundary
+
+The additive `phase7Shadow` receipt projection is server-derived and prompt-free:
+
+- frozen thresholds are 4,096 UTF-8 prompt bytes, 8 attributable
+  `tool_execution_start` events, and 60 seconds for a separate long-horizon
+  signal;
+- profiles are `standard`, `heavy`, or `long-horizon`, with bounded reason
+  codes; callers cannot select a profile, limit, affinity or priority;
+- affinity is the server-owned session; resource identity is explicitly the
+  existing shared `pi-control-process` (`shared-service`, `sessionScoped:false`)
+  rather than a fabricated per-session worker/cgroup;
+- receipt persistence allowlists the shape, enforces Pi-only/runtime/session
+  identity, verifies the initial projection against the server classifier, and
+  persists dynamic tool evidence before terminalisation; disk-backed restart
+  recovery retains observed evidence while marking the run interrupted;
+- raw diagnostics and the compact session-evidence projection retain only the
+  bounded Phase 7 metadata, including the affinity session id; prompt text is
+  not persisted; and
+- the ordinary Pi dispatch/ownership path is unchanged. The feature is gated
+  by `config.validationMode`, which the disposable validation server sets in
+  its isolated environment; normal development/production servers do not
+  observe this policy.
+
+### RED → GREEN chronology
+
+New Phase 7 RED failures were recorded before their fixes for: missing live
+scenario registration; missing diagnostic affinity identity; shadow evidence
+being attached outside validation mode; compact session evidence dropping
+Phase 7 diagnostic fields; forged server-derived classification; non-Pi receipt
+persistence; and loss of observed tool counts across disk-backed restart
+recovery. A batch route test initially timed out because its fixture omitted the
+required `agent_end`; the fixture was corrected rather than weakening the
+production completion contract.
+
+GREEN focused validation:
+
+```text
+npm test --workspace=server -- --run \
+  tests/unit/internal-api/phase7-pi-shadow.test.ts \
+  tests/unit/internal-api/run-receipt-phase7-shadow.test.ts \
+  tests/unit/internal-api/session-routes-phase7-shadow.test.ts \
+  tests/unit/internal-api/session-routes-evidence.test.ts \
+  tests/unit/live-validation/scenarios-phase7-shadow.test.ts
+# final focused result: 5 files, 28 tests passed
+```
+
+The affected pre-existing suites and all final full suites also passed:
+
+- server: 227 files, 2,860 tests;
+- client: 73 files, 863 tests;
+- `npm run typecheck` and `npm run build` passed;
+- `npm run lint` passed with the repository's existing warnings and no errors;
+- `npm run docs:check-agent-guides` and `npm run docs:check-links` passed.
+
+### Disposable live evidence
+
+A fresh isolated server was started twice using a unique `/tmp` validation
+folder, Unix socket and token; each was controlled-shutdown and its directory
+removed. The final disposable run passed:
+
+```text
+npm run validate:live -- --runtime pi --scenario phase7-pi-shadow --json
+```
+
+The scenario passed `receipt_completed`, policy `phase7-pi-shadow/v1`,
+`standard` profile, session affinity, honest shared-service identity,
+prompt-body omission, and the session evidence bundle's durable receipt plus
+bounded diagnostic projection. Earlier in the same disposable validation
+cycle, Pi `smoke` and `run-receipt-idempotency` also passed. No production
+socket, token, process, service, or runtime was used.
+
+### Independent review and disposition
+
+The first fresh-agent review returned HOLD findings for the production-scope
+gate, compact evidence projection, server-owned classification enforcement,
+and restart evidence durability. All were fixed with RED → GREEN tests and
+revalidation: `validationMode` gating, bounded Phase 7 fields in compact
+session evidence, exact server-classifier verification, Pi-only store
+validation, persisted dynamic shadow snapshots, and session-attributed tool
+counting. Minor coverage gaps for batch evidence were closed with a batch-route
+test. A second independent review of the final diff returned **GO** with no
+material blocker; its two remaining hardening suggestions (manager-level
+validation-mode defense-in-depth and explicit event-session attribution) were
+considered, and the attribution suggestion was also locked with a test.
+
+### PAUSE 7 — recorded
+
+The shadow implementation stops here. The existing uncontained Pi path remains
+the only execution path. No contained routing, production observation, Phase
+8A/8B, or Phase 9 work was started or authorised. Further expansion requires a
+new owner pause after the plan's evidence-floor, parity, throughput,
+control-latency, recovery and rollback gates.
+
+### Rollback state
+
+Disable the shadow policy by running the normal server without
+`PI_WEB_UI_VALIDATION_MODE=true`; no receipt history is deleted. Reverting the
+Phase 7 commit removes the disposable shadow projection and scenario while
+leaving the Phase 6 pilot and ordinary Pi path unchanged. No production
+rollback was needed because production was never touched.
 
 ---
 

@@ -390,6 +390,16 @@ export interface SessionEvidenceResponse {
       runId?: string;
       runtime?: string;
       executionInstanceId?: string;
+      phase7PolicyVersion?: 'phase7-pi-shadow/v1';
+      phase7Profile?: Phase7PiShadowProfile;
+      phase7ReasonCodes?: Phase7PiShadowReasonCode[];
+      phase7Affinity?: 'session';
+      phase7AffinitySessionId?: string;
+      phase7ResourceIdentity?: 'shared-service';
+      phase7ResourceBoundary?: 'pi-control-process';
+      phase7SessionScoped?: false;
+      phase7ToolEventCount?: number;
+      phase7DurationMs?: number;
       error?: { name: string; message: string };
     }>;
   };
@@ -667,6 +677,52 @@ export interface RunLivenessEvidence {
   cessation: RunCessationEvidence;
 }
 
+/** Server-owned Phase 7 shadow profile for Pi Internal API prompts. */
+export type Phase7PiShadowProfile = 'standard' | 'heavy' | 'long-horizon';
+
+/** Bounded explanations for the shadow profile; never contains prompt text. */
+export type Phase7PiShadowReasonCode =
+  | 'default_standard'
+  | 'message_tool_signal'
+  | 'message_fork_or_memory_signal'
+  | 'prompt_size_threshold'
+  | 'tool_event_threshold'
+  | 'turn_duration_threshold';
+
+export interface Phase7PiShadowAffinity {
+  kind: 'session';
+  sessionId: string;
+  ownership: 'server-owned';
+}
+
+/**
+ * Honest identity for the pre-containment Pi path. It explicitly says that the
+ * session is still inside the shared control process; it is not a per-session
+ * cgroup or worker identity.
+ */
+export interface Phase7PiShadowResourceIdentity {
+  kind: 'shared-service';
+  boundary: 'pi-control-process';
+  ownership: 'server-owned';
+  sessionScoped: false;
+}
+
+export interface Phase7PiShadowEvidence {
+  promptBytes: number;
+  toolEventCount: number;
+  durationMs?: number;
+}
+
+export interface Phase7PiShadowClassification {
+  policyVersion: 'phase7-pi-shadow/v1';
+  mode: 'shadow';
+  profile: Phase7PiShadowProfile;
+  reasonCodes: Phase7PiShadowReasonCode[];
+  affinity: Phase7PiShadowAffinity;
+  resourceIdentity: Phase7PiShadowResourceIdentity;
+  evidence: Phase7PiShadowEvidence;
+}
+
 export interface RunReceipt {
   runId: string;
   sessionId: string;
@@ -690,6 +746,8 @@ export interface RunReceipt {
   interruptionReason?: 'server_restart';
   /** Durable, payload-free liveness and recovery evidence (contract >= 1.14.0). */
   liveness?: RunLivenessEvidence;
+  /** Additive Phase 7 Pi-only shadow classification evidence. */
+  phase7Shadow?: Phase7PiShadowClassification;
   /** End of the idempotency replay window, when a key was supplied. */
   idempotencyExpiresAt?: string;
 }

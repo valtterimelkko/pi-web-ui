@@ -148,7 +148,20 @@ describe('GET /sessions/:id/evidence', () => {
     ['registry path', '/tmp/pi-session.jsonl'],
   ])('resolves by %s and returns compact diagnostic-first evidence', async (_label, identifier) => {
     const { routes } = buildRoutes([entry()]);
-    pushDiagnosticsRecord(record({ sessionId: 'internal-pi-id', requestId: 'req-1', msg: 'a useful log line' }));
+    pushDiagnosticsRecord(record({
+      sessionId: 'internal-pi-id',
+      requestId: 'req-1',
+      msg: 'a useful log line',
+      phase7PolicyVersion: 'phase7-pi-shadow/v1',
+      phase7Profile: 'heavy',
+      phase7ReasonCodes: ['message_tool_signal'],
+      phase7Affinity: 'session',
+      phase7AffinitySessionId: 'internal-pi-id',
+      phase7ResourceIdentity: 'shared-service',
+      phase7ResourceBoundary: 'pi-control-process',
+      phase7SessionScoped: false,
+      phase7ToolEventCount: 8,
+    }));
 
     const res = await callEvidence(routes, identifier);
     expect(res.statusCode).toBe(200);
@@ -161,7 +174,19 @@ describe('GET /sessions/:id/evidence', () => {
     expect(body.retention).toEqual({ durableLeaseCount: 0, residentLeaseCount: 0 });
     expect(body.residency).toMatchObject({ state: 'materialized' });
     expect(body.runChronology).toEqual([]);
-    expect(body.diagnostics.records[0]).toMatchObject({ requestId: 'req-1', msg: 'a useful log line' });
+    expect(body.diagnostics.records[0]).toMatchObject({
+      requestId: 'req-1',
+      msg: 'a useful log line',
+      phase7PolicyVersion: 'phase7-pi-shadow/v1',
+      phase7Profile: 'heavy',
+      phase7ReasonCodes: ['message_tool_signal'],
+      phase7Affinity: 'session',
+      phase7AffinitySessionId: 'internal-pi-id',
+      phase7ResourceIdentity: 'shared-service',
+      phase7ResourceBoundary: 'pi-control-process',
+      phase7SessionScoped: false,
+      phase7ToolEventCount: 8,
+    });
     expect(body).not.toHaveProperty('firstMessage');
     expect(body).not.toHaveProperty('screenView');
     expect(res.body).not.toContain('do not include this prompt');

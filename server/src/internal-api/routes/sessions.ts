@@ -52,6 +52,8 @@ import type {
   TranscriptResponse,
   ScreenViewResponse,
   RegisterWatchRequest,
+  Phase7PiShadowProfile,
+  Phase7PiShadowReasonCode,
 } from '../types.js';
 import { isThinkingLevel } from '../types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
@@ -63,6 +65,7 @@ import {
 } from '../run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../run-receipts/run-receipt-store.js';
 import { resolveExecutionInstanceId } from '../execution-instance.js';
+import { classifyPhase7PiShadow } from '../phase7-pi-shadow.js';
 import {
   createEventCollector,
   collectAnswerEvent,
@@ -144,6 +147,52 @@ function compactEvidenceText(value: string, knownPrompt?: string, maxLength = 32
   return result.length > maxLength ? `${result.slice(0, maxLength)}…` : result;
 }
 
+const PHASE7_SHADOW_PROFILES = new Set<Phase7PiShadowProfile>(['standard', 'heavy', 'long-horizon']);
+const PHASE7_SHADOW_REASON_CODES = new Set<Phase7PiShadowReasonCode>([
+  'default_standard',
+  'message_tool_signal',
+  'message_fork_or_memory_signal',
+  'prompt_size_threshold',
+  'tool_event_threshold',
+  'turn_duration_threshold',
+]);
+
+function compactPhase7DiagnosticFields(
+  record: LogRecord,
+): Partial<SessionEvidenceResponse['diagnostics']['records'][number]> {
+  const fields: Partial<SessionEvidenceResponse['diagnostics']['records'][number]> = {};
+  if (record.phase7PolicyVersion === 'phase7-pi-shadow/v1') fields.phase7PolicyVersion = record.phase7PolicyVersion;
+  if (typeof record.phase7Profile === 'string' && PHASE7_SHADOW_PROFILES.has(record.phase7Profile as Phase7PiShadowProfile)) {
+    fields.phase7Profile = record.phase7Profile as Phase7PiShadowProfile;
+  }
+  if (
+    Array.isArray(record.phase7ReasonCodes)
+    && record.phase7ReasonCodes.length > 0
+    && record.phase7ReasonCodes.length <= 8
+    && record.phase7ReasonCodes.every((reason): reason is Phase7PiShadowReasonCode => (
+      typeof reason === 'string' && PHASE7_SHADOW_REASON_CODES.has(reason as Phase7PiShadowReasonCode)
+    ))
+  ) {
+    fields.phase7ReasonCodes = [...record.phase7ReasonCodes];
+  }
+  if (record.phase7Affinity === 'session') fields.phase7Affinity = record.phase7Affinity;
+  if (typeof record.phase7AffinitySessionId === 'string' && record.phase7AffinitySessionId.length > 0) {
+    fields.phase7AffinitySessionId = compactEvidenceText(record.phase7AffinitySessionId, undefined, 128);
+  }
+  if (record.phase7ResourceIdentity === 'shared-service') fields.phase7ResourceIdentity = record.phase7ResourceIdentity;
+  if (record.phase7ResourceBoundary === 'pi-control-process') fields.phase7ResourceBoundary = record.phase7ResourceBoundary;
+  if (record.phase7SessionScoped === false) fields.phase7SessionScoped = false;
+  const toolEventCount = record.phase7ToolEventCount;
+  if (typeof toolEventCount === 'number' && Number.isSafeInteger(toolEventCount) && toolEventCount >= 0 && toolEventCount <= 10_000) {
+    fields.phase7ToolEventCount = toolEventCount;
+  }
+  const durationMs = record.phase7DurationMs;
+  if (typeof durationMs === 'number' && Number.isSafeInteger(durationMs) && durationMs >= 0 && durationMs <= 7 * 24 * 60 * 60 * 1000) {
+    fields.phase7DurationMs = durationMs;
+  }
+  return fields;
+}
+
 function extractQuestionControlEvents(events: NormalizedEvent[]): NonNullable<SessionEvidenceResponse['control']>['askUserQuestions'] {
   const toolCallByRequest = new Map<string, string>();
   const result: NonNullable<SessionEvidenceResponse['control']>['askUserQuestions'] = [];
@@ -187,6 +236,7 @@ function compactDiagnosticRecord(
     ...(record.runId ? { runId: record.runId } : {}),
     ...(record.runtime ? { runtime: record.runtime } : {}),
     ...(record.executionInstanceId ? { executionInstanceId: record.executionInstanceId } : {}),
+    ...compactPhase7DiagnosticFields(record),
     ...(record.error
       ? {
           error: {
@@ -200,6 +250,23 @@ function compactDiagnosticRecord(
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\\"'\\\"'")}'`;
+}
+
+function logPhase7Shadow(runId: string, shadow: NonNullable<RunReceipt['phase7Shadow']>): void {
+  logger.child({
+    runId,
+    sessionId: shadow.affinity.sessionId,
+    phase7PolicyVersion: shadow.policyVersion,
+    phase7Profile: shadow.profile,
+    phase7ReasonCodes: shadow.reasonCodes,
+    phase7Affinity: shadow.affinity.kind,
+    phase7AffinitySessionId: shadow.affinity.sessionId,
+    phase7ResourceIdentity: shadow.resourceIdentity.kind,
+    phase7ResourceBoundary: shadow.resourceIdentity.boundary,
+    phase7SessionScoped: shadow.resourceIdentity.sessionScoped,
+    phase7ToolEventCount: shadow.evidence.toolEventCount,
+    ...(shadow.evidence.durationMs !== undefined ? { phase7DurationMs: shadow.evidence.durationMs } : {}),
+  }).info(`[Phase7Shadow] ${runId} profile=${shadow.profile}`);
 }
 
 
@@ -1543,7 +1610,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // is deliberately deferred until this write completes, so even an SSE
       // client cannot observe success before its terminal receipt is durable.
       const busy = error ? isRuntimeAlreadyRunningError(error) : false;
-      persistence = busy
+      const terminalWrite = busy
         ? runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY })
         : runReceipts.finish(runId, error
           ? {
@@ -1557,6 +1624,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           : cessationBasis
             ? { status: 'completed', cessationBasis }
             : {});
+      persistence = terminalWrite.then((receipt) => {
+        if (receipt?.phase7Shadow) logPhase7Shadow(runId, receipt.phase7Shadow);
+        return receipt;
+      });
     };
 
     let executionError: Error | undefined;
@@ -1793,6 +1864,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         detach: body.detach === true,
         requireActiveTurn: body.requireActiveTurn === true,
         idempotencyKey: body.idempotencyKey,
+        ...(runtime === 'pi' && config.validationMode
+          ? { phase7Shadow: classifyPhase7PiShadow({ sessionId, message: body.message }) }
+          : {}),
       } as const;
 
       // Claim a new-turn slot synchronously before the first reservation await.
@@ -1832,6 +1906,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
 
       const runId = reservation.receipt.runId;
+      if (reservation.receipt.phase7Shadow) logPhase7Shadow(runId, reservation.receipt.phase7Shadow);
 
       // Native Pi follow-up is queue acceptance, not a separately correlated
       // turn. Persist queued before calling the SDK and never attach this run to
@@ -3562,6 +3637,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           verbosity: 'answers' as const,
           detach: false,
           idempotencyKey: entry.idempotencyKey,
+          ...(reg.sdkType === 'pi' && config.validationMode
+            ? { phase7Shadow: classifyPhase7PiShadow({ sessionId: entry.sessionId, message: entry.message }) }
+            : {}),
         };
 
         // As with the single-prompt route, an idempotent retry must be
@@ -3674,6 +3752,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
         const runId = reservation.receipt.runId;
         reservedRunId = runId;
+        if (reservation.receipt.phase7Shadow) logPhase7Shadow(runId, reservation.receipt.phase7Shadow);
         let busyAfterReservation: boolean;
         try {
           busyAfterReservation = reg.sdkType === 'claude'

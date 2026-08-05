@@ -1,6 +1,6 @@
 # Pi Web UI Agent OS-First Resource Scaling and Runtime Lifecycle Hardening
 
-**Status:** Phases 0–6 **COMPLETE**; PAUSE 6 recorded as bounded `hybrid`; the Phase 7 shadow gate is owner-approved; Phase 7 implementation and Phases 8–9 remain planned
+**Status:** Phases 0–6 **COMPLETE**; Phase 7 Pi/Internal API shadow implementation **COMPLETE — PAUSE 7 recorded**; contained routing, production observation and Phases 8–9 remain planned
 **Supersedes:** the original plan at commit `b8d9109`
 **Revision basis:** production evidence gathered 3–5 August 2026
 **Execution report:** [`PI-WEB-UI-HARDENING-EXECUTION-REPORT.md`](./execution-reports/PI-WEB-UI-HARDENING-EXECUTION-REPORT.md)
@@ -37,7 +37,7 @@
 | 4 — Execution arbiter | **COMPLETE** | Priority reservations, bounded control lane, emergency mode, and the frozen benchmark/live evidence are recorded. Read-only production recheck on 5 August observed contract 1.16.0, `controlReserve=1`, `maxActiveTurns=6`, service-cgroup memory truth and `TasksMax=1024`; the binary does not embed an exact Git revision, so do not overstate provenance. |
 | 5 — Agent OS integration | **COMPLETE** | Companion-repo verify + gap-fill, contract parity, durable capacity deferral, backpressure, P1 control, and exactly-once disposable live proof are recorded. |
 | 6 — Worker-cgroup pilot | **COMPLETE — BOUNDED HYBRID** | Frozen fixture, contained-heavy boundary, adversarial validation, final review and cleanup passed. The pilot remains off outside disposable validation; the decision constrains any later expansion to one canonical API and automatic server-owned policy. |
-| 7 — shadow gate | **OWNER-APPROVED / NOT STARTED** | Lowest-risk Pi/Agent OS Internal API shadow scope is approved; no contained routing or production observation is authorised. |
+| 7 — shadow gate | **SHADOW IMPLEMENTED / PAUSE 7 RECORDED** | Pi/Internal API shadow classification is implemented and disposable-live validated; no contained routing or production observation is authorised. |
 | 8–9 | **PLANNED / NOT STARTED** | Conditional expansion, capacity ramp/soak, representative Agent OS/browser proof and final production rollout remain future work. |
 
 All phase-level completion claims above are backed by the linked execution report. A phase being complete does not waive its later production rollout or observation gate where the report explicitly leaves that gate for Phase 9.
@@ -1603,7 +1603,7 @@ latency threshold fails.
 
 ---
 
-## Phase 7 — Conditional broader worker/runtime containment rollout (P2, separately owner-authorised shadow gate) — APPROVED SCOPE / IMPLEMENTATION NOT STARTED
+## Phase 7 — Conditional broader worker/runtime containment rollout (P2, separately owner-authorised shadow gate) — SHADOW IMPLEMENTED / PAUSE 7 RECORDED
 
 PAUSE 6's bounded `hybrid` selects a direction, not general rollout authority.
 The owner approved the following lowest-risk Phase 7 entry scope on **2026-08-05**:
@@ -1636,8 +1636,38 @@ The owner approved the following lowest-risk Phase 7 entry scope on **2026-08-05
   receipts and evidence. Any future contained routing, production observation or
   Phase 7 scope/settings change requires a new owner pause and approval.
 
-This approval allows the execution agent to begin Phase 7 shadow implementation,
-red-first validation and disposable evidence collection immediately. It does
+### Phase 7 shadow implementation record (2026-08-05)
+
+**Evidence label:** `unit-validated` + `integration-validated` +
+`live-validated-disposable`; no production observation, restart, configuration
+change or contained route.
+
+The Pi Internal API prompt and batch-prompt paths now classify only on the
+isolated `validationMode` server under `phase7-pi-shadow/v1`. The frozen
+server-owned thresholds are 4,096 UTF-8 prompt bytes, 8 attributable
+`tool_execution_start` events and a 60-second long-horizon signal. Receipts and
+bounded diagnostics persist profile, reason codes, session affinity, and the
+truthful shared `pi-control-process` identity (`sessionScoped:false`); prompt
+text is omitted. Dynamic tool evidence is persisted before terminalisation and
+survives disk-backed restart recovery as `interrupted` evidence. No caller can
+select a profile or forge the server-derived initial classification.
+
+Focused Phase 7 suites are green, the full server suite is 227 files / 2,860
+tests, the client suite is 73 files / 863 tests, and disposable Pi live
+validation passed `phase7-pi-shadow`, `smoke`, and `run-receipt-idempotency`.
+The live scenario also verified the session evidence bundle's receipt and
+bounded diagnostic projection. The independent review findings were fixed and
+re-reviewed; see the execution report for the RED → GREEN ledger and exact
+commands.
+
+**PAUSE 7 — recorded:** this implementation stops at shadow evidence. The
+existing uncontained Pi path remains the only execution path; no contained
+routing, production observation, Phase 8A/8B, or Phase 9 work is authorised by
+this record. Further expansion requires a new owner decision after the plan's
+sample, parity, throughput, control-latency, recovery and rollback gates.
+
+This approval allowed the execution agent to begin Phase 7 shadow
+implementation, red-first validation and disposable evidence collection. It did
 not authorise a contained route, production access, Phase 8A/8B, or Phase 9.
 The broader options below remain unapproved possibilities for later PAUSE 7
 review; this entry scope selects none of them.
