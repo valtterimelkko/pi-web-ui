@@ -37,6 +37,8 @@ export interface BeginRunInput {
   executionInstanceId: string;
   model?: string;
   modelSelector?: string;
+  invocationRole?: 'conductor-root' | 'implementation-child';
+  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide';
   message: string;
   mode: PromptMode;
   dispatchMode?: PromptMode;
@@ -217,6 +219,8 @@ export class RunReceiptManager {
         executionInstanceId: input.executionInstanceId,
         model: input.model,
         modelSelector: input.modelSelector,
+        invocationRole: input.invocationRole,
+        permissionProfile: input.permissionProfile,
         mode: input.mode,
         dispatchMode: input.dispatchMode ?? input.mode,
         status: 'accepted',

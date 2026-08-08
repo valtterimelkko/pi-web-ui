@@ -6,6 +6,7 @@ import {
   parseDebugNamespaces,
   parseLogFormat,
   parsePositiveInteger,
+  parseAbsolutePath,
   LOG_FORMATS,
   type LogLevel,
   type LogFormat,
@@ -18,6 +19,14 @@ describe('positive integer parsing', () => {
     for (const invalid of ['0', '-1', '1.5', 'NaN', '']) {
       expect(() => parsePositiveInteger(invalid, 50, 'TEST')).toThrow(/TEST.*positive integer/i);
     }
+  });
+});
+
+describe('absolute path parsing', () => {
+  it('accepts absolute configured paths and refuses relative paths', () => {
+    expect(parseAbsolutePath(undefined, '/tmp/default', 'PATH')).toBe('/tmp/default');
+    expect(parseAbsolutePath(' /opt/cmd ', '/tmp/default', 'PATH')).toBe('/opt/cmd');
+    expect(() => parseAbsolutePath('./cmd', '/tmp/default', 'PATH')).toThrow(/absolute/i);
   });
 });
 

@@ -6,6 +6,9 @@ export interface RuntimeHealthEntry {
   enabled: boolean;
   available: boolean;
   backend: RuntimeBackendMode;
+  detailStatus?: string;
+  version?: string;
+  missingModels?: string[];
   checkStatus: RuntimeCheckStatus;
   checkedAt: string;
   checkDurationMs: number;
@@ -15,7 +18,8 @@ export interface RuntimeHealthEntry {
   };
 }
 
-export type RuntimeHealthMatrix = Record<SessionRuntime, RuntimeHealthEntry>;
+export type RuntimeHealthMatrix = Record<Exclude<SessionRuntime, 'commandcode'>, RuntimeHealthEntry>
+  & Partial<Record<'commandcode', RuntimeHealthEntry>>;
 
 export interface RuntimeProbeDefinition {
   enabled: boolean;
@@ -23,7 +27,8 @@ export interface RuntimeProbeDefinition {
   probe?: () => Promise<boolean>;
 }
 
-export type RuntimeProbeDefinitions = Record<SessionRuntime, RuntimeProbeDefinition>;
+export type RuntimeProbeDefinitions = Record<Exclude<SessionRuntime, 'commandcode'>, RuntimeProbeDefinition>
+  & Partial<Record<'commandcode', RuntimeProbeDefinition>>;
 
 /** Keeps only the latest bounded, scrubbed probe failure for each runtime. */
 export class RuntimeHealthMonitor {

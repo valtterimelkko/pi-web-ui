@@ -16,6 +16,10 @@ import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
 import type { RegistryEntry } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
+import { CommandCodeRuntimeError, type CommandCodeService } from '../../command-code/command-code-service.js';
+import { commandCodeEventsToScreenEvents } from '../../command-code/command-code-event-adapter.js';
+import type { CommandCodeRoleAttestation } from '../../command-code/command-code-role-attestation.js';
+import type { CommandCodeInternalSessionRecord } from '../../command-code/command-code-session-store.js';
 import type {
   CreateSessionRequest,
   SendPromptRequest,
@@ -90,6 +94,7 @@ import {
   extractClaudeTranscript,
   extractOpenCodeTranscript,
   piSessionToReplayEvents,
+  replayEventsToVisibleItems,
 } from '../../session-transfer/index.js';
 import type { VisibleTranscript } from '../../session-transfer/types.js';
 import { stat, readdir, unlink, rm } from 'fs/promises';
@@ -137,6 +142,28 @@ class TurnStalledError extends Error {
 
 function isRuntimeAlreadyRunningError(error: Error): boolean {
   return /session is already running/i.test(error.message);
+}
+
+function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
+  if (runtime !== 'commandcode') {
+    return error instanceof TurnStalledError ? ErrorCode.TURN_STALLED : ErrorCode.RUNTIME_ERROR;
+  }
+  if (error instanceof CommandCodeRuntimeError) {
+    switch (error.code) {
+      case 'auth_required': return ErrorCode.COMMANDCODE_AUTH_REQUIRED;
+      case 'rate_limited': return ErrorCode.COMMANDCODE_RATE_LIMITED;
+      case 'network_failure': return ErrorCode.COMMANDCODE_NETWORK_FAILURE;
+      case 'provider_failure': return ErrorCode.COMMANDCODE_PROVIDER_FAILURE;
+      case 'credits': return ErrorCode.COMMANDCODE_CREDITS;
+      case 'max_turns': return ErrorCode.COMMANDCODE_MAX_TURNS;
+      case 'no_response': return ErrorCode.COMMANDCODE_NO_RESPONSE;
+      case 'protocol_error': return ErrorCode.COMMANDCODE_PROTOCOL_ERROR;
+      case 'interrupted': return ErrorCode.RUNTIME_ERROR;
+      case 'permission_denied': return ErrorCode.COMMANDCODE_ROLE_REFUSED;
+      default: return ErrorCode.RUNTIME_ERROR;
+    }
+  }
+  return ErrorCode.RUNTIME_ERROR;
 }
 
 function compactEvidenceText(value: string, knownPrompt?: string, maxLength = 320): string {
@@ -312,6 +339,8 @@ export interface SessionRoutesDeps {
   disposal?: SessionDisposalRegistry;
   /** Pi providers denied for Internal API agent execution. */
   blockedPiProviders?: readonly string[];
+  /** Feature-gated server-local Command Code runtime. */
+  commandCodeService?: CommandCodeService;
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps) {
@@ -325,6 +354,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     internalClientId,
     onSessionCreated,
   } = deps;
+  const commandCodeService = deps.commandCodeService;
 
   const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
   const antigravitySessionDir = deps.antigravitySessionDir ?? config.antigravitySessionDir;
@@ -492,6 +522,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   /** Pin a session via the right runtime service. Used by watch registration. */
   async function pinSessionById(sessionId: string, claimId = 'web-ui'): Promise<boolean> {
+    const commandCodeEntry = await commandCodeService?.getSession(sessionId);
+    if (commandCodeEntry) return commandCodeService?.pinSession(sessionId) ?? false;
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) return false;
     if (entry.sdkType === 'claude') return claudeService.pinSession(sessionId, claimId);
@@ -502,6 +534,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   /** Revoke one source-owned runtime claim via the right service. */
   async function unpinSessionById(sessionId: string, claimId = 'web-ui'): Promise<boolean> {
+    const commandCodeEntry = await commandCodeService?.getSession(sessionId);
+    if (commandCodeEntry) return commandCodeService?.unpinSession(sessionId) ?? false;
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) return false;
     if (entry.sdkType === 'claude') return claudeService.unpinSession(sessionId, claimId);
@@ -603,7 +637,39 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       : undefined;
   }
 
+  function commandCodeSessionInfo(record: CommandCodeInternalSessionRecord): SessionInfo {
+    return {
+      sessionId: record.sessionId,
+      sessionPath: record.sessionId,
+      runtime: 'commandcode',
+      executionInstanceId: record.executionInstanceId,
+      cwd: record.cwd,
+      model: record.modelSelector,
+      modelSelector: record.modelSelector,
+      invocationRole: record.invocationRole,
+      status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
+      messageCount: record.messageCount,
+      firstMessage: record.firstMessage,
+      createdAt: record.createdAt,
+      lastActivity: record.updatedAt,
+    };
+  }
+
+  function commandCodeSessionDetail(record: CommandCodeInternalSessionRecord): SessionDetail {
+    return {
+      ...commandCodeSessionInfo(record),
+      backendMode: 'subprocess',
+      nativeSessionId: record.nativeSessionId,
+      status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
+      tokens: undefined,
+    };
+  }
+
   async function cleanupRejectedCreatedSession(sessionId: string): Promise<void> {
+    if (await commandCodeService?.getSession(sessionId)) {
+      await commandCodeService?.deleteSession(sessionId);
+      return;
+    }
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) return;
     if (entry.sdkType === 'claude') claudeService.abort(sessionId);
@@ -798,9 +864,54 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
     let base: CreateSessionResponse | null = null;
     let createdPiSessionPath: string | undefined;
+    let createdCommandCodeSessionId: string | undefined;
 
     try {
       switch (runtime) {
+        case 'commandcode': {
+          if (!commandCodeService || !commandCodeService.isEnabled()) {
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code runtime is disabled'));
+            return;
+          }
+          if (!commandCodeService.isAvailable()) {
+            const health = commandCodeService.getHealth();
+            const code = health.status === 'executable_missing'
+              ? ErrorCode.COMMANDCODE_CLI_MISSING
+              : ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE;
+            sendJson(res, 503, enrichedErrorBody(code, `Command Code runtime is ${health.status}`));
+            return;
+          }
+          const selectedModel = body.model;
+          if (selectedModel !== 'qwen/qwen3.8-max' && selectedModel !== 'meta/muse-spark-1.2-contributor') {
+            sendJson(res, 400, enrichedErrorBody(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code requires one of the two exact allowlisted model ids'));
+            return;
+          }
+          const invocationRole = body.invocationRole;
+          if (invocationRole !== 'conductor-root' && invocationRole !== 'implementation-child') {
+            sendJson(res, 403, enrichedErrorBody(ErrorCode.COMMANDCODE_ROLE_REFUSED, 'Command Code invocationRole is required and server-owned'));
+            return;
+          }
+          const created = await commandCodeService.createSession({
+            cwd,
+            model: selectedModel,
+            permissionProfile: invocationRole === 'conductor-root' ? 'agent-os-7f-root-readonly' : 'implementation-child-wide',
+            invocationRole,
+            roleAttestation: body.commandCodeAttestation as CommandCodeRoleAttestation | undefined,
+          });
+          createdCommandCodeSessionId = created.sessionId;
+          base = {
+            sessionId: created.sessionId,
+            sessionPath: created.sessionId,
+            runtime: 'commandcode',
+            model: selectedModel,
+            modelSelector: selectedModel,
+            invocationRole,
+            executionInstanceId: created.executionInstanceId,
+            cwd: created.cwd,
+            createdAt: created.createdAt,
+          };
+          break;
+        }
         case 'claude': {
           const explicitProfileId = (body as { profileId?: string }).profileId;
           if (body.model?.startsWith('profile:')
@@ -1013,6 +1124,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sendJson(res, 201, base satisfies CreateSessionResponse);
       onSessionCreated?.(base.sessionId, base.sessionPath, base.runtime);
     } catch (err) {
+      if (createdCommandCodeSessionId) await commandCodeService?.deleteSession(createdCommandCodeSessionId).catch(() => undefined);
+      if (err instanceof CommandCodeRuntimeError && err.code === 'permission_denied') {
+        sendJson(res, 403, enrichedErrorBody(ErrorCode.COMMANDCODE_ROLE_REFUSED, err.message));
+        return;
+      }
       logger.errorObject('Failed to create session', err);
       sendJson(res, 500, {
         error: err instanceof Error ? err.message : 'Failed to create session',
@@ -1045,6 +1161,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         createdAt: entry.createdAt,
         lastActivity: entry.lastActivity,
       }));
+      if (commandCodeService?.isEnabled()) {
+        const commandCodeSessions = await commandCodeService.listSessions();
+        sessions.push(...commandCodeSessions.map(commandCodeSessionInfo));
+      }
 
       sendJson(res, 200, { sessions } satisfies ListSessionsResponse);
     } catch (err) {
@@ -1054,6 +1174,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   async function buildSessionDetail(sessionId: string): Promise<SessionDetail | null> {
+    const commandCodeEntry = await commandCodeService?.getSession(sessionId);
+    if (commandCodeEntry) return commandCodeSessionDetail(commandCodeEntry);
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) return null;
 
@@ -1231,6 +1353,114 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  async function commandCodeTranscript(record: CommandCodeInternalSessionRecord, scope: 'visible_recent' | 'visible_full'): Promise<TranscriptResponse> {
+    const events = await commandCodeService!.getReplayEvents(record.sessionId);
+    const projected = replayEventsToVisibleItems(commandCodeEventsToScreenEvents(events));
+    // Journals written before user message events were introduced still have a
+    // useful last prompt in the session record. Keep that bounded compatibility
+    // fallback, but never duplicate it when the normalized journal has users.
+    const allItems: TranscriptResponse['items'] = projected.length > 0 && projected.some((item) => item.kind === 'user')
+      ? projected
+      : record.lastMessage
+        ? [{ kind: 'user', text: record.lastMessage }, ...projected]
+        : projected;
+    const bounded = scope === 'visible_recent' && allItems.length > 20 ? allItems.slice(-20) : allItems;
+    return {
+      sessionId: record.sessionId,
+      runtime: 'commandcode',
+      scope,
+      itemCount: bounded.length,
+      truncated: bounded.length !== allItems.length,
+      items: bounded,
+      source: {
+        sessionId: record.sessionId,
+        displayName: record.firstMessage?.slice(0, 50) || record.sessionId,
+        sdkType: 'commandcode',
+        cwd: record.cwd,
+        createdAt: record.createdAt,
+        lastActivity: record.updatedAt,
+      },
+    };
+  }
+
+  async function handleCommandCodeEvidence(
+    res: ServerResponse,
+    record: CommandCodeInternalSessionRecord,
+    query: URLSearchParams,
+  ): Promise<void> {
+    await runReceipts.init();
+    const expansions = parseEvidenceExpansions(query.get('expand'));
+    const limit = parseEvidenceLimit(query.get('limit'));
+    const receipts = runReceipts.listBySession(record.sessionId)
+      .sort((a, b) => Date.parse(b.terminalAt ?? b.acceptedAt) - Date.parse(a.terminalAt ?? a.acceptedAt));
+    const diagnostics = record.diagnostics ? [{
+      ts: record.updatedAt,
+      level: record.diagnostics.protocolError ? 'warn' : 'info',
+      component: 'CommandCodeService',
+      msg: record.diagnostics.protocolError ?? `Command Code state=${record.state}`,
+      runtime: 'commandcode',
+      executionInstanceId: record.executionInstanceId,
+    }] : [];
+    const response: SessionEvidenceResponse = {
+      sessionId: record.sessionId,
+      runtime: 'commandcode',
+      aliases: {
+        internalId: record.sessionId,
+        path: record.sessionId,
+        ...(record.nativeSessionId ? { commandCodeNativeSessionId: record.nativeSessionId } : {}),
+      },
+      status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
+      backendMode: 'subprocess',
+      model: record.modelSelector,
+      cwd: record.cwd,
+      messageCount: record.messageCount,
+      createdAt: record.createdAt,
+      lastActivity: record.updatedAt,
+      executionInstanceId: record.executionInstanceId,
+      invocationRole: record.invocationRole,
+      permissionProfile: record.permissionProfile,
+      activity: { status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle', lastActivity: record.updatedAt },
+      sources: {
+        registryPath: 'private command-code session store',
+        runtime: {
+          executionInstanceId: record.executionInstanceId,
+          eventJournal: record.eventJournalRef,
+          nativeTranscript: 'owned by Command Code; not read or copied by Pi Web UI',
+        },
+        commands: [],
+      },
+      diagnostics: { processLocal: true, expanded: expansions.has('diagnostics'), records: expansions.has('diagnostics') ? diagnostics : diagnostics.slice(-3) },
+      receiptSummary: { durable: true, count: receipts.length, ...(receipts[0] ? { latest: receipts[0] } : {}) },
+      retention: evidenceRetention(record.sessionId),
+      residency: { state: record.state === 'running' ? 'materialized' : 'not_materialized', observedAt: new Date().toISOString() },
+      runChronology: receipts.slice(0, 3).map((receipt) => ({
+        runId: receipt.runId, status: receipt.status, acceptedAt: receipt.acceptedAt,
+        ...(receipt.startedAt ? { startedAt: receipt.startedAt } : {}),
+        ...(receipt.agentEndAt ? { agentEndAt: receipt.agentEndAt } : {}),
+        ...(receipt.terminalAt ? { terminalAt: receipt.terminalAt } : {}),
+        ...(receipt.errorCode ? { errorCode: receipt.errorCode } : {}),
+        ...(receipt.liveness ? { liveness: receipt.liveness } : {}),
+      })),
+      warnings: [
+        'Command Code native credentials and transcript files remain owned by Command Code and are not copied here.',
+        'The private normalized event journal is the Pi Web UI replay source.',
+      ],
+      links: evidenceLinks(record.sessionId),
+    };
+    if (expansions.has('runs')) response.runReceipts = receipts.slice(0, limit);
+    if (expansions.has('transcript')) response.transcript = await commandCodeTranscript(record, 'visible_recent');
+    if (expansions.has('screen')) {
+      const events = await commandCodeService!.getReplayEvents(record.sessionId);
+      const screenView = projectDefaultViewFromEvents(commandCodeEventsToScreenEvents(events), { expand: parseScreenViewExpand(query.get('expand')) });
+      response.screen = {
+        sessionId: record.sessionId, runtime: 'commandcode', view: 'screen', expanded: screenView.expanded,
+        screenView, markdown: renderScreenViewMarkdown(screenView),
+        source: { sessionId: record.sessionId, displayName: record.firstMessage?.slice(0, 50) || record.sessionId, sdkType: 'commandcode', cwd: record.cwd, createdAt: record.createdAt, lastActivity: record.updatedAt },
+      };
+    }
+    sendJson(res, 200, response);
+  }
+
   async function handleGetSessionEvidence(
     _req: IncomingMessage,
     res: ServerResponse,
@@ -1238,6 +1468,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     query: URLSearchParams,
   ): Promise<void> {
     try {
+      const commandCodeEntry = await commandCodeService?.findSession(identifier);
+      if (commandCodeEntry) {
+        await handleCommandCodeEvidence(res, commandCodeEntry, query);
+        return;
+      }
       const entry = await resolveSessionEntry(identifier);
       if (!entry) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -1398,6 +1633,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
+      const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+      if (commandCodeEntry) {
+        sendJson(res, 200, { sessionId: commandCodeEntry.sessionId, runtime: 'commandcode', events: (await commandCodeService!.getReplayEvents(commandCodeEntry.sessionId)).map((event) => ({ ...event })) } satisfies SessionHistoryResponse);
+        return;
+      }
       const entry = await sessionRegistry.get(sessionId);
       if (!entry) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -1505,6 +1745,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
+      const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+      if (commandCodeEntry) {
+        await runReceipts.cancelSession(commandCodeEntry.sessionId);
+        disposal.dispose(commandCodeEntry.sessionId);
+        broker.clear(commandCodeEntry.sessionId);
+        // Release every source-owned claim while the Command Code record is
+        // still resolvable. Deleting first would make unpinSessionById unable
+        // to find the runtime record and leave durable retention leases behind.
+        await watchManager.delete(commandCodeEntry.sessionId);
+        if (pinExpiry) await pinExpiry.clear(commandCodeEntry.sessionId);
+        await unpinSessionById(commandCodeEntry.sessionId).catch(() => false);
+        await commandCodeService!.deleteSession(commandCodeEntry.sessionId);
+        sendJson(res, 200, { success: true, nativeTranscriptRetained: true });
+        return;
+      }
       const entry = await sessionRegistry.get(sessionId);
       if (!entry) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -1615,11 +1870,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         : runReceipts.finish(runId, error
           ? {
               status: 'failed',
-              errorCode: error instanceof TurnStalledError
-                ? ErrorCode.TURN_STALLED
-                : error instanceof PiProviderNotAllowedError
-                  ? ErrorCode.PROVIDER_NOT_ALLOWED
-                  : ErrorCode.RUNTIME_ERROR,
+              errorCode: error instanceof PiProviderNotAllowedError
+                ? ErrorCode.PROVIDER_NOT_ALLOWED
+                : runtimeErrorCode(error, runtime),
             }
           : cessationBasis
             ? { status: 'completed', cessationBasis }
@@ -1642,6 +1895,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       },
       complete,
       admittedLease?.turnToken,
+      runId,
     ).then(() => {
       // Existing runtimes normally call onComplete at their turn boundary. The
       // fallback keeps the receipt explicit if a runtime returns without doing
@@ -1725,6 +1979,123 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     return busy ? { error: ErrorCode.SESSION_BUSY } : { dispatchMode: 'prompt' };
   }
 
+  async function handleCommandCodePrompt(
+    req: IncomingMessage,
+    res: ServerResponse,
+    record: CommandCodeInternalSessionRecord,
+    body: SendPromptRequest,
+  ): Promise<void> {
+    const verbosity: Verbosity = body.verbosity || parseVerbosityHeader(req.headers['x-verbosity'] as string | undefined) || 'answers';
+    const mode = body.mode ?? 'prompt';
+    if (mode === 'steer') {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Command Code does not support steer mode'));
+      return;
+    }
+    if (body.detach && (verbosity === 'full' || verbosity === 'tasks')) {
+      sendJson(res, 400, { error: 'detach=true requires verbosity=answers (non-streaming)', code: ErrorCode.INVALID_REQUEST });
+      return;
+    }
+    const dispatchMode: PromptMode = 'prompt';
+    const busy = commandCodeService!.isRunning(record.sessionId) || (await commandCodeService!.getSession(record.sessionId))?.state === 'running';
+    if (busy || mode === 'follow_up' && body.requireActiveTurn) {
+      res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
+      sendJson(res, 409, enrichedErrorBody(busy ? ErrorCode.SESSION_BUSY : ErrorCode.SESSION_NOT_STREAMING, busy ? 'Session is currently busy' : 'Session does not have an active turn'));
+      return;
+    }
+    const beginInput = {
+      sessionId: record.sessionId,
+      runtime: 'commandcode' as const,
+      executionInstanceId: record.executionInstanceId,
+      model: record.modelSelector,
+      modelSelector: record.modelSelector,
+      invocationRole: record.invocationRole,
+      permissionProfile: record.permissionProfile,
+      message: body.message,
+      mode,
+      dispatchMode,
+      verbosity,
+      detach: body.detach === true,
+      requireActiveTurn: body.requireActiveTurn === true,
+      idempotencyKey: body.idempotencyKey,
+    } as const;
+    if (body.idempotencyKey !== undefined) {
+      try {
+        const existing = await runReceipts.findExistingRun(beginInput);
+        if (existing?.kind === 'conflict') {
+          sendJson(res, 409, { ...enrichedErrorBody(ErrorCode.IDEMPOTENCY_KEY_CONFLICT, 'Idempotency key was already used for a different prompt'), runId: existing.receipt.runId });
+          return;
+        }
+        if (existing?.kind === 'duplicate') {
+          sendJson(res, 200, duplicatePromptResponse(record.sessionId, existing.receipt, body.detach === true));
+          return;
+        }
+      } catch (error) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, error instanceof Error ? error.message : String(error)));
+        return;
+      }
+    }
+    let reservation;
+    try {
+      reservation = await runReceipts.beginRun(beginInput);
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : 'Failed to reserve run receipt', code: ErrorCode.INTERNAL_ERROR });
+      return;
+    }
+    if (reservation.kind !== 'created') {
+      if (reservation.kind === 'conflict') sendJson(res, 409, { ...enrichedErrorBody(ErrorCode.IDEMPOTENCY_KEY_CONFLICT, 'Idempotency key was already used for a different prompt'), runId: reservation.receipt.runId });
+      else sendJson(res, 200, duplicatePromptResponse(record.sessionId, reservation.receipt, body.detach === true));
+      return;
+    }
+    const runId = reservation.receipt.runId;
+    let rawLease: { release: () => void };
+    try {
+      rawLease = await admission.acquire('commandcode', 'P2');
+    } catch (error) {
+      await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
+      const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
+      res.setHeader('Retry-After', String(capacityError.retryAfterSeconds));
+      sendJson(res, 429, { ...enrichedErrorBody(ErrorCode.ADMISSION_CAPACITY_EXHAUSTED, capacityError.message), reason: capacityError.reason, retryAfterSeconds: capacityError.retryAfterSeconds, runId });
+      return;
+    }
+    let released = false;
+    const lease = { release: () => { if (released) return; released = true; rawLease.release(); } };
+    runReceipts.attachLease(runId, lease);
+    try {
+      await runReceipts.markStarted(runId);
+    } catch (error) {
+      lease.release();
+      await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
+      logger.errorObject(`Failed to start Command Code run receipt ${runId}`, error);
+      sendJson(res, 500, { error: 'Failed to start run', code: ErrorCode.INTERNAL_ERROR, runId });
+      return;
+    }
+    const runContext = { runId, executionInstanceId: record.executionInstanceId };
+    if (body.detach) {
+      void withCorrelation(runContext, async () => {
+        logger.info(`[InternalAPI] Prompt dispatched: runtime=commandcode verbosity=${verbosity} mode=${mode} dispatchMode=${dispatchMode} runId=${runId}`);
+        await executePromptWithReceipt(runId, record.sessionId, 'commandcode', body.message, dispatchMode, () => undefined, (error) => {
+          if (error) logger.errorObject(`Detached Command Code prompt failed ${record.sessionId} run=${runId}`, error);
+        }, lease);
+      }).catch((error) => logger.errorObject(`Detached Command Code prompt error for ${record.sessionId} run=${runId}`, error));
+      sendJson(res, 202, { sessionId: record.sessionId, runId, detached: true, status: 'accepted', mode, dispatchMode } satisfies DetachedPromptResponse);
+      return;
+    }
+    try {
+      await withCorrelation(runContext, async () => {
+        logger.info(`[InternalAPI] Prompt dispatched: runtime=commandcode verbosity=${verbosity} mode=${mode} dispatchMode=${dispatchMode} runId=${runId}`);
+        if (verbosity === 'full' || verbosity === 'tasks') {
+          await handleStreamingPrompt(req, res, record.sessionId, 'commandcode', body.message, verbosity, mode, dispatchMode, runId, lease);
+        } else {
+          await handleAnswersPrompt(res, record.sessionId, 'commandcode', body.message, mode, dispatchMode, runId, lease);
+        }
+      });
+    } catch (error) {
+      lease.release();
+      await runReceipts.finish(runId, { status: 'failed', errorCode: runtimeErrorCode(error instanceof Error ? error : new Error(String(error)), 'commandcode') }).catch(() => undefined);
+      if (!res.headersSent) sendJson(res, 500, { error: 'Command Code prompt failed. Inspect evidence using the returned runId.', code: ErrorCode.RUNTIME_ERROR, runId });
+    }
+  }
+
   async function handleSendPrompt(
     req: IncomingMessage,
     res: ServerResponse,
@@ -1746,6 +2117,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const mode = body.mode ?? 'prompt';
     if (mode !== 'prompt' && mode !== 'follow_up' && mode !== 'steer') {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'mode must be prompt, follow_up, or steer'));
+      return;
+    }
+
+    const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+    if (commandCodeEntry) {
+      const requestId = getCorrelationContext()?.requestId ?? newRequestId();
+      await withCorrelation({ requestId, sessionId, runtime: 'commandcode' }, async () => {
+        await handleCommandCodePrompt(req, res, commandCodeEntry, body);
+      });
       return;
     }
 
@@ -2047,7 +2427,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         // occur after markStarted but before the runtime is invoked.
         await runReceipts.finish(runId, {
           status: 'failed',
-          errorCode: providerError ? ErrorCode.PROVIDER_NOT_ALLOWED : ErrorCode.RUNTIME_ERROR,
+          errorCode: providerError ? ErrorCode.PROVIDER_NOT_ALLOWED : runtimeErrorCode(err instanceof Error ? err : new Error(String(err)), runtime),
         }).catch(() => undefined);
         logger.errorObject('Prompt failed', err);
           if (!res.headersSent) {
@@ -2055,7 +2435,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             else {
               sendJson(res, 500, {
                 error: 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
-                code: ErrorCode.RUNTIME_ERROR,
+                code: runtimeErrorCode(err instanceof Error ? err : new Error(String(err)), runtime),
                 runId,
               });
             }
@@ -2095,13 +2475,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     if (collector.error) {
       const busy = isRuntimeAlreadyRunningError(collector.error);
-      const stalled = collector.error instanceof TurnStalledError;
+      const errorCode = busy ? ErrorCode.SESSION_BUSY : runtimeErrorCode(collector.error, runtime);
       if (busy) res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
-      sendJson(res, busy ? 409 : 500, {
-        error: busy
-          ? 'Session is currently busy'
-          : stalled ? 'Accepted run stalled before completion' : 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
-        code: busy ? ErrorCode.SESSION_BUSY : stalled ? ErrorCode.TURN_STALLED : ErrorCode.RUNTIME_ERROR,
+      const status = busy ? 409 : errorCode === ErrorCode.COMMANDCODE_RATE_LIMITED ? 429 : errorCode === ErrorCode.COMMANDCODE_AUTH_REQUIRED || errorCode === ErrorCode.COMMANDCODE_CREDITS ? 503 : errorCode === ErrorCode.COMMANDCODE_NETWORK_FAILURE || errorCode === ErrorCode.COMMANDCODE_PROVIDER_FAILURE || errorCode === ErrorCode.COMMANDCODE_PROTOCOL_ERROR || errorCode === ErrorCode.COMMANDCODE_NO_RESPONSE ? 502 : 500;
+      sendJson(res, status, {
+        error: busy ? 'Session is currently busy' : 'Runtime prompt failed. Inspect diagnostics using the returned runId.',
+        code: errorCode,
         runId,
       });
       return;
@@ -2149,7 +2528,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           // Completion may win the race while the client connection closes.
           // Never abort a runtime after its receipt became terminal.
           if (cancelled?.status !== 'cancelled') return;
-          if (runtime === 'claude') {
+          if (runtime === 'commandcode') {
+            await commandCodeService?.abort(sessionId);
+          } else if (runtime === 'claude') {
             claudeService.abort(sessionId);
           } else if (runtime === 'opencode') {
             opencodeService.abort(sessionId);
@@ -2200,6 +2581,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
+      const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+      if (commandCodeEntry) {
+        await runReceipts.cancelSession(commandCodeEntry.sessionId);
+        await commandCodeService!.abort(commandCodeEntry.sessionId);
+        sendJson(res, 200, { success: true });
+        return;
+      }
       const entry = await sessionRegistry.get(sessionId);
       if (!entry) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -2244,6 +2632,30 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
     const body = parsed.data as SessionControlRequest;
+
+    const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+    if (commandCodeEntry) {
+      if (body.action === 'set_model') {
+        if (body.modelId !== commandCodeEntry.modelSelector) {
+          sendJson(res, 400, enrichedErrorBody(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code model selection is fixed to the session route'));
+          return;
+        }
+        sendJson(res, 200, { success: true, action: 'set_model', modelId: body.modelId } satisfies SessionControlResponse);
+        return;
+      }
+      if (body.action === 'pin') {
+        const pinned = commandCodeService!.pinSession(commandCodeEntry.sessionId);
+        sendJson(res, 200, { success: pinned, action: 'pin', pinned } satisfies SessionControlResponse);
+        return;
+      }
+      if (body.action === 'unpin') {
+        commandCodeService!.unpinSession(commandCodeEntry.sessionId);
+        sendJson(res, 200, { success: true, action: 'unpin', pinned: false } satisfies SessionControlResponse);
+        return;
+      }
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'This session control operation is not supported for Command Code'));
+      return;
+    }
 
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
@@ -2512,6 +2924,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
+    if (await commandCodeService?.findSession(sessionId)) {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Approvals are not supported for Command Code'));
+      return;
+    }
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -2611,6 +3027,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   async function abortRuntimeTurn(sessionId: string, runtime: SessionRuntime): Promise<void> {
+    if (runtime === 'commandcode') {
+      await commandCodeService?.abort(sessionId);
+      return;
+    }
     if (runtime === 'claude') {
       claudeService.abort(sessionId);
       return;
@@ -2813,6 +3233,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error, cessationBasis?: 'documented_handler_return') => void,
     turnToken?: number,
+    runId?: string,
   ): Promise<void> {
     // Wrap onEvent so every event also flows into the broker. This lets
     // long-lived subscribers (e.g. GET /sessions/:id/events) observe the
@@ -2823,6 +3244,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     };
 
     switch (runtime) {
+      case 'commandcode': {
+        if (!commandCodeService) throw new Error('Command Code service is not configured');
+        return new Promise<void>((resolve) => {
+          const wrappedComplete = (error?: Error) => {
+            onComplete(error);
+            resolve();
+          };
+          commandCodeService.sendPrompt(sessionId, message, broadcast, wrappedComplete, runId).catch((error) => {
+            onComplete(error instanceof Error ? error : new Error(String(error)));
+            resolve();
+          });
+        });
+      }
+
       case 'claude': {
         return new Promise<void>((resolve) => {
           const wrappedComplete = (error?: Error) => {
@@ -2956,21 +3391,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
-    const entry = await sessionRegistry.get(sessionId);
-    if (!entry) {
+    const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+    const entry = commandCodeEntry ? undefined : await sessionRegistry.get(sessionId);
+    if (!entry && !commandCodeEntry) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
       return;
     }
 
     // For Pi sessions, eagerly attach the long-lived broker observer so
     // events emitted by any future prompt reach this subscriber.
-    if (entry.sdkType === 'pi') {
+    if (entry?.sdkType === 'pi') {
       attachPiObserverIfNeeded(entry.path);
     }
 
+    const brokerSessionId = commandCodeEntry?.sessionId ?? sessionId;
     const sse = createSSEStream(res);
 
-    const unsub = broker.subscribe(sessionId, (event) => {
+    const unsub = broker.subscribe(brokerSessionId, (event) => {
       sse.write(event.type, event);
     }, true, 'sse');
 
@@ -2979,7 +3416,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // response (the broker holds no req/res), so without this handle a deleted
     // session would leave an open SSE connection + 15s heartbeat until the
     // client disconnects. On delete, disposal closes the stream cleanly.
-    const unregisterDispose = disposal.register(sessionId, 'sse-events-stream', () => {
+    const unregisterDispose = disposal.register(brokerSessionId, 'sse-events-stream', () => {
       unsub();
       try { sse.complete({ reason: 'session_deleted' }); } catch { /* already closed */ }
     });
@@ -3008,6 +3445,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
     query: URLSearchParams,
   ): Promise<void> {
+    const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+    if (commandCodeEntry) {
+      const timeoutMs = Math.min(Math.max(parseInt(query.get('timeout') || '60000', 10), 0), 300000);
+      const start = Date.now();
+      const pollCommandCode = (): void => {
+        const status: WaitResponse['status'] = commandCodeService!.isRunning(commandCodeEntry.sessionId) ? 'running' : 'idle';
+        const elapsed = Date.now() - start;
+        if (status === (query.get('status') || 'idle') || elapsed >= timeoutMs) {
+          sendJson(res, 200, { sessionId: commandCodeEntry.sessionId, status: status === (query.get('status') || 'idle') ? status : 'timeout', waitedMs: elapsed } satisfies WaitResponse);
+          return;
+        }
+        setTimeout(pollCommandCode, Math.min(500, timeoutMs - elapsed));
+      };
+      pollCommandCode();
+      return;
+    }
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -3285,6 +3738,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     query: URLSearchParams,
   ): Promise<void> {
     try {
+      const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+      if (commandCodeEntry) {
+        if (query.get('view') === 'screen') {
+          const events = await commandCodeService!.getReplayEvents(commandCodeEntry.sessionId);
+          const screenView = projectDefaultViewFromEvents(commandCodeEventsToScreenEvents(events), { expand: parseScreenViewExpand(query.get('expand')) });
+          sendJson(res, 200, {
+            sessionId: commandCodeEntry.sessionId, runtime: 'commandcode', view: 'screen', expanded: screenView.expanded,
+            screenView, markdown: renderScreenViewMarkdown(screenView),
+            source: { sessionId: commandCodeEntry.sessionId, displayName: commandCodeEntry.firstMessage?.slice(0, 50) || commandCodeEntry.sessionId, sdkType: 'commandcode', cwd: commandCodeEntry.cwd, createdAt: commandCodeEntry.createdAt, lastActivity: commandCodeEntry.updatedAt },
+          } satisfies ScreenViewResponse);
+        } else {
+          const scope = query.get('scope') === 'visible_full' ? 'visible_full' : 'visible_recent';
+          sendJson(res, 200, await commandCodeTranscript(commandCodeEntry, scope));
+        }
+        return;
+      }
       const entry = await resolveSessionEntry(sessionId);
       if (!entry) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -3343,7 +3812,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sendJson(res, 400, { error: 'targetRuntime is required when createNew is true', code: ErrorCode.INVALID_REQUEST });
       return;
     }
+    if (targetSdk === 'commandcode') {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Session transfer to Command Code is not supported'));
+      return;
+    }
 
+    if (await commandCodeService?.findSession(sessionId)) {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Session transfer is not supported for Command Code'));
+      return;
+    }
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Source session not found'));
@@ -3523,6 +4000,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             internalClientId,
             cleanupRejectedSession: cleanupRejectedCreatedSession,
             blockedPiProviders,
+            commandCodeService,
           },
         });
         onSessionCreated?.(created.sessionId, created.sessionPath, created.runtime);
@@ -3556,7 +4034,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           success: false,
           runtime: entry.runtime,
           error: {
-            code: err instanceof RuntimeOpError ? err.code : ErrorCode.SESSION_CREATE_FAILED,
+            code: err instanceof RuntimeOpError
+              ? err.code
+              : err instanceof CommandCodeRuntimeError && err.code === 'permission_denied'
+                ? ErrorCode.COMMANDCODE_ROLE_REFUSED
+                : ErrorCode.SESSION_CREATE_FAILED,
             message: err instanceof Error ? err.message : 'Failed to create session',
           },
         };

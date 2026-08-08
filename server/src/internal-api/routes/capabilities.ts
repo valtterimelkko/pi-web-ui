@@ -11,16 +11,18 @@ import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import { config } from '../../config.js';
+import type { CommandCodeService } from '../../command-code/command-code-service.js';
 
 export interface CapabilitiesRoutesDeps {
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
   antigravityService: AntigravityService;
+  commandCodeService?: CommandCodeService;
   blockedPiProviders?: readonly string[];
 }
 
 export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
-  const { claudeService, opencodeService, antigravityService } = deps;
+  const { claudeService, opencodeService, antigravityService, commandCodeService } = deps;
   const blockedPiProviders = [...(deps.blockedPiProviders ?? config.internalApiBlockedPiProviders)];
 
   async function handleGetCapabilities(
@@ -37,6 +39,8 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
     // A disabled-but-installed runtime is advertised as unavailable and its
     // new work is refused rather than silently substituted.
     const opencodeEnabled = opencodeService.isEnabled();
+    const commandCodeEnabled = Boolean(commandCodeService?.isEnabled());
+    const commandCodeAvailable = Boolean(commandCodeService?.isAvailable());
 
     const body: CapabilitiesResponse = {
       status: 'ok',
@@ -119,6 +123,23 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           // Synthetic liveness heartbeat emitted during an in-flight turn (agy is
           // a batch subprocess with no native streaming).
           supportsHeartbeat: true,
+          supportsInteractiveQuestions: false,
+          supportsStructuredQuestionResponse: false,
+        },
+        commandcode: {
+          available: commandCodeEnabled && commandCodeAvailable,
+          enabled: commandCodeEnabled,
+          backendMode: 'subprocess',
+          supportsFollowUp: true,
+          followUpSemantics: 'new_turn',
+          supportsSteer: false,
+          supportsSteerWhileBusy: false,
+          supportsModelSwitch: false,
+          supportsThinkingLevel: false,
+          supportsPinning: true,
+          supportsReplayHistory: true,
+          supportsApprovals: false,
+          supportsHeartbeat: false,
           supportsInteractiveQuestions: false,
           supportsStructuredQuestionResponse: false,
         },

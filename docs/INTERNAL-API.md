@@ -56,6 +56,7 @@ Under the hood, each runtime slot exists for a different reason:
 | **Claude Code** | profile-driven SDK backend, legacy `claude -p`, **or** the channel-backed Claude Code path | Claude's monthly subscription does not allow external coding-agent harnesses to use Claude via the Anthropic API — Claude Code must be the agent environment. Pi Web UI therefore runs Claude Code directly, normalizes SDK messages, legacy NDJSON, or channel/plugin events into the common event model, and owns the replay/persistence layer so sessions survive restarts. Explicit provider profiles also let the same browser UI route Claude sessions through native Claude subscription or Anthropic-compatible providers such as GLM/Z.ai. |
 | **OpenCode** | `opencode serve` HTTP/SSE backend | Z.AI's GLM models (via the coding-plan provider) currently recognise OpenCode as a valid coding-agent harness but not Pi. Rather than bypass this, Pi Web UI integrates with the OpenCode server backend, adapting OpenCode SSE events into the same common event model. The OpenCode backend owns transcript storage; Pi Web UI stores registry metadata and replay transforms. |
 | **Antigravity** | `agy -p` subprocess-per-turn backend | Google Gemini via Antigravity CLI. Pi Web UI runs `agy` directly, stores Pi-owned turn logs for replay, and correlates them with agy-owned conversation SQLite DBs for follow-up continuity. |
+| **Command Code** | feature-gated `cmd -p --output-format json` subprocess | Server-local Internal API only. Exact routes are `qwen/qwen3.8-max` and `meta/muse-spark-1.2-contributor`; browser/shared runtime types, WebSocket, transfer, notifications, and default disposable validation remain unchanged. Creation requires a short-lived token-bound HMAC role attestation and a cwd under `COMMAND_CODE_ALLOWED_CWD_ROOTS`; the server maps roles to fixed profiles and never accepts raw CLI flags. |
 
 All runtime paths are surfaced through a **unified session list** so the
 runtime difference is transparent at the UI level — you create sessions,
@@ -98,7 +99,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.16.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.17.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -308,7 +309,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.16.0",
+    "contractVersion": "1.17.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -348,11 +349,13 @@ Models are always queried live — new models appear immediately. Each model may
 
 Pi model levels come from the Pi SDK catalogue. Claude's base `sonnet` and `opus` aliases and provider profiles that support the Claude/Z.AI effort ceiling advertise `max`; `haiku` keeps the legacy ceiling. A client should use the selected model's `thinkingLevels` before requesting `max`.
 
+When Command Code is enabled, its entries appear only after a fresh exact-version/model discovery probe. The initial routes are `qwen/qwen3.8-max` and `meta/muse-spark-1.2-contributor`; the runtime remains absent from browser/shared protocol types and is not included in disposable `--runtime all` validation.
+
 **Query parameters:**
 
 | Param | Values | Default |
 |---|---|---|
-| `runtime` | `pi`, `claude`, `opencode`, `antigravity` | all |
+| `runtime` | `pi`, `claude`, `opencode`, `antigravity`, or feature-gated `commandcode` | all |
 
 **Response:**
 ```json
@@ -489,14 +492,16 @@ POST /api/v1/sessions
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `runtime` | string | **Yes** | — | `pi`, `claude`, `opencode`, or `antigravity` |
+| `runtime` | string | **Yes** | — | `pi`, `claude`, `opencode`, `antigravity`, or feature-gated `commandcode` |
 | `cwd` | string | No | `process.cwd()` | Working directory |
-| `model` | string | No | runtime default | Model ID (from `/models`). For Claude, may be a base alias such as `sonnet` or a specific profile entry such as `profile:glm52-claude-sdk`. |
+| `model` | string | No | runtime default | Model ID (from `/models`). For Claude, may be a base alias such as `sonnet` or a specific profile entry such as `profile:glm52-claude-sdk`; Command Code requires one exact discovered id: `qwen/qwen3.8-max` or `meta/muse-spark-1.2-contributor`. |
 | `thinkingLevel` | string | No | runtime default | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use the selected model's `thinkingLevels` from `/models` as the capability source. |
 | `retention` | object | No | — | Required source-owned lease. `durable` preserves recoverability without forcing runtime residency; `resident` additionally keeps the runtime loaded. Requires `ownerId`; optional `ttlSeconds` (default 24h, max 7d) and `label`. Creation rolls back if the guarantee fails. |
 | `pin` | boolean | No | `false` | Legacy Internal API compatibility projection. Mutually exclusive with `retention`; does not consume a human Web UI pin slot. |
 | `pinTtlSeconds` | number | No | `86400` (24h) | Legacy pin lifetime. Clamped to a hard max of 7 days. |
 | `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. Supplying both forms with different ids is rejected. An explicit profile never falls back to another profile/backend when unavailable. |
+| `invocationRole` | `conductor-root` or `implementation-child` | Command Code only | — | Required for `runtime: "commandcode"`; mapped server-side to fixed permission profiles. Raw flags, environment, executable paths, and native ids are never accepted. |
+| `commandCodeAttestation` | object | Command Code only | — | Required for `runtime: "commandcode"`; strict short-lived HMAC binding of `role`, exact `model`, canonical `cwd`/`worktreeRoot`, `leaseId`, timestamp, signature, and (for `implementation-child`) `parentSessionId`. The server also enforces `COMMAND_CODE_ALLOWED_CWD_ROOTS`. Agent OS generates this from the owner-only API token; callers must not log or persist the secret. |
 
 **Response (201):**
 ```json
@@ -931,7 +936,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.16.0",
+    "contractVersion": "1.17.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -1345,7 +1350,7 @@ other reasoning-capable gateway models → `reasoning_effort`; non-reasoning mod
 GET /api/v1/sessions/:sessionId/history
 ```
 
-Returns normalized replay events. All four runtimes are supported:
+Returns normalized replay events. The ordinary four runtimes are supported; feature-gated Command Code sessions replay from the private normalized journal:
 - **Claude** and **OpenCode** return native normalized replay events.
 - **Antigravity** returns replay events reduced from Pi-owned turn logs.
 - **Pi** returns a synthesized event list derived from the Pi session
@@ -1522,7 +1527,7 @@ prompt (or several), then call `/wait` on each.
 GET /api/v1/sessions/:sessionId/transcript?scope=visible_recent
 ```
 
-Returns a runtime-agnostic transcript for any of the four runtimes,
+Returns a runtime-agnostic transcript for any ordinary runtime, plus feature-gated Command Code sessions from their private normalized journal,
 suitable for an orchestrator that needs to read child-session results
 without parsing runtime-specific files.
 
@@ -1613,7 +1618,7 @@ default:
 | `tools` | full (truncated-to-200-char) tool output, and un-groups tool groups into individual tool items |
 | `thinking` | the full thinking text behind the summarized thinking items |
 
-All four runtimes are supported (Pi, Claude, OpenCode, Antigravity); a
+The ordinary runtimes are supported (Pi, Claude, OpenCode, Antigravity); feature-gated Command Code is Internal-API-only; a
 thin/empty session yields a valid (empty) view rather than an error.
 
 **Response (200):**

@@ -115,7 +115,7 @@ export interface AdmissionControllerOptions {
   retryAfterSeconds?: number;
 }
 
-const RUNTIMES: SessionRuntime[] = ['pi', 'claude', 'opencode', 'antigravity'];
+const RUNTIMES: SessionRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode'];
 const DEFAULT_MINIMUM_HEADROOM_BYTES = 512 * 1024 * 1024;
 const DEFAULT_RESERVED_BYTES_PER_TURN = 256 * 1024 * 1024;
 const DEFAULT_RESERVED_PIDS_PER_TURN = 256;
@@ -244,7 +244,7 @@ export function readMemoryCapacity(): MemoryCapacity {
 export class AdmissionController {
   private activeTurns = 0;
   private readonly activeByRuntime: Record<SessionRuntime, number> = {
-    pi: 0, claude: 0, opencode: 0, antigravity: 0,
+    pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0,
   };
   private readonly maxActiveTurns: number;
   private readonly interactiveReserve: number;

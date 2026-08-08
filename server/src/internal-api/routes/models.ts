@@ -11,6 +11,7 @@ import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import type { PiService } from '../../pi/pi-service.js';
+import type { CommandCodeService } from '../../command-code/command-code-service.js';
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
 import { readBoundedJsonBody } from '../request-body.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
@@ -35,11 +36,12 @@ export interface ModelsRoutesDeps {
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
   antigravityService: AntigravityService;
+  commandCodeService?: CommandCodeService;
   blockedPiProviders?: readonly string[];
 }
 
 export function createModelsRoutes(deps: ModelsRoutesDeps) {
-  const { piService, claudeService, opencodeService, antigravityService } = deps;
+  const { piService, claudeService, opencodeService, antigravityService, commandCodeService } = deps;
   const blockedPiProviders = new Set(
     (deps.blockedPiProviders ?? config.internalApiBlockedPiProviders).map((provider) => provider.toLowerCase()),
   );
@@ -140,6 +142,21 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
           } catch {
             // OpenCode may not respond — return empty
           }
+        }
+      }
+
+      // Command Code models stay server-local and are advertised only when the
+      // feature is enabled and fresh exact-id discovery succeeded.
+      if (commandCodeService && (!runtimeFilter || runtimeFilter === 'commandcode')) {
+        if (commandCodeService.isEnabled() && commandCodeService.isAvailable()) {
+          result.commandcode = commandCodeService.getModels().map((model) => ({
+            id: model.id,
+            displayName: model.displayName,
+            provider: model.provider,
+            reasoning: model.reasoning,
+          }));
+        } else {
+          result.commandcode = [];
         }
       }
 

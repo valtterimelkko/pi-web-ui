@@ -1,0 +1,146 @@
+import { mkdtemp, readdir } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { Readable, Writable } from 'node:stream';
+import { describe, expect, it, vi } from 'vitest';
+import { AdmissionController } from '../../../src/internal-api/admission-controller.js';
+import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
+import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
+import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
+import { CommandCodeService } from '../../../src/command-code/command-code-service.js';
+import { createCommandCodeRoleAttestation } from '../../../src/command-code/command-code-role-attestation.js';
+import type { CommandCodeProcessRunInput, CommandCodeProcessRunResult } from '../../../src/command-code/command-code-process-runner.js';
+import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
+
+function req(body: unknown): any {
+  const value = Readable.from([Buffer.from(JSON.stringify(body))]) as any;
+  value.headers = {};
+  value.method = 'POST';
+  value.url = '/api/v1/sessions';
+  return value;
+}
+function res(): any {
+  const chunks: Buffer[] = [];
+  const value = new Writable({ write(chunk, _encoding, callback) { chunks.push(Buffer.from(chunk)); callback(); } }) as any;
+  value.statusCode = 200;
+  value.headersSent = false;
+  value.writeHead = vi.fn((status: number) => { value.statusCode = status; value.headersSent = true; return value; });
+  value.setHeader = vi.fn();
+  value.end = vi.fn((chunk?: string) => { if (chunk) chunks.push(Buffer.from(chunk)); value.body = Buffer.concat(chunks).toString(); return value; });
+  value.getHeader = vi.fn();
+  return value;
+}
+
+class Runner {
+  inputs: CommandCodeProcessRunInput[] = [];
+  async run(input: CommandCodeProcessRunInput): Promise<CommandCodeProcessRunResult> {
+    this.inputs.push(input);
+    return {
+      exitCode: 0, signal: null, stderrTail: '',
+      parsed: {
+        events: [
+          { event: { type: 'message_start' }, lineNumber: 1 },
+          { event: { type: 'text_delta', delta: 'route-ok' }, lineNumber: 2 },
+          { event: { type: 'message_end' }, lineNumber: 3 },
+          { event: { type: 'turn_end' }, lineNumber: 4 },
+        ],
+        terminal: { type: 'result', subtype: 'success', sessionId: 'native-route-1', finalText: 'route-ok' },
+        unknownEventTypes: [], suppressedDuplicateCount: 0, bytes: 1, lineCount: 5,
+      },
+    };
+  }
+  async abort() {}
+  async shutdown() {}
+  isRunning() { return false; }
+}
+
+describe('Command Code Internal API lifecycle', () => {
+  it('uses standard create, prompt, receipt, evidence, transcript, and delete endpoints', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-routes-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const runner = new Runner();
+    const commandCodeService = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir: root, expectedVersion: '1.15.0' },
+      runner,
+      discover: async () => ({ version: '1.15.0', models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'], ambiguous: [] }),
+      checkExecutable: false,
+    });
+    await commandCodeService.init();
+    commandCodeService.setRoleAttestationSecret('route-secret');
+    const attestation = createCommandCodeRoleAttestation('route-secret', {
+      role: 'conductor-root', model: 'qwen/qwen3.8-max', cwd, worktreeRoot: cwd,
+      leaseId: 'route-test-lease', issuedAt: new Date().toISOString(),
+    });
+    const registry = { get: vi.fn().mockResolvedValue(undefined), listAll: vi.fn().mockResolvedValue([]) } as any;
+    const receipts = new RunReceiptManager({ store: new RunReceiptStore(path.join(root, 'receipts')), turnIdleTimeoutMs: 10_000, turnMaxMs: 10_000 });
+    const admission = new AdmissionController({ maxActiveTurns: 2, interactiveReserve: 0, minimumHeadroomBytes: 1, hostMinimumHeadroomBytes: 1, reservedBytesPerTurn: 1, memory: () => ({ currentBytes: 1, limitBytes: 1_000_000 }), readPids: () => ({} as any), host: () => ({ memAvailableBytes: 1_000_000 } as any) });
+    const routes = createSessionRoutes({
+      claudeService: {} as any, opencodeService: {} as any, antigravityService: {} as any,
+      multiSessionManager: {} as any, sessionRegistry: registry, piService: {} as any,
+      internalClientId: 'test', watchDir: path.join(root, 'watches'), pinDir: path.join(root, 'pins'),
+      runReceiptManager: receipts, admissionController: admission, commandCodeService,
+    });
+    await routes.ready;
+
+    const rejectedResponse = res();
+    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', invocationRole: 'conductor-root', commandCodeAttestation: { ...attestation, signature: '0'.repeat(64) } }), rejectedResponse);
+    expect(rejectedResponse.statusCode).toBe(403);
+    expect(JSON.parse(rejectedResponse.body).code).toBe('COMMANDCODE_ROLE_REFUSED');
+
+    const batchRejectedResponse = res();
+    await routes.handleBatchCreate(req({ sessions: [{ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', invocationRole: 'conductor-root', commandCodeAttestation: { ...attestation, signature: '0'.repeat(64) } }] }), batchRejectedResponse);
+    const batchRejected = JSON.parse(batchRejectedResponse.body);
+    expect(batchRejected.createdCount).toBe(0);
+    expect(batchRejected.created[0].error.code).toBe('COMMANDCODE_ROLE_REFUSED');
+
+    const createResponse = res();
+    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', invocationRole: 'conductor-root', commandCodeAttestation: attestation, retention: { mode: 'resident', ttlSeconds: 900, ownerId: 'route-test' } }), createResponse);
+    expect(createResponse.statusCode).toBe(201);
+    const created = JSON.parse(createResponse.body);
+    expect(created.runtime).toBe('commandcode');
+
+    const promptResponse = res();
+    const logs: LogRecord[] = [];
+    setLogTap((record) => logs.push(record));
+    try {
+      await routes.handleSendPrompt(req({ message: 'say route-ok' }), promptResponse, created.sessionId);
+    } finally {
+      setLogTap(null);
+    }
+    expect(promptResponse.statusCode, promptResponse.body).toBe(200);
+    expect(JSON.parse(promptResponse.body).content).toBe('route-ok');
+    expect(runner.inputs[0]?.nativeSessionId).toBeUndefined();
+    const lifecycle = logs.filter((record) => record.msg.includes('Prompt dispatched') || record.msg.includes('Prompt turn complete'));
+    expect(lifecycle.some((record) => record.msg.includes('Prompt dispatched'))).toBe(true);
+    expect(lifecycle.length).toBeGreaterThan(0);
+    expect(lifecycle.every((record) => record.requestId && record.runId && record.sessionId === created.sessionId && record.runtime === 'commandcode' && record.executionInstanceId === 'commandcode-default')).toBe(true);
+
+    const receiptResponse = res();
+    await routes.handleGetRunReceipt(req({}), receiptResponse, JSON.parse(promptResponse.body).runId);
+    expect(JSON.parse(receiptResponse.body).status).toBe('completed');
+
+    const evidenceResponse = res();
+    await routes.handleGetSessionEvidence(req({}), evidenceResponse, created.sessionId, new URLSearchParams('expand=transcript,screen'));
+    expect(JSON.parse(evidenceResponse.body).runtime).toBe('commandcode');
+    expect(JSON.parse(evidenceResponse.body).transcript.items.some((item: any) => item.text === 'route-ok')).toBe(true);
+    expect(JSON.parse(evidenceResponse.body).screen.screenView.items.some((item: any) => item.kind === 'assistant' && item.text === 'route-ok')).toBe(true);
+    expect(JSON.parse(evidenceResponse.body).screen.screenView.items.some((item: any) => item.kind === 'user' && item.text === 'say route-ok')).toBe(true);
+
+    const transcriptResponse = res();
+    await routes.handleSessionTranscript(req({}), transcriptResponse, created.sessionId, new URLSearchParams());
+    expect(JSON.parse(transcriptResponse.body).runtime).toBe('commandcode');
+
+    vi.spyOn(receipts, 'markStarted').mockRejectedValueOnce(new Error('receipt persistence failure'));
+    const failedStartResponse = res();
+    await routes.handleSendPrompt(req({ message: 'receipt failure must release admission' }), failedStartResponse, created.sessionId);
+    expect(failedStartResponse.statusCode).toBe(500);
+    expect(admission.snapshot().activeTurns).toBe(0);
+
+    const deleteResponse = res();
+    await routes.handleDeleteSession(req({}), deleteResponse, created.sessionId);
+    expect(JSON.parse(deleteResponse.body).success).toBe(true);
+    expect(await commandCodeService.getSession(created.sessionId)).toBeUndefined();
+    expect(await readdir(path.join(root, 'pins'))).toEqual([]);
+    await routes.shutdown();
+  });
+});

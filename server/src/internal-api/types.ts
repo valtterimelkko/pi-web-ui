@@ -48,13 +48,13 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 
 // ─── Session runtime ─────────────────────────────────────────────────────────
 
-export type SessionRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity';
+export type SessionRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
 export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 'subprocess' | 'sdk';
 
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.16.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.17.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -98,6 +98,17 @@ export interface RetentionLeaseResponse {
   expiresAt: string;
 }
 
+export interface CommandCodeRoleAttestationRequest {
+  role: 'conductor-root' | 'implementation-child';
+  model: 'qwen/qwen3.8-max' | 'meta/muse-spark-1.2-contributor';
+  cwd: string;
+  worktreeRoot: string;
+  leaseId: string;
+  parentSessionId?: string;
+  issuedAt: string;
+  signature: string;
+}
+
 export interface CreateSessionRequest {
   runtime: SessionRuntime;
   cwd?: string;
@@ -119,6 +130,10 @@ export interface CreateSessionRequest {
   retention?: RetentionLeaseRequest;
   /** Claude-specific: select a provider profile by ID. */
   profileId?: string;
+  /** Required for commandcode; server maps it to a fixed permission profile. */
+  invocationRole?: 'conductor-root' | 'implementation-child';
+  /** Server-verified lease/worktree/role binding for Command Code sessions. */
+  commandCodeAttestation?: CommandCodeRoleAttestationRequest;
 }
 
 export interface SendPromptRequest {
@@ -188,6 +203,9 @@ export interface BatchCreateEntry {
   /** Pin each created session at creation time (see CreateSessionRequest.pin). */
   pin?: boolean;
   pinTtlSeconds?: number;
+  /** Command Code role binding; raw permission flags are never accepted. */
+  invocationRole?: 'conductor-root' | 'implementation-child';
+  commandCodeAttestation?: CommandCodeRoleAttestationRequest;
 }
 
 export interface BatchCreateRequest {
@@ -360,6 +378,7 @@ export interface SessionEvidenceResponse {
     claudeSessionId?: string;
     opencodeSessionId?: string;
     antigravityConversationId?: string;
+    commandCodeNativeSessionId?: string;
   };
   status: SessionInfo['status'];
   backendMode?: RuntimeBackendMode;
@@ -369,6 +388,8 @@ export interface SessionEvidenceResponse {
   createdAt: string;
   lastActivity: string;
   executionInstanceId: string;
+  invocationRole?: 'conductor-root' | 'implementation-child';
+  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide';
   activity: {
     status: SessionInfo['status'];
     lastActivity: string;
@@ -491,6 +512,8 @@ export interface CreateSessionResponse {
   model?: string;
   /** Canonical creation selector when it differs from the runtime model (for example profile:<id>). */
   modelSelector?: string;
+  /** Additive Command Code role projection; raw permission flags remain private. */
+  invocationRole?: 'conductor-root' | 'implementation-child';
   /** Configured runtime instance resolved for the created session. */
   executionInstanceId?: string;
   cwd: string;
@@ -516,6 +539,8 @@ export interface SessionInfo {
   model?: string;
   /** Canonical creation selector, additive for exact profile-backed routes. */
   modelSelector?: string;
+  /** Additive Command Code role projection; raw permission flags remain private. */
+  invocationRole?: 'conductor-root' | 'implementation-child';
   status: 'idle' | 'running' | 'error';
   messageCount: number;
   firstMessage: string;
@@ -732,6 +757,9 @@ export interface RunReceipt {
   model?: string;
   /** Canonical creation selector bound to the run, when distinct from model. */
   modelSelector?: string;
+  /** Additive Command Code role/profile projection; raw argv remains private. */
+  invocationRole?: 'conductor-root' | 'implementation-child';
+  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide';
   /** Requested prompt mode (prompt / follow_up / steer). */
   mode?: PromptMode;
   /** Actual dispatch mode after state-aware promotion/rejection decisions. */
@@ -795,6 +823,8 @@ export interface ModelsResponse {
     pi: ModelInfo[];
     claude: ModelInfo[];
     opencode: ModelInfo[];
+    /** Optional Internal-API-only runtime; absent from older servers/clients. */
+    commandcode?: ModelInfo[];
   };
 }
 
@@ -872,6 +902,8 @@ export interface CapabilitiesResponse {
     claude: RuntimeCapabilities;
     opencode: RuntimeCapabilities;
     antigravity: RuntimeCapabilities;
+    /** Internal-API-only runtime; older clients may ignore the additive key. */
+    commandcode: RuntimeCapabilities;
   };
 }
 
@@ -879,6 +911,10 @@ export interface RuntimeHealthEntry {
   enabled: boolean;
   available: boolean;
   backend: RuntimeBackendMode;
+  /** Runtime-specific readiness detail; additive and bounded. */
+  detailStatus?: string;
+  version?: string;
+  missingModels?: string[];
   checkStatus: 'ok' | 'unavailable' | 'error' | 'disabled';
   checkedAt: string;
   checkDurationMs: number;
@@ -893,9 +929,11 @@ export interface HealthResponse {
     claude: 'available' | 'unavailable';
     opencode: 'available' | 'unavailable';
     antigravity: 'available' | 'unavailable';
+    commandcode?: 'available' | 'unavailable';
   };
   /** Additive detailed runtime health; legacy `runtimes` remains for 1.8 clients. */
-  runtimeHealth: Record<SessionRuntime, RuntimeHealthEntry>;
+  runtimeHealth: Record<Exclude<SessionRuntime, 'commandcode'>, RuntimeHealthEntry>
+    & Partial<Record<'commandcode', RuntimeHealthEntry>>;
   uptime: number;
   version?: string;
 }

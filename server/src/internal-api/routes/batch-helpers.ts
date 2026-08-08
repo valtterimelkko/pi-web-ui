@@ -13,6 +13,7 @@ import type { AntigravityService } from '../../antigravity/antigravity-service.j
 import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
+import type { CommandCodeService } from '../../command-code/command-code-service.js';
 import type { BatchCreateEntry, SessionRuntime } from '../types.js';
 import { unlink } from 'fs/promises';
 import { config } from '../../config.js';
@@ -43,6 +44,7 @@ export interface BatchCreateDeps {
   internalClientId: string;
   cleanupRejectedSession(sessionId: string): Promise<void>;
   blockedPiProviders?: readonly string[];
+  commandCodeService?: CommandCodeService;
 }
 
 export interface CreatedSession {
@@ -64,6 +66,25 @@ export async function createOneSession(params: {
   const cwd = entry.cwd || config.validationDefaultCwd;
 
   switch (runtime) {
+    case 'commandcode': {
+      if (!deps.commandCodeService?.isEnabled()) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code runtime is disabled');
+      if (!deps.commandCodeService.isAvailable()) throw new RuntimeOpError(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code runtime is not available');
+      if (entry.model !== 'qwen/qwen3.8-max' && entry.model !== 'meta/muse-spark-1.2-contributor') {
+        throw new RuntimeOpError(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code requires one exact allowlisted model id');
+      }
+      if (entry.invocationRole !== 'conductor-root' && entry.invocationRole !== 'implementation-child') {
+        throw new RuntimeOpError(ErrorCode.COMMANDCODE_ROLE_REFUSED, 'Command Code invocationRole is required');
+      }
+      const created = await deps.commandCodeService.createSession({
+        cwd,
+        model: entry.model,
+        permissionProfile: entry.invocationRole === 'conductor-root' ? 'agent-os-7f-root-readonly' : 'implementation-child-wide',
+        invocationRole: entry.invocationRole,
+        roleAttestation: entry.commandCodeAttestation,
+      });
+      return { sessionId: created.sessionId, sessionPath: created.sessionId, runtime: 'commandcode', model: created.modelSelector, modelSelector: created.modelSelector, executionInstanceId: created.executionInstanceId, cwd: created.cwd };
+    }
+
     case 'claude': {
       if (!(await deps.claudeService.isAvailable())) {
         throw new Error('Claude runtime is not available');

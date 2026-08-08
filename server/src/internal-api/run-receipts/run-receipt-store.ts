@@ -39,6 +39,8 @@ const ALLOWED_KEYS = new Set([
   'executionInstanceId',
   'model',
   'modelSelector',
+  'invocationRole',
+  'permissionProfile',
   'mode',
   'dispatchMode',
   'status',
@@ -396,8 +398,13 @@ export class RunReceiptStore {
     if (!record.sessionId || !record.runtime || !record.executionInstanceId) {
       throw new Error('Receipt identity fields are required');
     }
-    if (!['pi', 'claude', 'opencode', 'antigravity'].includes(record.runtime)) {
+    if (!['pi', 'claude', 'opencode', 'antigravity', 'commandcode'].includes(record.runtime)) {
       throw new Error('Invalid receipt runtime');
+    }
+    if (record.runtime === 'commandcode') {
+      if (!record.invocationRole || !record.permissionProfile) throw new Error('Command Code receipt lacks immutable role/profile binding');
+      if (record.invocationRole === 'conductor-root' && record.permissionProfile !== 'agent-os-7f-root-readonly') throw new Error('Command Code receipt root role/profile drift');
+      if (record.invocationRole === 'implementation-child' && record.permissionProfile !== 'implementation-child-wide') throw new Error('Command Code receipt child role/profile drift');
     }
     if (!['accepted', 'queued', 'started', 'completed', 'failed', 'cancelled', 'interrupted'].includes(record.status)) {
       throw new Error('Invalid receipt status');

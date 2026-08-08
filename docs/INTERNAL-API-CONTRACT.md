@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.16.0",
+  "contractVersion": "1.17.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,11 @@ Current contract:
 
 ### Changelog
 
+- **1.17.0** (minor, additive server-local Command Code runtime) — adds the feature-gated `commandcode` runtime to the authenticated Internal API only:
+  - `GET /capabilities`, `GET /health`, and `GET /models` expose truthful disabled, unavailable, exact-model, version, and available states; no model is advertised until fresh `cmd --no-auto-update --version` and `--list-models` probes confirm version `1.15.0` and both exact ids `qwen/qwen3.8-max` and `meta/muse-spark-1.2-contributor`;
+  - standard session, prompt, run-receipt, evidence, history, transcript/screen, events, wait, abort, pin, and delete routes use a private atomic mapping and normalized event journal; native Command Code credentials/transcripts remain owned by Command Code and are not copied;
+  - callers provide only the additive `invocationRole` (`conductor-root` or `implementation-child`) plus a short-lived HMAC role attestation binding the exact model, canonical cwd/worktree, lease, and (for children) parent session; Pi Web UI maps the role to fixed server-owned profiles, enforces configured cwd roots, rejects aliases/raw flags, resumes only the stored exact native id, and keeps the runtime out of shared/browser `SdkType`, WebSocket, transfer, notifications, and default disposable `all` validation;
+  - the runtime is disabled by default with `PI_INTERNAL_API_COMMANDCODE_ENABLED=false` unless explicitly enabled on a disposable/local server. Old clients can ignore the additive runtime/capability/model fields.
 - **1.16.0** (minor, additive Internal API Pi-provider execution policy) — prevents accidental metered-provider agent spend on the local automation surface while preserving browser features:
   - Pi providers configured by `INTERNAL_API_BLOCKED_PI_PROVIDERS` (default `openai,openrouter`) are omitted from `GET /api/v1/models` and rejected with `403 PROVIDER_NOT_ALLOWED` before Internal API session creation, model switching, prompt/follow-up/steer/detached/batch dispatch, or transfer dispatch can invoke them;
   - the policy compares exact provider ids, so the subscription-backed `openai-codex` provider remains available; `/capabilities.features.piProviderPolicy.blockedProviders` exposes the effective list;

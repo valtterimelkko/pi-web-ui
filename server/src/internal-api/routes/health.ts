@@ -10,17 +10,19 @@ import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import { RuntimeHealthMonitor } from '../../observability/runtime-health.js';
+import type { CommandCodeService } from '../../command-code/command-code-service.js';
 
 export interface HealthRoutesDeps {
   claudeService: ClaudeService;
   opencodeService: OpenCodeService;
   antigravityService: AntigravityService;
+  commandCodeService?: CommandCodeService;
   startTime: number;
-  enabled?: { claude: boolean; opencode: boolean; antigravity: boolean };
+  enabled?: { claude: boolean; opencode: boolean; antigravity: boolean; commandcode?: boolean };
 }
 
 export function createHealthRoutes(deps: HealthRoutesDeps) {
-  const { claudeService, opencodeService, antigravityService, startTime } = deps;
+  const { claudeService, opencodeService, antigravityService, commandCodeService, startTime } = deps;
   const monitor = new RuntimeHealthMonitor();
 
   async function handleHealth(
@@ -28,7 +30,7 @@ export function createHealthRoutes(deps: HealthRoutesDeps) {
     res: ServerResponse,
   ): Promise<void> {
     const claudeBackend = await claudeService.getBackendMode().catch(() => 'direct' as const);
-    const enabled = deps.enabled ?? { claude: true, opencode: true, antigravity: true };
+    const enabled = deps.enabled ?? { claude: true, opencode: true, antigravity: true, commandcode: false };
     const runtimeHealth = await monitor.check({
       pi: { enabled: true, backend: 'native', probe: async () => true },
       claude: { enabled: enabled.claude, backend: claudeBackend, probe: () => claudeService.isAvailable() },
@@ -38,13 +40,29 @@ export function createHealthRoutes(deps: HealthRoutesDeps) {
         backend: 'subprocess',
         probe: () => antigravityService.isAvailable(),
       },
+      commandcode: {
+        enabled: Boolean(commandCodeService && enabled.commandcode),
+        backend: 'subprocess',
+        probe: async () => Boolean(commandCodeService?.isAvailable()),
+      },
     });
+
+    const commandCodeHealth = commandCodeService?.getHealth();
+    if (runtimeHealth.commandcode && commandCodeHealth) {
+      runtimeHealth.commandcode = {
+        ...runtimeHealth.commandcode,
+        detailStatus: commandCodeHealth.status,
+        ...(commandCodeHealth.version ? { version: commandCodeHealth.version } : {}),
+        missingModels: commandCodeHealth.missingModels,
+      };
+    }
 
     const runtimes = {
       pi: runtimeHealth.pi.available ? 'available' as const : 'unavailable' as const,
       claude: runtimeHealth.claude.available ? 'available' as const : 'unavailable' as const,
       opencode: runtimeHealth.opencode.available ? 'available' as const : 'unavailable' as const,
       antigravity: runtimeHealth.antigravity.available ? 'available' as const : 'unavailable' as const,
+      commandcode: runtimeHealth.commandcode?.available ? 'available' as const : 'unavailable' as const,
     };
 
     const overallStatus: HealthResponse['status'] =

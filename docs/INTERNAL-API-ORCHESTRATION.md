@@ -40,7 +40,7 @@ Do not stop, restart, or redeploy `pi-web-ui.service` during validation unless t
 
 ## What the Internal API can do today
 
-Across the four runtime paths, the current Internal API can now cover the
+Across the four ordinary runtime paths, plus the feature-gated server-local Command Code path, the current Internal API can now cover the
 full Tier-1 orchestration loop:
 
 1. **Discover** — `GET /capabilities`, `GET /models`
@@ -91,8 +91,10 @@ health, evidence, receipt-correctness, exact-profile, retention, admission, disp
 - `POST /api/v1/notifications`, `GET /api/v1/notifications/:id`, and `GET /api/v1/notifications` — durable explicit acceptance, pollable delivery status, and recent delivery history. Reuse one `Idempotency-Key` across retries (contract `1.8.0+`).
 - `POST/DELETE/GET /api/v1/sessions/:id/notifications...` — opt a child session into `agent_end` notifications and verify the opt-in/delivery state.
 - `GET /api/v1/runs/:runId` — durable run receipt lookup for accepted, detached, or retried dispatches. Contract `1.10.1` ensures Pi completion waits for `agent_end` across auto-compaction; on older servers, treat Pi `completed` without `agentEndAt` as contradictory/nonterminal evidence. Contract `1.11.0` adds `modelSelector`; `1.14.0` adds payload-free activity/watchdog/terminal/cessation evidence. A terminal receipt releases capacity but does not by itself prove nested-process or workspace quiescence. During the owner-approved Phase 7 shadow gate, Pi Internal API receipts may also carry `phase7Shadow`; treat its `shared-service` resource identity as explicit evidence that no contained worker was selected.
-- `GET /api/v1/models` — model-specific `thinkingLevels`; use this before requesting `max` for Claude or Pi sessions. Contract `1.16.0` also applies the Internal API Pi-provider execution policy: blocked providers are omitted here and exposed at `/capabilities.features.piProviderPolicy.blockedProviders`.
+- `GET /api/v1/models` — model-specific `thinkingLevels`; use this before requesting `max` for Claude or Pi sessions. Contract `1.17.0` also adds the feature-gated server-local Command Code runtime and applies the Internal API Pi-provider execution policy: blocked providers are omitted here and exposed at `/capabilities.features.piProviderPolicy.blockedProviders`.
 - `POST /api/v1/sessions/:id/control` with `{action:"set_thinking_level",level:"max"}` — available when the selected model advertises `max` (contract `1.7.0+`).
+
+When Command Code is enabled, choose only an exact id returned by `/models` and send `invocationRole` (`conductor-root` or `implementation-child`) plus a short-lived HMAC role attestation binding the exact model, canonical cwd/worktree, lease, and (for children) parent session. The server maps that role to fixed profiles, enforces configured cwd roots, and resumes only its stored native id; callers cannot choose `--yolo`, environment, executable, or native transcript paths. Discovery is a bounded startup probe with a controlled environment, and subprocess completion waits for pipe `close` so final NDJSON frames cannot be lost after process exit. Command Code is intentionally excluded from browser/shared runtime types, transfer, and default disposable `all` validation. Agent OS quota evidence must come from its authenticated local Internal API adapter plus a bounded proof; health/capacity availability alone remains fail-closed `unknown`.
 
 These are especially helpful during orchestration setup or when a child session behaves unexpectedly, because they let you inspect the server without shell access.
 

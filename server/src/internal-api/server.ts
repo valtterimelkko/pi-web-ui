@@ -51,6 +51,7 @@ import { createLogger } from '../logging/logger.js';
 import { bindOwnerOnlyUnixSocket, UnixSocketOwner } from './unix-socket-owner.js';
 import { getWorkerPool } from '../routes/sessions.js';
 import { AdmissionController, admissionStartupStatus } from './admission-controller.js';
+import { CommandCodeService } from '../command-code/command-code-service.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -117,6 +118,7 @@ export class InternalApiServer {
   private multiSessionManager: MultiSessionManager;
   private sessionRegistry: SessionRegistryManager;
   private piService: PiService;
+  private commandCodeService: CommandCodeService;
   private runReceiptManager: RunReceiptManager | null = null;
   private notificationManager: NotificationManager | null = null;
   private socketOwner: UnixSocketOwner | null = null;
@@ -135,6 +137,7 @@ export class InternalApiServer {
     multiSessionManager: MultiSessionManager;
     sessionRegistry: SessionRegistryManager;
     piService: PiService;
+    commandCodeService?: CommandCodeService;
   }) {
     this.config = deps.config;
     this.apiKey = deps.config.apiKey || '';
@@ -144,6 +147,18 @@ export class InternalApiServer {
     this.multiSessionManager = deps.multiSessionManager;
     this.sessionRegistry = deps.sessionRegistry;
     this.piService = deps.piService;
+    this.commandCodeService = deps.commandCodeService ?? new CommandCodeService({
+      config: {
+        enabled: config.commandCodeEnabled,
+        executablePath: config.commandCodeExecutablePath,
+        stateDir: config.commandCodeStateDir,
+        allowedCwdRoots: config.commandCodeAllowedCwdRoots,
+        expectedVersion: config.commandCodeExpectedVersion,
+        maxTurns: config.commandCodeMaxTurns,
+        maxWallTimeMs: config.commandCodeMaxWallTimeMs,
+        concurrency: config.commandCodeConcurrency,
+      },
+    });
     this.internalClientId = `internal-api-${randomBytes(4).toString('hex')}`;
   }
 
@@ -158,10 +173,15 @@ export class InternalApiServer {
     await socketOwner.prepareForBind();
 
     try {
+    // Initialise Command Code before readiness. This performs only the public
+    // executable/model discovery probe and never reads native auth state.
+    await this.commandCodeService.init();
+
     // Generate or load API key
     if (!this.apiKey) {
       this.apiKey = await this.resolveApiKey(tokenPath);
     }
+    this.commandCodeService.setRoleAttestationSecret(this.apiKey);
 
     // Load durable run receipts before binding the socket. A restart must
     // recover in-flight records before a caller can retry an idempotent key.
@@ -182,6 +202,8 @@ export class InternalApiServer {
       // the runtime confirms it has stopped, or a 30s drain timeout (quarantine).
       isRuntimeQuiescent: async (sessionId) => {
         try {
+          const commandCodeEntry = await this.commandCodeService.getSession(sessionId);
+          if (commandCodeEntry) return !this.commandCodeService.isRunning(sessionId);
           const entry = await this.sessionRegistry.get(sessionId);
           if (!entry) return true; // session gone -> quiescent
           if (entry.sdkType === 'claude') return !this.claudeService.isRunning(sessionId);
@@ -254,6 +276,7 @@ export class InternalApiServer {
       antigravitySessionDir: config.antigravitySessionDir,
       admissionController,
       blockedPiProviders: config.internalApiBlockedPiProviders,
+      commandCodeService: this.commandCodeService,
     });
     this.sessionRoutesShutdown = sessionRoutes.shutdown;
     await sessionRoutes.ready;
@@ -264,6 +287,7 @@ export class InternalApiServer {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      commandCodeService: this.commandCodeService,
       blockedPiProviders: config.internalApiBlockedPiProviders,
     };
     const modelsRoutes = createModelsRoutes(modelsDeps);
@@ -272,11 +296,13 @@ export class InternalApiServer {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      commandCodeService: this.commandCodeService,
       startTime: this.startTime,
       enabled: {
         claude: true,
         opencode: config.opencodeServerEnabled,
         antigravity: config.antigravityEnabled,
+        commandcode: config.commandCodeEnabled,
       },
     };
     const healthRoutes = createHealthRoutes(healthDeps);
@@ -285,6 +311,7 @@ export class InternalApiServer {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      commandCodeService: this.commandCodeService,
       blockedPiProviders: config.internalApiBlockedPiProviders,
     };
     const capabilitiesRoutes = createCapabilitiesRoutes(capabilitiesDeps);
@@ -443,6 +470,7 @@ export class InternalApiServer {
         await this.sessionRoutesShutdown().catch(() => { /* preserve startup error */ });
         this.sessionRoutesShutdown = null;
       }
+      await this.commandCodeService.shutdown().catch(() => { /* preserve startup error */ });
       if (this.runReceiptManager) {
         await this.runReceiptManager.shutdown().catch(() => { /* preserve startup error */ });
         this.runReceiptManager = null;
@@ -478,6 +506,7 @@ export class InternalApiServer {
         await this.sessionRoutesShutdown().catch((error) => failures.push(error));
         this.sessionRoutesShutdown = null;
       }
+      await this.commandCodeService.shutdown().catch((error) => failures.push(error));
       if (this.runReceiptManager) {
         await this.runReceiptManager.shutdown().catch((error) => failures.push(error));
         this.runReceiptManager = null;

@@ -43,6 +43,18 @@ export function parseNonnegativeInteger(raw: string | undefined, fallback: numbe
   return Number(raw);
 }
 
+export function parseAbsolutePath(raw: string | undefined, fallback: string, name: string): string {
+  const value = raw === undefined || raw.trim() === '' ? fallback : raw.trim();
+  if (!path.isAbsolute(value)) throw new Error(`${name} must be an absolute path.`);
+  return value;
+}
+
+export function parseAbsolutePathList(raw: string | undefined, fallback: string[], name: string): string[] {
+  const values = raw === undefined || raw.trim() === '' ? fallback : raw.split(',').map((value) => value.trim()).filter(Boolean);
+  if (values.length === 0) throw new Error(`${name} must contain at least one absolute path.`);
+  return values.map((value) => parseAbsolutePath(value, value, name));
+}
+
 export function parseLogLevel(raw: string | undefined, fallback: LogLevel = 'info'): LogLevel {
   if (!raw) return fallback;
   const value = raw.trim().toLowerCase();
@@ -189,6 +201,15 @@ export interface ServerConfig {
   internalApiAdmissionReservedPidsPerTurn?: number;
   /** Pi providers hidden and denied for agent execution on the Internal API only. */
   internalApiBlockedPiProviders: string[];
+  /** Feature-gated, server-local Command Code adapter. */
+  commandCodeEnabled: boolean;
+  commandCodeExecutablePath: string;
+  commandCodeStateDir: string;
+  commandCodeAllowedCwdRoots: string[];
+  commandCodeExpectedVersion: string;
+  commandCodeMaxTurns: number;
+  commandCodeMaxWallTimeMs: number;
+  commandCodeConcurrency: number;
   /** Ephemeral validation mode: isolated, disposable instance for live validation (no destructive cleanup). */
   validationMode: boolean;
   validationDefaultCwd: string;
@@ -322,6 +343,14 @@ export const config: ServerConfig = {
     ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN, 256, 'INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN')
     : undefined,
   internalApiBlockedPiProviders: parseBlockedPiProviders(process.env.INTERNAL_API_BLOCKED_PI_PROVIDERS),
+  commandCodeEnabled: process.env.PI_INTERNAL_API_COMMANDCODE_ENABLED === 'true',
+  commandCodeExecutablePath: parseAbsolutePath(process.env.COMMAND_CODE_EXECUTABLE_PATH, '/root/.npm-global/bin/cmd', 'COMMAND_CODE_EXECUTABLE_PATH'),
+  commandCodeStateDir: parseAbsolutePath(process.env.COMMAND_CODE_STATE_DIR, path.join(os.homedir(), '.pi-web-ui', 'command-code'), 'COMMAND_CODE_STATE_DIR'),
+  commandCodeAllowedCwdRoots: parseAbsolutePathList(process.env.COMMAND_CODE_ALLOWED_CWD_ROOTS, [path.dirname(parseAbsolutePath(process.env.COMMAND_CODE_STATE_DIR, path.join(os.homedir(), '.pi-web-ui', 'command-code'), 'COMMAND_CODE_STATE_DIR'))], 'COMMAND_CODE_ALLOWED_CWD_ROOTS'),
+  commandCodeExpectedVersion: process.env.COMMAND_CODE_EXPECTED_VERSION || '1.15.0',
+  commandCodeMaxTurns: parsePositiveInteger(process.env.COMMAND_CODE_MAX_TURNS, 8, 'COMMAND_CODE_MAX_TURNS'),
+  commandCodeMaxWallTimeMs: parsePositiveInteger(process.env.COMMAND_CODE_MAX_WALL_TIME_MS, 15 * 60 * 1000, 'COMMAND_CODE_MAX_WALL_TIME_MS'),
+  commandCodeConcurrency: parsePositiveInteger(process.env.COMMAND_CODE_CONCURRENCY, 1, 'COMMAND_CODE_CONCURRENCY'),
   validationMode: process.env.PI_WEB_UI_VALIDATION_MODE === 'true',
   validationDefaultCwd: process.env.PI_WEB_UI_VALIDATION_DEFAULT_CWD || process.cwd(),
   dictationOpenaiApiKey: process.env.OPENAI_API_KEY || process.env.DICTATION_OPENAI_API_KEY || '',

@@ -29,6 +29,8 @@ export function buildValidationIsolationEnv(
     INTERNAL_API_RUN_RECEIPTS_DIR: join(input.validationDir, 'run-receipts'),
     NOTIFICATIONS_DIR: join(input.validationDir, 'notifications'),
     INTERNAL_API_PIN_DIR: join(input.validationDir, 'pins'),
+    COMMAND_CODE_STATE_DIR: join(input.validationDir, 'command-code'),
+    COMMAND_CODE_ALLOWED_CWD_ROOTS: input.validationDir,
     SESSION_REGISTRY_PATH: join(input.validationDir, 'session-registry.json'),
     SESSION_DIR: piSessionsDir,
     PI_SESSIONS_DIR: piSessionsDir,

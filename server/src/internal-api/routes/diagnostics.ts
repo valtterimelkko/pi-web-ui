@@ -62,7 +62,7 @@ export function createDiagnosticsRoutes(deps: DiagnosticsRoutesDeps = {}) {
 
   async function operationalSnapshot() {
     const entries = await deps.sessionRegistry?.listAll().catch(() => []) ?? [];
-    const byRuntime: Record<SessionRuntime, number> = { pi: 0, claude: 0, opencode: 0, antigravity: 0 };
+    const byRuntime: Record<Exclude<SessionRuntime, 'commandcode'>, number> & Partial<Record<'commandcode', number>> = { pi: 0, claude: 0, opencode: 0, antigravity: 0 };
     const byStatus = { running: 0, idle: 0, error: 0 };
     for (const entry of entries) {
       if (entry.sdkType in byRuntime) byRuntime[entry.sdkType as SessionRuntime] += 1;
