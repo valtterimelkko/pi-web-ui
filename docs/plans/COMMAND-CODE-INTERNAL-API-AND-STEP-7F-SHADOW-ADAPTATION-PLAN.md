@@ -370,7 +370,7 @@ Do not add a parallel `/command-code/*` API. Extend the normal authenticated `/a
 
 ### 6.1 Contract version
 
-Bump the additive contract from `1.16.0` to the next minor version (expected `1.17.0`) in:
+Bump the additive contract from `1.16.0` to `1.18.0` to cover the feature-gated runtime and its run-scoped terminal usage evidence in:
 
 - `server/src/internal-api/types.ts`;
 - `docs/INTERNAL-API-CONTRACT.md` changelog and examples;

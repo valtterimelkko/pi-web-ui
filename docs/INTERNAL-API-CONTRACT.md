@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.17.0",
+  "contractVersion": "1.18.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,10 @@ Current contract:
 
 ### Changelog
 
+- **1.18.0** (minor, additive run-scoped Command Code usage evidence) — adds:
+  - `RunReceipt.tokenUsage` for Command Code when the matching terminal NDJSON result contains valid non-negative input/output counts; the projection is `{ scope: "run", source: "commandcode-terminal-result-v1", input, output, total }` and `total` must equal `input + output`;
+  - the usage field is persisted through receipt restart recovery, exposed by `/runs/:runId` and the Command Code session detail/evidence projections, and included in bounded run chronology;
+  - missing, malformed, contradictory, or cumulative session/context usage is omitted rather than inferred. Agent OS child budgets must treat omitted usage as unmeasurable and fail closed; old clients may ignore this additive field.
 - **1.17.0** (minor, additive server-local Command Code runtime) — adds the feature-gated `commandcode` runtime to the authenticated Internal API only:
   - `GET /capabilities`, `GET /health`, and `GET /models` expose truthful disabled, unavailable, exact-model, version, and available states; no model is advertised until fresh `cmd --no-auto-update --version` and `--list-models` probes confirm version `1.15.0` and both exact ids `qwen/qwen3.8-max` and `meta/muse-spark-1.2-contributor`;
   - standard session, prompt, run-receipt, evidence, history, transcript/screen, events, wait, abort, pin, and delete routes use a private atomic mapping and normalized event journal; native transcripts remain owned by Command Code, while authentication is copied into each session-private native home with mode `600` and never symlinked into the operator's shared config;

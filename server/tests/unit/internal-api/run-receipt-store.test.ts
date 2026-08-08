@@ -184,6 +184,35 @@ describe('RunReceiptStore — durable run ledger', () => {
     expect(restarted.get('legacy-run')).not.toHaveProperty('liveness');
   });
 
+  it('round-trips run-scoped token usage across restart and rejects malformed totals', async () => {
+    const first = new RunReceiptStore(dir);
+    await first.init();
+    await first.create(receipt({
+      runId: 'usage-run',
+      runtime: 'commandcode',
+      executionInstanceId: 'commandcode-default',
+      invocationRole: 'implementation-child',
+      permissionProfile: 'implementation-child-wide',
+      status: 'completed',
+      terminalAt: '2026-07-15T12:00:02.000Z',
+      tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18 },
+    } as never));
+
+    const restarted = new RunReceiptStore(dir);
+    await restarted.init();
+    expect(restarted.get('usage-run')?.tokenUsage).toEqual({
+      scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18,
+    });
+    await expect(first.create(receipt({
+      runId: 'bad-usage',
+      runtime: 'commandcode',
+      executionInstanceId: 'commandcode-default',
+      invocationRole: 'implementation-child',
+      permissionProfile: 'implementation-child-wide',
+      tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 99 },
+    } as never))).rejects.toThrow(/token|usage|total/i);
+  });
+
   it('does not expose mutable references to nested liveness evidence', async () => {
     const store = new RunReceiptStore(dir);
     await store.init();

@@ -76,6 +76,91 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     });
   });
 
+  it('persists run-scoped Command Code terminal usage and ignores cumulative/session-shaped usage', async () => {
+    const begun = await manager.beginRun({
+      ...baseInput,
+      sessionId: 'commandcode-usage-session',
+      runtime: 'commandcode',
+      executionInstanceId: 'commandcode-default',
+      model: 'qwen/qwen3.8-max',
+      modelSelector: 'qwen/qwen3.8-max',
+      invocationRole: 'implementation-child',
+      permissionProfile: 'implementation-child-wide',
+    });
+    expect(begun.kind).toBe('created');
+    if (begun.kind !== 'created') return;
+
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'usage',
+      sessionId: 'commandcode-usage-session',
+      timestamp: now,
+      data: { tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 900, output: 900, total: 1800 } },
+    });
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'agent_end',
+      sessionId: 'commandcode-usage-session',
+      timestamp: now,
+      data: { tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18 } },
+    });
+    await manager.finish(begun.receipt.runId);
+
+    expect(manager.get(begun.receipt.runId)?.tokenUsage).toEqual({
+      scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18,
+    });
+
+    const malformed = await manager.beginRun({
+      ...baseInput,
+      sessionId: 'commandcode-malformed-usage',
+      runtime: 'commandcode',
+      executionInstanceId: 'commandcode-default',
+      model: 'qwen/qwen3.8-max',
+      modelSelector: 'qwen/qwen3.8-max',
+      invocationRole: 'implementation-child',
+      permissionProfile: 'implementation-child-wide',
+    });
+    expect(malformed.kind).toBe('created');
+    if (malformed.kind !== 'created') return;
+    await manager.observeEvent(malformed.receipt.runId, {
+      type: 'agent_end',
+      sessionId: 'commandcode-malformed-usage',
+      timestamp: now,
+      data: { tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 99 } },
+    });
+    expect(manager.get(malformed.receipt.runId)).not.toHaveProperty('tokenUsage');
+  });
+
+  it('keeps the first valid terminal usage immutable across late duplicate agent_end events', async () => {
+    const begun = await manager.beginRun({
+      ...baseInput,
+      sessionId: 'commandcode-late-usage',
+      runtime: 'commandcode',
+      executionInstanceId: 'commandcode-default',
+      model: 'qwen/qwen3.8-max',
+      modelSelector: 'qwen/qwen3.8-max',
+      invocationRole: 'implementation-child',
+      permissionProfile: 'implementation-child-wide',
+    });
+    expect(begun.kind).toBe('created');
+    if (begun.kind !== 'created') return;
+
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'agent_end',
+      sessionId: 'commandcode-late-usage',
+      timestamp: now,
+      data: { tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18 } },
+    });
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'agent_end',
+      sessionId: 'commandcode-late-usage',
+      timestamp: now + 1,
+      data: { tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 100, output: 200, total: 300 } },
+    });
+
+    expect(manager.get(begun.receipt.runId)?.tokenUsage).toEqual({
+      scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18,
+    });
+  });
+
   it('does not project provider effort evidence onto a non-Command-Code receipt', async () => {
     const begun = await manager.beginRun({ ...baseInput, sessionId: 'pi-effort-shaped-event' });
     expect(begun.kind).toBe('created');

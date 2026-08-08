@@ -9,6 +9,7 @@ import type {
   RunReceipt,
   RunReceiptStatus,
   RunStallReason,
+  RunTokenUsage,
   SessionRuntime,
   Verbosity,
 } from '../types.js';
@@ -321,6 +322,7 @@ export class RunReceiptManager {
       : undefined;
     const isCommandCodeRun = active?.runtime === 'commandcode' || this.store.get(runId)?.runtime === 'commandcode';
     const effortObservation = isCommandCodeRun ? commandCodeEffortObservation(event) : undefined;
+    const tokenUsageObservation = isCommandCodeRun ? commandCodeTokenUsageObservation(event) : undefined;
     let activityToPersist: RunActivityObservation | undefined;
     if (active && isEligibleRunActivity(event.type)) {
       active.lastActivityAtMs = observedAtMs;
@@ -373,6 +375,7 @@ export class RunReceiptManager {
           origin: provenance.origin,
           ...(provenance.reason ? { reason: provenance.reason } : {}),
         },
+        tokenUsageObservation,
       );
     })
       .then(() => undefined)
@@ -796,6 +799,28 @@ function commandCodeEffortObservation(event: NormalizedEvent): { effort: Command
   if (typeof effort !== 'string' || !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) return undefined;
   const method = data?.effortEvidenceMethod === 'provider-result' ? 'provider-result' : 'provider-event';
   return { effort: effort as CommandCodeEffort, method };
+}
+
+function commandCodeTokenUsageObservation(event: NormalizedEvent): RunTokenUsage | undefined {
+  if (event.type !== 'agent_end') return undefined;
+  const data = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+    ? event.data as Record<string, unknown>
+    : undefined;
+  const value = data?.tokenUsage;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  if (JSON.stringify(Object.keys(usage).sort()) !== JSON.stringify(['input', 'output', 'scope', 'source', 'total'])) return undefined;
+  if (usage.scope !== 'run' || usage.source !== 'commandcode-terminal-result-v1') return undefined;
+  if (![usage.input, usage.output, usage.total].every((count) => Number.isSafeInteger(count) && (count as number) >= 0)) return undefined;
+  const sum = (usage.input as number) + (usage.output as number);
+  if (!Number.isSafeInteger(sum) || usage.total !== sum) return undefined;
+  return {
+    scope: 'run',
+    source: 'commandcode-terminal-result-v1',
+    input: usage.input as number,
+    output: usage.output as number,
+    total: usage.total as number,
+  };
 }
 
 function terminalProvenance(event: NormalizedEvent): {

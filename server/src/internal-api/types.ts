@@ -57,7 +57,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.17.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.18.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -412,6 +412,8 @@ export interface SessionEvidenceResponse {
   effectiveEffort?: CommandCodeEffort;
   effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
   effortCapabilityHash?: string;
+  /** Latest run-scoped usage observed from the matching terminal result, when available. */
+  tokenUsage?: RunTokenUsage;
   activity: {
     status: SessionInfo['status'];
     lastActivity: string;
@@ -464,7 +466,7 @@ export interface SessionEvidenceResponse {
   };
   /** Newest three compact durable run entries, bounded independently of expand=runs. */
   runChronology: Array<Pick<RunReceipt,
-    'runId' | 'status' | 'acceptedAt' | 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'liveness'
+    'runId' | 'status' | 'acceptedAt' | 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'liveness' | 'tokenUsage'
   >>;
   warnings: string[];
   links: {
@@ -590,6 +592,8 @@ export interface SessionInfo {
 
 export interface SessionDetail extends SessionInfo {
   backendMode?: RuntimeBackendMode;
+  /** Latest run-scoped usage observed from a terminal result, when available. */
+  tokenUsage?: RunTokenUsage;
   nativeSessionId?: string;
   sessionFile?: string;
   tokens?: {
@@ -746,6 +750,19 @@ export interface RunLivenessEvidence {
   cessation: RunCessationEvidence;
 }
 
+/**
+ * Bounded, run-scoped provider usage. Session/context totals are deliberately
+ * not interchangeable with this evidence: Command Code usage is accepted only
+ * from its matching terminal result frame.
+ */
+export interface RunTokenUsage {
+  scope: 'run';
+  source: 'commandcode-terminal-result-v1';
+  input: number;
+  output: number;
+  total: number;
+}
+
 /** Server-owned Phase 7 shadow profile for Pi Internal API prompts. */
 export type Phase7PiShadowProfile = 'standard' | 'heavy' | 'long-horizon';
 
@@ -810,6 +827,8 @@ export interface RunReceipt {
   effectiveEffort?: CommandCodeEffort;
   effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
   effortCapabilityHash?: string;
+  /** Run-scoped provider usage from the matching terminal result, when measured. */
+  tokenUsage?: RunTokenUsage;
   /** Additive Command Code role/profile projection; raw argv remains private. */
   invocationRole?: 'conductor-root' | 'implementation-child';
   permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide';

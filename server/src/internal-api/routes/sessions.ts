@@ -524,7 +524,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   /** Pin a session via the right runtime service. Used by watch registration. */
   async function pinSessionById(sessionId: string, claimId = 'web-ui'): Promise<boolean> {
     const commandCodeEntry = await commandCodeService?.getSession(sessionId);
-    if (commandCodeEntry) return commandCodeService?.pinSession(sessionId) ?? false;
+    if (commandCodeEntry) return commandCodeService?.pinSession(sessionId, claimId) ?? false;
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) return false;
     if (entry.sdkType === 'claude') return claudeService.pinSession(sessionId, claimId);
@@ -536,7 +536,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   /** Revoke one source-owned runtime claim via the right service. */
   async function unpinSessionById(sessionId: string, claimId = 'web-ui'): Promise<boolean> {
     const commandCodeEntry = await commandCodeService?.getSession(sessionId);
-    if (commandCodeEntry) return commandCodeService?.unpinSession(sessionId) ?? false;
+    if (commandCodeEntry) return commandCodeService?.unpinSession(sessionId, claimId) ?? false;
     const entry = await sessionRegistry.get(sessionId);
     if (!entry) return false;
     if (entry.sdkType === 'claude') return claudeService.unpinSession(sessionId, claimId);
@@ -668,13 +668,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     };
   }
 
-  function commandCodeSessionDetail(record: CommandCodeInternalSessionRecord): SessionDetail {
+  async function commandCodeSessionDetail(record: CommandCodeInternalSessionRecord): Promise<SessionDetail> {
+    await runReceipts.init();
+    const latest = runReceipts.listBySession(record.sessionId)
+      .sort((a, b) => Date.parse(b.terminalAt ?? b.acceptedAt) - Date.parse(a.terminalAt ?? a.acceptedAt))[0];
     return {
       ...commandCodeSessionInfo(record),
       backendMode: 'subprocess',
       nativeSessionId: record.nativeSessionId,
       status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
-      tokens: undefined,
+      ...(latest?.tokenUsage ? { tokenUsage: latest.tokenUsage } : {}),
     };
   }
 
@@ -1451,6 +1454,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       effectiveEffort: record.effectiveEffort,
       effortEvidenceMethod: record.effortEvidenceMethod,
       effortCapabilityHash: record.effortCapabilityHash,
+      ...(receipts[0]?.tokenUsage ? { tokenUsage: receipts[0].tokenUsage } : {}),
       activity: { status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle', lastActivity: record.updatedAt },
       sources: {
         registryPath: 'private command-code session store',
@@ -1472,6 +1476,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         ...(receipt.terminalAt ? { terminalAt: receipt.terminalAt } : {}),
         ...(receipt.errorCode ? { errorCode: receipt.errorCode } : {}),
         ...(receipt.liveness ? { liveness: receipt.liveness } : {}),
+        ...(receipt.tokenUsage ? { tokenUsage: receipt.tokenUsage } : {}),
       })),
       warnings: [
         'Command Code native credentials and transcript files remain owned by Command Code and are not copied here.',
@@ -2704,6 +2709,98 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sendJson(res, 500, { error: error instanceof Error ? error.message : 'Failed to set Command Code effort', code: ErrorCode.INTERNAL_ERROR });
           }
         }
+        return;
+      }
+      if (body.action === 'acquire_retention') {
+        if (!pinExpiry || !body.retention) {
+          sendJson(res, 400, { error: 'retention is required', code: ErrorCode.INVALID_REQUEST });
+          return;
+        }
+        let result: ApplyPinResult;
+        try {
+          result = await pinExpiry.acquireLease(commandCodeEntry.sessionId, {
+            mode: body.retention.mode,
+            ttlSeconds: body.retention.ttlSeconds,
+            ownerId: body.retention.ownerId,
+            label: body.retention.label,
+            sessionPath: commandCodeEntry.sessionId,
+            runtime: 'commandcode',
+          });
+        } catch (error) {
+          sendJson(res, 503, { error: error instanceof Error ? error.message : 'Retention store unavailable', code: ErrorCode.RETENTION_STORE_UNAVAILABLE });
+          return;
+        }
+        if (!result.retentionLeaseId) {
+          sendJson(res, 409, { error: 'Required resident retention capacity is unavailable', code: ErrorCode.RETENTION_RESIDENT_CAPACITY_EXHAUSTED });
+          return;
+        }
+        sendJson(res, 200, {
+          success: true,
+          action: 'acquire_retention',
+          pinned: commandCodeService!.isSessionPinned(commandCodeEntry.sessionId),
+          retention: {
+            leaseId: result.retentionLeaseId,
+            mode: body.retention.mode,
+            ownerId: body.retention.ownerId,
+            expiresAt: new Date(result.pinnedUntil as number).toISOString(),
+          },
+        } satisfies SessionControlResponse);
+        return;
+      }
+      if (body.action === 'renew_retention') {
+        if (!pinExpiry || !body.retentionLeaseId) {
+          sendJson(res, 400, { error: 'retentionLeaseId is required', code: ErrorCode.INVALID_REQUEST });
+          return;
+        }
+        const claim = pinExpiry.listLeases(commandCodeEntry.sessionId).find((item) => item.leaseId === body.retentionLeaseId);
+        if (!claim) {
+          sendJson(res, 404, { error: 'Retention lease not found', code: ErrorCode.RETENTION_CLAIM_NOT_FOUND });
+          return;
+        }
+        if (body.ownerId !== undefined && claim.ownerId !== body.ownerId) {
+          sendJson(res, 409, { error: 'Retention lease owner mismatch', code: ErrorCode.RETENTION_CLAIM_OWNER_MISMATCH });
+          return;
+        }
+        let result: ApplyPinResult;
+        try {
+          result = await pinExpiry.renewLease(commandCodeEntry.sessionId, body.retentionLeaseId, body.pinTtlSeconds);
+        } catch (error) {
+          sendJson(res, 503, { error: error instanceof Error ? error.message : 'Retention store unavailable', code: ErrorCode.RETENTION_STORE_UNAVAILABLE });
+          return;
+        }
+        sendJson(res, 200, {
+          success: true,
+          action: 'renew_retention',
+          pinned: commandCodeService!.isSessionPinned(commandCodeEntry.sessionId),
+          retention: {
+            leaseId: body.retentionLeaseId,
+            mode: result.retentionMode!,
+            ownerId: claim.ownerId ?? '',
+            expiresAt: new Date(result.pinnedUntil as number).toISOString(),
+          },
+        } satisfies SessionControlResponse);
+        return;
+      }
+      if (body.action === 'release_retention') {
+        if (!pinExpiry || !body.retentionLeaseId) {
+          sendJson(res, 400, { error: 'retentionLeaseId is required', code: ErrorCode.INVALID_REQUEST });
+          return;
+        }
+        try {
+          await pinExpiry.releaseLease(commandCodeEntry.sessionId, body.retentionLeaseId, body.ownerId);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '';
+          const code = message === 'RETENTION_CLAIM_OWNER_MISMATCH'
+            ? ErrorCode.RETENTION_CLAIM_OWNER_MISMATCH
+            : message === 'RETENTION_CLAIM_NOT_FOUND'
+              ? ErrorCode.RETENTION_CLAIM_NOT_FOUND
+              : ErrorCode.RETENTION_STORE_UNAVAILABLE;
+          const status = code === ErrorCode.RETENTION_CLAIM_OWNER_MISMATCH ? 409
+            : code === ErrorCode.RETENTION_CLAIM_NOT_FOUND ? 404 : 503;
+          sendJson(res, status, { error: message || code, code });
+          return;
+        }
+        sendJson(res, 200, { success: true, action: 'release_retention', pinned: commandCodeService!.isSessionPinned(commandCodeEntry.sessionId) } satisfies SessionControlResponse);
         return;
       }
       if (body.action === 'pin') {

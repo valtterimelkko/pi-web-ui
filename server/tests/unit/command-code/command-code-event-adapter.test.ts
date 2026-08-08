@@ -30,7 +30,12 @@ describe('Command Code event adapter', () => {
     expect(result.events[0]?.data).toMatchObject({ assistantMessageEvent: { type: 'text_delta', delta: 'hello' } });
     expect(result.events[1]?.data).toMatchObject({ assistantMessageEvent: { type: 'thinking_delta', delta: 'plan' } });
     expect(result.events[2]?.data).toMatchObject({ toolCallId: 't1', toolName: 'Read' });
-    expect(result.events[4]?.data).toMatchObject({ subtype: 'success', stopReason: undefined, usage: { input: 1, output: 2 } });
+    expect(result.events[4]?.data).toMatchObject({
+      subtype: 'success',
+      stopReason: undefined,
+      usage: { input: 1, output: 2 },
+      tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 1, output: 2, total: 3 },
+    });
     expect(result.finalText).toBe('hello');
     expect(result.nativeSessionId).toBe('native-1');
   });
@@ -50,6 +55,34 @@ describe('Command Code event adapter', () => {
       effort: 'xhigh',
       effortEvidenceMethod: 'provider-event',
     });
+  });
+
+  it('normalizes only complete, additive terminal usage and rejects inconsistent totals', () => {
+    const valid = adaptCommandCodeOutput({
+      sessionId: 'internal-1',
+      nativeSessionId: 'native-1',
+      events: [{ event: { type: 'agent_end', usage: { input: 999, output: 999 } }, lineNumber: 1 }],
+      terminal: { type: 'result', subtype: 'success', sessionId: 'native-1', finalText: '', usage: { input_tokens: 11, output_tokens: 7, total: 18 } },
+      unknownEventTypes: [],
+      suppressedDuplicateCount: 0,
+      bytes: 1,
+      lineCount: 2,
+    });
+    expect(valid.events.find((event) => event.type === COMMAND_CODE_AGENT_END)?.data).toMatchObject({
+      tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18 },
+    });
+
+    const malformed = adaptCommandCodeOutput({
+      sessionId: 'internal-1',
+      nativeSessionId: 'native-1',
+      events: [],
+      terminal: { type: 'result', subtype: 'success', sessionId: 'native-1', finalText: '', usage: { input: 11, output: 7, total: 99 } },
+      unknownEventTypes: [],
+      suppressedDuplicateCount: 0,
+      bytes: 1,
+      lineCount: 1,
+    });
+    expect(malformed.events.find((event) => event.type === COMMAND_CODE_AGENT_END)?.data).not.toHaveProperty('tokenUsage');
   });
 
   it('records terminal effective effort as provider-result evidence', () => {

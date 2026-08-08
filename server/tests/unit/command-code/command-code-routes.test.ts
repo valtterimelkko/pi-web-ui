@@ -44,7 +44,7 @@ class Runner {
           { event: { type: 'message_end' }, lineNumber: 3 },
           { event: { type: 'turn_end' }, lineNumber: 4 },
         ],
-        terminal: { type: 'result', subtype: 'success', sessionId: 'native-route-1', effort: 'low', finalText: 'route-ok' },
+        terminal: { type: 'result', subtype: 'success', sessionId: 'native-route-1', effort: 'low', finalText: 'route-ok', usage: { input: 13, output: 8, total: 21 } },
         unknownEventTypes: [], suppressedDuplicateCount: 0, bytes: 1, lineCount: 5,
       },
     };
@@ -153,14 +153,58 @@ describe('Command Code Internal API lifecycle', () => {
 
     const receiptResponse = res();
     await routes.handleGetRunReceipt(req({}), receiptResponse, JSON.parse(promptResponse.body).runId);
-    expect(JSON.parse(receiptResponse.body)).toMatchObject({ status: 'completed', effort: 'low', requestedEffort: 'low', acceptedEffort: 'low', effectiveEffort: 'low', effortEvidenceMethod: 'provider-result' });
+    expect(JSON.parse(receiptResponse.body)).toMatchObject({
+      status: 'completed',
+      effort: 'low',
+      requestedEffort: 'low',
+      acceptedEffort: 'low',
+      effectiveEffort: 'low',
+      effortEvidenceMethod: 'provider-result',
+      tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 13, output: 8, total: 21 },
+    });
+
+    const infoResponse = res();
+    await routes.handleGetSessionInfo(req({}), infoResponse, created.sessionId);
+    expect(JSON.parse(infoResponse.body)).toMatchObject({
+      runtime: 'commandcode',
+      tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 13, output: 8, total: 21 },
+    });
 
     const evidenceResponse = res();
     await routes.handleGetSessionEvidence(req({}), evidenceResponse, created.sessionId, new URLSearchParams('expand=transcript,screen'));
-    expect(JSON.parse(evidenceResponse.body)).toMatchObject({ runtime: 'commandcode', effort: 'low', requestedEffort: 'low', acceptedEffort: 'low', effectiveEffort: 'low', effortEvidenceMethod: 'provider-result' });
+    expect(JSON.parse(evidenceResponse.body)).toMatchObject({
+      runtime: 'commandcode',
+      effort: 'low',
+      requestedEffort: 'low',
+      acceptedEffort: 'low',
+      effectiveEffort: 'low',
+      effortEvidenceMethod: 'provider-result',
+      tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 13, output: 8, total: 21 },
+    });
     expect(JSON.parse(evidenceResponse.body).transcript.items.some((item: any) => item.text === 'route-ok')).toBe(true);
     expect(JSON.parse(evidenceResponse.body).screen.screenView.items.some((item: any) => item.kind === 'assistant' && item.text === 'route-ok')).toBe(true);
     expect(JSON.parse(evidenceResponse.body).screen.screenView.items.some((item: any) => item.kind === 'user' && item.text === 'say route-ok')).toBe(true);
+
+    const releaseRetentionResponse = res();
+    await routes.handleSessionControl(req({ action: 'release_retention', retentionLeaseId: created.retention.leaseId, ownerId: 'route-test' }), releaseRetentionResponse, created.sessionId);
+    expect(releaseRetentionResponse.statusCode).toBe(200);
+    expect(JSON.parse(releaseRetentionResponse.body)).toMatchObject({ success: true, action: 'release_retention' });
+    expect(await readdir(path.join(root, 'pins'))).toEqual([]);
+
+    const acquireRetentionResponse = res();
+    await routes.handleSessionControl(req({ action: 'acquire_retention', retention: { mode: 'durable', ownerId: 'route-test-2', ttlSeconds: 900 } }), acquireRetentionResponse, created.sessionId);
+    expect(acquireRetentionResponse.statusCode).toBe(200);
+    const acquiredRetention = JSON.parse(acquireRetentionResponse.body);
+    expect(acquiredRetention).toMatchObject({ success: true, action: 'acquire_retention', retention: { mode: 'durable', ownerId: 'route-test-2' } });
+
+    const renewRetentionResponse = res();
+    await routes.handleSessionControl(req({ action: 'renew_retention', retentionLeaseId: acquiredRetention.retention.leaseId, ownerId: 'route-test-2', pinTtlSeconds: 900 }), renewRetentionResponse, created.sessionId);
+    expect(renewRetentionResponse.statusCode).toBe(200);
+    expect(JSON.parse(renewRetentionResponse.body)).toMatchObject({ success: true, action: 'renew_retention', retention: { leaseId: acquiredRetention.retention.leaseId, mode: 'durable', ownerId: 'route-test-2' } });
+
+    const releaseDurableRetentionResponse = res();
+    await routes.handleSessionControl(req({ action: 'release_retention', retentionLeaseId: acquiredRetention.retention.leaseId, ownerId: 'route-test-2' }), releaseDurableRetentionResponse, created.sessionId);
+    expect(releaseDurableRetentionResponse.statusCode).toBe(200);
 
     const transcriptResponse = res();
     await routes.handleSessionTranscript(req({}), transcriptResponse, created.sessionId, new URLSearchParams());

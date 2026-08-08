@@ -8,6 +8,7 @@ import type {
   RunReceipt,
   RunReceiptStatus,
   RunTerminalObservation,
+  RunTokenUsage,
 } from '../types.js';
 import { createLogger } from '../../logging/logger.js';
 
@@ -47,6 +48,7 @@ const ALLOWED_KEYS = new Set([
   'effectiveEffort',
   'effortEvidenceMethod',
   'effortCapabilityHash',
+  'tokenUsage',
   'invocationRole',
   'permissionProfile',
   'mode',
@@ -266,6 +268,7 @@ export class RunReceiptStore {
     runId: string,
     timestamp: string,
     observation?: Omit<RunTerminalObservation, 'late'>,
+    tokenUsage?: RunTokenUsage,
   ): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
@@ -273,7 +276,14 @@ export class RunReceiptStore {
     // The runtime completion callback and the agent_end event can arrive in
     // either order. Keep the evidence even when the receipt is already
     // terminal; this update is observational and does not reopen the run.
-    const next: PersistedRunReceipt = { ...current, agentEndAt: current.agentEndAt ?? timestamp };
+    const next: PersistedRunReceipt = {
+      ...current,
+      agentEndAt: current.agentEndAt ?? timestamp,
+      // The first validated terminal-result observation is authoritative for
+      // this run. A late duplicate must never replace it with a cumulative or
+      // otherwise different snapshot.
+      ...(tokenUsage && current.tokenUsage === undefined ? { tokenUsage } : {}),
+    };
     if (observation && current.liveness) {
       const terminalObservation: RunTerminalObservation = {
         ...observation,
@@ -429,7 +439,8 @@ export class RunReceiptStore {
     if (record.effectiveEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.effectiveEffort)) throw new Error('Invalid Command Code effective effort');
     if (record.effortEvidenceMethod !== undefined && !['provider-event', 'provider-result', 'unobserved'].includes(record.effortEvidenceMethod)) throw new Error('Invalid Command Code effort evidence method');
     if (record.effortCapabilityHash !== undefined && !SAFE_DIGEST.test(record.effortCapabilityHash)) throw new Error('Invalid Command Code effort capability hash');
-    if (record.runtime !== 'commandcode' && ['effort', 'requestedEffort', 'acceptedEffort', 'effortSource', 'defaultEffort', 'effectiveEffort', 'effortEvidenceMethod', 'effortCapabilityHash'].some((key) => (record as unknown as Record<string, unknown>)[key] !== undefined)) throw new Error('Native effort fields require the Command Code runtime');
+    if (record.tokenUsage !== undefined) validateTokenUsage(record.tokenUsage, record.runtime);
+    if (record.runtime !== 'commandcode' && ['effort', 'requestedEffort', 'acceptedEffort', 'effortSource', 'defaultEffort', 'effectiveEffort', 'effortEvidenceMethod', 'effortCapabilityHash', 'tokenUsage'].some((key) => (record as unknown as Record<string, unknown>)[key] !== undefined)) throw new Error('Native effort/token usage fields require the Command Code runtime');
     if (record.mode !== undefined && !['prompt', 'follow_up', 'steer'].includes(record.mode)) {
       throw new Error('Invalid receipt mode');
     }
@@ -540,6 +551,15 @@ function validatePhase7Shadow(value: Phase7PiShadowClassification): void {
   if (value.evidence.durationMs !== undefined && (!Number.isSafeInteger(value.evidence.durationMs) || value.evidence.durationMs < 0 || value.evidence.durationMs > 7 * 24 * 60 * 60 * 1000)) {
     throw new Error('Invalid Phase 7 shadow duration');
   }
+}
+
+function validateTokenUsage(value: RunTokenUsage, runtime: string): void {
+  if (runtime !== 'commandcode') throw new Error('Run token usage requires the Command Code runtime');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid run token usage');
+  assertOnlyKeys(value, new Set(['scope', 'source', 'input', 'output', 'total']), 'run token usage');
+  if (value.scope !== 'run' || value.source !== 'commandcode-terminal-result-v1') throw new Error('Invalid run token usage provenance');
+  if (![value.input, value.output, value.total].every((count) => Number.isSafeInteger(count) && count >= 0)) throw new Error('Invalid run token usage count');
+  if (value.total !== value.input + value.output || !Number.isSafeInteger(value.input + value.output)) throw new Error('Run token usage total must equal input plus output');
 }
 
 function validateLiveness(value: RunLivenessEvidence): void {

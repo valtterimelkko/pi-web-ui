@@ -114,7 +114,8 @@ export class CommandCodeService {
   private initPromise?: Promise<void>;
   private shuttingDown = false;
   private shutdownPromise?: Promise<void>;
-  private readonly pinned = new Set<string>();
+  /** Runtime keepalive claims keyed per session, matching other runtimes' claim semantics. */
+  private readonly pinClaims = new Map<string, Set<string>>();
   private readonly pendingSessions = new Set<string>();
   private readonly activeSessions = new Set<string>();
   private readonly effortMutations = new Set<string>();
@@ -502,7 +503,7 @@ export class CommandCodeService {
       await this.runner.abort(sessionId);
       if (inFlight) await inFlight;
       if (effortMutation) await effortMutation;
-      this.pinned.delete(sessionId);
+      this.pinClaims.delete(sessionId);
       await this.journal.clear(sessionId).catch(() => undefined);
       if (this.ownsProcessRunner) await rm(path.join(this.config.nativeHomeDir, sessionId), { recursive: true, force: true }).catch(() => undefined);
       return await this.store.delete(sessionId);
@@ -577,9 +578,20 @@ export class CommandCodeService {
   getSessionDiagnostics(sessionId: string): Promise<CommandCodeInternalSessionRecord['diagnostics'] | undefined> {
     return this.store.get(sessionId).then((record) => record?.diagnostics);
   }
-  pinSession(sessionId: string): boolean { this.pinned.add(sessionId); return true; }
-  unpinSession(sessionId: string): boolean { return this.pinned.delete(sessionId); }
-  isSessionPinned(sessionId: string): boolean { return this.pinned.has(sessionId); }
+  pinSession(sessionId: string, claimId = 'web-ui'): boolean {
+    const claims = this.pinClaims.get(sessionId) ?? new Set<string>();
+    claims.add(claimId);
+    this.pinClaims.set(sessionId, claims);
+    return true;
+  }
+  unpinSession(sessionId: string, claimId = 'web-ui'): boolean {
+    const claims = this.pinClaims.get(sessionId);
+    if (!claims) return false;
+    claims.delete(claimId);
+    if (claims.size === 0) this.pinClaims.delete(sessionId);
+    return true;
+  }
+  isSessionPinned(sessionId: string): boolean { return (this.pinClaims.get(sessionId)?.size ?? 0) > 0; }
 
   private resolveEffort(model: CommandCodeModel, requested: unknown): {
     effort?: CommandCodeEffort;

@@ -3,6 +3,15 @@ import type { CommandCodeEffort } from './command-code-model-catalog.js';
 import type { CommandCodeResultFrame, ParsedCommandCodeEvent } from './command-code-ndjson-parser.js';
 
 export const COMMAND_CODE_AGENT_END = 'agent_end' as const;
+export const COMMAND_CODE_TOKEN_USAGE_SOURCE = 'commandcode-terminal-result-v1' as const;
+
+export interface CommandCodeTerminalTokenUsage {
+  scope: 'run';
+  source: typeof COMMAND_CODE_TOKEN_USAGE_SOURCE;
+  input: number;
+  output: number;
+  total: number;
+}
 
 export interface CommandCodeAdaptInput {
   sessionId: string;
@@ -21,6 +30,7 @@ export interface CommandCodeAdaptedOutput {
   finalText: string;
   nativeSessionId?: string;
   terminal: CommandCodeResultFrame;
+  tokenUsage?: CommandCodeTerminalTokenUsage;
   unknownEventTypes: string[];
   suppressedDuplicateCount: number;
   bytes: number;
@@ -35,6 +45,7 @@ export function adaptCommandCodeOutput(input: CommandCodeAdaptInput): CommandCod
   let sawAgentEnd = false;
   let activeMessageId: string | undefined;
   let syntheticMessageNumber = 0;
+  const tokenUsage = normalizeCommandCodeTerminalTokenUsage(input.terminal.usage);
 
   for (const parsed of input.events) {
     const event = parsed.event;
@@ -52,9 +63,17 @@ export function adaptCommandCodeOutput(input: CommandCodeAdaptInput): CommandCod
     if (normalized.type === 'agent_end') {
       const terminalEffort = nativeEffort(input.terminal.effort ?? input.terminal.effectiveEffort ?? input.terminal.reasoningEffort ?? input.terminal.usage?.reasoningEffort);
       const data = asRecord(normalized.data) ?? {};
+      // The terminal result is the only authoritative Command Code usage
+      // source. Remove any runtime-supplied usage-shaped field before adding
+      // the validated terminal projection, so cumulative session snapshots or
+      // native event payloads cannot become run-budget evidence.
+      delete data.tokenUsage;
       if (terminalEffort && data.effort === undefined) {
-        normalized = { ...normalized, data: { ...data, effort: terminalEffort, effortEvidenceMethod: 'provider-result' as const } };
+        data.effort = terminalEffort;
+        data.effortEvidenceMethod = 'provider-result' as const;
       }
+      if (tokenUsage) data.tokenUsage = tokenUsage;
+      normalized = { ...normalized, data };
     }
     if (normalized.type === 'agent_end') {
       if (sawAgentEnd) continue;
@@ -111,6 +130,7 @@ export function adaptCommandCodeOutput(input: CommandCodeAdaptInput): CommandCod
     finalText: terminalText || finalText,
     nativeSessionId: input.terminal.sessionId ?? input.nativeSessionId,
     terminal: input.terminal,
+    ...(tokenUsage ? { tokenUsage } : {}),
     unknownEventTypes: [...input.unknownEventTypes],
     suppressedDuplicateCount: input.suppressedDuplicateCount,
     bytes: input.bytes,
@@ -245,14 +265,48 @@ function normalizeEvent(
 
 function terminalData(terminal: CommandCodeResultFrame, nativeSessionId?: string): Record<string, unknown> {
   const effort = nativeEffort(terminal.effort ?? terminal.effectiveEffort ?? terminal.reasoningEffort ?? terminal.usage?.reasoningEffort);
+  const tokenUsage = normalizeCommandCodeTerminalTokenUsage(terminal.usage);
   return {
     result: terminal.finalText ?? null,
     subtype: terminal.subtype,
     stopReason: terminal.stopReason,
     usage: boundedValue(terminal.usage),
+    ...(tokenUsage ? { tokenUsage } : {}),
     ...(effort ? { effort, effortEvidenceMethod: 'provider-result' as const } : {}),
     nativeSessionId: terminal.sessionId ?? nativeSessionId,
   };
+}
+
+/**
+ * Normalize the usage object on one Command Code terminal result. This helper
+ * intentionally does not inspect `usage` events or session/context totals.
+ */
+export function normalizeCommandCodeTerminalTokenUsage(value: unknown): CommandCodeTerminalTokenUsage | undefined {
+  const usage = asRecord(value);
+  if (!usage) return undefined;
+  const input = readConsistentCount(usage, ['input', 'input_tokens', 'inputTokens', 'prompt_tokens']);
+  const output = readConsistentCount(usage, ['output', 'output_tokens', 'outputTokens', 'completion_tokens']);
+  if (input === undefined || output === undefined) return undefined;
+  const total = input + output;
+  if (!Number.isSafeInteger(total)) return undefined;
+  const reportedTotal = readConsistentCount(usage, ['total', 'total_tokens', 'totalTokens']);
+  if (reportedTotal !== undefined && reportedTotal !== total) return undefined;
+  return {
+    scope: 'run',
+    source: COMMAND_CODE_TOKEN_USAGE_SOURCE,
+    input,
+    output,
+    total,
+  };
+}
+
+function readConsistentCount(record: Record<string, unknown>, keys: string[]): number | undefined {
+  const present = keys.filter((key) => Object.prototype.hasOwnProperty.call(record, key));
+  if (present.length === 0) return undefined;
+  const values = present.map((key) => record[key]);
+  if (values.some((value) => !Number.isSafeInteger(value) || (value as number) < 0)) return undefined;
+  const first = values[0] as number;
+  return values.every((value) => value === first) ? first : undefined;
 }
 
 function nativeEffort(value: unknown): CommandCodeEffort | undefined {
