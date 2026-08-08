@@ -467,7 +467,7 @@ Add two exact, temporary Step 7F shadow route keys in `src/conductor/model-lands
 - supported effort/thinking level as freshly advertised;
 - current quota/availability evidence;
 - invocation role `conductor-root` for the root session;
-- a mandatory implementation-child binding to the same exact Command Code runtime/model route, with invocation role `implementation-child` and the wide profile; optional reviewers remain separately frozen by the common envelope;
+- a Command Code root binding only: the implementation child is **not** forced to the Command Code route. The root emits requirements with the `agent-os-selected` sentinel, and Agent OS selects one exact ordinary specialist child from the owner-approved common envelope (Luna, Sonnet, GLM 5.2, Terra or Opus) using semantic fit, fresh `/models` capability, specialist-child authority and authenticated subscription-quota evidence; the selected child carries the ordinary `specialist-child` role and its exact route-selection evidence; optional reviewers remain separately frozen by the common envelope;
 - `policyDeciding: false` or an equivalent typed shadow authority marker;
 - the Step 7F owner-evidence and canonical mission hash.
 
@@ -491,7 +491,7 @@ Fail closed when:
 - mission, baseline, prompt hash, owner envelope, or scoring rubric differs without a predeclared runtime-capability reason;
 - root/child evidence is missing or conflated;
 - a Command Code alias/family/case variant is substituted;
-- either runtime silently falls back to another model.
+- the root forces a concrete child route, the selected child is outside the amended common envelope, or either runtime silently substitutes another model after Agent OS selection.
 
 ### 7.3 Turn-based P1 child bridge
 
@@ -499,9 +499,9 @@ Do not make Command Code Mods the event transport and do not let a root implemen
 
 1. Agent OS creates and confirms the depth-0 root plan with no mutable product repository/lease.
 2. Pi Web UI starts the Command Code root using `agent-os-7f-root-readonly` against a read-only source view.
-3. The root's first terminal `finalText` must contain exactly one strict `HierarchicalChildProposal` payload and no claimed implementation result.
-4. Agent OS parses it with `parseHierarchicalChildProposal(...)`, creates the ordinary depth-1 child plan, and calls `admitHierarchicalChildPlan(...)`/`agent-os conductor child-admit` with the exact parent plan/task/confirmation/root-session binding.
-5. If in envelope, Agent OS dispatches the child through `dispatchConfirmedPlan(...)` as an ordinary first-class attempt in its own disjoint mutable worktree. For each shadow route, this mandatory implementation child uses the same exact Command Code model as its root with `implementation-child-wide`/`--yolo`; no model or runtime fallback is permitted.
+3. The root's first terminal `finalText` must contain exactly one strict `HierarchicalChildProposal` payload, must carry `routeSelection: "agent-os"` and `routeKey: "agent-os-selected"`, and must contain no claimed implementation result.
+4. Agent OS parses it with `parseHierarchicalChildProposal(...)`, selects one exact route from the D10 common envelope using semantic routing, fresh capability and authenticated quota gates, persists computed validation evidence, creates the ordinary depth-1 child plan with the selected thinking/route binding, and calls `admitHierarchicalChildPlan(...)`/`agent-os conductor child-admit` with the exact parent plan/task/confirmation/root-session binding.
+5. If in envelope, Agent OS dispatches the selected Pi/Claude child through `dispatchConfirmedPlan(...)` as an ordinary first-class attempt in its own disjoint mutable worktree. Command Code native child delegation remains forbidden; no root-proposed, Sol/K3, direct-pay or out-of-envelope runtime/model fallback is permitted.
 6. The child produces its own session, run receipt, evidence, handback, and lease release/reconciliation.
 7. The existing recovery runner creates one bounded root wake. Pi Web UI resumes the exact retained Command Code native session id and supplies the evidence-bound handback.
 8. The root returns criterion dispositions/recommendation; Agent OS persists `child-disposition` and scores only after all P1 evidence and quiescence gates pass.
@@ -662,13 +662,13 @@ Write failing route/contract tests for:
 
 In `/root/agent-os`, write failing tests for:
 
-- exact Qwen/Muse root and same-route implementation-child runtime/model/instance identity;
+- exact Qwen/Muse root identity plus Agent OS-selected ordinary child route from the D10 common envelope; root and child runtime/model/instance identities must remain distinct and exactly bound;
 - shadow routes cannot be policy deciding;
 - mixed-harness decision is bound and immutable;
 - identical mission/envelope/rubric projection;
 - strict proposal parse/admission/dispatch/handback/wake/disposition chain;
 - no mutable lease for root and a distinct lease for child;
-- native Command Code child is non-substitutive/non-scoreable;
+- native Command Code child is forbidden/non-substitutive/non-scoreable; a root may not force a concrete child route;
 - root mutation, zero-child, missing receipt/handback/disposition, and identity drift fail closed;
 - Step 7G verdict cannot cite shadow scores;
 - temporary authority closure;
@@ -684,8 +684,8 @@ Only after deterministic tests pass, run credit-conscious live probes in a dispo
 4. exact two-turn resume for each model, proving native session continuity;
 5. abort a bounded long-running harmless prompt and prove process-group cessation/quiescence;
 6. restart between turns and prove private mapping recovery/exact resume, or freeze the explicit blocker;
-7. one isolated child-profile write in a disposable fixture worktree, proving wide permissions stay inside the worktree;
-8. one full P1 disposable hierarchy per route: read-only root proposal, first-class child, receipt, handback, root wake, disposition, zero root mutation;
+7. one isolated selected Pi/Claude child-profile write in a disposable fixture worktree, proving wide permissions stay inside the worktree and the root cannot select the child model/runtime;
+8. one full P1 disposable hierarchy per route: read-only Command Code root proposal with the Agent OS selection sentinel, exact common-envelope child selection evidence, first-class ordinary child, receipt, handback, root wake, disposition, zero root mutation;
 9. negative controls for forbidden model, profile injection, wrong native id, malformed fake stream, missing result, and disabled feature.
 
 Do not target production without explicit owner permission. Keep auth/tokens/transcripts out of committed artifacts. Record canonical session ids, run ids, request ids, evidence bundle paths, and sanitised validation reports.
