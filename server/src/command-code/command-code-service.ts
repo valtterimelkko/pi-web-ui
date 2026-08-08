@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { access, chmod, copyFile, lstat, mkdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import {
@@ -11,8 +11,13 @@ import {
   COMMAND_CODE_MODELS,
   COMMAND_CODE_PROVIDER,
   COMMAND_CODE_VERSION,
+  COMMAND_CODE_EFFORT_LEVELS_BY_MODEL,
   assertCommandCodeModel,
+  assertCommandCodeEffort,
+  discoverCommandCodeEfforts,
   discoverCommandCodeModels,
+  type CommandCodeEffort,
+  type CommandCodeEffortCapabilities,
   type CommandCodeModel,
   type CommandCodeModelDiscovery,
   type CommandCodeDiscoveryRunner,
@@ -37,6 +42,7 @@ export type CommandCodeAvailability =
   | 'discovery_error'
   | 'version_mismatch'
   | 'exact_model_unavailable'
+  | 'effort_capability_unknown'
   | 'available';
 
 export interface CommandCodeHealth {
@@ -47,6 +53,7 @@ export interface CommandCodeHealth {
   expectedVersion: string;
   advertisedModels: CommandCodeModel[];
   missingModels: CommandCodeModel[];
+  effortCapabilities: Partial<CommandCodeEffortCapabilities>;
   checkedAt: string;
   diagnostic?: string;
 }
@@ -62,6 +69,8 @@ export interface CommandCodeServiceConfig extends Partial<CommandCodeRuntimeConf
 export interface CommandCodeCreateInput {
   cwd: string;
   model: CommandCodeModel;
+  /** Native effort; undefined means use the model's discovered default. */
+  effort?: string;
   permissionProfile: CommandCodePermissionProfile;
   invocationRole?: CommandCodeInvocationRole;
   roleAttestation?: CommandCodeRoleAttestation;
@@ -85,7 +94,8 @@ export type CommandCodeErrorClass =
   | 'no_response'
   | 'credits'
   | 'interrupted'
-  | 'protocol_error';
+  | 'protocol_error'
+  | 'effort_unsupported';
 
 type RunnerLike = Pick<CommandCodeProcessRunner, 'run' | 'abort' | 'shutdown' | 'isRunning'>;
 
@@ -94,7 +104,9 @@ export class CommandCodeService {
   readonly store: CommandCodeSessionStore;
   readonly journal: CommandCodeEventJournal;
   private readonly runner: RunnerLike;
+  private readonly ownsProcessRunner: boolean;
   private readonly discover: CommandCodeDiscoveryRunner;
+  private readonly usesDefaultDiscovery: boolean;
   private discovery?: CommandCodeModelDiscovery;
   private discoveryDiagnostic?: string;
   private healthStatus: CommandCodeAvailability = 'disabled';
@@ -105,9 +117,11 @@ export class CommandCodeService {
   private readonly pinned = new Set<string>();
   private readonly pendingSessions = new Set<string>();
   private readonly activeSessions = new Set<string>();
+  private readonly effortMutations = new Set<string>();
   private readonly abortRequested = new Set<string>();
   private readonly deletedSessions = new Set<string>();
   private readonly inFlightTurns = new Map<string, Promise<void>>();
+  private readonly inFlightEffortMutations = new Map<string, Promise<void>>();
   private roleAttestationSecret?: string;
 
   constructor(options: {
@@ -116,7 +130,8 @@ export class CommandCodeService {
     discover?: CommandCodeDiscoveryRunner;
     checkExecutable?: boolean;
   }) {
-    const mergedConfig = { ...defaultCommandCodeConfig(), ...options.config };
+    const mergedConfig = { ...defaultCommandCodeConfig(options.config), ...options.config };
+    if (!options.config.nativeHomeDir) mergedConfig.nativeHomeDir = path.join(mergedConfig.stateDir, 'native-home');
     this.config = {
       ...mergedConfig,
       allowedCwdRoots: options.config.allowedCwdRoots ?? [path.dirname(mergedConfig.stateDir)],
@@ -125,6 +140,7 @@ export class CommandCodeService {
     this.journal = new CommandCodeEventJournal(this.config.stateDir, {
       maxBytes: this.config.maxStdoutBytes,
     });
+    this.ownsProcessRunner = !options.runner;
     this.runner = options.runner ?? new CommandCodeProcessRunner({
       executablePath: this.config.executablePath,
       processGraceMs: this.config.processGraceMs,
@@ -133,7 +149,9 @@ export class CommandCodeService {
       maxStdoutBytes: this.config.maxStdoutBytes,
       maxPromptBytes: this.config.maxPromptBytes,
       maxStderrBytes: this.config.maxStderrBytes,
+      nativeHomeDir: this.config.nativeHomeDir,
     });
+    this.usesDefaultDiscovery = !options.discover;
     this.discover = options.discover ?? discoverCommandCodeModels;
     this.checkExecutable = options.checkExecutable ?? true;
   }
@@ -155,6 +173,10 @@ export class CommandCodeService {
       this.initialized = true;
       return;
     }
+    if (this.ownsProcessRunner) {
+      await this.prepareNativeHomeRoot();
+      for (const record of await this.store.list()) await this.prepareNativeHome(record.sessionId);
+    }
     try {
       if (this.checkExecutable) await access(this.config.executablePath);
     } catch {
@@ -165,11 +187,16 @@ export class CommandCodeService {
     }
     try {
       const discovered = await this.discover(this.config.executablePath);
-      this.discoveryResult = discovered;
+      const effortCapabilities = discovered.effortCapabilities
+        ?? (this.usesDefaultDiscovery ? (await discoverCommandCodeEfforts(this.config.executablePath)).capabilities : undefined);
+      this.discoveryResult = { ...discovered, ...(effortCapabilities ? { effortCapabilities } : {}) };
       if (discovered.version !== this.config.expectedVersion) {
         this.healthStatus = 'version_mismatch';
       } else if (discovered.ambiguous.length > 0 || !COMMAND_CODE_MODELS.every((model) => discovered.models.includes(model))) {
         this.healthStatus = 'exact_model_unavailable';
+      } else if (!effortCapabilities || !hasExactEffortCapabilities(effortCapabilities)) {
+        this.healthStatus = 'effort_capability_unknown';
+        this.discoveryDiagnostic = 'Command Code native effort capability discovery was incomplete or drifted; refusing session creation';
       } else {
         this.healthStatus = 'available';
       }
@@ -189,6 +216,7 @@ export class CommandCodeService {
     this.assertRunnable();
     const model = assertCommandCodeModel(input.model);
     if (!model || !this.discoveryResult?.models.includes(model)) throw new CommandCodeRuntimeError('Exact Command Code model is unavailable', 'protocol_error');
+    const effortBinding = this.resolveEffort(model, input.effort);
     if (input.invocationRole === 'conductor-root' && input.permissionProfile !== 'agent-os-7f-root-readonly') throw new CommandCodeRuntimeError('Command Code root role requires the server-owned readonly profile', 'permission_denied');
     if (input.invocationRole === 'implementation-child' && input.permissionProfile !== 'implementation-child-wide') throw new CommandCodeRuntimeError('Command Code implementation-child role requires the server-owned wide profile', 'permission_denied');
     const sessionId = `commandcode-${cryptoRandomId()}`;
@@ -198,7 +226,7 @@ export class CommandCodeService {
     }
     if (input.invocationRole) {
       try {
-        verifyCommandCodeRoleAttestation(this.roleAttestationSecret, input.roleAttestation, { role: input.invocationRole, model, cwd });
+        verifyCommandCodeRoleAttestation(this.roleAttestationSecret, input.roleAttestation, { role: input.invocationRole, model, cwd, effort: effortBinding.effort });
         if (input.invocationRole === 'implementation-child') {
           const parentId = input.roleAttestation?.parentSessionId;
           const parent = parentId ? await this.store.get(parentId) : undefined;
@@ -210,14 +238,74 @@ export class CommandCodeService {
         throw new CommandCodeRuntimeError(error instanceof Error ? error.message : String(error), 'permission_denied');
       }
     }
-    return this.store.create({
-      sessionId,
-      cwd,
-      modelSelector: model,
-      permissionProfile: input.permissionProfile,
-      invocationRole: input.invocationRole,
-      eventJournalRef: `events/${sessionId}.jsonl`,
-    });
+    try {
+      const created = await this.store.create({
+        sessionId,
+        cwd,
+        modelSelector: model,
+        ...(effortBinding.effort ? { effort: effortBinding.effort } : {}),
+        effortSource: effortBinding.source,
+        ...(effortBinding.defaultEffort ? { defaultEffort: effortBinding.defaultEffort } : {}),
+        effortCapabilityHash: effortBinding.capabilityHash,
+        permissionProfile: input.permissionProfile,
+        invocationRole: input.invocationRole,
+        eventJournalRef: `events/${sessionId}.jsonl`,
+      });
+      if (this.ownsProcessRunner) await this.prepareNativeHome(sessionId);
+      return created;
+    } catch (error) {
+      await this.store.delete(sessionId).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  getEffortCapabilities(): Partial<CommandCodeEffortCapabilities> {
+    const capabilities = this.discoveryResult?.effortCapabilities;
+    const result: Partial<CommandCodeEffortCapabilities> = {};
+    if (!capabilities) return result;
+    for (const model of COMMAND_CODE_MODELS) {
+      const capability = capabilities[model];
+      if (capability) result[model] = { ...capability, effortLevels: [...capability.effortLevels] };
+    }
+    return result;
+  }
+
+  getEffortCapability(model: CommandCodeModel) {
+    const capability = this.discoveryResult?.effortCapabilities?.[model];
+    return capability ? { ...capability, effortLevels: [...capability.effortLevels] } : undefined;
+  }
+
+  async setEffort(sessionId: string, effort?: string): Promise<CommandCodeInternalSessionRecord> {
+    if (this.shuttingDown) throw new CommandCodeRuntimeError('Command Code service is shutting down', 'interrupted');
+    if (this.deletedSessions.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session was deleted', 'runtime_error');
+    if (this.pendingSessions.has(sessionId) || this.activeSessions.has(sessionId) || this.effortMutations.has(sessionId)) {
+      throw new CommandCodeRuntimeError('Command Code session is already running', 'runtime_error');
+    }
+    this.effortMutations.add(sessionId);
+    let resolveMutation!: () => void;
+    const mutationSettled = new Promise<void>((resolve) => { resolveMutation = resolve; });
+    this.inFlightEffortMutations.set(sessionId, mutationSettled);
+    try {
+      await this.init();
+      this.assertRunnable();
+      const record = await this.store.get(sessionId);
+      if (!record) throw new CommandCodeRuntimeError('Command Code session not found', 'runtime_error');
+      const binding = this.resolveEffort(record.modelSelector, effort);
+      try {
+        return await this.store.setEffort(sessionId, {
+          ...(binding.effort ? { effort: binding.effort } : {}),
+          effortSource: binding.source,
+          ...(binding.defaultEffort ? { defaultEffort: binding.defaultEffort } : {}),
+          effortCapabilityHash: binding.capabilityHash,
+        });
+      } catch (error) {
+        throw new CommandCodeRuntimeError(error instanceof Error ? error.message : String(error), 'effort_unsupported');
+      }
+    } finally {
+      this.effortMutations.delete(sessionId);
+      if (this.inFlightEffortMutations.get(sessionId) === mutationSettled) this.inFlightEffortMutations.delete(sessionId);
+      resolveMutation();
+    }
   }
 
   async getSession(sessionId: string): Promise<CommandCodeInternalSessionRecord | undefined> {
@@ -245,7 +333,7 @@ export class CommandCodeService {
   ): Promise<void> {
     if (this.shuttingDown) throw new CommandCodeRuntimeError('Command Code service is shutting down', 'interrupted');
     if (this.deletedSessions.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session was deleted', 'runtime_error');
-    if (this.pendingSessions.has(sessionId) || this.activeSessions.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session is already running', 'runtime_error');
+    if (this.pendingSessions.has(sessionId) || this.activeSessions.has(sessionId) || this.effortMutations.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session is already running', 'runtime_error');
     let resolveTurn!: () => void;
     const turnSettled = new Promise<void>((resolve) => { resolveTurn = resolve; });
     this.inFlightTurns.set(sessionId, turnSettled);
@@ -309,6 +397,7 @@ export class CommandCodeService {
         permissionProfile: record.permissionProfile,
         prompt,
         nativeSessionId: record.nativeSessionId,
+        effort: record.effort,
       });
       const adapted = result.parsed
         ? adaptCommandCodeOutput({
@@ -325,6 +414,17 @@ export class CommandCodeService {
       if (adapted?.nativeSessionId) await this.store.bindNativeSession(sessionId, adapted.nativeSessionId);
       if (adapted) {
         for (const event of adapted.events) {
+          const effectiveEffort = extractEffectiveEffort(event);
+          if (effectiveEffort) {
+            const capability = this.capabilityFor(record.modelSelector);
+            if (!capability.effortLevels.includes(effectiveEffort.effort)) {
+              throw new CommandCodeRuntimeError(`Command Code reported unsupported effective effort '${effectiveEffort.effort}'`, 'protocol_error');
+            }
+            await this.store.update(sessionId, {
+              effectiveEffort: effectiveEffort.effort,
+              effortEvidenceMethod: effectiveEffort.method,
+            });
+          }
           await this.journal.append(sessionId, event);
           onEvent(event);
           if (event.type === 'agent_end') emittedTerminal = true;
@@ -398,10 +498,13 @@ export class CommandCodeService {
     this.abortRequested.add(sessionId);
     try {
       const inFlight = this.inFlightTurns.get(sessionId);
+      const effortMutation = this.inFlightEffortMutations.get(sessionId);
       await this.runner.abort(sessionId);
       if (inFlight) await inFlight;
+      if (effortMutation) await effortMutation;
       this.pinned.delete(sessionId);
       await this.journal.clear(sessionId).catch(() => undefined);
+      if (this.ownsProcessRunner) await rm(path.join(this.config.nativeHomeDir, sessionId), { recursive: true, force: true }).catch(() => undefined);
       return await this.store.delete(sessionId);
     } finally {
       this.deletedSessions.delete(sessionId);
@@ -414,7 +517,7 @@ export class CommandCodeService {
     this.shuttingDown = true;
     for (const sessionId of this.pendingSessions) this.abortRequested.add(sessionId);
     for (const sessionId of this.activeSessions) this.abortRequested.add(sessionId);
-    const inFlights = [...this.inFlightTurns.values()];
+    const inFlights = [...this.inFlightTurns.values(), ...this.inFlightEffortMutations.values()];
     this.shutdownPromise = (async () => {
       try {
         await this.runner.shutdown();
@@ -431,14 +534,30 @@ export class CommandCodeService {
   isEnabled(): boolean { return this.config.enabled; }
   isAvailable(): boolean { return this.healthStatus === 'available'; }
   getExecutionInstanceId(): 'commandcode-default' { return COMMAND_CODE_EXECUTION_INSTANCE_ID; }
-  getModels(): Array<{ id: CommandCodeModel; displayName: string; provider: string; reasoning: boolean }> {
+  getModels(): Array<{
+    id: CommandCodeModel;
+    displayName: string;
+    provider: string;
+    reasoning: boolean;
+    supportsEffort: boolean;
+    effortLevels: CommandCodeEffort[];
+    defaultEffort?: CommandCodeEffort;
+    effortCapabilityHash?: string;
+  }> {
     const available = this.discoveryResult?.models ?? [];
-    return available.map((id) => ({
-      id,
-      displayName: id === 'qwen/qwen3.8-max' ? 'Qwen 3.8 Max' : 'Muse Spark 1.2 Contributor',
-      provider: COMMAND_CODE_PROVIDER,
-      reasoning: true,
-    }));
+    return available.map((id) => {
+      const capability = this.discoveryResult?.effortCapabilities?.[id];
+      return {
+        id,
+        displayName: id === 'qwen/qwen3.8-max' ? 'Qwen 3.8 Max' : 'Muse Spark 1.2 Contributor',
+        provider: COMMAND_CODE_PROVIDER,
+        reasoning: true,
+        supportsEffort: capability?.supportsEffort === true,
+        effortLevels: [...(capability?.effortLevels ?? [])],
+        ...(capability?.defaultEffort ? { defaultEffort: capability.defaultEffort } : {}),
+        ...(capability?.capabilityHash ? { effortCapabilityHash: capability.capabilityHash } : {}),
+      };
+    });
   }
   getHealth(): CommandCodeHealth {
     const missingModels = COMMAND_CODE_MODELS.filter((model) => !this.discoveryResult?.models.includes(model));
@@ -450,6 +569,7 @@ export class CommandCodeService {
       expectedVersion: this.config.expectedVersion,
       advertisedModels: [...(this.discoveryResult?.models ?? [])],
       missingModels,
+      effortCapabilities: this.getEffortCapabilities(),
       checkedAt: new Date().toISOString(),
       ...(this.discoveryDiagnostic ? { diagnostic: this.discoveryDiagnostic } : {}),
     };
@@ -460,6 +580,71 @@ export class CommandCodeService {
   pinSession(sessionId: string): boolean { this.pinned.add(sessionId); return true; }
   unpinSession(sessionId: string): boolean { return this.pinned.delete(sessionId); }
   isSessionPinned(sessionId: string): boolean { return this.pinned.has(sessionId); }
+
+  private resolveEffort(model: CommandCodeModel, requested: unknown): {
+    effort?: CommandCodeEffort;
+    source: 'explicit' | 'default' | 'none';
+    defaultEffort?: CommandCodeEffort;
+    capabilityHash: string;
+  } {
+    const capability = this.capabilityFor(model);
+    if (capability.status === 'unknown') {
+      throw new CommandCodeRuntimeError(`Command Code effort capability is unknown for model ${model}`, 'effort_unsupported');
+    }
+    if (!capability.supportsEffort) {
+      if (requested !== undefined) throw new CommandCodeRuntimeError(`Command Code model ${model} does not support native effort`, 'effort_unsupported');
+      return { source: 'none', capabilityHash: capability.capabilityHash };
+    }
+    if (requested !== undefined) {
+      let effort: CommandCodeEffort;
+      try { effort = assertCommandCodeEffort(model, requested) as CommandCodeEffort; }
+      catch (error) { throw new CommandCodeRuntimeError(error instanceof Error ? error.message : String(error), 'effort_unsupported'); }
+      if (!capability.effortLevels.includes(effort)) throw new CommandCodeRuntimeError(`Command Code effort '${effort}' is not advertised for model ${model}`, 'effort_unsupported');
+      return { effort, source: 'explicit', ...(capability.defaultEffort ? { defaultEffort: capability.defaultEffort } : {}), capabilityHash: capability.capabilityHash };
+    }
+    if (!capability.defaultEffort || !capability.effortLevels.includes(capability.defaultEffort)) {
+      throw new CommandCodeRuntimeError(`Command Code default effort is unknown for model ${model}`, 'effort_unsupported');
+    }
+    return { effort: capability.defaultEffort, source: 'default', defaultEffort: capability.defaultEffort, capabilityHash: capability.capabilityHash };
+  }
+
+  private capabilityFor(model: CommandCodeModel) {
+    const capability = this.discoveryResult?.effortCapabilities?.[model];
+    if (!capability) throw new CommandCodeRuntimeError(`Command Code effort capability is unavailable for model ${model}`, 'effort_unsupported');
+    return capability;
+  }
+
+  private async prepareNativeHomeRoot(): Promise<void> {
+    await mkdir(this.config.nativeHomeDir, { recursive: true, mode: 0o700 });
+  }
+
+  private async prepareNativeHome(sessionId: string): Promise<void> {
+    await this.prepareNativeHomeRoot();
+    const sessionHome = path.join(this.config.nativeHomeDir, sessionId);
+    const commandCodeHome = path.join(sessionHome, '.commandcode');
+    await mkdir(commandCodeHome, { recursive: true, mode: 0o700 });
+    const source = path.join(process.env.HOME || '/root', '.commandcode', 'auth.json');
+    const target = path.join(commandCodeHome, 'auth.json');
+    try {
+      const sourceStat = await lstat(source);
+      if (!sourceStat.isFile()) return;
+      try {
+        const targetStat = await lstat(target);
+        if (targetStat.isSymbolicLink() || !targetStat.isFile()) throw new Error('Command Code private auth binding drift');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      // Copy the operator's credential into the session-owned native home. A
+      // symlink would let concurrent native invocations mutate one shared
+      // auth/config tree and would make per-session isolation illusory.
+      const temporary = `${target}.${process.pid}.tmp`;
+      await copyFile(source, temporary);
+      await chmod(temporary, 0o600);
+      await rename(temporary, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
 
   private assertRunnable(): void {
     if (!this.config.enabled) throw new CommandCodeRuntimeError('Command Code runtime is disabled', 'runtime_error');
@@ -479,6 +664,34 @@ export class CommandCodeService {
       },
     };
   }
+}
+
+function hasExactEffortCapabilities(capabilities: CommandCodeEffortCapabilities): boolean {
+  if (JSON.stringify(Object.keys(capabilities).sort()) !== JSON.stringify([...COMMAND_CODE_MODELS].sort())) return false;
+  return COMMAND_CODE_MODELS.every((model) => {
+    const capability = capabilities[model];
+    const expectedLevels = COMMAND_CODE_EFFORT_LEVELS_BY_MODEL[model];
+    return Boolean(capability)
+      && capability.status !== 'unknown'
+      && capability.source === 'live-preflight'
+      && /^[a-f0-9]{64}$/.test(capability.capabilityHash)
+      && capability.supportsEffort === (expectedLevels.length > 0)
+      && JSON.stringify(capability.effortLevels) === JSON.stringify(expectedLevels)
+      && (expectedLevels.length === 0 ? capability.defaultEffort === undefined : capability.defaultEffort === 'medium');
+  });
+}
+
+function extractEffectiveEffort(event: NormalizedEvent): { effort: CommandCodeEffort; method: 'provider-event' | 'provider-result' } | undefined {
+  if (event.type !== 'model_request_end' && event.type !== 'agent_end') return undefined;
+  const data = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+    ? event.data as Record<string, unknown>
+    : undefined;
+  const value = data?.effort ?? data?.effectiveEffort ?? data?.reasoningEffort;
+  if (typeof value !== 'string' || !['low', 'medium', 'high', 'xhigh', 'max'].includes(value)) return undefined;
+  return {
+    effort: value as CommandCodeEffort,
+    method: data?.effortEvidenceMethod === 'provider-result' ? 'provider-result' : 'provider-event',
+  };
 }
 
 function classifyResult(result: CommandCodeProcessRunResult, terminal?: { subtype: 'success' | 'error' | 'max_turns' }): Error | undefined {

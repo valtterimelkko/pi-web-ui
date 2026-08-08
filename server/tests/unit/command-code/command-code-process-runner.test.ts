@@ -25,6 +25,7 @@ describe('Command Code process runner', () => {
     const spawn = vi.fn(() => child);
     const runner = new CommandCodeProcessRunner({
       executablePath: '/opt/bin/cmd',
+      nativeHomeDir: '/tmp/private-command-code-home',
       spawn,
       maxWallTimeMs: 1000,
     });
@@ -42,7 +43,7 @@ describe('Command Code process runner', () => {
     child.emit('close', 0, null);
     const result = await resultPromise;
 
-    expect(spawn).toHaveBeenCalledWith('/opt/bin/cmd', expect.any(Array), expect.objectContaining({ shell: false, detached: true, cwd: '/tmp/worktree' }));
+    expect(spawn).toHaveBeenCalledWith('/opt/bin/cmd', expect.any(Array), expect.objectContaining({ shell: false, detached: true, cwd: '/tmp/worktree', env: expect.objectContaining({ HOME: '/tmp/private-command-code-home/s1' }) }));
     expect(spawn.mock.calls[0]?.[1]).not.toContain('--continue');
     expect(child.stdin.writableEnded).toBe(true);
     expect(result.parsed?.terminal.subtype).toBe('success');

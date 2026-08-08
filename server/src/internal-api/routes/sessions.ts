@@ -160,6 +160,7 @@ function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
       case 'protocol_error': return ErrorCode.COMMANDCODE_PROTOCOL_ERROR;
       case 'interrupted': return ErrorCode.RUNTIME_ERROR;
       case 'permission_denied': return ErrorCode.COMMANDCODE_ROLE_REFUSED;
+      case 'effort_unsupported': return ErrorCode.COMMANDCODE_EFFORT_UNSUPPORTED;
       default: return ErrorCode.RUNTIME_ERROR;
     }
   }
@@ -637,6 +638,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       : undefined;
   }
 
+  function commandCodeRequestedEffort(record: CommandCodeInternalSessionRecord): CommandCodeInternalSessionRecord['effort'] {
+    return record.effortSource === 'explicit' ? record.effort : undefined;
+  }
+
   function commandCodeSessionInfo(record: CommandCodeInternalSessionRecord): SessionInfo {
     return {
       sessionId: record.sessionId,
@@ -647,6 +652,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       model: record.modelSelector,
       modelSelector: record.modelSelector,
       invocationRole: record.invocationRole,
+      effort: record.effort,
+      requestedEffort: commandCodeRequestedEffort(record),
+      acceptedEffort: record.effort,
+      effortSource: record.effortSource,
+      defaultEffort: record.defaultEffort,
+      effectiveEffort: record.effectiveEffort,
+      effortEvidenceMethod: record.effortEvidenceMethod,
+      effortCapabilityHash: record.effortCapabilityHash,
       status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
       messageCount: record.messageCount,
       firstMessage: record.firstMessage,
@@ -894,6 +907,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           const created = await commandCodeService.createSession({
             cwd,
             model: selectedModel,
+            effort: body.effort,
             permissionProfile: invocationRole === 'conductor-root' ? 'agent-os-7f-root-readonly' : 'implementation-child-wide',
             invocationRole,
             roleAttestation: body.commandCodeAttestation as CommandCodeRoleAttestation | undefined,
@@ -906,6 +920,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             model: selectedModel,
             modelSelector: selectedModel,
             invocationRole,
+            effort: created.effort,
+            requestedEffort: created.effortSource === 'explicit' ? created.effort : undefined,
+            acceptedEffort: created.effort,
+            effortSource: created.effortSource,
+            defaultEffort: created.defaultEffort,
+            effortCapabilityHash: created.effortCapabilityHash,
             executionInstanceId: created.executionInstanceId,
             cwd: created.cwd,
             createdAt: created.createdAt,
@@ -1127,6 +1147,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (createdCommandCodeSessionId) await commandCodeService?.deleteSession(createdCommandCodeSessionId).catch(() => undefined);
       if (err instanceof CommandCodeRuntimeError && err.code === 'permission_denied') {
         sendJson(res, 403, enrichedErrorBody(ErrorCode.COMMANDCODE_ROLE_REFUSED, err.message));
+        return;
+      }
+      if (err instanceof CommandCodeRuntimeError && err.code === 'effort_unsupported') {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.COMMANDCODE_EFFORT_UNSUPPORTED, err.message));
         return;
       }
       logger.errorObject('Failed to create session', err);
@@ -1419,6 +1443,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       executionInstanceId: record.executionInstanceId,
       invocationRole: record.invocationRole,
       permissionProfile: record.permissionProfile,
+      effort: record.effort,
+      requestedEffort: commandCodeRequestedEffort(record),
+      acceptedEffort: record.effort,
+      effortSource: record.effortSource,
+      defaultEffort: record.defaultEffort,
+      effectiveEffort: record.effectiveEffort,
+      effortEvidenceMethod: record.effortEvidenceMethod,
+      effortCapabilityHash: record.effortCapabilityHash,
       activity: { status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle', lastActivity: record.updatedAt },
       sources: {
         registryPath: 'private command-code session store',
@@ -2008,6 +2040,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       executionInstanceId: record.executionInstanceId,
       model: record.modelSelector,
       modelSelector: record.modelSelector,
+      effort: record.effort,
+      requestedEffort: commandCodeRequestedEffort(record),
+      acceptedEffort: record.effort,
+      effortSource: record.effortSource,
+      defaultEffort: record.defaultEffort,
+      effortCapabilityHash: record.effortCapabilityHash,
       invocationRole: record.invocationRole,
       permissionProfile: record.permissionProfile,
       message: body.message,
@@ -2641,6 +2679,31 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           return;
         }
         sendJson(res, 200, { success: true, action: 'set_model', modelId: body.modelId } satisfies SessionControlResponse);
+        return;
+      }
+      if (body.action === 'set_effort') {
+        try {
+          const updated = await commandCodeService!.setEffort(commandCodeEntry.sessionId, body.effort);
+          sendJson(res, 200, {
+            success: true,
+            action: 'set_effort',
+            effort: updated.effort,
+            requestedEffort: updated.effortSource === 'explicit' ? updated.effort : undefined,
+            acceptedEffort: updated.effort,
+            effortSource: updated.effortSource,
+            defaultEffort: updated.defaultEffort,
+            effortCapabilityHash: updated.effortCapabilityHash,
+          } satisfies SessionControlResponse);
+        } catch (error) {
+          const runtimeError = error as CommandCodeRuntimeError;
+          if (runtimeError instanceof CommandCodeRuntimeError && runtimeError.code === 'effort_unsupported') {
+            sendJson(res, 400, enrichedErrorBody(ErrorCode.COMMANDCODE_EFFORT_UNSUPPORTED, runtimeError.message));
+          } else if (runtimeError instanceof CommandCodeRuntimeError && /already running|idle/i.test(runtimeError.message)) {
+            sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, runtimeError.message));
+          } else {
+            sendJson(res, 500, { error: error instanceof Error ? error.message : 'Failed to set Command Code effort', code: ErrorCode.INTERNAL_ERROR });
+          }
+        }
         return;
       }
       if (body.action === 'pin') {
@@ -4013,6 +4076,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           model: created.model,
           modelSelector: created.modelSelector,
           executionInstanceId: created.executionInstanceId,
+          effort: created.effort as BatchCreateResultItem['effort'],
+          requestedEffort: created.effortSource === 'explicit' ? created.effort : undefined,
+          acceptedEffort: created.effort,
+          effortSource: created.effortSource,
+          defaultEffort: created.defaultEffort,
+          effortCapabilityHash: created.effortCapabilityHash,
           cwd: created.cwd,
         };
         // Optional per-entry create-time pin (see POST /sessions pin field).
@@ -4038,7 +4107,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               ? err.code
               : err instanceof CommandCodeRuntimeError && err.code === 'permission_denied'
                 ? ErrorCode.COMMANDCODE_ROLE_REFUSED
-                : ErrorCode.SESSION_CREATE_FAILED,
+                : err instanceof CommandCodeRuntimeError && err.code === 'effort_unsupported'
+                  ? ErrorCode.COMMANDCODE_EFFORT_UNSUPPORTED
+                  : ErrorCode.SESSION_CREATE_FAILED,
             message: err instanceof Error ? err.message : 'Failed to create session',
           },
         };

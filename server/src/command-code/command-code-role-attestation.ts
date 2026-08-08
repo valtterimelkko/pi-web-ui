@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
-import type { CommandCodeModel } from './command-code-model-catalog.js';
+import type { CommandCodeEffort, CommandCodeModel } from './command-code-model-catalog.js';
 import type { CommandCodeInvocationRole } from './command-code-session-store.js';
 
 export interface CommandCodeRoleAttestation {
   role: CommandCodeInvocationRole;
   model: CommandCodeModel;
+  effort?: CommandCodeEffort;
   cwd: string;
   worktreeRoot: string;
   leaseId: string;
@@ -16,6 +17,7 @@ export interface CommandCodeRoleAttestation {
 export interface CommandCodeRoleAttestationPayload {
   role: CommandCodeInvocationRole;
   model: CommandCodeModel;
+  effort?: CommandCodeEffort;
   cwd: string;
   worktreeRoot: string;
   leaseId: string;
@@ -34,11 +36,11 @@ export function createCommandCodeRoleAttestation(
 export function verifyCommandCodeRoleAttestation(
   secret: string | undefined,
   attestation: CommandCodeRoleAttestation | undefined,
-  expected: { role: CommandCodeInvocationRole; model: CommandCodeModel; cwd: string },
+  expected: { role: CommandCodeInvocationRole; model: CommandCodeModel; effort?: CommandCodeEffort; cwd: string },
   now = Date.now(),
 ): void {
   if (!secret || !attestation) throw new Error('Command Code role attestation is required.');
-  if (attestation.role !== expected.role || attestation.model !== expected.model || attestation.cwd !== expected.cwd || attestation.worktreeRoot !== expected.cwd) {
+  if (attestation.role !== expected.role || attestation.model !== expected.model || attestation.effort !== expected.effort || attestation.cwd !== expected.cwd || attestation.worktreeRoot !== expected.cwd) {
     throw new Error('Command Code role attestation does not match the immutable session binding.');
   }
   if (!attestation.leaseId || attestation.leaseId.length > 256 || (attestation.role === 'implementation-child' && !attestation.parentSessionId) || (attestation.role === 'conductor-root' && attestation.parentSessionId !== undefined)) {
@@ -50,6 +52,7 @@ export function verifyCommandCodeRoleAttestation(
   const payload: CommandCodeRoleAttestationPayload = {
     role: attestation.role,
     model: attestation.model,
+    ...(attestation.effort ? { effort: attestation.effort } : {}),
     cwd: attestation.cwd,
     worktreeRoot: attestation.worktreeRoot,
     leaseId: attestation.leaseId,
@@ -64,6 +67,7 @@ function canonicalPayload(payload: CommandCodeRoleAttestationPayload): string {
   return JSON.stringify({
     role: payload.role,
     model: payload.model,
+    ...(payload.effort ? { effort: payload.effort } : {}),
     cwd: payload.cwd,
     worktreeRoot: payload.worktreeRoot,
     leaseId: payload.leaseId,

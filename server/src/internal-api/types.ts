@@ -7,6 +7,9 @@
  */
 
 import type { NormalizedEvent, ScreenView } from '@pi-web-ui/shared';
+import type { CommandCodeEffort as NativeCommandCodeEffort } from '../command-code/command-code-model-catalog.js';
+
+export type CommandCodeEffort = NativeCommandCodeEffort;
 
 // ─── Verbosity levels ────────────────────────────────────────────────────────
 
@@ -101,6 +104,7 @@ export interface RetentionLeaseResponse {
 export interface CommandCodeRoleAttestationRequest {
   role: 'conductor-root' | 'implementation-child';
   model: 'qwen/qwen3.8-max' | 'meta/muse-spark-1.2-contributor';
+  effort?: CommandCodeEffort;
   cwd: string;
   worktreeRoot: string;
   leaseId: string;
@@ -114,6 +118,8 @@ export interface CreateSessionRequest {
   cwd?: string;
   model?: string;
   thinkingLevel?: ThinkingLevel;
+  /** Command Code-native effort; distinct from generic thinkingLevel. */
+  effort?: CommandCodeEffort;
   source?: string;
   scenarioId?: string;
   ephemeral?: boolean;
@@ -200,6 +206,8 @@ export interface BatchCreateEntry {
   cwd?: string;
   model?: string;
   thinkingLevel?: ThinkingLevel;
+  /** Command Code-native effort; distinct from generic thinkingLevel. */
+  effort?: CommandCodeEffort;
   /** Pin each created session at creation time (see CreateSessionRequest.pin). */
   pin?: boolean;
   pinTtlSeconds?: number;
@@ -221,6 +229,12 @@ export interface BatchCreateResultItem {
   model?: string;
   modelSelector?: string;
   executionInstanceId?: string;
+  effort?: CommandCodeEffort;
+  requestedEffort?: CommandCodeEffort;
+  acceptedEffort?: CommandCodeEffort;
+  effortSource?: 'explicit' | 'default' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effortCapabilityHash?: string;
   cwd?: string;
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
@@ -390,6 +404,14 @@ export interface SessionEvidenceResponse {
   executionInstanceId: string;
   invocationRole?: 'conductor-root' | 'implementation-child';
   permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide';
+  effort?: CommandCodeEffort;
+  requestedEffort?: CommandCodeEffort;
+  acceptedEffort?: CommandCodeEffort;
+  effortSource?: 'explicit' | 'default' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effectiveEffort?: CommandCodeEffort;
+  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
+  effortCapabilityHash?: string;
   activity: {
     status: SessionInfo['status'];
     lastActivity: string;
@@ -472,9 +494,10 @@ export interface SessionEvidenceResponse {
 }
 
 export interface SessionControlRequest {
-  action: 'set_model' | 'set_thinking_level' | 'pin' | 'unpin' | 'acquire_retention' | 'renew_retention' | 'release_retention';
+  action: 'set_model' | 'set_thinking_level' | 'set_effort' | 'pin' | 'unpin' | 'acquire_retention' | 'renew_retention' | 'release_retention';
   modelId?: string;
   level?: ThinkingLevel;
+  effort?: CommandCodeEffort;
   /**
    * Pin lifetime in seconds for the `pin` action. Defaults to 24h; clamped to a
    * hard max (7d). Re-pinning extends the deadline. The granted expiry is
@@ -514,6 +537,12 @@ export interface CreateSessionResponse {
   modelSelector?: string;
   /** Additive Command Code role projection; raw permission flags remain private. */
   invocationRole?: 'conductor-root' | 'implementation-child';
+  effort?: CommandCodeEffort;
+  requestedEffort?: CommandCodeEffort;
+  acceptedEffort?: CommandCodeEffort;
+  effortSource?: 'explicit' | 'default' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effortCapabilityHash?: string;
   /** Configured runtime instance resolved for the created session. */
   executionInstanceId?: string;
   cwd: string;
@@ -541,6 +570,14 @@ export interface SessionInfo {
   modelSelector?: string;
   /** Additive Command Code role projection; raw permission flags remain private. */
   invocationRole?: 'conductor-root' | 'implementation-child';
+  effort?: CommandCodeEffort;
+  requestedEffort?: CommandCodeEffort;
+  acceptedEffort?: CommandCodeEffort;
+  effortSource?: 'explicit' | 'default' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effectiveEffort?: CommandCodeEffort;
+  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
+  effortCapabilityHash?: string;
   status: 'idle' | 'running' | 'error';
   messageCount: number;
   firstMessage: string;
@@ -587,6 +624,13 @@ export interface SessionControlResponse {
   action: SessionControlRequest['action'];
   modelId?: string;
   level?: string;
+  effort?: CommandCodeEffort;
+  requestedEffort?: CommandCodeEffort;
+  acceptedEffort?: CommandCodeEffort;
+  effortSource?: 'explicit' | 'default' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effectiveEffort?: CommandCodeEffort;
+  effortCapabilityHash?: string;
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
   pinnedUntil?: string;
@@ -757,6 +801,15 @@ export interface RunReceipt {
   model?: string;
   /** Canonical creation selector bound to the run, when distinct from model. */
   modelSelector?: string;
+  /** Native Command Code effort binding; never mapped to thinkingLevel. */
+  effort?: CommandCodeEffort;
+  requestedEffort?: CommandCodeEffort;
+  acceptedEffort?: CommandCodeEffort;
+  effortSource?: 'explicit' | 'default' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effectiveEffort?: CommandCodeEffort;
+  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
+  effortCapabilityHash?: string;
   /** Additive Command Code role/profile projection; raw argv remains private. */
   invocationRole?: 'conductor-root' | 'implementation-child';
   permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide';
@@ -812,6 +865,11 @@ export interface ModelInfo {
   reasoning?: boolean;
   /** Runtime-resolved model-specific levels. Pi populates this from its SDK catalogue. */
   thinkingLevels?: string[];
+  /** Command Code-native model-specific effort support. */
+  supportsEffort?: boolean;
+  effortLevels?: string[];
+  defaultEffort?: string;
+  effortCapabilityHash?: string;
   /** For Claude profile entries: the backend that drives this profile. */
   backend?: 'sdk-subscription' | 'cli-direct' | 'channel';
   /** For Claude profile entries: the underlying model alias (sonnet/opus/haiku). */
@@ -872,6 +930,16 @@ export interface RuntimeCapabilities {
   supportsSteer: boolean;
   supportsModelSwitch: boolean;
   supportsThinkingLevel: boolean;
+  /** Native Command Code effort support; generic runtimes omit this. */
+  supportsEffort?: boolean;
+  effortCapabilities?: Record<string, {
+    supportsEffort: boolean;
+    effortLevels: string[];
+    defaultEffort?: string;
+    status?: 'adjustable' | 'unavailable' | 'unknown';
+    source?: string;
+    capabilityHash?: string;
+  }>;
   supportsPinning: boolean;
   supportsReplayHistory: boolean;
   supportsApprovals: boolean;

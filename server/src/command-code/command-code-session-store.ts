@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { assertCommandCodeModel, type CommandCodeModel } from './command-code-model-catalog.js';
+import { assertCommandCodeEffort, assertCommandCodeModel, type CommandCodeEffort, type CommandCodeModel } from './command-code-model-catalog.js';
 import type { CommandCodePermissionProfile } from './command-code-config.js';
 
 export type CommandCodeSessionState = 'created' | 'running' | 'idle' | 'failed' | 'aborted' | 'deleted';
@@ -14,6 +14,13 @@ export interface CommandCodeInternalSessionRecord {
   nativeSessionId?: string;
   cwd: string;
   modelSelector: CommandCodeModel;
+  /** Accepted native effort for the next Command Code turn, when adjustable. */
+  effort?: CommandCodeEffort;
+  effortSource?: 'explicit' | 'default' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effectiveEffort?: CommandCodeEffort;
+  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
+  effortCapabilityHash?: string;
   executionInstanceId: 'commandcode-default';
   permissionProfile: CommandCodePermissionProfile;
   invocationRole?: CommandCodeInvocationRole;
@@ -47,6 +54,10 @@ export interface CreateCommandCodeSessionInput {
   sessionId?: string;
   cwd: string;
   modelSelector: CommandCodeModel;
+  effort?: CommandCodeEffort;
+  effortSource?: 'explicit' | 'default' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effortCapabilityHash?: string;
   permissionProfile: CommandCodePermissionProfile;
   invocationRole?: CommandCodeInvocationRole;
   eventJournalRef: string;
@@ -95,6 +106,10 @@ export class CommandCodeSessionStore {
       runtime: 'commandcode',
       cwd,
       modelSelector: model,
+      ...(input.effort ? { effort: input.effort } : {}),
+      ...(input.effortSource ? { effortSource: input.effortSource } : {}),
+      ...(input.defaultEffort ? { defaultEffort: input.defaultEffort } : {}),
+      ...(input.effortCapabilityHash ? { effortCapabilityHash: input.effortCapabilityHash } : {}),
       executionInstanceId: 'commandcode-default',
       permissionProfile: input.permissionProfile,
       ...(input.invocationRole ? { invocationRole: input.invocationRole } : {}),
@@ -123,11 +138,15 @@ export class CommandCodeSessionStore {
 
   async update(sessionId: string, patch: Partial<Pick<CommandCodeInternalSessionRecord,
     'nativeSessionId' | 'activeRunId' | 'state' | 'lastResult' | 'messageCount' | 'firstMessage' |
-    'lastMessage' | 'lastFinalText' | 'diagnostics'>> & {
+    'lastMessage' | 'lastFinalText' | 'diagnostics' | 'effectiveEffort' | 'effortEvidenceMethod'>> & {
       cwd?: string;
       modelSelector?: CommandCodeModel;
       permissionProfile?: CommandCodePermissionProfile;
       invocationRole?: CommandCodeInvocationRole;
+      effort?: CommandCodeEffort;
+      effortSource?: 'explicit' | 'default' | 'none';
+      defaultEffort?: CommandCodeEffort;
+      effortCapabilityHash?: string;
     }): Promise<CommandCodeInternalSessionRecord> {
     await this.init();
     const current = this.records.get(sessionId);
@@ -151,6 +170,23 @@ export class CommandCodeSessionStore {
     return clone(updated);
   }
 
+  async setEffort(sessionId: string, input: {
+    effort?: CommandCodeEffort;
+    effortSource: 'explicit' | 'default' | 'none';
+    defaultEffort?: CommandCodeEffort;
+    effortCapabilityHash?: string;
+  }): Promise<CommandCodeInternalSessionRecord> {
+    const current = await this.get(sessionId);
+    if (!current) throw new Error(`Command Code session not found: ${sessionId}`);
+    if (current.state === 'running') throw new Error('Command Code effort can only change while the session is idle');
+    return this.update(sessionId, {
+      effort: input.effort,
+      effortSource: input.effortSource,
+      defaultEffort: input.defaultEffort,
+      effortCapabilityHash: input.effortCapabilityHash,
+    });
+  }
+
   async bindNativeSession(sessionId: string, nativeSessionId: string): Promise<CommandCodeInternalSessionRecord> {
     if (!nativeSessionId || nativeSessionId.length > 512 || /[\r\n]/.test(nativeSessionId)) throw new Error('Invalid Command Code native session id');
     return this.update(sessionId, { nativeSessionId });
@@ -162,6 +198,7 @@ export class CommandCodeSessionStore {
     permissionProfile?: CommandCodePermissionProfile;
     invocationRole?: CommandCodeInvocationRole;
     nativeSessionId?: string;
+    effort?: CommandCodeEffort;
   }): Promise<CommandCodeInternalSessionRecord> {
     const record = await this.get(sessionId);
     if (!record) throw new Error(`Command Code session not found: ${sessionId}`);
@@ -170,6 +207,7 @@ export class CommandCodeSessionStore {
     if (binding.permissionProfile !== undefined && binding.permissionProfile !== record.permissionProfile) throw new Error('Command Code permission profile drift');
     if (binding.invocationRole !== undefined && binding.invocationRole !== record.invocationRole) throw new Error('Command Code invocation role drift');
     if (binding.nativeSessionId !== undefined && binding.nativeSessionId !== record.nativeSessionId) throw new Error('Command Code native session id drift');
+    if (binding.effort !== undefined && binding.effort !== record.effort) throw new Error('Command Code effort binding drift');
     return record;
   }
 
@@ -244,7 +282,8 @@ function validateRecord(value: unknown): CommandCodeInternalSessionRecord {
   if (!value || typeof value !== 'object') throw new Error('Invalid Command Code session record');
   const record = value as Partial<CommandCodeInternalSessionRecord>;
   if (record.schemaVersion !== 1 || record.runtime !== 'commandcode' || typeof record.sessionId !== 'string') throw new Error('Invalid Command Code session record identity');
-  if (!assertCommandCodeModel(record.modelSelector)) throw new Error('Invalid Command Code model binding');
+  const model = assertCommandCodeModel(record.modelSelector);
+  if (!model) throw new Error('Invalid Command Code model binding');
   if (record.executionInstanceId !== 'commandcode-default') throw new Error('Invalid Command Code execution instance');
   if (!record.cwd || !path.isAbsolute(record.cwd) || !record.eventJournalRef) throw new Error('Invalid Command Code session record paths');
   if (!record.permissionProfile || !record.state || !record.createdAt || !record.updatedAt) throw new Error('Invalid Command Code session record fields');
@@ -253,6 +292,16 @@ function validateRecord(value: unknown): CommandCodeInternalSessionRecord {
   if (record.invocationRole === 'conductor-root' && record.permissionProfile !== 'agent-os-7f-root-readonly') throw new Error('Command Code root role/profile binding drift');
   if (record.invocationRole === 'implementation-child' && record.permissionProfile !== 'implementation-child-wide') throw new Error('Command Code child role/profile binding drift');
   if (record.nativeSessionId !== undefined && (!record.nativeSessionId || record.nativeSessionId.length > 512 || /[\r\n]/.test(record.nativeSessionId))) throw new Error('Invalid Command Code native session id');
+  if (record.effort !== undefined) {
+    try { assertCommandCodeEffort(model, record.effort); } catch { throw new Error('Invalid Command Code effort'); }
+  }
+  if (record.effortSource !== undefined && !['explicit', 'default', 'none'].includes(record.effortSource)) throw new Error('Invalid Command Code effort source');
+  if (record.effortSource === 'none' && record.effort !== undefined) throw new Error('Command Code non-adjustable effort cannot carry a value');
+  if ((record.effortSource === 'explicit' || record.effortSource === 'default') && record.effort === undefined) throw new Error('Command Code adjustable effort source requires a value');
+  if (record.defaultEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.defaultEffort)) throw new Error('Invalid Command Code default effort');
+  if (record.effortCapabilityHash !== undefined && !/^[a-f0-9]{64}$/.test(record.effortCapabilityHash)) throw new Error('Invalid Command Code effort capability hash');
+  if (record.effectiveEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.effectiveEffort)) throw new Error('Invalid Command Code effective effort');
+  if (record.effortEvidenceMethod !== undefined && !['provider-event', 'provider-result', 'unobserved'].includes(record.effortEvidenceMethod)) throw new Error('Invalid Command Code effort evidence method');
   if (!['created', 'running', 'idle', 'failed', 'aborted', 'deleted'].includes(record.state)) throw new Error('Invalid Command Code session state');
   return record as CommandCodeInternalSessionRecord;
 }

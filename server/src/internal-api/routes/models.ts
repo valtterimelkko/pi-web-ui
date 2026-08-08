@@ -154,6 +154,10 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             displayName: model.displayName,
             provider: model.provider,
             reasoning: model.reasoning,
+            supportsEffort: model.supportsEffort,
+            effortLevels: model.effortLevels,
+            defaultEffort: model.defaultEffort,
+            effortCapabilityHash: model.effortCapabilityHash,
           }));
         } else {
           result.commandcode = [];

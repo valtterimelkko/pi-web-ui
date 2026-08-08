@@ -1,6 +1,7 @@
+import path from 'node:path';
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { buildCommandCodeArgs, type CommandCodePermissionProfile } from './command-code-config.js';
-import type { CommandCodeModel } from './command-code-model-catalog.js';
+import type { CommandCodeEffort, CommandCodeModel } from './command-code-model-catalog.js';
 import { CommandCodeNdjsonParser, type ParsedCommandCodeOutput } from './command-code-ndjson-parser.js';
 
 export interface CommandCodeSpawnOptions extends SpawnOptions {
@@ -19,7 +20,7 @@ export interface CommandCodeProcessRunInput {
   permissionProfile: CommandCodePermissionProfile;
   prompt: string;
   nativeSessionId?: string;
-  effort?: string;
+  effort?: CommandCodeEffort;
 }
 
 export interface CommandCodeProcessRunResult {
@@ -53,6 +54,7 @@ export class CommandCodeProcessRunner {
   private readonly maxStdoutBytes: number;
   private readonly maxPromptBytes: number;
   private readonly maxStderrBytes: number;
+  private readonly nativeHomeDir?: string;
   private readonly active = new Map<string, ActiveProcess>();
 
   constructor(options: {
@@ -64,6 +66,7 @@ export class CommandCodeProcessRunner {
     maxStdoutBytes?: number;
     maxPromptBytes?: number;
     maxStderrBytes?: number;
+    nativeHomeDir?: string;
   }) {
     if (!options.executablePath.startsWith('/')) throw new Error('Command Code executable path must be absolute');
     this.executablePath = options.executablePath;
@@ -74,6 +77,7 @@ export class CommandCodeProcessRunner {
     this.maxStdoutBytes = options.maxStdoutBytes ?? 8 * 1024 * 1024;
     this.maxPromptBytes = options.maxPromptBytes ?? 100_000;
     this.maxStderrBytes = options.maxStderrBytes ?? 64 * 1024;
+    this.nativeHomeDir = options.nativeHomeDir;
   }
 
   run(input: CommandCodeProcessRunInput): Promise<CommandCodeProcessRunResult> {
@@ -94,7 +98,7 @@ export class CommandCodeProcessRunner {
       detached: true,
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: controlledEnvironment(),
+      env: controlledEnvironment(this.nativeHomeDir, input.sessionId),
     });
     const parser = new CommandCodeNdjsonParser({
       maxLineBytes: this.maxStdoutLineBytes,
@@ -224,10 +228,19 @@ export class CommandCodeProcessRunner {
   }
 }
 
-function controlledEnvironment(): NodeJS.ProcessEnv {
+function controlledEnvironment(nativeHomeDir?: string, sessionId?: string): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {};
   for (const key of SAFE_ENV_KEYS) {
     if (process.env[key] !== undefined) environment[key] = process.env[key];
+  }
+  if (nativeHomeDir) {
+    const sessionHome = sessionId && /^[-a-zA-Z0-9_]+$/.test(sessionId)
+      ? path.join(nativeHomeDir, sessionId)
+      : nativeHomeDir;
+    environment.HOME = sessionHome;
+    environment.XDG_CONFIG_HOME = `${sessionHome}/.config`;
+    environment.XDG_DATA_HOME = `${sessionHome}/.local/share`;
+    environment.XDG_CACHE_HOME = `${sessionHome}/.cache`;
   }
   return environment;
 }

@@ -47,6 +47,63 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
+  it('records requested effort at acceptance and provider-reported effective effort separately', async () => {
+    const begun = await manager.beginRun({
+      ...baseInput,
+      sessionId: 'commandcode-effort-session',
+      runtime: 'commandcode',
+      executionInstanceId: 'commandcode-default',
+      model: 'qwen/qwen3.8-max',
+      modelSelector: 'qwen/qwen3.8-max',
+      invocationRole: 'conductor-root',
+      permissionProfile: 'agent-os-7f-root-readonly',
+      effort: 'xhigh',
+      effortSource: 'explicit',
+    });
+    expect(begun.kind).toBe('created');
+    if (begun.kind !== 'created') return;
+    expect(begun.receipt).toMatchObject({ effort: 'xhigh', effortSource: 'explicit' });
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'model_request_end',
+      sessionId: 'commandcode-effort-session',
+      timestamp: now,
+      data: { effort: 'xhigh', effortEvidenceMethod: 'provider-event' },
+    });
+    expect(manager.get(begun.receipt.runId)).toMatchObject({
+      effort: 'xhigh',
+      effectiveEffort: 'xhigh',
+      effortEvidenceMethod: 'provider-event',
+    });
+  });
+
+  it('does not project provider effort evidence onto a non-Command-Code receipt', async () => {
+    const begun = await manager.beginRun({ ...baseInput, sessionId: 'pi-effort-shaped-event' });
+    expect(begun.kind).toBe('created');
+    if (begun.kind !== 'created') return;
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'model_request_end',
+      sessionId: 'pi-effort-shaped-event',
+      timestamp: now,
+      data: { effort: 'xhigh', effortEvidenceMethod: 'provider-event' },
+    });
+    expect(manager.get(begun.receipt.runId)).not.toHaveProperty('effectiveEffort');
+    expect(manager.get(begun.receipt.runId)).not.toHaveProperty('effortEvidenceMethod');
+  });
+
+  it('keeps the non-Command-Code terminal observation when its event shape contains an effort-like field', async () => {
+    const begun = await manager.beginRun({ ...baseInput, sessionId: 'pi-effort-shaped-terminal' });
+    expect(begun.kind).toBe('created');
+    if (begun.kind !== 'created') return;
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'agent_end',
+      sessionId: 'pi-effort-shaped-terminal',
+      timestamp: now,
+      data: { effort: 'xhigh', effortEvidenceMethod: 'provider-result' },
+    });
+    expect(manager.get(begun.receipt.runId)?.agentEndAt).toBeDefined();
+    expect(manager.get(begun.receipt.runId)).not.toHaveProperty('effectiveEffort');
+  });
+
   // Phase 3.2 — a watchdog-terminalised TURN_STALLED run fires onStalled so the
   // operator can be notified of a quarantined/unknown run (no required action;
   // the slot is held conservatively until terminalisation).

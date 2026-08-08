@@ -44,7 +44,7 @@ class Runner {
           { event: { type: 'message_end' }, lineNumber: 3 },
           { event: { type: 'turn_end' }, lineNumber: 4 },
         ],
-        terminal: { type: 'result', subtype: 'success', sessionId: 'native-route-1', finalText: 'route-ok' },
+        terminal: { type: 'result', subtype: 'success', sessionId: 'native-route-1', effort: 'low', finalText: 'route-ok' },
         unknownEventTypes: [], suppressedDuplicateCount: 0, bytes: 1, lineCount: 5,
       },
     };
@@ -62,13 +62,21 @@ describe('Command Code Internal API lifecycle', () => {
     const commandCodeService = new CommandCodeService({
       config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir: root, expectedVersion: '1.15.0' },
       runner,
-      discover: async () => ({ version: '1.15.0', models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'], ambiguous: [] }),
+      discover: async () => ({
+        version: '1.15.0',
+        models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'],
+        ambiguous: [],
+        effortCapabilities: {
+          'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium', source: 'live-preflight', capabilityHash: 'a'.repeat(64) },
+          'meta/muse-spark-1.2-contributor': { supportsEffort: false, effortLevels: [], source: 'live-preflight', capabilityHash: 'b'.repeat(64) },
+        },
+      }),
       checkExecutable: false,
     });
     await commandCodeService.init();
     commandCodeService.setRoleAttestationSecret('route-secret');
     const attestation = createCommandCodeRoleAttestation('route-secret', {
-      role: 'conductor-root', model: 'qwen/qwen3.8-max', cwd, worktreeRoot: cwd,
+      role: 'conductor-root', model: 'qwen/qwen3.8-max', effort: 'xhigh', cwd, worktreeRoot: cwd,
       leaseId: 'route-test-lease', issuedAt: new Date().toISOString(),
     });
     const registry = { get: vi.fn().mockResolvedValue(undefined), listAll: vi.fn().mockResolvedValue([]) } as any;
@@ -93,11 +101,38 @@ describe('Command Code Internal API lifecycle', () => {
     expect(batchRejected.createdCount).toBe(0);
     expect(batchRejected.created[0].error.code).toBe('COMMANDCODE_ROLE_REFUSED');
 
+    const defaultAttestation = createCommandCodeRoleAttestation('route-secret', {
+      role: 'conductor-root', model: 'qwen/qwen3.8-max', effort: 'medium', cwd, worktreeRoot: cwd,
+      leaseId: 'route-default-lease', issuedAt: new Date().toISOString(),
+    });
+    const defaultCreateResponse = res();
+    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', invocationRole: 'conductor-root', commandCodeAttestation: defaultAttestation }), defaultCreateResponse);
+    expect(defaultCreateResponse.statusCode).toBe(201);
+    const defaultCreated = JSON.parse(defaultCreateResponse.body);
+    expect(defaultCreated).toMatchObject({ effort: 'medium', acceptedEffort: 'medium', effortSource: 'default', defaultEffort: 'medium' });
+    expect(defaultCreated.requestedEffort).toBeUndefined();
+
     const createResponse = res();
-    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', invocationRole: 'conductor-root', commandCodeAttestation: attestation, retention: { mode: 'resident', ttlSeconds: 900, ownerId: 'route-test' } }), createResponse);
+    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', effort: 'xhigh', invocationRole: 'conductor-root', commandCodeAttestation: attestation, retention: { mode: 'resident', ttlSeconds: 900, ownerId: 'route-test' } }), createResponse);
     expect(createResponse.statusCode).toBe(201);
     const created = JSON.parse(createResponse.body);
     expect(created.runtime).toBe('commandcode');
+    expect(created.effort).toBe('xhigh');
+    expect(created.acceptedEffort).toBe('xhigh');
+    expect(created.requestedEffort).toBe('xhigh');
+
+    const controlResponse = res();
+    await routes.handleSessionControl(req({ action: 'set_effort', effort: 'low' }), controlResponse, created.sessionId);
+    expect(controlResponse.statusCode).toBe(200);
+    expect(JSON.parse(controlResponse.body)).toMatchObject({
+      success: true,
+      action: 'set_effort',
+      effort: 'low',
+      requestedEffort: 'low',
+      acceptedEffort: 'low',
+      effortSource: 'explicit',
+      effortCapabilityHash: created.effortCapabilityHash,
+    });
 
     const promptResponse = res();
     const logs: LogRecord[] = [];
@@ -110,6 +145,7 @@ describe('Command Code Internal API lifecycle', () => {
     expect(promptResponse.statusCode, promptResponse.body).toBe(200);
     expect(JSON.parse(promptResponse.body).content).toBe('route-ok');
     expect(runner.inputs[0]?.nativeSessionId).toBeUndefined();
+    expect(runner.inputs[0]?.effort).toBe('low');
     const lifecycle = logs.filter((record) => record.msg.includes('Prompt dispatched') || record.msg.includes('Prompt turn complete'));
     expect(lifecycle.some((record) => record.msg.includes('Prompt dispatched'))).toBe(true);
     expect(lifecycle.length).toBeGreaterThan(0);
@@ -117,11 +153,11 @@ describe('Command Code Internal API lifecycle', () => {
 
     const receiptResponse = res();
     await routes.handleGetRunReceipt(req({}), receiptResponse, JSON.parse(promptResponse.body).runId);
-    expect(JSON.parse(receiptResponse.body).status).toBe('completed');
+    expect(JSON.parse(receiptResponse.body)).toMatchObject({ status: 'completed', effort: 'low', requestedEffort: 'low', acceptedEffort: 'low', effectiveEffort: 'low', effortEvidenceMethod: 'provider-result' });
 
     const evidenceResponse = res();
     await routes.handleGetSessionEvidence(req({}), evidenceResponse, created.sessionId, new URLSearchParams('expand=transcript,screen'));
-    expect(JSON.parse(evidenceResponse.body).runtime).toBe('commandcode');
+    expect(JSON.parse(evidenceResponse.body)).toMatchObject({ runtime: 'commandcode', effort: 'low', requestedEffort: 'low', acceptedEffort: 'low', effectiveEffort: 'low', effortEvidenceMethod: 'provider-result' });
     expect(JSON.parse(evidenceResponse.body).transcript.items.some((item: any) => item.text === 'route-ok')).toBe(true);
     expect(JSON.parse(evidenceResponse.body).screen.screenView.items.some((item: any) => item.kind === 'assistant' && item.text === 'route-ok')).toBe(true);
     expect(JSON.parse(evidenceResponse.body).screen.screenView.items.some((item: any) => item.kind === 'user' && item.text === 'say route-ok')).toBe(true);

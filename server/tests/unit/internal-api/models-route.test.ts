@@ -114,6 +114,40 @@ describe('createModelsRoutes — handleListModels', () => {
     });
   });
 
+  it('publishes Command Code model-specific native effort capabilities', async () => {
+    const routes = createModelsRoutes({
+      piService: { getAvailableModels: vi.fn().mockResolvedValue([]) } as any,
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      commandCodeService: {
+        isEnabled: vi.fn().mockReturnValue(true),
+        isAvailable: vi.fn().mockReturnValue(true),
+        getModels: vi.fn().mockReturnValue([
+          {
+            id: 'qwen/qwen3.8-max', displayName: 'Qwen 3.8 Max', provider: 'command-code', reasoning: true,
+            supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium',
+          },
+          {
+            id: 'meta/muse-spark-1.2-contributor', displayName: 'Muse Spark 1.2 Contributor', provider: 'command-code', reasoning: true,
+            supportsEffort: false, effortLevels: [],
+          },
+        ]),
+      } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(
+      createMockReq(undefined, 'GET', '/api/v1/models?runtime=commandcode'),
+      res,
+    );
+
+    expect(JSON.parse(res.body).models.commandcode).toEqual([
+      expect.objectContaining({ id: 'qwen/qwen3.8-max', supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' }),
+      expect.objectContaining({ id: 'meta/muse-spark-1.2-contributor', supportsEffort: false, effortLevels: [] }),
+    ]);
+  });
+
   it('publishes Claude model-specific thinking levels including max where supported', async () => {
     const routes = createModelsRoutes({
       piService: { getAvailableModels: vi.fn().mockResolvedValue([]) } as any,

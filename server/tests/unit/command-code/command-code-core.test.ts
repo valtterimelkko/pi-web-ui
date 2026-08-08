@@ -6,6 +6,7 @@ import {
   COMMAND_CODE_MODELS,
   COMMAND_CODE_VERSION,
   assertCommandCodeModel,
+  discoverCommandCodeEfforts,
   discoverCommandCodeModels,
   parseCommandCodeModelList,
 } from '../../../src/command-code/command-code-model-catalog.js';
@@ -38,6 +39,67 @@ describe('Command Code model identity', () => {
       models: [...COMMAND_CODE_MODELS],
       ambiguous: [],
     });
+  });
+
+  it('discovers model-specific native effort support and defaults without inheriting credentials', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-effort-discovery-'));
+    const script = path.join(root, 'fake-cmd.mjs');
+    const secretMarker = path.join(root, 'secret-seen');
+    const scriptBody = `import { writeFileSync } from 'node:fs';\nconst marker = ${JSON.stringify(secretMarker)};\nif (process.env.COMMAND_CODE_TEST_SECRET) writeFileSync(marker, 'secret-seen');\nconst args = process.argv.slice(2);\nconst model = args[args.indexOf('--model') + 1];\nconst effort = args[args.indexOf('--effort') + 1];\nif (args.includes('--version')) console.log('Command Code v1.15.0');\nelse if (args.includes('--list-models')) console.log('qwen/qwen3.8-max autonomous\\nmeta/muse-spark-1.2-contributor contributor');\nelse if (model === 'qwen/qwen3.8-max' && ['low', 'medium', 'xhigh'].includes(effort)) { console.error('authentication required'); process.exit(3); }\nelse { console.error('unsupported reasoning effort'); process.exit(2); }\n`;
+    await import('node:fs/promises').then(({ writeFile }) => writeFile(script, `#!/usr/bin/env node
+${scriptBody}`));
+    await chmod(script, 0o700);
+    const previous = process.env.COMMAND_CODE_TEST_SECRET;
+    process.env.COMMAND_CODE_TEST_SECRET = 'do-not-forward';
+    try {
+      const discovered = await discoverCommandCodeEfforts(script);
+      expect(discovered.capabilities['qwen/qwen3.8-max']).toMatchObject({
+        supportsEffort: true,
+        effortLevels: ['low', 'medium', 'xhigh'],
+        defaultEffort: 'medium',
+        source: 'live-preflight',
+      });
+      expect(discovered.capabilities['meta/muse-spark-1.2-contributor']).toMatchObject({
+        supportsEffort: false,
+        effortLevels: [],
+        source: 'live-preflight',
+      });
+      await expect(readFile(secretMarker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      if (previous === undefined) delete process.env.COMMAND_CODE_TEST_SECRET;
+      else process.env.COMMAND_CODE_TEST_SECRET = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recognises flag-accepted effort probes that stop before a model turn', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-effort-flag-probe-'));
+    const script = path.join(root, 'fake-cmd.mjs');
+    const scriptBody = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const model = args[args.indexOf('--model') + 1];
+const effort = args[args.indexOf('--effort') + 1];
+if (args.includes('--version')) console.log('Command Code v1.15.0');
+else if (args.includes('--list-models')) console.log('qwen/qwen3.8-max autonomous\\nmeta/muse-spark-1.2-contributor contributor');
+else if (model === 'qwen/qwen3.8-max' && ['low', 'medium', 'xhigh'].includes(effort)) { console.log('Reasoning effort set to ' + effort + ' for Qwen 3.8 Max.'); console.error('Error: No query provided. Usage: cmd -p \\"your query\\"'); process.exit(1); }
+else { console.error('Muse Spark 1.2 Contributor has no adjustable reasoning effort.'); process.exit(1); }
+`;
+    await import('node:fs/promises').then(({ writeFile }) => writeFile(script, scriptBody));
+    await chmod(script, 0o700);
+    try {
+      const discovered = await discoverCommandCodeEfforts(script);
+      expect(discovered.capabilities['qwen/qwen3.8-max']).toMatchObject({
+        supportsEffort: true,
+        effortLevels: ['low', 'medium', 'xhigh'],
+        defaultEffort: 'medium',
+      });
+      expect(discovered.capabilities['meta/muse-spark-1.2-contributor']).toMatchObject({
+        supportsEffort: false,
+        effortLevels: [],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('uses a bounded controlled environment and kills a hung discovery probe', async () => {
@@ -81,6 +143,21 @@ describe('Command Code command construction', () => {
     expect(args).not.toContain('--yolo');
     expect(COMMAND_CODE_EXECUTION_INSTANCE_ID).toBe('commandcode-default');
     expect(getCommandCodeProfile('implementation-child-wide').args).toContain('--yolo');
+  });
+
+  it('validates native effort against the exact model capability', () => {
+    expect(buildCommandCodeArgs({
+      executablePath: '/opt/bin/cmd', model: 'qwen/qwen3.8-max', maxTurns: 2,
+      permissionProfile: 'implementation-child-wide', effort: 'xhigh',
+    })).toContain('xhigh');
+    expect(() => buildCommandCodeArgs({
+      executablePath: '/opt/bin/cmd', model: 'qwen/qwen3.8-max', maxTurns: 2,
+      permissionProfile: 'implementation-child-wide', effort: 'high',
+    })).toThrow(/effort|supported/i);
+    expect(() => buildCommandCodeArgs({
+      executablePath: '/opt/bin/cmd', model: 'meta/muse-spark-1.2-contributor', maxTurns: 2,
+      permissionProfile: 'implementation-child-wide', effort: 'low',
+    })).toThrow(/effort|supported/i);
   });
 
   it('resumes only by the stored exact native session id', () => {

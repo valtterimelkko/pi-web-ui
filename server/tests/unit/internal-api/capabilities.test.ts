@@ -133,6 +133,36 @@ describe('createCapabilitiesRoutes', () => {
   });
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
+  it('advertises native effort support per Command Code model without enabling generic thinking levels', async () => {
+    const routes = createCapabilitiesRoutes({
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(false),
+        getBackendMode: vi.fn().mockResolvedValue('direct'),
+        getProfiles: vi.fn().mockReturnValue([]),
+      } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      commandCodeService: {
+        isEnabled: vi.fn().mockReturnValue(true),
+        isAvailable: vi.fn().mockReturnValue(true),
+        getEffortCapabilities: vi.fn().mockReturnValue({
+          'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium', source: 'live-preflight', capabilityHash: 'a'.repeat(64) },
+          'meta/muse-spark-1.2-contributor': { supportsEffort: false, effortLevels: [], source: 'live-preflight', capabilityHash: 'b'.repeat(64) },
+        }),
+      } as any,
+    });
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+    expect(JSON.parse(res.body).runtimes.commandcode).toMatchObject({
+      supportsThinkingLevel: false,
+      supportsEffort: true,
+      effortCapabilities: {
+        'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
+        'meta/muse-spark-1.2-contributor': { supportsEffort: false, effortLevels: [] },
+      },
+    });
+  });
+
   it('downgrades Claude-specific capability flags in direct mode', async () => {
     const routes = createCapabilitiesRoutes({
       claudeService: {

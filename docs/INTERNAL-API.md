@@ -349,7 +349,7 @@ Models are always queried live — new models appear immediately. Each model may
 
 Pi model levels come from the Pi SDK catalogue. Claude's base `sonnet` and `opus` aliases and provider profiles that support the Claude/Z.AI effort ceiling advertise `max`; `haiku` keeps the legacy ceiling. A client should use the selected model's `thinkingLevels` before requesting `max`.
 
-When Command Code is enabled, its entries appear only after a fresh exact-version/model discovery probe. The initial routes are `qwen/qwen3.8-max` and `meta/muse-spark-1.2-contributor`; the runtime remains absent from browser/shared protocol types and is not included in disposable `--runtime all` validation.
+When Command Code is enabled, its entries appear only after a fresh exact-version/model/effort discovery probe. The initial routes are `qwen/qwen3.8-max` and `meta/muse-spark-1.2-contributor`; Qwen advertises native `effortLevels: ["low", "medium", "xhigh"]` with `defaultEffort: "medium"`, while Muse advertises `supportsEffort: false` and an empty level list. Native `effort` is distinct from generic `thinkingLevel`; unknown or drifted capability metadata fails closed. The runtime remains absent from browser/shared protocol types and is not included in disposable `--runtime all` validation.
 
 **Query parameters:**
 
@@ -495,13 +495,14 @@ POST /api/v1/sessions
 | `runtime` | string | **Yes** | — | `pi`, `claude`, `opencode`, `antigravity`, or feature-gated `commandcode` |
 | `cwd` | string | No | `process.cwd()` | Working directory |
 | `model` | string | No | runtime default | Model ID (from `/models`). For Claude, may be a base alias such as `sonnet` or a specific profile entry such as `profile:glm52-claude-sdk`; Command Code requires one exact discovered id: `qwen/qwen3.8-max` or `meta/muse-spark-1.2-contributor`. |
-| `thinkingLevel` | string | No | runtime default | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use the selected model's `thinkingLevels` from `/models` as the capability source. |
+| `thinkingLevel` | string | No | runtime default | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use the selected model's `thinkingLevels` from `/models` as the capability source. Not used by Command Code native effort. |
+| `effort` | `low`, `medium`, `high`, `xhigh`, or `max` | Command Code only | model default | Native Command Code effort. Use only the selected model's advertised `effortLevels`; Qwen currently accepts `low`, `medium`, `xhigh`, while Muse accepts none. Unsupported values fail closed. |
 | `retention` | object | No | — | Required source-owned lease. `durable` preserves recoverability without forcing runtime residency; `resident` additionally keeps the runtime loaded. Requires `ownerId`; optional `ttlSeconds` (default 24h, max 7d) and `label`. Creation rolls back if the guarantee fails. |
 | `pin` | boolean | No | `false` | Legacy Internal API compatibility projection. Mutually exclusive with `retention`; does not consume a human Web UI pin slot. |
 | `pinTtlSeconds` | number | No | `86400` (24h) | Legacy pin lifetime. Clamped to a hard max of 7 days. |
 | `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. Supplying both forms with different ids is rejected. An explicit profile never falls back to another profile/backend when unavailable. |
 | `invocationRole` | `conductor-root` or `implementation-child` | Command Code only | — | Required for `runtime: "commandcode"`; mapped server-side to fixed permission profiles. Raw flags, environment, executable paths, and native ids are never accepted. |
-| `commandCodeAttestation` | object | Command Code only | — | Required for `runtime: "commandcode"`; strict short-lived HMAC binding of `role`, exact `model`, canonical `cwd`/`worktreeRoot`, `leaseId`, timestamp, signature, and (for `implementation-child`) `parentSessionId`. The server also enforces `COMMAND_CODE_ALLOWED_CWD_ROOTS`. Agent OS generates this from the owner-only API token; callers must not log or persist the secret. |
+| `commandCodeAttestation` | object | Command Code only | — | Required for `runtime: "commandcode"`; strict short-lived HMAC binding of `role`, exact `model`, optional native `effort`, canonical `cwd`/`worktreeRoot`, `leaseId`, timestamp, signature, and (for `implementation-child`) `parentSessionId`. The server also enforces `COMMAND_CODE_ALLOWED_CWD_ROOTS`. Agent OS generates this from the owner-only API token; callers must not log or persist the secret. |
 
 **Response (201):**
 ```json
@@ -867,6 +868,15 @@ The lookup returns the persisted receipt directly:
   "idempotencyExpiresAt": "2026-07-16T12:00:00.000Z"
 }
 ```
+
+For Command Code receipts, `effort` is the canonical next-turn binding and
+`requestedEffort`/`acceptedEffort` are additive audit aliases. They are equal
+when present because unsupported effort requests fail closed before dispatch;
+when the model default is selected without an explicit request,
+`requestedEffort` is omitted while `acceptedEffort` records the default binding.
+`defaultEffort`, `effectiveEffort`, `effortEvidenceMethod`, and
+`effortCapabilityHash` remain separate. `effectiveEffort` is omitted when the
+provider does not report it.
 
 Receipt statuses are `accepted`, `queued`, `started`, `completed`, `failed`,
 `cancelled`, and `interrupted`. `queued` means native Pi accepted a busy-turn
@@ -1335,6 +1345,13 @@ See [source-owned session retention](#source-owned-session-retention-persistent-
 For Claude, `max` is forwarded to the SDK/direct CLI/channel effort control;
 for Pi it is clamped by the selected model's SDK capabilities; and for
 OpenCode it maps to that model's reasoning control. Clients should use the selected model's `thinkingLevels` from `/models` before requesting it.
+
+For Command Code, use `{ "action": "set_effort", "effort": "low" }` (or
+`medium`/`xhigh` for Qwen). Muse rejects every native effort value. This action
+is idle-only, applies to the next turn, and returns the canonical binding,
+requested/accepted aliases, default, and capability hash; when `effort` is
+omitted it selects the discovered default and leaves `requestedEffort` absent.
+It never changes `thinkingLevel`.
 
 For the OpenCode runtime the level is translated, capability-aware, into the model's
 reasoning controls in `opencode.json` (GLM → `thinking` + `reasoning_effort`;

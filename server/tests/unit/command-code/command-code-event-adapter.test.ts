@@ -35,6 +35,40 @@ describe('Command Code event adapter', () => {
     expect(result.nativeSessionId).toBe('native-1');
   });
 
+  it('preserves provider-reported effective effort as an explicit normalized event', () => {
+    const result = adaptCommandCodeOutput({
+      sessionId: 'internal-1',
+      nativeSessionId: 'native-1',
+      events: [{ event: { type: 'model_request_end', effort: 'xhigh', requestId: 'req-1' }, lineNumber: 1 }],
+      terminal: { type: 'result', subtype: 'success', sessionId: 'native-1', finalText: '' },
+      unknownEventTypes: [],
+      suppressedDuplicateCount: 0,
+      bytes: 1,
+      lineCount: 2,
+    });
+    expect(result.events.find((event) => event.type === 'model_request_end')?.data).toMatchObject({
+      effort: 'xhigh',
+      effortEvidenceMethod: 'provider-event',
+    });
+  });
+
+  it('records terminal effective effort as provider-result evidence', () => {
+    const result = adaptCommandCodeOutput({
+      sessionId: 'internal-1',
+      nativeSessionId: 'native-1',
+      events: [],
+      terminal: { type: 'result', subtype: 'success', sessionId: 'native-1', effort: 'medium', finalText: '' },
+      unknownEventTypes: [],
+      suppressedDuplicateCount: 0,
+      bytes: 1,
+      lineCount: 1,
+    });
+    expect(result.events.find((event) => event.type === COMMAND_CODE_AGENT_END)?.data).toMatchObject({
+      effort: 'medium',
+      effortEvidenceMethod: 'provider-result',
+    });
+  });
+
   it('does not synthesize a second agent_end when a runtime event supplied one', () => {
     const result = adaptCommandCodeOutput({
       sessionId: 'internal-1',

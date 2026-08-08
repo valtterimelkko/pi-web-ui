@@ -1,5 +1,10 @@
 import path from 'node:path';
-import { COMMAND_CODE_MODELS, type CommandCodeModel } from './command-code-model-catalog.js';
+import {
+  assertCommandCodeEffort,
+  COMMAND_CODE_MODELS,
+  type CommandCodeEffort,
+  type CommandCodeModel,
+} from './command-code-model-catalog.js';
 
 export const COMMAND_CODE_EXECUTION_INSTANCE_ID = 'commandcode-default' as const;
 export type CommandCodeExecutionInstanceId = typeof COMMAND_CODE_EXECUTION_INSTANCE_ID;
@@ -9,6 +14,8 @@ export interface CommandCodeRuntimeConfig {
   enabled: boolean;
   executablePath: string;
   stateDir: string;
+  /** Private per-session native home root; never the operator's shared home. */
+  nativeHomeDir: string;
   allowedCwdRoots: string[];
   maxTurns: number;
   maxPromptBytes: number;
@@ -27,7 +34,7 @@ export interface CommandCodeArgOptions {
   maxTurns: number;
   permissionProfile: CommandCodePermissionProfile;
   nativeSessionId?: string;
-  effort?: string;
+  effort?: CommandCodeEffort;
 }
 
 export interface CommandCodeProfile {
@@ -58,6 +65,7 @@ export function buildCommandCodeArgs(options: CommandCodeArgOptions): string[] {
   if (!COMMAND_CODE_MODELS.includes(options.model)) {
     throw new Error(`Command Code model is not allowlisted: ${String(options.model)}`);
   }
+  assertCommandCodeEffort(options.model, options.effort);
   const args = [
     '-p',
     '--output-format', 'json',
@@ -76,6 +84,7 @@ export function defaultCommandCodeConfig(overrides: Partial<CommandCodeRuntimeCo
     enabled: false,
     executablePath: '/root/.npm-global/bin/cmd',
     stateDir,
+    nativeHomeDir: overrides.nativeHomeDir ?? path.join(stateDir, 'native-home'),
     allowedCwdRoots: overrides.allowedCwdRoots ?? [path.dirname(stateDir)],
     maxTurns: 8,
     maxPromptBytes: 100_000,

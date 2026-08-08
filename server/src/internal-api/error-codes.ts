@@ -56,6 +56,7 @@ export const ErrorCode = {
   COMMANDCODE_CLI_MISSING: 'COMMANDCODE_CLI_MISSING',
   COMMANDCODE_AUTH_REQUIRED: 'COMMANDCODE_AUTH_REQUIRED',
   COMMANDCODE_MODEL_UNAVAILABLE: 'COMMANDCODE_MODEL_UNAVAILABLE',
+  COMMANDCODE_EFFORT_UNSUPPORTED: 'COMMANDCODE_EFFORT_UNSUPPORTED',
   COMMANDCODE_PROTOCOL_ERROR: 'COMMANDCODE_PROTOCOL_ERROR',
   COMMANDCODE_NO_RESPONSE: 'COMMANDCODE_NO_RESPONSE',
   COMMANDCODE_MAX_TURNS: 'COMMANDCODE_MAX_TURNS',
@@ -316,6 +317,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     httpStatus: 503,
     description: 'An exact Command Code model route is unavailable.',
     cause: 'Fresh discovery did not advertise the requested exact id.',
+    docs: 'docs/INTERNAL-API-CONTRACT.md',
+  },
+  [ErrorCode.COMMANDCODE_EFFORT_UNSUPPORTED]: {
+    httpStatus: 400,
+    description: 'The requested native Command Code effort is not supported by the exact model route.',
+    cause: 'Fresh model-specific capability evidence does not advertise the requested effort, or the model has no adjustable effort.',
+    hint: 'Read GET /api/v1/models?runtime=commandcode and use only the returned effortLevels; do not map thinkingLevel to effort.',
     docs: 'docs/INTERNAL-API-CONTRACT.md',
   },
   [ErrorCode.COMMANDCODE_PROTOCOL_ERROR]: {

@@ -17,6 +17,7 @@
 
 import { z } from 'zod';
 import { THINKING_LEVELS, isThinkingLevel } from './types.js';
+import { COMMAND_CODE_EFFORT_LEVELS } from '../command-code/command-code-model-catalog.js';
 
 export const MAX_BATCH_ITEMS = 50;
 
@@ -37,9 +38,11 @@ const idempotencyKeySchema = z.string().min(1).max(200);
 const thinkingLevelSchema = z
   .string()
   .refine((v) => isThinkingLevel(v), { message: `thinkingLevel must be one of ${THINKING_LEVELS.join(', ')}` });
+const commandCodeEffortSchema = z.enum(COMMAND_CODE_EFFORT_LEVELS);
 const commandCodeAttestationSchema = z.object({
   role: z.enum(['conductor-root', 'implementation-child']),
   model: z.enum(['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor']),
+  effort: commandCodeEffortSchema.optional(),
   cwd: cwdSchema,
   worktreeRoot: cwdSchema,
   leaseId: z.string().min(1).max(256),
@@ -66,6 +69,7 @@ export const createSessionBodySchema = z.object({
   cwd: cwdSchema.optional(),
   model: modelSchema.optional(),
   thinkingLevel: thinkingLevelSchema.optional(),
+  effort: commandCodeEffortSchema.optional(),
   source: z.string().max(200).optional(),
   scenarioId: z.string().max(200).optional(),
   ephemeral: z.boolean().optional(),
@@ -113,6 +117,7 @@ const batchCreateEntrySchema = z.object({
   cwd: cwdSchema.optional(),
   model: modelSchema.optional(),
   thinkingLevel: thinkingLevelSchema.optional(),
+  effort: commandCodeEffortSchema.optional(),
   invocationRole: z.enum(['conductor-root', 'implementation-child']).optional(),
   commandCodeAttestation: commandCodeAttestationSchema.optional(),
   ...pinFields,
@@ -142,9 +147,10 @@ const batchCreateEntrySchema = z.object({
 });
 
 export const sessionControlBodySchema = z.object({
-  action: z.enum(['set_model', 'set_thinking_level', 'pin', 'unpin', 'acquire_retention', 'renew_retention', 'release_retention']),
+  action: z.enum(['set_model', 'set_thinking_level', 'set_effort', 'pin', 'unpin', 'acquire_retention', 'renew_retention', 'release_retention']),
   modelId: z.string().min(1).optional(),
   level: z.string().min(1).optional(),
+  effort: commandCodeEffortSchema.optional(),
   pinTtlSeconds: ttlSecondsSchema.optional(),
   retentionLeaseId: z.string().uuid().optional(),
   ownerId: z.string().min(1).max(200).optional(),

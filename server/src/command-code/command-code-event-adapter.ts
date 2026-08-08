@@ -1,4 +1,5 @@
 import type { NormalizedEvent } from '@pi-web-ui/shared';
+import type { CommandCodeEffort } from './command-code-model-catalog.js';
 import type { CommandCodeResultFrame, ParsedCommandCodeEvent } from './command-code-ndjson-parser.js';
 
 export const COMMAND_CODE_AGENT_END = 'agent_end' as const;
@@ -45,9 +46,16 @@ export function adaptCommandCodeOutput(input: CommandCodeAdaptInput): CommandCod
     if (type === 'message_start') {
       activeMessageId = nativeMessageId ?? `commandcode-message-${++syntheticMessageNumber}`;
     }
-    const normalized = normalizeEvent(input.sessionId, event, timestamp, activeMessageId);
+    let normalized = normalizeEvent(input.sessionId, event, timestamp, activeMessageId);
     if (type === 'message_end') activeMessageId = undefined;
     if (!normalized) continue;
+    if (normalized.type === 'agent_end') {
+      const terminalEffort = nativeEffort(input.terminal.effort ?? input.terminal.effectiveEffort ?? input.terminal.reasoningEffort ?? input.terminal.usage?.reasoningEffort);
+      const data = asRecord(normalized.data) ?? {};
+      if (terminalEffort && data.effort === undefined) {
+        normalized = { ...normalized, data: { ...data, effort: terminalEffort, effortEvidenceMethod: 'provider-result' as const } };
+      }
+    }
     if (normalized.type === 'agent_end') {
       if (sawAgentEnd) continue;
       sawAgentEnd = true;
@@ -215,6 +223,17 @@ function normalizeEvent(
     };
   }
   if (type === 'usage') return { ...base, type: 'usage', data: boundedValue(event.usage ?? event) };
+  if (type === 'model_request_start' || type === 'model_request_end') {
+    const effort = nativeEffort(event.effort ?? event.effectiveEffort ?? event.reasoningEffort);
+    return {
+      ...base,
+      type,
+      data: {
+        ...(stringValue(event.requestId) ? { requestId: event.requestId } : {}),
+        ...(effort ? { effort, effortEvidenceMethod: 'provider-event' as const } : {}),
+      },
+    };
+  }
   if (type === 'error') return { ...base, type: 'error', data: { message: boundedText(stringValue(event.message) ?? 'Command Code runtime error') } };
   if (type === 'agent_end' || type === 'turn_end' || type === 'session_end' || type === 'run_end') {
     return { ...base, type: COMMAND_CODE_AGENT_END, data: boundedValue(event) };
@@ -225,13 +244,21 @@ function normalizeEvent(
 }
 
 function terminalData(terminal: CommandCodeResultFrame, nativeSessionId?: string): Record<string, unknown> {
+  const effort = nativeEffort(terminal.effort ?? terminal.effectiveEffort ?? terminal.reasoningEffort ?? terminal.usage?.reasoningEffort);
   return {
     result: terminal.finalText ?? null,
     subtype: terminal.subtype,
     stopReason: terminal.stopReason,
     usage: boundedValue(terminal.usage),
+    ...(effort ? { effort, effortEvidenceMethod: 'provider-result' as const } : {}),
     nativeSessionId: terminal.sessionId ?? nativeSessionId,
   };
+}
+
+function nativeEffort(value: unknown): CommandCodeEffort | undefined {
+  return typeof value === 'string' && ['low', 'medium', 'high', 'xhigh', 'max'].includes(value)
+    ? value as CommandCodeEffort
+    : undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

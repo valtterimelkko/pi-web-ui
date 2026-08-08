@@ -41,6 +41,8 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
     const opencodeEnabled = opencodeService.isEnabled();
     const commandCodeEnabled = Boolean(commandCodeService?.isEnabled());
     const commandCodeAvailable = Boolean(commandCodeService?.isAvailable());
+    const commandCodeEffortCapabilities = commandCodeService?.getEffortCapabilities?.() ?? {};
+    const commandCodeSupportsEffort = Object.values(commandCodeEffortCapabilities).some((capability) => capability.supportsEffort === true);
 
     const body: CapabilitiesResponse = {
       status: 'ok',
@@ -136,6 +138,8 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsSteerWhileBusy: false,
           supportsModelSwitch: false,
           supportsThinkingLevel: false,
+          supportsEffort: commandCodeSupportsEffort,
+          effortCapabilities: commandCodeEffortCapabilities,
           supportsPinning: true,
           supportsReplayHistory: true,
           supportsApprovals: false,

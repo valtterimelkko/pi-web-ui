@@ -14,6 +14,7 @@ import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
 import type { CommandCodeService } from '../../command-code/command-code-service.js';
+import type { CommandCodeEffort } from '../../command-code/command-code-model-catalog.js';
 import type { BatchCreateEntry, SessionRuntime } from '../types.js';
 import { unlink } from 'fs/promises';
 import { config } from '../../config.js';
@@ -54,6 +55,10 @@ export interface CreatedSession {
   model?: string;
   modelSelector?: string;
   executionInstanceId?: string;
+  effort?: CommandCodeEffort;
+  effortSource?: 'explicit' | 'default' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effortCapabilityHash?: string;
   cwd: string;
 }
 
@@ -78,11 +83,12 @@ export async function createOneSession(params: {
       const created = await deps.commandCodeService.createSession({
         cwd,
         model: entry.model,
+        effort: entry.effort,
         permissionProfile: entry.invocationRole === 'conductor-root' ? 'agent-os-7f-root-readonly' : 'implementation-child-wide',
         invocationRole: entry.invocationRole,
         roleAttestation: entry.commandCodeAttestation,
       });
-      return { sessionId: created.sessionId, sessionPath: created.sessionId, runtime: 'commandcode', model: created.modelSelector, modelSelector: created.modelSelector, executionInstanceId: created.executionInstanceId, cwd: created.cwd };
+      return { sessionId: created.sessionId, sessionPath: created.sessionId, runtime: 'commandcode', model: created.modelSelector, modelSelector: created.modelSelector, executionInstanceId: created.executionInstanceId, effort: created.effort, effortSource: created.effortSource, defaultEffort: created.defaultEffort, effortCapabilityHash: created.effortCapabilityHash, cwd: created.cwd };
     }
 
     case 'claude': {

@@ -39,6 +39,14 @@ const ALLOWED_KEYS = new Set([
   'executionInstanceId',
   'model',
   'modelSelector',
+  'effort',
+  'requestedEffort',
+  'acceptedEffort',
+  'effortSource',
+  'defaultEffort',
+  'effectiveEffort',
+  'effortEvidenceMethod',
+  'effortCapabilityHash',
   'invocationRole',
   'permissionProfile',
   'mode',
@@ -171,7 +179,7 @@ export class RunReceiptStore {
   async transition(
     runId: string,
     status: RunReceiptStatus,
-    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness' | 'phase7Shadow'>> & {
+    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness' | 'phase7Shadow' | 'effortEvidenceMethod'>> & {
       /** Release a reservation that failed before runtime dispatch. */
       clearIdempotency?: boolean;
     } = {},
@@ -206,7 +214,7 @@ export class RunReceiptStore {
 
   async patch(
     runId: string,
-    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode' | 'liveness' | 'phase7Shadow'>>,
+    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode' | 'liveness' | 'phase7Shadow' | 'effectiveEffort' | 'effortEvidenceMethod'>>,
   ): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
@@ -409,6 +417,19 @@ export class RunReceiptStore {
     if (!['accepted', 'queued', 'started', 'completed', 'failed', 'cancelled', 'interrupted'].includes(record.status)) {
       throw new Error('Invalid receipt status');
     }
+    if (record.effort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.effort)) throw new Error('Invalid Command Code effort');
+    if (record.requestedEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.requestedEffort)) throw new Error('Invalid Command Code requested effort');
+    if (record.acceptedEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.acceptedEffort)) throw new Error('Invalid Command Code accepted effort');
+    if (record.acceptedEffort !== undefined && record.acceptedEffort !== record.effort) throw new Error('Command Code accepted effort must match the canonical effort binding');
+    if (record.requestedEffort !== undefined && record.acceptedEffort !== undefined && record.requestedEffort !== record.acceptedEffort) throw new Error('Command Code requested and accepted effort must match after fail-closed validation');
+    if (record.effortSource !== undefined && !['explicit', 'default', 'none'].includes(record.effortSource)) throw new Error('Invalid Command Code effort source');
+    if (record.effortSource === 'none' && record.effort !== undefined) throw new Error('Non-adjustable Command Code effort cannot carry a value');
+    if ((record.effortSource === 'explicit' || record.effortSource === 'default') && record.effort === undefined) throw new Error('Command Code effort source requires a value');
+    if (record.defaultEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.defaultEffort)) throw new Error('Invalid Command Code default effort');
+    if (record.effectiveEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.effectiveEffort)) throw new Error('Invalid Command Code effective effort');
+    if (record.effortEvidenceMethod !== undefined && !['provider-event', 'provider-result', 'unobserved'].includes(record.effortEvidenceMethod)) throw new Error('Invalid Command Code effort evidence method');
+    if (record.effortCapabilityHash !== undefined && !SAFE_DIGEST.test(record.effortCapabilityHash)) throw new Error('Invalid Command Code effort capability hash');
+    if (record.runtime !== 'commandcode' && ['effort', 'requestedEffort', 'acceptedEffort', 'effortSource', 'defaultEffort', 'effectiveEffort', 'effortEvidenceMethod', 'effortCapabilityHash'].some((key) => (record as unknown as Record<string, unknown>)[key] !== undefined)) throw new Error('Native effort fields require the Command Code runtime');
     if (record.mode !== undefined && !['prompt', 'follow_up', 'steer'].includes(record.mode)) {
       throw new Error('Invalid receipt mode');
     }

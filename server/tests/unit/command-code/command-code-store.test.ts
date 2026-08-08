@@ -15,10 +15,14 @@ describe('Command Code private state', () => {
       sessionId: 'cc-1',
       cwd,
       modelSelector: 'qwen/qwen3.8-max',
+      effort: 'xhigh',
+      effortSource: 'explicit',
       permissionProfile: 'agent-os-7f-root-readonly',
       eventJournalRef: 'cc-1.jsonl',
     });
     expect(created.runtime).toBe('commandcode');
+    expect(created.effort).toBe('xhigh');
+    expect(created.effortSource).toBe('explicit');
     expect(created.cwd).toBe(path.resolve(cwd));
     await store.update('cc-1', { state: 'running', nativeSessionId: 'native-1' });
 
@@ -71,6 +75,7 @@ describe('Command Code private state', () => {
       permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-1.jsonl',
     });
     await expect(store.bindNativeSession('cc-1', 'native-1')).resolves.toBeDefined();
+    await expect(store.assertBinding('cc-1', { effort: 'medium' })).rejects.toThrow(/effort|drift/i);
     await expect(store.bindNativeSession('cc-1', 'native-2')).rejects.toThrow(/drift/i);
     await expect(store.assertBinding('cc-1', { modelSelector: 'meta/muse-spark-1.2-contributor' })).rejects.toThrow(/drift/i);
   });
