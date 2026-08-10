@@ -538,7 +538,7 @@ curl --silent --unix-socket "$SOCKET" \
   | jq '{status, contract: .contract.contractVersion, runtimes}'
 ```
 
-The expected Internal API contract version is `1.16.0`; `1.14.0` added bounded payload-free liveness/watchdog/cessation and recovery evidence, `1.15.0` made operator-disabled runtimes explicit, and `1.16.0` adds the Internal API-only Pi-provider execution policy. In production, keep `INTERNAL_API_BLOCKED_PI_PROVIDERS=openai,openrouter` unless Internal API automation is intentionally authorised to use those providers; this does not affect browser model use, dictation/Drive Mode dictation, or TTS.
+The expected Internal API contract version is `1.19.0`; `1.14.0` added bounded payload-free liveness/watchdog/cessation and recovery evidence, `1.15.0` made operator-disabled runtimes explicit, `1.16.0` added the Internal API-only Pi-provider execution policy, `1.18.0` added run-scoped Command Code usage evidence, and `1.19.0` adds bounded normalized-output evidence. In production, keep `INTERNAL_API_BLOCKED_PI_PROVIDERS=openai,openrouter` unless Internal API automation is intentionally authorised to use those providers; this does not affect browser model use, dictation/Drive Mode dictation, or TTS.
 A public readiness check can be run in addition after the Internal API is ready:
 
 ```bash
