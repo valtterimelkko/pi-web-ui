@@ -57,7 +57,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.18.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.19.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -465,9 +465,7 @@ export interface SessionEvidenceResponse {
     observedAt: string;
   };
   /** Newest three compact durable run entries, bounded independently of expand=runs. */
-  runChronology: Array<Pick<RunReceipt,
-    'runId' | 'status' | 'acceptedAt' | 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'liveness' | 'tokenUsage'
-  >>;
+  runChronology: SessionRunChronologyEntry[];
   warnings: string[];
   links: {
     info: string;
@@ -763,6 +761,26 @@ export interface RunTokenUsage {
   total: number;
 }
 
+/**
+ * Payload-free evidence of normalized assistant/tool output observed for one
+ * run. It distinguishes a completed run with no text from a run whose output
+ * could not be classified, without judging answer quality.
+ */
+export interface RunOutputEvidence {
+  policyVersion: 'run-output-v1';
+  source: 'normalized-events-v1';
+  assistantMessages: number;
+  assistantTextBlocks: number;
+  assistantTextChars: number;
+  toolCalls: number;
+  disposition: 'text' | 'no-text' | 'unknown';
+}
+
+/** Compact default session-evidence projection; full counts remain on receipts and expand=runs. */
+export type SessionRunChronologyEntry = Pick<RunReceipt,
+  'runId' | 'status' | 'acceptedAt' | 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'liveness' | 'tokenUsage'
+> & { outputEvidence?: Pick<RunOutputEvidence, 'disposition'> };
+
 /** Server-owned Phase 7 shadow profile for Pi Internal API prompts. */
 export type Phase7PiShadowProfile = 'standard' | 'heavy' | 'long-horizon';
 
@@ -829,6 +847,8 @@ export interface RunReceipt {
   effortCapabilityHash?: string;
   /** Run-scoped provider usage from the matching terminal result, when measured. */
   tokenUsage?: RunTokenUsage;
+  /** Payload-free normalized-event output evidence; additive since 1.19.0. */
+  outputEvidence?: RunOutputEvidence;
   /** Additive Command Code role/profile projection; raw argv remains private. */
   invocationRole?: 'conductor-root' | 'implementation-child';
   permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide';

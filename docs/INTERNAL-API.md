@@ -99,7 +99,7 @@ the same ones the web UI uses.
 
 ### Key Properties
 
-- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.18.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+- **Contracted:** `GET /health` and `GET /capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, contract version `1.19.0`) so local consumers can detect the API surface they are using. See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
 - **Local-only:** The API runs on a Unix domain socket. It cannot be accessed
   over the network.
 - **Auto-discovering models:** The `/models` endpoint queries live model lists
@@ -309,7 +309,7 @@ No authentication required.
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.18.0",
+    "contractVersion": "1.19.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },
@@ -850,6 +850,15 @@ The lookup returns the persisted receipt directly:
     "output": 80,
     "total": 200
   },
+  "outputEvidence": {
+    "policyVersion": "run-output-v1",
+    "source": "normalized-events-v1",
+    "assistantMessages": 1,
+    "assistantTextBlocks": 1,
+    "assistantTextChars": 42,
+    "toolCalls": 2,
+    "disposition": "text"
+  },
   "liveness": {
     "activityPolicyVersion": "run-activity-v1",
     "idleTimeoutMs": 900000,
@@ -898,9 +907,11 @@ should not trust an ordinary Pi `completed` receipt whose `agentEndAt` is absent
 `interrupted` is written during startup
 recovery when a process died or was restarted while a run was accepted or
 started; its `errorCode` is `SERVER_RESTART` and it is not automatically
-retried. Receipts contain identity, timestamps, status, stable error codes, bounded run-scoped token usage when a runtime terminal result measures it, and payload-free liveness evidence — never prompt text, transcript bodies, event payloads, credentials, cookies, or cumulative session/context totals. For Command Code, missing or malformed terminal usage is omitted.
+retried. Receipts contain identity, timestamps, status, stable error codes, bounded run-scoped token usage when a runtime terminal result measures it, additive payload-free output evidence, and payload-free liveness evidence — never prompt text, transcript bodies, event payloads, credentials, cookies, or cumulative session/context totals. `outputEvidence.disposition` distinguishes normalized text, observed terminal no-text, and unknown output evidence; it does not assess semantic answer quality. For Command Code, missing or malformed terminal usage is omitted.
 
 Contract `1.14.0` records the `run-activity-v1` policy and timeouts on new receipts. Only run-correlated agent/message/tool/control event classes advance the inactivity clock; this includes Pi `extension_ui_request` interactions, while `stream_activity` and observer/polling/retention activity do not. Bounded activity snapshots are persisted at most once per second, except attribution-critical control requests, and the latest observation is persisted again at terminalisation. A `TURN_STALLED` receipt retains its stable error code and adds `liveness.watchdog.reason` (`idle` or `absolute`) plus the last eligible observation. Up to four `agent_end` observations may be retained, including observations that arrive after terminalisation. Terminal reasons are an explicit low-cardinality allowlist (`api_error_grace` currently); arbitrary runtime reason strings are omitted. Observations never reopen the receipt or reacquire capacity, and synthetic `agent_end` does not itself make either direct or queued Pi work successful. `cessation` is deliberately separate: a terminal signal may be `unconfirmed`, watchdog/restart boundaries remain `unknown`, and a synchronous Pi slash-handler return is `confirmed` only for that documented handler boundary; consumers must not infer arbitrary worker or external-side-effect quiescence.
+
+For final-artifact certainty, read the matching receipt and then both transcript projections: `GET /sessions/:id/transcript?scope=visible_full` for the complete bounded runtime-agnostic output and `GET /sessions/:id/transcript?view=screen` for the UI-faithful projection. `scope=screen` is not a valid replacement for `view=screen`. Require terminal state, output evidence, and transcript/screen hashes or counts to remain unchanged across the caller's bounded quiescence readback window. `outputEvidence.disposition=text` only proves normalized assistant text was observed; `no-text` and `unknown` are non-conclusive and do not assess semantic answer quality. The default `session evidence.runChronology` carries only the compact disposition to stay within its response budget; use the full receipt or `expand=runs` for all output counts. Do not infer transport loss from an empty recent or screen projection without checking full transcript, history, diagnostics, and runtime-owned evidence.
 
 During the owner-approved Phase 7 shadow gate, Pi prompts submitted through the disposable `validationMode` Internal API server add an optional `phase7Shadow` projection. Normal development/production servers do not enable this observation. It is evidence only: `mode:"shadow"` never changes routing or ownership. The projection contains the server policy `phase7-pi-shadow/v1`, a bounded `standard`, `heavy`, or `long-horizon` profile, low-cardinality reason codes, session affinity, and the honest `shared-service`/`pi-control-process` resource identity (`sessionScoped:false`). Prompt text is never persisted. The frozen thresholds are 4,096 UTF-8 prompt bytes, 8 attributable `tool_execution_start` events, and 60 seconds for a separate long-horizon signal; duration is not treated as resource-pressure proof. The existing uncontained Pi path remains the only execution path, and the field is absent for other runtimes and non-validation servers.
 
@@ -953,7 +964,7 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     "name": "pi-web-ui-internal-api",
     "routePrefix": "/api/v1",
     "majorVersion": "v1",
-    "contractVersion": "1.18.0",
+    "contractVersion": "1.19.0",
     "stability": "beta",
     "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
   },

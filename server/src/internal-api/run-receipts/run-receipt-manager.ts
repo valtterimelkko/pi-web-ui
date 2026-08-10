@@ -10,6 +10,7 @@ import type {
   RunReceiptStatus,
   RunStallReason,
   RunTokenUsage,
+  RunOutputEvidence,
   SessionRuntime,
   Verbosity,
 } from '../types.js';
@@ -61,6 +62,8 @@ export interface BeginRunInput {
 export interface RunFinishOutcome {
   status?: Extract<RunReceiptStatus, 'completed' | 'failed' | 'cancelled'>;
   errorCode?: string;
+  /** Optional caller-supplied output evidence for adapters without events. */
+  outputEvidence?: RunOutputEvidence;
   /** Internal watchdog classification; public callers continue to use TURN_STALLED. */
   stallReason?: RunStallReason;
   /** Explicit adapter-owned completion boundary for synchronous handlers. */
@@ -101,6 +104,13 @@ export class IdempotencyKeyValidationError extends Error {
   }
 }
 
+interface MutableRunOutputEvidence {
+  assistantMessages: number;
+  assistantTextBlocks: number;
+  assistantTextChars: number;
+  toolCalls: number;
+}
+
 interface ActiveRun {
   runId: string;
   sessionId: string;
@@ -112,6 +122,7 @@ interface ActiveRun {
   lastPersistedActivityAtMs?: number;
   lease?: { release: () => void };
   phase7Shadow?: Phase7PiShadowState;
+  outputEvidence: MutableRunOutputEvidence;
 }
 
 /**
@@ -313,6 +324,7 @@ export class RunReceiptManager {
       ? event.timestamp
       : observedAtMs;
     const active = this.activeRuns.get(runId);
+    if (active) observeOutputEvent(active.outputEvidence, event);
     const persistPhase7Shadow = Boolean(active?.phase7Shadow && (
       event.type === 'tool_execution_start' || event.type === 'agent_end'
     ));
@@ -376,6 +388,7 @@ export class RunReceiptManager {
           ...(provenance.reason ? { reason: provenance.reason } : {}),
         },
         tokenUsageObservation,
+        active ? finalizeOutputEvidence(active.outputEvidence, true) : undefined,
       );
     })
       .then(() => undefined)
@@ -406,6 +419,8 @@ export class RunReceiptManager {
     const phase7Shadow = active?.phase7Shadow
       ? finalizePhase7PiShadow(active.phase7Shadow, terminalAtMs)
       : current.phase7Shadow;
+    const outputEvidence = outcome.outputEvidence
+      ?? (active ? finalizeOutputEvidence(active.outputEvidence, Boolean(current.agentEndAt)) : current.outputEvidence);
     const liveness = current.liveness
       ? {
           ...current.liveness,
@@ -442,6 +457,7 @@ export class RunReceiptManager {
         ? { effortEvidenceMethod: 'unobserved' as const }
         : {}),
       ...(liveness ? { liveness } : {}),
+      ...(outputEvidence ? { outputEvidence } : {}),
       ...(phase7Shadow ? { phase7Shadow } : {}),
     });
     this.terminalize(terminal);
@@ -587,6 +603,7 @@ export class RunReceiptManager {
       acceptedAtMs,
       startedAtMs: record.startedAt ? Date.parse(record.startedAt) : undefined,
       lastActivityAtMs: acceptedAtMs,
+      outputEvidence: mutableOutputEvidence(record.outputEvidence),
       ...(record.phase7Shadow ? { phase7Shadow: createPhase7PiShadowState(record.phase7Shadow, acceptedAtMs) } : {}),
     });
   }
@@ -788,6 +805,69 @@ const ELIGIBLE_RUN_ACTIVITY_TYPES = new Set([
 
 function isEligibleRunActivity(eventType: string): boolean {
   return ELIGIBLE_RUN_ACTIVITY_TYPES.has(eventType);
+}
+
+function mutableOutputEvidence(value?: RunOutputEvidence): MutableRunOutputEvidence {
+  return {
+    assistantMessages: value?.assistantMessages ?? 0,
+    assistantTextBlocks: value?.assistantTextBlocks ?? 0,
+    assistantTextChars: value?.assistantTextChars ?? 0,
+    toolCalls: value?.toolCalls ?? 0,
+  };
+}
+
+function boundedAdd(current: number, increment: number, maximum: number): number {
+  if (!Number.isFinite(increment) || increment <= 0) return current;
+  return Math.min(maximum, current + Math.floor(increment));
+}
+
+function observeOutputEvent(output: MutableRunOutputEvidence, event: NormalizedEvent): void {
+  const data = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+    ? event.data as Record<string, unknown>
+    : undefined;
+  if (event.type === 'message_start') {
+    const message = data?.message && typeof data.message === 'object' && !Array.isArray(data.message)
+      ? data.message as Record<string, unknown>
+      : undefined;
+    if (message?.role === 'assistant') output.assistantMessages = boundedAdd(output.assistantMessages, 1, 100_000);
+    return;
+  }
+  if (event.type === 'tool_execution_start') {
+    output.toolCalls = boundedAdd(output.toolCalls, 1, 100_000);
+    return;
+  }
+  if (event.type !== 'message_update') return;
+  const messageEvent = data?.assistantMessageEvent && typeof data.assistantMessageEvent === 'object' && !Array.isArray(data.assistantMessageEvent)
+    ? data.assistantMessageEvent as Record<string, unknown>
+    : undefined;
+  if (!messageEvent) return;
+  const content = messageEvent.content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!block || typeof block !== 'object' || Array.isArray(block)) continue;
+      const text = (block as Record<string, unknown>).type === 'text' ? (block as Record<string, unknown>).text : undefined;
+      if (typeof text !== 'string' || text.length === 0) continue;
+      output.assistantTextBlocks = boundedAdd(output.assistantTextBlocks, 1, 1_000_000);
+      output.assistantTextChars = boundedAdd(output.assistantTextChars, text.length, 10_000_000);
+    }
+    return;
+  }
+  if (messageEvent.type === 'text_delta' && typeof messageEvent.delta === 'string' && messageEvent.delta.length > 0) {
+    output.assistantTextBlocks = boundedAdd(output.assistantTextBlocks, 1, 1_000_000);
+    output.assistantTextChars = boundedAdd(output.assistantTextChars, messageEvent.delta.length, 10_000_000);
+  }
+}
+
+function finalizeOutputEvidence(output: MutableRunOutputEvidence, terminalSignal: boolean): RunOutputEvidence {
+  return {
+    policyVersion: 'run-output-v1',
+    source: 'normalized-events-v1',
+    assistantMessages: output.assistantMessages,
+    assistantTextBlocks: output.assistantTextBlocks,
+    assistantTextChars: output.assistantTextChars,
+    toolCalls: output.toolCalls,
+    disposition: terminalSignal ? (output.assistantTextChars > 0 ? 'text' : 'no-text') : 'unknown',
+  };
 }
 
 function commandCodeEffortObservation(event: NormalizedEvent): { effort: CommandCodeEffort; method: 'provider-event' | 'provider-result' } | undefined {

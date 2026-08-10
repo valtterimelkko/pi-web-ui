@@ -213,6 +213,35 @@ describe('RunReceiptStore — durable run ledger', () => {
     } as never))).rejects.toThrow(/token|usage|total/i);
   });
 
+  it('round-trips additive output evidence and keeps legacy receipts readable', async () => {
+    const first = new RunReceiptStore(dir);
+    await first.init();
+    await first.create(receipt({
+      status: 'completed',
+      terminalAt: '2026-07-15T12:00:02.000Z',
+      outputEvidence: {
+        policyVersion: 'run-output-v1',
+        source: 'normalized-events-v1',
+        assistantMessages: 1,
+        assistantTextBlocks: 2,
+        assistantTextChars: 18,
+        toolCalls: 1,
+        disposition: 'text',
+      },
+    }));
+
+    const restarted = new RunReceiptStore(dir);
+    await restarted.init();
+    expect(restarted.get('run-1')?.outputEvidence).toMatchObject({
+      source: 'normalized-events-v1',
+      assistantTextChars: 18,
+      disposition: 'text',
+    });
+
+    await restarted.create(receipt({ runId: 'legacy-run' }));
+    expect(restarted.get('legacy-run')).not.toHaveProperty('outputEvidence');
+  });
+
   it('does not expose mutable references to nested liveness evidence', async () => {
     const store = new RunReceiptStore(dir);
     await store.init();

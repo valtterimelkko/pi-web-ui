@@ -9,6 +9,7 @@ import type {
   RunReceiptStatus,
   RunTerminalObservation,
   RunTokenUsage,
+  RunOutputEvidence,
 } from '../types.js';
 import { createLogger } from '../../logging/logger.js';
 
@@ -49,6 +50,7 @@ const ALLOWED_KEYS = new Set([
   'effortEvidenceMethod',
   'effortCapabilityHash',
   'tokenUsage',
+  'outputEvidence',
   'invocationRole',
   'permissionProfile',
   'mode',
@@ -181,7 +183,7 @@ export class RunReceiptStore {
   async transition(
     runId: string,
     status: RunReceiptStatus,
-    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness' | 'phase7Shadow' | 'effortEvidenceMethod'>> & {
+    patch: Partial<Pick<PersistedRunReceipt, 'startedAt' | 'agentEndAt' | 'terminalAt' | 'errorCode' | 'interruptionReason' | 'liveness' | 'phase7Shadow' | 'effortEvidenceMethod' | 'outputEvidence'>> & {
       /** Release a reservation that failed before runtime dispatch. */
       clearIdempotency?: boolean;
     } = {},
@@ -216,7 +218,7 @@ export class RunReceiptStore {
 
   async patch(
     runId: string,
-    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode' | 'liveness' | 'phase7Shadow' | 'effectiveEffort' | 'effortEvidenceMethod'>>,
+    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode' | 'liveness' | 'phase7Shadow' | 'effectiveEffort' | 'effortEvidenceMethod' | 'outputEvidence'>>,
   ): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
@@ -269,6 +271,7 @@ export class RunReceiptStore {
     timestamp: string,
     observation?: Omit<RunTerminalObservation, 'late'>,
     tokenUsage?: RunTokenUsage,
+    outputEvidence?: RunOutputEvidence,
   ): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
@@ -283,6 +286,7 @@ export class RunReceiptStore {
       // this run. A late duplicate must never replace it with a cumulative or
       // otherwise different snapshot.
       ...(tokenUsage && current.tokenUsage === undefined ? { tokenUsage } : {}),
+      ...(outputEvidence && current.outputEvidence === undefined ? { outputEvidence } : {}),
     };
     if (observation && current.liveness) {
       const terminalObservation: RunTerminalObservation = {
@@ -440,6 +444,7 @@ export class RunReceiptStore {
     if (record.effortEvidenceMethod !== undefined && !['provider-event', 'provider-result', 'unobserved'].includes(record.effortEvidenceMethod)) throw new Error('Invalid Command Code effort evidence method');
     if (record.effortCapabilityHash !== undefined && !SAFE_DIGEST.test(record.effortCapabilityHash)) throw new Error('Invalid Command Code effort capability hash');
     if (record.tokenUsage !== undefined) validateTokenUsage(record.tokenUsage, record.runtime);
+    if (record.outputEvidence !== undefined) validateOutputEvidence(record.outputEvidence);
     if (record.runtime !== 'commandcode' && ['effort', 'requestedEffort', 'acceptedEffort', 'effortSource', 'defaultEffort', 'effectiveEffort', 'effortEvidenceMethod', 'effortCapabilityHash', 'tokenUsage'].some((key) => (record as unknown as Record<string, unknown>)[key] !== undefined)) throw new Error('Native effort/token usage fields require the Command Code runtime');
     if (record.mode !== undefined && !['prompt', 'follow_up', 'steer'].includes(record.mode)) {
       throw new Error('Invalid receipt mode');
@@ -502,6 +507,7 @@ const ACTIVITY_KEYS = new Set(['eventType', 'occurredAt', 'observedAt']);
 const WATCHDOG_KEYS = new Set(['reason', 'decidedAt', 'idleTimeoutMs', 'absoluteTimeoutMs']);
 const TERMINAL_OBSERVATION_KEYS = new Set(['type', 'occurredAt', 'observedAt', 'origin', 'reason', 'late']);
 const CESSATION_KEYS = new Set(['state', 'basis', 'observedAt']);
+const OUTPUT_EVIDENCE_KEYS = new Set(['policyVersion', 'source', 'assistantMessages', 'assistantTextBlocks', 'assistantTextChars', 'toolCalls', 'disposition']);
 const SAFE_EVENT_TYPE = /^[a-z][a-z0-9_]{0,63}$/;
 
 function assertOnlyKeys(value: object, allowed: Set<string>, label: string): void {
@@ -560,6 +566,23 @@ function validateTokenUsage(value: RunTokenUsage, runtime: string): void {
   if (value.scope !== 'run' || value.source !== 'commandcode-terminal-result-v1') throw new Error('Invalid run token usage provenance');
   if (![value.input, value.output, value.total].every((count) => Number.isSafeInteger(count) && count >= 0)) throw new Error('Invalid run token usage count');
   if (value.total !== value.input + value.output || !Number.isSafeInteger(value.input + value.output)) throw new Error('Run token usage total must equal input plus output');
+}
+
+function validateOutputEvidence(value: RunOutputEvidence): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid output evidence');
+  assertOnlyKeys(value, OUTPUT_EVIDENCE_KEYS, 'output evidence');
+  if (value.policyVersion !== 'run-output-v1' || value.source !== 'normalized-events-v1') throw new Error('Invalid output evidence provenance');
+  if (!['text', 'no-text', 'unknown'].includes(value.disposition)) throw new Error('Invalid output evidence disposition');
+  for (const [label, count, maximum] of [
+    ['assistant message', value.assistantMessages, 100_000],
+    ['assistant text block', value.assistantTextBlocks, 1_000_000],
+    ['assistant text character', value.assistantTextChars, 10_000_000],
+    ['tool call', value.toolCalls, 100_000],
+  ] as const) {
+    if (!Number.isSafeInteger(count) || count < 0 || count > maximum) throw new Error(`Invalid output evidence ${label} count`);
+  }
+  if (value.disposition === 'text' && value.assistantTextChars < 1) throw new Error('Text output evidence requires text characters');
+  if (value.disposition === 'no-text' && value.assistantTextChars !== 0) throw new Error('No-text output evidence cannot carry text characters');
 }
 
 function validateLiveness(value: RunLivenessEvidence): void {

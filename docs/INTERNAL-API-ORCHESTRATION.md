@@ -84,14 +84,14 @@ Useful debugging/introspection, notification, model-control, run-identity, and
 health, evidence, receipt-correctness, exact-profile, retention, admission, dispatch-integrity, and run-liveness additions landed in contract `1.3.0` through `1.14.0`:
 
 - `GET /api/v1/diagnostics` — self-service recent logs (secret-scrubbed) when something looks off; `1.9.0` adds `requestId`, `runId`, `runtime`, `component`, and `since` selectors plus a bounded process-local `operational` snapshot.
-- `GET /api/v1/sessions/:id/evidence` — `1.10.0` compact one-call troubleshooting bundle; resolves aliases, returns bounded diagnostics and durable receipt summary, and links to deeper reads. Contract `1.14.0` adds separate retention/residency projections and a bounded three-run liveness chronology. Use this before separate `/info`, `/diagnostics`, and transcript calls.
+- `GET /api/v1/sessions/:id/evidence` — `1.10.0` compact one-call troubleshooting bundle; resolves aliases, returns bounded diagnostics and durable receipt summary, and links to deeper reads. Contract `1.14.0` adds separate retention/residency projections and a bounded three-run liveness chronology; `1.19.0` adds compact output dispositions to that chronology while full output counts remain on the receipt/expanded run reads. Use this before separate `/info`, `/diagnostics`, and transcript calls.
 - `GET /api/v1/health` — use the additive `runtimeHealth` matrix for per-runtime checks; the legacy `runtimes` strings/top-level status are compatibility projections.
 - `GET /api/v1/events/types` — machine-readable catalogue of normalized event kinds on the `/events` stream.
 - `GET /api/v1/sessions/:id/transcript?view=screen` — a read-only “what the user sees” projection for a finished or in-progress session, without browser automation.
 - `POST /api/v1/notifications`, `GET /api/v1/notifications/:id`, and `GET /api/v1/notifications` — durable explicit acceptance, pollable delivery status, and recent delivery history. Reuse one `Idempotency-Key` across retries (contract `1.8.0+`).
 - `POST/DELETE/GET /api/v1/sessions/:id/notifications...` — opt a child session into `agent_end` notifications and verify the opt-in/delivery state.
-- `GET /api/v1/runs/:runId` — durable run receipt lookup for accepted, detached, or retried dispatches. Contract `1.10.1` ensures Pi completion waits for `agent_end` across auto-compaction; on older servers, treat Pi `completed` without `agentEndAt` as contradictory/nonterminal evidence. Contract `1.11.0` adds `modelSelector`; `1.14.0` adds payload-free activity/watchdog/terminal/cessation evidence; `1.18.0` adds optional Command Code `tokenUsage` from the matching terminal result only. A terminal receipt releases capacity but does not by itself prove nested-process or workspace quiescence. During the owner-approved Phase 7 shadow gate, Pi Internal API receipts may also carry `phase7Shadow`; treat its `shared-service` resource identity as explicit evidence that no contained worker was selected.
-- `GET /api/v1/models` — model-specific `thinkingLevels`; use this before requesting `max` for Claude or Pi sessions. Contract `1.17.0` adds the feature-gated server-local Command Code runtime and `1.18.0` adds its run-scoped terminal usage evidence. The Internal API Pi-provider execution policy still applies: blocked providers are omitted here and exposed at `/capabilities.features.piProviderPolicy.blockedProviders`.
+- `GET /api/v1/runs/:runId` — durable run receipt lookup for accepted, detached, or retried dispatches. Contract `1.10.1` ensures Pi completion waits for `agent_end` across auto-compaction; on older servers, treat Pi `completed` without `agentEndAt` as contradictory/nonterminal evidence. Contract `1.11.0` adds `modelSelector`; `1.14.0` adds payload-free activity/watchdog/terminal/cessation evidence; `1.18.0` adds optional Command Code `tokenUsage` from the matching terminal result only; `1.19.0` adds payload-free normalized-output `outputEvidence` with `text`, `no-text`, or `unknown` dispositions. A terminal receipt releases capacity but does not by itself prove nested-process or workspace quiescence or a substantive answer. During the owner-approved Phase 7 shadow gate, Pi Internal API receipts may also carry `phase7Shadow`; treat its `shared-service` resource identity as explicit evidence that no contained worker was selected.
+- `GET /api/v1/models` — model-specific `thinkingLevels`; use this before requesting `max` for Claude or Pi sessions. Contract `1.17.0` adds the feature-gated server-local Command Code runtime, `1.18.0` adds its run-scoped terminal usage evidence, and `1.19.0` adds bounded normalized-output evidence on receipts. The Internal API Pi-provider execution policy still applies: blocked providers are omitted here and exposed at `/capabilities.features.piProviderPolicy.blockedProviders`.
 - `POST /api/v1/sessions/:id/control` with `{action:"set_thinking_level",level:"max"}` — available when the selected model advertises `max` (contract `1.7.0+`).
 
 When Command Code is enabled, choose only an exact id returned by `/models` and send `invocationRole` (`conductor-root` or `implementation-child`) plus a short-lived HMAC role attestation binding the exact model, canonical cwd/worktree, lease, and (for children) parent session. The server maps that role to fixed profiles, enforces configured cwd roots, and resumes only its stored native id; callers cannot choose `--yolo`, environment, executable, or native transcript paths. Discovery is a bounded startup probe with a controlled environment, and subprocess completion waits for pipe `close` so final NDJSON frames cannot be lost after process exit. Command Code is intentionally excluded from browser/shared runtime types, transfer, and default disposable `all` validation. Agent OS quota evidence must come from its authenticated local Internal API adapter plus a bounded proof; health/capacity availability alone remains fail-closed `unknown`.
@@ -244,11 +244,13 @@ Use this when:
 ### 6. Read results back
 
 ### Preferred default
-- `GET /api/v1/sessions/:id/transcript`
+- `GET /api/v1/sessions/:id/transcript?scope=visible_full` for final-artifact certainty
+- `GET /api/v1/sessions/:id/transcript?scope=visible_recent` for compact progress reads
 
 This gives you a runtime-agnostic output format and is usually the best way to
-consume child results. Start with `scope=visible_recent` to keep context small;
-request `visible_full` only when the whole transcript is needed.
+consume child results. Do not use a compact recent projection to conclude that a
+finished run had no answer; compare the full projection with receipt
+`outputEvidence`, diagnostics, and history when the result is empty or delayed.
 
 ### UI-faithful alternative
 - `GET /api/v1/sessions/:id/transcript?view=screen`
@@ -256,7 +258,13 @@ request `visible_full` only when the whole transcript is needed.
 Use this when you want the fastest read-only answer to: **what does the user see
 right now?** It returns the same session in a screen-oriented projection with
 collapsed tool cards, grouped tools, summarized thinking, and a rendered markdown
-"text screenshot". Add `expand=tools,thinking` only when you need the extra detail.
+"text screenshot". `scope=screen` is not valid; use `view=screen`. Add
+`expand=tools,thinking` only when you need the extra detail.
+
+For a final verdict, require a terminal receipt and stable unchanged receipt,
+output-evidence, and transcript observations across the configured bounded
+quiescence readback window. `outputEvidence.disposition=no-text` or `unknown`
+means the answer is non-conclusive, not that transport loss has been proven.
 
 ### Lower-level alternative
 - `GET /api/v1/sessions/:id/history`
@@ -328,7 +336,7 @@ never the production instance by default.
 | Watch live progress | `/sessions/:id/events` |
 | Wait for completion safely | `/sessions/:id/wait` |
 | Start troubleshooting from any session id | `/sessions/:id/evidence` |
-| Read child output in one common format | `/sessions/:id/transcript` |
+| Read child output in one common format | `/sessions/:id/transcript?scope=visible_full` |
 | Read what the user sees by default | `/sessions/:id/transcript?view=screen` |
 | Get replay-like details | `/sessions/:id/history` |
 | Hand context into another session | `/sessions/:id/transfer` |

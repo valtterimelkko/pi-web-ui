@@ -1477,10 +1477,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         ...(receipt.errorCode ? { errorCode: receipt.errorCode } : {}),
         ...(receipt.liveness ? { liveness: receipt.liveness } : {}),
         ...(receipt.tokenUsage ? { tokenUsage: receipt.tokenUsage } : {}),
+        ...(receipt.outputEvidence ? { outputEvidence: { disposition: receipt.outputEvidence.disposition } } : {}),
       })),
       warnings: [
-        'Command Code native credentials and transcript files remain owned by Command Code and are not copied here.',
-        'The private normalized event journal is the Pi Web UI replay source.',
+        'Command Code credentials and native transcripts remain private and are not copied here.',
+        'The private normalized journal is the Pi Web UI replay source.',
       ],
       links: evidenceLinks(record.sessionId),
     };
@@ -1588,14 +1589,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           ...(receipt.terminalAt ? { terminalAt: receipt.terminalAt } : {}),
           ...(receipt.errorCode ? { errorCode: receipt.errorCode } : {}),
           ...(receipt.liveness ? { liveness: receipt.liveness } : {}),
+          ...(receipt.outputEvidence ? { outputEvidence: { disposition: receipt.outputEvidence.disposition } } : {}),
         })),
         control: {
           askUserQuestions: extractQuestionControlEvents(broker.getRecentEvents(entry.id, EVIDENCE_MAX_LIMIT)),
         },
         warnings: [
-          'Diagnostics are process-local and reset when the server restarts.',
-          'Run receipts and runtime-owned source files are durable; this bundle is intentionally bounded.',
-          'Residency means adapter materialisation only; it does not prove execution progress, process quiescence, or semantic completion.',
+          'Diagnostics reset on restart.',
+          'Receipts/source files are durable; bundle is bounded.',
+          'Residency is materialisation only, not progress, quiescence, or semantic completion.',
         ],
         links: evidenceLinks(entry.id),
       };

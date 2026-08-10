@@ -29,6 +29,7 @@ export type {
   DetachedPromptResponse,
   RunReceiptStatus,
   RunReceipt,
+  RunOutputEvidence,
   ModelInfo,
   ModelsResponse,
   RuntimeCapabilities,

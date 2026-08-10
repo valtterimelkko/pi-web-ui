@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.18.0",
+  "contractVersion": "1.19.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,10 @@ Current contract:
 
 ### Changelog
 
+- **1.19.0** (minor, additive normalized-output evidence) — adds:
+  - `RunReceipt.outputEvidence` with bounded counts of normalized assistant messages, text-bearing events/characters, tool calls, and a `text` / `no-text` / `unknown` disposition;
+  - `no-text` is emitted only when a terminal `agent_end` was observed without normalized assistant text; `unknown` remains the honest value when lifecycle terminality occurred without that signal;
+  - the field is payload-free, persisted across restart, and old receipts/clients remain readable and compatible. It does not change terminal statuses or claim semantic answer quality.
 - **1.18.0** (minor, additive run-scoped Command Code usage evidence) — adds:
   - `RunReceipt.tokenUsage` for Command Code when the matching terminal NDJSON result contains valid non-negative input/output counts; the projection is `{ scope: "run", source: "commandcode-terminal-result-v1", input, output, total }` and `total` must equal `input + output`;
   - the usage field is persisted through receipt restart recovery, exposed by `/runs/:runId` and the Command Code session detail/evidence projections, and included in bounded run chronology;

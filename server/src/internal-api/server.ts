@@ -31,6 +31,7 @@ import { createEventTypesRoutes } from './routes/event-types.js';
 import { createNotificationsRoutes } from './routes/notifications.js';
 import { RunReceiptManager } from './run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from './run-receipts/run-receipt-store.js';
+import { readPiRuntimeQuiescence } from './runtime-quiescence.js';
 import { NotificationManager } from '../notifications/notification-manager.js';
 import { NotificationStore } from '../notifications/notification-store.js';
 import { NotificationIngressSpool } from '../notifications/notification-ingress-spool.js';
@@ -209,10 +210,9 @@ export class InternalApiServer {
           if (entry.sdkType === 'claude') return !this.claudeService.isRunning(sessionId);
           if (entry.sdkType === 'opencode') return !this.opencodeService.isRunning(sessionId);
           if (entry.sdkType === 'antigravity') return !this.antigravityService.isRunning(sessionId);
-          const status = this.multiSessionManager.getSessionStatus(entry.path);
-          return status?.status !== 'busy'; // 'busy' = actively streaming; else quiescent
+          return readPiRuntimeQuiescence(() => this.multiSessionManager.getSessionStatus(entry.path));
         } catch {
-          return true; // lookup failure -> treat as quiescent (never hold a slot forever)
+          return false; // status lookup failure is not positive cessation evidence
         }
       },
     });

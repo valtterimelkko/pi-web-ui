@@ -341,6 +341,7 @@ describe('GET /sessions/:id/evidence', () => {
     const res = await callEvidence(routes, 'internal-pi-id');
     const body = JSON.parse(res.body);
     expect(body.runChronology).toHaveLength(3);
+    expect(body.runChronology[0].outputEvidence).toEqual({ disposition: 'no-text' });
     expect(Buffer.byteLength(res.body)).toBeLessThan(5_000);
     expect(res.body).not.toContain('hidden-');
   });

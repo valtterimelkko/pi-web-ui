@@ -189,6 +189,67 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     expect(manager.get(begun.receipt.runId)).not.toHaveProperty('effectiveEffort');
   });
 
+  it('records bounded normalized-event output evidence for a text-bearing run', async () => {
+    const begun = await manager.beginRun({ ...baseInput, sessionId: 'output-evidence-text' });
+    expect(begun.kind).toBe('created');
+    if (begun.kind !== 'created') return;
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'message_start',
+      sessionId: 'output-evidence-text',
+      timestamp: now,
+      data: { message: { role: 'assistant' } },
+    });
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'message_update',
+      sessionId: 'output-evidence-text',
+      timestamp: now,
+      data: { assistantMessageEvent: { type: 'text_delta', delta: 'answer' } },
+    });
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'tool_execution_start',
+      sessionId: 'output-evidence-text',
+      timestamp: now,
+      data: { toolName: 'Read' },
+    });
+    await manager.observeEvent(begun.receipt.runId, {
+      type: 'agent_end',
+      sessionId: 'output-evidence-text',
+      timestamp: now,
+      data: {},
+    });
+    await manager.finish(begun.receipt.runId);
+
+    expect(manager.get(begun.receipt.runId)?.outputEvidence).toEqual({
+      policyVersion: 'run-output-v1',
+      source: 'normalized-events-v1',
+      assistantMessages: 1,
+      assistantTextBlocks: 1,
+      assistantTextChars: 6,
+      toolCalls: 1,
+      disposition: 'text',
+    });
+  });
+
+  it('distinguishes a completed textless run from a terminal run with unknown output evidence', async () => {
+    const textless = await manager.beginRun({ ...baseInput, sessionId: 'output-evidence-empty' });
+    expect(textless.kind).toBe('created');
+    if (textless.kind !== 'created') return;
+    await manager.observeEvent(textless.receipt.runId, {
+      type: 'agent_end',
+      sessionId: 'output-evidence-empty',
+      timestamp: now,
+      data: {},
+    });
+    await manager.finish(textless.receipt.runId);
+    expect(manager.get(textless.receipt.runId)?.outputEvidence?.disposition).toBe('no-text');
+
+    const unknown = await manager.beginRun({ ...baseInput, sessionId: 'output-evidence-unknown' });
+    expect(unknown.kind).toBe('created');
+    if (unknown.kind !== 'created') return;
+    await manager.finish(unknown.receipt.runId, { status: 'failed', errorCode: 'RUNTIME_ERROR' });
+    expect(manager.get(unknown.receipt.runId)?.outputEvidence?.disposition).toBe('unknown');
+  });
+
   // Phase 3.2 — a watchdog-terminalised TURN_STALLED run fires onStalled so the
   // operator can be notified of a quarantined/unknown run (no required action;
   // the slot is held conservatively until terminalisation).

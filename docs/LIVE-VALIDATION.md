@@ -198,6 +198,16 @@ warnings. A failed assertion may be retried once, but cleanup warnings from all
 attempts are retained. Long-horizon polling failures become explicit `failed`
 verdicts and still run watch/session finalization.
 
+For detached or delayed-output checks, do not treat a terminal receipt or a
+single idle observation as final-artifact proof. Read the matching receipt and
+bounded session evidence, then compare `transcript?scope=visible_full` with
+`transcript?view=screen` after a configured stable-read/quiescence window.
+Contract `1.19.0+` receipts expose payload-free `outputEvidence`: `text` means
+normalized assistant text was observed; `no-text` and `unknown` require a
+non-conclusive/indeterminate report unless lower-layer evidence explains the
+absence. Preserve only a bounded redacted anomaly bundle before disposable
+cleanup; never retain raw credentials or an entire session directory by default.
+
 ## Current scenarios
 
 - `smoke` — create a session and verify a minimal turn completes

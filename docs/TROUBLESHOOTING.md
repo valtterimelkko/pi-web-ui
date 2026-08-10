@@ -69,9 +69,18 @@ curl -s --unix-socket "$SOCKET" \
 
 Use the response's `sessionId` as the canonical internal id for the next calls. Choose the read path deliberately:
 
-- `transcript?view=screen` — lowest-noise answer to **what the operator sees**;
-- `transcript?scope=visible_recent` — compact runtime-agnostic result reading;
+- `transcript?scope=visible_full` — complete bounded runtime-agnostic output for final evidence;
+- `transcript?view=screen` — lowest-noise answer to **what the operator sees** (`scope=screen` is not valid);
+- `transcript?scope=visible_recent` — compact progress/result reading only;
 - `history` — only when replay/event reconstruction is the problem.
+
+A completed receipt is lifecycle evidence, not proof of a substantive answer. On
+contract `1.19.0+`, compare `receipt.outputEvidence.disposition` with the full
+transcript: `text` means normalized assistant text was observed, while `no-text`
+and `unknown` are non-conclusive. For a final-artifact claim, re-read the
+receipt, session evidence, full transcript, and screen projection after the
+configured bounded quiescence window; do not call a blank recent/screen view
+transport loss without lower-layer corroboration.
 
 ### 4. Narrow diagnostics by correlation, not by text search
 
@@ -113,10 +122,11 @@ Follow this order unless you already know the exact failing subsystem:
 When you have Internal API access, resolve the identifier once with the evidence ladder above, then use the smallest read that answers the question:
 
 1. `GET /api/v1/sessions/:id/evidence` — one-call canonical identity, locators, bounded logs, and receipt summary
-2. `GET /api/v1/sessions/:id/transcript?view=screen` — read-only "what the user sees" projection
-3. `GET /api/v1/sessions/:id/diagnostics` — correlated, secret-scrubbed session logs; narrow with `runId`, `requestId`, `runtime`, `component`, `since`, `minLevel`, and `limit`
-4. `GET /api/v1/diagnostics` — bounded global logs plus the process-local operational snapshot
-5. `GET /api/v1/sessions/:id/history` — lower-level replay/debug detail only if needed
+2. `GET /api/v1/sessions/:id/transcript?scope=visible_full` — complete bounded output for final evidence
+3. `GET /api/v1/sessions/:id/transcript?view=screen` — read-only "what the user sees" projection
+4. `GET /api/v1/sessions/:id/diagnostics` — correlated, secret-scrubbed session logs; narrow with `runId`, `requestId`, `runtime`, `component`, `since`, `minLevel`, and `limit`
+5. `GET /api/v1/diagnostics` — bounded global logs plus the process-local operational snapshot
+6. `GET /api/v1/sessions/:id/history` — lower-level replay/debug detail only if needed
 
 This is often the most token-efficient route for LLM agents because it avoids driving the UI and avoids rediscovering log locations first. For a browser-only failure that reaches the React error screen, ask the operator to use **Copy diagnostics** or **Download diagnostics**; the privacy-safe browser ring is manual-only and is never uploaded automatically.
 
