@@ -152,6 +152,7 @@
 
 ### Internal API (`server/src/internal-api/`)
 - `server.ts` / `unix-socket-owner.ts` — token-authenticated Unix-socket server, fail-closed ownership, readiness, and bounded shutdown.
+- `../packages/internal-api-mcp/` — retained inactive experimental stdio MCP consumer; it uses this contracted socket API, never imports runtime services, and has no persistent launcher.
 - `routes/sessions.ts` — cross-runtime session CRUD, prompts, abort/control, wait/events, transcripts/screen view, compact session evidence, transfer, usage, batch operations, run receipts, pins, and watches.
 - `routes/diagnostics.ts` / `routes/health.ts` / `routes/capabilities.ts` / `routes/models.ts` — self-service diagnostics, additive runtime health, capability discovery, and live model metadata.
 - `run-receipts/` — durable accepted/started/terminal run identity, idempotency, restart interruption recovery, and bounded retention.
@@ -175,6 +176,24 @@
 - `scripts/validate-claude-profiles.ts` — Profile-specific validation runner. Validates SDK backend, direct CLI backend, tool visibility, skills, follow-up, and concurrency through a disposable server. Run via `npm run validate:claude-profiles`.
 - `scripts/concurrency-test.ts` — Tests simultaneous Claude + provider-profile sessions for cross-contamination. Run directly with `npx tsx scripts/concurrency-test.ts`.
 - `pi-claude-channel/server.ts` — Local Claude channel/plugin bridge process.
+
+## Internal API MCP workspace (`packages/internal-api-mcp/`)
+
+**Lifecycle:** validated experiment retained as source/tests, inactive by default
+since 2026-08-12. No MCP/tunnel service or production connection is enabled; see
+[`MCP-SERVER.md`](./MCP-SERVER.md) for shutdown and reactivation boundaries.
+
+- `src/index.ts` — tiny compiled stdio entrypoint; stdout remains MCP JSON-RPC only.
+- `src/server.ts` — constructs the separately launched `McpServer` and registers the adapter tools.
+- `src/config.ts` — bounded process configuration plus owner-only token/socket checks and replacement detection.
+- `src/internal-api-client.ts` — fixed-operation HTTP-over-Unix-socket client with bearer auth, contract checks, deadlines, cancellation and response caps.
+- `src/internal-api-types.ts` — narrow Zod-validated Internal API DTOs.
+- `src/projections.ts` — explicit allowlist projections, runtime filtering and UTF-8-safe transcript caps.
+- `src/tool-schemas.ts` / `src/tools.ts` — strict seven-tool schemas, handlers, envelopes and MCP annotations.
+- `src/validation-safety.ts` — explicit disposable target guard and cleanup/report helpers.
+- `scripts/validate-wire.ts` — compiled MCP process + official SDK + fake owner-only UDS proof.
+- `scripts/validate-live.ts` — compiled MCP process + official SDK + disposable real-runtime receipt/transcript proof; direct cleanup is validator-only.
+- `README.md` — workspace-level developer notes (see canonical [`MCP-SERVER.md`](./MCP-SERVER.md) for the operator guide).
 
 ## Shared Package (`shared/src/`)
 

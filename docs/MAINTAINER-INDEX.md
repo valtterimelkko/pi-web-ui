@@ -59,6 +59,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md`](./ORCHESTRATED-RUN-LIVENESS-AND-RECOVERY.md) — shipped `1.14.0` liveness/recovery contract, remaining intent, provenance, and responsibility boundaries
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) — the three live-validation options (Internal API, Playwright E2E, browser-WebSocket path) with full runbooks; includes `scripts/ws-validate.mjs`
 - [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md) — durable watch ledgers + headless `validate:long-horizon` runner for long-running validation; recorded firings survive restart, but reloaded watches must be re-registered to resume live observation
+- [`MCP-SERVER.md`](./MCP-SERVER.md) — retained inactive seven-tool MCP experiment: validation evidence, completed shutdown, and fresh-authorisation reactivation boundary
 
 ## 7. Integration & extension
 - [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md) — checklist for adding a new runtime

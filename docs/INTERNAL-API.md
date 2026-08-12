@@ -174,6 +174,17 @@ The default socket (`~/.pi-web-ui/internal-api.sock`) belongs to the running pro
 
 The Internal API remains available for trusted local orchestration, but validation tasks are special because they are expected to exercise real runtimes without disturbing the user's active UI or real session data.
 
+### Private MCP consumer
+
+The repository retains an **inactive experimental** stdio-only MCP consumer at
+[`../packages/internal-api-mcp/`](../packages/internal-api-mcp/). It exposes a
+closed seven-tool surface over this same Unix-socket contract; it does not add a
+network listener or import runtime services. It is not launched by Pi Web UI and
+has no installed persistent service. Its disposable ChatGPT/tunnel experiment
+was shut down on 2026-08-12; production was never connected. See the canonical
+[`MCP-SERVER.md`](./MCP-SERVER.md) guide for its lifecycle status, strict
+schemas, validation evidence, shutdown record, and reactivation boundary.
+
 ## Connection
 
 ### Socket Path

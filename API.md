@@ -113,6 +113,7 @@ Reference docs:
 - [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md) — contract metadata, compatibility rules, and local-consumer coordination notes
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
+- [`docs/MCP-SERVER.md`](./docs/MCP-SERVER.md) — retained inactive seven-tool stdio MCP experiment over the Internal API
 
 `GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.16.0`) for local consumers such as Agent OS. Contract `1.12.0` added source-owned durable/resident retention leases and resource-aware execution admission; `1.13.0` added truthful dispatch/approval/watchdog/session-identity semantics; `1.14.0` added payload-free run-liveness and bounded recovery evidence; `1.15.0` made disabled runtimes explicit; and `1.16.0` adds the Internal API-only Pi-provider execution policy. Health also exposes per-runtime `runtimeHealth`, while diagnostics and `/sessions/:id/evidence` provide bounded troubleshooting evidence.
 

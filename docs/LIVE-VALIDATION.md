@@ -180,6 +180,50 @@ Only when the user explicitly asks to validate against the running production We
 npm run validate:live -- --allow-production --runtime claude --scenario smoke
 ```
 
+## Retained experimental MCP adapter validation
+
+The Internal API MCP adapter is retained but inactive; no MCP/tunnel service is
+installed or enabled. Its 2026-08-12 experiment passed the two local layers
+below plus an external disposable ChatGPT tunnel proof, then the processes,
+plugin, local credentials, profiles, and disposable state were removed.
+Re-running these commands is a new opt-in experiment, not routine validation.
+The adapter is a separate stdio process and does not change the validation
+server or Internal API contract:
+
+```bash
+# compiled process + official MCP SDK + fake owner-only Unix socket
+npm run validate:mcp:wire
+```
+
+For the real-runtime proof, boot a disposable validation server and pass both
+exact printed paths. The MCP validator requires them, refuses the canonical
+production paths with no `--allow-production` escape hatch, refuses
+Antigravity in disposable mode, and performs every discovery/create/dispatch/
+receipt/transcript action through the MCP client. It directly deletes only the
+created disposable session during cleanup; there is intentionally no delete
+MCP tool:
+
+```bash
+VALIDATION_DIR="$(mktemp -d /tmp/pi-web-ui-mcp-validation-XXXXXX)"
+npm run validate:server -- --dir "$VALIDATION_DIR" --port 0 \
+  >"$VALIDATION_DIR/server.log" 2>&1 &
+VALIDATION_PID=$!
+npm run validate:mcp:live -- \
+  --socket "$VALIDATION_DIR/internal-api.sock" \
+  --token-path "$VALIDATION_DIR/internal-api-token" \
+  --runtime pi
+kill "$VALIDATION_PID" 2>/dev/null || true
+wait "$VALIDATION_PID" 2>/dev/null || true
+rm -rf "$VALIDATION_DIR"
+```
+
+The report must say that the disposable server leaves production service,
+socket, registry and session state untouched while real provider credentials
+and model resources may still be reused. It must not print a prompt,
+transcript, token or credential. Full MCP architecture, environment variables,
+Secure MCP Tunnel egress-only design, experiment shutdown evidence, and fresh
+production/reactivation opt-in rules are in [`MCP-SERVER.md`](./MCP-SERVER.md).
+
 ## How it works
 
 The runner talks to the Internal API socket you pass with `--socket` and authenticates with the token passed via `--token-path`.
