@@ -1362,7 +1362,9 @@ See [source-owned session retention](#source-owned-session-retention-persistent-
 `set_thinking_level` accepts `off | minimal | low | medium | high | xhigh | max`.
 For Claude, `max` is forwarded to the SDK/direct CLI/channel effort control;
 for Pi it is clamped by the selected model's SDK capabilities; and for
-OpenCode it maps to that model's reasoning control. Clients should use the selected model's `thinkingLevels` from `/models` before requesting it.
+OpenCode it maps to that model's reasoning control. Clients should use the selected model's `thinkingLevels` from `/models` before requesting it. For Pi,
+`level` in the successful control response is the effective read-back level
+(after any SDK clamping), not merely an echo of the request.
 
 For Command Code, use `{ "action": "set_effort", "effort": "low" }` (or
 `medium`/`xhigh` for Qwen). Muse rejects every native effort value. This action

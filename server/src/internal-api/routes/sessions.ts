@@ -2877,6 +2877,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             return;
           }
 
+          let effectiveThinkingLevel = body.level;
           if (entry.sdkType === 'claude') {
             claudeService.setThinkingLevel(sessionId, body.level);
           } else if (entry.sdkType === 'opencode') {
@@ -2888,12 +2889,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               return;
             }
             agentSession.setThinkingLevel(body.level);
+            // Pi clamps unsupported requests to the nearest model-supported
+            // level. Return the read-back value so callers can fail closed
+            // instead of treating an echoed request as proof of effect.
+            effectiveThinkingLevel = agentSession.thinkingLevel;
           } else {
             sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Thinking level not supported for this runtime'));
             return;
           }
 
-          response = { success: true, action: 'set_thinking_level', level: body.level };
+          response = { success: true, action: 'set_thinking_level', level: effectiveThinkingLevel };
           break;
         }
 

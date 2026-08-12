@@ -1065,6 +1065,41 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(claudeService.createSession).toHaveBeenCalledWith('/tmp/claude-max', 'sonnet', 'max', undefined);
     });
 
+    it('returns the effective Pi thinking level rather than the requested level', async () => {
+      const agentSession = multiSessionManager.getAgentSession();
+      agentSession.thinkingLevel = 'low';
+      registry.get.mockResolvedValue({
+        id: 'pi-thinking',
+        path: '/tmp/pi-thinking.jsonl',
+        sdkType: 'pi',
+        cwd: '/root/proj',
+        model: 'openai-codex/gpt-5.6-luna',
+        firstMessage: '',
+        messageCount: 0,
+        status: 'idle',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        lastActivity: '2026-05-01T00:10:00.000Z',
+      });
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSessionControl(
+        createJsonReq('POST', '/api/v1/sessions/pi-thinking/control', {
+          action: 'set_thinking_level',
+          level: 'medium',
+        }),
+        res,
+        'pi-thinking',
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toMatchObject({
+        success: true,
+        action: 'set_thinking_level',
+        level: 'low',
+      });
+    });
+
     it('applies max to a Pi session after selecting the requested model', async () => {
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions', {
