@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Bell, BellOff, Loader2 } from 'lucide-react';
-import { canonicalOptInId } from '@pi-web-ui/shared';
+import { canonicalOptInId, type NotificationOptInRuntime } from '@pi-web-ui/shared';
 import { useSessionStore, useUIStore } from '../../store';
 
 /**
@@ -18,7 +18,7 @@ export function SessionNotifyToggle({
   label,
 }: {
   sessionId: string;
-  sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity';
+  sdkType: NotificationOptInRuntime;
   sessionPath: string;
   /**
    * The session's current display name (renamed name → runtime name → first

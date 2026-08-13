@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { RUN_TERMINAL_REASON_ALLOWLIST } from '../types.js';
 import type {
+  CommandCodeEffortSource,
   Phase7PiShadowClassification,
   PromptMode,
   CommandCodeEffort,
@@ -41,7 +42,7 @@ export interface BeginRunInput {
   model?: string;
   modelSelector?: string;
   invocationRole?: 'conductor-root' | 'implementation-child';
-  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide';
+  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide' | 'browser-contained';
   message: string;
   mode: PromptMode;
   dispatchMode?: PromptMode;
@@ -51,7 +52,7 @@ export interface BeginRunInput {
   /** Command Code-native effort binding, distinct from thinkingLevel. */
   effort?: CommandCodeEffort;
   requestedEffort?: CommandCodeEffort;
-  effortSource?: 'explicit' | 'default' | 'none';
+  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   effortCapabilityHash?: string;
   idempotencyKey?: string;

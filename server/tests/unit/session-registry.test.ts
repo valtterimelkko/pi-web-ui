@@ -87,6 +87,18 @@ describe('SessionRegistryManager', () => {
     expect(claudeEntries[0].sdkType).toBe('claude');
   });
 
+  it('rejects duplicate Command Code native session bindings', async () => {
+    const manager = new SessionRegistryManager(registryPath);
+    await manager.upsert({
+      id: 'commandcode-a', sdkType: 'commandcode', path: 'commandcode-a', cwd: '/workspace',
+      commandCodeNativeSessionId: 'native-duplicate', firstMessage: '', messageCount: 0,
+    });
+    await expect(manager.upsert({
+      id: 'commandcode-b', sdkType: 'commandcode', path: 'commandcode-b', cwd: '/workspace',
+      commandCodeNativeSessionId: 'native-duplicate', firstMessage: '', messageCount: 0,
+    })).rejects.toThrow(/already bound|duplicate/i);
+  });
+
   it('deletes an entry', async () => {
     const manager = new SessionRegistryManager(registryPath);
 

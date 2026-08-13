@@ -78,6 +78,31 @@ describe('diagnostics routes (Task 10)', () => {
     expect(res.body).not.toContain('/private/path');
   });
 
+  it('excludes Command Code browser sessions from operational counts, logs, and session diagnostics', async () => {
+    pushDiagnosticsRecord(rec({ msg: 'shadow evidence', runtime: 'commandcode', sessionId: 'shadow' }));
+    pushDiagnosticsRecord(rec({ msg: 'browser evidence', runtime: 'commandcode', sessionId: 'browser' }));
+    pushDiagnosticsRecord(rec({ msg: 'unscoped commandcode evidence', runtime: 'commandcode' }));
+    pushDiagnosticsRecord(rec({ msg: 'browser correlation leak', sessionId: 'browser' }));
+    pushDiagnosticsRecord(rec({ msg: 'shadow correlation without runtime', sessionId: 'shadow' }));
+    const routes = createDiagnosticsRoutes({
+      sessionRegistry: { listAll: async () => [
+        { id: 'shadow', sdkType: 'commandcode', status: 'idle' },
+        { id: 'browser', sdkType: 'commandcode', status: 'running' },
+      ] },
+      isVisibleSession: async (id) => id === 'shadow',
+    });
+    const global = mockRes();
+    await routes.handleGetDiagnostics({} as never, global, new URLSearchParams());
+    const globalBody = JSON.parse(global.body);
+    expect(globalBody.operational.sessions).toMatchObject({ total: 1, byRuntime: { commandcode: 1 } });
+    expect(globalBody.recentLogs.map((log: LogRecord) => log.msg)).toEqual(['shadow evidence', 'shadow correlation without runtime']);
+    expect(globalBody.summary).toMatchObject({ bufferedRecords: 2 });
+    expect(globalBody.recentLogs).not.toContainEqual(expect.objectContaining({ msg: 'browser correlation leak' }));
+    const hidden = mockRes();
+    await routes.handleGetSessionDiagnostics({} as never, hidden, 'browser', new URLSearchParams());
+    expect(hidden.statusCode).toBe(404);
+  });
+
   it('GET /sessions/:id/diagnostics scopes logs to that session', async () => {
     pushDiagnosticsRecord(rec({ msg: 'a', sessionId: 'sess-1' }));
     pushDiagnosticsRecord(rec({ msg: 'b', sessionId: 'sess-2' }));

@@ -19,6 +19,7 @@ import {
 } from '../diagnostics-buffer.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../../observability/operational-metrics.js';
 import type { SessionRuntime } from '../types.js';
+import type { LogRecord } from '../../logging/logger.js';
 
 const VALID_LEVELS: ReadonlySet<string> = new Set(['error', 'warn', 'info', 'debug']);
 
@@ -52,8 +53,10 @@ function parseQuery(q: URLSearchParams): ParsedDiagnosticsQuery {
 interface DiagnosticsRoutesDeps {
   metrics?: OperationalMetrics;
   sessionRegistry?: {
-    listAll(): Promise<Array<{ sdkType: string; status: string }>>;
+    listAll(): Promise<Array<{ id?: string; sdkType: string; status: string }>>;
   };
+  /** Returns true only for sessions exposed through the Internal API shadow path. */
+  isVisibleSession?: (sessionId: string) => Promise<boolean>;
   workerSummary?: () => unknown;
 }
 
@@ -62,17 +65,72 @@ export function createDiagnosticsRoutes(deps: DiagnosticsRoutesDeps = {}) {
 
   async function operationalSnapshot() {
     const entries = await deps.sessionRegistry?.listAll().catch(() => []) ?? [];
-    const byRuntime: Record<Exclude<SessionRuntime, 'commandcode'>, number> & Partial<Record<'commandcode', number>> = { pi: 0, claude: 0, opencode: 0, antigravity: 0 };
+    const byRuntime: Record<SessionRuntime, number> = { pi: 0, claude: 0, opencode: 0, antigravity: 0, commandcode: 0 };
     const byStatus = { running: 0, idle: 0, error: 0 };
-    for (const entry of entries) {
+    const visibleEntries = deps.isVisibleSession
+      ? (await Promise.all(entries.map(async (entry) => entry.id && await deps.isVisibleSession!(entry.id) ? entry : undefined))).filter((entry): entry is typeof entries[number] => entry !== undefined)
+      : entries.filter((entry) => entry.sdkType !== 'commandcode');
+    for (const entry of visibleEntries) {
       if (entry.sdkType in byRuntime) byRuntime[entry.sdkType as SessionRuntime] += 1;
       if (entry.status in byStatus) byStatus[entry.status as keyof typeof byStatus] += 1;
     }
     return {
       ...metrics.snapshot(),
-      sessions: { total: entries.length, byRuntime, byStatus },
+      sessions: { total: visibleEntries.length, byRuntime, byStatus },
       ...(deps.workerSummary ? { workers: deps.workerSummary() } : {}),
     };
+  }
+
+  async function visibleSessionContext(): Promise<Set<string> | undefined> {
+    if (!deps.isVisibleSession || !deps.sessionRegistry) return undefined;
+    const entries = await deps.sessionRegistry.listAll().catch(() => []);
+    const visibleIds = new Set<string>();
+    await Promise.all(entries.map(async (entry) => {
+      if (entry.id && await deps.isVisibleSession!(entry.id)) visibleIds.add(entry.id);
+    }));
+    return visibleIds;
+  }
+
+  function isVisibleDiagnosticRecord(record: LogRecord, visibleIds: Set<string> | undefined): boolean {
+    if (!visibleIds) return record.runtime !== 'commandcode';
+    // Any session-correlated record must resolve to an Internal API-visible
+    // registry entry. This also fails closed when a browser Command Code
+    // registry projection was removed during a policy change or restart.
+    if (record.sessionId) return visibleIds.has(record.sessionId);
+    // Unscoped Command Code records are never safe to expose. Other runtime
+    // logs remain process-level operational evidence.
+    return record.runtime !== 'commandcode';
+  }
+
+  function diagnosticView(query: ParsedDiagnosticsQuery, records: LogRecord[], visibleIds: Set<string> | undefined): {
+    recentLogs: LogRecord[];
+    recentErrors: LogRecord[];
+    summary: ReturnType<typeof getDiagnosticsSummary>;
+  } {
+    const logLimit = clampLimit(query.limit, 200);
+    const errorLimit = clampLimit(query.limit, 50);
+    const visibleRecords = records.filter((record) => isVisibleDiagnosticRecord(record, visibleIds));
+    const errors = visibleRecords.filter((record) => record.level === 'error');
+    return {
+      recentLogs: visibleRecords.slice(-logLimit),
+      recentErrors: errors.slice(-errorLimit),
+      summary: {
+        bufferedRecords: visibleRecords.length,
+        errorCount: errors.length,
+        warnCount: visibleRecords.filter((record) => record.level === 'warn').length,
+        oldestTs: visibleRecords[0]?.ts,
+        newestTs: visibleRecords[visibleRecords.length - 1]?.ts,
+      },
+    };
+  }
+
+  async function buildDiagnosticView(query: ParsedDiagnosticsQuery) {
+    const sessionContext = await visibleSessionContext();
+    // The ring buffer is bounded to 1000 records, so this retrieves the
+    // complete filtered candidate set before applying visibility and output
+    // limits. This keeps summary counts truthful after redaction.
+    const records = getRecentLogs({ ...query, limit: 1000 });
+    return diagnosticView(query, records, sessionContext);
   }
 
   async function handleGetDiagnostics(
@@ -80,13 +138,8 @@ export function createDiagnosticsRoutes(deps: DiagnosticsRoutesDeps = {}) {
     res: ServerResponse,
     query: URLSearchParams,
   ): Promise<void> {
-    const q = parseQuery(query);
-    sendJson(res, 200, {
-      recentLogs: getRecentLogs(q),
-      recentErrors: getRecentErrors(q),
-      summary: getDiagnosticsSummary(q),
-      operational: await operationalSnapshot(),
-    });
+    const view = await buildDiagnosticView(parseQuery(query));
+    sendJson(res, 200, { ...view, operational: await operationalSnapshot() });
   }
 
   async function handleGetSessionDiagnostics(
@@ -95,17 +148,20 @@ export function createDiagnosticsRoutes(deps: DiagnosticsRoutesDeps = {}) {
     sessionId: string,
     query: URLSearchParams,
   ): Promise<void> {
-    const q = parseQuery(query);
-    sendJson(res, 200, {
-      sessionId,
-      recentLogs: getRecentLogs({ ...q, sessionId }),
-      recentErrors: getRecentErrors({ ...q, sessionId }),
-      summary: getDiagnosticsSummary({ ...q, sessionId }),
-      operational: await operationalSnapshot(),
-    });
+    if (deps.isVisibleSession && !(await deps.isVisibleSession(sessionId))) {
+      sendJson(res, 404, { error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    const view = await buildDiagnosticView({ ...parseQuery(query), sessionId });
+    sendJson(res, 200, { sessionId, ...view, operational: await operationalSnapshot() });
   }
 
   return { handleGetDiagnostics, handleGetSessionDiagnostics };
+}
+
+function clampLimit(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(1000, Math.max(1, Math.floor(value as number)));
 }
 
 function sendJson(res: ServerResponse, statusCode: number, data: unknown): void {

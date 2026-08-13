@@ -151,8 +151,15 @@ export class InternalApiServer {
     this.commandCodeService = deps.commandCodeService ?? new CommandCodeService({
       config: {
         enabled: config.commandCodeEnabled,
+        shadowEnabled: config.commandCodeEnabled,
+        browserEnabled: config.commandCodeBrowserEnabled,
+        browserAllowedModels: config.commandCodeBrowserAllowedModels,
+        browserAllowedCwdRoots: config.commandCodeBrowserAllowedCwdRoots,
+        browserAuthFile: config.commandCodeBrowserAuthFile,
+        browserRuntimeRoots: config.commandCodeBrowserRuntimeRoots,
         executablePath: config.commandCodeExecutablePath,
         stateDir: config.commandCodeStateDir,
+        nativeHomeDir: config.commandCodeNativeHomeDir,
         allowedCwdRoots: config.commandCodeAllowedCwdRoots,
         expectedVersion: config.commandCodeExpectedVersion,
         maxTurns: config.commandCodeMaxTurns,
@@ -203,7 +210,7 @@ export class InternalApiServer {
       // the runtime confirms it has stopped, or a 30s drain timeout (quarantine).
       isRuntimeQuiescent: async (sessionId) => {
         try {
-          const commandCodeEntry = await this.commandCodeService.getSession(sessionId);
+          const commandCodeEntry = await this.commandCodeService.getShadowSession(sessionId);
           if (commandCodeEntry) return !this.commandCodeService.isRunning(sessionId);
           const entry = await this.sessionRegistry.get(sessionId);
           if (!entry) return true; // session gone -> quiescent
@@ -318,6 +325,12 @@ export class InternalApiServer {
 
     const diagnosticsRoutes = createDiagnosticsRoutes({
       sessionRegistry: this.sessionRegistry,
+      isVisibleSession: async (sessionId) => {
+        const commandCode = await this.commandCodeService.getShadowSession(sessionId);
+        if (commandCode) return true;
+        const entry = await this.sessionRegistry.get(sessionId);
+        return Boolean(entry && entry.sdkType !== 'commandcode');
+      },
       workerSummary: () => {
         const pool = getWorkerPool();
         const crashes = pool.getCrashStats();
@@ -359,7 +372,14 @@ export class InternalApiServer {
         claude: this.claudeService,
         opencode: this.opencodeService,
         antigravity: this.antigravityService,
+        commandcode: this.commandCodeService,
       },
+      isSessionAllowed: async (record) => record.runtime !== 'commandcode'
+        || (record.access === 'browser'
+          ? record.sessionId === record.sessionPath
+            && await this.commandCodeService.isBrowserSession(record.sessionId)
+          : await this.commandCodeService.getShadowSession(record.sessionId) !== undefined
+            || await this.commandCodeService.getShadowSession(record.sessionPath) !== undefined),
       tailMaxChars: config.notificationsTailMaxChars,
       publicBaseUrl: config.notificationsPublicBaseUrl ?? config.allowedOrigins[0],
       debounceMs: config.notificationsDebounceMs,
@@ -384,6 +404,7 @@ export class InternalApiServer {
     const notificationRoutes = createNotificationsRoutes({
       manager: notificationManager,
       sessionRegistry: this.sessionRegistry,
+      isShadowCommandCodeSession: (sessionId) => this.commandCodeService.getShadowSession(sessionId).then((record) => record !== undefined),
     });
 
     // Capture recent structured logs into the diagnostics ring buffer so the

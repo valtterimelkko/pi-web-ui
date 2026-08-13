@@ -123,6 +123,8 @@ describe('createModelsRoutes — handleListModels', () => {
       commandCodeService: {
         isEnabled: vi.fn().mockReturnValue(true),
         isAvailable: vi.fn().mockReturnValue(true),
+        isShadowAvailable: vi.fn().mockReturnValue(true),
+        isShadowEnabled: vi.fn().mockReturnValue(true),
         getModels: vi.fn().mockReturnValue([
           {
             id: 'qwen/qwen3.8-max', displayName: 'Qwen 3.8 Max', provider: 'command-code', reasoning: true,

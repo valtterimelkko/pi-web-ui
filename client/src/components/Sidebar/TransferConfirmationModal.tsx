@@ -35,6 +35,7 @@ const RUNTIME_LABELS: Record<string, string> = {
   claude: 'Claude Direct',
   opencode: 'OpenCode Direct',
   antigravity: 'Antigravity',
+  commandcode: 'Command Code',
 };
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -53,6 +54,7 @@ function SdkBadge({ sdkType }: { sdkType: string }) {
     claude: 'bg-amber-100 text-amber-700',
     opencode: 'bg-emerald-100 text-emerald-700',
     antigravity: 'bg-violet-100 text-violet-700',
+    commandcode: 'bg-slate-100 text-slate-700',
   };
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${colorMap[sdkType] ?? 'bg-gray-100 text-gray-700'}`}>
@@ -94,6 +96,8 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
   const opencodeAuthError = useSessionStore(s => s.opencodeAuthError);
   const antigravityAvailable = useSessionStore(s => s.antigravityAvailable);
   const antigravityAuthError = useSessionStore(s => s.antigravityAuthError);
+  const commandCodeAvailable = useSessionStore(s => s.commandCodeAvailable);
+  const commandCodeEnabled = useSessionStore(s => s.commandCodeEnabled);
   const localSwitchSession = useSessionStore((s) => s.switchSession);
   const { switchSession: wsSwitchSession } = useWebSocket();
   const recentFolders = useUIStore((s) => s.recentFolders);
@@ -243,7 +247,7 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
 
                 {/* Runtime Selector */}
                 <p className="text-xs font-medium text-gray-500 mb-1.5">Runtime</p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   <button
                     onClick={() => setNewTargetRuntime('pi')}
                     className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
@@ -307,6 +311,24 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
                     <span className="text-sm font-medium">Antigravity</span>
                     <span className="text-xs text-gray-500 mt-0.5">
                       {antigravityAvailable ? 'Gemini • Google' : (antigravityAuthError || 'Not available')}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => commandCodeAvailable && commandCodeEnabled && setNewTargetRuntime('commandcode')}
+                    disabled={!commandCodeAvailable || !commandCodeEnabled}
+                    title={!commandCodeEnabled ? 'Command Code browser runtime is disabled' : (!commandCodeAvailable ? 'Not available' : undefined)}
+                    className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
+                      !commandCodeAvailable || !commandCodeEnabled
+                        ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                        : newTargetRuntime === 'commandcode'
+                        ? 'border-slate-700 bg-slate-100 text-gray-900'
+                        : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                    }`}
+                  >
+                    <span className="text-sm font-medium">Command Code</span>
+                    <span className="text-xs text-gray-500 mt-0.5">
+                      {commandCodeAvailable ? 'Contained' : 'Not available'}
                     </span>
                   </button>
                 </div>

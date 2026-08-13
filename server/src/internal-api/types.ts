@@ -10,6 +10,7 @@ import type { NormalizedEvent, ScreenView } from '@pi-web-ui/shared';
 import type { CommandCodeEffort as NativeCommandCodeEffort } from '../command-code/command-code-model-catalog.js';
 
 export type CommandCodeEffort = NativeCommandCodeEffort;
+export type CommandCodeEffortSource = 'explicit' | 'default' | 'automatic' | 'none';
 
 // ─── Verbosity levels ────────────────────────────────────────────────────────
 
@@ -232,7 +233,7 @@ export interface BatchCreateResultItem {
   effort?: CommandCodeEffort;
   requestedEffort?: CommandCodeEffort;
   acceptedEffort?: CommandCodeEffort;
-  effortSource?: 'explicit' | 'default' | 'none';
+  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   effortCapabilityHash?: string;
   cwd?: string;
@@ -403,11 +404,11 @@ export interface SessionEvidenceResponse {
   lastActivity: string;
   executionInstanceId: string;
   invocationRole?: 'conductor-root' | 'implementation-child';
-  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide';
+  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide' | 'browser-contained';
   effort?: CommandCodeEffort;
   requestedEffort?: CommandCodeEffort;
   acceptedEffort?: CommandCodeEffort;
-  effortSource?: 'explicit' | 'default' | 'none';
+  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   effectiveEffort?: CommandCodeEffort;
   effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
@@ -540,7 +541,7 @@ export interface CreateSessionResponse {
   effort?: CommandCodeEffort;
   requestedEffort?: CommandCodeEffort;
   acceptedEffort?: CommandCodeEffort;
-  effortSource?: 'explicit' | 'default' | 'none';
+  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   effortCapabilityHash?: string;
   /** Configured runtime instance resolved for the created session. */
@@ -573,7 +574,7 @@ export interface SessionInfo {
   effort?: CommandCodeEffort;
   requestedEffort?: CommandCodeEffort;
   acceptedEffort?: CommandCodeEffort;
-  effortSource?: 'explicit' | 'default' | 'none';
+  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   effectiveEffort?: CommandCodeEffort;
   effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
@@ -629,7 +630,7 @@ export interface SessionControlResponse {
   effort?: CommandCodeEffort;
   requestedEffort?: CommandCodeEffort;
   acceptedEffort?: CommandCodeEffort;
-  effortSource?: 'explicit' | 'default' | 'none';
+  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   effectiveEffort?: CommandCodeEffort;
   effortCapabilityHash?: string;
@@ -840,7 +841,7 @@ export interface RunReceipt {
   effort?: CommandCodeEffort;
   requestedEffort?: CommandCodeEffort;
   acceptedEffort?: CommandCodeEffort;
-  effortSource?: 'explicit' | 'default' | 'none';
+  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   effectiveEffort?: CommandCodeEffort;
   effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
@@ -851,7 +852,7 @@ export interface RunReceipt {
   outputEvidence?: RunOutputEvidence;
   /** Additive Command Code role/profile projection; raw argv remains private. */
   invocationRole?: 'conductor-root' | 'implementation-child';
-  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide';
+  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide' | 'browser-contained';
   /** Requested prompt mode (prompt / follow_up / steer). */
   mode?: PromptMode;
   /** Actual dispatch mode after state-aware promotion/rejection decisions. */

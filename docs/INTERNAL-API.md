@@ -56,7 +56,7 @@ Under the hood, each runtime slot exists for a different reason:
 | **Claude Code** | profile-driven SDK backend, legacy `claude -p`, **or** the channel-backed Claude Code path | Claude's monthly subscription does not allow external coding-agent harnesses to use Claude via the Anthropic API — Claude Code must be the agent environment. Pi Web UI therefore runs Claude Code directly, normalizes SDK messages, legacy NDJSON, or channel/plugin events into the common event model, and owns the replay/persistence layer so sessions survive restarts. Explicit provider profiles also let the same browser UI route Claude sessions through native Claude subscription or Anthropic-compatible providers such as GLM/Z.ai. |
 | **OpenCode** | `opencode serve` HTTP/SSE backend | Z.AI's GLM models (via the coding-plan provider) currently recognise OpenCode as a valid coding-agent harness but not Pi. Rather than bypass this, Pi Web UI integrates with the OpenCode server backend, adapting OpenCode SSE events into the same common event model. The OpenCode backend owns transcript storage; Pi Web UI stores registry metadata and replay transforms. |
 | **Antigravity** | `agy -p` subprocess-per-turn backend | Google Gemini via Antigravity CLI. Pi Web UI runs `agy` directly, stores Pi-owned turn logs for replay, and correlates them with agy-owned conversation SQLite DBs for follow-up continuity. |
-| **Command Code** | feature-gated `cmd -p --output-format json` subprocess | Server-local Internal API only. Exact routes are `qwen/qwen3.8-max` and `meta/muse-spark-1.2-contributor`; browser/shared runtime types, WebSocket, transfer, notifications, and default disposable validation remain unchanged. Creation requires a short-lived token-bound HMAC role attestation and a cwd under `COMMAND_CODE_ALLOWED_CWD_ROOTS`; the server maps roles to fixed profiles and never accepts raw CLI flags. |
+| **Command Code** | separately gated `cmd -p --output-format json` subprocess | The authenticated Internal API retains narrow Agent OS shadow routes; the browser can be enabled separately only with a non-empty exact model allowlist, canonical workspace roots, a browser-only credential, pinned read-only runtime mounts, and Bubblewrap containment with an unshared network namespace. The browser path is represented in shared/WebSocket/session-transfer/notification surfaces, while MCP and disposable `--runtime all` remain intentionally excluded. Internal API shadow creation requires a short-lived token-bound HMAC role attestation and a cwd under `COMMAND_CODE_ALLOWED_CWD_ROOTS`; browser requests cannot choose executable paths, argv, environment, auth paths, native ids, or permission profiles. Exact model ids and native effort values come from fresh discovery. |
 
 All runtime paths are surfaced through a **unified session list** so the
 runtime difference is transparent at the UI level — you create sessions,
@@ -127,6 +127,12 @@ the same ones the web UI uses.
 The current surface is strong enough for the full Tier-1 orchestration loop:
 - discover runtimes and models
 - create child sessions on different runtime paths
+
+Command Code is a special case: the Internal API exposes only its attested
+Agent OS shadow profile. Browser-contained Command Code sessions are not visible
+through Internal API session/diagnostic/notification/receipt routes, and
+Internal API transfer never creates or targets them. Browser transfer remains a
+WebSocket-only surface with the active browser containment policy.
 - dispatch prompts
 - monitor progress
 - wait for completion
@@ -360,7 +366,7 @@ Models are always queried live — new models appear immediately. Each model may
 
 Pi model levels come from the Pi SDK catalogue. Claude's base `sonnet` and `opus` aliases and provider profiles that support the Claude/Z.AI effort ceiling advertise `max`; `haiku` keeps the legacy ceiling. A client should use the selected model's `thinkingLevels` before requesting `max`.
 
-When Command Code is enabled, its entries appear only after a fresh exact-version/model/effort discovery probe. The initial routes are `qwen/qwen3.8-max` and `meta/muse-spark-1.2-contributor`; Qwen advertises native `effortLevels: ["low", "medium", "xhigh"]` with `defaultEffort: "medium"`, while Muse advertises `supportsEffort: false` and an empty level list. Native `effort` is distinct from generic `thinkingLevel`; unknown or drifted capability metadata fails closed. The runtime remains absent from browser/shared protocol types and is not included in disposable `--runtime all` validation.
+When Command Code is enabled, its entries appear only after a fresh exact-version/model/effort discovery probe. The initial shadow routes are `qwen/qwen3.8-max` and `meta/muse-spark-1.2-contributor`; Qwen advertises native `effortLevels: ["low", "medium", "xhigh"]` with `defaultEffort: "medium"`, while Muse advertises `supportsEffort: false` and an empty level list. Native `effort` is distinct from generic `thinkingLevel`; unknown or drifted capability metadata fails closed. Browser sessions require a separate non-empty exact model allowlist, canonical non-symlink workspace roots, a browser-only credential, pinned read-only runtime roots, and Bubblewrap's unshared network namespace. The runtime is excluded from MCP and disposable `--runtime all` validation.
 
 **Query parameters:**
 
@@ -1245,10 +1251,14 @@ GET /api/v1/sessions/:sessionId/diagnostics   # scoped to one session
   "summary": { "bufferedRecords": 35, "errorCount": 0, "warnCount": 1, "oldestTs": "...", "newestTs": "..." },
   "operational": {
     "turns": { "accepted": 12, "completed": 10, "failed": 1 },
-    "sessions": { "total": 4, "byRuntime": { "pi": 2, "claude": 1, "opencode": 1, "antigravity": 0 }, "byStatus": { "running": 0, "idle": 4, "error": 0 } }
+    "sessions": { "total": 4, "byRuntime": { "pi": 2, "claude": 1, "opencode": 1, "antigravity": 0, "commandcode": 0 }, "byStatus": { "running": 0, "idle": 4, "error": 0 } }
   }
 }
 ```
+
+The session-scoped diagnostics route returns `404 SESSION_NOT_FOUND` for a
+browser-contained Command Code id. Global operational counts include only
+Internal-API-visible Command Code shadow records; browser records are excluded.
 
 Each record is a scrubbed structured log line. Secret values (tokens, passwords,
 `Bearer …`, `sk-…` keys, sensitive keys like `apiKey`/`authorization`) are

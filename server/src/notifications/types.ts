@@ -6,8 +6,8 @@
  * channels, routes) programs against. See docs/NOTIFICATIONS.md.
  */
 
-/** The four normalized runtimes Pi Web UI unifies into one event stream. */
-export type NotificationRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity';
+/** The normalized runtimes Pi Web UI unifies into one event stream. */
+export type NotificationRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
 
 /** How a notification was produced. `agent_end` = the agent yielded control. */
 export type NotificationKind = 'agent_end' | 'explicit';
@@ -20,6 +20,8 @@ export interface OptInRecord {
   optedInAt: string; // ISO timestamp
   /** Operator-friendly name surfaced in the message header. */
   label?: string;
+  /** Surface that owns this opt-in; browser-contained sessions are never internal. */
+  access?: 'internal' | 'browser';
 }
 
 /** A single, already-formatted (Telegram-ready) notification. */

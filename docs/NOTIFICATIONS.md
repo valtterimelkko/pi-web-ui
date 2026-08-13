@@ -3,8 +3,9 @@
 A unified, **one-way** notification subsystem inside Pi Web UI that pings the
 operator on **Telegram** when an agent session **yields control back to the
 human** — i.e. on `agent_end` (the agent either finished its work or stopped to
-ask a question). It works **reliably across all four runtimes** (Pi, Claude,
-OpenCode, Antigravity) and is architected to extend cleanly to richer
+ask a question). It works across the five runtime families when their relevant
+feature gate is enabled (Pi, Claude, OpenCode, Antigravity, and contained
+Command Code browser sessions) and is architected to extend cleanly to richer
 notifications later without a rewrite.
 
 > See [`NOTIFICATION-LAYER-MVP-PLAN.md`](./NOTIFICATION-LAYER-MVP-PLAN.md) for
@@ -14,7 +15,7 @@ notifications later without a rewrite.
 
 ## 1. Intent
 
-- **Trigger:** `agent_end` only. In this operator's setup all runtimes
+- **Trigger:** `agent_end` only. In this operator's setup all enabled runtimes
   auto-approve, so an agent only stops when it finished or wrote its final
   question — both are `agent_end`. "Done" and "has a question" are the *same
   event* with different *content*; the operator reads the tail and decides.
@@ -379,12 +380,16 @@ Write a **semi-comprehensive** body: what you did, the outcome
 for `question` / `blocked` — exactly what decision or input you need from the
 operator. The title is the one-line headline; the body is the detail.
 
-### Works across all four harnesses
+### Works across all enabled harnesses
 
 `claude`, `glm`, `pi`, `opencode`, and `agy` each expose a Bash tool and
 operate at the repo root, so the same script and the same activation prompt
-work for all of them — one mechanism, not four. (`glm` is just `claude` run
-with GLM/Z.ai env, so it shares Claude Code's Bash tool entirely.)
+work for all of them — one mechanism, not five. Contained Command Code browser
+sessions use the same browser-facing notification path when that gate is
+enabled. They are intentionally not opt-in-able through the Internal API shadow
+route; browser identities are checked against the active browser policy.
+(`glm` is just `claude` run with GLM/Z.ai env, so it shares Claude Code's Bash
+tool entirely.)
 
 ### Security
 

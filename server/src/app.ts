@@ -32,6 +32,7 @@ import { dirname, join } from 'path';
  */
 export interface NotificationsWebMount {
   getManager: () => NotificationManager | null;
+  resolveSession?: (sessionId: string, runtime: import('./notifications/types.js').NotificationRuntime, sessionPath: string) => Promise<boolean>;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -92,7 +93,10 @@ export function createApp(notifications?: NotificationsWebMount): express.Applic
   if (notifications) {
     app.use(
       '/api/sessions',
-      createNotificationsWebRouter({ getManager: notifications.getManager }),
+      createNotificationsWebRouter({
+        getManager: notifications.getManager,
+        resolveSession: notifications.resolveSession,
+      }),
     );
   }
 

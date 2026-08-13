@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import type { CommandCodeEffort, SdkType } from '@pi-web-ui/shared';
 import { useSessionStore, useDraftStore } from '../../store';
 import { useNavigationStore } from '../../store/navigationStore';
 import { useUIStore } from '../../store/uiStore';
@@ -99,8 +100,8 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
     listRef.current?.scrollToBottom();
   };
 
-  const handleCreateSession = (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity', model?: string, thinkingLevel?: string) => {
-    createNewSession(cwd, sdkType, model, thinkingLevel);
+  const handleCreateSession = (cwd?: string, sdkType?: SdkType, model?: string, thinkingLevel?: string, effort?: CommandCodeEffort) => {
+    createNewSession(cwd, sdkType, model, thinkingLevel, effort);
   };
 
   return (

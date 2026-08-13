@@ -1,7 +1,7 @@
 // WebSocket Protocol Types
 // Defines the message format for client-server communication
 
-import type { SubagentToolSummary } from '@pi-web-ui/shared';
+import type { CommandCodeEffort, CommandCodeModelInfo, SdkType, SubagentToolSummary } from '@pi-web-ui/shared';
 
 // ============================================================================
 // Multi-Session Protocol Types
@@ -106,7 +106,7 @@ export type ClientMessage =
   | { type: 'steer'; message: string }
   | { type: 'follow_up'; message: string }
   | { type: 'abort' }
-  | { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' | 'opencode' }
+  | { type: 'new_session'; cwd?: string; sdkType?: SdkType; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort }
   | { type: 'switch_session'; sessionPath: string }
   | { type: 'get_sessions'; cwd?: string }
   | { type: 'get_session_tree'; sessionId: string }
@@ -115,6 +115,7 @@ export type ClientMessage =
   | { type: 'navigate_tree'; entryId: string; summarize?: boolean }
   | { type: 'set_model'; modelId: string }
   | { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }
+  | { type: 'set_effort'; effort?: CommandCodeEffort }
   | { type: 'compact'; customInstructions?: string }
   | { type: 'goal_control'; sessionId: string; action: 'pause' | 'resume' | 'clear' }
   | { type: 'extension_ui_response'; response: { id: string; approved?: boolean; value?: unknown; cancelled?: boolean } }
@@ -135,6 +136,10 @@ export interface SessionInfo {
   messageCount: number;
   cwd: string;
   name?: string;
+  sdkType?: SdkType;
+  model?: string;
+  effort?: CommandCodeEffort;
+  effortLevels?: CommandCodeEffort[];
   createdAt?: string;
   lastActivity?: string;
 }
@@ -169,6 +174,8 @@ export interface SessionStats {
   };
   cost?: number;
   model?: string;
+  effort?: CommandCodeEffort;
+  effortLevels?: CommandCodeEffort[];
   contextWindow?: number;
   contextUsed?: number;
   contextPercent?: number;
@@ -190,11 +197,13 @@ export type ServerMessage =
   | { type: 'connection_status'; status: string }
   | { type: 'error'; message: string; code?: string; sessionPath?: string }
   | { type: 'sessions_list'; sessions: SessionInfo[] }
-  | { type: 'session_created'; sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' }
-  | { type: 'session_switched'; sessionId: string; sessionPath: string; model?: string; thinkingLevel?: string; contextWindow?: number; contextUsed?: number; contextPercent?: number; messages?: SessionMessage[]; fileTimestamp?: number; isStreaming?: boolean }
+  | { type: 'session_created'; sessionId: string; sessionPath: string; sdkType?: SdkType; model?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; effortSource?: 'explicit' | 'default' | 'automatic' | 'none' }
+  | { type: 'session_switched'; sessionId: string; sessionPath: string; sdkType?: SdkType; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; effortSource?: 'explicit' | 'default' | 'automatic' | 'none'; contextWindow?: number; contextUsed?: number; contextPercent?: number; messages?: SessionMessage[]; fileTimestamp?: number; isStreaming?: boolean }
   | { type: 'session_tree'; tree: TreeNode[] }
   | { type: 'session_info'; stats: SessionStats }
   | { type: 'model_changed'; modelId: string }
+  | { type: 'effort_changed'; effort?: CommandCodeEffort; effortSource: 'explicit' | 'default' | 'automatic' | 'none'; effortLevels?: CommandCodeEffort[] }
+  | { type: 'commandcode_available'; available: boolean; enabled: boolean; models: CommandCodeModelInfo[]; error: string | null }
   | { type: 'thinking_level_changed'; level: string }
   | { type: 'compaction_result'; summary: string; tokensBefore: number; contextWindow?: number; contextUsed?: number; contextPercent?: number }
   | { type: 'context_update'; sessionId: string; contextWindow?: number; contextUsed?: number; contextPercent?: number }
@@ -372,7 +381,7 @@ export interface TransferSessionContext {
   sourceSessionId: string;
   targetSessionId?: string;
   createNew?: boolean;
-  targetSdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity';
+  targetSdkType?: SdkType;
   targetCwd?: string;
   scope: 'visible_recent' | 'visible_full';
   sourceDisplayName?: string;

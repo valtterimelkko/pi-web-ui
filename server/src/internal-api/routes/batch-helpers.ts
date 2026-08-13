@@ -15,7 +15,7 @@ import type { SessionRegistryManager } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
 import type { CommandCodeService } from '../../command-code/command-code-service.js';
 import type { CommandCodeEffort } from '../../command-code/command-code-model-catalog.js';
-import type { BatchCreateEntry, SessionRuntime } from '../types.js';
+import type { BatchCreateEntry, CommandCodeEffortSource, SessionRuntime } from '../types.js';
 import { unlink } from 'fs/promises';
 import { config } from '../../config.js';
 import { ErrorCode } from '../error-codes.js';
@@ -56,7 +56,7 @@ export interface CreatedSession {
   modelSelector?: string;
   executionInstanceId?: string;
   effort?: CommandCodeEffort;
-  effortSource?: 'explicit' | 'default' | 'none';
+  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   effortCapabilityHash?: string;
   cwd: string;
@@ -72,10 +72,10 @@ export async function createOneSession(params: {
 
   switch (runtime) {
     case 'commandcode': {
-      if (!deps.commandCodeService?.isEnabled()) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code runtime is disabled');
+      if (!deps.commandCodeService || !(deps.commandCodeService.isShadowAvailable?.() ?? deps.commandCodeService.isAvailable()) || !(deps.commandCodeService.isShadowEnabled?.() ?? deps.commandCodeService.isEnabled())) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code shadow runtime is disabled or unavailable');
       if (!deps.commandCodeService.isAvailable()) throw new RuntimeOpError(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code runtime is not available');
       if (entry.model !== 'qwen/qwen3.8-max' && entry.model !== 'meta/muse-spark-1.2-contributor') {
-        throw new RuntimeOpError(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code requires one exact allowlisted model id');
+        throw new RuntimeOpError(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code shadow routes require one exact allowlisted model id');
       }
       if (entry.invocationRole !== 'conductor-root' && entry.invocationRole !== 'implementation-child') {
         throw new RuntimeOpError(ErrorCode.COMMANDCODE_ROLE_REFUSED, 'Command Code invocationRole is required');

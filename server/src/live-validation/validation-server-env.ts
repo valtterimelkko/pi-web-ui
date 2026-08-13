@@ -8,12 +8,19 @@ interface ValidationIsolationInput {
   claudeWsPort: string;
   claudeHookPort: string;
   opencodePort: string;
+  commandCodeFixture?: boolean;
+  commandCodeBrowserFixture?: boolean;
 }
 
 export function buildValidationIsolationEnv(
   input: ValidationIsolationInput,
 ): NodeJS.ProcessEnv {
   const piSessionsDir = join(input.validationDir, 'pi-sessions');
+  const commandCodeFixture = input.commandCodeFixture === true;
+  const commandCodeBrowserFixture = input.commandCodeBrowserFixture === true;
+  if (commandCodeBrowserFixture && !commandCodeFixture) {
+    throw new Error('Command Code browser fixture requires the Command Code fixture executable.');
+  }
 
   return {
     PI_WEB_UI_VALIDATION_MODE: 'true',
@@ -29,7 +36,24 @@ export function buildValidationIsolationEnv(
     INTERNAL_API_RUN_RECEIPTS_DIR: join(input.validationDir, 'run-receipts'),
     NOTIFICATIONS_DIR: join(input.validationDir, 'notifications'),
     INTERNAL_API_PIN_DIR: join(input.validationDir, 'pins'),
+    // Command Code is excluded from the normal disposable all-runtime matrix;
+    // the explicit fixture mode below is deterministic and provider-free.
+    // Browser fixture validation intentionally keeps the Internal API shadow
+    // gate separate; it is exercised through the authenticated WebSocket path.
+    PI_INTERNAL_API_COMMANDCODE_ENABLED: commandCodeFixture && !commandCodeBrowserFixture ? 'true' : 'false',
+    PI_COMMAND_CODE_BROWSER_ENABLED: commandCodeBrowserFixture ? 'true' : 'false',
+    PI_COMMAND_CODE_BROWSER_ALLOWED_MODELS: commandCodeBrowserFixture ? 'qwen/qwen3.8-max' : '',
+    PI_COMMAND_CODE_BROWSER_ALLOWED_CWD_ROOTS: commandCodeBrowserFixture ? join(input.validationDir, 'workspace') : '',
+    PI_COMMAND_CODE_BROWSER_AUTH_FILE: commandCodeBrowserFixture ? join(input.validationDir, 'command-code-browser-auth.json') : '',
+    PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS: commandCodeBrowserFixture
+      ? [join(input.validationDir, 'command-code-fixture-bin'), '/usr/bin', '/usr/lib', '/usr/lib64'].join(',')
+      : '',
+    COMMAND_CODE_EXECUTABLE_PATH: commandCodeFixture
+      ? join(input.validationDir, 'command-code-fixture-bin', 'cmd')
+      : '/root/.npm-global/bin/cmd',
+    COMMAND_CODE_EXPECTED_VERSION: '1.19.0',
     COMMAND_CODE_STATE_DIR: join(input.validationDir, 'command-code'),
+    COMMAND_CODE_NATIVE_HOME_DIR: join(input.validationDir, 'command-code-native-home'),
     COMMAND_CODE_ALLOWED_CWD_ROOTS: input.validationDir,
     SESSION_REGISTRY_PATH: join(input.validationDir, 'session-registry.json'),
     SESSION_DIR: piSessionsDir,

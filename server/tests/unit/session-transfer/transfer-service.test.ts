@@ -675,6 +675,55 @@ describe('TransferService', () => {
       }
     });
 
+    it('extracts Command Code normalized journal events for transfer', async () => {
+      const commandCodeMock = {
+        isBrowserAvailable: vi.fn().mockReturnValue(true),
+        isBrowserSession: vi.fn().mockResolvedValue(true),
+        isRunning: vi.fn().mockReturnValue(false),
+        getReplayEvents: vi.fn().mockResolvedValue([
+          { type: 'message_start', sessionId: 'cmd-src', timestamp: 1700000000000, data: { id: 'u1', role: 'user', content: 'Hello from Command Code' } },
+          { type: 'message_end', sessionId: 'cmd-src', timestamp: 1700000000001, data: { id: 'u1' } },
+          { type: 'message_start', sessionId: 'cmd-src', timestamp: 1700000001000, data: { id: 'a1', role: 'assistant' } },
+          { type: 'message_update', sessionId: 'cmd-src', timestamp: 1700000001001, data: { id: 'a1', assistantMessageEvent: { type: 'text_delta', delta: 'Safe answer' } } },
+          { type: 'message_end', sessionId: 'cmd-src', timestamp: 1700000001002, data: { id: 'a1' } },
+        ]),
+      };
+      const config = makeConfig({ commandCodeService: commandCodeMock as never, allowBrowserCommandCodeTarget: true });
+      (config.registry.get as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => {
+        if (id === 'cmd-src') return makeRegistryEntry({ id: 'cmd-src', sdkType: 'commandcode', path: 'cmd-src' });
+        if (id === 'tgt-1') return makeRegistryEntry({ id: 'tgt-1', sdkType: 'claude' });
+        return undefined;
+      });
+      const claudeMock = makeClaudeServiceMock();
+      config.claudeService = claudeMock as never;
+
+      const result = await new TransferService(config).executeTransfer({
+        sourceSessionId: 'cmd-src',
+        targetSessionId: 'tgt-1',
+        scope: 'visible_full',
+      });
+
+      expect(result.success, JSON.stringify(result)).toBe(true);
+      expect(claudeMock.sendPrompt.mock.calls[0][1]).toContain('Safe answer');
+      expect(claudeMock.sendPrompt.mock.calls[0][1]).toContain('Hello from Command Code');
+    });
+
+    it('refuses Command Code transfer when the browser policy no longer permits the source', async () => {
+      const commandCodeMock = {
+        isBrowserAvailable: vi.fn().mockReturnValue(false),
+        isBrowserSession: vi.fn().mockResolvedValue(false),
+        getReplayEvents: vi.fn(),
+      };
+      const config = makeConfig({ commandCodeService: commandCodeMock as never });
+      (config.registry.get as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => id === 'cmd-src'
+        ? makeRegistryEntry({ id: 'cmd-src', sdkType: 'commandcode', path: 'cmd-src' })
+        : undefined);
+      const result = await new TransferService(config).executeTransfer({ sourceSessionId: 'cmd-src', targetSessionId: 'tgt-1', scope: 'visible_full' });
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toMatch(/browser transfer policy/i);
+      expect(commandCodeMock.getReplayEvents).not.toHaveBeenCalled();
+    });
+
     it('handles Pi source extraction', async () => {
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-tx-test-'));
       const sessionFile = path.join(tmpDir, 'session.jsonl');

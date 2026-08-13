@@ -1,6 +1,6 @@
 # Runtime Overview
 
-Pi Web UI can present **four runtime families in one browser UI**, but you do not need to adopt all four.
+Pi Web UI can present **five runtime families in one browser UI**. Command Code is separately feature-gated and disabled by default.
 
 This guide helps you choose where to start.
 
@@ -23,6 +23,7 @@ Then add more runtimes only if they solve a real problem for you:
 | **Claude Code** | Claude Agent SDK, `claude -p`, or channel-backed Claude Code | Profile-driven SDK integration (preferred), direct CLI fallback, or PTY/plugin path | Medium-high | SDK and channel modes offer good tool visibility; legacy direct is weaker | Claude Code-centric workflows, multi-provider access (GLM 5.2 / Z.ai, etc.), and users who want backend flexibility | Medium–higher |
 | **OpenCode** | `opencode serve` | Local server/API integration | Medium | Strong normalized streaming via SSE adaptation | OpenCode-backed workflows and OpenCode/Z.AI setups | Low-medium |
 | **Antigravity** | `agy -p` | Subprocess-per-turn wrapper | Medium | No native response/tool streaming; synthetic heartbeat + replay/log driven | Gemini/Antigravity access in the same UI | Higher |
+| **Command Code** | `cmd -p` | Server-owned contained subprocess | High | Normalized NDJSON streaming, replay and native effort where advertised | Feature-gated fifth runtime with exact live model discovery | High |
 
 ## The important trust distinction
 
@@ -89,14 +90,21 @@ Read next:
 
 ## Capability summary
 
-| Capability | Pi Coding Agent | Claude Code | OpenCode | Antigravity |
-|---|---|---|---|---|
-| Unified sidebar session | Yes | Yes | Yes | Yes |
-| History replay | Yes | Yes | Yes | Yes |
-| Follow-up turns | Yes | Yes | Yes | Yes |
-| Mid-turn steer | Yes | No | No | No |
-| Approvals in UI | Extension/path dependent | SDK `AskUserQuestion` / channel permissions; not direct-CLI interactive approval | Yes | No |
-| Best companion ecosystem | Strongest | Limited | Good with plugins | Limited |
+| Capability | Pi Coding Agent | Claude Code | OpenCode | Antigravity | Command Code |
+|---|---|---|---|---|---|
+| Unified sidebar session | Yes | Yes | Yes | Yes | Browser gate |
+| History replay | Yes | Yes | Yes | Yes | Normalized journal |
+| Follow-up turns | Yes | Yes | Yes | Yes | New turn |
+| Mid-turn steer | Yes | No | No | No | No |
+| Approvals in UI | Extension/path dependent | SDK `AskUserQuestion` / channel permissions; not direct-CLI interactive approval | Yes | No | No |
+| Native effort control | Generic thinking levels | Generic thinking levels | Runtime-specific | No | Per-model, freshly discovered |
+| Best companion ecosystem | Strongest | Limited | Good with plugins | Limited | None |
+
+Command Code browser sessions require a non-empty exact model allowlist,
+canonical non-symlink workspace roots, a browser-only credential, pinned
+read-only runtime roots, and Bubblewrap with an unshared network namespace.
+The narrow attested Internal API shadow path is a separate gate; Command Code
+remains out of MCP and disposable `--runtime all` validation.
 
 ## Practical recommendations
 
@@ -124,6 +132,7 @@ But only if you already know why each one belongs.
 | **Claude Code** | `~/.pi-web-ui/claude-sessions/` + Claude native session JSONL |
 | **OpenCode** | OpenCode runtime owns transcript storage; Pi Web UI stores registry metadata and replay transforms |
 | **Antigravity** | `~/.pi-web-ui/antigravity-sessions/` + agy-owned conversation DBs |
+| **Command Code** | `~/.pi-web-ui/command-code/` private records/journals + per-session native homes |
 
 ## Companion repos
 

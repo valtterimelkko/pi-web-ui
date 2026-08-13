@@ -1,4 +1,5 @@
 import { X, Settings2, AlertCircle, RefreshCw, Info, Lock } from 'lucide-react';
+import type { CommandCodeEffort } from '@pi-web-ui/shared';
 import { useState, useEffect, useMemo } from 'react';
 import { api } from '../../lib/api';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -38,11 +39,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [currentModel, setCurrentModel] = useState<string>('');
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('medium');
   const [showThinking, setShowThinking] = useState(true);
+  const [nativeEffort, setNativeEffort] = useState<CommandCodeEffort | ''>('');
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const { setModel, setThinkingLevel: sendThinkingLevel } = useWebSocket();
+  const { setModel, setThinkingLevel: sendThinkingLevel, setEffort } = useWebSocket();
   const storeCurrentModel = useSessionStore((state) => state.currentModel);
   const storeCurrentThinkingLevel = useSessionStore((state) => state.currentThinkingLevel);
+  const storeCurrentEffort = useSessionStore((state) => state.currentEffort);
+  const storeCurrentEffortLevels = useSessionStore((state) => state.currentEffortLevels);
   const errorMessage = useSessionStore((state) => state.error);
   const currentSessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   
@@ -50,6 +54,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const isClaudeSession = useMemo(() => currentSessionSdkType === 'claude', [currentSessionSdkType]);
   const isOpenCodeSession = useMemo(() => currentSessionSdkType === 'opencode', [currentSessionSdkType]);
   const isAntigravitySession = useMemo(() => currentSessionSdkType === 'antigravity', [currentSessionSdkType]);
+  const isCommandCodeSession = useMemo(() => currentSessionSdkType === 'commandcode', [currentSessionSdkType]);
 
   // Profile entries for the locked Claude model panel (best-effort fetch).
   const [claudeProfiles, setClaudeProfiles] = useState<ClaudeProfileEntry[]>([]);
@@ -99,13 +104,19 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           setIsLoading(false);
           return;
         }
+        if (isCommandCodeSession) {
+          setModels([]);
+          setCurrentModel(storeCurrentModel || '');
+          setIsLoading(false);
+          return;
+        }
         
         // Add a timeout to prevent infinite loading (10 seconds)
         const timeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => reject(new Error('Request timeout')), 10000);
         });
 
-        const sdkTypeParam = isOpenCodeSession ? 'opencode' : isAntigravitySession ? 'antigravity' : 'pi';
+        const sdkTypeParam = isOpenCodeSession ? 'opencode' : isAntigravitySession ? 'antigravity' : isCommandCodeSession ? 'commandcode' : 'pi';
         const response = await Promise.race([
           api.get(`/api/models?sdkType=${sdkTypeParam}`) as Promise<{ models: Model[] }>,
           timeoutPromise
@@ -124,7 +135,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     };
 
     fetchModels();
-  }, [isOpen, isClaudeSession, isOpenCodeSession, isAntigravitySession, storeCurrentModel]); // Depend on runtime and current model
+  }, [isOpen, isClaudeSession, isCommandCodeSession, isOpenCodeSession, isAntigravitySession, storeCurrentModel]); // Depend on runtime and current model
 
   // Update current model when storeCurrentModel changes (separate from fetch)
   useEffect(() => {
@@ -139,8 +150,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       if (storeCurrentThinkingLevel) {
         setThinkingLevel(storeCurrentThinkingLevel as ThinkingLevel);
       }
+      setNativeEffort(storeCurrentEffort ?? '');
     }
-  }, [isOpen, storeCurrentThinkingLevel]);
+  }, [isOpen, storeCurrentThinkingLevel, storeCurrentEffort]);
 
   useEffect(() => {
     if (errorMessage && isOpen) {
@@ -165,13 +177,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       }
       return LEGACY_THINKING_LEVELS;
     }
-    if (isOpenCodeSession || isAntigravitySession) return LEGACY_THINKING_LEVELS;
+    if (isOpenCodeSession || isAntigravitySession || isCommandCodeSession) return LEGACY_THINKING_LEVELS;
 
     const selectedModel = models.find(
       (model) => `${model.provider}/${model.id}` === currentModel,
     );
     return selectedModel?.thinkingLevels ?? LEGACY_THINKING_LEVELS;
-  }, [claudeProfiles, currentModel, isAntigravitySession, isClaudeSession, isOpenCodeSession, models, storeCurrentModel]);
+  }, [claudeProfiles, currentModel, isAntigravitySession, isClaudeSession, isCommandCodeSession, isOpenCodeSession, models, storeCurrentModel]);
 
   useEffect(() => {
     if (isLoading) return;
@@ -190,10 +202,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     }
     setIsSaving(true);
     setError(null);
-    if (!isClaudeSession) {
-      setModel(currentModel);
+    if (isCommandCodeSession) {
+      setEffort(nativeEffort || undefined);
+    } else {
+      if (!isClaudeSession) {
+        setModel(currentModel);
+      }
+      sendThinkingLevel(thinkingLevel);
     }
-    sendThinkingLevel(thinkingLevel);
 
     setTimeout(() => {
       setIsSaving(false);
@@ -263,6 +279,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   Antigravity
                 </span>
               )}
+              {isCommandCodeSession && (
+                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                  Command Code
+                </span>
+              )}
             </h3>
             {isOpenCodeSession && (
               <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
@@ -295,6 +316,25 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   <span>Provider, backend, and model are chosen when a Claude session is created. Start a new session to change them.</span>
                 </p>
               </div>
+            ) : isCommandCodeSession ? (
+              <div data-testid="commandcode-model-locked">
+                <div className="w-full flex items-center justify-between p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded flex items-center justify-center bg-slate-100">
+                      <Lock className="w-4 h-4 text-slate-600" />
+                    </div>
+                    <div className="text-left">
+                      <p className="text-sm font-medium text-gray-900">{storeCurrentModel || 'Command Code model'}</p>
+                      <p className="text-xs text-gray-500">Fixed for this session</p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Locked</span>
+                </div>
+                <p className="mt-2 flex items-start gap-2 text-xs text-gray-500">
+                  <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>Command Code model switching is disabled for an existing session. Start a new session to choose another exact model.</span>
+                </p>
+              </div>
             ) : isLoading ? (
               <div className="flex items-center gap-2 text-gray-400 text-sm">
                 <RefreshCw className="w-4 h-4 animate-spin" />
@@ -317,7 +357,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             const timeoutPromise = new Promise<never>((_, reject) => {
                               setTimeout(() => reject(new Error('Request timeout')), 10000);
                             });
-                            const sdkTypeParam = isOpenCodeSession ? 'opencode' : isAntigravitySession ? 'antigravity' : 'pi';
+                            const sdkTypeParam = isOpenCodeSession ? 'opencode' : isAntigravitySession ? 'antigravity' : isCommandCodeSession ? 'commandcode' : 'pi';
                             const response = await Promise.race([
                               api.get(`/api/models?sdkType=${sdkTypeParam}`) as Promise<{ models: Model[] }>,
                               timeoutPromise
@@ -353,14 +393,33 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             )}
           </section>
 
-          {/* Thinking Level */}
-          <section>
-            <ThinkingLevelSelector
-              value={thinkingLevel}
-              availableLevels={availableThinkingLevels}
-              onChange={setThinkingLevel}
-            />
-          </section>
+          {/* Thinking Level / native Command Code effort */}
+          {isCommandCodeSession ? (
+            <section data-testid="commandcode-effort-settings">
+              <h3 className="text-sm font-medium text-gray-500 mb-3">Native effort</h3>
+              {storeCurrentEffortLevels.length === 0 ? (
+                <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-3">This model does not expose adjustable native effort.</p>
+              ) : (
+                <select
+                  value={nativeEffort}
+                  onChange={(e) => setNativeEffort(e.target.value as CommandCodeEffort | '')}
+                  className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
+                  data-testid="commandcode-effort-settings-select"
+                >
+                  <option value="">Automatic (server default)</option>
+                  {storeCurrentEffortLevels.map((level) => <option key={level} value={level}>{level}</option>)}
+                </select>
+              )}
+            </section>
+          ) : (
+            <section>
+              <ThinkingLevelSelector
+                value={thinkingLevel}
+                availableLevels={availableThinkingLevels}
+                onChange={setThinkingLevel}
+              />
+            </section>
+          )}
 
           {/* Toggle Options */}
           <section className="space-y-3">

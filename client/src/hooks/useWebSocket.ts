@@ -115,8 +115,8 @@ export function useWebSocket() {
     return sendMessage({ type: 'goal_control', sessionId, action });
   }, [sendMessage]);
 
-  const createNewSession = useCallback((cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity', model?: string, thinkingLevel?: string) => {
-    return sendMessage({ type: 'new_session', cwd, sdkType: sdkType || 'pi', model, thinkingLevel });
+  const createNewSession = useCallback((cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode', model?: string, thinkingLevel?: string, effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max') => {
+    return sendMessage({ type: 'new_session', cwd, sdkType: sdkType || 'pi', model, thinkingLevel, effort });
   }, [sendMessage]);
 
   const switchSession = useCallback((sessionPath: string) => {
@@ -143,6 +143,10 @@ export function useWebSocket() {
 
   const setThinkingLevel = useCallback((level: string) => {
     return sendMessage({ type: 'set_thinking_level', level });
+  }, [sendMessage]);
+
+  const setEffort = useCallback((effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max') => {
+    return sendMessage({ type: 'set_effort', effort });
   }, [sendMessage]);
 
   const sendCompact = useCallback((customInstructions?: string) => {
@@ -179,6 +183,7 @@ export function useWebSocket() {
     getSessions,
     setModel,
     setThinkingLevel,
+    setEffort,
     sendCompact,
     getSessionInfo,
     setSessionName,

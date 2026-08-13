@@ -1,5 +1,18 @@
 // SDK Type
-export type SdkType = 'pi' | 'claude' | 'opencode' | 'antigravity';
+export type SdkType = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
+
+export type CommandCodeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export interface CommandCodeModelInfo {
+  id: string;
+  displayName: string;
+  provider: string;
+  reasoning: boolean;
+  supportsEffort: boolean;
+  effortLevels: CommandCodeEffort[];
+  defaultEffort?: CommandCodeEffort;
+  effortCapabilityHash?: string;
+}
 
 // WebSocket Message Types
 
@@ -27,7 +40,7 @@ export interface SessionInfo {
   path: string;
   cwd: string;
   name?: string;
-  sdkType: SdkType;               // SDK type ('pi' | 'claude')
+  sdkType: SdkType;               // SDK type ('pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode')
   parentSessionPath?: string;
   createdAt: Date;
   lastActivity: Date;
@@ -35,6 +48,7 @@ export interface SessionInfo {
   firstMessage: string;
   model?: string;                   // current model name for display
   claudeSessionId?: string;         // Claude Code session ID (for claude type)
+  commandCodeNativeSessionId?: string; // Command Code native resume/session id
 }
 
 export interface ClaudeSessionInfo {

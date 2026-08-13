@@ -12,7 +12,7 @@ import {
   clearDisplayNamePref,
 } from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
-import type { SubagentToolSummary } from '@pi-web-ui/shared';
+import type { CommandCodeEffort, CommandCodeModelInfo, SubagentToolSummary } from '@pi-web-ui/shared';
 
 import { useTransferStore } from './transferStore';
 import { useGoalStore } from './goalStore';
@@ -208,8 +208,10 @@ export interface Session {
   messageCount: number;
   cwd: string;
   name?: string;
-  sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity';  // optional for backward compatibility
+  sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';  // optional for backward compatibility
   model?: string;              // current model
+  effort?: CommandCodeEffort;
+  effortLevels?: CommandCodeEffort[];
   createdAt?: string;
   lastActivity?: string;
 }
@@ -362,6 +364,8 @@ export interface SessionStats {
   };
   cost: number;
   model?: string;
+  effort?: CommandCodeEffort;
+  effortLevels?: CommandCodeEffort[];
   contextWindow?: number;
   contextUsed?: number;
   contextPercent?: number;
@@ -375,9 +379,12 @@ export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'error'
 interface SessionState {
   sessions: Session[];
   currentSessionId: string | null;
-  currentSessionSdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | null;
+  currentSessionSdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | null;
   currentModel: string | null;
   currentThinkingLevel: string | null;
+  currentEffort: CommandCodeEffort | null;
+  currentEffortLevels: CommandCodeEffort[];
+
   messages: Message[];
   isStreaming: boolean;
   lastStreamEventAt: number | null;
@@ -452,12 +459,19 @@ interface SessionState {
   antigravityAvailable: boolean;
   antigravityAuthError: string | null;
 
+  // Command Code browser availability and model capability catalogue
+  commandCodeAvailable: boolean;
+  commandCodeEnabled: boolean;
+  commandCodeError: string | null;
+  commandCodeModels: CommandCodeModelInfo[];
+
   // Actions
   setSessions: (sessions: Session[]) => void;
   setCurrentSession: (sessionId: string | null) => void;
   switchSession: (newSessionId: string) => void;
   setCurrentModel: (modelId: string) => void;
   setCurrentThinkingLevel: (level: string) => void;
+  setCurrentEffort: (effort: CommandCodeEffort | null) => void;
   addMessage: (message: Message) => void;
   updateMessage: (id: string, updates: Partial<Message>) => void;
   setStreaming: (isStreaming: boolean) => void;
@@ -517,6 +531,7 @@ interface SessionState {
 
   // Antigravity availability
   setAntigravityAvailable: (available: boolean, error?: string | null) => void;
+  setCommandCodeAvailable: (available: boolean, enabled: boolean, models: CommandCodeModelInfo[], error?: string | null) => void;
 
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -530,6 +545,8 @@ export const useSessionStore = create<SessionState>()(
       currentSessionSdkType: null,
       currentModel: null,
       currentThinkingLevel: null,
+      currentEffort: null,
+      currentEffortLevels: [],
       messages: [],
       isStreaming: false,
       lastStreamEventAt: null,
@@ -577,6 +594,10 @@ export const useSessionStore = create<SessionState>()(
       opencodeAgentModes: {},
       antigravityAvailable: false,
       antigravityAuthError: null,
+      commandCodeAvailable: false,
+      commandCodeEnabled: false,
+      commandCodeError: null,
+      commandCodeModels: [],
 
       // Worker status tracking implementation
       updateWorkerStatus: (sessionId: string, status: WorkerStatus) => {
@@ -613,6 +634,7 @@ export const useSessionStore = create<SessionState>()(
       setClaudeAvailable: (available, error = null) => set({ claudeAvailable: available, claudeAuthError: error }),
       setOpencodeAvailable: (available, error = null) => set({ opencodeAvailable: available, opencodeAuthError: error }),
       setAntigravityAvailable: (available, error = null) => set({ antigravityAvailable: available, antigravityAuthError: error }),
+      setCommandCodeAvailable: (available, enabled, models, error = null) => set({ commandCodeAvailable: available, commandCodeEnabled: enabled, commandCodeModels: models, commandCodeError: error }),
 
       setOpencodeAgentMode: (sessionId, mode) => set((state) => ({
         opencodeAgentModes: { ...state.opencodeAgentModes, [sessionId]: mode },
@@ -625,6 +647,7 @@ export const useSessionStore = create<SessionState>()(
       setSessionInfo: (info) => set({ sessionInfo: info }),
       setCurrentModel: (modelId) => set({ currentModel: modelId }),
       setCurrentThinkingLevel: (level) => set({ currentThinkingLevel: level }),
+      setCurrentEffort: (effort) => set({ currentEffort: effort }),
 
       // LRU cache eviction: remove least recently used sessions when over limit
       evictIfNeeded: () => {
@@ -1293,7 +1316,7 @@ export const useSessionStore = create<SessionState>()(
         switch (msg.type) {
           case 'sessions_list': {
             // Deduplicate sessions by path (path is the stable identifier)
-            const rawSessions = (msg.sessions as Array<Session & { sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' }>) || [];
+            const rawSessions = (msg.sessions as Array<Session & { sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' }>) || [];
             const seenPaths = new Set<string>();
             const dedupedSessions = rawSessions
               .filter((session) => {
@@ -1314,7 +1337,7 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'session_created': {
-            const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity'; model?: string; thinkingLevel?: string };
+            const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode'; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; effortSource?: string };
             set({ 
               currentSessionId: createdMsg.sessionId,
               currentSessionSdkType: createdMsg.sdkType ?? null,
@@ -1323,6 +1346,8 @@ export const useSessionStore = create<SessionState>()(
               // give a false impression of the active model.
               currentModel: createdMsg.model ?? null,
               currentThinkingLevel: createdMsg.thinkingLevel ?? null,
+              currentEffort: createdMsg.effort ?? null,
+              currentEffortLevels: createdMsg.effortLevels ?? [],
               messages: [], // Clear messages for new session
               contextPercent: 0,
               contextUsed: 0,
@@ -1345,7 +1370,7 @@ export const useSessionStore = create<SessionState>()(
               const updatedSessions = existingSession
                 ? state.sessions.map((s) =>
                     s.id === createdMsg.sessionId
-                      ? { ...s, path: createdMsg.sessionPath, sdkType: createdMsg.sdkType ?? s.sdkType }
+                      ? { ...s, path: createdMsg.sessionPath, sdkType: createdMsg.sdkType ?? s.sdkType, model: createdMsg.model ?? s.model, effort: createdMsg.effort ?? s.effort, effortLevels: createdMsg.effortLevels ?? s.effortLevels }
                       : s
                   )
                 : [
@@ -1356,6 +1381,9 @@ export const useSessionStore = create<SessionState>()(
                       messageCount: 0,
                       cwd: '',
                       sdkType: createdMsg.sdkType ?? undefined,
+                      model: createdMsg.model,
+                      effort: createdMsg.effort,
+                      effortLevels: createdMsg.effortLevels,
                     },
                     ...state.sessions,
                   ];
@@ -1372,9 +1400,11 @@ export const useSessionStore = create<SessionState>()(
           case 'session_switched': {
             const switchMsg = msg as unknown as {
               sessionId: string;
-              sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity';
+              sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
               model?: string;
               thinkingLevel?: string;
+              effort?: CommandCodeEffort;
+              effortLevels?: CommandCodeEffort[];
               contextWindow?: number;
               contextUsed?: number;
               contextPercent?: number;
@@ -1451,7 +1481,7 @@ export const useSessionStore = create<SessionState>()(
               const updatedSessions = switchMsg.sdkType
                 ? state.sessions.map((s) =>
                     s.id === switchMsg.sessionId
-                      ? { ...s, sdkType: switchMsg.sdkType }
+                      ? { ...s, sdkType: switchMsg.sdkType, model: switchMsg.model ?? s.model, effort: switchMsg.effort ?? s.effort, effortLevels: switchMsg.effortLevels ?? s.effortLevels }
                       : s
                   )
                 : state.sessions;
@@ -1463,6 +1493,8 @@ export const useSessionStore = create<SessionState>()(
                 extensionWidgets: state.sessionExtensionWidgets[switchMsg.sessionId] ?? {},
                 extensionStatuses: state.sessionExtensionStatuses[switchMsg.sessionId] ?? {},
                 currentThinkingLevel: switchMsg.thinkingLevel ?? null,
+                currentEffort: switchMsg.effort ?? null,
+                currentEffortLevels: switchMsg.effortLevels ?? [],
                 messages: clientMessages,
                 contextPercent: switchMsg.contextPercent ?? 0,
                 contextUsed: switchMsg.contextUsed ?? 0,
@@ -1951,6 +1983,18 @@ export const useSessionStore = create<SessionState>()(
               type: 'success',
               message: `Thinking level set to ${level}`,
             });
+            break;
+          }
+
+          case 'effort_changed': {
+            const effortMsg = msg as unknown as { effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[] };
+            set({ currentEffort: effortMsg.effort ?? null, currentEffortLevels: effortMsg.effortLevels ?? get().currentEffortLevels });
+            break;
+          }
+
+          case 'commandcode_available': {
+            const commandCodeMsg = msg as unknown as { available: boolean; enabled: boolean; models?: CommandCodeModelInfo[]; error?: string | null };
+            get().setCommandCodeAvailable(commandCodeMsg.available, commandCodeMsg.enabled, commandCodeMsg.models ?? [], commandCodeMsg.error ?? null);
             break;
           }
 
@@ -2822,7 +2866,7 @@ function parseCrossTabSessionMeta(raw: string): Record<string, SessionMeta> | nu
 
     const result: Record<string, SessionMeta> = {};
     for (const [key, value] of Object.entries(candidate)) {
-      if (!/^(?:pi|claude|opencode|antigravity|unknown):/.test(key)
+      if (!/^(?:pi|claude|opencode|antigravity|commandcode|unknown):/.test(key)
         || !value || typeof value !== 'object' || Array.isArray(value)) return null;
       const record = value as Record<string, unknown>;
       if (record.archived !== undefined && record.archived !== true) return null;

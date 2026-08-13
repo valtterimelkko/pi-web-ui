@@ -9,13 +9,14 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import {
   buildValidationIsolationEnv,
   loadValidationEnvFile,
   resolveValidationEnvFile,
   resolveValidationEnvKeys,
 } from '../server/src/live-validation/validation-server-env.js';
+import { createCommandCodeValidationFixture } from '../server/src/live-validation/command-code-fixture.js';
 import {
   acquireValidationDirectoryLock,
   assertSafeValidationDirectory,
@@ -52,6 +53,11 @@ async function main(): Promise<void> {
   const validationDir = explicitDir
     ? path.resolve(explicitDir)
     : createDefaultValidationDirectory(path.join(os.tmpdir(), 'pi-web-ui-validation'));
+  const commandCodeFixture = validationArgs.includes('--command-code-fixture');
+  const commandCodeBrowserFixture = validationArgs.includes('--command-code-browser-fixture');
+  if (commandCodeBrowserFixture && !commandCodeFixture) {
+    throw new Error('--command-code-browser-fixture requires --command-code-fixture.');
+  }
   const defaultStateRoot = path.join(os.homedir(), '.pi-web-ui');
   const productionFiles = [
     process.env.INTERNAL_API_SOCKET_PATH ?? path.join(defaultStateRoot, 'internal-api.sock'),
@@ -100,12 +106,18 @@ async function main(): Promise<void> {
       mkdirSync(path.join(validationDir, dir), { recursive: true, mode: 0o700 });
     }
 
+    if (commandCodeFixture) await createCommandCodeValidationFixture(validationDir);
+    if (commandCodeBrowserFixture) {
+      writeFileSync(path.join(validationDir, 'command-code-browser-auth.json'), '{"token":"disposable-fixture"}\n', { encoding: 'utf8', mode: 0o600 });
+    }
     const isolationEnv = buildValidationIsolationEnv({
       validationDir,
       port,
       claudeWsPort,
       claudeHookPort,
       opencodePort,
+      commandCodeFixture,
+      commandCodeBrowserFixture,
     });
     const socketPath = path.join(validationDir, 'internal-api.sock');
     const tokenPath = path.join(validationDir, 'internal-api-token');
@@ -126,6 +138,7 @@ async function main(): Promise<void> {
     console.error(` claude ws   : ${claudeWsPort}`);
     console.error(` claude hook : ${claudeHookPort}`);
     console.error(` opencode    : ${opencodePort}`);
+    console.error(` commandcode : ${commandCodeFixture ? (commandCodeBrowserFixture ? 'contained browser fixture enabled' : 'deterministic fixture enabled') : 'disabled'}`);
     console.error('');
     console.error(' Point a validator at it, e.g.:');
     console.error(`   npm run validate:long-horizon -- --socket ${socketPath} --token-path ${tokenPath} ...`);

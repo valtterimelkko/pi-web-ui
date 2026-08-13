@@ -1,4 +1,4 @@
-export type RuntimeSdkType = 'pi' | 'claude' | 'opencode' | 'antigravity' | null | undefined;
+export type RuntimeSdkType = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | null | undefined;
 
 export function isPiSlashCommandAllowedWhileStreaming(
   draft: string,

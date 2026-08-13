@@ -52,6 +52,22 @@ describe('Command Code private state', () => {
     expect(await restarted.get('cc-corrupt')).toBeUndefined();
   });
 
+  it('quarantines persisted records with malformed lifecycle fields or diagnostic bindings', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-invalid-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const store = new CommandCodeSessionStore(root);
+    await store.init();
+    await store.create({ sessionId: 'cc-invalid', cwd, modelSelector: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-invalid.jsonl' });
+    const file = path.join(root, 'sessions', 'cc-invalid.json');
+    const record = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    record.messageCount = -1;
+    record.diagnostics = { suppressedDuplicateCount: 0, unknownEventTypes: [], nativeSessionId: 'native-different' };
+    await (await import('node:fs/promises')).writeFile(file, JSON.stringify(record));
+    const restarted = new CommandCodeSessionStore(root);
+    await restarted.init();
+    expect(await restarted.get('cc-invalid')).toBeUndefined();
+  });
+
   it('does not resurrect a record when delete races a queued update write', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-race-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
@@ -63,6 +79,18 @@ describe('Command Code private state', () => {
     await Promise.allSettled([update, deletion]);
     expect(await store.get('cc-race')).toBeUndefined();
     await expect(readFile(path.join(root, 'sessions', 'cc-race.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects duplicate native-session bindings atomically', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const store = new CommandCodeSessionStore(root);
+    await store.init();
+    await store.create({ sessionId: 'cc-one', cwd, modelSelector: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-one.jsonl' });
+    await store.create({ sessionId: 'cc-two', cwd, modelSelector: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-two.jsonl' });
+    await store.bindNativeSession('cc-one', 'native-shared');
+    await expect(store.bindNativeSession('cc-two', 'native-shared')).rejects.toThrow(/already bound/i);
+    expect((await store.get('cc-two'))?.nativeSessionId).toBeUndefined();
   });
 
   it('refuses model/profile/native-session drift', async () => {

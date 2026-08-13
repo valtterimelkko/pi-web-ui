@@ -11,7 +11,7 @@
  *
  * Origin-independence (the §4 gap): because the manager attaches the observer
  * directly to the service — not via the Internal-API prompt path — it sees
- * `agent_end` for sessions started in the browser on ALL FOUR runtimes
+ * `agent_end` for sessions started in the browser across all enabled runtimes
  * (Claude/Antigravity observers are added in Phase 3; Pi/OpenCode already had
  * the method). Self-contained: no reference to routes/sessions.ts or its broker.
  */
@@ -48,6 +48,7 @@ export interface NotificationServices {
   claude?: NotificationServiceObserver;
   opencode?: NotificationServiceObserver;
   antigravity?: NotificationServiceObserver;
+  commandcode?: NotificationServiceObserver;
 }
 
 export interface NotificationManagerDeps {
@@ -75,6 +76,8 @@ export interface NotificationManagerDeps {
   resolveLabel?: (sessionPath: string) => Promise<string | undefined>;
   /** Optional durable terminal-ingress spool, isolated per server instance. */
   ingressSpool?: NotificationIngressSpool;
+  /** Runtime policy gate for rehydrating and creating per-session observers. */
+  isSessionAllowed?: (record: OptInRecord) => boolean | Promise<boolean>;
   ingressPollMs?: number;
   metrics?: OperationalMetrics;
 }
@@ -146,10 +149,16 @@ export class NotificationManager {
     await this.migrateOptIns();
     // Rehydration: re-attach observers for every still-opted-in session.
     const optIns = this.deps.store.listOptIns();
+    let attachedCount = 0;
     for (const record of optIns) {
+      if (this.deps.isSessionAllowed && !(await this.deps.isSessionAllowed(record))) {
+        await this.deps.store.removeOptIn(record.sessionId);
+        continue;
+      }
       this.attach(record);
+      attachedCount++;
     }
-    logger.info(`rehydrated ${optIns.length} opted-in session(s)`);
+    logger.info(`rehydrated ${attachedCount} opted-in session(s)`);
     if (this.deps.router.listConfigured().length === 0) {
       logger.warn('notifications enabled but no delivery channel is configured (queued notifications will never drain)');
     }
@@ -204,7 +213,11 @@ export class NotificationManager {
     );
   }
 
-  async optIn(record: OptInRecord): Promise<void> {
+  async optIn(record: OptInRecord): Promise<boolean> {
+    if (this.deps.isSessionAllowed && !(await this.deps.isSessionAllowed(record))) {
+      logger.child({ sessionId: record.sessionId, runtime: record.runtime }).warn('notification opt-in rejected by active runtime policy');
+      return false;
+    }
     const existing = this.deps.store.getOptIn(record.sessionId);
     if (
       existing
@@ -219,9 +232,10 @@ export class NotificationManager {
     log.info('opted in for agent_end notifications');
     if (!this.deps.enabled) {
       log.debug('notifications globally disabled; opt-in persisted but no observer attached');
-      return;
+      return true;
     }
     this.attach(record); // idempotent: detaches any prior observation first
+    return true;
   }
 
   async optOut(sessionId: string): Promise<void> {

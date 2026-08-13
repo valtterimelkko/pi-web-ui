@@ -31,7 +31,7 @@ export interface PiSessionEntry {
  * Pi session files store `message` envelopes (role + content parts) and tool
  * events rather than the message_start/update/end deltas the other runtimes
  * produce, so this normalizes them into the same flat shape — letting the
- * shared screen-view projection consume all four runtimes uniformly.
+ * shared screen-view projection consume all enabled runtimes uniformly.
  *
  * Read-only: never writes. Returns [] if the file is missing/unreadable so a
  * thin/empty session yields a valid (empty) screen view rather than an error.

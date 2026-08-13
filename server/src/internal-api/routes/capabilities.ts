@@ -39,8 +39,8 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
     // A disabled-but-installed runtime is advertised as unavailable and its
     // new work is refused rather than silently substituted.
     const opencodeEnabled = opencodeService.isEnabled();
-    const commandCodeEnabled = Boolean(commandCodeService?.isEnabled());
-    const commandCodeAvailable = Boolean(commandCodeService?.isAvailable());
+    const commandCodeEnabled = Boolean(commandCodeService?.isShadowEnabled?.() ?? commandCodeService?.isEnabled());
+    const commandCodeAvailable = Boolean(commandCodeService?.isShadowAvailable?.() ?? commandCodeService?.isAvailable());
     const commandCodeEffortCapabilities = commandCodeService?.getEffortCapabilities?.() ?? {};
     const commandCodeSupportsEffort = Object.values(commandCodeEffortCapabilities).some((capability) => capability.supportsEffort === true);
 

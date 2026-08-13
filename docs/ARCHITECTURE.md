@@ -13,12 +13,13 @@ If you are still deciding whether to adopt the project, read these first:
 
 ## Overview
 
-Pi Web UI is a single browser application that presents a unified chat/session UI over **four runtime paths**:
+Pi Web UI is a single browser application that presents a unified chat/session UI over **five runtime paths** (with Command Code separately feature-gated):
 
 1. **Pi Coding Agent** (via the SDK path)
 2. **Claude Code** (profile-driven SDK backend, direct CLI fallback, or channel-backed backend)
 3. **OpenCode**
 4. **Antigravity** (`agy` / Google Gemini)
+5. **Command Code** (`cmd -p`, secure server-owned subprocess boundary)
 
 The architectural theme of the repo is:
 - keep the **frontend mostly runtime-agnostic**
@@ -44,7 +45,8 @@ Express server
   ├─ Pi Coding Agent service + worker/session lifecycle
   ├─ Claude service + (SDK/profile backend, direct CLI backend, or channel-backed PTY/plugin backend)
   ├─ OpenCode service + process manager/client/SSE adapter
-  └─ Antigravity service + subprocess-per-turn `agy` adapter
+  ├─ Antigravity service + subprocess-per-turn `agy` adapter
+  └─ Command Code service + exact discovery, private journal, and contained subprocess adapter
 ```
 
 ## Major Layers
@@ -55,7 +57,7 @@ Key frontend responsibilities:
 - render the unified session list
 - create sessions for the selected runtime
 - display message/tool history and streaming updates
-- surface runtime availability (`claude_available`, `opencode_available`, `antigravity_available`)
+- surface runtime availability (`claude_available`, `opencode_available`, `antigravity_available`, `commandcode_available`)
 - expose structured runtime selectors where needed, such as the Claude provider → backend → model selector when profiles are enabled
 - handle extension/approval UI requests
 
@@ -215,6 +217,7 @@ Registry entries let the UI treat sessions consistently while preserving runtime
 - Claude profile IDs / Claude backend mode when applicable
 - OpenCode session IDs
 - Antigravity conversation IDs
+- Command Code native session IDs, effort capability hashes, and permission profiles
 
 For Claude specifically, the registry still uses `sdkType: 'claude'` even though the backend may be SDK, direct CLI, or channel-backed. That distinction is operational, not a separate frontend runtime family.
 
@@ -361,6 +364,12 @@ See [`../SECURITY.md`](../SECURITY.md) for the canonical security view.
 - replay is reconstructed from Pi-owned Antigravity JSONL turn logs and registry conversation metadata
 - live prompts run via `agy -p` and are emitted to the frontend as normalized message lifecycle events
 
+### Command Code
+- exact model ids and model-scoped native effort values are discovered from fresh `cmd` probes
+- private normalized journals are the replay source; stderr, credentials, native paths, and attestations remain private
+- browser sessions use a server-owned `browser-contained` profile, a non-empty exact model allowlist, canonical non-symlink workspace roots, a browser-only credential, pinned read-only runtime directory handles, an unshared Bubblewrap network namespace, and no raw caller-controlled flags; the attested Internal API shadow route is separately gated
+- Command Code is intentionally excluded from MCP and disposable `--runtime all` validation
+
 This is one of the most important architectural themes in the repo: **the UI sees a common replay model even though the backing data sources are different.**
 
 ## Availability and Health Reporting
@@ -369,6 +378,7 @@ REST and WebSocket surfaces expose runtime availability:
 - `claude_available`
 - `opencode_available`
 - `antigravity_available`
+- `commandcode_available` (browser containment gate)
 - `/api/health/ready`
 - `/api/models?sdkType=opencode`
 - `/api/models?sdkType=antigravity`

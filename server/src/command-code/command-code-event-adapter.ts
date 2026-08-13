@@ -37,6 +37,44 @@ export interface CommandCodeAdaptedOutput {
   lineCount: number;
 }
 
+/** Mutable state used to normalize one accepted native event at a time. */
+export interface CommandCodeIncrementalAdapterState {
+  activeMessageId?: string;
+  syntheticMessageNumber: number;
+  sawAgentEnd: boolean;
+  finalText: string;
+}
+
+export function createCommandCodeIncrementalAdapterState(): CommandCodeIncrementalAdapterState {
+  return { syntheticMessageNumber: 0, sawAgentEnd: false, finalText: '' };
+}
+
+/** Normalize one event frame without waiting for the terminal result. */
+export function adaptCommandCodeEvent(input: {
+  sessionId: string;
+  parsed: ParsedCommandCodeEvent;
+  state: CommandCodeIncrementalAdapterState;
+  observedAt?: number;
+}): NormalizedEvent | undefined {
+  const event = input.parsed.event;
+  const type = typeof event.type === 'string' ? event.type : '';
+  const timestamp = typeof event.timestamp === 'number' && Number.isFinite(event.timestamp)
+    ? event.timestamp
+    : input.observedAt ?? Date.now();
+  const nativeMessageId = eventMessageId(event);
+  if (type === 'message_start') input.state.activeMessageId = nativeMessageId ?? `commandcode-message-${++input.state.syntheticMessageNumber}`;
+  const normalized = normalizeEvent(input.sessionId, event, timestamp, input.state.activeMessageId);
+  if (type === 'message_end') input.state.activeMessageId = undefined;
+  if (!normalized) return undefined;
+  if (normalized.type === 'message_update') {
+    const data = asRecord(normalized.data);
+    const assistant = asRecord(data?.assistantMessageEvent);
+    if (assistant?.type === 'text_delta' && typeof assistant.delta === 'string') input.state.finalText += assistant.delta;
+  }
+  if (normalized.type === 'agent_end') input.state.sawAgentEnd = true;
+  return normalized;
+}
+
 /** Convert public Command Code event names into Pi Web UI's normalized event model. */
 export function adaptCommandCodeOutput(input: CommandCodeAdaptInput): CommandCodeAdaptedOutput {
   const timestampFallback = input.observedAt ?? Date.now();

@@ -447,6 +447,14 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
                 AG
               </span>
             )}
+            {session.sdkType === 'commandcode' && (
+              <span
+                className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-500/15 text-slate-700 border border-slate-500/20 cursor-help"
+                title="Command Code - contained browser runtime"
+              >
+                CMD
+              </span>
+            )}
 
             <div className="flex items-center gap-1 flex-shrink-0">
               {/* Pin indicator - always visible when pinned */}

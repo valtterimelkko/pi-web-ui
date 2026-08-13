@@ -1,18 +1,19 @@
 import { create } from 'zustand';
+import type { SdkType } from '@pi-web-ui/shared';
 
 export type TransferScope = 'visible_recent' | 'visible_full';
 
 export interface TransferSourceMeta {
   sessionId: string;
   displayName: string;
-  sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity';
+  sdkType: SdkType;
   cwd: string;
 }
 
 export interface TransferTargetMeta {
   sessionId?: string;
   displayName?: string;
-  sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity';
+  sdkType?: SdkType;
   cwd?: string;
 }
 
@@ -32,7 +33,7 @@ export interface TransferState {
   status: TransferStatus;
   targetMode: TransferTargetMode;
   existingTarget: TransferTargetMeta | null;
-  newTargetRuntime: 'pi' | 'claude' | 'opencode' | 'antigravity';
+  newTargetRuntime: SdkType;
   newTargetCwd: string;
   scope: TransferScope;
   error: TransferError | null;
@@ -47,7 +48,7 @@ export interface TransferActions {
   openConfirmNew: (source: TransferSourceMeta) => void;
   cancel: () => void;
   setScope: (scope: TransferScope) => void;
-  setNewTargetRuntime: (runtime: 'pi' | 'claude' | 'opencode' | 'antigravity') => void;
+  setNewTargetRuntime: (runtime: SdkType) => void;
   setNewTargetCwd: (cwd: string) => void;
   setSubmitting: () => void;
   setSucceeded: (targetSessionId: string) => void;

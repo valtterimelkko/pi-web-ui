@@ -1,4 +1,5 @@
 import { request as httpRequest, type ClientRequest } from 'node:http';
+import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
@@ -22,6 +23,7 @@ import type {
   SessionDetail,
   SessionEvidenceResponse,
   SessionHistoryResponse,
+  CommandCodeRoleAttestationRequest,
   WaitResponse,
   WatchResponse,
 } from '../internal-api/types.js';
@@ -48,6 +50,21 @@ function setRequestTimeout(req: ClientRequest, timeoutMs: number, method: string
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function createCommandCodeFixtureAttestation(secret: string, model: string, cwd: string): CommandCodeRoleAttestationRequest {
+  const issuedAt = new Date().toISOString();
+  const payload = {
+    role: 'conductor-root' as const,
+    model: model as CommandCodeRoleAttestationRequest['model'],
+    ...(model === 'qwen/qwen3.8-max' ? { effort: 'medium' as const } : {}),
+    cwd,
+    worktreeRoot: cwd,
+    leaseId: 'live-validation-fixture-lease',
+    issuedAt,
+  };
+  const canonical = JSON.stringify(payload);
+  return { ...payload, signature: createHmac('sha256', secret).update(canonical).digest('hex') };
 }
 
 function countEvents(events: NormalizedEvent[]): Record<string, number> {
@@ -195,8 +212,17 @@ export class InternalApiClient implements InternalApiClientLike {
     });
   }
 
-  async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; source?: string; scenarioId?: string; ephemeral?: boolean; pin?: boolean; pinTtlSeconds?: number }): Promise<CreateSessionResponse> {
-    return this.request<CreateSessionResponse>('POST', '/api/v1/sessions', input);
+  async createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; source?: string; scenarioId?: string; ephemeral?: boolean; pin?: boolean; pinTtlSeconds?: number; invocationRole?: 'conductor-root' | 'implementation-child'; commandCodeAttestation?: CommandCodeRoleAttestationRequest }): Promise<CreateSessionResponse> {
+    const request = { ...input } as typeof input & { model?: string; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; invocationRole?: 'conductor-root'; commandCodeAttestation?: CommandCodeRoleAttestationRequest };
+    if (input.runtime === 'commandcode' && input.source === 'live-validation-commandcode-fixture') {
+      const cwd = input.cwd ?? process.cwd();
+      const model = input.model ?? 'qwen/qwen3.8-max';
+      request.model = model;
+      request.effort = 'medium';
+      request.invocationRole = 'conductor-root';
+      request.commandCodeAttestation = createCommandCodeFixtureAttestation(this.token, model, cwd);
+    }
+    return this.request<CreateSessionResponse>('POST', '/api/v1/sessions', request);
   }
 
   /** Detached (fire-and-forget) prompt dispatch: returns 202 immediately; the

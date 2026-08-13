@@ -61,7 +61,7 @@ async function withEphemeralSession(
     runtime: context.runtime,
     cwd: context.cwd,
     model: context.model,
-    source: 'live-validation',
+    source: context.runtime === 'commandcode' ? 'live-validation-commandcode-fixture' : 'live-validation',
     scenarioId: 'ephemeral',
     ephemeral: true,
   });
@@ -188,6 +188,34 @@ async function waitForNotificationDelivery(
 }
 
 export const scenarioRegistry: Record<string, ValidationScenario> = {
+  'commandcode-fixture-smoke': {
+    id: 'commandcode-fixture-smoke',
+    description: 'Create a deterministic local Command Code fixture session and verify normalized streaming, replay and terminal usage evidence.',
+    async run(context) {
+      if (context.runtime !== 'commandcode') {
+        return { scenarioId: 'commandcode-fixture-smoke', runtime: context.runtime, passed: true, skipped: true, reason: 'Command Code fixture only', assertions: [] };
+      }
+      return withEphemeralSession(context, async (sessionId) => {
+        const events = await context.client.promptStream(sessionId, {
+          message: 'Reply with the exact text COMMAND-CODE-LIVE-OK and nothing else.',
+          verbosity: 'full',
+          mode: 'prompt',
+        });
+        const summary = collectValidationSummary(events);
+        const history = await context.client.getSessionHistory(sessionId);
+        const evidence = await context.client.getSessionEvidence?.(sessionId, ['runs', 'transcript']);
+        const types = history.events.map((event) => String(event.type ?? ''));
+        const assertions: ValidationAssertion[] = [
+          { name: 'agent_start', passed: summary.sawAgentStart, details: 'normalized agent_start' },
+          { name: 'agent_end', passed: summary.sawAgentEnd, details: 'normalized agent_end' },
+          { name: 'assistant_text', passed: summary.assistantText.includes('COMMAND-CODE-LIVE-OK'), details: summary.assistantText },
+          { name: 'replay_has_terminal', passed: types.includes('agent_end'), details: types.join(',') },
+          { name: 'run_usage_evidence', passed: evidence?.runReceipts?.some((receipt) => receipt.tokenUsage?.source === 'commandcode-terminal-result-v1') === true, details: evidence?.runReceipts?.[0]?.tokenUsage ? 'terminal usage present' : 'terminal usage missing' },
+        ];
+        return { scenarioId: 'commandcode-fixture-smoke', runtime: context.runtime, passed: assertions.every((a) => a.passed), assertions };
+      });
+    },
+  },
   smoke: {
     id: 'smoke',
     description: 'Create a session and verify a minimal turn completes.',

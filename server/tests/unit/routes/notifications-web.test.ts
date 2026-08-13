@@ -21,17 +21,18 @@ function fakeManager() {
       optIns.delete(id);
     }),
     getOptIn: (id: string) => optIns.get(id),
-    listDeliveriesForSession: () => [],
+    listDeliveriesForSession: vi.fn(() => []),
   } as unknown as NotificationManager & {
     optIn: ReturnType<typeof vi.fn>;
     optOut: ReturnType<typeof vi.fn>;
+    listDeliveriesForSession: ReturnType<typeof vi.fn>;
   };
 }
 
-function buildApp(manager: NotificationManager | null) {
+function buildApp(manager: NotificationManager | null, resolveSession?: (sessionId: string, runtime: import('../../../src/notifications/types.js').NotificationRuntime, sessionPath: string) => Promise<boolean>) {
   const app = express();
   app.use(express.json());
-  app.use('/api/sessions', createNotificationsWebRouter({ getManager: () => manager }));
+  app.use('/api/sessions', createNotificationsWebRouter({ getManager: () => manager, resolveSession }));
   return app;
 }
 
@@ -95,6 +96,138 @@ describe('notifications web router (cookie-auth browser surface)', () => {
     expect(res.status).toBe(200);
     expect(res.body.optIn.runtime).toBe('pi');
     expect(Array.isArray(res.body.deliveries)).toBe(true);
+  });
+
+  it('rejects browser Command Code opt-in when the active policy no longer exposes the session', async () => {
+    const app = buildApp(fakeManager(), async () => false);
+    const res = await request(app)
+      .post('/api/sessions/browser-cmd/notifications/opt-in')
+      .send({ runtime: 'commandcode', sessionPath: 'browser-cmd' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('SESSION_NOT_FOUND');
+  });
+
+  it('rejects a browser Command Code opt-in whose id and sessionPath do not identify the same session', async () => {
+    const mgr = fakeManager();
+    const app = buildApp(mgr, async () => true);
+    const res = await request(app)
+      .post('/api/sessions/shadow-cmd/notifications/opt-in')
+      .send({ runtime: 'commandcode', sessionPath: 'browser-cmd' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('SESSION_NOT_FOUND');
+    expect(mgr.optIn).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the browser Command Code policy resolver is not wired', async () => {
+    const mgr = fakeManager();
+    const app = buildApp(mgr);
+    const post = await request(app)
+      .post('/api/sessions/browser-cmd/notifications/opt-in')
+      .send({ runtime: 'commandcode', sessionPath: 'browser-cmd' });
+    expect(post.status).toBe(404);
+    expect(post.body.code).toBe('SESSION_NOT_FOUND');
+
+    await mgr.optIn({
+      sessionId: 'browser-cmd',
+      runtime: 'commandcode',
+      sessionPath: 'browser-cmd',
+      optedInAt: '2026-08-13T00:00:00.000Z',
+      access: 'browser',
+    });
+    const get = await request(app).get('/api/sessions/browser-cmd/notifications');
+    expect(get.status).toBe(404);
+    const deleteResponse = await request(app).delete('/api/sessions/browser-cmd/notifications/opt-in');
+    expect(deleteResponse.status).toBe(404);
+    expect(mgr.getOptIn('browser-cmd')).toBeDefined();
+  });
+
+  it('does not expose a shadow Command Code opt-in through the browser state or opt-out routes', async () => {
+    const mgr = fakeManager();
+    await mgr.optIn({
+      sessionId: 'shadow-cmd',
+      runtime: 'commandcode',
+      sessionPath: 'shadow-cmd',
+      optedInAt: '2026-08-13T00:00:00.000Z',
+      access: 'internal',
+    });
+    const app = buildApp(mgr, async () => false);
+
+    const state = await request(app).get('/api/sessions/shadow-cmd/notifications');
+    expect(state.status).toBe(404);
+    expect(state.body.code).toBe('SESSION_NOT_FOUND');
+
+    const optOut = await request(app).delete('/api/sessions/shadow-cmd/notifications/opt-in');
+    expect(optOut.status).toBe(404);
+    expect(optOut.body.code).toBe('SESSION_NOT_FOUND');
+    expect(mgr.getOptIn('shadow-cmd')).toBeDefined();
+  });
+
+  it('hides shadow Command Code delivery history after its opt-in is removed', async () => {
+    const mgr = fakeManager();
+    mgr.listDeliveriesForSession.mockReturnValue([{ notification: { runtime: 'commandcode' } }]);
+    const app = buildApp(mgr, async () => false);
+    const state = await request(app).get('/api/sessions/shadow-cmd/notifications');
+    expect(state.status).toBe(404);
+    expect(state.body.code).toBe('SESSION_NOT_FOUND');
+  });
+
+  it('rejects a mismatched or path-bound stored browser Command Code identity', async () => {
+    const mgr = fakeManager();
+    await mgr.optIn({
+      sessionId: 'shadow-cmd',
+      runtime: 'commandcode',
+      sessionPath: 'browser-cmd',
+      optedInAt: '2026-08-13T00:00:00.000Z',
+      access: 'browser',
+    });
+    const app = buildApp(mgr, async () => true);
+    const state = await request(app).get('/api/sessions/shadow-cmd/notifications');
+    expect(state.status).toBe(404);
+    const optOut = await request(app).delete('/api/sessions/shadow-cmd/notifications/opt-in');
+    expect(optOut.status).toBe(404);
+    expect(mgr.getOptIn('shadow-cmd')).toBeDefined();
+  });
+
+  it('does not treat a mismatched browser record as an active browser session', async () => {
+    const mgr = fakeManager();
+    await mgr.optIn({
+      sessionId: 'shadow-cmd',
+      runtime: 'commandcode',
+      sessionPath: 'browser-cmd',
+      optedInAt: '2026-08-13T00:00:00.000Z',
+      access: 'browser',
+    });
+    const app = buildApp(mgr, async () => true);
+    const state = await request(app).get('/api/sessions/shadow-cmd/notifications');
+    expect(state.status).toBe(404);
+
+    const browserMgr = fakeManager();
+    await browserMgr.optIn({
+      sessionId: 'browser-cmd',
+      runtime: 'commandcode',
+      sessionPath: 'browser-cmd',
+      optedInAt: '2026-08-13T00:00:00.000Z',
+      access: 'browser',
+    });
+    const browserApp = buildApp(browserMgr, async () => true);
+    const browserState = await request(browserApp).get('/api/sessions/browser-cmd/notifications');
+    expect(browserState.status).toBe(200);
+  });
+
+  it('hides browser Command Code deliveries if a stored identity is no longer browser-visible', async () => {
+    const mgr = fakeManager();
+    await mgr.optIn({
+      sessionId: 'browser-cmd',
+      runtime: 'commandcode',
+      sessionPath: 'browser-cmd',
+      optedInAt: '2026-08-13T00:00:00.000Z',
+      access: 'browser',
+    });
+    mgr.listDeliveriesForSession.mockReturnValue([{ notification: { runtime: 'commandcode' } }]);
+    const app = buildApp(mgr, async () => false);
+    const state = await request(app).get('/api/sessions/browser-cmd/notifications');
+    expect(state.status).toBe(404);
+    expect(state.body.code).toBe('SESSION_NOT_FOUND');
   });
 
   it('returns 503 when notifications are unavailable (no manager)', async () => {

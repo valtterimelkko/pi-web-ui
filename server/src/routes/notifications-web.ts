@@ -14,10 +14,12 @@ import { cookieAuthMiddleware } from '../middleware/auth.js';
 import type { NotificationManager } from '../notifications/notification-manager.js';
 import type { NotificationRuntime, OptInRecord } from '../notifications/types.js';
 
-const RUNTIMES: readonly NotificationRuntime[] = ['pi', 'claude', 'opencode', 'antigravity'];
+const RUNTIMES: readonly NotificationRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode'];
 
 export interface NotificationsWebDeps {
   getManager: () => NotificationManager | null;
+  /** Resolves the browser-visible runtime identity; Command Code uses this to prevent shadow-only exposure. */
+  resolveSession?: (sessionId: string, runtime: NotificationRuntime, sessionPath: string) => Promise<boolean>;
 }
 
 export function createNotificationsWebRouter(deps: NotificationsWebDeps): Router {
@@ -55,6 +57,12 @@ export function createNotificationsWebRouter(deps: NotificationsWebDeps): Router
     // the persisted record findable by GET after a reload. The POST body still
     // carries the real sessionPath for the Pi observer's serviceKey.
     const sessionId = canonicalOptInId(runtime as NotificationRuntime, rawId, sessionPath);
+    if (runtime === 'commandcode' && (!deps.resolveSession
+      || rawId !== sessionPath
+      || !(await deps.resolveSession(sessionId, runtime as NotificationRuntime, sessionPath)))) {
+      res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
     const label = typeof req.body?.label === 'string' ? req.body.label.slice(0, 200) : undefined;
     const record: OptInRecord = {
       sessionId,
@@ -62,8 +70,13 @@ export function createNotificationsWebRouter(deps: NotificationsWebDeps): Router
       sessionPath,
       optedInAt: new Date().toISOString(),
       label,
+      access: runtime === 'commandcode' ? 'browser' : 'internal',
     };
-    await manager.optIn(record);
+    const accepted = await manager.optIn(record);
+    if (accepted === false) {
+      res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
     res.json({
       status: 'ok',
       optIn: { sessionId, runtime: record.runtime, label: record.label },
@@ -77,6 +90,15 @@ export function createNotificationsWebRouter(deps: NotificationsWebDeps): Router
       res.status(503).json({ error: 'Notifications unavailable', code: 'NOTIFICATIONS_UNAVAILABLE' });
       return;
     }
+    const existing = manager.getOptIn(req.params.id);
+    if (existing?.runtime === 'commandcode' && !isBoundBrowserCommandCodeRecord(existing, req.params.id)) {
+      res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    if (existing?.runtime === 'commandcode' && (!deps.resolveSession || !(await deps.resolveSession(req.params.id, existing.runtime, existing.sessionPath)))) {
+      res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
     await manager.optOut(req.params.id);
     res.json({ status: 'ok', optIn: null });
   });
@@ -88,12 +110,37 @@ export function createNotificationsWebRouter(deps: NotificationsWebDeps): Router
       res.status(503).json({ error: 'Notifications unavailable', code: 'NOTIFICATIONS_UNAVAILABLE' });
       return;
     }
+    const existing = manager.getOptIn(req.params.id);
+    if (existing?.runtime === 'commandcode' && !isBoundBrowserCommandCodeRecord(existing, req.params.id)) {
+      res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    if (existing?.runtime === 'commandcode' && (!deps.resolveSession || !(await deps.resolveSession(req.params.id, existing.runtime, existing.sessionPath)))) {
+      res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    const allDeliveries = manager.listDeliveriesForSession(req.params.id);
+    if (!existing && allDeliveries.some((item) => item.notification.runtime === 'commandcode')) {
+      if (!deps.resolveSession || !(await deps.resolveSession(req.params.id, 'commandcode', req.params.id))) {
+        res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+        return;
+      }
+    }
+    const deliveries = existing?.runtime === 'commandcode'
+      ? allDeliveries
+      : allDeliveries.filter((item) => item.notification.runtime !== 'commandcode');
     res.json({
       status: 'ok',
-      optIn: manager.getOptIn(req.params.id) ?? null,
-      deliveries: manager.listDeliveriesForSession(req.params.id),
+      optIn: existing ?? null,
+      deliveries,
     });
   });
 
   return router;
+}
+
+function isBoundBrowserCommandCodeRecord(record: OptInRecord, requestedId: string): boolean {
+  return record.access === 'browser'
+    && record.sessionId === requestedId
+    && record.sessionPath === record.sessionId;
 }

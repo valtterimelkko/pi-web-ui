@@ -7,6 +7,7 @@ import { getClaudeProfiles } from '../claude/index.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { apiLimiter } from '../security/rate-limit.js';
 import { createLogger } from '../logging/logger.js';
+import { getCommandCodeService } from '../command-code/command-code-instance.js';
 
 const logger = createLogger('Models');
 
@@ -32,6 +33,17 @@ router.get('/', async (req: Request, res: Response) => {
       }
       const models = await opencodeService.getAvailableModels();
       res.json({ models });
+      return;
+    }
+
+    if (sdkType === 'commandcode') {
+      const commandCodeService = getCommandCodeService();
+      await commandCodeService?.init();
+      if (!commandCodeService?.isBrowserAvailable()) {
+        res.json({ models: [] });
+        return;
+      }
+      res.json({ models: commandCodeService.getBrowserModels() });
       return;
     }
 

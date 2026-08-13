@@ -24,6 +24,7 @@ export function findSessionEntry(entries, query) {
     || entry.claudeSessionId === query
     || entry.opencodeSessionId === query
     || entry.antigravityConversationId === query
+    || entry.commandCodeNativeSessionId === query
   )) ?? null;
 }
 
@@ -99,6 +100,23 @@ export function buildSessionDebugReport(entry, opts = {}) {
     return lines.join('\n');
   }
 
+  if (entry.sdkType === 'commandcode') {
+    lines.push(
+      '  - Command Code service journal: sudo journalctl -u pi-web-ui -f | grep -i commandcode',
+      '',
+      'Session files and state:',
+      `  - Private session record:    ${path.join(homeDir, '.pi-web-ui', 'command-code', 'sessions', `${entry.id}.json`)}`,
+      `  - Normalized event journal:  ${path.join(homeDir, '.pi-web-ui', 'command-code', 'events', `${entry.id}.jsonl`)}`,
+      `  - Native session id:         ${entry.commandCodeNativeSessionId || 'N/A'}`,
+      '  - Native auth/config:        server-owned per-session home (not exposed to the browser)',
+      '',
+      'Useful checks:',
+      '  - Command Code health:       curl http://localhost:<server-port>/api/health/ready | jq ".checks.commandcode"',
+      '  - Command Code models:        curl "http://localhost:<server-port>/api/models?sdkType=commandcode"',
+    );
+    return lines.join('\\n');
+  }
+
   if (entry.sdkType === 'antigravity') {
     const conversationId = entry.antigravityConversationId || 'N/A';
     lines.push(
@@ -145,6 +163,7 @@ export function buildSessionEvidenceJson(entry, opts = {}) {
     ...(entry.claudeSessionId ? { claudeSessionId: entry.claudeSessionId } : {}),
     ...(entry.opencodeSessionId ? { opencodeSessionId: entry.opencodeSessionId } : {}),
     ...(entry.antigravityConversationId ? { antigravityConversationId: entry.antigravityConversationId } : {}),
+    ...(entry.commandCodeNativeSessionId ? { commandCodeNativeSessionId: entry.commandCodeNativeSessionId } : {}),
   };
 
   let runtime = {};
@@ -170,6 +189,14 @@ export function buildSessionEvidenceJson(entry, opts = {}) {
       opencodeSessionId: entry.opencodeSessionId ?? '',
       transcriptSource: 'OpenCode runtime/message APIs',
       goalEngineStateDir: path.join(homeDir, '.opencode', 'goal-engine'),
+    };
+  } else if (entry.sdkType === 'commandcode') {
+    journalUnit = 'pi-web-ui';
+    runtime = {
+      privateSessionRecord: path.join(homeDir, '.pi-web-ui', 'command-code', 'sessions', `${entry.id}.json`),
+      normalizedEventJournal: path.join(homeDir, '.pi-web-ui', 'command-code', 'events', `${entry.id}.jsonl`),
+      commandCodeNativeSessionId: entry.commandCodeNativeSessionId ?? '',
+      transcriptSource: 'Pi Web UI normalized Command Code journal',
     };
   } else if (entry.sdkType === 'antigravity') {
     runtime = {

@@ -33,6 +33,8 @@ import { parseGoalCommand, type GoalCommand } from '../opencode/goal-command.js'
 import { OpenCodeSessionSubscribers } from '../opencode/opencode-session-subscribers.js';
 import { getAntigravityService, type AntigravityService } from '../antigravity/index.js';
 import { AntigravitySessionSubscribers } from '../antigravity/antigravity-session-subscribers.js';
+import { CommandCodeService } from '../command-code/command-code-service.js';
+import { setCommandCodeService } from '../command-code/command-code-instance.js';
 import { getSessionRegistry } from '../session-registry.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
@@ -134,6 +136,7 @@ export async function sendRuntimeAvailabilityStatus(
   opencodeService: OpenCodeAvailabilityService,
   sendMessage: (clientId: string, message: ServerMessage) => void,
   antigravityService?: AntigravityAvailabilityService,
+  commandCodeService?: Pick<CommandCodeService, 'isEnabled' | 'isBrowserAvailable' | 'getBrowserModels'> & { init?: () => Promise<void> },
 ): Promise<void> {
   await Promise.all([
     (async () => {
@@ -212,6 +215,22 @@ export async function sendRuntimeAvailabilityStatus(
         } as ServerMessage);
       }
     })(),
+    (async () => {
+      if (!commandCodeService) return;
+      try {
+        await commandCodeService.init?.();
+        const available = commandCodeService.isBrowserAvailable();
+        sendMessage(clientId, {
+          type: 'commandcode_available',
+          available,
+          enabled: commandCodeService.isEnabled(),
+          models: available ? commandCodeService.getBrowserModels() : [],
+          error: available ? null : commandCodeService.isEnabled() ? 'Command Code browser runtime is unavailable' : 'Command Code browser runtime is disabled',
+        });
+      } catch {
+        sendMessage(clientId, { type: 'commandcode_available', available: false, enabled: commandCodeService.isEnabled(), models: [], error: 'Command Code availability check failed' });
+      }
+    })(),
   ]);
 }
 
@@ -251,9 +270,12 @@ export class WebSocketConnectionManager {
   private antigravityService: AntigravityService;
   private antigravitySessionIds: Set<string> = new Set();
   private antigravitySubs = new AntigravitySessionSubscribers();
+  private commandCodeService: CommandCodeService;
+  private commandCodeSessionIds: Set<string> = new Set();
+  private commandCodeSubs = new Map<string, Set<string>>();
   private pendingClaudePermissions: Map<string, string> = new Map();
 
-  constructor() {
+  constructor(commandCodeService?: CommandCodeService) {
     this.wss = new WebSocketServer({ noServer: true });
     this.piService = getPiService();
     this.sessionPool = new SessionPool(this.piService);
@@ -261,6 +283,26 @@ export class WebSocketConnectionManager {
     this.claudeService = getClaudeService();
     this.opencodeService = getOpenCodeService();
     this.antigravityService = getAntigravityService();
+    this.commandCodeService = commandCodeService ?? new CommandCodeService({
+      config: {
+        enabled: config.commandCodeEnabled || config.commandCodeBrowserEnabled,
+        shadowEnabled: config.commandCodeEnabled,
+        browserEnabled: config.commandCodeBrowserEnabled,
+        browserAllowedModels: config.commandCodeBrowserAllowedModels,
+        browserAllowedCwdRoots: config.commandCodeBrowserAllowedCwdRoots,
+        browserAuthFile: config.commandCodeBrowserAuthFile,
+        browserRuntimeRoots: config.commandCodeBrowserRuntimeRoots,
+        executablePath: config.commandCodeExecutablePath,
+        stateDir: config.commandCodeStateDir,
+        nativeHomeDir: config.commandCodeNativeHomeDir,
+        allowedCwdRoots: config.commandCodeAllowedCwdRoots,
+        expectedVersion: config.commandCodeExpectedVersion,
+        maxTurns: config.commandCodeMaxTurns,
+        maxWallTimeMs: config.commandCodeMaxWallTimeMs,
+        concurrency: config.commandCodeConcurrency,
+      },
+    });
+    setCommandCodeService(this.commandCodeService);
 
     // Log Claude availability on startup
     this.claudeService.isAvailable().then(async (available) => {
@@ -276,6 +318,7 @@ export class WebSocketConnectionManager {
     void this.restoreClaudeSessionIds();
     void this.restoreOpencodeSessionIds();
     void this.restoreAntigravitySessionIds();
+    void this.restoreCommandCodeSessionIds();
 
     // Create MultiSessionManager with broadcast function
     // Configure aggressive cleanup for lazy session management
@@ -370,6 +413,41 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private getCommandCodeSubscribers(sessionId: string): Set<string> {
+    const subscribers = this.commandCodeSubs.get(sessionId);
+    return subscribers ?? new Set<string>();
+  }
+
+  private subscribeCommandCode(clientId: string, sessionId: string): void {
+    const subscribers = this.commandCodeSubs.get(sessionId) ?? new Set<string>();
+    subscribers.add(clientId);
+    this.commandCodeSubs.set(sessionId, subscribers);
+  }
+
+  private unsubscribeCommandCode(clientId: string, sessionId: string): void {
+    const subscribers = this.commandCodeSubs.get(sessionId);
+    if (!subscribers) return;
+    subscribers.delete(clientId);
+    if (subscribers.size === 0) this.commandCodeSubs.delete(sessionId);
+  }
+
+  private unsubscribeAllCommandCode(clientId: string): void {
+    for (const [sessionId, subscribers] of this.commandCodeSubs) {
+      subscribers.delete(clientId);
+      if (subscribers.size === 0) this.commandCodeSubs.delete(sessionId);
+    }
+  }
+
+  private async restoreCommandCodeSessionIds(): Promise<void> {
+    try {
+      const sessions = await this.commandCodeService.listBrowserSessions();
+      for (const session of sessions) this.commandCodeSessionIds.add(session.sessionId);
+      if (sessions.length > 0) logger.info(`[WebUI] Restored ${sessions.length} Command Code session(s)`);
+    } catch (err) {
+      logger.warn('[WebUI] Failed to restore Command Code sessions:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   /**
    * Set up broadcasting of session status changes to all clients.
    * Covers both Pi SDK sessions (via MultiSessionManager) and
@@ -443,6 +521,26 @@ export class WebSocketConnectionManager {
           });
         }
       }
+
+      for (const sessionId of this.commandCodeSessionIds) {
+        const subscribers = this.getCommandCodeSubscribers(sessionId);
+        if (subscribers.size > 0) {
+          const isRunning = this.commandCodeService.isRunning(sessionId);
+          const session = this.commandCodeService.getSession(sessionId);
+          void session.then((record) => {
+            if (!record) return;
+            this.broadcast({
+              type: 'session_status',
+              sessionId,
+              sessionPath: sessionId,
+              status: isRunning ? 'streaming' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
+              lastActivity: record.updatedAt,
+              messageCount: record.messageCount,
+              pinned: this.commandCodeService.isSessionPinned(sessionId),
+            });
+          }).catch(() => undefined);
+        }
+      }
     }, 1000);
     // Do not keep the process alive solely for status polling; the HTTP/WS
     // listeners own the event loop, and this lets tests exit cleanly.
@@ -477,6 +575,7 @@ export class WebSocketConnectionManager {
         this.opencodeService,
         this.sendMessage.bind(this),
         this.antigravityService,
+        this.commandCodeService,
       );
 
       // Set up event forwarding for this client
@@ -707,6 +806,10 @@ export class WebSocketConnectionManager {
         await this.handleSetThinkingLevel(clientId, message);
         break;
 
+      case 'set_effort':
+        await this.handleSetEffort(clientId, message);
+        break;
+
       case 'compact':
         await this.handleCompact(clientId, message);
         break;
@@ -835,6 +938,8 @@ export class WebSocketConnectionManager {
       claudeService: this.claudeService,
       opencodeService: this.opencodeService,
       antigravityService: this.antigravityService,
+      commandCodeService: this.commandCodeService,
+      allowBrowserCommandCodeTarget: true,
       piSessionDir: config.sessionDir || process.env.PI_SESSIONS_DIR || `${config.piAgentDir}/sessions`,
       isPiSessionBusy: (sessionPath: string) => {
         const status = this.multiSessionManager.getSessionStatus(sessionPath)?.status;
@@ -972,6 +1077,11 @@ export class WebSocketConnectionManager {
     }
     await withCorrelation({ requestId: newRequestId(), sessionId: correlationSessionId }, async () => {
       // Dispatch to appropriate runtime handler
+      if (this.commandCodeSessionIds.has(sessionPath)) {
+        await this.handleCommandCodePrompt(clientId, sessionPath, message.message);
+        return;
+      }
+
       if (this.antigravitySessionIds.has(sessionPath)) {
         await this.handleAntigravityPrompt(clientId, sessionPath, message.message);
         return;
@@ -1027,6 +1137,30 @@ export class WebSocketConnectionManager {
         throw error;
       }
     });
+  }
+
+  private async handleCommandCodePrompt(clientId: string, sessionId: string, prompt: string): Promise<void> {
+    try {
+      await this.commandCodeService.sendPrompt(
+        sessionId,
+        prompt,
+        (normalizedEvent) => {
+          const msg = { type: 'session_event' as const, sessionId, event: normEventToPiFormat(normalizedEvent) };
+          const subscribers = this.getCommandCodeSubscribers(sessionId);
+          const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
+          for (const subId of targets) this.sendMessage(subId, msg as unknown as ServerMessage);
+        },
+        (error) => {
+          const subscribers = this.getCommandCodeSubscribers(sessionId);
+          const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
+          if (error) {
+            for (const subId of targets) this.sendMessage(subId, { type: 'error', message: error.message, code: (error as Error & { code?: string }).code ?? 'COMMANDCODE_ERROR' });
+          }
+        },
+      );
+    } catch (error) {
+      this.sendMessage(clientId, { type: 'error', message: error instanceof Error ? error.message : 'Command Code prompt failed', code: (error as Error & { code?: string }).code ?? 'COMMANDCODE_ERROR' });
+    }
   }
 
   /**
@@ -1377,6 +1511,10 @@ export class WebSocketConnectionManager {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
+    if (this.commandCodeSessionIds.has(sessionPath)) {
+      this.sendMessage(clientId, { type: 'error', message: 'Command Code does not support steer while a turn is running', code: 'STEER_UNSUPPORTED' });
+      return;
+    }
 
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
     if (!agentSession) {
@@ -1396,6 +1534,10 @@ export class WebSocketConnectionManager {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
+    if (this.commandCodeSessionIds.has(sessionPath)) {
+      await this.handleCommandCodePrompt(clientId, sessionPath, message.message);
+      return;
+    }
 
     const agentSession = this.multiSessionManager.getAgentSession(sessionPath);
     if (!agentSession) {
@@ -1409,6 +1551,11 @@ export class WebSocketConnectionManager {
   private async handleAbort(clientId: string): Promise<void> {
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) return;
+
+    if (this.commandCodeSessionIds.has(sessionPath)) {
+      await this.commandCodeService.abort(sessionPath);
+      return;
+    }
 
     if (this.antigravitySessionIds.has(sessionPath)) {
       this.antigravityService.abort(sessionPath);
@@ -1563,12 +1710,55 @@ export class WebSocketConnectionManager {
 
   private async handleNewSession(
     clientId: string,
-    message: { type: 'new_session'; cwd?: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity'; model?: string; thinkingLevel?: string }
+    message: Extract<ClientMessage, { type: 'new_session' }>
   ): Promise<void> {
     logger.info(`[handleNewSession] Creating session for client ${clientId}, cwd=${message.cwd || 'not specified'}, sdkType=${message.sdkType || 'pi'}, model=${message.model || 'default'}, thinkingLevel=${message.thinkingLevel || 'default'}`);
 
     const cwd = message.cwd || config.validationDefaultCwd;
     const sdkType = message.sdkType || 'pi';
+
+    if (sdkType === 'commandcode') {
+      try {
+        await this.commandCodeService.init();
+        if (!this.commandCodeService.isBrowserAvailable()) {
+          this.sendMessage(clientId, {
+            type: 'error',
+            message: this.commandCodeService.isEnabled() ? 'Command Code browser runtime is unavailable' : 'Command Code browser runtime is disabled',
+            code: 'COMMANDCODE_UNAVAILABLE',
+          });
+          return;
+        }
+        const selectedModel = message.model ?? this.commandCodeService.getBrowserModels()[0]?.id;
+        if (!selectedModel) {
+          this.sendMessage(clientId, { type: 'error', message: 'No Command Code model is available for browser use', code: 'COMMANDCODE_MODEL_UNAVAILABLE' });
+          return;
+        }
+        const created = await this.commandCodeService.createSession({
+          cwd,
+          model: selectedModel,
+          effort: message.effort,
+          permissionProfile: 'browser-contained',
+        });
+        const effortCapability = this.commandCodeService.getEffortCapability(created.modelSelector);
+        this.commandCodeSessionIds.add(created.sessionId);
+        this.clientViewingSession.set(clientId, created.sessionId);
+        this.subscribeCommandCode(clientId, created.sessionId);
+        this.clientCwd.set(clientId, cwd);
+        this.sendMessage(clientId, {
+          type: 'session_created',
+          sessionId: created.sessionId,
+          sessionPath: created.sessionId,
+          sdkType: 'commandcode',
+          model: created.modelSelector,
+          effort: created.effort,
+          effortLevels: effortCapability?.effortLevels,
+          effortSource: created.effortSource,
+        } as unknown as ServerMessage);
+      } catch (error) {
+        this.sendMessage(clientId, { type: 'error', message: error instanceof Error ? error.message : 'Failed to create Command Code session', code: 'COMMANDCODE_CREATE_FAILED' });
+      }
+      return;
+    }
 
     if (sdkType === 'antigravity') {
       try {
@@ -1735,6 +1925,9 @@ export class WebSocketConnectionManager {
     if (isClaudeSession) {
       if (oldSessionPath && oldSessionPath !== sessionPath) {
         this.claudeSubs.unsubscribe(clientId, oldSessionPath);
+        this.unsubscribeCommandCode(clientId, oldSessionPath);
+        this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
+        this.antigravitySubs.unsubscribe(clientId, oldSessionPath);
         this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
       }
       this.clientViewingSession.set(clientId, sessionPath);
@@ -1763,6 +1956,8 @@ export class WebSocketConnectionManager {
       if (oldSessionPath && oldSessionPath !== sessionPath) {
         this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
         this.claudeSubs.unsubscribe(clientId, oldSessionPath);
+        this.unsubscribeCommandCode(clientId, oldSessionPath);
+        this.antigravitySubs.unsubscribe(clientId, oldSessionPath);
         this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
       }
       this.clientViewingSession.set(clientId, sessionPath);
@@ -1792,6 +1987,7 @@ export class WebSocketConnectionManager {
         this.antigravitySubs.unsubscribe(clientId, oldSessionPath);
         this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
         this.claudeSubs.unsubscribe(clientId, oldSessionPath);
+        this.unsubscribeCommandCode(clientId, oldSessionPath);
         this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
       }
       this.clientViewingSession.set(clientId, sessionPath);
@@ -1802,15 +1998,49 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    let isCommandCodeSession = this.commandCodeSessionIds.has(sessionPath);
+    if (!isCommandCodeSession) {
+      try {
+        const entry = await getSessionRegistry().get(sessionPath);
+        if (entry?.sdkType === 'commandcode' && await this.commandCodeService.isBrowserSession(sessionPath)) {
+          isCommandCodeSession = true;
+          this.commandCodeSessionIds.add(sessionPath);
+        }
+      } catch {
+        // ignore registry lookup failures
+      }
+    }
+    if (isCommandCodeSession) {
+      if (oldSessionPath && oldSessionPath !== sessionPath) {
+        this.unsubscribeCommandCode(clientId, oldSessionPath);
+        this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
+        this.antigravitySubs.unsubscribe(clientId, oldSessionPath);
+        this.claudeSubs.unsubscribe(clientId, oldSessionPath);
+        this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
+      }
+      this.clientViewingSession.set(clientId, sessionPath);
+      const commandCodeRecord = await this.commandCodeService.getBrowserSession(sessionPath);
+      if (commandCodeRecord) this.clientCwd.set(clientId, commandCodeRecord.cwd);
+      this.subscribeCommandCode(clientId, sessionPath);
+      await this.replayCommandCodeHistory(clientId, sessionPath);
+      logger.info(`[handleSwitchSession] Client ${clientId} switched to Command Code session ${sessionPath}`);
+      return;
+    }
+
     // Pi session switching. Validate the on-disk identity before mutating the
     // client's current subscription or asking the SDK to rehydrate the path.
     // MultiSessionManager may already hold this path in memory, so relying on
     // createSession() alone would miss a file deleted after first open.
     await assertPiSessionFileIdentity(sessionPath);
 
-    // Unsubscribe from the old session if different from new session
-    // This prevents receiving events from the old session while viewing the new one
+    // Unsubscribe from every runtime's old subscription before switching to Pi.
+    // This prevents a Command Code (or other runtime) stream from leaking into
+    // the newly viewed session after a cross-runtime switch.
     if (oldSessionPath && oldSessionPath !== sessionPath) {
+      this.unsubscribeCommandCode(clientId, oldSessionPath);
+      this.claudeSubs.unsubscribe(clientId, oldSessionPath);
+      this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
+      this.antigravitySubs.unsubscribe(clientId, oldSessionPath);
       this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
       logger.info(`[handleSwitchSession] Client ${clientId} unsubscribed from ${oldSessionPath}`);
     }
@@ -2000,6 +2230,38 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private async replayCommandCodeHistory(clientId: string, sessionId: string): Promise<void> {
+    const record = await this.commandCodeService.getBrowserSession(sessionId);
+    if (!record) {
+      this.sendMessage(clientId, { type: 'error', message: 'Command Code session not found', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    const capability = this.commandCodeService.getEffortCapability(record.modelSelector);
+    this.sendMessage(clientId, {
+      type: 'session_switched',
+      sessionId,
+      sessionPath: sessionId,
+      sdkType: 'commandcode',
+      model: record.modelSelector,
+      effort: record.effort,
+      effortLevels: capability?.effortLevels,
+      isStreaming: this.commandCodeService.isRunning(sessionId),
+      messages: [],
+      fileTimestamp: Date.parse(record.updatedAt),
+    } as unknown as ServerMessage);
+    const events = await this.commandCodeService.getReplayEvents(sessionId);
+    if (events.length === 0) return;
+    this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
+    for (const event of events) {
+      this.sendMessage(clientId, {
+        type: 'session_event',
+        sessionId,
+        event: normEventToPiFormat(event),
+      } as unknown as ServerMessage);
+    }
+    this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
+  }
+
   private async replayAntigravityHistory(clientId: string, sessionId: string): Promise<void> {
     // Durability note: prompts are persisted as a `running` turn the instant they
     // are accepted (see docs/plans/ANTIGRAVITY-TURN-DURABILITY-PLAN.md), so a
@@ -2085,7 +2347,7 @@ export class WebSocketConnectionManager {
     const piSessions = await getPiSessionListCache().list();
 
     const formattedPiSessions: Array<{
-      id: string; path: string; sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity';
+      id: string; path: string; sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
       firstMessage: string; messageCount: number; cwd: string;
       name?: string; createdAt: string; lastActivity: string;
     }> = piSessions.map(s => ({
@@ -2156,6 +2418,30 @@ export class WebSocketConnectionManager {
       logger.warn('[handleGetSessions] Failed to load Antigravity sessions:', e instanceof Error ? e.message : String(e));
     }
 
+    try {
+      const commandCodeEntries = await this.commandCodeService.listBrowserSessions();
+      const formattedCommandCodeSessions = commandCodeEntries.map((entry) => {
+        const capability = this.commandCodeService.getEffortCapability(entry.modelSelector);
+        return {
+          id: entry.sessionId,
+          path: entry.sessionId,
+          sdkType: 'commandcode' as const,
+          model: entry.modelSelector,
+          effort: entry.effort,
+          effortLevels: capability?.effortLevels,
+          firstMessage: entry.firstMessage || '',
+          messageCount: entry.messageCount || 0,
+          cwd: entry.cwd || '',
+          name: undefined,
+          createdAt: entry.createdAt,
+          lastActivity: entry.updatedAt,
+        };
+      });
+      allSessions = [...allSessions, ...formattedCommandCodeSessions];
+    } catch (e) {
+      logger.warn('[handleGetSessions] Failed to load Command Code sessions:', e instanceof Error ? e.message : String(e));
+    }
+
     this.sendMessage(clientId, {
       type: 'sessions_list',
       sessions: allSessions,
@@ -2178,6 +2464,31 @@ export class WebSocketConnectionManager {
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    // Command Code session info
+    if (this.commandCodeSessionIds.has(sessionPath)) {
+      const record = await this.commandCodeService.getBrowserSession(sessionPath);
+      if (!record) {
+        this.sendMessage(clientId, { type: 'error', message: 'Command Code session not found', code: 'SESSION_NOT_FOUND' });
+        return;
+      }
+      const capability = this.commandCodeService.getEffortCapability(record.modelSelector);
+      this.sendMessage(clientId, {
+        type: 'session_info',
+        stats: {
+          sessionId: record.sessionId,
+          cwd: record.cwd,
+          userMessages: record.messageCount,
+          totalMessages: record.messageCount,
+          messageCount: record.messageCount,
+          model: record.modelSelector,
+          effort: record.effort,
+          effortLevels: capability?.effortLevels,
+          lastActivityAt: Date.parse(record.updatedAt),
+        },
+      } as unknown as ServerMessage);
       return;
     }
 
@@ -2381,6 +2692,11 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    if (this.commandCodeSessionIds.has(sessionPath)) {
+      this.sendMessage(clientId, { type: 'error', message: 'Command Code model switching is not supported for an existing session', code: 'MODEL_SWITCH_UNSUPPORTED' });
+      return;
+    }
+
     if (this.opencodeSessionIds.has(sessionPath)) {
       if (!this.opencodeService.isEnabled()) {
         this.sendMessage(clientId, {
@@ -2445,6 +2761,37 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private async handleSetEffort(
+    clientId: string,
+    message: { type: 'set_effort'; effort?: import('@pi-web-ui/shared').CommandCodeEffort },
+  ): Promise<void> {
+    const sessionPath = this.getCurrentSessionPath(clientId);
+    if (!sessionPath) {
+      this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    if (!this.commandCodeSessionIds.has(sessionPath)) {
+      this.sendMessage(clientId, { type: 'error', message: 'Native effort is only supported by Command Code', code: 'EFFORT_UNSUPPORTED' });
+      return;
+    }
+    try {
+      const updated = await this.commandCodeService.setEffort(sessionPath, message.effort);
+      const capability = this.commandCodeService.getEffortCapability(updated.modelSelector);
+      const subscribers = this.getCommandCodeSubscribers(sessionPath);
+      const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
+      for (const subId of targets) {
+        this.sendMessage(subId, {
+          type: 'effort_changed',
+          effort: updated.effort,
+          effortSource: updated.effortSource ?? 'none',
+          effortLevels: capability?.effortLevels,
+        });
+      }
+    } catch (error) {
+      this.sendMessage(clientId, { type: 'error', message: error instanceof Error ? error.message : 'Failed to set Command Code effort', code: 'EFFORT_UNSUPPORTED' });
+    }
+  }
+
   private async handleSetThinkingLevel(
     clientId: string,
     message: { type: 'set_thinking_level'; level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }
@@ -2452,6 +2799,11 @@ export class WebSocketConnectionManager {
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    if (this.commandCodeSessionIds.has(sessionPath)) {
+      this.sendMessage(clientId, { type: 'error', message: 'Command Code uses native effort, not generic thinkingLevel', code: 'THINKING_LEVEL_UNSUPPORTED' });
       return;
     }
 
@@ -2719,6 +3071,22 @@ export class WebSocketConnectionManager {
   ): Promise<void> {
     const sessionPath = message.sessionPath;
 
+    // Command Code session subscribe
+    let isCommandCodeSub = this.commandCodeSessionIds.has(sessionPath);
+    if (!isCommandCodeSub) {
+      const entry = await getSessionRegistry().get(sessionPath).catch(() => undefined);
+      if (entry?.sdkType === 'commandcode' && await this.commandCodeService.isBrowserSession(sessionPath)) {
+        isCommandCodeSub = true;
+        this.commandCodeSessionIds.add(sessionPath);
+      }
+    }
+    if (isCommandCodeSub) {
+      this.clientViewingSession.set(clientId, sessionPath);
+      this.subscribeCommandCode(clientId, sessionPath);
+      await this.replayCommandCodeHistory(clientId, sessionPath);
+      return;
+    }
+
     // Check if this is a Claude session
     let isClaudeSession = this.claudeSessionIds.has(sessionPath);
     if (!isClaudeSession) {
@@ -2792,6 +3160,12 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'unsubscribe_session'; sessionPath: string }
   ): void {
+    if (this.commandCodeSessionIds.has(message.sessionPath)) {
+      this.unsubscribeCommandCode(clientId, message.sessionPath);
+      this.sendMessage(clientId, { type: 'session_unsubscribed', sessionId: message.sessionPath, sessionPath: message.sessionPath });
+      return;
+    }
+
     // Get session status before unsubscribing to get sessionId
     const status = this.multiSessionManager.getSessionStatus(message.sessionPath);
     const sessionId = status?.sessionId || '';
@@ -2809,6 +3183,14 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'pin_session'; sessionPath: string }
   ): Promise<void> {
+    if (this.commandCodeSessionIds.has(message.sessionPath)) {
+      const success = this.commandCodeService.pinSession(message.sessionPath);
+      this.sendMessage(clientId, success
+        ? { type: 'session_pinned', sessionPath: message.sessionPath, pinned: true }
+        : { type: 'session_pin_error', sessionPath: message.sessionPath, error: 'Session not found' });
+      return;
+    }
+
     if (this.antigravitySessionIds.has(message.sessionPath)) {
       const success = await this.antigravityService.pinSession(message.sessionPath);
       if (success) {
@@ -2883,6 +3265,12 @@ export class WebSocketConnectionManager {
     clientId: string,
     message: { type: 'unpin_session'; sessionPath: string }
   ): void {
+    if (this.commandCodeSessionIds.has(message.sessionPath)) {
+      this.commandCodeService.unpinSession(message.sessionPath);
+      this.sendMessage(clientId, { type: 'session_pinned', sessionPath: message.sessionPath, pinned: false });
+      return;
+    }
+
     if (this.antigravitySessionIds.has(message.sessionPath)) {
       this.antigravityService.unpinSession(message.sessionPath);
       this.sendMessage(clientId, { type: 'session_pinned', sessionPath: message.sessionPath, pinned: false });
@@ -2938,6 +3326,7 @@ export class WebSocketConnectionManager {
       this.claudeSubs.unsubscribeAll(clientId);
       this.opencodeSubs.unsubscribeAll(clientId);
       this.antigravitySubs.unsubscribeAll(clientId);
+      this.unsubscribeAllCommandCode(clientId);
 
       // Arm the grace timer for sessions that may now be unwatched + pending.
       for (const sessionId of watchedClaudeSessions) {
@@ -3113,6 +3502,10 @@ export class WebSocketConnectionManager {
     return this.antigravityService;
   }
 
+  getCommandCodeService(): CommandCodeService {
+    return this.commandCodeService;
+  }
+
   /**
    * Close all connections and cleanup
    */
@@ -3150,6 +3543,7 @@ export class WebSocketConnectionManager {
         this.claudeService.stop(),
         this.opencodeService.shutdown(),
         this.antigravityService.shutdown(),
+        this.commandCodeService.shutdown(),
       ]);
       const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failure) throw failure.reason;

@@ -14,6 +14,7 @@ export interface RegistryEntry {
   claudeSessionId?: string; // For Claude: the --session-id
   opencodeSessionId?: string; // For OpenCode: the OpenCode server session ID
   antigravityConversationId?: string; // For Antigravity: the agy --conversation UUID
+  commandCodeNativeSessionId?: string; // For Command Code: native resume/session id
   cwd: string;
   model?: string;
   thinkingLevel?: string;
@@ -138,6 +139,11 @@ export class SessionRegistryManager {
     return registry.entries.find(e => e.opencodeSessionId === opencodeSessionId);
   }
 
+  async getByCommandCodeNativeSessionId(commandCodeNativeSessionId: string): Promise<RegistryEntry | undefined> {
+    const registry = await this.load();
+    return registry.entries.find(e => e.commandCodeNativeSessionId === commandCodeNativeSessionId);
+  }
+
   async upsert(entry: Partial<RegistryEntry> & { sdkType: SdkType; cwd: string }): Promise<RegistryEntry> {
     const registry = await this.load();
 
@@ -154,6 +160,19 @@ export class SessionRegistryManager {
     }
     if (existingIndex === -1 && entry.opencodeSessionId) {
       existingIndex = registry.entries.findIndex(e => e.opencodeSessionId === entry.opencodeSessionId);
+    }
+    if (existingIndex === -1 && entry.commandCodeNativeSessionId) {
+      existingIndex = registry.entries.findIndex(e => e.commandCodeNativeSessionId === entry.commandCodeNativeSessionId);
+    }
+
+    if (entry.sdkType === 'commandcode' && entry.commandCodeNativeSessionId) {
+      const duplicate = registry.entries.find((candidate) => (
+        candidate.sdkType === 'commandcode'
+        && candidate.commandCodeNativeSessionId === entry.commandCodeNativeSessionId
+        && candidate.id !== entry.id
+        && candidate.path !== entry.path
+      ));
+      if (duplicate) throw new Error(`Command Code native session id is already bound to ${duplicate.id}`);
     }
 
     const now = new Date().toISOString();
@@ -179,6 +198,7 @@ export class SessionRegistryManager {
         path: entry.path ?? '',
         claudeSessionId: entry.claudeSessionId,
         opencodeSessionId: entry.opencodeSessionId,
+        commandCodeNativeSessionId: entry.commandCodeNativeSessionId,
         cwd: entry.cwd,
         model: entry.model,
         thinkingLevel: entry.thinkingLevel,

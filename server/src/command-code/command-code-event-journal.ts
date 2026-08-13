@@ -80,15 +80,25 @@ function validateSessionId(value: string): string {
   return value;
 }
 
-function redactValue(value: unknown, depth = 0): unknown {
+function redactValue(value: unknown, depth = 0, keyHint = ''): unknown {
   if (depth > 8) return '[truncated]';
-  if (typeof value === 'string') return value.length > 20_000 ? `${value.slice(0, 20_000)}…` : value;
-  if (Array.isArray(value)) return value.slice(0, 100).map((item) => redactValue(item, depth + 1));
+  if (typeof value === 'string') {
+    if (/(?:token|secret|password|api[_-]?key|auth(?:entication)?)/i.test(keyHint)) return '[REDACTED]';
+    return redactSensitiveText(value.length > 20_000 ? `${value.slice(0, 20_000)}…` : value);
+  }
+  if (Array.isArray(value)) return value.slice(0, 100).map((item) => redactValue(item, depth + 1, keyHint));
   if (!value || typeof value !== 'object') return value;
   const result: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 100)) {
     if (/(?:token|secret|password|api[_-]?key|auth(?:entication)?)/i.test(key)) result[key] = '[REDACTED]';
-    else result[key] = redactValue(item, depth + 1);
+    else result[key] = redactValue(item, depth + 1, key);
   }
   return result;
+}
+
+function redactSensitiveText(value: string): string {
+  return value
+    .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
+    .replace(/((?:token|secret|password|api[_-]?key)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|\S+)/gi, '$1[REDACTED]')
+    .replace(/(\b(?:token|secret|password|api[_-]?key)\b\s+)(?:"[^"]*"|'[^']*'|\S+)/gi, '$1[REDACTED]');
 }

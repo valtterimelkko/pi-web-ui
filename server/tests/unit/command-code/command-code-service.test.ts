@@ -25,7 +25,7 @@ class FakeRunner {
 }
 
 const discovery: CommandCodeModelDiscovery = {
-  version: '1.15.0',
+  version: '1.19.0',
   models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'],
   ambiguous: [],
   effortCapabilities: {
@@ -64,13 +64,15 @@ describe('Command Code service', () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const nativeHomeDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-native-home-'));
+    const executablePath = path.join(nativeHomeDir, 'cmd');
+    await writeFile(executablePath, '#!/bin/sh\n', { mode: 0o700 });
     await mkdir(path.join(operatorHome, '.commandcode'), { recursive: true });
     await writeFile(path.join(operatorHome, '.commandcode', 'auth.json'), '{"apiKey":"fixture-secret"}\n', { mode: 0o600 });
     const previousHome = process.env.HOME;
     process.env.HOME = operatorHome;
     try {
       const service = new CommandCodeService({
-        config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, nativeHomeDir, allowedCwdRoots: [cwd], expectedVersion: '1.15.0' },
+        config: { enabled: true, executablePath, stateDir, nativeHomeDir, allowedCwdRoots: [cwd], expectedVersion: '1.19.0' },
         discover: async () => discovery,
         checkExecutable: false,
       });
@@ -79,7 +81,7 @@ describe('Command Code service', () => {
       const authPath = path.join(nativeHomeDir, created.sessionId, '.commandcode', 'auth.json');
       const metadata = await lstat(authPath);
       expect(metadata.isSymbolicLink()).toBe(false);
-      expect(metadata.mode & 0o777).toBe(0o600);
+      expect(metadata.mode & 0o777).toBe(0o400);
       await expect(readFile(authPath, 'utf8')).resolves.toBe('{"apiKey":"fixture-secret"}\n');
     } finally {
       process.env.HOME = previousHome;
@@ -93,7 +95,7 @@ describe('Command Code service', () => {
     const runner = new FakeRunner();
     runner.results.push(success('native-1', 'first'), success('native-1', 'second'));
     const service = new CommandCodeService({
-      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' },
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
       runner,
       discover: async () => discovery,
       checkExecutable: false,
@@ -121,7 +123,7 @@ describe('Command Code service', () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const runner = new FakeRunner();
     runner.results.push(success('native-pending', 'pending-safe'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', effort: 'medium', permissionProfile: 'implementation-child-wide' });
 
@@ -136,7 +138,7 @@ describe('Command Code service', () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const runner = new FakeRunner();
     runner.results.push(success('native-control-race', 'control-race'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', effort: 'medium', permissionProfile: 'implementation-child-wide' });
     let releaseRead!: () => void;
@@ -168,7 +170,7 @@ describe('Command Code service', () => {
   it('waits for an in-flight effort update before deleting the session', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', effort: 'medium', permissionProfile: 'implementation-child-wide' });
     let releaseRead!: () => void;
@@ -198,10 +200,205 @@ describe('Command Code service', () => {
     expect(await service.getSession(session.sessionId)).toBeUndefined();
   });
 
+  it('accepts a freshly discovered model without inventing a native default effort', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const model = 'deepseek/deepseek-v4-pro';
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({
+        version: '1.19.0',
+        models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor', model],
+        ambiguous: [],
+        effortCapabilities: {
+          'qwen/qwen3.8-max': {
+            supportsEffort: true,
+            effortLevels: ['low', 'medium', 'xhigh'],
+            defaultEffort: 'medium',
+            status: 'adjustable',
+            source: 'live-preflight',
+            capabilityHash: 'a'.repeat(64),
+          },
+          'meta/muse-spark-1.2-contributor': {
+            supportsEffort: false,
+            effortLevels: [],
+            status: 'unavailable',
+            source: 'live-preflight',
+            capabilityHash: 'b'.repeat(64),
+          },
+          [model]: {
+            supportsEffort: true,
+            effortLevels: ['high', 'max'],
+            status: 'adjustable',
+            source: 'live-preflight',
+            capabilityHash: 'c'.repeat(64),
+          },
+        },
+      }),
+      checkExecutable: false,
+    });
+    await service.init();
+
+    const created = await service.createSession({
+      cwd,
+      model: model as any,
+      permissionProfile: 'implementation-child-wide',
+    });
+
+    expect(created.modelSelector).toBe(model);
+    expect(created.effort).toBeUndefined();
+    expect(service.getModels()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: model, effortLevels: ['high', 'max'], supportsEffort: true }),
+    ]));
+  });
+
+  it('allows only policy-approved discovered models through the server-owned browser profile', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const browserAuthFile = path.join(cwd, 'browser-auth.json');
+    await writeFile(browserAuthFile, '{"token":"fixture"}\n', { mode: 0o600 });
+    const model = 'deepseek/deepseek-v4-pro';
+    const service = new CommandCodeService({
+      config: {
+        enabled: false,
+        browserEnabled: true,
+        browserAllowedModels: [model],
+        browserAllowedCwdRoots: [cwd],
+        browserAuthFile,
+        browserRuntimeRoots: [cwd],
+        executablePath: '/opt/bin/cmd',
+        stateDir,
+        expectedVersion: '1.19.0',
+      } as any,
+      runner: new FakeRunner(),
+      discover: async () => ({
+        version: '1.19.0',
+        models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor', model],
+        ambiguous: [],
+        effortCapabilities: {
+          'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium', status: 'adjustable', source: 'live-preflight', capabilityHash: 'a'.repeat(64) },
+          'meta/muse-spark-1.2-contributor': { supportsEffort: false, effortLevels: [], status: 'unavailable', source: 'live-preflight', capabilityHash: 'b'.repeat(64) },
+          [model]: { supportsEffort: false, effortLevels: [], status: 'unavailable', source: 'live-preflight', capabilityHash: 'c'.repeat(64) },
+        },
+      }),
+      checkExecutable: false,
+    });
+    (service as any).runner.browserSandboxReady = () => true;
+    await service.init();
+    await expect(service.createSession({ cwd, model, permissionProfile: 'browser-contained' } as any)).resolves.toMatchObject({ modelSelector: model, permissionProfile: 'browser-contained' });
+    await expect(service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'browser-contained' } as any)).rejects.toThrow(/policy|browser|allowlist/i);
+  });
+
+  it('refuses a browser workspace symlink that resolves outside the configured root', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const allowedRoot = await mkdtemp(path.join(os.tmpdir(), 'command-code-browser-root-'));
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'command-code-browser-outside-'));
+    const link = path.join(allowedRoot, 'linked-workspace');
+    const browserAuthFile = path.join(allowedRoot, 'browser-auth.json');
+    await writeFile(browserAuthFile, '{"token":"fixture"}\n', { mode: 0o600 });
+    await (await import('node:fs/promises')).symlink(outside, link, 'dir');
+    const service = new CommandCodeService({
+      config: {
+        enabled: true,
+        browserEnabled: true,
+        browserAllowedModels: ['qwen/qwen3.8-max'],
+        browserAllowedCwdRoots: [allowedRoot],
+        browserAuthFile,
+        browserRuntimeRoots: [allowedRoot],
+        executablePath: '/opt/bin/cmd',
+        stateDir,
+        expectedVersion: '1.19.0',
+      } as any,
+      runner: Object.assign(new FakeRunner(), { browserSandboxReady: () => true }),
+      discover: async () => discovery,
+      checkExecutable: false,
+    });
+    await service.init();
+    await expect(service.createSession({ cwd: link, model: 'qwen/qwen3.8-max', permissionProfile: 'browser-contained' })).rejects.toThrow(/outside|root/i);
+    await Promise.all([
+      service.shutdown(),
+      rm(stateDir, { recursive: true, force: true }),
+      rm(allowedRoot, { recursive: true, force: true }),
+      rm(outside, { recursive: true, force: true }),
+    ]);
+  });
+
+  it('does not expose browser sessions through shadow-only lookups', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const browserAuthFile = path.join(cwd, 'browser-auth.json');
+    await writeFile(browserAuthFile, '{"token":"fixture"}\n', { mode: 0o600 });
+    const service = new CommandCodeService({
+      config: { enabled: false, shadowEnabled: true, browserEnabled: true, browserAllowedModels: ['qwen/qwen3.8-max'], browserAllowedCwdRoots: [cwd], browserAuthFile, browserRuntimeRoots: [cwd], executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' } as any,
+      runner: Object.assign(new FakeRunner(), { browserSandboxReady: () => true }),
+      discover: async () => discovery,
+      checkExecutable: false,
+    });
+    await service.init();
+    const shadow = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide' });
+    const created = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'browser-contained' });
+    await expect(service.getShadowSession(created.sessionId)).resolves.toBeUndefined();
+    await expect(service.getBrowserSession(created.sessionId)).resolves.toMatchObject({ sessionId: created.sessionId });
+    const otherRoot = await mkdtemp(path.join(os.tmpdir(), 'command-code-other-browser-root-'));
+    service.config.browserAllowedCwdRoots = [otherRoot];
+    await expect(service.getBrowserSession(created.sessionId)).resolves.toBeUndefined();
+    service.config.browserAllowedCwdRoots = [cwd];
+    await rm(otherRoot, { recursive: true, force: true });
+    await expect(service.findShadowSession(created.sessionId)).resolves.toBeUndefined();
+    await expect(service.listShadowSessions()).resolves.toEqual([expect.objectContaining({ sessionId: shadow.sessionId })]);
+    await expect(service.listBrowserSessions()).resolves.toEqual([expect.objectContaining({ sessionId: created.sessionId, permissionProfile: 'browser-contained' })]);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('does not expose a persisted browser session after the browser gate is disabled', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const browserAuthFile = path.join(cwd, 'browser-auth.json');
+    await writeFile(browserAuthFile, '{"token":"fixture"}\n', { mode: 0o600 });
+    const first = new CommandCodeService({
+      config: {
+        enabled: true,
+        shadowEnabled: false,
+        browserEnabled: true,
+        browserAllowedModels: ['qwen/qwen3.8-max'],
+        browserAllowedCwdRoots: [cwd],
+        browserAuthFile,
+        browserRuntimeRoots: [cwd],
+        executablePath: '/opt/bin/cmd',
+        stateDir,
+        expectedVersion: '1.19.0',
+      } as any,
+      runner: Object.assign(new FakeRunner(), { browserSandboxReady: () => true }),
+      discover: async () => discovery,
+      checkExecutable: false,
+    });
+    await first.init();
+    const created = await first.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'browser-contained' });
+
+    const second = new CommandCodeService({
+      config: { enabled: false, shadowEnabled: false, browserEnabled: false, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      checkExecutable: false,
+    });
+    await second.init();
+
+    await expect(second.findSession(created.sessionId)).resolves.toBeUndefined();
+    await expect(second.isSessionAccessible(created.sessionId)).resolves.toBe(false);
+
+    await Promise.all([
+      first.shutdown(),
+      second.shutdown(),
+      rm(stateDir, { recursive: true, force: true }),
+      rm(cwd, { recursive: true, force: true }),
+    ]);
+  });
+
   it('refuses native effort for a model with no adjustable effort capability', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
     await service.init();
     await expect(service.createSession({ cwd, model: 'meta/muse-spark-1.2-contributor', effort: 'low', permissionProfile: 'implementation-child-wide' })).rejects.toThrow(/effort|supported/i);
   });
@@ -218,7 +415,7 @@ describe('Command Code service', () => {
         unknownEventTypes: [], suppressedDuplicateCount: 0, bytes: 1, lineCount: 1,
       },
     });
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', effort: 'medium', permissionProfile: 'implementation-child-wide' });
     await service.sendPrompt(session.sessionId, 'report effort', () => undefined);
@@ -233,7 +430,7 @@ describe('Command Code service', () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const allowedRoot = await mkdtemp(path.join(os.tmpdir(), 'command-code-allowed-'));
     const outside = await mkdtemp(path.join(os.tmpdir(), 'command-code-outside-'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0', allowedCwdRoots: [allowedRoot] } as any, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0', allowedCwdRoots: [allowedRoot] } as any, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
     await service.init();
     await expect(service.createSession({ cwd: outside, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly', invocationRole: 'conductor-root' })).rejects.toThrow(/workspace|cwd|root/i);
   });
@@ -241,7 +438,7 @@ describe('Command Code service', () => {
   it('rejects a role-bound Command Code session without an attestation', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
     await service.init();
     await expect(service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly', invocationRole: 'conductor-root' })).rejects.toThrow(/attestation|role/i);
   });
@@ -249,7 +446,7 @@ describe('Command Code service', () => {
   it('accepts a valid server-bound Command Code role attestation', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
     await service.init();
     service.setRoleAttestationSecret('service-secret');
     const attestation = createCommandCodeRoleAttestation('service-secret', {
@@ -269,7 +466,7 @@ describe('Command Code service', () => {
   it('rejects a Command Code role/profile mismatch before creating a session', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner: new FakeRunner(), discover: async () => discovery, checkExecutable: false });
     await service.init();
     await expect(service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly', invocationRole: 'implementation-child' })).rejects.toThrow(/profile|role/i);
   });
@@ -278,7 +475,7 @@ describe('Command Code service', () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const runner = new FakeRunner();
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide' });
     const events: string[] = [];
@@ -289,12 +486,30 @@ describe('Command Code service', () => {
     expect((await service.getSession(session.sessionId))?.state).toBe('failed');
   });
 
+  it('revalidates the active workspace policy before spawning a turn', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const allowedRoot = await mkdtemp(path.join(os.tmpdir(), 'command-code-allowed-'));
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'command-code-outside-'));
+    const runner = new FakeRunner();
+    runner.results.push(success('native-policy', 'must-not-run'));
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0', allowedCwdRoots: [allowedRoot] } as any, runner, discover: async () => discovery, checkExecutable: false });
+    await service.init();
+    // Create under an initially permitted root, then change the live policy.
+    const session = await service.createSession({ cwd: allowedRoot, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly' });
+    (service as any).config.allowedCwdRoots = [outside];
+    let completionError: Error | undefined;
+    await expect(service.sendPrompt(session.sessionId, 'must not spawn', () => undefined, (error) => { completionError = error; })).rejects.toMatchObject({ code: 'permission_denied' });
+    expect(completionError).toBeUndefined();
+    expect(runner.inputs).toHaveLength(0);
+    await Promise.all([service.shutdown(), rm(stateDir, { recursive: true, force: true }), rm(allowedRoot, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]);
+  });
+
   it('revalidates the canonical cwd before spawning a turn', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const runner = new FakeRunner();
     runner.results.push(success('native-never', 'never'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly' });
     await rm(cwd, { recursive: true, force: true });
@@ -306,12 +521,30 @@ describe('Command Code service', () => {
     expect((await service.getSession(session.sessionId))?.state).toBe('failed');
   });
 
+  it('rejects a tampered persisted session id before native-home preparation', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const nativeHomeDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-native-home-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const sessionsDir = path.join(stateDir, 'sessions');
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(path.join(sessionsDir, 'bad.json'), JSON.stringify({
+      schemaVersion: 1, sessionId: '../escaped', runtime: 'commandcode', cwd: path.resolve(cwd), modelSelector: 'qwen/qwen3.8-max',
+      executionInstanceId: 'commandcode-default', permissionProfile: 'implementation-child-wide', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      eventJournalRef: 'events/bad.jsonl', state: 'idle', messageCount: 0, firstMessage: '',
+    }));
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, nativeHomeDir, expectedVersion: '1.19.0' }, discover: async () => discovery, checkExecutable: false });
+    await service.init();
+    expect(await service.listSessions()).toEqual([]);
+    expect(await service.getSession('../escaped')).toBeUndefined();
+    await Promise.all([service.shutdown(), rm(stateDir, { recursive: true, force: true }), rm(nativeHomeDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
   it('abort fences a pending turn before the process runner can spawn', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const runner = new FakeRunner();
     runner.results.push(success('native-never', 'never'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly' });
     let releaseAppend!: () => void;
@@ -331,7 +564,7 @@ describe('Command Code service', () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const runner = new FakeRunner();
     runner.results.push(success('native-never', 'never'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly' });
     let releaseAppend!: () => void;
@@ -355,7 +588,7 @@ describe('Command Code service', () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const runner = new FakeRunner();
     runner.results.push(success('native-close', 'finished'));
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly' });
     let enteredIdle!: () => void;
@@ -384,7 +617,7 @@ describe('Command Code service', () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const runner = new FakeRunner();
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly' });
     await service.shutdown();
@@ -404,7 +637,7 @@ describe('Command Code service', () => {
       return success('native-shutdown', 'finished');
     });
     runner.shutdownError = new Error('runner shutdown failed');
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly' });
     const send = service.sendPrompt(session.sessionId, 'shutdown waits', () => undefined);
@@ -423,7 +656,7 @@ describe('Command Code service', () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const runner = new FakeRunner();
     runner.results.push({ exitCode: null, signal: 'SIGTERM', stderrTail: '', terminationCause: 'timeout', protocolError: 'NDJSON output exceeded the configured limit' });
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'agent-os-7f-root-readonly' });
     let completionError: Error | undefined;
@@ -439,7 +672,7 @@ describe('Command Code service', () => {
       exitCode: 0, signal: null, stderrTail: '',
       parsed: { events: [], terminal: { type: 'result', subtype: 'max_turns' }, unknownEventTypes: [], suppressedDuplicateCount: 0, bytes: 1, lineCount: 1 },
     });
-    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.15.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
     await service.init();
     const session = await service.createSession({ cwd, model: 'meta/muse-spark-1.2-contributor', permissionProfile: 'implementation-child-wide' });
     let completionError: Error | undefined;

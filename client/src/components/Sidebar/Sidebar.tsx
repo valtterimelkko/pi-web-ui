@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { CommandCodeEffort, SdkType } from '@pi-web-ui/shared';
 import { PanelLeft, PanelRight, Plus, RefreshCw, Sun, Moon, ChevronRight, Coins, Archive } from 'lucide-react';
 import { useSessionStore, useUIStore } from '../../store';
 import { useChatStore } from '../../store/chatStore';
@@ -79,8 +80,8 @@ export function Sidebar() {
     }
   };
 
-  const handleCreateSession = (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity', model?: string, thinkingLevel?: string) => {
-    createNewSession(cwd, sdkType, model, thinkingLevel);
+  const handleCreateSession = (cwd?: string, sdkType?: SdkType, model?: string, thinkingLevel?: string, effort?: CommandCodeEffort) => {
+    createNewSession(cwd, sdkType, model, thinkingLevel, effort);
   };
 
   const transferStatus = useTransferStore(state => state.status);

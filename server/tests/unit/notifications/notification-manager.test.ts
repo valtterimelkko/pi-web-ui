@@ -96,6 +96,7 @@ function makeHarness(
     enabled?: boolean;
     resolveLabel?: (sessionPath: string) => Promise<string | undefined>;
     ingressSpool?: NotificationIngressSpool;
+    isSessionAllowed?: (record: OptInRecord) => boolean | Promise<boolean>;
   } = {},
 ): Harness {
   const store = opts.store ?? new NotificationStore(dir);
@@ -117,6 +118,7 @@ function makeHarness(
     now: () => NOW,
     resolveLabel: opts.resolveLabel,
     ingressSpool: opts.ingressSpool,
+    isSessionAllowed: opts.isSessionAllowed,
     ingressPollMs: 60_000,
   });
   return { mgr, store, pi, claude, channel };
@@ -372,6 +374,39 @@ describe('NotificationManager', () => {
   });
 
   describe('rehydration (simulated restart)', () => {
+    it('delegates browser Command Code opt-ins to the active browser policy gate', async () => {
+      const h = makeHarness(dir, { isSessionAllowed: async (record) => record.access === 'browser' });
+      await h.mgr.init();
+      await expect(h.mgr.optIn({ ...piOptIn(), sessionId: 'browser-cmd', runtime: 'commandcode', access: 'browser' })).resolves.toBe(true);
+      expect(h.mgr.getOptIn('browser-cmd')?.access).toBe('browser');
+      h.mgr.shutdown();
+    });
+
+    it('does not rehydrate a session rejected by the active runtime policy', async () => {
+      const store = new NotificationStore(dir);
+      await store.init();
+      await store.setOptIn(piOptIn({ sessionId: 'browser-cmd', runtime: 'commandcode', sessionPath: 'browser-cmd' }));
+      const commandcode = fakeService();
+      const router = new ChannelRouter();
+      router.register(captureChannel());
+      const manager = new NotificationManager({
+        enabled: true,
+        store,
+        router,
+        services: { commandcode },
+        tailMaxChars: 100,
+        debounceMs: 1,
+        maxAttempts: 1,
+        isSessionAllowed: async (record) => record.sessionId !== 'browser-cmd',
+      });
+
+      await manager.init();
+
+      expect(manager.listOptIns()).toEqual([]);
+      expect(commandcode.addCalls).toEqual([]);
+      manager.shutdown();
+    });
+
     it('re-attaches observers for opted-in sessions and resumes the pending outbox', async () => {
       // Manager A: opt-in + a turn whose delivery fails → item stays pending.
       const a = makeHarness(dir, { channelFail: true });

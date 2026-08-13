@@ -33,6 +33,8 @@ export interface CommandCodeParserOptions {
   maxLineBytes?: number;
   maxAggregateBytes?: number;
   maxUnknownEvents?: number;
+  /** Called synchronously after each accepted event frame, before finish(). */
+  onEvent?: (event: ParsedCommandCodeEvent) => void;
 }
 
 export class CommandCodeProtocolError extends Error {
@@ -47,6 +49,7 @@ export class CommandCodeNdjsonParser {
   private readonly maxLineBytes: number;
   private readonly maxAggregateBytes: number;
   private readonly maxUnknownEvents: number;
+  private readonly onEvent?: (event: ParsedCommandCodeEvent) => void;
   private buffer = '';
   private bytes = 0;
   private lineCount = 0;
@@ -60,6 +63,7 @@ export class CommandCodeNdjsonParser {
     this.maxLineBytes = options.maxLineBytes ?? 512 * 1024;
     this.maxAggregateBytes = options.maxAggregateBytes ?? 8 * 1024 * 1024;
     this.maxUnknownEvents = options.maxUnknownEvents ?? 100;
+    this.onEvent = options.onEvent;
   }
 
   push(chunk: string | Uint8Array): void {
@@ -164,7 +168,9 @@ export class CommandCodeNdjsonParser {
           return;
         }
         const normalized = { ...event, text: suffix, cumulative: false };
-        this.events.push({ event: normalized, lineNumber });
+        const parsed = { event: normalized, lineNumber };
+        this.events.push(parsed);
+        this.onEvent?.(parsed);
         return;
       }
     }
@@ -173,7 +179,9 @@ export class CommandCodeNdjsonParser {
     } else if (!KNOWN_EVENT_TYPES.has(event.type) && this.unknownEventTypes.length < this.maxUnknownEvents) {
       this.unknownEventTypes.push(event.type);
     }
-    this.events.push({ event: { ...event }, lineNumber });
+    const parsed = { event: { ...event }, lineNumber };
+    this.events.push(parsed);
+    this.onEvent?.(parsed);
   }
 
   private consumeResult(frame: Record<string, unknown>): void {
@@ -199,7 +207,7 @@ const KNOWN_EVENT_TYPES = new Set([
   'tool_update', 'tool_execution_update', 'tool_result', 'tool_execution_end',
   'thinking', 'reasoning', 'usage', 'compaction_start', 'compaction_end',
   'error', 'heartbeat',
-  // Command Code 1.15.0 print-stream lifecycle and delta events.
+  // Command Code 1.19.0 print-stream lifecycle and delta events.
   'run_start', 'run_end', 'model_request_start', 'model_request_end', 'model_trace',
   'thinking_start', 'thinking_delta', 'thinking_end', 'text_delta',
 ]);

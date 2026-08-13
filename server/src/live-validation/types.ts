@@ -3,6 +3,7 @@ import type {
   ApprovalResponseRequest,
   CapabilitiesResponse,
   CreateSessionResponse,
+  CommandCodeRoleAttestationRequest,
   SendPromptRequest,
   SessionControlRequest,
   SessionDetail,
@@ -17,7 +18,7 @@ export type ValidationCapabilities = CapabilitiesResponse;
 export type ValidationRuntime = keyof ValidationCapabilities['runtimes'];
 
 export interface InternalApiClientLike {
-  createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; source?: string; scenarioId?: string; ephemeral?: boolean }): Promise<CreateSessionResponse>;
+  createSession(input: { runtime: ValidationRuntime; cwd?: string; model?: string; thinkingLevel?: ThinkingLevel; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; source?: string; scenarioId?: string; ephemeral?: boolean; invocationRole?: 'conductor-root' | 'implementation-child'; commandCodeAttestation?: CommandCodeRoleAttestationRequest }): Promise<CreateSessionResponse>;
   promptStream(sessionId: string, input: SendPromptRequest): Promise<NormalizedEvent[]>;
   promptWithIdempotency(sessionId: string, input: SendPromptRequest): Promise<PromptDispatchResponse>;
   promptDetached?(sessionId: string, message: string): Promise<{ sessionId: string; runId: string; detached: boolean; status: string }>;

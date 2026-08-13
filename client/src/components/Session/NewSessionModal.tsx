@@ -3,11 +3,12 @@ import { X, Folder, FolderOpen, ChevronRight, Loader2, Home, FolderCog, ArrowUp,
 import { api } from '../../lib/api';
 import { useUIStore } from '../../store/uiStore';
 import { useSessionStore } from '../../store';
+import type { SdkType, CommandCodeEffort } from '@pi-web-ui/shared';
 
 interface NewSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreateSession: (cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity', model?: string, thinkingLevel?: string) => void;
+  onCreateSession: (cwd?: string, sdkType?: SdkType, model?: string, thinkingLevel?: string, effort?: CommandCodeEffort) => void;
   onOpenDriveMode?: () => void;
 }
 
@@ -111,7 +112,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const [error, setError] = useState<string | null>(null);
   const [showRecentFolders, setShowRecentFolders] = useState(true);
   const [pathInput, setPathInput] = useState('/root');
-  const [sdkType, setSdkType] = useState<'pi' | 'claude' | 'opencode' | 'antigravity'>('pi');
+  const [sdkType, setSdkType] = useState<SdkType>('pi');
   const [piModels, setPiModels] = useState<PiModelEntry[]>([]);
   const [piModel, setPiModel] = useState('');
   const [piModelsLoading, setPiModelsLoading] = useState(false);
@@ -121,6 +122,8 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const [claudeProvider, setClaudeProvider] = useState<ClaudeProvider>('claude');
   const [claudeBackend, setClaudeBackend] = useState<string>('sdk-subscription');
   const [claudeModel, setClaudeModel] = useState<string>('sonnet');
+  const [commandCodeModel, setCommandCodeModel] = useState<string>('');
+  const [commandCodeEffort, setCommandCodeEffort] = useState<CommandCodeEffort | ''>('');
   const recentDropdownRef = useRef<HTMLDivElement>(null);
 
   const recentFolders = useUIStore(s => s.recentFolders);
@@ -132,6 +135,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const opencodeAuthError = useSessionStore(s => s.opencodeAuthError);
   const antigravityAvailable = useSessionStore(s => s.antigravityAvailable);
   const antigravityAuthError = useSessionStore(s => s.antigravityAuthError);
+  const commandCodeEnabled = useSessionStore(s => s.commandCodeEnabled);
+  const commandCodeAvailable = useSessionStore(s => s.commandCodeAvailable);
+  const commandCodeModels = useSessionStore(s => s.commandCodeModels ?? []);
   const topRecentFolders = getRecentFolders(8);
 
   const fetchDirectories = async (path: string) => {
@@ -263,8 +269,28 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
 
   const selectedModelArg = () => {
     if (sdkType === 'pi') return piModel || undefined;
+    if (sdkType === 'commandcode') return commandCodeModel || commandCodeModels[0]?.id;
     return claudeModelArg();
   };
+
+  const selectedEffortArg = () => sdkType === 'commandcode' && commandCodeEffort ? commandCodeEffort : undefined;
+
+  useEffect(() => {
+    if (commandCodeModels.length === 0) {
+      setCommandCodeModel('');
+      setCommandCodeEffort('');
+      return;
+    }
+    const selected = commandCodeModels.find((model) => model.id === commandCodeModel) ?? commandCodeModels[0];
+    if (selected.id !== commandCodeModel) setCommandCodeModel(selected.id);
+    if (!selected.supportsEffort) {
+      setCommandCodeEffort('');
+      return;
+    }
+    const levels = selected.effortLevels;
+    if (commandCodeEffort && levels.includes(commandCodeEffort)) return;
+    setCommandCodeEffort(selected.defaultEffort && levels.includes(selected.defaultEffort) ? selected.defaultEffort : '');
+  }, [commandCodeModels, commandCodeModel, commandCodeEffort]);
 
   // Derived lists for the structured Claude selector.
   const providerList = providersOf(claudeModels);
@@ -288,11 +314,26 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     }
   };
 
+  const createSession = (path: string) => {
+    const model = selectedModelArg();
+    const effort = selectedEffortArg();
+    // Preserve the compact legacy callback shape when no native Command Code
+    // effort is selected; this also avoids turning optional undefined values
+    // into observable arguments for existing consumers.
+    if (effort !== undefined) {
+      onCreateSession(path, sdkType, model, undefined, effort);
+    } else if (model !== undefined) {
+      onCreateSession(path, sdkType, model);
+    } else {
+      onCreateSession(path, sdkType);
+    }
+  };
+
   const handleSelectAndCreate = () => {
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(currentPath);
-    onCreateSession(currentPath, sdkType, selectedModelArg());
+    createSession(currentPath);
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -300,7 +341,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(path);
-    onCreateSession(path, sdkType, selectedModelArg());
+    createSession(path);
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -315,7 +356,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     e.stopPropagation();
     setIsCreating(true);
     addRecentFolder(path);
-    onCreateSession(path, sdkType, selectedModelArg());
+    createSession(path);
     onClose(); // Close modal immediately - creation happens in background
   };
 
@@ -350,7 +391,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
         {/* SDK Type Selector */}
         <div className="px-3 sm:px-4 pt-2 pb-2 border-b border-gray-200 flex-shrink-0">
           <p className="text-xs font-medium text-gray-500 mb-1.5">Session Type</p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             {/* Pi SDK option */}
             <button
               onClick={() => setSdkType('pi')}
@@ -434,6 +475,30 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                 {antigravityAvailable ? 'Gemini Flash' : (antigravityAuthError || 'Not available')}
               </span>
             </button>
+
+            {/* Command Code browser option. It is server-owned and separately
+                gated; the browser never receives raw permission flags. */}
+            <button
+              onClick={() => commandCodeAvailable && commandCodeEnabled && setSdkType('commandcode')}
+              disabled={!commandCodeAvailable || !commandCodeEnabled}
+              aria-pressed={sdkType === 'commandcode'}
+              title={!commandCodeEnabled ? 'Command Code browser runtime is disabled' : (!commandCodeAvailable ? 'Command Code is not currently available' : undefined)}
+              className={`flex flex-col items-start p-2 sm:p-3 rounded-lg border text-left transition-colors ${
+                !commandCodeAvailable || !commandCodeEnabled
+                  ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                  : sdkType === 'commandcode'
+                  ? 'border-slate-700 bg-slate-100 text-gray-900'
+                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+              }`}
+            >
+              <span className="text-sm font-medium">Command Code</span>
+              <span className="text-xs text-gray-500 mt-0.5 hidden sm:inline">
+                {commandCodeAvailable ? 'Contained browser runtime' : 'Not available'}
+              </span>
+              <span className="text-xs text-gray-500 mt-0.5 sm:hidden">
+                {commandCodeAvailable ? 'Contained' : 'Unavailable'}
+              </span>
+            </button>
           </div>
 
           {/* Pi SDK model selector */}
@@ -459,6 +524,48 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                   ))}
                 </select>
               )}
+            </div>
+          )}
+
+          {/* Command Code model + native effort selector */}
+          {sdkType === 'commandcode' && (
+            <div className="mt-2 space-y-2" data-testid="commandcode-model-selector">
+              <div>
+                <p className="text-xs font-medium text-gray-500 mb-1.5">Model</p>
+                <select
+                  value={commandCodeModel}
+                  onChange={(e) => {
+                    setCommandCodeModel(e.target.value);
+                    setCommandCodeEffort('');
+                  }}
+                  data-testid="commandcode-model-select"
+                  className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
+                >
+                  {commandCodeModels.map((model) => (
+                    <option key={model.id} value={model.id}>{model.displayName} ({model.id})</option>
+                  ))}
+                </select>
+              </div>
+              {(() => {
+                const selected = commandCodeModels.find((model) => model.id === commandCodeModel);
+                if (!selected?.supportsEffort) {
+                  return <p className="text-xs text-gray-500">This model does not expose adjustable native effort.</p>;
+                }
+                return (
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 mb-1.5">Native effort</p>
+                    <select
+                      value={commandCodeEffort}
+                      onChange={(e) => setCommandCodeEffort(e.target.value as CommandCodeEffort | '')}
+                      data-testid="commandcode-effort-select"
+                      className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
+                    >
+                      <option value="">Automatic (server default)</option>
+                      {selected.effortLevels.map((level) => <option key={level} value={level}>{level}</option>)}
+                    </select>
+                  </div>
+                );
+              })()}
             </div>
           )}
 

@@ -1,12 +1,12 @@
 # Pi Web UI
 
-> **Latest work:** Internal API `1.14.0` adds durable payload-free run-liveness, watchdog-cause, cessation, and bounded recovery evidence. It builds on truthful dispatch, approval, watchdog, and Pi identity semantics (`1.13.0`) plus source-owned retention and execution admission (`1.12.0`). See [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md) for details.
+> **Latest work:** Command Code is now a separately gated fifth runtime with exact live model/effort discovery, private normalized replay, and a fail-closed contained browser path. The narrow attested shadow path, MCP boundary, and disposable `--runtime all` matrix remain separate. See [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md) and [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md).
 
 Built for a simple reality: **one agent runtime and one subscription is often not enough.**
 
 Pi Web UI is a self-hosted browser interface for running multiple coding-agent runtimes from one place. It works across mobile, desktop, and laptop browsers, so you can keep the same agent workspace available at a desk or on the go.
 
-Built around [Pi Coding Agent](https://shittycodingagent.ai/) (via its SDK mode), Pi Web UI lets you use **Pi Coding Agent**, **Claude Code**, **OpenCode**, and **Antigravity** through a single persistent UI with unified sessions, replay, and a local automation API.
+Built around [Pi Coding Agent](https://shittycodingagent.ai/) (via its SDK mode), Pi Web UI lets you use **Pi Coding Agent**, **Claude Code**, **OpenCode**, **Antigravity**, and the feature-gated **Command Code** runtime through a single persistent UI with unified sessions, replay, and a local automation API.
 
 It is built for people who want more than one vendor-owned coding surface: different runtime strengths, different provider access, different subscription economics, and one persistent session UI across them.
 
@@ -16,6 +16,7 @@ Currently supported runtime paths:
 - **Claude Code** (SDK/profile-backed, direct `claude -p`, or channel-backed Claude Code)
 - **OpenCode**
 - **Antigravity** (`agy -p` / Gemini)
+- **Command Code** (`cmd -p`, separately feature-gated and disabled by default)
 
 ## Why this exists
 
@@ -32,7 +33,7 @@ For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY
 
 ## What makes it different
 
-- **Four runtime families behind one UI**
+- **Five runtime families behind one UI** (Command Code remains separately disabled until its browser policy is configured)
 - **Unified session list and replay model** across runtimes with very different backends
 - **Local automation API** for live validation, integrations, and orchestration experiments
 - **Optional per-session Telegram notifications** when an agent yields control back to you
@@ -47,6 +48,7 @@ For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY
 | **Claude Code** | Claude Agent SDK (profiles), `claude -p`, or channel-backed Claude Code | Harder coding work on Claude Code; multi-provider access via provider profiles | Medium–higher |
 | **OpenCode** | `opencode serve` + HTTP/SSE | OpenCode-backed workflows, especially OpenCode/Z.AI setups | Low–medium |
 | **Antigravity** | `agy -p` subprocess-per-turn | Gemini/Antigravity workflows in the same UI | Higher |
+| **Command Code** | Server-owned exact-discovery subprocess; Bubblewrap for browser sessions | Isolated fifth-runtime workflows with native effort where advertised | High |
 
 The important truth is that these paths are **not equally official in the eyes of their upstreams**:
 

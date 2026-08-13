@@ -161,8 +161,39 @@ Run the current disposable-safe runtime set (Pi, Claude, and OpenCode) against a
 npm run validate:live -- --socket <sock> --token-path <token> --runtime all --scenario all
 ```
 
-`--runtime all` is intentionally not a synonym for all four runtime families:
+For the separately gated provider-free Command Code browser fixture, use a
+fresh disposable directory and the explicit fixture flag. It is not included
+in `--runtime all` and requires Bubblewrap plus an exact browser model policy:
+
+```bash
+VALIDATION_DIR="$(mktemp -d /tmp/pi-web-ui-commandcode-validation-XXXXXX)"
+npm run validate:server -- --dir "$VALIDATION_DIR" --port 0 \
+  --command-code-fixture --command-code-browser-fixture \
+  >"$VALIDATION_DIR/server.log" 2>&1 &
+VALIDATION_PID=$!
+# The browser fixture intentionally disables the Internal API shadow gate.
+# Validate it over the authenticated WebSocket path (the same path as the UI)
+# and inspect the private native-home/read-only workspace markers:
+PORT="$(awk '/Server] Pi Web UI Server running on port/{print $NF}' "$VALIDATION_DIR/server.log" | tail -1)"
+node scripts/validate-command-code-browser.mjs \
+  --base "http://127.0.0.1:$PORT" --validation-dir "$VALIDATION_DIR"
+# The Internal API commandcode fixture is a separate, non-browser mode:
+# omit --command-code-browser-fixture and run commandcode-fixture-smoke there.
+kill "$VALIDATION_PID" 2>/dev/null || true
+wait "$VALIDATION_PID" 2>/dev/null || true
+rm -rf "$VALIDATION_DIR"
+```
+
+The fixture is provider-free and uses the browser-contained process path with
+an exact model allowlist. The current smoke path proves normalized events and
+terminal evidence; the companion browser WebSocket validation must also verify
+that only the private native home is writable and the workspace is read-only.
+Production browser rollout still requires separate owner approval for the model,
+roots, credential, and sandbox policy.
+
+`--runtime all` is intentionally not a synonym for all runtime families:
 `live-validate.ts` currently expands it to `pi`, `claude`, and `opencode`.
+Command Code is excluded and must use the explicit fixture workflow below.
 Antigravity is disabled by the disposable server because `agy` has no supported
 conversation-data directory override. Run an Antigravity scenario only with an
 explicitly authorised, separately isolated-enough workflow and record that it
@@ -254,6 +285,7 @@ cleanup; never retain raw credentials or an entire session directory by default.
 
 ## Current scenarios
 
+- `commandcode-fixture-smoke` — explicit provider-free Command Code fixture: exact model/effort, normalized stream, replay, and terminal usage evidence
 - `smoke` — create a session and verify a minimal turn completes
 - `run-receipt-idempotency` — verify `runId`, terminal receipt lookup, execution-instance attribution, and same-key deduplication
 - `phase7-pi-shadow` — disposable Pi-only proof that an Internal API receipt persists the server-owned `phase7-pi-shadow/v1` classification, session affinity, and honest shared-service resource identity without changing routing
@@ -279,6 +311,7 @@ cleanup; never retain raw credentials or an entire session directory by default.
 
 | Evidence / scenario | Disposable-safe scope | What it proves |
 |---|---|---|
+| `commandcode-fixture-smoke` | Explicit Command Code fixture only; not part of `--runtime all` | exact discovered model/effort, normalized streaming, replay, and terminal usage evidence |
 | `smoke` | Pi, Claude, OpenCode; Antigravity only when explicitly authorised | session creation and a minimal completed turn |
 | `run-receipt-idempotency` | Pi, Claude, OpenCode | durable `runId`, terminal receipt, execution identity, and same-key deduplication |
 | `phase7-pi-shadow` | Pi disposable server only | shadow policy/profile/reason codes, session affinity, prompt-free receipt metadata, and explicit non-contained shared-service identity |

@@ -1,4 +1,5 @@
-import { access, chmod, copyFile, lstat, mkdir, rename, rm } from 'node:fs/promises';
+import { access, chmod, lstat, mkdir, open, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import {
@@ -13,22 +14,30 @@ import {
   COMMAND_CODE_VERSION,
   COMMAND_CODE_EFFORT_LEVELS_BY_MODEL,
   assertCommandCodeModel,
+  assertCommandCodeRuntimeModel,
   assertCommandCodeEffort,
   discoverCommandCodeEfforts,
   discoverCommandCodeModels,
   type CommandCodeEffort,
   type CommandCodeEffortCapabilities,
+  type CommandCodeRuntimeModel,
   type CommandCodeModel,
   type CommandCodeModelDiscovery,
   type CommandCodeDiscoveryRunner,
 } from './command-code-model-catalog.js';
-import { adaptCommandCodeOutput } from './command-code-event-adapter.js';
+import {
+  adaptCommandCodeEvent,
+  adaptCommandCodeOutput,
+  createCommandCodeIncrementalAdapterState,
+} from './command-code-event-adapter.js';
 import { verifyCommandCodeRoleAttestation, type CommandCodeRoleAttestation } from './command-code-role-attestation.js';
 import { CommandCodeEventJournal } from './command-code-event-journal.js';
 import {
   CommandCodeProcessRunner,
+  type CommandCodeProcessRunInput,
   type CommandCodeProcessRunResult,
 } from './command-code-process-runner.js';
+import type { SessionRegistryManager } from '../session-registry.js';
 import {
   CommandCodeSessionStore,
   canonicalCwd,
@@ -51,7 +60,7 @@ export interface CommandCodeHealth {
   status: CommandCodeAvailability;
   version?: string;
   expectedVersion: string;
-  advertisedModels: CommandCodeModel[];
+  advertisedModels: CommandCodeRuntimeModel[];
   missingModels: CommandCodeModel[];
   effortCapabilities: Partial<CommandCodeEffortCapabilities>;
   checkedAt: string;
@@ -68,7 +77,7 @@ export interface CommandCodeServiceConfig extends Partial<CommandCodeRuntimeConf
 
 export interface CommandCodeCreateInput {
   cwd: string;
-  model: CommandCodeModel;
+  model: CommandCodeRuntimeModel;
   /** Native effort; undefined means use the model's discovered default. */
   effort?: string;
   permissionProfile: CommandCodePermissionProfile;
@@ -97,7 +106,17 @@ export type CommandCodeErrorClass =
   | 'protocol_error'
   | 'effort_unsupported';
 
-type RunnerLike = Pick<CommandCodeProcessRunner, 'run' | 'abort' | 'shutdown' | 'isRunning'>;
+type RunnerLike = Pick<CommandCodeProcessRunner, 'run' | 'abort' | 'shutdown' | 'isRunning'> & {
+  browserSandboxReady?: () => boolean;
+  setBrowserPolicyRoots?: (
+    allowedCwdRoots: string[],
+    runtimeRoots: string[],
+    nativeHomeDir?: string,
+    expected?: { allowed: { dev: number; ino: number }[]; runtime: { dev: number; ino: number }[]; nativeHome: { dev: number; ino: number } },
+  ) => void;
+  pinExecutable?: (executablePath?: string, expected?: { dev: number; ino: number }) => void;
+  pinBrowserSandbox?: (sandboxExecutablePath?: string, expected?: { dev: number; ino: number }) => void;
+};
 
 export class CommandCodeService {
   readonly config: CommandCodeRuntimeConfig;
@@ -123,19 +142,31 @@ export class CommandCodeService {
   private readonly deletedSessions = new Set<string>();
   private readonly inFlightTurns = new Map<string, Promise<void>>();
   private readonly inFlightEffortMutations = new Map<string, Promise<void>>();
+  private readonly apiObservers = new Map<string, Set<(event: NormalizedEvent) => void>>();
   private roleAttestationSecret?: string;
+
+  private readonly sessionRegistry?: SessionRegistryManager;
+  private registryProjectionError?: string;
+  private browserPolicyReady = false;
+  private browserAuthHandle?: Awaited<ReturnType<typeof open>>;
+  private browserAuthIdentity?: { dev: number; ino: number };
+  private executableIdentity?: { dev: number; ino: number };
+  private browserSandboxIdentity?: { dev: number; ino: number };
 
   constructor(options: {
     config: CommandCodeServiceConfig;
     runner?: RunnerLike;
     discover?: CommandCodeDiscoveryRunner;
     checkExecutable?: boolean;
+    sessionRegistry?: SessionRegistryManager;
   }) {
     const mergedConfig = { ...defaultCommandCodeConfig(options.config), ...options.config };
     if (!options.config.nativeHomeDir) mergedConfig.nativeHomeDir = path.join(mergedConfig.stateDir, 'native-home');
     this.config = {
       ...mergedConfig,
       allowedCwdRoots: options.config.allowedCwdRoots ?? [path.dirname(mergedConfig.stateDir)],
+      browserAllowedCwdRoots: options.config.browserAllowedCwdRoots ?? [],
+      browserRuntimeRoots: options.config.browserRuntimeRoots ?? [],
     };
     this.store = new CommandCodeSessionStore(this.config.stateDir);
     this.journal = new CommandCodeEventJournal(this.config.stateDir, {
@@ -151,10 +182,14 @@ export class CommandCodeService {
       maxPromptBytes: this.config.maxPromptBytes,
       maxStderrBytes: this.config.maxStderrBytes,
       nativeHomeDir: this.config.nativeHomeDir,
+      browserSandboxExecutablePath: this.config.browserSandboxExecutablePath,
+      browserAllowedCwdRoots: this.config.browserAllowedCwdRoots,
+      browserRuntimeRoots: this.config.browserRuntimeRoots,
     });
     this.usesDefaultDiscovery = !options.discover;
     this.discover = options.discover ?? discoverCommandCodeModels;
     this.checkExecutable = options.checkExecutable ?? true;
+    this.sessionRegistry = options.sessionRegistry;
   }
 
   private readonly checkExecutable: boolean;
@@ -168,19 +203,64 @@ export class CommandCodeService {
 
   private async initialize(): Promise<void> {
     await this.store.init();
+    for (const invalidSessionId of this.store.listInvalidSessionIds()) {
+      await rm(path.join(this.config.nativeHomeDir, invalidSessionId), { recursive: true, force: true }).catch(() => undefined);
+    }
     await this.store.reconcileAfterRestart();
-    if (!this.config.enabled) {
+    const privateRecords = await this.store.list();
+    if (this.sessionRegistry) {
+      // Rebuild the public projection only after discovery and browser-policy
+      // checks complete. In particular, a persisted browser session must not
+      // remain discoverable after the browser gate is disabled or its policy
+      // becomes invalid between restarts.
+      try {
+        for (const entry of await this.sessionRegistry.listBySdkType('commandcode')) {
+          await this.sessionRegistry.delete(entry.id).catch(() => undefined);
+        }
+      } catch {
+        // Registry projection is best-effort; the private store remains the
+        // Command Code source of truth and every public lookup is gated below.
+      }
+    }
+    if (!this.config.enabled && !this.config.browserEnabled) {
+      for (const record of privateRecords) {
+        if (record.permissionProfile === 'browser-contained') {
+          await rm(path.join(this.config.nativeHomeDir, record.sessionId), { recursive: true, force: true }).catch(() => undefined);
+        }
+      }
       this.healthStatus = 'disabled';
       this.initialized = true;
       return;
     }
     if (this.ownsProcessRunner) {
       await this.prepareNativeHomeRoot();
-      for (const record of await this.store.list()) await this.prepareNativeHome(record.sessionId);
+      for (const record of await this.store.list()) {
+        // Native shadow sessions may be rehydrated into their private homes;
+        // browser sessions are prepared lazily only after the browser policy is
+        // validated, so a disabled/invalid browser gate cannot copy credentials.
+        if (record.permissionProfile !== 'browser-contained') {
+          await this.prepareNativeHome(record.sessionId, record.permissionProfile);
+        }
+      }
     }
     try {
-      if (this.checkExecutable) await access(this.config.executablePath);
+      if (this.checkExecutable) {
+        const canonicalExecutable = await realpath(this.config.executablePath);
+        const executableStat = await stat(canonicalExecutable);
+        if (!executableStat.isFile()) throw new Error('Command Code executable is not a regular file');
+        await access(canonicalExecutable, fsConstants.X_OK);
+        this.executableIdentity = { dev: executableStat.dev, ino: executableStat.ino };
+        this.config.executablePath = canonicalExecutable;
+      }
+      if (this.config.browserEnabled) await this.validateBrowserPolicy();
+      if (this.ownsProcessRunner) this.runner.pinExecutable?.(this.config.executablePath, this.executableIdentity);
     } catch {
+      await this.browserAuthHandle?.close().catch(() => undefined);
+      this.browserAuthHandle = undefined;
+      this.browserAuthIdentity = undefined;
+      this.browserPolicyReady = false;
+      this.runner.setBrowserPolicyRoots?.([], [], this.config.nativeHomeDir);
+      await this.removeInaccessibleBrowserHomes();
       this.healthStatus = 'executable_missing';
       this.discoveryDiagnostic = 'Configured Command Code executable is not accessible';
       this.initialized = true;
@@ -189,13 +269,20 @@ export class CommandCodeService {
     try {
       const discovered = await this.discover(this.config.executablePath);
       const effortCapabilities = discovered.effortCapabilities
-        ?? (this.usesDefaultDiscovery ? (await discoverCommandCodeEfforts(this.config.executablePath)).capabilities : undefined);
+        ?? (this.usesDefaultDiscovery
+          ? (await discoverCommandCodeEfforts(this.config.executablePath, {
+              models: discovered.models,
+              probeAllValues: this.usesDefaultDiscovery
+                && discovered.models.length === COMMAND_CODE_MODELS.length
+                && discovered.models.every((model) => (COMMAND_CODE_MODELS as readonly string[]).includes(model)),
+            })).capabilities
+          : undefined);
       this.discoveryResult = { ...discovered, ...(effortCapabilities ? { effortCapabilities } : {}) };
       if (discovered.version !== this.config.expectedVersion) {
         this.healthStatus = 'version_mismatch';
-      } else if (discovered.ambiguous.length > 0 || !COMMAND_CODE_MODELS.every((model) => discovered.models.includes(model))) {
+      } else if (discovered.ambiguous.length > 0 || discovered.models.length === 0) {
         this.healthStatus = 'exact_model_unavailable';
-      } else if (!effortCapabilities || !hasExactEffortCapabilities(effortCapabilities)) {
+      } else if (!effortCapabilities || !hasExactEffortCapabilities(effortCapabilities, discovered.models)) {
         this.healthStatus = 'effort_capability_unknown';
         this.discoveryDiagnostic = 'Command Code native effort capability discovery was incomplete or drifted; refusing session creation';
       } else {
@@ -204,6 +291,20 @@ export class CommandCodeService {
     } catch (error) {
       this.healthStatus = 'discovery_error';
       this.discoveryDiagnostic = scrubDiagnostic(error instanceof Error ? error.message : String(error));
+    }
+    if (this.ownsProcessRunner && this.isBrowserAvailable()) {
+      for (const record of await this.store.list()) {
+        if (record.permissionProfile === 'browser-contained' && this.isSessionRecordAccessible(record)) await this.prepareNativeHome(record.sessionId, record.permissionProfile);
+      }
+    }
+    await this.removeInaccessibleBrowserHomes();
+    for (const record of await this.store.list()) {
+      if (record.permissionProfile === 'browser-contained' && !this.isSessionRecordAccessible(record)) {
+        const staleSessionId = (record as CommandCodeInternalSessionRecord).sessionId;
+        await rm(path.join(this.config.nativeHomeDir, staleSessionId), { recursive: true, force: true }).catch(() => undefined);
+        continue;
+      }
+      if (this.isSessionRecordAccessible(record)) await this.syncRegistryRecord(record);
     }
     this.initialized = true;
   }
@@ -215,19 +316,34 @@ export class CommandCodeService {
     await this.init();
     if (this.shuttingDown) throw new CommandCodeRuntimeError('Command Code service is shutting down', 'interrupted');
     this.assertRunnable();
-    const model = assertCommandCodeModel(input.model);
-    if (!model || !this.discoveryResult?.models.includes(model)) throw new CommandCodeRuntimeError('Exact Command Code model is unavailable', 'protocol_error');
+    const model = assertCommandCodeRuntimeModel(input.model, this.discoveryResult?.models ?? []);
+    if (!model) throw new CommandCodeRuntimeError('Exact Command Code model is unavailable', 'protocol_error');
     const effortBinding = this.resolveEffort(model, input.effort);
+    if (input.permissionProfile === 'browser-contained') {
+      if (input.invocationRole) throw new CommandCodeRuntimeError('Browser Command Code sessions cannot carry Agent OS invocation roles', 'permission_denied');
+      if (!this.isBrowserAvailable()) {
+        throw new CommandCodeRuntimeError('Command Code browser containment is unavailable', 'permission_denied');
+      }
+      const allowedModels = this.config.browserAllowedModels ?? [];
+      if (allowedModels.length === 0 || !allowedModels.includes(model)) {
+        throw new CommandCodeRuntimeError(`Command Code model ${model} is not approved for browser use`, 'permission_denied');
+      }
+    }
     if (input.invocationRole === 'conductor-root' && input.permissionProfile !== 'agent-os-7f-root-readonly') throw new CommandCodeRuntimeError('Command Code root role requires the server-owned readonly profile', 'permission_denied');
     if (input.invocationRole === 'implementation-child' && input.permissionProfile !== 'implementation-child-wide') throw new CommandCodeRuntimeError('Command Code implementation-child role requires the server-owned wide profile', 'permission_denied');
     const sessionId = `commandcode-${cryptoRandomId()}`;
     const cwd = await canonicalCwd(input.cwd);
-    if (this.config.allowedCwdRoots.length === 0 || !this.config.allowedCwdRoots.some((root) => isWithinRoot(root, cwd))) {
+    const cwdRoots = input.permissionProfile === 'browser-contained'
+      ? (this.config.browserAllowedCwdRoots ?? [])
+      : this.config.allowedCwdRoots;
+    if (cwdRoots.length === 0 || !cwdRoots.some((root) => isWithinRoot(root, cwd))) {
       throw new CommandCodeRuntimeError('Command Code cwd is outside the configured isolated workspace roots', 'permission_denied');
     }
     if (input.invocationRole) {
       try {
-        verifyCommandCodeRoleAttestation(this.roleAttestationSecret, input.roleAttestation, { role: input.invocationRole, model, cwd, effort: effortBinding.effort });
+        const attestedModel = assertCommandCodeModel(model);
+        if (!attestedModel) throw new Error('Agent OS role attestations are restricted to the shadow model routes.');
+        verifyCommandCodeRoleAttestation(this.roleAttestationSecret, input.roleAttestation, { role: input.invocationRole, model: attestedModel, cwd, effort: effortBinding.effort });
         if (input.invocationRole === 'implementation-child') {
           const parentId = input.roleAttestation?.parentSessionId;
           const parent = parentId ? await this.store.get(parentId) : undefined;
@@ -252,7 +368,8 @@ export class CommandCodeService {
         invocationRole: input.invocationRole,
         eventJournalRef: `events/${sessionId}.jsonl`,
       });
-      if (this.ownsProcessRunner) await this.prepareNativeHome(sessionId);
+      if (this.ownsProcessRunner) await this.prepareNativeHome(sessionId, input.permissionProfile);
+      await this.syncRegistryRecord(created);
       return created;
     } catch (error) {
       await this.store.delete(sessionId).catch(() => undefined);
@@ -260,18 +377,17 @@ export class CommandCodeService {
     }
   }
 
-  getEffortCapabilities(): Partial<CommandCodeEffortCapabilities> {
+  getEffortCapabilities(): CommandCodeEffortCapabilities {
     const capabilities = this.discoveryResult?.effortCapabilities;
-    const result: Partial<CommandCodeEffortCapabilities> = {};
+    const result: CommandCodeEffortCapabilities = {};
     if (!capabilities) return result;
-    for (const model of COMMAND_CODE_MODELS) {
-      const capability = capabilities[model];
+    for (const [model, capability] of Object.entries(capabilities)) {
       if (capability) result[model] = { ...capability, effortLevels: [...capability.effortLevels] };
     }
     return result;
   }
 
-  getEffortCapability(model: CommandCodeModel) {
+  getEffortCapability(model: CommandCodeRuntimeModel) {
     const capability = this.discoveryResult?.effortCapabilities?.[model];
     return capability ? { ...capability, effortLevels: [...capability.effortLevels] } : undefined;
   }
@@ -291,14 +407,19 @@ export class CommandCodeService {
       this.assertRunnable();
       const record = await this.store.get(sessionId);
       if (!record) throw new CommandCodeRuntimeError('Command Code session not found', 'runtime_error');
+      if (!this.isSessionRecordAccessible(record)) {
+        throw new CommandCodeRuntimeError('Command Code session is no longer enabled by the active runtime policy', 'permission_denied');
+      }
       const binding = this.resolveEffort(record.modelSelector, effort);
       try {
-        return await this.store.setEffort(sessionId, {
+        const updated = await this.store.setEffort(sessionId, {
           ...(binding.effort ? { effort: binding.effort } : {}),
           effortSource: binding.source,
           ...(binding.defaultEffort ? { defaultEffort: binding.defaultEffort } : {}),
           effortCapabilityHash: binding.capabilityHash,
         });
+        await this.syncRegistryRecord(updated);
+        return updated;
       } catch (error) {
         throw new CommandCodeRuntimeError(error instanceof Error ? error.message : String(error), 'effort_unsupported');
       }
@@ -311,18 +432,65 @@ export class CommandCodeService {
 
   async getSession(sessionId: string): Promise<CommandCodeInternalSessionRecord | undefined> {
     await this.init();
-    return this.store.get(sessionId);
+    const record = await this.store.get(sessionId);
+    return this.isSessionRecordAccessible(record) ? record : undefined;
+  }
+
+  /** Internal API / Agent OS may see only the attested shadow profile. */
+  async getShadowSession(sessionId: string): Promise<CommandCodeInternalSessionRecord | undefined> {
+    await this.init();
+    const record = await this.store.get(sessionId);
+    return record && record.permissionProfile !== 'browser-contained' && this.isSessionRecordAccessible(record)
+      ? record
+      : undefined;
   }
 
   async listSessions(): Promise<CommandCodeInternalSessionRecord[]> {
     await this.init();
-    return this.store.list();
+    if (!this.isShadowEnabled() && !this.config.browserEnabled) return [];
+    return (await this.store.list()).filter((record) => this.isSessionRecordAccessible(record));
+  }
+
+  async listShadowSessions(): Promise<CommandCodeInternalSessionRecord[]> {
+    await this.init();
+    if (!this.isShadowAvailable()) return [];
+    return (await this.store.list()).filter((record) => record.permissionProfile !== 'browser-contained' && this.isSessionRecordAccessible(record));
+  }
+
+  async listBrowserSessions(): Promise<CommandCodeInternalSessionRecord[]> {
+    await this.init();
+    if (!this.isBrowserAvailable()) return [];
+    return (await this.store.list()).filter((record) => this.isSessionRecordAccessible(record) && this.isBrowserSessionRecord(record));
+  }
+
+  async isBrowserSession(sessionId: string): Promise<boolean> {
+    await this.init();
+    const record = await this.store.get(sessionId);
+    return Boolean(record && this.isSessionRecordAccessible(record) && this.isBrowserSessionRecord(record));
+  }
+
+  /** Browser/WebSocket lookups must never fall back to the shadow-inclusive accessor. */
+  async getBrowserSession(sessionId: string): Promise<CommandCodeInternalSessionRecord | undefined> {
+    await this.init();
+    const record = await this.store.get(sessionId);
+    return record && this.isSessionRecordAccessible(record) && this.isBrowserSessionRecord(record) ? record : undefined;
+  }
+
+  async isSessionAccessible(sessionId: string): Promise<boolean> {
+    await this.init();
+    return this.isSessionRecordAccessible(await this.store.get(sessionId));
   }
 
   async findSession(identifier: string): Promise<CommandCodeInternalSessionRecord | undefined> {
     const direct = await this.getSession(identifier);
     if (direct) return direct;
     return (await this.listSessions()).find((record) => record.nativeSessionId === identifier);
+  }
+
+  async findShadowSession(identifier: string): Promise<CommandCodeInternalSessionRecord | undefined> {
+    const direct = await this.getShadowSession(identifier);
+    if (direct) return direct;
+    return (await this.listShadowSessions()).find((record) => record.nativeSessionId === identifier);
   }
 
   async sendPrompt(
@@ -345,7 +513,17 @@ export class CommandCodeService {
       this.assertRunnable();
       const record = await this.store.get(sessionId);
       if (!record) throw new CommandCodeRuntimeError('Command Code session not found', 'runtime_error');
+      if (!this.isSessionRecordAccessible(record)) throw new CommandCodeRuntimeError('Command Code session is no longer enabled by the active runtime policy', 'permission_denied');
       if (this.deletedSessions.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session was deleted', 'runtime_error');
+      const discoveredModel = assertCommandCodeRuntimeModel(record.modelSelector, this.discoveryResult?.models ?? []);
+      if (!discoveredModel) throw new CommandCodeRuntimeError('Command Code session model is no longer advertised', 'protocol_error');
+      const capability = this.capabilityFor(discoveredModel);
+      if (!record.effortCapabilityHash || record.effortCapabilityHash !== capability.capabilityHash) {
+        throw new CommandCodeRuntimeError('Command Code effort capability changed; recreate the session', 'effort_unsupported');
+      }
+      if (record.permissionProfile === 'browser-contained' && !this.isBrowserModelAllowed(record.modelSelector)) {
+        throw new CommandCodeRuntimeError('Command Code browser policy no longer permits this session model', 'permission_denied');
+      }
       if (record.state === 'running' || this.runner.isRunning(sessionId)) throw new CommandCodeRuntimeError('Command Code session is already running', 'runtime_error');
       if (this.activeSessions.size >= this.config.concurrency) throw new CommandCodeRuntimeError('Command Code concurrency limit is exhausted', 'runtime_error');
       if (Buffer.byteLength(prompt, 'utf8') > this.config.maxPromptBytes) throw new CommandCodeRuntimeError('Command Code prompt exceeds byte limit', 'protocol_error');
@@ -354,13 +532,14 @@ export class CommandCodeService {
       this.activeSessions.add(sessionId);
       const nextCount = record.messageCount + 1;
       try {
-        await this.store.update(sessionId, {
+        const runningRecord = await this.store.update(sessionId, {
         state: 'running',
         activeRunId: runId,
         messageCount: nextCount,
         firstMessage: record.firstMessage || prompt.slice(0, 4_000),
         lastMessage: prompt.slice(0, 4_000),
       });
+      await this.syncRegistryRecord(runningRecord);
     } catch (error) {
       this.activeSessions.delete(sessionId);
       throw error;
@@ -368,7 +547,33 @@ export class CommandCodeService {
 
     let completionError: Error | undefined;
     let emittedTerminal = false;
+    const streamState = createCommandCodeIncrementalAdapterState();
+    const streamedEvents: NormalizedEvent[] = [];
+    let streamQueue = Promise.resolve();
+    const observedAt = Date.now();
+    const queueStreamEvent = (parsed: Parameters<NonNullable<CommandCodeProcessRunInput['onEvent']>>[0]): void => {
+      const event = adaptCommandCodeEvent({ sessionId, parsed, state: streamState, observedAt });
+      if (!event) return;
+      streamedEvents.push(event);
+      streamQueue = streamQueue.then(async () => {
+        await this.recordEffectiveEffort(sessionId, record.modelSelector, event);
+        await this.journal.append(sessionId, event);
+        this.publishApiEvent(sessionId, event);
+        onEvent(event);
+        if (event.type === 'agent_end') emittedTerminal = true;
+      });
+    };
     try {
+      const agentStart: NormalizedEvent = {
+        type: 'agent_start',
+        sessionId,
+        timestamp: Date.now(),
+        data: { runtime: 'commandcode', runId },
+      };
+      await this.journal.append(sessionId, agentStart);
+      this.publishApiEvent(sessionId, agentStart);
+      onEvent(agentStart);
+
       const userMessageId = `commandcode-user-${runId ?? cryptoRandomId()}`;
       const userStart: NormalizedEvent = {
         type: 'message_start',
@@ -383,12 +588,20 @@ export class CommandCodeService {
         data: { id: userMessageId },
       };
       await this.journal.append(sessionId, userStart);
+      this.publishApiEvent(sessionId, userStart);
       onEvent(userStart);
       await this.journal.append(sessionId, userEnd);
+      this.publishApiEvent(sessionId, userEnd);
       onEvent(userEnd);
 
       const currentCwd = await canonicalCwd(record.cwd);
       if (currentCwd !== record.cwd) throw new CommandCodeRuntimeError('Command Code cwd binding drift', 'permission_denied');
+      const activeCwdRoots = record.permissionProfile === 'browser-contained'
+        ? (this.config.browserAllowedCwdRoots ?? [])
+        : this.config.allowedCwdRoots;
+      if (!activeCwdRoots.some((root) => isWithinRoot(root, currentCwd))) {
+        throw new CommandCodeRuntimeError('Command Code cwd is outside the active workspace policy', 'permission_denied');
+      }
       if (this.abortRequested.has(sessionId)) throw new CommandCodeRuntimeError('Command Code run was aborted before spawn', 'interrupted');
       const result = await this.runner.run({
         sessionId,
@@ -399,7 +612,12 @@ export class CommandCodeService {
         prompt,
         nativeSessionId: record.nativeSessionId,
         effort: record.effort,
+        ...(record.permissionProfile === 'browser-contained'
+          ? { browserAuthFd: this.browserAuthHandle?.fd, browserAuthIdentity: this.browserAuthIdentity }
+          : {}),
+        onEvent: queueStreamEvent,
       });
+      await streamQueue;
       const adapted = result.parsed
         ? adaptCommandCodeOutput({
             sessionId,
@@ -412,64 +630,79 @@ export class CommandCodeService {
             lineCount: result.parsed.lineCount,
           })
         : undefined;
-      if (adapted?.nativeSessionId) await this.store.bindNativeSession(sessionId, adapted.nativeSessionId);
+      if (adapted?.nativeSessionId) {
+        const bound = await this.store.bindNativeSession(sessionId, adapted.nativeSessionId);
+        await this.syncRegistryRecord(bound);
+      }
       if (adapted) {
+        // The parser has already delivered visible events incrementally. The
+        // final adapter is still authoritative for terminal metadata and any
+        // terminal-only text, but must not replay the streamed prefix. Match
+        // by stable type/data counts rather than array length: unknown native
+        // frames and non-visible events make a positional slice unsafe.
+        const streamedKeys = new Map<string, number>();
+        for (const streamedEvent of streamedEvents) {
+          const key = normalizedEventKey(streamedEvent);
+          streamedKeys.set(key, (streamedKeys.get(key) ?? 0) + 1);
+        }
         for (const event of adapted.events) {
-          const effectiveEffort = extractEffectiveEffort(event);
-          if (effectiveEffort) {
-            const capability = this.capabilityFor(record.modelSelector);
-            if (!capability.effortLevels.includes(effectiveEffort.effort)) {
-              throw new CommandCodeRuntimeError(`Command Code reported unsupported effective effort '${effectiveEffort.effort}'`, 'protocol_error');
-            }
-            await this.store.update(sessionId, {
-              effectiveEffort: effectiveEffort.effort,
-              effortEvidenceMethod: effectiveEffort.method,
-            });
+          if (event.type === 'agent_end' && emittedTerminal) continue;
+          const key = normalizedEventKey(event);
+          const remaining = streamedKeys.get(key) ?? 0;
+          if (remaining > 0) {
+            streamedKeys.set(key, remaining - 1);
+            continue;
           }
+          await this.recordEffectiveEffort(sessionId, record.modelSelector, event);
           await this.journal.append(sessionId, event);
+          this.publishApiEvent(sessionId, event);
           onEvent(event);
           if (event.type === 'agent_end') emittedTerminal = true;
         }
       } else {
         const synthetic = this.syntheticEnd(sessionId, result);
         await this.journal.append(sessionId, synthetic);
+        this.publishApiEvent(sessionId, synthetic);
         onEvent(synthetic);
         emittedTerminal = true;
       }
       completionError = classifyResult(result, adapted?.terminal);
       if (this.abortRequested.has(sessionId)) completionError = new CommandCodeRuntimeError('Command Code run was aborted', 'interrupted');
       const terminal = adapted?.terminal;
-      await this.store.update(sessionId, {
+      const completedRecord = await this.store.update(sessionId, {
         state: result.terminationCause === 'abort' || this.abortRequested.has(sessionId) ? 'aborted' : completionError ? 'failed' : 'idle',
         activeRunId: undefined,
         ...(terminal ? { lastResult: { subtype: terminal.subtype, ...(terminal.stopReason ? { stopReason: terminal.stopReason } : {}), ...(typeof result.exitCode === 'number' ? { exitCode: result.exitCode } : {}) } } : {}),
-        ...(adapted ? { lastFinalText: adapted.finalText.slice(0, 20_000) } : {}),
+        ...(adapted ? { lastFinalText: scrubDiagnostic(adapted.finalText) } : {}),
         diagnostics: {
           suppressedDuplicateCount: result.parsed?.suppressedDuplicateCount ?? 0,
           unknownEventTypes: result.parsed?.unknownEventTypes ?? [],
-          ...(result.stderrTail ? { stderrTail: result.stderrTail } : {}),
-          ...(result.protocolError ? { protocolError: result.protocolError } : {}),
+          ...(result.stderrTail ? { stderrTail: scrubDiagnostic(result.stderrTail) } : {}),
+          ...(result.protocolError ? { protocolError: scrubDiagnostic(result.protocolError) } : {}),
           ...(adapted?.nativeSessionId ? { nativeSessionId: adapted.nativeSessionId } : {}),
           exitCode: result.exitCode,
           signal: result.signal,
           ...(result.terminationCause ? { terminationCause: result.terminationCause } : {}),
         },
       });
+      await this.syncRegistryRecord(completedRecord);
       // Abort can arrive after the child has closed but while the final
       // journal/session snapshot is being persisted. Re-check after the await
       // so a cancelled receipt cannot be paired with an idle/success response.
       if (this.abortRequested.has(sessionId)) {
         completionError = new CommandCodeRuntimeError('Command Code run was aborted', 'interrupted');
-        await this.store.update(sessionId, { state: 'aborted', activeRunId: undefined });
+        const abortedRecord = await this.store.update(sessionId, { state: 'aborted', activeRunId: undefined });
+        await this.syncRegistryRecord(abortedRecord);
       }
     } catch (error) {
       completionError = error instanceof Error ? error : new Error(String(error));
       if (!emittedTerminal) {
         const synthetic = this.syntheticEnd(sessionId, { exitCode: null, signal: null, stderrTail: '', protocolError: completionError.message });
         await this.journal.append(sessionId, synthetic).catch(() => undefined);
+        this.publishApiEvent(sessionId, synthetic);
         onEvent(synthetic);
       }
-      await this.store.update(sessionId, { state: this.abortRequested.has(sessionId) || completionError instanceof CommandCodeRuntimeError && completionError.code === 'interrupted' ? 'aborted' : 'failed', activeRunId: undefined, diagnostics: { suppressedDuplicateCount: 0, unknownEventTypes: [], protocolError: completionError.message, ...(this.abortRequested.has(sessionId) ? { terminationCause: 'abort' as const } : {}) } }).catch(() => undefined);
+      await this.store.update(sessionId, { state: this.abortRequested.has(sessionId) || completionError instanceof CommandCodeRuntimeError && completionError.code === 'interrupted' ? 'aborted' : 'failed', activeRunId: undefined, diagnostics: { suppressedDuplicateCount: 0, unknownEventTypes: [], protocolError: scrubDiagnostic(completionError.message), ...(this.abortRequested.has(sessionId) ? { terminationCause: 'abort' as const } : {}) } }).then((record) => this.syncRegistryRecord(record)).catch(() => undefined);
     }
     this.activeSessions.delete(sessionId);
     onComplete?.(completionError);
@@ -484,7 +717,10 @@ export class CommandCodeService {
 
   async getReplayEvents(sessionId: string): Promise<NormalizedEvent[]> {
     await this.init();
-    if (!await this.store.get(sessionId)) throw new CommandCodeRuntimeError('Command Code session not found');
+    const record = await this.store.get(sessionId);
+    if (!this.isSessionRecordAccessible(record)) {
+      throw new CommandCodeRuntimeError('Command Code session is no longer enabled by the active runtime policy', 'permission_denied');
+    }
     return this.journal.read(sessionId);
   }
 
@@ -504,9 +740,12 @@ export class CommandCodeService {
       if (inFlight) await inFlight;
       if (effortMutation) await effortMutation;
       this.pinClaims.delete(sessionId);
+      this.apiObservers.delete(sessionId);
       await this.journal.clear(sessionId).catch(() => undefined);
       if (this.ownsProcessRunner) await rm(path.join(this.config.nativeHomeDir, sessionId), { recursive: true, force: true }).catch(() => undefined);
-      return await this.store.delete(sessionId);
+      const deleted = await this.store.delete(sessionId);
+      if (deleted) await this.sessionRegistry?.delete(sessionId).catch(() => undefined);
+      return deleted;
     } finally {
       this.deletedSessions.delete(sessionId);
       this.abortRequested.delete(sessionId);
@@ -524,19 +763,83 @@ export class CommandCodeService {
         await this.runner.shutdown();
       } finally {
         await Promise.allSettled(inFlights);
+        await this.browserAuthHandle?.close().catch(() => undefined);
+        this.browserAuthHandle = undefined;
+        this.browserAuthIdentity = undefined;
       }
     })();
     return this.shutdownPromise;
   }
 
+  addApiObserver(sessionId: string, observer: (event: unknown) => void): void {
+    const observers = this.apiObservers.get(sessionId) ?? new Set<(event: NormalizedEvent) => void>();
+    observers.add(observer as (event: NormalizedEvent) => void);
+    this.apiObservers.set(sessionId, observers);
+  }
+
+  removeApiObserver(sessionId: string, observer: (event: unknown) => void): void {
+    const observers = this.apiObservers.get(sessionId);
+    if (!observers) return;
+    observers.delete(observer as (event: NormalizedEvent) => void);
+    if (observers.size === 0) this.apiObservers.delete(sessionId);
+  }
+
+  private publishApiEvent(sessionId: string, event: NormalizedEvent): void {
+    for (const observer of this.apiObservers.get(sessionId) ?? []) {
+      try { observer(event); } catch { /* observer failures never affect runtime turns */ }
+    }
+  }
+
   setRoleAttestationSecret(secret: string): void { this.roleAttestationSecret = secret || undefined; }
   isRunning(sessionId: string): boolean { return this.runner.isRunning(sessionId); }
-  async hasSession(sessionId: string): Promise<boolean> { return Boolean(await this.store.get(sessionId)); }
-  isEnabled(): boolean { return this.config.enabled; }
+  async hasSession(sessionId: string): Promise<boolean> {
+    await this.init();
+    return this.isSessionRecordAccessible(await this.store.get(sessionId));
+  }
+  isEnabled(): boolean { return this.config.enabled || this.config.browserEnabled === true; }
+  isShadowEnabled(): boolean { return this.config.shadowEnabled ?? this.config.enabled; }
+  /** Runtime-wide availability, including dynamically discovered browser models. */
   isAvailable(): boolean { return this.healthStatus === 'available'; }
+  /** The narrow Agent OS shadow surface remains separately gated. */
+  isShadowAvailable(): boolean {
+    return this.isShadowEnabled()
+      && this.isAvailable()
+      && COMMAND_CODE_MODELS.every((model) => this.discoveryResult?.models.includes(model));
+  }
+  isBrowserAvailable(): boolean {
+    return this.isAvailable()
+      && this.config.browserEnabled === true
+      && this.browserPolicyReady
+      && (this.config.browserAllowedCwdRoots ?? []).length > 0
+      && this.runner.browserSandboxReady?.() === true;
+  }
+  getBrowserModels() {
+    const allowlist = this.config.browserAllowedModels ?? [];
+    return this.getModels().filter((model) => allowlist.length > 0 && allowlist.includes(model.id));
+  }
+  private isBrowserModelAllowed(model: CommandCodeRuntimeModel): boolean {
+    const allowlist = this.config.browserAllowedModels ?? [];
+    return allowlist.length > 0 && allowlist.includes(model);
+  }
+  private isBrowserSessionRecord(record: CommandCodeInternalSessionRecord): boolean {
+    return record.permissionProfile === 'browser-contained'
+      && this.isBrowserAvailable()
+      && this.isBrowserModelAllowed(record.modelSelector);
+  }
+
+  private isSessionRecordAccessible(record: CommandCodeInternalSessionRecord | undefined): record is CommandCodeInternalSessionRecord {
+    if (!record || record.state === 'deleted') return false;
+    const activeRoots = record.permissionProfile === 'browser-contained'
+      ? (this.config.browserAllowedCwdRoots ?? [])
+      : this.config.allowedCwdRoots;
+    if (activeRoots.length === 0 || !activeRoots.some((root) => isWithinRoot(root, record.cwd))) return false;
+    if (record.permissionProfile === 'browser-contained') return this.isBrowserSessionRecord(record);
+    return this.isShadowAvailable();
+  }
+
   getExecutionInstanceId(): 'commandcode-default' { return COMMAND_CODE_EXECUTION_INSTANCE_ID; }
   getModels(): Array<{
-    id: CommandCodeModel;
+    id: CommandCodeRuntimeModel;
     displayName: string;
     provider: string;
     reasoning: boolean;
@@ -550,7 +853,7 @@ export class CommandCodeService {
       const capability = this.discoveryResult?.effortCapabilities?.[id];
       return {
         id,
-        displayName: id === 'qwen/qwen3.8-max' ? 'Qwen 3.8 Max' : 'Muse Spark 1.2 Contributor',
+        displayName: commandCodeDisplayName(id),
         provider: COMMAND_CODE_PROVIDER,
         reasoning: true,
         supportsEffort: capability?.supportsEffort === true,
@@ -563,7 +866,7 @@ export class CommandCodeService {
   getHealth(): CommandCodeHealth {
     const missingModels = COMMAND_CODE_MODELS.filter((model) => !this.discoveryResult?.models.includes(model));
     return {
-      enabled: this.config.enabled,
+      enabled: this.isEnabled(),
       available: this.isAvailable(),
       status: this.healthStatus,
       ...(this.discoveryResult?.version ? { version: this.discoveryResult.version } : {}),
@@ -573,10 +876,13 @@ export class CommandCodeService {
       effortCapabilities: this.getEffortCapabilities(),
       checkedAt: new Date().toISOString(),
       ...(this.discoveryDiagnostic ? { diagnostic: this.discoveryDiagnostic } : {}),
+      ...(this.registryProjectionError ? { diagnostic: `${this.discoveryDiagnostic ? `${this.discoveryDiagnostic}; ` : ''}registry projection: ${this.registryProjectionError}` } : {}),
     };
   }
-  getSessionDiagnostics(sessionId: string): Promise<CommandCodeInternalSessionRecord['diagnostics'] | undefined> {
-    return this.store.get(sessionId).then((record) => record?.diagnostics);
+  async getSessionDiagnostics(sessionId: string): Promise<CommandCodeInternalSessionRecord['diagnostics'] | undefined> {
+    await this.init();
+    const record = await this.store.get(sessionId);
+    return this.isSessionRecordAccessible(record) ? record.diagnostics : undefined;
   }
   pinSession(sessionId: string, claimId = 'web-ui'): boolean {
     const claims = this.pinClaims.get(sessionId) ?? new Set<string>();
@@ -593,9 +899,9 @@ export class CommandCodeService {
   }
   isSessionPinned(sessionId: string): boolean { return (this.pinClaims.get(sessionId)?.size ?? 0) > 0; }
 
-  private resolveEffort(model: CommandCodeModel, requested: unknown): {
+  private resolveEffort(model: CommandCodeRuntimeModel, requested: unknown): {
     effort?: CommandCodeEffort;
-    source: 'explicit' | 'default' | 'none';
+    source: 'explicit' | 'default' | 'automatic' | 'none';
     defaultEffort?: CommandCodeEffort;
     capabilityHash: string;
   } {
@@ -615,30 +921,93 @@ export class CommandCodeService {
       return { effort, source: 'explicit', ...(capability.defaultEffort ? { defaultEffort: capability.defaultEffort } : {}), capabilityHash: capability.capabilityHash };
     }
     if (!capability.defaultEffort || !capability.effortLevels.includes(capability.defaultEffort)) {
-      throw new CommandCodeRuntimeError(`Command Code default effort is unknown for model ${model}`, 'effort_unsupported');
+      // Some Command Code models expose an adjustable effort selector but do
+      // not publish a native default. Automatic must therefore omit --effort;
+      // never guess from the first advertised value.
+      return { source: 'automatic', capabilityHash: capability.capabilityHash };
     }
     return { effort: capability.defaultEffort, source: 'default', defaultEffort: capability.defaultEffort, capabilityHash: capability.capabilityHash };
   }
 
-  private capabilityFor(model: CommandCodeModel) {
+  private capabilityFor(model: CommandCodeRuntimeModel) {
     const capability = this.discoveryResult?.effortCapabilities?.[model];
     if (!capability) throw new CommandCodeRuntimeError(`Command Code effort capability is unavailable for model ${model}`, 'effort_unsupported');
     return capability;
   }
 
-  private async prepareNativeHomeRoot(): Promise<void> {
-    await mkdir(this.config.nativeHomeDir, { recursive: true, mode: 0o700 });
+  private async recordEffectiveEffort(sessionId: string, model: CommandCodeRuntimeModel, event: NormalizedEvent): Promise<void> {
+    const effectiveEffort = extractEffectiveEffort(event);
+    if (!effectiveEffort) return;
+    const capability = this.capabilityFor(model);
+    if (!capability.effortLevels.includes(effectiveEffort.effort)) {
+      throw new CommandCodeRuntimeError(`Command Code reported unsupported effective effort '${effectiveEffort.effort}'`, 'protocol_error');
+    }
+    await this.store.update(sessionId, {
+      effectiveEffort: effectiveEffort.effort,
+      effortEvidenceMethod: effectiveEffort.method,
+    });
   }
 
-  private async prepareNativeHome(sessionId: string): Promise<void> {
+  private async syncRegistryRecord(record: CommandCodeInternalSessionRecord): Promise<void> {
+    if (!this.sessionRegistry) return;
+    try {
+      await this.sessionRegistry.upsert({
+        id: record.sessionId,
+        sdkType: 'commandcode',
+        path: record.sessionId,
+        commandCodeNativeSessionId: record.nativeSessionId,
+        cwd: record.cwd,
+        model: record.modelSelector,
+        firstMessage: record.firstMessage,
+        messageCount: record.messageCount,
+        createdAt: record.createdAt,
+        lastActivity: record.updatedAt,
+        status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
+      });
+      this.registryProjectionError = undefined;
+    } catch (error) {
+      this.registryProjectionError = error instanceof Error ? error.message : String(error);
+      // Registry projection is discoverability evidence, not the private
+      // session source of truth; a persistence hiccup must not abort a turn.
+    }
+  }
+
+  private async removeInaccessibleBrowserHomes(): Promise<void> {
+    for (const record of await this.store.list()) {
+      if (record.permissionProfile === 'browser-contained' && !this.isSessionRecordAccessible(record)) {
+        const staleSessionId = (record as CommandCodeInternalSessionRecord).sessionId;
+        await rm(path.join(this.config.nativeHomeDir, staleSessionId), { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
+  }
+
+  private async prepareNativeHomeRoot(): Promise<void> {
+    await ensurePrivateDirectory(this.config.nativeHomeDir, 'Command Code native home root');
+  }
+
+  private async prepareNativeHome(sessionId: string, permissionProfile: CommandCodePermissionProfile): Promise<void> {
     await this.prepareNativeHomeRoot();
     const sessionHome = path.join(this.config.nativeHomeDir, sessionId);
     const commandCodeHome = path.join(sessionHome, '.commandcode');
-    await mkdir(commandCodeHome, { recursive: true, mode: 0o700 });
-    const source = path.join(process.env.HOME || '/root', '.commandcode', 'auth.json');
+    await ensurePrivateDirectory(sessionHome, 'Command Code session home');
+    await ensurePrivateDirectory(commandCodeHome, 'Command Code private auth directory');
+    const source = permissionProfile === 'browser-contained'
+      ? this.config.browserAuthFile
+      : path.join(process.env.HOME || '/root', '.commandcode', 'auth.json');
     const target = path.join(commandCodeHome, 'auth.json');
+    if (!source) return;
+
+    let sourceHandle: Awaited<ReturnType<typeof open>> | undefined;
+    let temporaryHandle: Awaited<ReturnType<typeof open>> | undefined;
+    const temporary = `${target}.${process.pid}.${cryptoRandomId()}.tmp`;
     try {
-      const sourceStat = await lstat(source);
+      if (permissionProfile === 'browser-contained') {
+        sourceHandle = this.browserAuthHandle;
+        if (!sourceHandle) throw new Error('Command Code browser auth is not pinned');
+      } else {
+        sourceHandle = await open(source, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+      }
+      const sourceStat = await sourceHandle.stat();
       if (!sourceStat.isFile()) return;
       try {
         const targetStat = await lstat(target);
@@ -646,20 +1015,95 @@ export class CommandCodeService {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
-      // Copy the operator's credential into the session-owned native home. A
-      // symlink would let concurrent native invocations mutate one shared
-      // auth/config tree and would make per-session isolation illusory.
-      const temporary = `${target}.${process.pid}.tmp`;
-      await copyFile(source, temporary);
-      await chmod(temporary, 0o600);
+      temporaryHandle = await open(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o400);
+      const contents = permissionProfile === 'browser-contained'
+        ? await readFile(`/proc/self/fd/${sourceHandle.fd}`)
+        : await sourceHandle.readFile();
+      await temporaryHandle.writeFile(contents);
+      await temporaryHandle.chmod(0o400);
+      await temporaryHandle.close();
+      temporaryHandle = undefined;
       await rename(temporary, target);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (permissionProfile === 'browser-contained' || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    } finally {
+      if (sourceHandle && sourceHandle !== this.browserAuthHandle) await sourceHandle.close().catch(() => undefined);
+      await temporaryHandle?.close().catch(() => undefined);
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+
+  private async validateBrowserPolicy(): Promise<void> {
+    this.browserPolicyReady = false;
+    await this.browserAuthHandle?.close().catch(() => undefined);
+    this.browserAuthHandle = undefined;
+    this.browserAuthIdentity = undefined;
+    if (!this.config.browserAuthFile || (this.config.browserRuntimeRoots ?? []).length === 0 || (this.config.browserAllowedCwdRoots ?? []).length === 0 || (this.config.browserAllowedModels ?? []).length === 0) {
+      this.discoveryDiagnostic = 'Command Code browser credential, model allowlist, runtime roots, and workspace roots are all required';
+      return;
+    }
+    try {
+      const authStat = await lstat(this.config.browserAuthFile);
+      if (!authStat.isFile() || authStat.isSymbolicLink()) throw new Error('browser auth must be a regular non-symlink file');
+      const authParent = path.dirname(path.resolve(this.config.browserAuthFile));
+      if (await realpath(authParent) !== authParent) throw new Error('browser auth parent may not contain symlinked path components');
+      const runtimeValidation = await canonicalBrowserDirectories(this.config.browserRuntimeRoots ?? [], 'runtime roots');
+      const workspaceValidation = await canonicalBrowserDirectories(this.config.browserAllowedCwdRoots ?? [], 'workspace roots', true);
+      const canonicalRuntimeRoots = runtimeValidation.paths;
+      const canonicalWorkspaceRoots = workspaceValidation.paths;
+      const canonicalAuth = await realpath(this.config.browserAuthFile);
+      let authHandle: Awaited<ReturnType<typeof open>> | undefined;
+      try {
+        authHandle = await open(canonicalAuth, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+        const openedAuth = await authHandle.stat();
+        if (!openedAuth.isFile() || openedAuth.isSymbolicLink()) throw new Error('browser auth must be a regular file');
+        if (openedAuth.dev !== authStat.dev || openedAuth.ino !== authStat.ino) throw new Error('browser auth changed during validation');
+        if ((openedAuth.mode & 0o077) !== 0) throw new Error('browser auth must not be group/world accessible');
+        if (typeof process.getuid === 'function' && openedAuth.uid !== process.getuid()) throw new Error('browser auth must be owned by the server user');
+      } catch (error) {
+        await authHandle?.close().catch(() => undefined);
+        throw error;
+      }
+      this.browserAuthHandle = authHandle;
+      this.browserAuthIdentity = { dev: (await authHandle.stat()).dev, ino: (await authHandle.stat()).ino };
+      const canonicalSandbox = this.config.browserSandboxExecutablePath ? await realpath(this.config.browserSandboxExecutablePath) : '';
+      const sandboxStat = await stat(canonicalSandbox);
+      if (!sandboxStat.isFile()) throw new Error('browser sandbox launcher is not a regular file');
+      await access(canonicalSandbox, fsConstants.X_OK);
+      this.browserSandboxIdentity = { dev: sandboxStat.dev, ino: sandboxStat.ino };
+      if (canonicalRuntimeRoots.some(isBroadRuntimeRoot) || canonicalWorkspaceRoots.some(isBroadWorkspaceRoot)) throw new Error('browser roots are too broad');
+      const pinnedRootIdentities = this.runner.setBrowserPolicyRoots
+        ? {
+            allowed: workspaceValidation.identities,
+            runtime: runtimeValidation.identities,
+            nativeHome: await identityForDirectory(this.config.nativeHomeDir),
+          }
+        : undefined;
+      this.runner.setBrowserPolicyRoots?.(
+        canonicalWorkspaceRoots,
+        canonicalRuntimeRoots,
+        this.config.nativeHomeDir,
+        pinnedRootIdentities,
+      );
+      if (this.ownsProcessRunner) this.runner.pinBrowserSandbox?.(this.config.browserSandboxExecutablePath, this.browserSandboxIdentity);
+      if (this.runner.browserSandboxReady?.() !== true) throw new Error('browser sandbox launcher is unavailable');
+      this.config.browserRuntimeRoots = canonicalRuntimeRoots;
+      this.config.browserAllowedCwdRoots = canonicalWorkspaceRoots;
+      this.config.browserAuthFile = canonicalAuth;
+      this.config.browserSandboxExecutablePath = canonicalSandbox;
+      this.browserPolicyReady = true;
+    } catch (error) {
+      await this.browserAuthHandle?.close().catch(() => undefined);
+      this.browserAuthHandle = undefined;
+      this.browserAuthIdentity = undefined;
+      this.browserPolicyReady = false;
+      this.runner.setBrowserPolicyRoots?.([], [], this.config.nativeHomeDir);
+      this.discoveryDiagnostic = `Command Code browser containment unavailable: ${scrubDiagnostic(error instanceof Error ? error.message : String(error))}`;
     }
   }
 
   private assertRunnable(): void {
-    if (!this.config.enabled) throw new CommandCodeRuntimeError('Command Code runtime is disabled', 'runtime_error');
+    if (!this.isEnabled()) throw new CommandCodeRuntimeError('Command Code runtime is disabled', 'runtime_error');
     if (this.healthStatus !== 'available') throw new CommandCodeRuntimeError(`Command Code runtime is ${this.healthStatus}`, 'runtime_error');
   }
 
@@ -678,17 +1122,34 @@ export class CommandCodeService {
   }
 }
 
-function hasExactEffortCapabilities(capabilities: CommandCodeEffortCapabilities): boolean {
-  if (JSON.stringify(Object.keys(capabilities).sort()) !== JSON.stringify([...COMMAND_CODE_MODELS].sort())) return false;
-  return COMMAND_CODE_MODELS.every((model) => {
+function commandCodeDisplayName(model: CommandCodeRuntimeModel): string {
+  if (model === 'qwen/qwen3.8-max') return 'Qwen 3.8 Max';
+  if (model === 'meta/muse-spark-1.2-contributor') return 'Muse Spark 1.2 Contributor';
+  const leaf = model.split('/').pop() ?? model;
+  return leaf
+    .split(/[-_.]+/g)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function hasExactEffortCapabilities(
+  capabilities: CommandCodeEffortCapabilities,
+  models: readonly CommandCodeRuntimeModel[],
+): boolean {
+  if (JSON.stringify(Object.keys(capabilities).sort()) !== JSON.stringify([...models].sort())) return false;
+  const shadowCatalogue = models.length === COMMAND_CODE_MODELS.length
+    && models.every((model) => (COMMAND_CODE_MODELS as readonly string[]).includes(model));
+  return models.every((model) => {
     const capability = capabilities[model];
-    const expectedLevels = COMMAND_CODE_EFFORT_LEVELS_BY_MODEL[model];
-    return Boolean(capability)
-      && capability.status !== 'unknown'
-      && capability.source === 'live-preflight'
-      && /^[a-f0-9]{64}$/.test(capability.capabilityHash)
-      && capability.supportsEffort === (expectedLevels.length > 0)
-      && JSON.stringify(capability.effortLevels) === JSON.stringify(expectedLevels)
+    if (!capability
+      || capability.status === 'unknown'
+      || capability.source !== 'live-preflight'
+      || !/^[a-f0-9]{64}$/.test(capability.capabilityHash)
+      || capability.supportsEffort !== (capability.effortLevels.length > 0)) return false;
+    if (!shadowCatalogue) return true;
+    const expectedLevels = COMMAND_CODE_EFFORT_LEVELS_BY_MODEL[model] ?? [];
+    return JSON.stringify(capability.effortLevels) === JSON.stringify(expectedLevels)
       && (expectedLevels.length === 0 ? capability.defaultEffort === undefined : capability.defaultEffort === 'medium');
   });
 }
@@ -704,6 +1165,10 @@ function extractEffectiveEffort(event: NormalizedEvent): { effort: CommandCodeEf
     effort: value as CommandCodeEffort,
     method: data?.effortEvidenceMethod === 'provider-result' ? 'provider-result' : 'provider-event',
   };
+}
+
+function normalizedEventKey(event: NormalizedEvent): string {
+  return JSON.stringify({ type: event.type, data: event.data });
 }
 
 function classifyResult(result: CommandCodeProcessRunResult, terminal?: { subtype: 'success' | 'error' | 'max_turns' }): Error | undefined {
@@ -741,6 +1206,51 @@ function exitCodeClass(code: number | null): CommandCodeErrorClass {
 function isWithinRoot(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function isBroadWorkspaceRoot(root: string): boolean {
+  const canonical = path.resolve(root);
+  return new Set(['/','/home','/root','/tmp','/var','/etc','/usr','/bin','/sbin','/lib','/lib64']).has(canonical);
+}
+
+function isBroadRuntimeRoot(root: string): boolean {
+  return new Set(['/','/home','/root','/tmp','/var','/usr','/usr/local','/etc','/bin','/sbin','/lib','/lib64']).has(path.resolve(root));
+}
+
+async function identityForDirectory(directory: string): Promise<{ dev: number; ino: number }> {
+  const metadata = await stat(directory);
+  if (!metadata.isDirectory()) throw new Error(`Command Code browser root is not a directory: ${directory}`);
+  return { dev: metadata.dev, ino: metadata.ino };
+}
+
+async function canonicalBrowserDirectories(
+  roots: string[],
+  label: string,
+  rejectSymlinkAliases = false,
+): Promise<{ paths: string[]; identities: Array<{ dev: number; ino: number }> }> {
+  const canonical: string[] = [];
+  const identities: Array<{ dev: number; ino: number }> = [];
+  for (const root of [...new Set(roots.map((value) => path.resolve(value)))]) {
+    const link = await lstat(root);
+    if (!link.isDirectory() || link.isSymbolicLink()) throw new Error(`browser ${label} must be regular directories`);
+    const resolved = await realpath(root);
+    if (rejectSymlinkAliases && resolved !== path.resolve(root)) throw new Error(`browser ${label} may not contain symlinked path components`);
+    const resolvedStat = await stat(resolved);
+    if (!resolvedStat.isDirectory()) throw new Error(`browser ${label} must be directories`);
+    canonical.push(resolved);
+    identities.push({ dev: resolvedStat.dev, ino: resolvedStat.ino });
+  }
+  const uniquePaths = [...new Set(canonical)];
+  return { paths: uniquePaths, identities: identities.slice(0, uniquePaths.length) };
+}
+
+async function ensurePrivateDirectory(directory: string, label: string): Promise<void> {
+  const resolved = path.resolve(directory);
+  await mkdir(resolved, { recursive: true, mode: 0o700 });
+  const metadata = await lstat(resolved);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error(`${label} must be a regular directory`);
+  if (await realpath(resolved) !== resolved) throw new Error(`${label} may not contain symlinked path components`);
+  await chmod(resolved, 0o700);
 }
 
 function scrubDiagnostic(value: string): string {

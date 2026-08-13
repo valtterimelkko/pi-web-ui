@@ -60,10 +60,10 @@ describe('Command Code Internal API lifecycle', () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const runner = new Runner();
     const commandCodeService = new CommandCodeService({
-      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir: root, expectedVersion: '1.15.0' },
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir: root, expectedVersion: '1.19.0' },
       runner,
       discover: async () => ({
-        version: '1.15.0',
+        version: '1.19.0',
         models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'],
         ambiguous: [],
         effortCapabilities: {

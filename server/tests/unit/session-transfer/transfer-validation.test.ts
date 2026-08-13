@@ -33,6 +33,10 @@ describe('validateSdkType', () => {
     expect(validateSdkType('opencode')).toBe(true);
   });
 
+  it('accepts commandcode', () => {
+    expect(validateSdkType('commandcode')).toBe(true);
+  });
+
   it('rejects invalid', () => {
     expect(validateSdkType('invalid')).toBe(false);
   });

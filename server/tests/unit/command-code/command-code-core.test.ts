@@ -33,10 +33,53 @@ describe('Command Code model identity', () => {
   });
 
   it('keeps version and exact ids from a fresh cmd --list-models probe', () => {
-    const probe = `Command Code v${COMMAND_CODE_VERSION}\nqwen/qwen3.8-max autonomous\nmeta/muse-spark-1.2-contributor contributor`;
+    const probe = `Command Code v${COMMAND_CODE_VERSION}\nqwen/qwen3.8-max             autonomous description\nmeta/muse-spark-1.2-contributor             contributor description`;
     expect(parseCommandCodeModelList(probe)).toEqual({
-      version: '1.15.0',
+      version: COMMAND_CODE_VERSION,
       models: [...COMMAND_CODE_MODELS],
+      ambiguous: [],
+    });
+  });
+
+  it('accepts the current bare cmd --version format', () => {
+    expect(parseCommandCodeModelList('1.19.0\n')).toMatchObject({ version: '1.19.0' });
+  });
+
+  it('ignores prose and single-space aliases instead of treating them as executable model ids', () => {
+    expect(parseCommandCodeModelList([
+      'Available models · 2 models',
+      'Use the full id or short alias',
+      'qwen/qwen3.8-max alias',
+      'qwen/qwen3.8-max             full description',
+      'cmd --model qwen/qwen3.8-max',
+    ].join('\n'))).toMatchObject({
+      models: ['qwen/qwen3.8-max'],
+      ambiguous: [],
+    });
+  });
+
+  it('parses every exact model id advertised by the live catalogue, not only shadow routes', () => {
+    const probe = [
+      'Available models  ·  3 models',
+      '',
+      'Open Source',
+      'deepseek/deepseek-v4-pro             long-context reasoning',
+      'claude-sonnet-5                       provider short id',
+      'qwen/qwen3.8-max                     autonomous coding',
+      'meta/muse-spark-1.2-contributor      contributor route',
+      '',
+      'Pass the full id, or just the short name after the last "/":',
+      'cmd --model moonshotai/kimi-k2.5',
+      'cmd --model kimi-k2.5',
+    ].join('\n');
+
+    expect(parseCommandCodeModelList(probe)).toMatchObject({
+      models: [
+        'deepseek/deepseek-v4-pro',
+        'claude-sonnet-5',
+        'qwen/qwen3.8-max',
+        'meta/muse-spark-1.2-contributor',
+      ],
       ambiguous: [],
     });
   });
@@ -45,7 +88,7 @@ describe('Command Code model identity', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-effort-discovery-'));
     const script = path.join(root, 'fake-cmd.mjs');
     const secretMarker = path.join(root, 'secret-seen');
-    const scriptBody = `import { writeFileSync } from 'node:fs';\nconst marker = ${JSON.stringify(secretMarker)};\nif (process.env.COMMAND_CODE_TEST_SECRET) writeFileSync(marker, 'secret-seen');\nconst args = process.argv.slice(2);\nconst model = args[args.indexOf('--model') + 1];\nconst effort = args[args.indexOf('--effort') + 1];\nif (args.includes('--version')) console.log('Command Code v1.15.0');\nelse if (args.includes('--list-models')) console.log('qwen/qwen3.8-max autonomous\\nmeta/muse-spark-1.2-contributor contributor');\nelse if (model === 'qwen/qwen3.8-max' && ['low', 'medium', 'xhigh'].includes(effort)) { console.error('authentication required'); process.exit(3); }\nelse { console.error('unsupported reasoning effort'); process.exit(2); }\n`;
+    const scriptBody = `import { writeFileSync } from 'node:fs';\nconst marker = ${JSON.stringify(secretMarker)};\nif (process.env.COMMAND_CODE_TEST_SECRET) writeFileSync(marker, 'secret-seen');\nconst args = process.argv.slice(2);\nconst model = args[args.indexOf('--model') + 1];\nconst effort = args[args.indexOf('--effort') + 1];\nif (args.includes('--version')) console.log('Command Code v1.19.0');\nelse if (args.includes('--list-models')) console.log('qwen/qwen3.8-max             autonomous description\\nmeta/muse-spark-1.2-contributor             contributor description');\nelse if (model === 'qwen/qwen3.8-max' && ['low', 'medium', 'xhigh'].includes(effort)) { console.error('authentication required'); process.exit(3); }\nelse { console.error('unsupported reasoning effort'); process.exit(2); }\n`;
     await import('node:fs/promises').then(({ writeFile }) => writeFile(script, `#!/usr/bin/env node
 ${scriptBody}`));
     await chmod(script, 0o700);
@@ -79,8 +122,8 @@ ${scriptBody}`));
 const args = process.argv.slice(2);
 const model = args[args.indexOf('--model') + 1];
 const effort = args[args.indexOf('--effort') + 1];
-if (args.includes('--version')) console.log('Command Code v1.15.0');
-else if (args.includes('--list-models')) console.log('qwen/qwen3.8-max autonomous\\nmeta/muse-spark-1.2-contributor contributor');
+if (args.includes('--version')) console.log('Command Code v1.19.0');
+else if (args.includes('--list-models')) console.log('qwen/qwen3.8-max             autonomous description\\nmeta/muse-spark-1.2-contributor             contributor description');
 else if (model === 'qwen/qwen3.8-max' && ['low', 'medium', 'xhigh'].includes(effort)) { console.log('Reasoning effort set to ' + effort + ' for Qwen 3.8 Max.'); console.error('Error: No query provided. Usage: cmd -p \\"your query\\"'); process.exit(1); }
 else { console.error('Muse Spark 1.2 Contributor has no adjustable reasoning effort.'); process.exit(1); }
 `;
@@ -102,11 +145,36 @@ else { console.error('Muse Spark 1.2 Contributor has no adjustable reasoning eff
     }
   });
 
+  it('parses native effort lists from one model-specific invalid-value probe', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-effort-list-probe-'));
+    const script = path.join(root, 'fake-cmd.mjs');
+    const scriptBody = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const model = args[args.indexOf('--model') + 1];
+if (model === 'qwen/qwen3.8-max') console.error('Unknown effort "probe". Supported: low, medium, xhigh.');
+else console.error('Muse Spark 1.2 Contributor has no adjustable reasoning effort.');
+process.exit(1);
+`;
+    await import('node:fs/promises').then(({ writeFile }) => writeFile(script, scriptBody));
+    await chmod(script, 0o700);
+    try {
+      const discovered = await discoverCommandCodeEfforts(script, {
+        models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'],
+        probeAllValues: false,
+      });
+      expect(discovered.capabilities['qwen/qwen3.8-max']).toMatchObject({ supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'] });
+      expect(discovered.capabilities['qwen/qwen3.8-max']?.defaultEffort).toBeUndefined();
+      expect(discovered.capabilities['meta/muse-spark-1.2-contributor']).toMatchObject({ supportsEffort: false, effortLevels: [], status: 'unavailable' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('uses a bounded controlled environment and kills a hung discovery probe', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-discovery-'));
     const script = path.join(root, 'fake-cmd.mjs');
     const secretMarker = path.join(root, 'secret-seen');
-    const scriptBody = `import { writeFileSync } from 'node:fs';\nconst marker = ${JSON.stringify(secretMarker)};\nif (process.env.COMMAND_CODE_TEST_SECRET) writeFileSync(marker, 'secret-seen');\nif (process.argv.includes('--version')) console.log('Command Code v1.15.0');\nelse if (process.argv.includes('--list-models')) console.log('qwen/qwen3.8-max autonomous\\nmeta/muse-spark-1.2-contributor contributor');\nelse setTimeout(() => {}, 1000);\n`;
+    const scriptBody = `import { writeFileSync } from 'node:fs';\nconst marker = ${JSON.stringify(secretMarker)};\nif (process.env.COMMAND_CODE_TEST_SECRET) writeFileSync(marker, 'secret-seen');\nif (process.argv.includes('--version')) console.log('Command Code v1.19.0');\nelse if (process.argv.includes('--list-models')) console.log('qwen/qwen3.8-max             autonomous description\\nmeta/muse-spark-1.2-contributor             contributor description');\nelse setTimeout(() => {}, 1000);\n`;
     await import('node:fs/promises').then(({ writeFile }) => writeFile(script, `#!/usr/bin/env node\n${scriptBody}`));
     await chmod(script, 0o700);
     const previous = process.env.COMMAND_CODE_TEST_SECRET;
@@ -115,7 +183,7 @@ else { console.error('Muse Spark 1.2 Contributor has no adjustable reasoning eff
     await import('node:fs/promises').then(({ writeFile }) => writeFile(hangScript, '#!/usr/bin/env node\nsetTimeout(() => {}, 1000);'));
     await chmod(hangScript, 0o700);
     try {
-      await expect(discoverCommandCodeModels(script)).resolves.toMatchObject({ version: '1.15.0', models: [...COMMAND_CODE_MODELS] });
+      await expect(discoverCommandCodeModels(script)).resolves.toMatchObject({ version: '1.19.0', models: [...COMMAND_CODE_MODELS] });
       await expect(discoverCommandCodeModels(hangScript, { timeoutMs: 20 })).rejects.toThrow(/timed out/i);
       await expect(readFile(secretMarker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
@@ -143,6 +211,7 @@ describe('Command Code command construction', () => {
     expect(args).not.toContain('--yolo');
     expect(COMMAND_CODE_EXECUTION_INSTANCE_ID).toBe('commandcode-default');
     expect(getCommandCodeProfile('implementation-child-wide').args).toContain('--yolo');
+    expect(() => getCommandCodeProfile('invalid-profile' as never)).toThrow(/unknown.*profile/i);
   });
 
   it('validates native effort against the exact model capability', () => {

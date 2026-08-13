@@ -424,9 +424,16 @@ export class RunReceiptStore {
       throw new Error('Invalid receipt runtime');
     }
     if (record.runtime === 'commandcode') {
-      if (!record.invocationRole || !record.permissionProfile) throw new Error('Command Code receipt lacks immutable role/profile binding');
-      if (record.invocationRole === 'conductor-root' && record.permissionProfile !== 'agent-os-7f-root-readonly') throw new Error('Command Code receipt root role/profile drift');
-      if (record.invocationRole === 'implementation-child' && record.permissionProfile !== 'implementation-child-wide') throw new Error('Command Code receipt child role/profile drift');
+      if (record.permissionProfile !== 'agent-os-7f-root-readonly' && record.permissionProfile !== 'implementation-child-wide' && record.permissionProfile !== 'browser-contained') {
+        throw new Error('Invalid Command Code receipt permission profile');
+      }
+      if (record.permissionProfile === 'browser-contained') {
+        if (record.invocationRole !== undefined) throw new Error('Browser Command Code receipt cannot carry an invocation role');
+      } else {
+        if (record.invocationRole !== 'conductor-root' && record.invocationRole !== 'implementation-child') throw new Error('Invalid Command Code receipt invocation role');
+        if (record.invocationRole === 'conductor-root' && record.permissionProfile !== 'agent-os-7f-root-readonly') throw new Error('Command Code receipt root role/profile drift');
+        if (record.invocationRole === 'implementation-child' && record.permissionProfile !== 'implementation-child-wide') throw new Error('Command Code receipt child role/profile drift');
+      }
     }
     if (!['accepted', 'queued', 'started', 'completed', 'failed', 'cancelled', 'interrupted'].includes(record.status)) {
       throw new Error('Invalid receipt status');
@@ -436,8 +443,8 @@ export class RunReceiptStore {
     if (record.acceptedEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.acceptedEffort)) throw new Error('Invalid Command Code accepted effort');
     if (record.acceptedEffort !== undefined && record.acceptedEffort !== record.effort) throw new Error('Command Code accepted effort must match the canonical effort binding');
     if (record.requestedEffort !== undefined && record.acceptedEffort !== undefined && record.requestedEffort !== record.acceptedEffort) throw new Error('Command Code requested and accepted effort must match after fail-closed validation');
-    if (record.effortSource !== undefined && !['explicit', 'default', 'none'].includes(record.effortSource)) throw new Error('Invalid Command Code effort source');
-    if (record.effortSource === 'none' && record.effort !== undefined) throw new Error('Non-adjustable Command Code effort cannot carry a value');
+    if (record.effortSource !== undefined && !['explicit', 'default', 'automatic', 'none'].includes(record.effortSource)) throw new Error('Invalid Command Code effort source');
+    if ((record.effortSource === 'none' || record.effortSource === 'automatic') && record.effort !== undefined) throw new Error('Automatic/non-adjustable Command Code effort cannot carry a value');
     if ((record.effortSource === 'explicit' || record.effortSource === 'default') && record.effort === undefined) throw new Error('Command Code effort source requires a value');
     if (record.defaultEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.defaultEffort)) throw new Error('Invalid Command Code default effort');
     if (record.effectiveEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.effectiveEffort)) throw new Error('Invalid Command Code effective effort');

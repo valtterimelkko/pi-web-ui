@@ -24,7 +24,7 @@ import type { NotificationRuntime, OptInRecord } from '../../notifications/types
 
 const logger = createLogger('NotificationsRoutes');
 
-const NOTIFICATION_RUNTIMES: readonly NotificationRuntime[] = ['pi', 'claude', 'opencode', 'antigravity'];
+const NOTIFICATION_RUNTIMES: readonly NotificationRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode'];
 
 function isNotificationRuntime(value: unknown): value is NotificationRuntime {
   return typeof value === 'string' && (NOTIFICATION_RUNTIMES as readonly string[]).includes(value);
@@ -52,23 +52,50 @@ export interface NotificationsRoutesDeps {
   sessionRegistry: {
     get(sessionId: string): Promise<{ sdkType: string; path?: string } | undefined | null>;
   };
+  /** Internal API visibility seam; browser-contained sessions must stay out. */
+  isShadowCommandCodeSession?: (sessionId: string) => Promise<boolean>;
 }
 
 export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
   const { manager, sessionRegistry } = deps;
 
-  async function resolveCanonicalId(sessionId: string): Promise<string> {
+  async function resolveVisibleEntry(sessionId: string): Promise<{ sdkType: string; path?: string } | undefined> {
     const entry = await sessionRegistry.get(sessionId);
-    return entry && isNotificationRuntime(entry.sdkType)
-      ? canonicalOptInId(entry.sdkType, sessionId, entry.path ?? sessionId)
+    if (!entry) return undefined;
+    if (entry.sdkType === 'commandcode' && !(await deps.isShadowCommandCodeSession?.(sessionId) ?? false)) {
+      return undefined;
+    }
+    return entry;
+  }
+
+  async function isHiddenCommandCodeSession(sessionId: string): Promise<boolean> {
+    const entry = await sessionRegistry.get(sessionId);
+    const optInIsCommandCode = manager.getOptIn(sessionId)?.runtime === 'commandcode';
+    const hasCommandCodeDelivery = manager
+      .listDeliveriesForSession(sessionId)
+      .some((item) => item.notification.runtime === 'commandcode');
+    if (entry?.sdkType === 'commandcode') {
+      return !(await deps.isShadowCommandCodeSession?.(sessionId) ?? false);
+    }
+    // A Command Code notification identity/history is addressable through the
+    // Internal API only when its registry entry is explicitly Command Code and
+    // the shadow accessor approves it. Missing or mismatched registry entries
+    // fail closed, including after browser opt-out removes the opt-in record.
+    return optInIsCommandCode || hasCommandCodeDelivery;
+  }
+
+  async function resolveCanonicalId(sessionId: string): Promise<string> {
+    const entry = await resolveVisibleEntry(sessionId);
+    return entry
+      ? canonicalOptInId(entry.sdkType as NotificationRuntime, sessionId, entry.path ?? sessionId)
       : sessionId;
   }
 
   /** POST /api/v1/sessions/:id/notifications/opt-in */
   async function handleOptIn(req: IncomingMessage, res: ServerResponse, sessionId: string): Promise<void> {
-    const entry = await sessionRegistry.get(sessionId).catch(() => undefined);
+    const entry = await resolveVisibleEntry(sessionId).catch(() => undefined);
     if (!entry) {
-      logger.warn(`opt-in requested for unknown session: ${sessionId} (registry/UI mismatch)`);
+      logger.warn(`opt-in requested for unknown or Internal API-invisible session: ${sessionId} (registry/UI mismatch)`);
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Session not found: ${sessionId}`));
       return;
     }
@@ -89,12 +116,17 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
     const canonicalId = canonicalOptInId(runtime, sessionId, sessionPath);
     const record: OptInRecord = {
       sessionId: canonicalId,
-      runtime,
+      runtime: runtime as NotificationRuntime,
       sessionPath,
       optedInAt: new Date().toISOString(),
       label: parsed.data.label,
+      access: 'internal',
     };
-    await manager.optIn(record);
+    const accepted = await manager.optIn(record);
+    if (accepted === false) {
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session is not available for Internal API notifications'));
+      return;
+    }
     sendJson(res, 200, {
       status: 'ok',
       optIn: { sessionId: canonicalId, runtime: record.runtime, label: record.label, optedInAt: record.optedInAt },
@@ -104,6 +136,10 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
   /** DELETE /api/v1/sessions/:id/notifications/opt-in */
   async function handleOptOut(_req: IncomingMessage, res: ServerResponse, sessionId: string): Promise<void> {
     try {
+      if (await isHiddenCommandCodeSession(sessionId)) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session is not available for Internal API notifications'));
+        return;
+      }
       await manager.optOut(await resolveCanonicalId(sessionId));
       sendJson(res, 200, { status: 'ok', optIn: null });
     } catch (error) {
@@ -115,6 +151,10 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
   /** GET /api/v1/sessions/:id/notifications */
   async function handleGetSessionState(_req: IncomingMessage, res: ServerResponse, sessionId: string): Promise<void> {
     try {
+      if (await isHiddenCommandCodeSession(sessionId)) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session is not available for Internal API notifications'));
+        return;
+      }
       const canonicalId = await resolveCanonicalId(sessionId);
       sendJson(res, 200, {
         status: 'ok',
@@ -175,6 +215,13 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.NOT_FOUND, `Notification not found: ${notificationId}`));
       return;
     }
+    if (delivery.notification.runtime === 'commandcode') {
+      const sessionId = delivery.notification.sessionId;
+      if (!sessionId || !(await deps.isShadowCommandCodeSession?.(sessionId) ?? false)) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.NOT_FOUND, `Notification not found: ${notificationId}`));
+        return;
+      }
+    }
     sendJson(res, 200, { status: 'ok', delivery });
   }
 
@@ -186,7 +233,12 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
   ): Promise<void> {
     const rawLimit = Number.parseInt(query.get('limit') ?? '', 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : undefined;
-    sendJson(res, 200, { status: 'ok', deliveries: manager.listRecentDeliveries(limit) });
+    const deliveries = (await Promise.all(manager.listRecentDeliveries(limit).map(async (item) => {
+      if (item.notification.runtime !== 'commandcode') return item;
+      const sessionId = item.notification.sessionId;
+      return sessionId && await (deps.isShadowCommandCodeSession?.(sessionId) ?? Promise.resolve(false)) ? item : undefined;
+    }))).filter((item): item is NonNullable<typeof item> => item !== undefined);
+    sendJson(res, 200, { status: 'ok', deliveries });
   }
 
   return {

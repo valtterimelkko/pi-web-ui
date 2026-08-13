@@ -16,7 +16,7 @@
  */
 
 /** Runtimes that carry notification opt-ins. */
-export type NotificationOptInRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity';
+export type NotificationOptInRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
 
 /**
  * Matches the trailing `<uuid>.jsonl` of a Pi session file. The uuid in the

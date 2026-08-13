@@ -4,20 +4,25 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-/** The only Command Code routes admitted by the first Internal API slice. */
+/**
+ * The two exact routes reserved for the Agent OS shadow workflow. They remain
+ * intentionally narrow even though the browser catalogue is discovered live.
+ */
 export const COMMAND_CODE_MODELS = [
   'qwen/qwen3.8-max',
   'meta/muse-spark-1.2-contributor',
 ] as const;
 
 export type CommandCodeModel = (typeof COMMAND_CODE_MODELS)[number];
-export const COMMAND_CODE_VERSION = '1.15.0' as const;
+/** A model id returned by the current Command Code catalogue. */
+export type CommandCodeRuntimeModel = string;
+export const COMMAND_CODE_VERSION = '1.19.0' as const;
 export const COMMAND_CODE_PROVIDER = 'command-code' as const;
 
 /** Native Command Code effort values are intentionally not the generic API thinking levels. */
 export const COMMAND_CODE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type CommandCodeEffort = (typeof COMMAND_CODE_EFFORT_LEVELS)[number];
-export const COMMAND_CODE_EFFORT_LEVELS_BY_MODEL: Record<CommandCodeModel, readonly CommandCodeEffort[]> = {
+export const COMMAND_CODE_EFFORT_LEVELS_BY_MODEL: Partial<Record<CommandCodeRuntimeModel, readonly CommandCodeEffort[]>> = {
   'qwen/qwen3.8-max': ['low', 'medium', 'xhigh'],
   'meta/muse-spark-1.2-contributor': [],
 };
@@ -33,26 +38,35 @@ export interface CommandCodeEffortCapability {
   capabilityHash: string;
 }
 
-export type CommandCodeEffortCapabilities = Record<CommandCodeModel, CommandCodeEffortCapability>;
+export type CommandCodeEffortCapabilities = Record<CommandCodeRuntimeModel, CommandCodeEffortCapability>;
 
 export interface CommandCodeModelDiscovery {
   version: string;
-  models: CommandCodeModel[];
+  models: CommandCodeRuntimeModel[];
   ambiguous: string[];
   /** Populated by the full startup discovery; omitted by the model-list parser. */
   effortCapabilities?: CommandCodeEffortCapabilities;
 }
 
-/** Exact, case-sensitive route check. Aliases and friendly names are rejected. */
+/** Exact, case-sensitive check for the two Agent OS shadow routes. */
 export function assertCommandCodeModel(value: unknown): CommandCodeModel | undefined {
   return (COMMAND_CODE_MODELS as readonly string[]).includes(value as string)
     ? value as CommandCodeModel
     : undefined;
 }
 
-export function assertCommandCodeEffort(model: CommandCodeModel, value: unknown): CommandCodeEffort | undefined {
+/** Exact, case-sensitive check against a freshly advertised runtime catalogue. */
+export function assertCommandCodeRuntimeModel(
+  value: unknown,
+  advertisedModels: readonly CommandCodeRuntimeModel[],
+): CommandCodeRuntimeModel | undefined {
+  return typeof value === 'string' && advertisedModels.includes(value) ? value : undefined;
+}
+
+export function assertCommandCodeEffort(model: CommandCodeRuntimeModel, value: unknown): CommandCodeEffort | undefined {
   if (value === undefined) return undefined;
-  const allowed = COMMAND_CODE_EFFORT_LEVELS_BY_MODEL[model];
+  const knownLevels = COMMAND_CODE_EFFORT_LEVELS_BY_MODEL[model];
+  const allowed = knownLevels ?? COMMAND_CODE_EFFORT_LEVELS;
   if (!(allowed as readonly unknown[]).includes(value)) {
     throw new Error(`Command Code effort '${String(value)}' is not supported for model ${model}`);
   }
@@ -61,29 +75,43 @@ export function assertCommandCodeEffort(model: CommandCodeModel, value: unknown)
 
 /**
  * Parse the public `cmd --list-models` text without importing Command Code.
- * An exact id must occur exactly once to be considered advertised. The parser
- * intentionally ignores descriptions and short-name aliases.
+ * Model rows begin with an exact id followed by a multi-space description;
+ * headings, aliases and prose are ignored. Duplicate exact rows are reported
+ * as ambiguous rather than silently deduplicated into a usable route.
  */
 export function parseCommandCodeModelList(stdout: string): CommandCodeModelDiscovery {
-  const version = stdout.match(/Command Code v(\d+(?:\.\d+){2})/i)?.[1] ?? 'unknown';
-  const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const models: CommandCodeModel[] = [];
-  const ambiguous: string[] = [];
-  for (const expected of COMMAND_CODE_MODELS) {
-    const matches = lines.filter((line) => new RegExp(`^${escapeRegExp(expected)}(?:\\s|$)`).test(line));
-    if (matches.length === 1) models.push(expected);
-    else if (matches.length > 1) ambiguous.push(expected);
-  }
+  const version = stdout.match(/(?:Command\s+Code\s+)?v?(\d+(?:\.\d+){2})/i)?.[1] ?? 'unknown';
+  const lines = stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const ids = lines
+    .map(parseAdvertisedModelId)
+    .filter((value): value is CommandCodeRuntimeModel => value !== undefined);
+  const counts = new Map<string, number>();
+  for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+  const models = [...new Set(ids)];
+  const ambiguous = [...counts.entries()].filter(([, count]) => count > 1).map(([id]) => id);
   return { version, models, ambiguous };
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function parseAdvertisedModelId(line: string): CommandCodeRuntimeModel | undefined {
+  const trimmed = line.trim();
+  // Catalogue rows have an exact lower-case model id followed by the CLI's
+  // fixed multi-space description column. Headings, prose, aliases and
+  // executable examples are not model advertisements.
+  if (/^cmd\s+--model\b/i.test(trimmed)) return undefined;
+  const match = trimmed.match(/^([a-z0-9][a-z0-9._/-]{0,255})[ ]{2,}\S/u);
+  return match?.[1];
 }
 
 export interface CommandCodeDiscoveryOptions {
   /** Bound startup discovery so a broken executable cannot wedge readiness. */
   timeoutMs?: number;
+  /** Restrict effort discovery to the freshly advertised exact ids. */
+  models?: readonly CommandCodeRuntimeModel[];
+  /**
+   * Legacy shadow probing checks every known effort value. Browser discovery
+   * can use one invalid-value probe and parse the CLI's supported-values list.
+   */
+  probeAllValues?: boolean;
 }
 
 export interface CommandCodeDiscoveryRunner {
@@ -118,35 +146,61 @@ export async function discoverCommandCodeEfforts(
   return withIsolatedDiscoveryHome(async (homeDir) => {
     const environment = controlledDiscoveryEnvironment(homeDir);
     const capabilities = {} as CommandCodeEffortCapabilities;
-    for (const model of COMMAND_CODE_MODELS) {
+    const models = options.models?.length ? [...options.models] : [...COMMAND_CODE_MODELS];
+    for (const model of models) {
       const supported: CommandCodeEffort[] = [];
       let unknown = false;
-      for (const effort of COMMAND_CODE_EFFORT_LEVELS) {
+      let defaultEffort: CommandCodeEffort | undefined;
+
+      if (options.probeAllValues === false) {
         try {
           const probe = await runDiscoveryCommand(
             executablePath,
-            ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1', '--trust', '--skip-onboarding', '--no-auto-update', '--effort', effort],
+            ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1', '--trust', '--skip-onboarding', '--no-auto-update', '--effort', '__pi_web_ui_capability_probe__'],
             options.timeoutMs,
             environment,
             true,
           );
-          const result = classifyEffortProbe(probe);
-          if (result === 'accepted') supported.push(effort);
-          else if (result === 'unknown') unknown = true;
+          const parsed = parseSupportedEfforts(probe.stdout, probe.stderr);
+          if (parsed) supported.push(...parsed);
+          else if (isNoAdjustableEffort(probe.stdout, probe.stderr)) {
+            // Explicitly non-adjustable; this is a valid capability result.
+          } else {
+            unknown = true;
+          }
         } catch {
           unknown = true;
         }
+      } else {
+        for (const effort of COMMAND_CODE_EFFORT_LEVELS) {
+          try {
+            const probe = await runDiscoveryCommand(
+              executablePath,
+              ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1', '--trust', '--skip-onboarding', '--no-auto-update', '--effort', effort],
+              options.timeoutMs,
+              environment,
+              true,
+            );
+            const result = classifyEffortProbe(probe);
+            if (result === 'accepted') supported.push(effort);
+            else if (result === 'unknown') unknown = true;
+          } catch {
+            unknown = true;
+          }
+        }
+        defaultEffort = supported.includes('medium') ? 'medium' : supported[0];
       }
-      const effortLevels = supported;
-      const status = unknown ? 'unknown' : supported.length > 0 ? 'adjustable' : 'unavailable';
-      const defaultEffort = supported.includes('medium') ? 'medium' : supported[0];
+
+      const effortLevels = [...new Set(supported)];
+      const status = unknown ? 'unknown' : effortLevels.length > 0 ? 'adjustable' : 'unavailable';
+      const supportsEffort = effortLevels.length > 0 && !unknown;
       capabilities[model] = {
-        supportsEffort: supported.length > 0 && !unknown,
+        supportsEffort,
         effortLevels,
-        ...(supported.length > 0 && !unknown && defaultEffort ? { defaultEffort } : {}),
+        ...(supportsEffort && defaultEffort ? { defaultEffort } : {}),
         status,
         source: COMMAND_CODE_EFFORT_SOURCE,
-        capabilityHash: effortCapabilityHash(model, { supportsEffort: supported.length > 0 && !unknown, effortLevels, status, ...(defaultEffort ? { defaultEffort } : {}) }),
+        capabilityHash: effortCapabilityHash(model, { supportsEffort, effortLevels, status, ...(defaultEffort ? { defaultEffort } : {}) }),
       };
     }
     return { capabilities };
@@ -217,6 +271,19 @@ async function runDiscoveryCommand(
 
 type EffortProbeClassification = 'accepted' | 'unsupported' | 'unknown';
 
+function parseSupportedEfforts(stdout: string, stderr: string): CommandCodeEffort[] | undefined {
+  const diagnostics = `${stdout}\n${stderr}`;
+  const match = diagnostics.match(/supported:\s*([^.!?\r\n]+)/i);
+  if (!match) return undefined;
+  const values = match[1].split(',').map((value) => value.trim().toLowerCase());
+  const supported = values.filter((value): value is CommandCodeEffort => (COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(value));
+  return supported.length > 0 ? supported : [];
+}
+
+function isNoAdjustableEffort(stdout: string, stderr: string): boolean {
+  return /no adjustable .*effort|effort not supported|does not support .*effort/i.test(`${stdout}\n${stderr}`);
+}
+
 function classifyEffortProbe(probe: { exitCode: number | null; stdout: string; stderr: string }): EffortProbeClassification {
   const diagnostics = `${probe.stdout}\n${probe.stderr}`.toLowerCase();
   // Command Code exits through its auth gate after accepting a valid model /
@@ -234,7 +301,7 @@ function classifyEffortProbe(probe: { exitCode: number | null; stdout: string; s
 }
 
 function effortCapabilityHash(
-  model: CommandCodeModel,
+  model: CommandCodeRuntimeModel,
   capability: Pick<CommandCodeEffortCapability, 'supportsEffort' | 'effortLevels' | 'defaultEffort' | 'status'>,
 ): string {
   return createHash('sha256')

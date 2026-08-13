@@ -59,6 +59,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
         claude: [],
         opencode: [],
         antigravity: [],
+        commandcode: [],
       };
 
       // Pi SDK models
@@ -148,7 +149,8 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
       // Command Code models stay server-local and are advertised only when the
       // feature is enabled and fresh exact-id discovery succeeded.
       if (commandCodeService && (!runtimeFilter || runtimeFilter === 'commandcode')) {
-        if (commandCodeService.isEnabled() && commandCodeService.isAvailable()) {
+        await commandCodeService.init?.();
+        if ((commandCodeService.isShadowAvailable?.() ?? commandCodeService.isAvailable()) && (commandCodeService.isShadowEnabled?.() ?? commandCodeService.isEnabled())) {
           result.commandcode = commandCodeService.getModels().map((model) => ({
             id: model.id,
             displayName: model.displayName,

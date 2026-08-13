@@ -80,6 +80,9 @@ function fakeService() {
       this.removeCalls.push(key);
       observers.delete(key);
     },
+    emit(key: string, event: NormalizedEvent): void {
+      observers.get(key)?.forEach((observer) => observer(event));
+    },
   };
 }
 
@@ -106,6 +109,7 @@ describe('notifications routes', () => {
   let claude: ReturnType<typeof fakeService>;
   let opencode: ReturnType<typeof fakeService>;
   let antigravity: ReturnType<typeof fakeService>;
+  let commandcode: ReturnType<typeof fakeService>;
   let channel: ReturnType<typeof captureChannel>;
   let manager: NotificationManager;
   let registry: { get: ReturnType<typeof vi.fn> };
@@ -117,6 +121,7 @@ describe('notifications routes', () => {
     claude = fakeService();
     opencode = fakeService();
     antigravity = fakeService();
+    commandcode = fakeService();
     channel = captureChannel();
     const router = new ChannelRouter();
     router.register(channel);
@@ -125,7 +130,7 @@ describe('notifications routes', () => {
       enabled: true,
       store,
       router,
-      services: { pi, claude, opencode, antigravity },
+      services: { pi, claude, opencode, antigravity, commandcode },
       tailMaxChars: 1200,
       publicBaseUrl: 'https://app.example.com',
       debounceMs: 10,
@@ -135,7 +140,7 @@ describe('notifications routes', () => {
     });
     await manager.init();
     registry = { get: vi.fn() };
-    routes = createNotificationsRoutes({ manager, sessionRegistry: registry as never });
+    routes = createNotificationsRoutes({ manager, sessionRegistry: registry as never, isShadowCommandCodeSession: async (id) => id !== 'browser-cmd-1' && id !== 'browser-cmd-3' });
   });
 
   afterEach(async () => {
@@ -165,6 +170,62 @@ describe('notifications routes', () => {
       expect(claude.addCalls).toEqual(['id-claude']);
       expect(opencode.addCalls).toEqual(['id-opencode']);
       expect(antigravity.addCalls).toEqual(['id-antigravity']);
+    });
+
+    it('opts in a shadow Command Code session through the registry-owned identity', async () => {
+      registry.get.mockResolvedValue(entry('commandcode', 'cmd-1'));
+      const res = createMockRes();
+      await routes.handleOptIn(createJsonReq('POST', '/api/v1/sessions/cmd-1/notifications/opt-in'), res, 'cmd-1');
+      expect(res.statusCode).toBe(200);
+      expect(commandcode.addCalls).toEqual(['cmd-1']);
+      expect(manager.getOptIn('cmd-1')?.runtime).toBe('commandcode');
+      expect(manager.getOptIn('cmd-1')?.access).toBe('internal');
+    });
+
+    it('does not expose a browser-contained Command Code session to Internal API notifications', async () => {
+      registry.get.mockResolvedValue(entry('commandcode', 'browser-cmd-1'));
+      const res = createMockRes();
+      await routes.handleOptIn(createJsonReq('POST', '/api/v1/sessions/browser-cmd-1/notifications/opt-in'), res, 'browser-cmd-1');
+      expect(res.statusCode).toBe(404);
+      expect(commandcode.addCalls).toEqual([]);
+    });
+
+    it('hides a stored browser opt-in even if its registry projection has disappeared', async () => {
+      await manager.optIn({
+        sessionId: 'browser-cmd-2',
+        runtime: 'commandcode',
+        sessionPath: 'browser-cmd-2',
+        optedInAt: '2026-08-13T00:00:00.000Z',
+        access: 'browser',
+      });
+      registry.get.mockResolvedValue(undefined);
+      const state = createMockRes();
+      await routes.handleGetSessionState(createJsonReq('GET', '/api/v1/sessions/browser-cmd-2/notifications'), state, 'browser-cmd-2');
+      expect(state.statusCode).toBe(404);
+      const optOut = createMockRes();
+      await routes.handleOptOut(createJsonReq('DELETE', '/api/v1/sessions/browser-cmd-2/notifications/opt-in'), optOut, 'browser-cmd-2');
+      expect(optOut.statusCode).toBe(404);
+      expect(manager.getOptIn('browser-cmd-2')).toBeDefined();
+    });
+
+    it('hides browser Command Code delivery history after opt-out and registry loss', async () => {
+      registry.get.mockResolvedValue(entry('commandcode', 'browser-cmd-3'));
+      await manager.optIn({
+        sessionId: 'browser-cmd-3',
+        runtime: 'commandcode',
+        sessionPath: 'browser-cmd-3',
+        optedInAt: '2026-08-13T00:00:00.000Z',
+        access: 'browser',
+      });
+      commandcode.emit('browser-cmd-3', { type: 'agent_end', sessionId: 'browser-cmd-3', timestamp: Date.now(), data: {} });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await manager.drain();
+      await manager.optOut('browser-cmd-3');
+      registry.get.mockResolvedValue(undefined);
+
+      const state = createMockRes();
+      await routes.handleGetSessionState(createJsonReq('GET', '/api/v1/sessions/browser-cmd-3/notifications'), state, 'browser-cmd-3');
+      expect(state.statusCode).toBe(404);
     });
 
     it('normalizes a Pi opt-in to the canonical bare-uuid id (derived from entry.path)', async () => {
@@ -214,6 +275,7 @@ describe('notifications routes', () => {
 
     it('warns when opt-in targets a session whose runtime is unsupported', async () => {
       const records: LogRecord[] = [];
+      routes = createNotificationsRoutes({ manager, sessionRegistry: registry as never, isShadowCommandCodeSession: async () => true });
       setLogTap((r) => records.push(r));
       try {
         registry.get.mockResolvedValue(entry('opencli', 'weird1'));
@@ -410,6 +472,24 @@ describe('notifications routes', () => {
   });
 
   describe('GET /notifications (recent deliveries)', () => {
+    it('keeps shadow Command Code deliveries visible while hiding browser deliveries', async () => {
+      registry.get.mockResolvedValue(entry('commandcode', 'shadow-cmd'));
+      await routes.handleOptIn(createJsonReq('POST', '/api/v1/sessions/shadow-cmd/notifications/opt-in'), res_void(), 'shadow-cmd');
+      commandcode.emit('shadow-cmd', { type: 'agent_end', sessionId: 'shadow-cmd', timestamp: Date.now(), data: {} });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await manager.drain();
+      const delivery = manager.listRecentDeliveries().find((item) => item.notification.runtime === 'commandcode');
+      expect(delivery).toBeDefined();
+
+      const status = createMockRes();
+      await routes.handleGetDeliveryStatus(createJsonReq('GET', '/api/v1/notifications/shadow'), status, delivery!.notification.id);
+      expect(status.statusCode).toBe(200);
+
+      const recent = createMockRes();
+      await routes.handleGetRecentDeliveries(createJsonReq('GET', '/api/v1/notifications'), recent, new URLSearchParams());
+      expect((json(recent) as { deliveries: Array<{ notification: { runtime?: string } }> }).deliveries.some((item) => item.notification.runtime === 'commandcode')).toBe(true);
+    });
+
     it('returns the recent delivery log', async () => {
       // Produce one delivered notification first.
       await routes.handleExplicitNotify(

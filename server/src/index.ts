@@ -16,6 +16,8 @@ import { SessionCleanupService } from './session-cleanup.js';
 import { getSessionRegistry } from './session-registry.js';
 import { createFatalErrorHandlers } from './fatal-error-handlers.js';
 import { ShutdownCoordinator } from './shutdown-coordinator.js';
+import { CommandCodeService } from './command-code/command-code-service.js';
+import { setCommandCodeService } from './command-code/command-code-instance.js';
 
 // State used by createApp's lazy notification-router getters. Declared before
 // createApp() (which runs at module load) so the getters close over initialized
@@ -24,9 +26,13 @@ let wsManager: WebSocketConnectionManager | null = null;
 let sessionCleanup: SessionCleanupService | null = null;
 let internalApiServer: import('./internal-api/index.js').InternalApiServer | null = null;
 let notificationsRegistry: ReturnType<typeof getSessionRegistry> | null = null;
+let browserCommandCodeSessionResolver: ((sessionId: string, runtime: import('./notifications/types.js').NotificationRuntime, sessionPath: string) => Promise<boolean>) | undefined;
 
 const app = createApp({
   getManager: () => internalApiServer?.getNotificationManager() ?? null,
+  resolveSession: async (sessionId, runtime, sessionPath) => browserCommandCodeSessionResolver
+    ? browserCommandCodeSessionResolver(sessionId, runtime, sessionPath)
+    : runtime !== 'commandcode',
 });
 const server = createServer(app);
 
@@ -37,8 +43,40 @@ async function initialize(): Promise<void> {
     await initializePiService();
     logger.info('Pi service initialized');
 
+    const sharedRegistry = getSessionRegistry(config.sessionRegistryPath);
+
+    // One process-owned Command Code service is shared by browser WebSocket
+    // traffic and the authenticated Internal API. The browser gate is kept
+    // separate from the Agent OS shadow gate.
+    const commandCodeService = new CommandCodeService({
+      config: {
+        enabled: config.commandCodeEnabled || config.commandCodeBrowserEnabled,
+        shadowEnabled: config.commandCodeEnabled,
+        browserEnabled: config.commandCodeBrowserEnabled,
+        browserAllowedModels: config.commandCodeBrowserAllowedModels,
+        browserAllowedCwdRoots: config.commandCodeBrowserAllowedCwdRoots,
+        browserAuthFile: config.commandCodeBrowserAuthFile,
+        browserRuntimeRoots: config.commandCodeBrowserRuntimeRoots,
+        executablePath: config.commandCodeExecutablePath,
+        stateDir: config.commandCodeStateDir,
+        nativeHomeDir: config.commandCodeNativeHomeDir,
+        allowedCwdRoots: config.commandCodeAllowedCwdRoots,
+        expectedVersion: config.commandCodeExpectedVersion,
+        maxTurns: config.commandCodeMaxTurns,
+        maxWallTimeMs: config.commandCodeMaxWallTimeMs,
+        concurrency: config.commandCodeConcurrency,
+      },
+      sessionRegistry: sharedRegistry,
+    });
+
+    setCommandCodeService(commandCodeService);
+    browserCommandCodeSessionResolver = async (sessionId, runtime, sessionPath) => {
+      if (runtime !== 'commandcode') return true;
+      return sessionId === sessionPath && await commandCodeService.isBrowserSession(sessionId);
+    };
+
     // Create WebSocket connection manager
-    wsManager = new WebSocketConnectionManager();
+    wsManager = new WebSocketConnectionManager(commandCodeService);
 
     // Handle WebSocket upgrade requests. One central pre-upgrade guard
     // (origin + cookie-auth + upgrade rate-limit) is applied to every accepted
@@ -52,7 +90,7 @@ async function initialize(): Promise<void> {
 
     // Initialize CLI session watcher. Each already-observed add/change is
     // incrementally indexed; this does not trigger a directory-wide rescan.
-    const watcherRegistry = getSessionRegistry(config.sessionRegistryPath);
+    const watcherRegistry = sharedRegistry;
     const sessionWatcher = startSessionWatcher(
       config.sessionDir || path.join(config.piAgentDir, 'sessions'),
       watcherRegistry,
@@ -109,7 +147,7 @@ async function initialize(): Promise<void> {
     if (config.internalApiEnabled) {
       try {
         const { InternalApiServer } = await import('./internal-api/index.js');
-        notificationsRegistry = getSessionRegistry(config.sessionRegistryPath);
+        notificationsRegistry = sharedRegistry;
         internalApiServer = new InternalApiServer({
           config: {
             socketPath: config.internalApiSocketPath,
@@ -156,6 +194,7 @@ async function initialize(): Promise<void> {
           multiSessionManager: wsManager.getMultiSessionManager(),
           sessionRegistry: notificationsRegistry,
           piService: getPiService(),
+          commandCodeService,
         });
         await internalApiServer.start();
         logger.info(`[InternalAPI] Started on Unix socket: ${config.internalApiSocketPath}`);
