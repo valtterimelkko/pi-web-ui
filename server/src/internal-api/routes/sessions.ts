@@ -1350,6 +1350,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
+      const browserSession = await commandCodeService?.getBrowserSession(sessionId);
+      if (browserSession) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+        return;
+      }
       const detail = await buildSessionDetail(sessionId);
       if (!detail) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -1368,6 +1373,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
+      const browserSession = await commandCodeService?.getBrowserSession(sessionId);
+      if (browserSession) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+        return;
+      }
       const detail = await buildSessionDetail(sessionId);
       if (!detail) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -1672,6 +1682,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
+      if (await commandCodeService?.getBrowserSession(sessionId)) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+        return;
+      }
       const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
       if (commandCodeEntry) {
         sendJson(res, 200, { sessionId: commandCodeEntry.sessionId, runtime: 'commandcode', events: (await commandCodeService!.getReplayEvents(commandCodeEntry.sessionId)).map((event) => ({ ...event })) } satisfies SessionHistoryResponse);
@@ -3564,6 +3578,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
+    if (await commandCodeService?.getBrowserSession(sessionId)) {
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+      return;
+    }
     const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
     const entry = commandCodeEntry ? undefined : await getNonCommandCodeRegistryEntry(sessionId);
     if (!entry && !commandCodeEntry) {
@@ -3618,6 +3636,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
     query: URLSearchParams,
   ): Promise<void> {
+    if (await commandCodeService?.getBrowserSession(sessionId)) {
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+      return;
+    }
     const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
     if (commandCodeEntry) {
       const timeoutMs = Math.min(Math.max(parseInt(query.get('timeout') || '60000', 10), 0), 300000);
@@ -3916,6 +3938,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     query: URLSearchParams,
   ): Promise<void> {
     try {
+      if (await commandCodeService?.getBrowserSession(sessionId)) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+        return;
+      }
       const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
       if (commandCodeEntry) {
         if (query.get('view') === 'screen') {
@@ -3979,6 +4005,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
+    if (await commandCodeService?.getBrowserSession(sessionId)) {
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+      return;
+    }
     const body = await readJsonBody<TransferSessionRequest>(req);
     if (!body) {
       sendJson(res, 400, { error: 'Request body required', code: ErrorCode.INVALID_REQUEST });

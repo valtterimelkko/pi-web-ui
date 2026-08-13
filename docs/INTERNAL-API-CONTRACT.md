@@ -81,7 +81,7 @@ routing change.
   - `POST /sessions` accepts required `retention: {mode:"durable"|"resident",ttlSeconds?,ownerId,label?}` and returns a lease id; failure is atomic and removes the unused session;
   - `acquire_retention` adds an independent lease to an existing session; `renew_retention` and `release_retention` target one lease id, so Web UI, watch, and concurrent Internal API owners cannot release each other's claims;
   - the historical two-pin cap now applies only to human Web UI claims; API leases do not consume those slots;
-  - `GET /api/v1/capacity` reports process-local admission, per-runtime active turns, interactive reserve, and measured cgroup/RSS memory headroom; prompt refusal returns `429 ADMISSION_CAPACITY_EXHAUSTED` with `Retry-After`;
+  - `GET /api/v1/capacity` reports process-local admission, dynamic per-runtime active turns, interactive/control reserve, ordinary execution capacity, measured cgroup/RSS memory headroom, optional PID/task and host-pressure/event evidence, and conservative-knob provenance; prompt refusal returns `429` (or `503` under resource pressure) with `ADMISSION_CAPACITY_EXHAUSTED` and `Retry-After`;
   - Pi Internal API synthetic subscriptions are released after create/turn completion, and explicit DELETE disposes the loaded SDK session before removing files;
   - legacy `pin`/`unpin` fields remain compatible API-owned projections during migration. Old clients can ignore every additive field/endpoint.
 - **1.11.0** (minor, additive) — made exact Claude profile identity explicit and fail-closed:

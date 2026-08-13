@@ -660,6 +660,57 @@ export interface ListSessionsResponse {
   sessions: SessionInfo[];
 }
 
+export interface CapacityPressureAverage {
+  avg10: number;
+  avg60: number;
+  avg300: number;
+}
+
+/** Response shape for GET /api/v1/capacity. Kept explicit so consumers can
+ * distinguish execution admission from control, PID, host, and cgroup truth. */
+export interface CapacityResponse {
+  available: boolean;
+  reason?: 'global_limit' | 'runtime_limit' | 'memory_pressure' | 'pid_pressure' | 'host_memory_pressure';
+  activeTurns: number;
+  maxActiveTurns: number;
+  interactiveReserve: number;
+  apiTurnLimit: number;
+  controlReserve: number;
+  executionCapacity: number;
+  controlAvailable: boolean;
+  emergencyMode: boolean;
+  retryAfterSeconds: number;
+  memory: {
+    currentBytes: number;
+    limitBytes: number;
+    headroomBytes: number;
+    minimumHeadroomBytes: number;
+    highBytes?: number;
+    source?: 'service' | 'root' | 'process-rss';
+    reservedBytesPerTurn: number;
+    projectedHeadroomBytes: number;
+  };
+  runtimes: Record<string, { activeTurns: number; maxActiveTurns: number; stalledRuns?: number }>;
+  classes?: Record<string, { active: number }>;
+  pids?: { current?: number; max?: number; source?: 'service' | 'root' | 'process-rss'; pressure?: boolean; reservedPidsPerTurn?: number };
+  host?: {
+    memAvailableBytes?: number;
+    memTotalBytes?: number;
+    psi?: { memory?: { some?: CapacityPressureAverage; full?: CapacityPressureAverage }; cpu?: { some?: CapacityPressureAverage; full?: CapacityPressureAverage }; io?: { some?: CapacityPressureAverage; full?: CapacityPressureAverage } };
+    source?: 'host';
+    hostPressure?: boolean;
+    hostMinimumHeadroomBytes?: number;
+    telemetryAvailable?: boolean;
+  };
+  memoryEvents?: { oom?: number; oomKill?: number; high?: number; source: 'service' | 'root' | 'process-rss' };
+  admissionConfig?: { explicitKnobs: string[]; prodFallbackKnobs: string[] };
+  stalledRuns?: number;
+  quarantinedRuns?: number;
+  oldestActiveRunStartedAt?: string;
+  control?: { inFlight: number; queued: number };
+  disposalOwners?: Record<string, number>;
+}
+
 export interface PromptResponse {
   sessionId: string;
   /** Run identity for this prompt dispatch. */

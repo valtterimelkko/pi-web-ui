@@ -109,6 +109,10 @@ async function main(): Promise<void> {
     if (commandCodeFixture) await createCommandCodeValidationFixture(validationDir);
     if (commandCodeBrowserFixture) {
       writeFileSync(path.join(validationDir, 'command-code-browser-auth.json'), '{"token":"disposable-fixture"}\n', { encoding: 'utf8', mode: 0o600 });
+      // Browser validation uses the same cookie-authenticated route as the UI.
+      // The wrapper may inherit NODE_ENV=production from .env, so use a
+      // disposable bcrypt hash rather than weakening production auth checks.
+      process.env.AUTH_PASSWORD = '$2b$10$EJfE4MVDcyjSjCNpztQ74O/Y10CKuzAWexXatmlrSqY5yg5RY4C9u';
     }
     const isolationEnv = buildValidationIsolationEnv({
       validationDir,

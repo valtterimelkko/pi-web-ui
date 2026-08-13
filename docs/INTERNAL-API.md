@@ -1073,9 +1073,13 @@ GET /api/v1/capacity
 ```
 
 Returns the current process-local Internal API turn budget, active counts by
-runtime, the slot reserved for interactive Web UI work, measured cgroup-v2
-memory usage (or process RSS/host RAM fallback), projected per-turn reservation,
-and `retryAfterSeconds`.
+runtime (including any newly advertised runtime), the slot reserved for
+interactive Web UI work, separate control/execution capacity, measured
+cgroup-v2 memory usage (or process RSS/host RAM fallback), optional PID/task and
+host-pressure/event evidence, conservative-knob provenance, and
+`retryAfterSeconds`. Additive fields such as `classes`, `control`,
+`stalledRuns`, `quarantinedRuns`, `oldestActiveRunStartedAt`, and
+`disposalOwners` are process-local diagnostics.
 
 ```json
 {
@@ -1084,32 +1088,46 @@ and `retryAfterSeconds`.
   "maxActiveTurns": 8,
   "interactiveReserve": 1,
   "apiTurnLimit": 7,
+  "controlReserve": 1,
+  "executionCapacity": 7,
+  "controlAvailable": true,
+  "emergencyMode": false,
   "memory": {
     "currentBytes": 268435456,
     "limitBytes": 8589934592,
     "headroomBytes": 8321499136,
     "minimumHeadroomBytes": 536870912,
     "reservedBytesPerTurn": 268435456,
-    "projectedHeadroomBytes": 8053063680
+    "projectedHeadroomBytes": 8053063680,
+    "source": "service"
   },
   "runtimes": {
     "pi": { "activeTurns": 0, "maxActiveTurns": 7 },
     "claude": { "activeTurns": 0, "maxActiveTurns": 7 },
     "opencode": { "activeTurns": 0, "maxActiveTurns": 7 },
-    "antigravity": { "activeTurns": 0, "maxActiveTurns": 7 }
+    "antigravity": { "activeTurns": 0, "maxActiveTurns": 7 },
+    "commandcode": { "activeTurns": 0, "maxActiveTurns": 7 }
   },
+  "pids": { "current": 12, "max": 512, "source": "service", "pressure": false },
+  "host": { "memAvailableBytes": 4294967296, "source": "host", "telemetryAvailable": true, "hostPressure": false },
+  "memoryEvents": { "oom": 0, "oomKill": 0, "high": 0, "source": "service" },
+  "admissionConfig": { "explicitKnobs": ["maxActiveTurns"], "prodFallbackKnobs": [] },
+  "control": { "inFlight": 0, "queued": 0 },
   "retryAfterSeconds": 2
 }
 ```
 
 `available`/top-level `reason` reflect memory and global checks. Consumers must
 also inspect their runtime counter; the final prompt-time check can still refuse
-for `runtime_limit`. Conductors should preflight, but the prompt route remains
-the atomic authority because capacity can change between reads. A refusal is
-HTTP `429` with code `ADMISSION_CAPACITY_EXHAUSTED`, stable `reason`
-(`global_limit`, `runtime_limit`, or `memory_pressure`), body
-`retryAfterSeconds`, and a `Retry-After` header. Capacity limits active turns,
-not durable sessions or retention leases; no hidden queue is created.
+for `runtime_limit`. `controlAvailable` describes the reserved P0/P1 control
+lane, while `executionCapacity` describes ordinary P2/P3 execution. Conductors
+should preflight, but the prompt route remains the atomic authority because
+capacity can change between reads. A refusal is HTTP `429` (or `503` for
+resource-pressure reasons) with code `ADMISSION_CAPACITY_EXHAUSTED`, stable
+`reason` (`global_limit`, `runtime_limit`, `memory_pressure`, `pid_pressure`,
+or `host_memory_pressure`), body `retryAfterSeconds`, and a `Retry-After`
+header. Capacity limits active turns, not durable sessions or retention leases;
+no hidden queue is created.
 
 ---
 

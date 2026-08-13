@@ -48,11 +48,12 @@ process.stdin.on('end', () => {
   } catch (error) {
     process.stderr.write(String(error));
   }
-  const text = prompt.includes('RUN-RECEIPT-LIVE-OK') ? 'RUN-RECEIPT-LIVE-OK'
-    : prompt.includes('EVIDENCE-LIVE-OK') ? 'EVIDENCE-LIVE-OK'
-      : prompt.includes('LIVE-VALIDATION-INFO') ? 'LIVE-VALIDATION-INFO'
-        : prompt.includes('LIVE-VALIDATION-OK') ? 'LIVE-VALIDATION-OK'
-          : 'COMMAND-CODE-LIVE-OK';
+  const text = prompt.includes('COMMAND-CODE-BROWSER-LIVE-OK') ? 'COMMAND-CODE-BROWSER-LIVE-OK'
+    : prompt.includes('RUN-RECEIPT-LIVE-OK') ? 'RUN-RECEIPT-LIVE-OK'
+      : prompt.includes('EVIDENCE-LIVE-OK') ? 'EVIDENCE-LIVE-OK'
+        : prompt.includes('LIVE-VALIDATION-INFO') ? 'LIVE-VALIDATION-INFO'
+          : prompt.includes('LIVE-VALIDATION-OK') ? 'LIVE-VALIDATION-OK'
+            : 'COMMAND-CODE-LIVE-OK';
   const sessionId = 'command-code-fixture-native-session';
   const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
   emit({ type: 'event', event: { type: 'run_start', sessionId } });

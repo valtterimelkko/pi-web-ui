@@ -264,6 +264,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
     runReceiptManager?: RunReceiptManager,
     admissionController?: any,
     blockedPiProviders = ['openai', 'openrouter'],
+    commandCodeService?: any,
   ) {
     return createSessionRoutes({
       claudeService, opencodeService, antigravityService,
@@ -273,6 +274,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       runReceiptManager,
       admissionController,
       blockedPiProviders,
+      commandCodeService,
     });
   }
 
@@ -525,6 +527,17 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(texts).toContain('hello back');
     });
 
+    it('hides browser-contained Command Code sessions from transcript reads', async () => {
+      const browserSession = { sessionId: 'browser-1', permissionProfile: 'browser-contained' };
+      const routes = makeRoutes(undefined, undefined, ['openai', 'openrouter'], {
+        getBrowserSession: vi.fn().mockResolvedValue(browserSession),
+      });
+      const res = createMockRes();
+      await routes.handleSessionTranscript(createJsonReq('GET', '/api/v1/sessions/browser-1/transcript'), res, 'browser-1', new URLSearchParams());
+      expect(res.statusCode).toBe(404);
+      expect(JSON.parse(res.body).code).toBe('SESSION_NOT_FOUND');
+    });
+
     it('returns a transcript for pi sessions via JSONL parse', async () => {
       const { entry } = await writePiSessionFile('t4', [
         { type: 'message', message: { role: 'user', content: 'pi user msg' } },
@@ -567,6 +580,17 @@ describe('createSessionRoutes orchestration endpoints', () => {
       await routes.handleSessionTransfer(req, res, 'tr1');
       expect(res.statusCode).toBe(400);
       expect(JSON.parse(res.body).code).toBe('INVALID_REQUEST');
+    });
+
+    it('hides browser-contained Command Code sessions from transfer', async () => {
+      const routes = makeRoutes(undefined, undefined, ['openai', 'openrouter'], {
+        getBrowserSession: vi.fn().mockResolvedValue({ sessionId: 'browser-1', permissionProfile: 'browser-contained' }),
+      });
+      const req = createJsonReq('POST', '/api/v1/sessions/browser-1/transfer', { createNew: true, targetRuntime: 'claude' });
+      const res = createMockRes();
+      await routes.handleSessionTransfer(req, res, 'browser-1');
+      expect(res.statusCode).toBe(404);
+      expect(JSON.parse(res.body).code).toBe('SESSION_NOT_FOUND');
     });
 
     it('transfers into a new claude session', async () => {
