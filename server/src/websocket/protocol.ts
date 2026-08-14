@@ -139,14 +139,8 @@ export interface SessionInfo {
   sdkType?: SdkType;
   model?: string;
   effort?: CommandCodeEffort;
-  requestedEffort?: CommandCodeEffort;
-  acceptedEffort?: CommandCodeEffort;
   effortLevels?: CommandCodeEffort[];
-  effortSource?: 'explicit' | 'default' | 'automatic' | 'none';
   defaultEffort?: CommandCodeEffort;
-  effectiveEffort?: CommandCodeEffort;
-  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
-  effortCapabilityHash?: string;
   createdAt?: string;
   lastActivity?: string;
 }
@@ -182,14 +176,8 @@ export interface SessionStats {
   cost?: number;
   model?: string;
   effort?: CommandCodeEffort;
-  requestedEffort?: CommandCodeEffort;
-  acceptedEffort?: CommandCodeEffort;
   effortLevels?: CommandCodeEffort[];
-  effortSource?: 'explicit' | 'default' | 'automatic' | 'none';
   defaultEffort?: CommandCodeEffort;
-  effectiveEffort?: CommandCodeEffort;
-  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
-  effortCapabilityHash?: string;
   contextWindow?: number;
   contextUsed?: number;
   contextPercent?: number;

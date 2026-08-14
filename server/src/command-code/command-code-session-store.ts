@@ -50,6 +50,15 @@ export interface CreateCommandCodeSessionInput {
   eventJournalRef: string;
 }
 
+export interface CommandCodeSessionPatch extends Partial<Pick<CommandCodeInternalSessionRecord,
+  'nativeSessionId' | 'activeRunId' | 'state' | 'lastResult' | 'messageCount' | 'firstMessage' |
+  'lastMessage' | 'lastFinalText' | 'diagnostics'>> {
+  cwd?: string;
+  modelSelector?: CommandCodeRuntimeModel;
+  effort?: CommandCodeEffort;
+  defaultEffort?: CommandCodeEffort;
+}
+
 export class CommandCodeSessionStore {
   private readonly root: string;
   private readonly sessionsDir: string;
@@ -132,28 +141,14 @@ export class CommandCodeSessionStore {
     return [...this.invalidSessionIds];
   }
 
-  async update(sessionId: string, patch: Partial<Pick<CommandCodeInternalSessionRecord,
-    'nativeSessionId' | 'activeRunId' | 'state' | 'lastResult' | 'messageCount' | 'firstMessage' |
-    'lastMessage' | 'lastFinalText' | 'diagnostics'>> & {
-    cwd?: string;
-    modelSelector?: CommandCodeRuntimeModel;
-    effort?: CommandCodeEffort;
-    defaultEffort?: CommandCodeEffort;
-  }): Promise<CommandCodeInternalSessionRecord> {
+  async update(sessionId: string, patch: CommandCodeSessionPatch): Promise<CommandCodeInternalSessionRecord> {
     if (patch.nativeSessionId !== undefined) {
       return this.withNativeBindingLock(() => this.updateRecord(sessionId, patch));
     }
     return this.updateRecord(sessionId, patch);
   }
 
-  private async updateRecord(sessionId: string, patch: Partial<Pick<CommandCodeInternalSessionRecord,
-    'nativeSessionId' | 'activeRunId' | 'state' | 'lastResult' | 'messageCount' | 'firstMessage' |
-    'lastMessage' | 'lastFinalText' | 'diagnostics'>> & {
-    cwd?: string;
-    modelSelector?: CommandCodeRuntimeModel;
-    effort?: CommandCodeEffort;
-    defaultEffort?: CommandCodeEffort;
-  }): Promise<CommandCodeInternalSessionRecord> {
+  private async updateRecord(sessionId: string, patch: CommandCodeSessionPatch): Promise<CommandCodeInternalSessionRecord> {
     await this.init();
     const current = this.records.get(sessionId);
     if (!current) throw new Error(`Command Code session not found: ${sessionId}`);
@@ -204,21 +199,6 @@ export class CommandCodeSessionStore {
     } finally {
       release();
     }
-  }
-
-  async assertBinding(sessionId: string, binding: {
-    cwd?: string;
-    modelSelector?: CommandCodeRuntimeModel;
-    nativeSessionId?: string;
-    effort?: CommandCodeEffort;
-  }): Promise<CommandCodeInternalSessionRecord> {
-    const record = await this.get(sessionId);
-    if (!record) throw new Error(`Command Code session not found: ${sessionId}`);
-    if (binding.cwd !== undefined && path.resolve(binding.cwd) !== record.cwd) throw new Error('Command Code cwd binding drift');
-    if (binding.modelSelector !== undefined && binding.modelSelector !== record.modelSelector) throw new Error('Command Code model binding drift');
-    if (binding.nativeSessionId !== undefined && binding.nativeSessionId !== record.nativeSessionId) throw new Error('Command Code native session id drift');
-    if (binding.effort !== undefined && binding.effort !== record.effort) throw new Error('Command Code effort binding drift');
-    return record;
   }
 
   async delete(sessionId: string): Promise<boolean> {

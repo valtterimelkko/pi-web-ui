@@ -40,7 +40,7 @@ describe('Command Code event adapter', () => {
     expect(result.nativeSessionId).toBe('native-1');
   });
 
-  it('preserves provider-reported effective effort as an explicit normalized event', () => {
+  it('preserves provider-reported effort as an explicit normalized event', () => {
     const result = adaptCommandCodeOutput({
       sessionId: 'internal-1',
       nativeSessionId: 'native-1',
@@ -53,7 +53,6 @@ describe('Command Code event adapter', () => {
     });
     expect(result.events.find((event) => event.type === 'model_request_end')?.data).toMatchObject({
       effort: 'xhigh',
-      effortEvidenceMethod: 'provider-event',
     });
   });
 
@@ -85,7 +84,7 @@ describe('Command Code event adapter', () => {
     expect(malformed.events.find((event) => event.type === COMMAND_CODE_AGENT_END)?.data).not.toHaveProperty('tokenUsage');
   });
 
-  it('records terminal effective effort as provider-result evidence', () => {
+  it('records terminal effort on the authoritative agent_end', () => {
     const result = adaptCommandCodeOutput({
       sessionId: 'internal-1',
       nativeSessionId: 'native-1',
@@ -98,7 +97,6 @@ describe('Command Code event adapter', () => {
     });
     expect(result.events.find((event) => event.type === COMMAND_CODE_AGENT_END)?.data).toMatchObject({
       effort: 'medium',
-      effortEvidenceMethod: 'provider-result',
     });
   });
 

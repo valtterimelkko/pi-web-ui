@@ -108,7 +108,6 @@ export function adaptCommandCodeOutput(input: CommandCodeAdaptInput): CommandCod
       delete data.tokenUsage;
       if (terminalEffort && data.effort === undefined) {
         data.effort = terminalEffort;
-        data.effortEvidenceMethod = 'provider-result' as const;
       }
       if (tokenUsage) data.tokenUsage = tokenUsage;
       normalized = { ...normalized, data };
@@ -288,7 +287,7 @@ function normalizeEvent(
       type,
       data: {
         ...(stringValue(event.requestId) ? { requestId: event.requestId } : {}),
-        ...(effort ? { effort, effortEvidenceMethod: 'provider-event' as const } : {}),
+        ...(effort ? { effort } : {}),
       },
     };
   }
@@ -310,7 +309,7 @@ function terminalData(terminal: CommandCodeResultFrame, nativeSessionId?: string
     stopReason: terminal.stopReason,
     usage: boundedValue(terminal.usage),
     ...(tokenUsage ? { tokenUsage } : {}),
-    ...(effort ? { effort, effortEvidenceMethod: 'provider-result' as const } : {}),
+    ...(effort ? { effort } : {}),
     nativeSessionId: terminal.sessionId ?? nativeSessionId,
   };
 }

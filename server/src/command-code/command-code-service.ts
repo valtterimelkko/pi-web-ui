@@ -265,11 +265,7 @@ export class CommandCodeService {
   }
 
   async setEffort(sessionId: string, effort?: string): Promise<CommandCodeInternalSessionRecord> {
-    if (this.shuttingDown) throw new CommandCodeRuntimeError('Command Code service is shutting down', 'interrupted');
-    if (this.deletedSessions.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session was deleted', 'runtime_error');
-    if (this.pendingSessions.has(sessionId) || this.activeSessions.has(sessionId) || this.effortMutations.has(sessionId)) {
-      throw new CommandCodeRuntimeError('Command Code session is already running', 'runtime_error');
-    }
+    this.assertTurnAvailable(sessionId);
     this.effortMutations.add(sessionId);
     let resolveMutation!: () => void;
     const mutationSettled = new Promise<void>((resolve) => { resolveMutation = resolve; });
@@ -309,11 +305,6 @@ export class CommandCodeService {
     return (await this.store.list()).filter((record) => this.isSessionRecordAccessible(record));
   }
 
-  async isSessionAccessible(sessionId: string): Promise<boolean> {
-    await this.init();
-    return this.isSessionRecordAccessible(await this.store.get(sessionId));
-  }
-
   async findSession(identifier: string): Promise<CommandCodeInternalSessionRecord | undefined> {
     const direct = await this.getSession(identifier);
     if (direct) return direct;
@@ -327,9 +318,7 @@ export class CommandCodeService {
     onComplete?: (error?: Error) => void,
     runId?: string,
   ): Promise<void> {
-    if (this.shuttingDown) throw new CommandCodeRuntimeError('Command Code service is shutting down', 'interrupted');
-    if (this.deletedSessions.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session was deleted', 'runtime_error');
-    if (this.pendingSessions.has(sessionId) || this.activeSessions.has(sessionId) || this.effortMutations.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session is already running', 'runtime_error');
+    this.assertTurnAvailable(sessionId);
     let resolveTurn!: () => void;
     const turnSettled = new Promise<void>((resolve) => { resolveTurn = resolve; });
     this.inFlightTurns.set(sessionId, turnSettled);
@@ -382,42 +371,17 @@ export class CommandCodeService {
       if (event.type === 'agent_end') return;
       streamedEvents.push(event);
       streamQueue = streamQueue.then(async () => {
-        await this.journal.append(sessionId, event);
-        this.publishApiEvent(sessionId, event);
-        onEvent(event);
+        await this.emit(sessionId, event, onEvent);
         if (event.type === 'agent_end') emittedTerminal = true;
       });
     };
     try {
-      const agentStart: NormalizedEvent = {
-        type: 'agent_start',
-        sessionId,
-        timestamp: Date.now(),
-        data: { runtime: 'commandcode', runId },
-      };
-      await this.journal.append(sessionId, agentStart);
-      this.publishApiEvent(sessionId, agentStart);
-      onEvent(agentStart);
-
+      const makeEvent = (type: NormalizedEvent['type'], data: Record<string, unknown>): NormalizedEvent =>
+        ({ type, sessionId, timestamp: Date.now(), data });
+      await this.emit(sessionId, makeEvent('agent_start', { runtime: 'commandcode', runId }), onEvent);
       const userMessageId = `commandcode-user-${runId ?? cryptoRandomId()}`;
-      const userStart: NormalizedEvent = {
-        type: 'message_start',
-        sessionId,
-        timestamp: Date.now(),
-        data: { id: userMessageId, role: 'user', content: prompt.slice(0, 20_000) },
-      };
-      const userEnd: NormalizedEvent = {
-        type: 'message_end',
-        sessionId,
-        timestamp: Date.now(),
-        data: { id: userMessageId },
-      };
-      await this.journal.append(sessionId, userStart);
-      this.publishApiEvent(sessionId, userStart);
-      onEvent(userStart);
-      await this.journal.append(sessionId, userEnd);
-      this.publishApiEvent(sessionId, userEnd);
-      onEvent(userEnd);
+      await this.emit(sessionId, makeEvent('message_start', { id: userMessageId, role: 'user', content: prompt.slice(0, 20_000) }), onEvent);
+      await this.emit(sessionId, makeEvent('message_end', { id: userMessageId }), onEvent);
 
       const currentCwd = await canonicalCwd(record.cwd);
       if (currentCwd !== record.cwd) throw new CommandCodeRuntimeError('Command Code cwd binding drift', 'permission_denied');
@@ -471,16 +435,12 @@ export class CommandCodeService {
             streamedKeys.set(key, remaining - 1);
             continue;
           }
-          await this.journal.append(sessionId, event);
-          this.publishApiEvent(sessionId, event);
-          onEvent(event);
+          await this.emit(sessionId, event, onEvent);
           if (event.type === 'agent_end') emittedTerminal = true;
         }
       } else {
         const synthetic = this.syntheticEnd(sessionId, result);
-        await this.journal.append(sessionId, synthetic);
-        this.publishApiEvent(sessionId, synthetic);
-        onEvent(synthetic);
+        await this.emit(sessionId, synthetic, onEvent);
         emittedTerminal = true;
       }
       completionError = classifyResult(result, adapted?.terminal);
@@ -515,9 +475,7 @@ export class CommandCodeService {
       completionError = error instanceof Error ? error : new Error(String(error));
       if (!emittedTerminal) {
         const synthetic = this.syntheticEnd(sessionId, { exitCode: null, signal: null, stderrTail: '', protocolError: completionError.message });
-        await this.journal.append(sessionId, synthetic).catch(() => undefined);
-        this.publishApiEvent(sessionId, synthetic);
-        onEvent(synthetic);
+        await this.emit(sessionId, synthetic, onEvent).catch(() => undefined);
       }
       await this.store.update(sessionId, { state: this.abortRequested.has(sessionId) || completionError instanceof CommandCodeRuntimeError && completionError.code === 'interrupted' ? 'aborted' : 'failed', activeRunId: undefined, diagnostics: { suppressedDuplicateCount: 0, unknownEventTypes: [], protocolError: scrubDiagnostic(completionError.message), ...(this.abortRequested.has(sessionId) ? { terminationCause: 'abort' as const } : {}) } }).then((record) => this.syncRegistryRecord(record)).catch(() => undefined);
     }
@@ -596,6 +554,23 @@ export class CommandCodeService {
     if (!observers) return;
     observers.delete(observer as (event: NormalizedEvent) => void);
     if (observers.size === 0) this.apiObservers.delete(sessionId);
+  }
+
+
+  /** A turn or effort mutation needs the session idle and the service alive. */
+  private assertTurnAvailable(sessionId: string): void {
+    if (this.shuttingDown) throw new CommandCodeRuntimeError('Command Code service is shutting down', 'interrupted');
+    if (this.deletedSessions.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session was deleted', 'runtime_error');
+    if (this.pendingSessions.has(sessionId) || this.activeSessions.has(sessionId) || this.effortMutations.has(sessionId)) {
+      throw new CommandCodeRuntimeError('Command Code session is already running', 'runtime_error');
+    }
+  }
+
+  /** Journal, publish to Internal API observers, and forward to the live sink. */
+  private async emit(sessionId: string, event: NormalizedEvent, onEvent: (event: NormalizedEvent) => void): Promise<void> {
+    await this.journal.append(sessionId, event);
+    this.publishApiEvent(sessionId, event);
+    onEvent(event);
   }
 
   private publishApiEvent(sessionId: string, event: NormalizedEvent): void {

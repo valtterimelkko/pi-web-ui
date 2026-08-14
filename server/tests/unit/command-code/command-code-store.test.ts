@@ -102,7 +102,6 @@ describe('Command Code private state', () => {
     });
     await expect(store.bindNativeSession('cc-1', 'native-1')).resolves.toBeDefined();
     await expect(store.bindNativeSession('cc-1', 'native-2')).rejects.toThrow(/drift/i);
-    await expect(store.assertBinding('cc-1', { modelSelector: 'meta/muse-spark-1.2-contributor' })).rejects.toThrow(/drift/i);
   });
 });
 
