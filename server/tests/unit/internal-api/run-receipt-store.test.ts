@@ -8,6 +8,13 @@ import {
 } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 import { classifyPhase7PiShadow } from '../../../src/internal-api/phase7-pi-shadow.js';
 
+/**
+ * Fixture era. Receipts carry hardcoded 2026-07-15 timestamps, so stores that
+ * create terminal receipts must pin `now` to the same era: with real time, the
+ * 30-day prune deletes the fixtures as soon as the wall clock passes 2026-08-14.
+ */
+const FIXTURE_NOW = Date.parse('2026-07-15T12:00:00.000Z');
+
 function receipt(overrides: Partial<PersistedRunReceipt> = {}): PersistedRunReceipt {
   return {
     runId: 'run-1',
@@ -33,7 +40,7 @@ describe('RunReceiptStore — durable run ledger', () => {
   });
 
   it('creates and transitions a receipt through the legal lifecycle', async () => {
-    const store = new RunReceiptStore(dir);
+    const store = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await store.init();
     await store.create(receipt());
 
@@ -48,7 +55,7 @@ describe('RunReceiptStore — durable run ledger', () => {
   });
 
   it('rejects illegal transitions and keeps terminal receipts immutable', async () => {
-    const store = new RunReceiptStore(dir);
+    const store = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await store.init();
     await store.create(receipt({ status: 'completed', terminalAt: '2026-07-15T12:00:02.000Z' }));
 
@@ -57,18 +64,18 @@ describe('RunReceiptStore — durable run ledger', () => {
   });
 
   it('persists receipts and reloads them in a fresh store instance', async () => {
-    const first = new RunReceiptStore(dir);
+    const first = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await first.init();
     await first.create(receipt({ status: 'completed', terminalAt: '2026-07-15T12:00:02.000Z' }));
 
-    const restarted = new RunReceiptStore(dir);
+    const restarted = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await restarted.init();
 
     expect(restarted.get('run-1')).toMatchObject({ runId: 'run-1', status: 'completed' });
   });
 
   it('marks accepted and started receipts interrupted during restart recovery', async () => {
-    const first = new RunReceiptStore(dir);
+    const first = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await first.init();
     await first.create(receipt({ runId: 'accepted' }));
     await first.create(receipt({
@@ -110,7 +117,7 @@ describe('RunReceiptStore — durable run ledger', () => {
   });
 
   it('does not prune newly recovered in-flight receipts before exposing restart evidence', async () => {
-    const first = new RunReceiptStore(dir);
+    const first = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await first.init();
     await first.create(receipt({ runId: 'accepted-1' }));
     await first.create(receipt({ runId: 'accepted-2' }));
@@ -143,7 +150,7 @@ describe('RunReceiptStore — durable run ledger', () => {
   });
 
   it('round-trips bounded liveness evidence while keeping legacy receipts readable', async () => {
-    const store = new RunReceiptStore(dir);
+    const store = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await store.init();
     await store.create(receipt({
       status: 'failed',
@@ -172,7 +179,7 @@ describe('RunReceiptStore — durable run ledger', () => {
       },
     }));
 
-    const restarted = new RunReceiptStore(dir);
+    const restarted = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await restarted.init();
     expect(restarted.get('run-1')?.liveness).toMatchObject({
       activityPolicyVersion: 'run-activity-v1',
@@ -185,7 +192,7 @@ describe('RunReceiptStore — durable run ledger', () => {
   });
 
   it('rejects native effort metadata that contradicts the exact Command Code route', async () => {
-    const store = new RunReceiptStore(dir);
+    const store = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await store.init();
     const commandCodeBase = {
       runtime: 'commandcode' as const,
@@ -233,7 +240,7 @@ describe('RunReceiptStore — durable run ledger', () => {
   });
 
   it('round-trips run-scoped token usage across restart and rejects malformed totals', async () => {
-    const first = new RunReceiptStore(dir);
+    const first = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await first.init();
     await first.create(receipt({
       runId: 'usage-run',
@@ -248,7 +255,7 @@ describe('RunReceiptStore — durable run ledger', () => {
       tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18 },
     } as never));
 
-    const restarted = new RunReceiptStore(dir);
+    const restarted = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await restarted.init();
     expect(restarted.get('usage-run')?.tokenUsage).toEqual({
       scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18,
@@ -266,7 +273,7 @@ describe('RunReceiptStore — durable run ledger', () => {
   });
 
   it('round-trips additive output evidence and keeps legacy receipts readable', async () => {
-    const first = new RunReceiptStore(dir);
+    const first = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await first.init();
     await first.create(receipt({
       status: 'completed',
@@ -282,7 +289,7 @@ describe('RunReceiptStore — durable run ledger', () => {
       },
     }));
 
-    const restarted = new RunReceiptStore(dir);
+    const restarted = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await restarted.init();
     expect(restarted.get('run-1')?.outputEvidence).toMatchObject({
       source: 'normalized-events-v1',
@@ -295,7 +302,7 @@ describe('RunReceiptStore — durable run ledger', () => {
   });
 
   it('does not expose mutable references to nested liveness evidence', async () => {
-    const store = new RunReceiptStore(dir);
+    const store = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await store.init();
     await store.create(receipt({
       liveness: {
@@ -328,7 +335,7 @@ describe('RunReceiptStore — durable run ledger', () => {
   });
 
   it('rejects unsafe receipt and nested liveness fields so payloads and credentials cannot be persisted', async () => {
-    const store = new RunReceiptStore(dir);
+    const store = new RunReceiptStore(dir, { now: () => FIXTURE_NOW });
     await store.init();
 
     await expect(store.create({ ...receipt(), prompt: 'do not persist' } as never)).rejects.toThrow(/unsupported|unsafe/i);
