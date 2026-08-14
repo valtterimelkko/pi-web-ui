@@ -153,7 +153,7 @@ describe('NewSessionModal — Claude backend selector', () => {
     fireEvent.change(selector, { target: { value: 'openai-codex/gpt-5.6-luna' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
-    expect(onCreateSession).toHaveBeenCalledWith('/root', 'pi', 'openai-codex/gpt-5.6-luna');
+    expect(onCreateSession).toHaveBeenCalledWith('/root', 'pi', 'openai-codex/gpt-5.6-luna', undefined, undefined, expect.any(String));
   });
 
   it('lists all 35 GOAT-eligible Command Code models and none of the excluded ids', async () => {

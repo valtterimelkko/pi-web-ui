@@ -41,6 +41,9 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   const openDriveMode = useUIStore((state) => state.openDriveMode);
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  /** Correlates the modal's create request with the store's creation outcome. */
+  const pendingCreateRequestId = useRef<string | undefined>(undefined);
+  const sessionCreation = useSessionStore((state) => state.sessionCreation);
   const listRef = useRef<VirtualizedMessageListHandle>(null);
   const { createNewSession, goalControl, sendPrompt } = useWebSocket();
   const setDraft = useDraftStore((s) => s.setDraft);
@@ -100,9 +103,20 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
     listRef.current?.scrollToBottom();
   };
 
-  const handleCreateSession = (cwd?: string, sdkType?: SdkType, model?: string, thinkingLevel?: string, effort?: CommandCodeEffort) => {
-    createNewSession(cwd, sdkType, model, thinkingLevel, effort);
+  const handleCreateSession = (cwd?: string, sdkType?: SdkType, model?: string, thinkingLevel?: string, effort?: CommandCodeEffort, requestId?: string) => {
+    if (requestId) pendingCreateRequestId.current = requestId;
+    createNewSession(cwd, sdkType, model, thinkingLevel, effort, requestId);
   };
+
+  // The modal stays open until creation resolves; close it when the store
+  // reports the outcome for the request the modal issued.
+  useEffect(() => {
+    if (sessionCreation.status === 'created'
+      && (!sessionCreation.requestId || sessionCreation.requestId === pendingCreateRequestId.current)) {
+      pendingCreateRequestId.current = undefined;
+      setShowNewSessionModal(false);
+    }
+  }, [sessionCreation]);
 
   return (
     <div className="flex flex-col h-full bg-white" data-testid="chat-interface">

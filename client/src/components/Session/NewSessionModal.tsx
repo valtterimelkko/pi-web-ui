@@ -8,7 +8,7 @@ import type { SdkType, CommandCodeEffort } from '@pi-web-ui/shared';
 interface NewSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreateSession: (cwd?: string, sdkType?: SdkType, model?: string, thinkingLevel?: string, effort?: CommandCodeEffort) => void;
+  onCreateSession: (cwd?: string, sdkType?: SdkType, model?: string, thinkingLevel?: string, effort?: CommandCodeEffort, requestId?: string) => void;
   onOpenDriveMode?: () => void;
 }
 
@@ -124,6 +124,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const [claudeModel, setClaudeModel] = useState<string>('sonnet');
   const [commandCodeModel, setCommandCodeModel] = useState<string>('');
   const [commandCodeEffort, setCommandCodeEffort] = useState<CommandCodeEffort | ''>('');
+  /** Correlates this modal's create request with the store's creation outcome. */
+  const creationRequestId = useRef<string | undefined>(undefined);
+  const sessionCreation = useSessionStore((s) => s.sessionCreation);
   const recentDropdownRef = useRef<HTMLDivElement>(null);
 
   const recentFolders = useUIStore(s => s.recentFolders);
@@ -267,37 +270,38 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     return resolveProfileId(claudeModels, claudeProvider, claudeBackend, claudeModel) || claudeModel;
   };
 
-  // Catalogue visibility is not execution authority. Only an explicit
-  // server-owned browserRunnable=true bit may reach the create request;
-  // missing/stale evidence is disabled rather than guessed runnable.
-  const commandCodeBrowserModels = commandCodeModels.filter((model) => model.browserRunnable === true);
-
-  const selectedCommandCodeModel = commandCodeBrowserModels.find((model) => model.id === commandCodeModel);
+  // Every catalogue model the server lists is selectable. The choice is the
+  // user's; nothing re-derives it from a filtered list.
+  const selectedCommandCodeModel = commandCodeModels.find((model) => model.id === commandCodeModel);
 
   const selectedModelArg = () => {
     if (sdkType === 'pi') return piModel || undefined;
-    if (sdkType === 'commandcode') return selectedCommandCodeModel?.id || commandCodeBrowserModels[0]?.id;
+    if (sdkType === 'commandcode') return selectedCommandCodeModel?.id || commandCodeModels[0]?.id;
     return claudeModelArg();
   };
 
   const selectedEffortArg = () => sdkType === 'commandcode' && commandCodeEffort ? commandCodeEffort : undefined;
 
+  // Initialise the Command Code selection once: when the runtime is selected
+  // with no model held, or when the held model disappeared from the catalogue.
+  // A selection the user made is never re-derived or snapped back.
   useEffect(() => {
-    if (commandCodeBrowserModels.length === 0) {
-      setCommandCodeModel('');
-      setCommandCodeEffort('');
-      return;
+    if (sdkType !== 'commandcode') return;
+    if (commandCodeModel && commandCodeModels.some((model) => model.id === commandCodeModel)) return;
+    const first = commandCodeModels[0]?.id ?? '';
+    setCommandCodeModel(first);
+    const spec = commandCodeModels.find((model) => model.id === first);
+    setCommandCodeEffort(spec?.defaultEffort ?? '');
+  }, [sdkType, commandCodeModels, commandCodeModel]);
+
+  // A rejected create re-enables the button while preserving every selection;
+  // a successful create is closed by ChatView when the session appears.
+  useEffect(() => {
+    if (sessionCreation.requestId && sessionCreation.requestId === creationRequestId.current) {
+      if (sessionCreation.status === 'error') setIsCreating(false);
+      if (sessionCreation.status === 'created') creationRequestId.current = undefined;
     }
-    const selected = commandCodeBrowserModels.find((model) => model.id === commandCodeModel) ?? commandCodeBrowserModels[0];
-    if (selected.id !== commandCodeModel) setCommandCodeModel(selected.id);
-    if (!selected.supportsEffort) {
-      setCommandCodeEffort('');
-      return;
-    }
-    const levels = selected.effortLevels;
-    if (commandCodeEffort && levels.includes(commandCodeEffort)) return;
-    setCommandCodeEffort(selected.defaultEffort && levels.includes(selected.defaultEffort) ? selected.defaultEffort : '');
-  }, [commandCodeBrowserModels, commandCodeModel, commandCodeEffort]);
+  }, [sessionCreation]);
 
   // Derived lists for the structured Claude selector.
   const providerList = providersOf(claudeModels);
@@ -324,15 +328,19 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const createSession = (path: string) => {
     const model = selectedModelArg();
     const effort = selectedEffortArg();
+    // The requestId correlates this create request with the session_created /
+    // error the server echoes back, so the modal can wait for the outcome.
+    const requestId = crypto.randomUUID();
+    creationRequestId.current = requestId;
     // Preserve the compact legacy callback shape when no native Command Code
     // effort is selected; this also avoids turning optional undefined values
     // into observable arguments for existing consumers.
     if (effort !== undefined) {
-      onCreateSession(path, sdkType, model, undefined, effort);
+      onCreateSession(path, sdkType, model, undefined, effort, requestId);
     } else if (model !== undefined) {
-      onCreateSession(path, sdkType, model);
+      onCreateSession(path, sdkType, model, undefined, undefined, requestId);
     } else {
-      onCreateSession(path, sdkType);
+      onCreateSession(path, sdkType, undefined, undefined, undefined, requestId);
     }
   };
 
@@ -340,8 +348,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(currentPath);
+    // Stay open until the matching session_created arrives; ChatView closes
+    // the modal. A rejection re-enables Create and shows the error here.
     createSession(currentPath);
-    onClose(); // Close modal immediately - creation happens in background
   };
 
   const handleQuickSelect = (path: string) => {
@@ -349,7 +358,6 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     setIsCreating(true);
     addRecentFolder(path);
     createSession(path);
-    onClose(); // Close modal immediately - creation happens in background
   };
 
   const handleRecentFolderSelect = (path: string) => {
@@ -364,7 +372,6 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     setIsCreating(true);
     addRecentFolder(path);
     createSession(path);
-    onClose(); // Close modal immediately - creation happens in background
   };
 
   // Close on Escape
@@ -543,37 +550,36 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                   value={commandCodeModel}
                   onChange={(e) => {
                     setCommandCodeModel(e.target.value);
-                    setCommandCodeEffort('');
+                    const spec = commandCodeModels.find((model) => model.id === e.target.value);
+                    setCommandCodeEffort(spec?.defaultEffort ?? '');
                   }}
                   data-testid="commandcode-model-select"
                   className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
                 >
-                  {commandCodeModels.map((model) => {
-                    const selectable = model.browserRunnable === true;
-                    const statusLabel = model.status && model.status !== 'runnable' ? ` — ${model.status}` : '';
-                    return (
-                      <option key={model.id} value={model.id} disabled={!selectable}>
-                        {model.displayName} ({model.id}){statusLabel}
-                      </option>
-                    );
-                  })}
+                  {commandCodeModels.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.displayName} ({model.id})
+                    </option>
+                  ))}
                 </select>
               </div>
               {(() => {
-                const selected = commandCodeBrowserModels.find((model) => model.id === commandCodeModel);
-                if (!selected?.supportsEffort) {
+                const selected = commandCodeModels.find((model) => model.id === commandCodeModel);
+                if (!selected || selected.effortLevels.length === 0) {
                   return <p className="text-xs text-gray-500">This model does not expose adjustable native effort.</p>;
                 }
+                const effortValue = selected.effortLevels.includes(commandCodeEffort as CommandCodeEffort)
+                  ? (commandCodeEffort as CommandCodeEffort)
+                  : selected.defaultEffort ?? selected.effortLevels[0];
                 return (
                   <div>
                     <p className="text-xs font-medium text-gray-500 mb-1.5">Native effort</p>
                     <select
-                      value={commandCodeEffort}
-                      onChange={(e) => setCommandCodeEffort(e.target.value as CommandCodeEffort | '')}
+                      value={effortValue}
+                      onChange={(e) => setCommandCodeEffort(e.target.value as CommandCodeEffort)}
                       data-testid="commandcode-effort-select"
                       className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
                     >
-                      <option value="">Automatic (server default)</option>
                       {selected.effortLevels.map((level) => <option key={level} value={level}>{level}</option>)}
                     </select>
                   </div>
@@ -846,7 +852,14 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
             <span className="hidden sm:inline">Selected: </span>
             <span className="text-gray-600 font-mono">{currentPath}</span>
           </p>
-          <div className="flex gap-2 sm:gap-3 flex-shrink-0">
+          <div className="flex gap-2 sm:gap-3 flex-shrink-0 items-center">
+            {sessionCreation.status === 'error'
+              && sessionCreation.requestId === creationRequestId.current
+              && sessionCreation.error && (
+              <p role="alert" data-testid="create-error" className="text-xs text-red-600 max-w-[220px] truncate" title={sessionCreation.error}>
+                {sessionCreation.error}
+              </p>
+            )}
             <button
               onClick={onClose}
               disabled={isCreating}

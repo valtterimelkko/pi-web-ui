@@ -12,7 +12,7 @@ import {
   clearDisplayNamePref,
 } from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
-import type { CommandCodeAvailabilityStatus, CommandCodeEffort, CommandCodeModelInfo, SubagentToolSummary } from '@pi-web-ui/shared';
+import type { CommandCodeEffort, CommandCodeModelInfo, SubagentToolSummary } from '@pi-web-ui/shared';
 
 import { useTransferStore } from './transferStore';
 import { useGoalStore } from './goalStore';
@@ -462,14 +462,13 @@ interface SessionState {
   antigravityAvailable: boolean;
   antigravityAuthError: string | null;
 
-  // Command Code browser availability and model capability catalogue
+  // Command Code availability and model catalogue
   commandCodeAvailable: boolean;
   commandCodeEnabled: boolean;
   commandCodeError: string | null;
-  commandCodeAvailabilityStatus: CommandCodeAvailabilityStatus | null;
-  commandCodeCatalogueCheckedAt: string | null;
-  commandCodeCatalogueSource: 'live-discovery' | null;
   commandCodeModels: CommandCodeModelInfo[];
+  /** Outcome of the most recent session-creation request, correlated by requestId. */
+  sessionCreation: { status: 'idle' | 'created' | 'error'; requestId?: string; error?: string };
 
   // Actions
   setSessions: (sessions: Session[]) => void;
@@ -537,7 +536,7 @@ interface SessionState {
 
   // Antigravity availability
   setAntigravityAvailable: (available: boolean, error?: string | null) => void;
-  setCommandCodeAvailable: (available: boolean, enabled: boolean, models: CommandCodeModelInfo[], error?: string | null, catalogue?: { availabilityStatus?: CommandCodeAvailabilityStatus; checkedAt?: string; source?: 'live-discovery' }) => void;
+  setCommandCodeAvailable: (available: boolean, enabled: boolean, models: CommandCodeModelInfo[], error?: string | null) => void;
 
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -604,10 +603,8 @@ export const useSessionStore = create<SessionState>()(
       commandCodeAvailable: false,
       commandCodeEnabled: false,
       commandCodeError: null,
-      commandCodeAvailabilityStatus: null,
-      commandCodeCatalogueCheckedAt: null,
-      commandCodeCatalogueSource: null,
       commandCodeModels: [],
+      sessionCreation: { status: 'idle' },
 
       // Worker status tracking implementation
       updateWorkerStatus: (sessionId: string, status: WorkerStatus) => {
@@ -644,14 +641,11 @@ export const useSessionStore = create<SessionState>()(
       setClaudeAvailable: (available, error = null) => set({ claudeAvailable: available, claudeAuthError: error }),
       setOpencodeAvailable: (available, error = null) => set({ opencodeAvailable: available, opencodeAuthError: error }),
       setAntigravityAvailable: (available, error = null) => set({ antigravityAvailable: available, antigravityAuthError: error }),
-      setCommandCodeAvailable: (available, enabled, models, error = null, catalogue) => set({
+      setCommandCodeAvailable: (available, enabled, models, error = null) => set({
         commandCodeAvailable: available,
         commandCodeEnabled: enabled,
         commandCodeModels: models,
         commandCodeError: error,
-        commandCodeAvailabilityStatus: catalogue?.availabilityStatus ?? null,
-        commandCodeCatalogueCheckedAt: catalogue?.checkedAt ?? null,
-        commandCodeCatalogueSource: catalogue?.source ?? null,
       }),
 
       setOpencodeAgentMode: (sessionId, mode) => set((state) => ({
@@ -1355,7 +1349,7 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'session_created': {
-            const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode'; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort };
+            const createdMsg = msg as unknown as { requestId?: string; sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode'; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort };
             set({ 
               currentSessionId: createdMsg.sessionId,
               currentSessionSdkType: createdMsg.sdkType ?? null,
@@ -1412,6 +1406,7 @@ export const useSessionStore = create<SessionState>()(
                 sessionMessages: newSessionMessages,
                 sessionCacheMeta: newSessionCacheMeta,
                 sessionCache: newCache,
+                sessionCreation: { status: 'created', requestId: createdMsg.requestId },
               };
             });
             break;
@@ -1766,6 +1761,9 @@ export const useSessionStore = create<SessionState>()(
               error: errorMessage,
               isStreaming: false,
               isLoading: false,
+              ...(typeof (msg as { requestId?: string }).requestId === 'string'
+                ? { sessionCreation: { status: 'error' as const, requestId: (msg as unknown as { requestId: string }).requestId, error: errorMessage } }
+                : {}),
             });
             if (errorCode === 'CLAUDE_AUTH_EXPIRED') {
               useUIStore.getState().addToast({
@@ -2015,21 +2013,12 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'commandcode_available': {
-            const commandCodeMsg = msg as unknown as {
-              available: boolean;
-              enabled: boolean;
-              models?: CommandCodeModelInfo[];
-              error?: string | null;
-              availabilityStatus?: CommandCodeAvailabilityStatus;
-              checkedAt?: string;
-              source?: 'live-discovery';
-            };
+            const commandCodeMsg = msg as unknown as { available: boolean; enabled: boolean; models: CommandCodeModelInfo[]; error: string | null };
             get().setCommandCodeAvailable(
               commandCodeMsg.available,
               commandCodeMsg.enabled,
               commandCodeMsg.models ?? [],
               commandCodeMsg.error ?? null,
-              { availabilityStatus: commandCodeMsg.availabilityStatus, checkedAt: commandCodeMsg.checkedAt, source: commandCodeMsg.source },
             );
             break;
           }

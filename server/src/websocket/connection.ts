@@ -1733,6 +1733,7 @@ export class WebSocketConnectionManager {
             type: 'error',
             message: this.commandCodeService.isEnabled() ? 'Command Code runtime is unavailable' : 'Command Code runtime is disabled',
             code: 'COMMANDCODE_UNAVAILABLE',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
           });
           return;
         }
@@ -1756,13 +1757,14 @@ export class WebSocketConnectionManager {
           sessionId: created.sessionId,
           sessionPath: created.sessionId,
           sdkType: 'commandcode',
+          ...(message.requestId ? { requestId: message.requestId } : {}),
           model: created.modelSelector,
           effort: created.effort,
           effortLevels: effortSpec?.effortLevels,
           defaultEffort: created.defaultEffort,
         } as unknown as ServerMessage);
       } catch (error) {
-        this.sendMessage(clientId, { type: 'error', message: error instanceof Error ? error.message : 'Failed to create Command Code session', code: 'COMMANDCODE_CREATE_FAILED' });
+        this.sendMessage(clientId, { type: 'error', message: error instanceof Error ? error.message : 'Failed to create Command Code session', code: 'COMMANDCODE_CREATE_FAILED', ...(message.requestId ? { requestId: message.requestId } : {}) });
       }
       return;
     }
@@ -1780,7 +1782,8 @@ export class WebSocketConnectionManager {
           sessionId,
           sessionPath: sessionId,
           sdkType: 'antigravity',
-        } as unknown as ServerMessage);
+
+          ...(message.requestId ? { requestId: message.requestId } : {}),        } as unknown as ServerMessage);
       } catch (error) {
         this.sendMessage(clientId, {
           type: 'error',
@@ -1816,7 +1819,8 @@ export class WebSocketConnectionManager {
           sessionId,
           sessionPath: sessionId,
           sdkType: 'opencode',
-        } as unknown as ServerMessage);
+
+          ...(message.requestId ? { requestId: message.requestId } : {}),        } as unknown as ServerMessage);
       } catch (error) {
         this.sendMessage(clientId, {
           type: 'error',
@@ -1868,7 +1872,8 @@ export class WebSocketConnectionManager {
           sessionId,
           sessionPath: sessionId,  // For Claude sessions, sessionId IS the path
           sdkType: 'claude',
-          model: createModel,
+
+          ...(message.requestId ? { requestId: message.requestId } : {}),          model: createModel,
           thinkingLevel: message.thinkingLevel,
         } as unknown as ServerMessage);
       } catch (error) {
@@ -1901,6 +1906,7 @@ export class WebSocketConnectionManager {
       sessionId: status.sessionId,
       sessionPath: sessionPath,
       sdkType: 'pi',
+      ...(message.requestId ? { requestId: message.requestId } : {}),
     });
   }
 

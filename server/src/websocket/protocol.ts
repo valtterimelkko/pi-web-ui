@@ -106,7 +106,7 @@ export type ClientMessage =
   | { type: 'steer'; message: string }
   | { type: 'follow_up'; message: string }
   | { type: 'abort' }
-  | { type: 'new_session'; cwd?: string; sdkType?: SdkType; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort }
+  | { type: 'new_session'; cwd?: string; sdkType?: SdkType; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; requestId?: string }
   | { type: 'switch_session'; sessionPath: string }
   | { type: 'get_sessions'; cwd?: string }
   | { type: 'get_session_tree'; sessionId: string }
@@ -209,9 +209,9 @@ export interface TreeNode {
 export type ServerMessage =
   | { type: 'authenticated'; sessionId: string }
   | { type: 'connection_status'; status: string }
-  | { type: 'error'; message: string; code?: string; sessionPath?: string }
+  | { type: 'error'; message: string; code?: string; sessionPath?: string; requestId?: string }
   | { type: 'sessions_list'; sessions: SessionInfo[] }
-  | { type: 'session_created'; sessionId: string; sessionPath: string; sdkType?: SdkType; model?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort }
+  | { type: 'session_created'; sessionId: string; sessionPath: string; sdkType?: SdkType; model?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort; requestId?: string }
   | { type: 'session_switched'; sessionId: string; sessionPath: string; sdkType?: SdkType; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort; contextWindow?: number; contextUsed?: number; contextPercent?: number; messages?: SessionMessage[]; fileTimestamp?: number; isStreaming?: boolean }
   | { type: 'session_tree'; tree: TreeNode[] }
   | { type: 'session_info'; stats: SessionStats }
