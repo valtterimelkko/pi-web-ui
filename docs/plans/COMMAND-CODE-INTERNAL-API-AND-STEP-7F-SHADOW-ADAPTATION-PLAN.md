@@ -1,6 +1,6 @@
 # Command Code Internal API adapter and Agent OS Step 7F shadow-cohort plan
 
-> **Historical status:** superseded for current Pi Web UI product execution by [`COMMAND-CODE-FULL-CATALOGUE-MINIMAL-SOLUTION-PLAN.md`](./COMMAND-CODE-FULL-CATALOGUE-MINIMAL-SOLUTION-PLAN.md). The two-model cohort remains historical Step 7F evidence only and no longer limits the operator-authorised GOAT-eligible browser/Internal API catalogue.
+> **Historical only — do not execute.** Superseded for Pi Web UI product work by [`COMMAND-CODE-35-MODEL-MINIMUM-COMPLETION-PLAN.md`](./COMMAND-CODE-35-MODEL-MINIMUM-COMPLETION-PLAN.md). The two-model Step 7F cohort is historical evidence only and does not limit the current 35-model browser/Internal API target.
 >
 > **Status:** implementation-ready plan; no production enablement is authorised by this document
 >

@@ -1,6 +1,6 @@
 # Command Code Fifth Browser Runtime — Execution Plan
 
-> **Historical status:** superseded for current product work by [`COMMAND-CODE-FULL-CATALOGUE-MINIMAL-SOLUTION-PLAN.md`](./COMMAND-CODE-FULL-CATALOGUE-MINIMAL-SOLUTION-PLAN.md), which records the operator-authorised GOAT-entitlement, full Internal API cohort, and provider-capable browser egress decisions. Preserve this document only as implementation history; do not use its pair-only or mandatory no-network boundaries as current authority.
+> **Historical only — do not execute.** Superseded in full by [`COMMAND-CODE-35-MODEL-MINIMUM-COMPLETION-PLAN.md`](./COMMAND-CODE-35-MODEL-MINIMUM-COMPLETION-PLAN.md). Its custom containment assumptions are not current authority. The replacement uses one direct `cmd` subprocess with ordinary host networking, matching the other runtime paths.
 >
 > Status: implementation complete; security hardening and release review in progress
 >

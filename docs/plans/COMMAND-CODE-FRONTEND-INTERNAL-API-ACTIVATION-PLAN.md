@@ -1,6 +1,6 @@
 # Command Code Frontend + Internal API Activation Plan
 
-> **Historical status:** superseded for current product work by [`COMMAND-CODE-FULL-CATALOGUE-MINIMAL-SOLUTION-PLAN.md`](./COMMAND-CODE-FULL-CATALOGUE-MINIMAL-SOLUTION-PLAN.md), which records the operator-authorised GOAT-entitlement, full Internal API cohort, and mandatory real installed-runtime validation decisions. Preserve this document only as validation history; its provider-free-only acceptance boundary is no longer sufficient.
+> **Historical only — do not execute.** Superseded in full by [`COMMAND-CODE-35-MODEL-MINIMUM-COMPLETION-PLAN.md`](./COMMAND-CODE-35-MODEL-MINIMUM-COMPLETION-PLAN.md). Preserve this file only as prior validation history; it is not current scope or implementation authority.
 
 ## Objective
 
