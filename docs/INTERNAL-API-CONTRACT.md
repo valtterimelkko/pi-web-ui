@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.19.0",
+  "contractVersion": "1.20.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,7 @@ Current contract:
 
 ### Changelog
 
+- **1.20.0** (minor, breaking for Command Code role metadata) — Command Code session creation no longer requires `invocationRole` or a role attestation; both request fields are accepted and ignored (removal tracked in `session-validation.ts`). The `catalogue`, `browserRunnable` and `supportsEffort` fields are removed from the Command Code model projection, and the effort metadata on sessions/receipts collapses to `effort` / `effortLevels` / `defaultEffort`. Command Code is one direct subprocess for both browser and Internal API callers; a session is a session.
 - **1.19.0** (minor, additive normalized-output evidence) — adds:
   - `RunReceipt.outputEvidence` with bounded counts of normalized assistant messages, text-bearing events/characters, tool calls, and a `text` / `no-text` / `unknown` disposition;
   - `no-text` is emitted only when a terminal `agent_end` was observed without normalized assistant text; `unknown` remains the honest value when lifecycle terminality occurred without that signal;
@@ -290,6 +291,8 @@ When changing the Internal API:
 Agent OS should treat Pi Web UI as a runtime gateway, not as its own source of truth. Agent OS should store durable work state itself and record Pi Web UI session IDs as execution/evidence references.
 
 Pi Web UI should expose stable enough session, event, transcript, transfer, and usage primitives for that local consumer without importing Agent OS concepts into the Pi Web UI data model.
+
+> **1.20.0 note for Agent OS callers:** Command Code creation no longer requires `invocationRole` or `commandCodeAttestation` — both are accepted and ignored, so existing callers keep working while the fields are retired on the Agent OS side. The Agent OS mirror of this contract is maintained in the Agent OS repository and is intentionally not edited from here.
 
 Practical contract boundary:
 
