@@ -95,9 +95,8 @@ process.exit(2);
     }
   });
 
-  it('marks the exact policy models unavailable when the pinned runtime version drifts', async () => {
+  it('keeps the runtime available when the CLI version is newer than the legacy configuration', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-version-drift-'));
-    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const service = new CommandCodeService({
       config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
       runner: new FakeRunner(),
@@ -105,13 +104,13 @@ process.exit(2);
       checkExecutable: false,
     });
     await service.init();
-    expect(service.getHealth()).toMatchObject({ status: 'version_mismatch', version: '1.23.2' });
+    expect(service.getHealth()).toMatchObject({ status: 'available', version: '1.23.2' });
     expect(service.getModels().map((model) => ({ id: model.id, status: model.status, runnable: model.runnable }))).toEqual([
-      { id: 'qwen/qwen3.8-max', status: 'unavailable', runnable: false },
-      { id: 'meta/muse-spark-1.2-contributor', status: 'unavailable', runnable: false },
+      { id: 'qwen/qwen3.8-max', status: 'runnable', runnable: true },
+      { id: 'meta/muse-spark-1.2-contributor', status: 'runnable', runnable: true },
     ]);
     await service.shutdown();
-    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+    await rm(stateDir, { recursive: true, force: true });
   });
 
   it('copies operator auth into each private native home without a shared auth symlink', async () => {

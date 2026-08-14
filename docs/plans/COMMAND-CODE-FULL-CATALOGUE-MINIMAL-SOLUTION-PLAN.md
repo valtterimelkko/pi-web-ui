@@ -27,7 +27,8 @@ untouched.
   earlier audit observed `1.23.1`) and `cmd --no-auto-update --list-models`
   reports 54 rows in the exact canonical order pinned by
   `COMMAND_CODE_FULL_MODEL_CATALOGUE`. The pinned execution policy remains
-  `COMMAND_CODE_EXPECTED_VERSION=1.19.0`; version drift is deliberately
+  `COMMAND_CODE_EXPECTED_VERSION` is legacy diagnostic-only configuration; CLI
+  version drift is not a readiness gate.
   fail-closed and cannot broaden execution. The full catalogue remains visible
   as evidence while the runtime is unavailable for execution.
 - The catalogue anchor is now the complete 54-entry list, including
@@ -44,7 +45,7 @@ untouched.
    malformed-row rejection.
 2. Make the catalogue anchor 54 current model IDs and wire validation into the
    default discovery path. Keep the expected runtime version independently
-   pinned to `1.19.0`.
+   determined by live model and native-effort discovery, not a pinned CLI version.
 3. Add/repair fixture generation so its model list is complete and its launcher
    has exactly one shebang.
 4. Preserve bounded spawn, timeout, malformed-output, and unknown-effort

@@ -25,7 +25,8 @@ export interface CommandCodeRuntimeConfig {
   maxStderrBytes: number;
   processGraceMs: number;
   concurrency: number;
-  expectedVersion: string;
+  /** Legacy diagnostic override; readiness follows live discovery and never pins this value. */
+  expectedVersion?: string;
   /** Browser exposure is separately gated from the Internal API shadow runtime. */
   browserEnabled?: boolean;
   /** Agent OS shadow routes remain separately gated from browser sessions. */
@@ -129,7 +130,6 @@ export function defaultCommandCodeConfig(overrides: Partial<CommandCodeRuntimeCo
     maxStderrBytes: 64 * 1024,
     processGraceMs: 2_000,
     concurrency: 1,
-    expectedVersion: '1.19.0',
     browserEnabled: false,
     shadowEnabled: overrides.shadowEnabled ?? overrides.enabled ?? false,
     browserAllowedModels: [],

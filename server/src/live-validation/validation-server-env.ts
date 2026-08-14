@@ -51,7 +51,6 @@ export function buildValidationIsolationEnv(
     COMMAND_CODE_EXECUTABLE_PATH: commandCodeFixture
       ? join(input.validationDir, 'command-code-fixture-bin', 'cmd')
       : '/root/.npm-global/bin/cmd',
-    COMMAND_CODE_EXPECTED_VERSION: '1.19.0',
     COMMAND_CODE_STATE_DIR: join(input.validationDir, 'command-code'),
     COMMAND_CODE_NATIVE_HOME_DIR: join(input.validationDir, 'command-code-native-home'),
     COMMAND_CODE_ALLOWED_CWD_ROOTS: input.validationDir,

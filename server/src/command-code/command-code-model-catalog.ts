@@ -16,7 +16,8 @@ export const COMMAND_CODE_MODELS = [
 /**
  * Full catalogue observed from the current Command Code model listing.
  * Visibility follows this order; execution remains restricted to COMMAND_CODE_MODELS.
- * The pinned runtime contract still controls execution separately.
+ * Runtime readiness follows the freshly discovered catalogue and effort evidence;
+ * the observed CLI version is diagnostic only.
  */
 export const COMMAND_CODE_FULL_MODEL_CATALOGUE = [
   'deepseek/deepseek-v4-pro',

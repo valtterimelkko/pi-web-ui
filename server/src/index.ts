@@ -71,9 +71,8 @@ async function initialize(): Promise<void> {
 
     setCommandCodeService(commandCodeService);
     // Complete bounded Command Code discovery before the server exposes any
-    // browser/WebSocket or Internal API session path. Catalogue evidence may
-    // still be projected on version drift, but execution gates must never be
-    // observed in their pre-discovery default state.
+    // browser/WebSocket or Internal API session path. Live model and effort
+    // evidence, rather than a repository-owned CLI version pin, controls readiness.
     await commandCodeService.init();
     browserCommandCodeSessionResolver = async (sessionId, runtime, sessionPath) => {
       if (runtime !== 'commandcode') return true;

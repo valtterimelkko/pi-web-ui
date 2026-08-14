@@ -19,10 +19,15 @@ import {
 import {
   buildCommandCodeArgs,
   COMMAND_CODE_EXECUTION_INSTANCE_ID,
+  defaultCommandCodeConfig,
   getCommandCodeProfile,
 } from '../../../src/command-code/command-code-config.js';
 
 describe('Command Code model identity', () => {
+  it('does not pin readiness to a repository-owned CLI version', () => {
+    expect(defaultCommandCodeConfig().expectedVersion).toBeUndefined();
+  });
+
   it('pins the complete 54-model catalogue and rejects catalogue drift', () => {
     expect(COMMAND_CODE_FULL_MODEL_CATALOGUE).toHaveLength(54);
     expect(COMMAND_CODE_FULL_MODEL_CATALOGUE).toContain('google/gemini-3.7-flash');

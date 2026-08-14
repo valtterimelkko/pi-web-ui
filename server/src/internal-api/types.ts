@@ -15,6 +15,7 @@ export type CommandCodeAvailabilityStatus =
   | 'disabled'
   | 'executable_missing'
   | 'discovery_error'
+  /** Retained for compatibility with older clients; no longer emitted by live discovery. */
   | 'version_mismatch'
   | 'exact_model_unavailable'
   | 'effort_capability_unknown'

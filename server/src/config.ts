@@ -231,7 +231,8 @@ export interface ServerConfig {
   commandCodeStateDir: string;
   commandCodeNativeHomeDir: string;
   commandCodeAllowedCwdRoots: string[];
-  commandCodeExpectedVersion: string;
+  /** Deprecated compatibility setting; live discovery is not version-pinned. */
+  commandCodeExpectedVersion?: string;
   commandCodeMaxTurns: number;
   commandCodeMaxWallTimeMs: number;
   commandCodeConcurrency: number;
@@ -384,7 +385,7 @@ export const config: ServerConfig = {
   commandCodeStateDir: parseAbsolutePath(process.env.COMMAND_CODE_STATE_DIR, path.join(os.homedir(), '.pi-web-ui', 'command-code'), 'COMMAND_CODE_STATE_DIR'),
   commandCodeNativeHomeDir: parseAbsolutePath(process.env.COMMAND_CODE_NATIVE_HOME_DIR, path.join(os.homedir(), '.pi-web-ui', 'command-code-native-home'), 'COMMAND_CODE_NATIVE_HOME_DIR'),
   commandCodeAllowedCwdRoots: parseAbsolutePathList(process.env.COMMAND_CODE_ALLOWED_CWD_ROOTS, [path.dirname(parseAbsolutePath(process.env.COMMAND_CODE_STATE_DIR, path.join(os.homedir(), '.pi-web-ui', 'command-code'), 'COMMAND_CODE_STATE_DIR'))], 'COMMAND_CODE_ALLOWED_CWD_ROOTS'),
-  commandCodeExpectedVersion: process.env.COMMAND_CODE_EXPECTED_VERSION || '1.19.0',
+  commandCodeExpectedVersion: process.env.COMMAND_CODE_EXPECTED_VERSION || undefined,
   commandCodeMaxTurns: parsePositiveInteger(process.env.COMMAND_CODE_MAX_TURNS, 8, 'COMMAND_CODE_MAX_TURNS'),
   commandCodeMaxWallTimeMs: parsePositiveInteger(process.env.COMMAND_CODE_MAX_WALL_TIME_MS, 15 * 60 * 1000, 'COMMAND_CODE_MAX_WALL_TIME_MS'),
   commandCodeConcurrency: parsePositiveInteger(process.env.COMMAND_CODE_CONCURRENCY, 1, 'COMMAND_CODE_CONCURRENCY'),

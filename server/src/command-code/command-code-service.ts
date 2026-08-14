@@ -12,7 +12,6 @@ import {
   COMMAND_CODE_MODELS,
   COMMAND_CODE_FULL_MODEL_CATALOGUE,
   COMMAND_CODE_PROVIDER,
-  COMMAND_CODE_VERSION,
   COMMAND_CODE_EFFORT_LEVELS,
   COMMAND_CODE_EFFORT_LEVELS_BY_MODEL,
   validateCommandCodeModelCatalogue,
@@ -53,6 +52,7 @@ export type CommandCodeAvailability =
   | 'disabled'
   | 'executable_missing'
   | 'discovery_error'
+  /** Retained for compatibility with older clients; live readiness no longer emits this state. */
   | 'version_mismatch'
   | 'exact_model_unavailable'
   | 'effort_capability_unknown'
@@ -63,7 +63,8 @@ export interface CommandCodeHealth {
   available: boolean;
   status: CommandCodeAvailability;
   version?: string;
-  expectedVersion: string;
+  /** Legacy diagnostic override; it is not used as an execution gate. */
+  expectedVersion?: string;
   advertisedModels: CommandCodeRuntimeModel[];
   missingModels: CommandCodeModel[];
   effortCapabilities: Partial<CommandCodeEffortCapabilities>;
@@ -76,7 +77,8 @@ export interface CommandCodeServiceConfig extends Partial<CommandCodeRuntimeConf
   executablePath: string;
   stateDir: string;
   allowedCwdRoots?: string[];
-  expectedVersion: string;
+  /** Legacy diagnostic override; it is not used as an execution gate. */
+  expectedVersion?: string;
 }
 
 export interface CommandCodeCreateInput {
@@ -311,8 +313,6 @@ export class CommandCodeService {
       if (!catalogueValidation.valid) {
         this.healthStatus = 'exact_model_unavailable';
         this.discoveryDiagnostic = `Command Code model catalogue is invalid: ${catalogueValidation.reason}`;
-      } else if (discovered.version !== this.config.expectedVersion) {
-        this.healthStatus = 'version_mismatch';
       } else if (discovered.ambiguous.length > 0 || discovered.models.length === 0) {
         this.healthStatus = 'exact_model_unavailable';
       } else if (effortDiscoveryDiagnostic || !effortCapabilities || !hasExactEffortCapabilities(effortCapabilities, discovered.models)) {
@@ -964,7 +964,7 @@ export class CommandCodeService {
       available: this.isAvailable(),
       status: this.healthStatus,
       ...(this.discoveryResult?.version ? { version: this.discoveryResult.version } : {}),
-      expectedVersion: this.config.expectedVersion,
+      ...(this.config.expectedVersion ? { expectedVersion: this.config.expectedVersion } : {}),
       advertisedModels: [...(this.discoveryResult?.models ?? [])],
       missingModels,
       effortCapabilities: this.getEffortCapabilities(),
