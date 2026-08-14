@@ -146,33 +146,10 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
         }
       }
 
-      // Command Code models stay server-local and are advertised when the
-      // shadow feature is enabled and bounded catalogue discovery produced
-      // evidence. Freshness/status metadata and `runnable` independently mark
-      // the exact server-approved execution cohort.
-      let commandCodeCatalogue: ReturnType<CommandCodeService['getCatalogueMetadata']> | undefined;
+      // Command Code models are advertised whenever the runtime is enabled.
       if (commandCodeService && (!runtimeFilter || runtimeFilter === 'commandcode')) {
         await commandCodeService.init?.();
-        const shadowEnabled = commandCodeService.isShadowEnabled?.() ?? commandCodeService.isEnabled?.() ?? false;
-        commandCodeCatalogue = shadowEnabled ? commandCodeService.getCatalogueMetadata?.() : undefined;
-        if (shadowEnabled && commandCodeService.getModels().length > 0) {
-          result.commandcode = commandCodeService.getModels().map((model) => ({
-            id: model.id,
-            displayName: model.displayName,
-            provider: model.provider,
-            reasoning: model.reasoning,
-            runnable: model.runnable,
-            status: model.status,
-            browserRunnable: model.browserRunnable,
-            supportsEffort: model.supportsEffort,
-            effortLevels: model.effortLevels,
-            defaultEffort: model.defaultEffort,
-            effortCapabilityHash: model.effortCapabilityHash,
-            catalogue: model.catalogue ?? commandCodeCatalogue,
-          }));
-        } else {
-          result.commandcode = [];
-        }
+        result.commandcode = commandCodeService.isEnabled() ? commandCodeService.getModels() : [];
       }
 
       // Antigravity models
@@ -191,10 +168,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
         }
       }
 
-      sendJson(res, 200, {
-        models: result,
-        ...(commandCodeCatalogue ? { catalogueMetadata: { commandcode: commandCodeCatalogue } } : {}),
-      });
+      sendJson(res, 200, { models: result });
     } catch (err) {
       logger.errorObject('Failed to list models', err);
       sendJson(res, 500, { error: 'Failed to list models', code: ErrorCode.INTERNAL_ERROR });

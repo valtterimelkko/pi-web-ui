@@ -7,16 +7,16 @@ import { AdmissionController } from '../../../src/internal-api/admission-control
 import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
+import { createModelsRoutes } from '../../../src/internal-api/routes/models.js';
 import { CommandCodeService } from '../../../src/command-code/command-code-service.js';
-import { createCommandCodeRoleAttestation } from '../../../src/command-code/command-code-role-attestation.js';
 import type { CommandCodeProcessRunInput, CommandCodeProcessRunResult } from '../../../src/command-code/command-code-process-runner.js';
-import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
+import { ADVERTISED_IDS, COMMAND_CODE_EXCLUDED_IDS } from './command-code-fixture.js';
 
-function req(body: unknown): any {
-  const value = Readable.from([Buffer.from(JSON.stringify(body))]) as any;
+function req(body: unknown, url = '/api/v1/sessions'): any {
+  const value = Readable.from([Buffer.from(JSON.stringify(body ?? {}))]) as any;
   value.headers = {};
   value.method = 'POST';
-  value.url = '/api/v1/sessions';
+  value.url = url;
   return value;
 }
 function res(): any {
@@ -54,171 +54,114 @@ class Runner {
   isRunning() { return false; }
 }
 
+async function buildHarness() {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-routes-'));
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-routes-cwd-'));
+  const runner = new Runner();
+  const commandCodeService = new CommandCodeService({
+    config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir: root, allowedCwdRoots: [cwd] },
+    runner,
+    discover: async () => ({ version: '1.23.2', models: [...ADVERTISED_IDS], ambiguous: [] }),
+    checkExecutable: false,
+  });
+  const registry = { get: vi.fn().mockResolvedValue(undefined), listAll: vi.fn().mockResolvedValue([]) } as any;
+  const receipts = new RunReceiptManager({ store: new RunReceiptStore(path.join(root, 'receipts')), turnIdleTimeoutMs: 10_000, turnMaxMs: 10_000 });
+  const admission = new AdmissionController({ maxActiveTurns: 2, interactiveReserve: 0, minimumHeadroomBytes: 1, hostMinimumHeadroomBytes: 1, reservedBytesPerTurn: 1, memory: () => ({ currentBytes: 1, limitBytes: 1_000_000 }), readPids: () => ({} as any), host: () => ({ memAvailableBytes: 1_000_000 } as any) });
+  const routes = createSessionRoutes({
+    claudeService: {} as any, opencodeService: {} as any, antigravityService: {} as any,
+    multiSessionManager: {} as any, sessionRegistry: registry, piService: {} as any,
+    internalClientId: 'test', watchDir: path.join(root, 'watches'), pinDir: path.join(root, 'pins'),
+    runReceiptManager: receipts, admissionController: admission, commandCodeService,
+  });
+  await routes.ready;
+  return { root, cwd, runner, commandCodeService, routes, admission };
+}
+
 describe('Command Code Internal API lifecycle', () => {
-  it('uses standard create, prompt, receipt, evidence, transcript, and delete endpoints', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-routes-'));
-    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
-    const runner = new Runner();
-    const commandCodeService = new CommandCodeService({
-      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir: root, expectedVersion: '1.19.0' },
-      runner,
-      discover: async () => ({
-        version: '1.19.0',
-        models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'],
-        ambiguous: [],
-        effortCapabilities: {
-          'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium', status: 'adjustable', source: 'live-preflight', capabilityHash: 'a'.repeat(64) },
-          'meta/muse-spark-1.2-contributor': { supportsEffort: false, effortLevels: [], status: 'unavailable', source: 'live-preflight', capabilityHash: 'b'.repeat(64) },
-        },
-      }),
-      checkExecutable: false,
+  it('lists the 35 eligible models with effort metadata and no catalogue envelope', async () => {
+    const { commandCodeService } = await buildHarness();
+    const modelsRoutes = createModelsRoutes({
+      piService: {} as any, claudeService: {} as any, opencodeService: {} as any, antigravityService: {} as any,
+      commandCodeService,
     });
-    commandCodeService.setRoleAttestationSecret('route-secret');
-    const attestation = createCommandCodeRoleAttestation('route-secret', {
-      role: 'conductor-root', model: 'qwen/qwen3.8-max', effort: 'xhigh', cwd, worktreeRoot: cwd,
-      leaseId: 'route-test-lease', issuedAt: new Date().toISOString(),
-    });
-    const registry = { get: vi.fn().mockResolvedValue(undefined), listAll: vi.fn().mockResolvedValue([]) } as any;
-    const receipts = new RunReceiptManager({ store: new RunReceiptStore(path.join(root, 'receipts')), turnIdleTimeoutMs: 10_000, turnMaxMs: 10_000 });
-    const admission = new AdmissionController({ maxActiveTurns: 2, interactiveReserve: 0, minimumHeadroomBytes: 1, hostMinimumHeadroomBytes: 1, reservedBytesPerTurn: 1, memory: () => ({ currentBytes: 1, limitBytes: 1_000_000 }), readPids: () => ({} as any), host: () => ({ memAvailableBytes: 1_000_000 } as any) });
-    const routes = createSessionRoutes({
-      claudeService: {} as any, opencodeService: {} as any, antigravityService: {} as any,
-      multiSessionManager: {} as any, sessionRegistry: registry, piService: {} as any,
-      internalClientId: 'test', watchDir: path.join(root, 'watches'), pinDir: path.join(root, 'pins'),
-      runReceiptManager: receipts, admissionController: admission, commandCodeService,
-    });
-    await routes.ready;
+    const modelsResponse = res();
+    await modelsRoutes.handleListModels(req(undefined, '/api/v1/models?runtime=commandcode'), modelsResponse);
+    expect(modelsResponse.statusCode, modelsResponse.body).toBe(200);
+    const body = JSON.parse(modelsResponse.body);
+    expect(body.models.commandcode).toHaveLength(35);
+    for (const excluded of COMMAND_CODE_EXCLUDED_IDS) {
+      expect(body.models.commandcode.map((model: { id: string }) => model.id)).not.toContain(excluded);
+    }
+    const qwen = body.models.commandcode.find((model: { id: string }) => model.id === 'qwen/qwen3.8-max');
+    expect(qwen).toMatchObject({ effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' });
+    expect(body.catalogueMetadata).toBeUndefined();
+  });
 
-    const rejectedResponse = res();
-    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', invocationRole: 'conductor-root', commandCodeAttestation: { ...attestation, signature: '0'.repeat(64) } }), rejectedResponse);
-    expect(rejectedResponse.statusCode).toBe(403);
-    expect(JSON.parse(rejectedResponse.body).code).toBe('COMMANDCODE_ROLE_REFUSED');
+  it('creates without any attestation; excluded models and unsupported efforts are rejected before spawn', async () => {
+    const { cwd, runner, routes } = await buildHarness();
 
-    const batchRejectedResponse = res();
-    await routes.handleBatchCreate(req({ sessions: [{ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', invocationRole: 'conductor-root', commandCodeAttestation: { ...attestation, signature: '0'.repeat(64) } }] }), batchRejectedResponse);
-    const batchRejected = JSON.parse(batchRejectedResponse.body);
-    expect(batchRejected.createdCount).toBe(0);
-    expect(batchRejected.created[0].error.code).toBe('COMMANDCODE_ROLE_REFUSED');
+    const excludedResponse = res();
+    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'claude-opus-5' }), excludedResponse);
+    expect(excludedResponse.statusCode).toBe(400);
+    expect(JSON.parse(excludedResponse.body).code).toBe('COMMANDCODE_PLAN_INELIGIBLE');
 
-    const defaultAttestation = createCommandCodeRoleAttestation('route-secret', {
-      role: 'conductor-root', model: 'qwen/qwen3.8-max', effort: 'medium', cwd, worktreeRoot: cwd,
-      leaseId: 'route-default-lease', issuedAt: new Date().toISOString(),
-    });
-    const defaultCreateResponse = res();
-    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', invocationRole: 'conductor-root', commandCodeAttestation: defaultAttestation }), defaultCreateResponse);
-    expect(defaultCreateResponse.statusCode).toBe(201);
-    const defaultCreated = JSON.parse(defaultCreateResponse.body);
-    expect(defaultCreated).toMatchObject({ effort: 'medium', acceptedEffort: 'medium', effortSource: 'default', defaultEffort: 'medium' });
-    expect(defaultCreated.requestedEffort).toBeUndefined();
+    const effortResponse = res();
+    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', effort: 'max' }), effortResponse);
+    expect(effortResponse.statusCode).toBe(400);
+    expect(JSON.parse(effortResponse.body).code).toBe('COMMANDCODE_EFFORT_UNSUPPORTED');
+    expect(runner.inputs).toHaveLength(0);
 
     const createResponse = res();
-    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', effort: 'xhigh', invocationRole: 'conductor-root', commandCodeAttestation: attestation, retention: { mode: 'resident', ttlSeconds: 900, ownerId: 'route-test' } }), createResponse);
-    expect(createResponse.statusCode).toBe(201);
+    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max', effort: 'xhigh' }), createResponse);
+    expect(createResponse.statusCode, createResponse.body).toBe(201);
     const created = JSON.parse(createResponse.body);
-    expect(created.runtime).toBe('commandcode');
-    expect(created.effort).toBe('xhigh');
-    expect(created.acceptedEffort).toBe('xhigh');
-    expect(created.requestedEffort).toBe('xhigh');
+    expect(created).toMatchObject({ runtime: 'commandcode', model: 'qwen/qwen3.8-max', effort: 'xhigh' });
 
-    const controlResponse = res();
-    await routes.handleSessionControl(req({ action: 'set_effort', effort: 'low' }), controlResponse, created.sessionId);
-    expect(controlResponse.statusCode).toBe(200);
-    expect(JSON.parse(controlResponse.body)).toMatchObject({
-      success: true,
-      action: 'set_effort',
-      effort: 'low',
-      requestedEffort: 'low',
-      acceptedEffort: 'low',
-      effortSource: 'explicit',
-      effortCapabilityHash: created.effortCapabilityHash,
-    });
+    // Legacy Agent OS callers may still send role fields; they are accepted and ignored.
+    const shimResponse = res();
+    await routes.handleCreateSession(req({
+      runtime: 'commandcode', cwd, model: 'deepseek/deepseek-v4-flash',
+      invocationRole: 'conductor-root', commandCodeAttestation: { junk: true },
+    }), shimResponse);
+    expect(shimResponse.statusCode, shimResponse.body).toBe(201);
+
+    await routes.shutdown();
+  });
+
+  it('prompt returns a terminal receipt and transcript carrying the exact model; delete releases the process', async () => {
+    const { root, cwd, runner, commandCodeService, routes, admission } = await buildHarness();
+
+    const createResponse = res();
+    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'deepseek/deepseek-v4-flash' }), createResponse);
+    expect(createResponse.statusCode, createResponse.body).toBe(201);
+    const created = JSON.parse(createResponse.body);
 
     const promptResponse = res();
-    const logs: LogRecord[] = [];
-    setLogTap((record) => logs.push(record));
-    try {
-      await routes.handleSendPrompt(req({ message: 'say route-ok' }), promptResponse, created.sessionId);
-    } finally {
-      setLogTap(null);
-    }
+    await routes.handleSendPrompt(req({ message: 'say route-ok' }), promptResponse, created.sessionId);
     expect(promptResponse.statusCode, promptResponse.body).toBe(200);
     expect(JSON.parse(promptResponse.body).content).toBe('route-ok');
-    expect(runner.inputs[0]?.nativeSessionId).toBeUndefined();
-    expect(runner.inputs[0]?.effort).toBe('low');
-    const lifecycle = logs.filter((record) => record.msg.includes('Prompt dispatched') || record.msg.includes('Prompt turn complete'));
-    expect(lifecycle.some((record) => record.msg.includes('Prompt dispatched'))).toBe(true);
-    expect(lifecycle.length).toBeGreaterThan(0);
-    expect(lifecycle.every((record) => record.requestId && record.runId && record.sessionId === created.sessionId && record.runtime === 'commandcode' && record.executionInstanceId === 'commandcode-default')).toBe(true);
+    expect(runner.inputs[0]?.model).toBe('deepseek/deepseek-v4-flash');
 
     const receiptResponse = res();
     await routes.handleGetRunReceipt(req({}), receiptResponse, JSON.parse(promptResponse.body).runId);
     expect(JSON.parse(receiptResponse.body)).toMatchObject({
       status: 'completed',
-      effort: 'low',
-      requestedEffort: 'low',
-      acceptedEffort: 'low',
-      effectiveEffort: 'low',
-      effortEvidenceMethod: 'provider-result',
-      tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 13, output: 8, total: 21 },
-    });
-
-    const infoResponse = res();
-    await routes.handleGetSessionInfo(req({}), infoResponse, created.sessionId);
-    expect(JSON.parse(infoResponse.body)).toMatchObject({
       runtime: 'commandcode',
-      tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 13, output: 8, total: 21 },
+      model: 'deepseek/deepseek-v4-flash',
     });
 
     const evidenceResponse = res();
-    await routes.handleGetSessionEvidence(req({}), evidenceResponse, created.sessionId, new URLSearchParams('expand=transcript,screen'));
-    expect(JSON.parse(evidenceResponse.body)).toMatchObject({
-      runtime: 'commandcode',
-      effort: 'low',
-      requestedEffort: 'low',
-      acceptedEffort: 'low',
-      effectiveEffort: 'low',
-      effortEvidenceMethod: 'provider-result',
-      tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 13, output: 8, total: 21 },
-    });
-    expect(JSON.parse(evidenceResponse.body).transcript.items.some((item: any) => item.text === 'route-ok')).toBe(true);
-    expect(JSON.parse(evidenceResponse.body).screen.screenView.items.some((item: any) => item.kind === 'assistant' && item.text === 'route-ok')).toBe(true);
-    expect(JSON.parse(evidenceResponse.body).screen.screenView.items.some((item: any) => item.kind === 'user' && item.text === 'say route-ok')).toBe(true);
-
-    const releaseRetentionResponse = res();
-    await routes.handleSessionControl(req({ action: 'release_retention', retentionLeaseId: created.retention.leaseId, ownerId: 'route-test' }), releaseRetentionResponse, created.sessionId);
-    expect(releaseRetentionResponse.statusCode).toBe(200);
-    expect(JSON.parse(releaseRetentionResponse.body)).toMatchObject({ success: true, action: 'release_retention' });
-    expect(await readdir(path.join(root, 'pins'))).toEqual([]);
-
-    const acquireRetentionResponse = res();
-    await routes.handleSessionControl(req({ action: 'acquire_retention', retention: { mode: 'durable', ownerId: 'route-test-2', ttlSeconds: 900 } }), acquireRetentionResponse, created.sessionId);
-    expect(acquireRetentionResponse.statusCode).toBe(200);
-    const acquiredRetention = JSON.parse(acquireRetentionResponse.body);
-    expect(acquiredRetention).toMatchObject({ success: true, action: 'acquire_retention', retention: { mode: 'durable', ownerId: 'route-test-2' } });
-
-    const renewRetentionResponse = res();
-    await routes.handleSessionControl(req({ action: 'renew_retention', retentionLeaseId: acquiredRetention.retention.leaseId, ownerId: 'route-test-2', pinTtlSeconds: 900 }), renewRetentionResponse, created.sessionId);
-    expect(renewRetentionResponse.statusCode).toBe(200);
-    expect(JSON.parse(renewRetentionResponse.body)).toMatchObject({ success: true, action: 'renew_retention', retention: { leaseId: acquiredRetention.retention.leaseId, mode: 'durable', ownerId: 'route-test-2' } });
-
-    const releaseDurableRetentionResponse = res();
-    await routes.handleSessionControl(req({ action: 'release_retention', retentionLeaseId: acquiredRetention.retention.leaseId, ownerId: 'route-test-2' }), releaseDurableRetentionResponse, created.sessionId);
-    expect(releaseDurableRetentionResponse.statusCode).toBe(200);
-
-    const transcriptResponse = res();
-    await routes.handleSessionTranscript(req({}), transcriptResponse, created.sessionId, new URLSearchParams());
-    expect(JSON.parse(transcriptResponse.body).runtime).toBe('commandcode');
-
-    vi.spyOn(receipts, 'markStarted').mockRejectedValueOnce(new Error('receipt persistence failure'));
-    const failedStartResponse = res();
-    await routes.handleSendPrompt(req({ message: 'receipt failure must release admission' }), failedStartResponse, created.sessionId);
-    expect(failedStartResponse.statusCode).toBe(500);
-    expect(admission.snapshot().activeTurns).toBe(0);
+    await routes.handleGetSessionEvidence(req({}), evidenceResponse, created.sessionId, new URLSearchParams('expand=transcript'));
+    const evidence = JSON.parse(evidenceResponse.body);
+    expect(evidence.runtime).toBe('commandcode');
+    expect(evidence.model).toBe('deepseek/deepseek-v4-flash');
+    expect(evidence.transcript.items.some((item: { text?: string }) => item.text === 'route-ok')).toBe(true);
 
     const deleteResponse = res();
     await routes.handleDeleteSession(req({}), deleteResponse, created.sessionId);
     expect(JSON.parse(deleteResponse.body).success).toBe(true);
     expect(await commandCodeService.getSession(created.sessionId)).toBeUndefined();
+    expect(admission.snapshot().activeTurns).toBe(0);
     expect(await readdir(path.join(root, 'pins'))).toEqual([]);
     await routes.shutdown();
   });

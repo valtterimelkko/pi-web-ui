@@ -53,7 +53,6 @@ export function createHealthRoutes(deps: HealthRoutesDeps) {
         ...runtimeHealth.commandcode,
         detailStatus: commandCodeHealth.status,
         ...(commandCodeHealth.version ? { version: commandCodeHealth.version } : {}),
-        missingModels: commandCodeHealth.missingModels,
       };
     }
 

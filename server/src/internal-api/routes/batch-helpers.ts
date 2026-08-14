@@ -72,29 +72,19 @@ export async function createOneSession(params: {
 
   switch (runtime) {
     case 'commandcode': {
-      if (!deps.commandCodeService) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code shadow runtime is not configured');
+      if (!deps.commandCodeService) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code runtime is not configured');
       // Batch creation can be exercised directly by focused route users as
       // well as through the booted server. Initialise discovery here so the
-      // exact catalogue/capability gate is never evaluated in its default
-      // pre-discovery state.
+      // catalogue gate is never evaluated in its default pre-discovery state.
       await deps.commandCodeService.init();
-      if (!(deps.commandCodeService.isShadowAvailable?.() ?? deps.commandCodeService.isAvailable()) || !(deps.commandCodeService.isShadowEnabled?.() ?? deps.commandCodeService.isEnabled())) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code shadow runtime is disabled or unavailable');
-      if (!deps.commandCodeService.isAvailable()) throw new RuntimeOpError(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code runtime is not available');
-      if (entry.model !== 'qwen/qwen3.8-max' && entry.model !== 'meta/muse-spark-1.2-contributor') {
-        throw new RuntimeOpError(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code shadow routes require one exact allowlisted model id');
-      }
-      if (entry.invocationRole !== 'conductor-root' && entry.invocationRole !== 'implementation-child') {
-        throw new RuntimeOpError(ErrorCode.COMMANDCODE_ROLE_REFUSED, 'Command Code invocationRole is required');
-      }
+      if (!deps.commandCodeService.isEnabled() || !deps.commandCodeService.isAvailable()) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code runtime is disabled or unavailable');
+      if (!entry.model) throw new RuntimeOpError(ErrorCode.INVALID_REQUEST, 'Command Code requires a model id');
       const created = await deps.commandCodeService.createSession({
         cwd,
         model: entry.model,
         effort: entry.effort,
-        permissionProfile: entry.invocationRole === 'conductor-root' ? 'agent-os-7f-root-readonly' : 'implementation-child-wide',
-        invocationRole: entry.invocationRole,
-        roleAttestation: entry.commandCodeAttestation,
       });
-      return { sessionId: created.sessionId, sessionPath: created.sessionId, runtime: 'commandcode', model: created.modelSelector, modelSelector: created.modelSelector, executionInstanceId: created.executionInstanceId, effort: created.effort, effortSource: created.effortSource, defaultEffort: created.defaultEffort, effortCapabilityHash: created.effortCapabilityHash, cwd: created.cwd };
+      return { sessionId: created.sessionId, sessionPath: created.sessionId, runtime: 'commandcode', model: created.modelSelector, modelSelector: created.modelSelector, executionInstanceId: created.executionInstanceId, effort: created.effort, effortSource: created.effortSource, defaultEffort: created.defaultEffort, cwd: created.cwd };
     }
 
     case 'claude': {

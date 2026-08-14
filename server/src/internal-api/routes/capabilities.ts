@@ -40,16 +40,10 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
     // A disabled-but-installed runtime is advertised as unavailable and its
     // new work is refused rather than silently substituted.
     const opencodeEnabled = opencodeService.isEnabled();
-    const commandCodeEnabled = Boolean(commandCodeService?.isShadowEnabled?.() ?? commandCodeService?.isEnabled());
-    const commandCodeAvailable = Boolean(commandCodeService?.isShadowAvailable?.() ?? commandCodeService?.isAvailable());
-    const commandCodeEffortCapabilities = commandCodeEnabled
-      ? (commandCodeService?.getEffortCapabilities?.()
-        ?? commandCodeService?.getShadowEffortCapabilities?.()
-        ?? {})
-      : {};
-    const commandCodeSupportsEffort = Object.values(commandCodeEffortCapabilities).some((capability) => capability?.supportsEffort === true);
+    const commandCodeEnabled = Boolean(commandCodeService?.isEnabled());
+    const commandCodeAvailable = commandCodeEnabled && Boolean(commandCodeService?.isAvailable());
     const commandCodeModels = commandCodeEnabled ? (commandCodeService?.getModels?.() ?? []) : [];
-    const commandCodeCatalogue = commandCodeEnabled ? commandCodeService?.getCatalogueMetadata?.() : undefined;
+    const commandCodeSupportsEffort = commandCodeModels.some((model) => model.effortLevels.length > 0);
 
     const body: CapabilitiesResponse = {
       status: 'ok',
@@ -146,15 +140,17 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsModelSwitch: false,
           supportsThinkingLevel: false,
           supportsEffort: commandCodeSupportsEffort,
-          ...(commandCodeCatalogue ? { catalogue: commandCodeCatalogue } : {}),
           modelCatalogue: commandCodeModels.map((model) => ({
             id: model.id,
-            status: model.status,
-            runnable: model.runnable,
-            browserRunnable: model.browserRunnable,
           })),
           effortCapabilities: Object.fromEntries(
-            Object.entries(commandCodeEffortCapabilities).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => entry[1] !== undefined),
+            commandCodeModels
+              .filter((model) => model.effortLevels.length > 0)
+              .map((model) => [model.id, {
+                supportsEffort: true,
+                effortLevels: [...model.effortLevels],
+                ...(model.defaultEffort ? { defaultEffort: model.defaultEffort } : {}),
+              }]),
           ),
           supportsPinning: true,
           supportsReplayHistory: true,

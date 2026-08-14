@@ -677,8 +677,9 @@ describe('TransferService', () => {
 
     it('extracts Command Code normalized journal events for transfer', async () => {
       const commandCodeMock = {
-        isBrowserAvailable: vi.fn().mockReturnValue(true),
-        isBrowserSession: vi.fn().mockResolvedValue(true),
+        isEnabled: vi.fn().mockReturnValue(true),
+        isAvailable: vi.fn().mockReturnValue(true),
+        hasSession: vi.fn().mockResolvedValue(true),
         isRunning: vi.fn().mockReturnValue(false),
         getReplayEvents: vi.fn().mockResolvedValue([
           { type: 'message_start', sessionId: 'cmd-src', timestamp: 1700000000000, data: { id: 'u1', role: 'user', content: 'Hello from Command Code' } },
@@ -708,10 +709,11 @@ describe('TransferService', () => {
       expect(claudeMock.sendPrompt.mock.calls[0][1]).toContain('Hello from Command Code');
     });
 
-    it('refuses Command Code transfer when the browser policy no longer permits the source', async () => {
+    it('refuses Command Code transfer when the runtime is unavailable', async () => {
       const commandCodeMock = {
-        isBrowserAvailable: vi.fn().mockReturnValue(false),
-        isBrowserSession: vi.fn().mockResolvedValue(false),
+        isEnabled: vi.fn().mockReturnValue(true),
+        isAvailable: vi.fn().mockReturnValue(false),
+        hasSession: vi.fn().mockResolvedValue(false),
         getReplayEvents: vi.fn(),
       };
       const config = makeConfig({ commandCodeService: commandCodeMock as never });
@@ -720,7 +722,7 @@ describe('TransferService', () => {
         : undefined);
       const result = await new TransferService(config).executeTransfer({ sourceSessionId: 'cmd-src', targetSessionId: 'tgt-1', scope: 'visible_full' });
       expect(result.success).toBe(false);
-      expect(result.error?.message).toMatch(/browser transfer policy/i);
+      expect(result.error?.message).toMatch(/transfer is unavailable/i);
       expect(commandCodeMock.getReplayEvents).not.toHaveBeenCalled();
     });
 

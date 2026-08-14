@@ -41,8 +41,6 @@ export interface BeginRunInput {
   executionInstanceId: string;
   model?: string;
   modelSelector?: string;
-  invocationRole?: 'conductor-root' | 'implementation-child';
-  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide' | 'browser-contained';
   message: string;
   mode: PromptMode;
   dispatchMode?: PromptMode;
@@ -54,7 +52,6 @@ export interface BeginRunInput {
   requestedEffort?: CommandCodeEffort;
   effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
-  effortCapabilityHash?: string;
   idempotencyKey?: string;
   /** Server-derived Pi-only shadow evidence; callers cannot provide this field. */
   phase7Shadow?: Phase7PiShadowClassification;
@@ -244,9 +241,6 @@ export class RunReceiptManager {
         acceptedEffort: input.effort,
         effortSource: input.effortSource,
         defaultEffort: input.defaultEffort,
-        effortCapabilityHash: input.effortCapabilityHash,
-        invocationRole: input.invocationRole,
-        permissionProfile: input.permissionProfile,
         mode: input.mode,
         dispatchMode: input.dispatchMode ?? input.mode,
         status: 'accepted',

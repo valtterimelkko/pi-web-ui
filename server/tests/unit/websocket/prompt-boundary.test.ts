@@ -122,9 +122,9 @@ describe('S4: unified prompt-boundary on prompt / steer / follow_up', () => {
     expect(sent.find((entry) => entry.message.code === 'SESSION_STUCK')).toBeUndefined();
   });
 
-  it('revalidates a stale Command Code browser session before dispatching a prompt', async () => {
+  it('revalidates a stale Command Code session before dispatching a prompt', async () => {
     const commandCodeService = {
-      isBrowserSession: vi.fn().mockResolvedValue(false),
+      hasSession: vi.fn().mockResolvedValue(false),
       shutdown: vi.fn().mockResolvedValue(undefined),
     };
     (mgr as any).commandCodeService = commandCodeService;
@@ -137,7 +137,7 @@ describe('S4: unified prompt-boundary on prompt / steer / follow_up', () => {
       message: BENIGN,
     });
 
-    expect(commandCodeService.isBrowserSession).toHaveBeenCalledWith('/commandcode/stale');
+    expect(commandCodeService.hasSession).toHaveBeenCalledWith('/commandcode/stale');
     expect(sent.find((entry) => entry.message.code === 'COMMANDCODE_UNAVAILABLE')).toBeDefined();
     expect(promptSpy).not.toHaveBeenCalled();
   });

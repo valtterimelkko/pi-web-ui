@@ -52,36 +52,13 @@ export interface NotificationsRoutesDeps {
   sessionRegistry: {
     get(sessionId: string): Promise<{ sdkType: string; path?: string } | undefined | null>;
   };
-  /** Internal API visibility seam; browser-contained sessions must stay out. */
-  isShadowCommandCodeSession?: (sessionId: string) => Promise<boolean>;
 }
 
 export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
   const { manager, sessionRegistry } = deps;
 
   async function resolveVisibleEntry(sessionId: string): Promise<{ sdkType: string; path?: string } | undefined> {
-    const entry = await sessionRegistry.get(sessionId);
-    if (!entry) return undefined;
-    if (entry.sdkType === 'commandcode' && !(await deps.isShadowCommandCodeSession?.(sessionId) ?? false)) {
-      return undefined;
-    }
-    return entry;
-  }
-
-  async function isHiddenCommandCodeSession(sessionId: string): Promise<boolean> {
-    const entry = await sessionRegistry.get(sessionId);
-    const optInIsCommandCode = manager.getOptIn(sessionId)?.runtime === 'commandcode';
-    const hasCommandCodeDelivery = manager
-      .listDeliveriesForSession(sessionId)
-      .some((item) => item.notification.runtime === 'commandcode');
-    if (entry?.sdkType === 'commandcode') {
-      return !(await deps.isShadowCommandCodeSession?.(sessionId) ?? false);
-    }
-    // A Command Code notification identity/history is addressable through the
-    // Internal API only when its registry entry is explicitly Command Code and
-    // the shadow accessor approves it. Missing or mismatched registry entries
-    // fail closed, including after browser opt-out removes the opt-in record.
-    return optInIsCommandCode || hasCommandCodeDelivery;
+    return (await sessionRegistry.get(sessionId)) ?? undefined;
   }
 
   async function resolveCanonicalId(sessionId: string): Promise<string> {
@@ -136,10 +113,6 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
   /** DELETE /api/v1/sessions/:id/notifications/opt-in */
   async function handleOptOut(_req: IncomingMessage, res: ServerResponse, sessionId: string): Promise<void> {
     try {
-      if (await isHiddenCommandCodeSession(sessionId)) {
-        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session is not available for Internal API notifications'));
-        return;
-      }
       await manager.optOut(await resolveCanonicalId(sessionId));
       sendJson(res, 200, { status: 'ok', optIn: null });
     } catch (error) {
@@ -151,10 +124,6 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
   /** GET /api/v1/sessions/:id/notifications */
   async function handleGetSessionState(_req: IncomingMessage, res: ServerResponse, sessionId: string): Promise<void> {
     try {
-      if (await isHiddenCommandCodeSession(sessionId)) {
-        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session is not available for Internal API notifications'));
-        return;
-      }
       const canonicalId = await resolveCanonicalId(sessionId);
       sendJson(res, 200, {
         status: 'ok',
@@ -215,13 +184,6 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.NOT_FOUND, `Notification not found: ${notificationId}`));
       return;
     }
-    if (delivery.notification.runtime === 'commandcode') {
-      const sessionId = delivery.notification.sessionId;
-      if (!sessionId || !(await deps.isShadowCommandCodeSession?.(sessionId) ?? false)) {
-        sendJson(res, 404, enrichedErrorBody(ErrorCode.NOT_FOUND, `Notification not found: ${notificationId}`));
-        return;
-      }
-    }
     sendJson(res, 200, { status: 'ok', delivery });
   }
 
@@ -233,12 +195,7 @@ export function createNotificationsRoutes(deps: NotificationsRoutesDeps) {
   ): Promise<void> {
     const rawLimit = Number.parseInt(query.get('limit') ?? '', 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : undefined;
-    const deliveries = (await Promise.all(manager.listRecentDeliveries(limit).map(async (item) => {
-      if (item.notification.runtime !== 'commandcode') return item;
-      const sessionId = item.notification.sessionId;
-      return sessionId && await (deps.isShadowCommandCodeSession?.(sessionId) ?? Promise.resolve(false)) ? item : undefined;
-    }))).filter((item): item is NonNullable<typeof item> => item !== undefined);
-    sendJson(res, 200, { status: 'ok', deliveries });
+    sendJson(res, 200, { status: 'ok', deliveries: manager.listRecentDeliveries(limit) });
   }
 
   return {

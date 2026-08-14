@@ -5,15 +5,6 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 /**
- * The two exact routes reserved for the Agent OS shadow workflow. They remain
- * intentionally narrow even though the browser catalogue is discovered live.
- */
-export const COMMAND_CODE_MODELS = [
-  'qwen/qwen3.8-max',
-  'meta/muse-spark-1.2-contributor',
-] as const;
-
-/**
  * Full catalogue observed from the current Command Code model listing.
  * Visibility follows this order; execution remains restricted to COMMAND_CODE_MODELS.
  * Runtime readiness follows the freshly discovered catalogue and effort evidence;
@@ -76,7 +67,7 @@ export const COMMAND_CODE_FULL_MODEL_CATALOGUE = [
   'xai/grok-4.6',
 ] as const;
 
-export type CommandCodeModel = (typeof COMMAND_CODE_MODELS)[number];
+export type CommandCodeModel = string;
 
 export type CommandCodeModelCatalogueValidation =
   | { valid: true }
@@ -105,37 +96,10 @@ export const COMMAND_CODE_PROVIDER = 'command-code' as const;
 /** Native Command Code effort values are intentionally not the generic API thinking levels. */
 export const COMMAND_CODE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type CommandCodeEffort = (typeof COMMAND_CODE_EFFORT_LEVELS)[number];
-export const COMMAND_CODE_EFFORT_LEVELS_BY_MODEL: Partial<Record<CommandCodeRuntimeModel, readonly CommandCodeEffort[]>> = {
-  'qwen/qwen3.8-max': ['low', 'medium', 'xhigh'],
-  'meta/muse-spark-1.2-contributor': [],
-};
-export const COMMAND_CODE_EFFORT_SOURCE = 'live-preflight' as const;
-
-export interface CommandCodeEffortCapability {
-  supportsEffort: boolean;
-  effortLevels: CommandCodeEffort[];
-  defaultEffort?: CommandCodeEffort;
-  /** Unknown means discovery was inconclusive and must fail closed. */
-  status: 'adjustable' | 'unavailable' | 'unknown';
-  source: typeof COMMAND_CODE_EFFORT_SOURCE;
-  capabilityHash: string;
-}
-
-export type CommandCodeEffortCapabilities = Record<CommandCodeRuntimeModel, CommandCodeEffortCapability>;
-
 export interface CommandCodeModelDiscovery {
   version: string;
   models: CommandCodeRuntimeModel[];
   ambiguous: string[];
-  /** Populated by the full startup discovery; omitted by the model-list parser. */
-  effortCapabilities?: CommandCodeEffortCapabilities;
-}
-
-/** Exact, case-sensitive check for the two Agent OS shadow routes. */
-export function assertCommandCodeModel(value: unknown): CommandCodeModel | undefined {
-  return (COMMAND_CODE_MODELS as readonly string[]).includes(value as string)
-    ? value as CommandCodeModel
-    : undefined;
 }
 
 /** Exact, case-sensitive check against a freshly advertised runtime catalogue. */
@@ -148,9 +112,7 @@ export function assertCommandCodeRuntimeModel(
 
 export function assertCommandCodeEffort(model: CommandCodeRuntimeModel, value: unknown): CommandCodeEffort | undefined {
   if (value === undefined) return undefined;
-  const knownLevels = COMMAND_CODE_EFFORT_LEVELS_BY_MODEL[model];
-  const allowed = knownLevels ?? COMMAND_CODE_EFFORT_LEVELS;
-  if (!(allowed as readonly unknown[]).includes(value)) {
+  if (!(COMMAND_CODE_EFFORT_LEVELS as readonly unknown[]).includes(value)) {
     throw new Error(`Command Code effort '${String(value)}' is not supported for model ${model}`);
   }
   return value as CommandCodeEffort;
@@ -196,20 +158,6 @@ function parseAdvertisedModelId(line: string): CommandCodeRuntimeModel | undefin
 export interface CommandCodeDiscoveryOptions {
   /** Bound each child-process discovery probe so a broken executable cannot wedge readiness. */
   timeoutMs?: number;
-  /** Bound the complete hybrid effort catalogue discovery, not just one probe. */
-  totalTimeoutMs?: number;
-  /** Restrict effort discovery to the freshly advertised exact ids. */
-  models?: readonly CommandCodeRuntimeModel[];
-  /**
-   * Legacy shadow probing checks every known effort value. Browser discovery
-   * can use one invalid-value probe and parse the CLI's supported-values list.
-   */
-  probeAllValues?: boolean;
-  /**
-   * Exact policy models that still require exhaustive probes when the broader
-   * discovered catalogue uses the bounded invalid-value probe.
-   */
-  probeAllValuesForModels?: readonly CommandCodeRuntimeModel[];
 }
 
 export interface CommandCodeDiscoveryRunner {
@@ -217,7 +165,6 @@ export interface CommandCodeDiscoveryRunner {
 }
 
 export const COMMAND_CODE_DISCOVERY_TIMEOUT_MS = 10_000;
-export const COMMAND_CODE_DISCOVERY_TOTAL_TIMEOUT_MS = 120_000;
 
 /** Startup-only model discovery. It uses an isolated home and never reads native auth/config files. */
 export const discoverCommandCodeModels: CommandCodeDiscoveryRunner = async (executablePath, options = {}) => {
@@ -237,104 +184,11 @@ export const discoverCommandCodeModels: CommandCodeDiscoveryRunner = async (exec
   });
 };
 
-/**
- * Probe each exact model with each documented native effort value. A model that
- * rejects every value is explicitly non-adjustable; a timeout/spawn failure is
- * unknown and therefore remains fail-closed for session creation.
- */
-export async function discoverCommandCodeEfforts(
-  executablePath: string,
-  options: CommandCodeDiscoveryOptions = {},
-): Promise<{ capabilities: CommandCodeEffortCapabilities }> {
-  return withIsolatedDiscoveryHome(async (homeDir) => {
-    const environment = controlledDiscoveryEnvironment(homeDir);
-    const capabilities = {} as CommandCodeEffortCapabilities;
-    const models = options.models?.length ? [...options.models] : [...COMMAND_CODE_MODELS];
-    const totalTimeoutMs = options.totalTimeoutMs ?? COMMAND_CODE_DISCOVERY_TOTAL_TIMEOUT_MS;
-    if (!Number.isFinite(totalTimeoutMs) || totalTimeoutMs <= 0) throw new Error('Command Code total discovery timeout must be positive');
-    const deadline = Date.now() + totalTimeoutMs;
-    const probeTimeout = (): number => {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new Error(`Command Code effort discovery timed out after ${totalTimeoutMs}ms`);
-      return Math.min(options.timeoutMs ?? COMMAND_CODE_DISCOVERY_TIMEOUT_MS, remaining);
-    };
-    for (const model of models) {
-      const supported: CommandCodeEffort[] = [];
-      let unknown = false;
-      let defaultEffort: CommandCodeEffort | undefined;
-
-      const probeAllValues = options.probeAllValuesForModels?.includes(model)
-        || options.probeAllValues !== false;
-      if (!probeAllValues) {
-        const result = await probeEffortList(
-          executablePath,
-          model,
-          probeTimeout(),
-          environment,
-        );
-        supported.push(...result.values);
-        unknown ||= result.unknown;
-        if (model === 'qwen/qwen3.8-max' && supported.includes('medium')) defaultEffort = 'medium';
-      } else {
-        for (const effort of COMMAND_CODE_EFFORT_LEVELS) {
-          try {
-            const probe = await runDiscoveryCommand(
-              executablePath,
-              ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1', '--trust', '--skip-onboarding', '--no-auto-update', '--effort', effort],
-              probeTimeout(),
-              environment,
-              true,
-            );
-            const result = classifyEffortProbe(probe);
-            if (result === 'accepted') supported.push(effort);
-            else if (result === 'unknown') unknown = true;
-          } catch {
-            unknown = true;
-          }
-        }
-        // The exact shadow models are exhaustively probed, but also receive a
-        // bounded invalid-value probe when the caller explicitly requests the
-        // hybrid mode. This catches a CLI update that adds a new native value
-        // instead of silently truncating it to the repository enum.
-        if (options.probeAllValues === false && options.probeAllValuesForModels?.includes(model)) {
-          const result = await probeEffortList(
-            executablePath,
-            model,
-            probeTimeout(),
-            environment,
-          );
-          unknown ||= result.unknown || result.values.some((effort) => !supported.includes(effort));
-          supported.push(...result.values);
-        }
-        defaultEffort = supported.includes('medium') ? 'medium' : supported[0];
-      }
-      if (Date.now() >= deadline) throw new Error(`Command Code effort discovery timed out after ${totalTimeoutMs}ms`);
-
-      // An inconclusive probe must not leave a plausible selector behind. Keep
-      // the whole capability atomically fail-closed: unknown means no usable
-      // levels, no default, and no native effort claim.
-      const effortLevels = unknown ? [] : [...new Set(supported)];
-      const status = unknown ? 'unknown' : effortLevels.length > 0 ? 'adjustable' : 'unavailable';
-      const supportsEffort = effortLevels.length > 0 && !unknown;
-      capabilities[model] = {
-        supportsEffort,
-        effortLevels,
-        ...(supportsEffort && defaultEffort ? { defaultEffort } : {}),
-        status,
-        source: COMMAND_CODE_EFFORT_SOURCE,
-        capabilityHash: effortCapabilityHash(model, { supportsEffort, effortLevels, status, ...(defaultEffort ? { defaultEffort } : {}) }),
-      };
-    }
-    return { capabilities };
-  });
-}
-
 async function runDiscoveryCommand(
   executablePath: string,
   args: string[],
   timeoutMs = COMMAND_CODE_DISCOVERY_TIMEOUT_MS,
   environment = controlledDiscoveryEnvironment(),
-  allowNonZero = false,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Command Code discovery timeout must be positive');
   const child = spawn(executablePath, args, {
@@ -382,7 +236,7 @@ async function runDiscoveryCommand(
     child.once('close', (code, signal) => {
       if (timeoutError) {
         finish(timeoutError);
-      } else if (code !== 0 && !allowNonZero) {
+      } else if (code !== 0) {
         const error = new Error(`Command Code model discovery failed with exit ${code ?? signal ?? 'unknown'}`);
         (error as Error & { stderr?: string }).stderr = redactDiscoveryDiagnostics(stderr);
         finish(error);
@@ -391,82 +245,7 @@ async function runDiscoveryCommand(
   });
 }
 
-type EffortProbeClassification = 'accepted' | 'unsupported' | 'unknown';
-
-interface ParsedSupportedEfforts {
-  values: CommandCodeEffort[];
-  unknown: boolean;
-}
-
-async function probeEffortList(
-  executablePath: string,
-  model: CommandCodeRuntimeModel,
-  timeoutMs: number | undefined,
-  environment: NodeJS.ProcessEnv,
-): Promise<ParsedSupportedEfforts> {
-  try {
-    const probe = await runDiscoveryCommand(
-      executablePath,
-      ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1', '--trust', '--skip-onboarding', '--no-auto-update', '--effort', '__pi_web_ui_capability_probe__'],
-      timeoutMs,
-      environment,
-      true,
-    );
-    const parsed = parseSupportedEfforts(probe.stdout, probe.stderr);
-    if (parsed) return parsed;
-    if (isNoAdjustableEffort(probe.stdout, probe.stderr)) return { values: [], unknown: false };
-    return { values: [], unknown: true };
-  } catch {
-    return { values: [], unknown: true };
-  }
-}
-
-function parseSupportedEfforts(stdout: string, stderr: string): ParsedSupportedEfforts | undefined {
-  const diagnostics = `${stdout}\n${stderr}`;
-  const match = diagnostics.match(/supported(?:\s+values?)?:\s*([^.!?\r\n]+)/i);
-  if (!match) return undefined;
-  const values = match[1]
-    .split(',')
-    .map((value) => value.trim().toLowerCase().replace(/^or\s+/, '').replace(/^['"`]+|['"`]+$/g, ''))
-    .filter(Boolean);
-  const supported = values.filter((value): value is CommandCodeEffort => (COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(value));
-  return {
-    values: [...new Set(supported)],
-    unknown: values.some((value) => !(COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(value)),
-  };
-}
-
-function isNoAdjustableEffort(stdout: string, stderr: string): boolean {
-  return /no adjustable .*effort|effort not supported|does not support .*effort/i.test(`${stdout}\n${stderr}`);
-}
-
-function classifyEffortProbe(probe: { exitCode: number | null; stdout: string; stderr: string }): EffortProbeClassification {
-  const diagnostics = `${probe.stdout}\n${probe.stderr}`.toLowerCase();
-  // Command Code exits through its auth gate after accepting a valid model /
-  // effort pair. This is positive capability evidence, not an inference from
-  // a successful model response.
-  if (probe.exitCode === 3 || /authentication required|login required|not authenticated|missing credentials/.test(diagnostics)) return 'accepted';
-  // `cmd -p` validates the native flag before it validates the query. In a
-  // credential-scrubbed startup probe it may therefore emit this positive
-  // acknowledgement and then stop with "no query provided". That is still
-  // capability evidence, not a model-turn result.
-  if (/reasoning effort set to\s+(?:low|medium|high|xhigh|max)\b/.test(diagnostics)) return 'accepted';
-  if (/unsupported|not supported|no adjustable .*effort|invalid .*effort|unknown .*effort|invalid value|must be one of/.test(diagnostics)) return 'unsupported';
-  if (probe.exitCode === 0) return 'accepted';
-  return 'unknown';
-}
-
-function effortCapabilityHash(
-  model: CommandCodeRuntimeModel,
-  capability: Pick<CommandCodeEffortCapability, 'supportsEffort' | 'effortLevels' | 'defaultEffort' | 'status'>,
-): string {
-  return createHash('sha256')
-    .update(JSON.stringify({ model, ...capability }))
-    .digest('hex');
-}
-
-async function withIsolatedDiscoveryHome<T>(fn: (homeDir: string) => Promise<T>): Promise<T> {
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-discovery-home-'));
+async function withIsolatedDiscoveryHome<T>(fn: (homeDir: string) => Promise<T>): Promise<T> {  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-discovery-home-'));
   try {
     return await fn(homeDir);
   } finally {

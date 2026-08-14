@@ -152,10 +152,10 @@ export interface CreateSessionRequest {
   retention?: RetentionLeaseRequest;
   /** Claude-specific: select a provider profile by ID. */
   profileId?: string;
-  /** Required for commandcode; server maps it to a fixed permission profile. */
+  // TODO(remove once Agent OS drops the fields): accepted and ignored legacy role field.
   invocationRole?: 'conductor-root' | 'implementation-child';
-  /** Server-verified lease/worktree/role binding for Command Code sessions. */
-  commandCodeAttestation?: CommandCodeRoleAttestationRequest;
+  // TODO(remove once Agent OS drops the fields): accepted and ignored legacy attestation field.
+  commandCodeAttestation?: unknown;
 }
 
 export interface SendPromptRequest {
@@ -250,7 +250,6 @@ export interface BatchCreateResultItem {
   acceptedEffort?: CommandCodeEffort;
   effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
-  effortCapabilityHash?: string;
   cwd?: string;
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
@@ -418,8 +417,6 @@ export interface SessionEvidenceResponse {
   createdAt: string;
   lastActivity: string;
   executionInstanceId: string;
-  invocationRole?: 'conductor-root' | 'implementation-child';
-  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide' | 'browser-contained';
   effort?: CommandCodeEffort;
   requestedEffort?: CommandCodeEffort;
   acceptedEffort?: CommandCodeEffort;
@@ -427,7 +424,6 @@ export interface SessionEvidenceResponse {
   defaultEffort?: CommandCodeEffort;
   effectiveEffort?: CommandCodeEffort;
   effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
-  effortCapabilityHash?: string;
   /** Latest run-scoped usage observed from the matching terminal result, when available. */
   tokenUsage?: RunTokenUsage;
   activity: {
@@ -551,14 +547,11 @@ export interface CreateSessionResponse {
   model?: string;
   /** Canonical creation selector when it differs from the runtime model (for example profile:<id>). */
   modelSelector?: string;
-  /** Additive Command Code role projection; raw permission flags remain private. */
-  invocationRole?: 'conductor-root' | 'implementation-child';
   effort?: CommandCodeEffort;
   requestedEffort?: CommandCodeEffort;
   acceptedEffort?: CommandCodeEffort;
   effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
-  effortCapabilityHash?: string;
   /** Configured runtime instance resolved for the created session. */
   executionInstanceId?: string;
   cwd: string;
@@ -584,8 +577,6 @@ export interface SessionInfo {
   model?: string;
   /** Canonical creation selector, additive for exact profile-backed routes. */
   modelSelector?: string;
-  /** Additive Command Code role projection; raw permission flags remain private. */
-  invocationRole?: 'conductor-root' | 'implementation-child';
   effort?: CommandCodeEffort;
   requestedEffort?: CommandCodeEffort;
   acceptedEffort?: CommandCodeEffort;
@@ -593,7 +584,6 @@ export interface SessionInfo {
   defaultEffort?: CommandCodeEffort;
   effectiveEffort?: CommandCodeEffort;
   effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
-  effortCapabilityHash?: string;
   status: 'idle' | 'running' | 'error';
   messageCount: number;
   firstMessage: string;
@@ -648,7 +638,6 @@ export interface SessionControlResponse {
   effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   effectiveEffort?: CommandCodeEffort;
-  effortCapabilityHash?: string;
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
   pinnedUntil?: string;
@@ -911,14 +900,10 @@ export interface RunReceipt {
   defaultEffort?: CommandCodeEffort;
   effectiveEffort?: CommandCodeEffort;
   effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
-  effortCapabilityHash?: string;
   /** Run-scoped provider usage from the matching terminal result, when measured. */
   tokenUsage?: RunTokenUsage;
   /** Payload-free normalized-event output evidence; additive since 1.19.0. */
   outputEvidence?: RunOutputEvidence;
-  /** Additive Command Code role/profile projection; raw argv remains private. */
-  invocationRole?: 'conductor-root' | 'implementation-child';
-  permissionProfile?: 'agent-os-7f-root-readonly' | 'implementation-child-wide' | 'browser-contained';
   /** Requested prompt mode (prompt / follow_up / steer). */
   mode?: PromptMode;
   /** Actual dispatch mode after state-aware promotion/rejection decisions. */
@@ -981,7 +966,6 @@ export interface ModelInfo {
   supportsEffort?: boolean;
   effortLevels?: string[];
   defaultEffort?: string;
-  effortCapabilityHash?: string;
   /** Runtime catalogue freshness/source, shared by all Command Code projections. */
   catalogue?: CommandCodeCatalogueMetadata;
   /** For Claude profile entries: the backend that drives this profile. */
@@ -1051,19 +1035,11 @@ export interface RuntimeCapabilities {
   /** Full discovered Command Code model projection; execution status is per model. */
   modelCatalogue?: Array<{
     id: string;
-    status: CommandCodeModelStatus;
-    runnable: boolean;
-    browserRunnable: boolean;
   }>;
-  /** Runtime catalogue freshness/status; separate from per-model execution status. */
-  catalogue?: CommandCodeCatalogueMetadata;
   effortCapabilities?: Record<string, {
     supportsEffort: boolean;
     effortLevels: string[];
     defaultEffort?: string;
-    status?: 'adjustable' | 'unavailable' | 'unknown';
-    source?: string;
-    capabilityHash?: string;
   }>;
   supportsPinning: boolean;
   supportsReplayHistory: boolean;

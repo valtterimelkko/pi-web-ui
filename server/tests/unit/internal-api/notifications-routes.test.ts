@@ -182,50 +182,49 @@ describe('notifications routes', () => {
       expect(manager.getOptIn('cmd-1')?.access).toBe('internal');
     });
 
-    it('does not expose a browser-contained Command Code session to Internal API notifications', async () => {
-      registry.get.mockResolvedValue(entry('commandcode', 'browser-cmd-1'));
+    it('rejects an opt-in for a session the registry cannot resolve', async () => {
+      registry.get.mockResolvedValue(undefined);
       const res = createMockRes();
-      await routes.handleOptIn(createJsonReq('POST', '/api/v1/sessions/browser-cmd-1/notifications/opt-in'), res, 'browser-cmd-1');
+      await routes.handleOptIn(createJsonReq('POST', '/api/v1/sessions/unknown-cmd/notifications/opt-in'), res, 'unknown-cmd');
       expect(res.statusCode).toBe(404);
       expect(commandcode.addCalls).toEqual([]);
     });
 
-    it('hides a stored browser opt-in even if its registry projection has disappeared', async () => {
+    it('keeps a stored Command Code opt-in addressable even if its registry projection disappears', async () => {
       await manager.optIn({
-        sessionId: 'browser-cmd-2',
+        sessionId: 'cmd-2',
         runtime: 'commandcode',
-        sessionPath: 'browser-cmd-2',
+        sessionPath: 'cmd-2',
         optedInAt: '2026-08-13T00:00:00.000Z',
-        access: 'browser',
+        access: 'internal',
       });
       registry.get.mockResolvedValue(undefined);
       const state = createMockRes();
-      await routes.handleGetSessionState(createJsonReq('GET', '/api/v1/sessions/browser-cmd-2/notifications'), state, 'browser-cmd-2');
-      expect(state.statusCode).toBe(404);
+      await routes.handleGetSessionState(createJsonReq('GET', '/api/v1/sessions/cmd-2/notifications'), state, 'cmd-2');
+      expect(state.statusCode).toBe(200);
       const optOut = createMockRes();
-      await routes.handleOptOut(createJsonReq('DELETE', '/api/v1/sessions/browser-cmd-2/notifications/opt-in'), optOut, 'browser-cmd-2');
-      expect(optOut.statusCode).toBe(404);
-      expect(manager.getOptIn('browser-cmd-2')).toBeDefined();
+      await routes.handleOptOut(createJsonReq('DELETE', '/api/v1/sessions/cmd-2/notifications/opt-in'), optOut, 'cmd-2');
+      expect(optOut.statusCode).toBe(200);
+      expect(manager.getOptIn('cmd-2')).toBeUndefined();
     });
 
-    it('hides browser Command Code delivery history after opt-out and registry loss', async () => {
-      registry.get.mockResolvedValue(entry('commandcode', 'browser-cmd-3'));
+    it('exposes Command Code delivery history without browser/shadow filtering', async () => {
+      registry.get.mockResolvedValue(entry('commandcode', 'cmd-3'));
       await manager.optIn({
-        sessionId: 'browser-cmd-3',
+        sessionId: 'cmd-3',
         runtime: 'commandcode',
-        sessionPath: 'browser-cmd-3',
+        sessionPath: 'cmd-3',
         optedInAt: '2026-08-13T00:00:00.000Z',
-        access: 'browser',
+        access: 'internal',
       });
-      commandcode.emit('browser-cmd-3', { type: 'agent_end', sessionId: 'browser-cmd-3', timestamp: Date.now(), data: {} });
+      commandcode.emit('cmd-3', { type: 'agent_end', sessionId: 'cmd-3', timestamp: Date.now(), data: {} });
       await new Promise((resolve) => setTimeout(resolve, 30));
       await manager.drain();
-      await manager.optOut('browser-cmd-3');
-      registry.get.mockResolvedValue(undefined);
 
       const state = createMockRes();
-      await routes.handleGetSessionState(createJsonReq('GET', '/api/v1/sessions/browser-cmd-3/notifications'), state, 'browser-cmd-3');
-      expect(state.statusCode).toBe(404);
+      await routes.handleGetSessionState(createJsonReq('GET', '/api/v1/sessions/cmd-3/notifications'), state, 'cmd-3');
+      expect(state.statusCode).toBe(200);
+      expect(JSON.parse(state.body).deliveries.length).toBeGreaterThan(0);
     });
 
     it('normalizes a Pi opt-in to the canonical bare-uuid id (derived from entry.path)', async () => {

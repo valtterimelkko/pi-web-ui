@@ -18,7 +18,6 @@ import type { RegistryEntry } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
 import { CommandCodeRuntimeError, type CommandCodeService } from '../../command-code/command-code-service.js';
 import { commandCodeEventsToScreenEvents } from '../../command-code/command-code-event-adapter.js';
-import type { CommandCodeRoleAttestation } from '../../command-code/command-code-role-attestation.js';
 import type { CommandCodeInternalSessionRecord } from '../../command-code/command-code-session-store.js';
 import type {
   CreateSessionRequest,
@@ -523,7 +522,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   /** Pin a session via the right runtime service. Used by watch registration. */
   async function pinSessionById(sessionId: string, claimId = 'web-ui'): Promise<boolean> {
-    const commandCodeEntry = await commandCodeService?.getShadowSession(sessionId);
+    const commandCodeEntry = await commandCodeService?.getSession(sessionId);
     if (commandCodeEntry) return commandCodeService?.pinSession(sessionId, claimId) ?? false;
     const entry = await getNonCommandCodeRegistryEntry(sessionId);
     if (!entry) return false;
@@ -535,7 +534,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   /** Revoke one source-owned runtime claim via the right service. */
   async function unpinSessionById(sessionId: string, claimId = 'web-ui'): Promise<boolean> {
-    const commandCodeEntry = await commandCodeService?.getShadowSession(sessionId);
+    const commandCodeEntry = await commandCodeService?.getSession(sessionId);
     if (commandCodeEntry) return commandCodeService?.unpinSession(sessionId, claimId) ?? false;
     const entry = await getNonCommandCodeRegistryEntry(sessionId);
     if (!entry) return false;
@@ -651,7 +650,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       cwd: record.cwd,
       model: record.modelSelector,
       modelSelector: record.modelSelector,
-      invocationRole: record.invocationRole,
       effort: record.effort,
       requestedEffort: commandCodeRequestedEffort(record),
       acceptedEffort: record.effort,
@@ -659,7 +657,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       defaultEffort: record.defaultEffort,
       effectiveEffort: record.effectiveEffort,
       effortEvidenceMethod: record.effortEvidenceMethod,
-      effortCapabilityHash: record.effortCapabilityHash,
       status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
       messageCount: record.messageCount,
       firstMessage: record.firstMessage,
@@ -682,7 +679,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   async function cleanupRejectedCreatedSession(sessionId: string): Promise<void> {
-    if (await commandCodeService?.getShadowSession(sessionId)) {
+    if (await commandCodeService?.getSession(sessionId)) {
       await commandCodeService?.deleteSession(sessionId);
       return;
     }
@@ -886,19 +883,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       switch (runtime) {
         case 'commandcode': {
           if (!commandCodeService) {
-            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code shadow runtime is not configured'));
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code runtime is not configured'));
             return;
           }
           // Session creation can be called directly by focused route users as
           // well as through the booted server. Initialise here too so the
-          // exact catalogue/capability gate is never evaluated on its
-          // pre-discovery default state.
+          // catalogue gate is never evaluated on its pre-discovery default state.
           await commandCodeService.init();
-          if (!(commandCodeService.isShadowAvailable?.() ?? commandCodeService.isAvailable()) || !(commandCodeService.isShadowEnabled?.() ?? commandCodeService.isEnabled())) {
-            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code shadow runtime is disabled or unavailable'));
-            return;
-          }
-          if (!commandCodeService.isAvailable()) {
+          if (!commandCodeService.isEnabled() || !commandCodeService.isAvailable()) {
             const health = commandCodeService.getHealth();
             const code = health.status === 'executable_missing'
               ? ErrorCode.COMMANDCODE_CLI_MISSING
@@ -906,38 +898,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sendJson(res, 503, enrichedErrorBody(code, `Command Code runtime is ${health.status}`));
             return;
           }
-          const selectedModel = body.model;
-          if (selectedModel !== 'qwen/qwen3.8-max' && selectedModel !== 'meta/muse-spark-1.2-contributor') {
-            sendJson(res, 400, enrichedErrorBody(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code requires one of the two exact allowlisted model ids'));
-            return;
-          }
-          const invocationRole = body.invocationRole;
-          if (invocationRole !== 'conductor-root' && invocationRole !== 'implementation-child') {
-            sendJson(res, 403, enrichedErrorBody(ErrorCode.COMMANDCODE_ROLE_REFUSED, 'Command Code invocationRole is required and server-owned'));
+          if (!body.model) {
+            sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'Command Code requires a model id'));
             return;
           }
           const created = await commandCodeService.createSession({
             cwd,
-            model: selectedModel,
+            model: body.model,
             effort: body.effort,
-            permissionProfile: invocationRole === 'conductor-root' ? 'agent-os-7f-root-readonly' : 'implementation-child-wide',
-            invocationRole,
-            roleAttestation: body.commandCodeAttestation as CommandCodeRoleAttestation | undefined,
           });
           createdCommandCodeSessionId = created.sessionId;
           base = {
             sessionId: created.sessionId,
             sessionPath: created.sessionId,
             runtime: 'commandcode',
-            model: selectedModel,
-            modelSelector: selectedModel,
-            invocationRole,
+            model: created.modelSelector,
+            modelSelector: created.modelSelector,
             effort: created.effort,
             requestedEffort: created.effortSource === 'explicit' ? created.effort : undefined,
             acceptedEffort: created.effort,
             effortSource: created.effortSource,
             defaultEffort: created.defaultEffort,
-            effortCapabilityHash: created.effortCapabilityHash,
             executionInstanceId: created.executionInstanceId,
             cwd: created.cwd,
             createdAt: created.createdAt,
@@ -1197,8 +1178,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         createdAt: entry.createdAt,
         lastActivity: entry.lastActivity,
       }));
-      if (commandCodeService && (commandCodeService.isShadowEnabled?.() ?? commandCodeService.isEnabled())) {
-        const commandCodeSessions = await commandCodeService.listShadowSessions();
+      if (commandCodeService && commandCodeService.isEnabled()) {
+        const commandCodeSessions = await commandCodeService.listSessions();
         sessions.push(...commandCodeSessions.map(commandCodeSessionInfo));
       }
 
@@ -1210,7 +1191,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   async function buildSessionDetail(sessionId: string): Promise<SessionDetail | null> {
-    const commandCodeEntry = await commandCodeService?.getShadowSession(sessionId);
+    const commandCodeEntry = await commandCodeService?.getSession(sessionId);
     if (commandCodeEntry) return commandCodeSessionDetail(commandCodeEntry);
     const entry = await getNonCommandCodeRegistryEntry(sessionId);
     if (!entry) return null;
@@ -1359,7 +1340,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
-      const browserSession = await commandCodeService?.getBrowserSession(sessionId);
+      const browserSession = await commandCodeService?.getSession(sessionId);
       if (browserSession) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
@@ -1382,7 +1363,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
-      const browserSession = await commandCodeService?.getBrowserSession(sessionId);
+      const browserSession = await commandCodeService?.getSession(sessionId);
       if (browserSession) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
@@ -1463,8 +1444,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       createdAt: record.createdAt,
       lastActivity: record.updatedAt,
       executionInstanceId: record.executionInstanceId,
-      invocationRole: record.invocationRole,
-      permissionProfile: record.permissionProfile,
       effort: record.effort,
       requestedEffort: commandCodeRequestedEffort(record),
       acceptedEffort: record.effort,
@@ -1472,7 +1451,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       defaultEffort: record.defaultEffort,
       effectiveEffort: record.effectiveEffort,
       effortEvidenceMethod: record.effortEvidenceMethod,
-      effortCapabilityHash: record.effortCapabilityHash,
       ...(receipts[0]?.tokenUsage ? { tokenUsage: receipts[0].tokenUsage } : {}),
       activity: { status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle', lastActivity: record.updatedAt },
       sources: {
@@ -1525,7 +1503,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     query: URLSearchParams,
   ): Promise<void> {
     try {
-      const commandCodeEntry = await commandCodeService?.findShadowSession(identifier);
+      const commandCodeEntry = await commandCodeService?.findSession(identifier);
       if (commandCodeEntry) {
         await handleCommandCodeEvidence(res, commandCodeEntry, query);
         return;
@@ -1678,7 +1656,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   ): Promise<void> {
     await runReceipts.init();
     const receipt = runReceipts.get(runId);
-    if (!receipt || (receipt.runtime === 'commandcode' && !(await commandCodeService?.getShadowSession(receipt.sessionId)))) {
+    if (!receipt || (receipt.runtime === 'commandcode' && !(await commandCodeService?.getSession(receipt.sessionId)))) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.RUN_NOT_FOUND, 'Run receipt not found'));
       return;
     }
@@ -1691,11 +1669,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
-      if (await commandCodeService?.getBrowserSession(sessionId)) {
-        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
-        return;
-      }
-      const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
+      const commandCodeEntry = await commandCodeService?.findSession(sessionId);
       if (commandCodeEntry) {
         sendJson(res, 200, { sessionId: commandCodeEntry.sessionId, runtime: 'commandcode', events: (await commandCodeService!.getReplayEvents(commandCodeEntry.sessionId)).map((event) => ({ ...event })) } satisfies SessionHistoryResponse);
         return;
@@ -1811,7 +1785,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
-      const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
+      const commandCodeEntry = await commandCodeService?.findSession(sessionId);
       if (commandCodeEntry) {
         await runReceipts.cancelSession(commandCodeEntry.sessionId);
         disposal.dispose(commandCodeEntry.sessionId);
@@ -2064,7 +2038,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
     const dispatchMode: PromptMode = 'prompt';
-    const busy = commandCodeService!.isRunning(record.sessionId) || (await commandCodeService!.getShadowSession(record.sessionId))?.state === 'running';
+    const busy = commandCodeService!.isRunning(record.sessionId) || (await commandCodeService!.getSession(record.sessionId))?.state === 'running';
     if (busy || mode === 'follow_up' && body.requireActiveTurn) {
       res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
       sendJson(res, 409, enrichedErrorBody(busy ? ErrorCode.SESSION_BUSY : ErrorCode.SESSION_NOT_STREAMING, busy ? 'Session is currently busy' : 'Session does not have an active turn'));
@@ -2081,9 +2055,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       acceptedEffort: record.effort,
       effortSource: record.effortSource,
       defaultEffort: record.defaultEffort,
-      effortCapabilityHash: record.effortCapabilityHash,
-      invocationRole: record.invocationRole,
-      permissionProfile: record.permissionProfile,
       message: body.message,
       mode,
       dispatchMode,
@@ -2194,7 +2165,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
+    const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     if (commandCodeEntry) {
       const requestId = getCorrelationContext()?.requestId ?? newRequestId();
       await withCorrelation({ requestId, sessionId, runtime: 'commandcode' }, async () => {
@@ -2655,7 +2626,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
-      const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
+      const commandCodeEntry = await commandCodeService?.findSession(sessionId);
       if (commandCodeEntry) {
         await runReceipts.cancelSession(commandCodeEntry.sessionId);
         await commandCodeService!.abort(commandCodeEntry.sessionId);
@@ -2707,7 +2678,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
     const body = parsed.data as SessionControlRequest;
 
-    const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
+    const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     if (commandCodeEntry) {
       if (body.action === 'set_model') {
         if (body.modelId !== commandCodeEntry.modelSelector) {
@@ -2728,7 +2699,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             acceptedEffort: updated.effort,
             effortSource: updated.effortSource,
             defaultEffort: updated.defaultEffort,
-            effortCapabilityHash: updated.effortCapabilityHash,
           } satisfies SessionControlResponse);
         } catch (error) {
           const runtimeError = error as CommandCodeRuntimeError;
@@ -3120,7 +3090,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    if (await commandCodeService?.findShadowSession(sessionId)) {
+    if (await commandCodeService?.findSession(sessionId)) {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Approvals are not supported for Command Code'));
       return;
     }
@@ -3587,11 +3557,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
-    if (await commandCodeService?.getBrowserSession(sessionId)) {
-      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
-      return;
-    }
-    const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
+    const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     const entry = commandCodeEntry ? undefined : await getNonCommandCodeRegistryEntry(sessionId);
     if (!entry && !commandCodeEntry) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -3645,11 +3611,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
     query: URLSearchParams,
   ): Promise<void> {
-    if (await commandCodeService?.getBrowserSession(sessionId)) {
-      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
-      return;
-    }
-    const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
+    const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     if (commandCodeEntry) {
       const timeoutMs = Math.min(Math.max(parseInt(query.get('timeout') || '60000', 10), 0), 300000);
       const start = Date.now();
@@ -3963,11 +3925,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     query: URLSearchParams,
   ): Promise<void> {
     try {
-      if (await commandCodeService?.getBrowserSession(sessionId)) {
-        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
-        return;
-      }
-      const commandCodeEntry = await commandCodeService?.findShadowSession(sessionId);
+      const commandCodeEntry = await commandCodeService?.findSession(sessionId);
       if (commandCodeEntry) {
         if (query.get('view') === 'screen') {
           const events = await commandCodeService!.getReplayEvents(commandCodeEntry.sessionId);
@@ -4030,10 +3988,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
-    if (await commandCodeService?.getBrowserSession(sessionId)) {
-      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
-      return;
-    }
     const body = await readJsonBody<TransferSessionRequest>(req);
     if (!body) {
       sendJson(res, 400, { error: 'Request body required', code: ErrorCode.INVALID_REQUEST });
@@ -4050,11 +4004,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    const commandCodeSource = await commandCodeService?.findShadowSession(sessionId);
-    if (commandCodeSource && commandCodeSource.permissionProfile !== 'browser-contained') {
-      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Agent OS Command Code sessions cannot be transferred through the browser/API surface'));
-      return;
-    }
     const entry = await getNonCommandCodeRegistryEntry(sessionId);
     if (!entry) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Source session not found'));
@@ -4257,7 +4206,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           acceptedEffort: created.effort,
           effortSource: created.effortSource,
           defaultEffort: created.defaultEffort,
-          effortCapabilityHash: created.effortCapabilityHash,
           cwd: created.cwd,
         };
         // Optional per-entry create-time pin (see POST /sessions pin field).
@@ -4333,7 +4281,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
       let reservedRunId: string | undefined;
       try {
-        const commandCodeRecord = await commandCodeService?.findShadowSession(entry.sessionId);
+        const commandCodeRecord = await commandCodeService?.findSession(entry.sessionId);
         const reg = commandCodeRecord
           ? commandCodeRecordAsRegistryEntry(commandCodeRecord)
           : await getNonCommandCodeRegistryEntry(entry.sessionId);
@@ -4375,9 +4323,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             acceptedEffort: commandCodeRecord.effort,
             effortSource: commandCodeRecord.effortSource,
             defaultEffort: commandCodeRecord.defaultEffort,
-            effortCapabilityHash: commandCodeRecord.effortCapabilityHash,
-            invocationRole: commandCodeRecord.invocationRole,
-            permissionProfile: commandCodeRecord.permissionProfile,
           } : {}),
           ...(reg.sdkType === 'pi' && config.validationMode
             ? { phase7Shadow: classifyPhase7PiShadow({ sessionId: entry.sessionId, message: entry.message }) }

@@ -12,7 +12,7 @@ import type {
   RunOutputEvidence,
 } from '../types.js';
 import { createLogger } from '../../logging/logger.js';
-import { assertCommandCodeEffort, assertCommandCodeModel } from '../../command-code/command-code-model-catalog.js';
+import { assertCommandCodeEffort } from '../../command-code/command-code-model-catalog.js';
 
 const logger = createLogger('RunReceiptStore');
 
@@ -49,11 +49,8 @@ const ALLOWED_KEYS = new Set([
   'defaultEffort',
   'effectiveEffort',
   'effortEvidenceMethod',
-  'effortCapabilityHash',
   'tokenUsage',
   'outputEvidence',
-  'invocationRole',
-  'permissionProfile',
   'mode',
   'dispatchMode',
   'status',
@@ -426,16 +423,6 @@ export class RunReceiptStore {
     }
     if (record.runtime === 'commandcode') {
       if (record.executionInstanceId !== 'commandcode-default') throw new Error('Command Code receipts require the commandcode-default execution instance');
-      if (record.permissionProfile !== 'agent-os-7f-root-readonly' && record.permissionProfile !== 'implementation-child-wide' && record.permissionProfile !== 'browser-contained') {
-        throw new Error('Invalid Command Code receipt permission profile');
-      }
-      if (record.permissionProfile === 'browser-contained') {
-        if (record.invocationRole !== undefined) throw new Error('Browser Command Code receipt cannot carry an invocation role');
-      } else {
-        if (record.invocationRole !== 'conductor-root' && record.invocationRole !== 'implementation-child') throw new Error('Invalid Command Code receipt invocation role');
-        if (record.invocationRole === 'conductor-root' && record.permissionProfile !== 'agent-os-7f-root-readonly') throw new Error('Command Code receipt root role/profile drift');
-        if (record.invocationRole === 'implementation-child' && record.permissionProfile !== 'implementation-child-wide') throw new Error('Command Code receipt child role/profile drift');
-      }
     }
     if (!['accepted', 'queued', 'started', 'completed', 'failed', 'cancelled', 'interrupted'].includes(record.status)) {
       throw new Error('Invalid receipt status');
@@ -445,9 +432,7 @@ export class RunReceiptStore {
     if (record.acceptedEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.acceptedEffort)) throw new Error('Invalid Command Code accepted effort');
     if (record.runtime === 'commandcode') {
       const model = record.model ?? record.modelSelector;
-      if (!model || assertCommandCodeModel(model) === undefined) {
-        throw new Error('Command Code receipts require an exact allowlisted model route');
-      }
+      if (!model) throw new Error('Command Code receipts require a model binding');
       if (record.model !== undefined && record.modelSelector !== undefined && record.model !== record.modelSelector) {
         throw new Error('Command Code receipt model and modelSelector bindings differ');
       }
@@ -460,18 +445,6 @@ export class RunReceiptStore {
           throw new Error('Command Code receipt native effort does not match the exact model route');
         }
       }
-      if (model === 'qwen/qwen3.8-max'
-        && (!['explicit', 'default'].includes(record.effortSource ?? '')
-          || record.effort === undefined
-          || record.defaultEffort !== 'medium'
-          || record.effortSource === 'explicit' && record.requestedEffort !== record.effort
-          || record.effortSource === 'default' && record.requestedEffort !== undefined)) {
-        throw new Error('Qwen Command Code receipts must preserve the native effort binding and medium default effort');
-      }
-      if (model === 'meta/muse-spark-1.2-contributor'
-        && (record.effortSource !== 'none' || record.effort !== undefined || record.requestedEffort !== undefined || record.acceptedEffort !== undefined || record.defaultEffort !== undefined || record.effectiveEffort !== undefined)) {
-        throw new Error('Muse Command Code receipts must preserve effortSource none and cannot carry native effort metadata');
-      }
     }
     if (record.acceptedEffort !== undefined && record.acceptedEffort !== record.effort) throw new Error('Command Code accepted effort must match the canonical effort binding');
     if (record.requestedEffort !== undefined && record.acceptedEffort !== undefined && record.requestedEffort !== record.acceptedEffort) throw new Error('Command Code requested and accepted effort must match after fail-closed validation');
@@ -482,10 +455,9 @@ export class RunReceiptStore {
     if (record.defaultEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.defaultEffort)) throw new Error('Invalid Command Code default effort');
     if (record.effectiveEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.effectiveEffort)) throw new Error('Invalid Command Code effective effort');
     if (record.effortEvidenceMethod !== undefined && !['provider-event', 'provider-result', 'unobserved'].includes(record.effortEvidenceMethod)) throw new Error('Invalid Command Code effort evidence method');
-    if (record.effortCapabilityHash !== undefined && !SAFE_DIGEST.test(record.effortCapabilityHash)) throw new Error('Invalid Command Code effort capability hash');
     if (record.tokenUsage !== undefined) validateTokenUsage(record.tokenUsage, record.runtime);
     if (record.outputEvidence !== undefined) validateOutputEvidence(record.outputEvidence);
-    if (record.runtime !== 'commandcode' && ['effort', 'requestedEffort', 'acceptedEffort', 'effortSource', 'defaultEffort', 'effectiveEffort', 'effortEvidenceMethod', 'effortCapabilityHash', 'tokenUsage'].some((key) => (record as unknown as Record<string, unknown>)[key] !== undefined)) throw new Error('Native effort/token usage fields require the Command Code runtime');
+    if (record.runtime !== 'commandcode' && ['effort', 'requestedEffort', 'acceptedEffort', 'effortSource', 'defaultEffort', 'effectiveEffort', 'effortEvidenceMethod', 'tokenUsage'].some((key) => (record as unknown as Record<string, unknown>)[key] !== undefined)) throw new Error('Native effort/token usage fields require the Command Code runtime');
     if (record.mode !== undefined && !['prompt', 'follow_up', 'steer'].includes(record.mode)) {
       throw new Error('Invalid receipt mode');
     }

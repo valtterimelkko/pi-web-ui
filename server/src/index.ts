@@ -46,22 +46,14 @@ async function initialize(): Promise<void> {
     const sharedRegistry = getSessionRegistry(config.sessionRegistryPath);
 
     // One process-owned Command Code service is shared by browser WebSocket
-    // traffic and the authenticated Internal API. The browser gate is kept
-    // separate from the Agent OS shadow gate.
+    // traffic and the authenticated Internal API.
     const commandCodeService = new CommandCodeService({
       config: {
-        enabled: config.commandCodeEnabled || config.commandCodeBrowserEnabled,
-        shadowEnabled: config.commandCodeEnabled,
-        browserEnabled: config.commandCodeBrowserEnabled,
-        browserAllowedModels: config.commandCodeBrowserAllowedModels,
-        browserAllowedCwdRoots: config.commandCodeBrowserAllowedCwdRoots,
-        browserAuthFile: config.commandCodeBrowserAuthFile,
-        browserRuntimeRoots: config.commandCodeBrowserRuntimeRoots,
+        enabled: config.commandCodeEnabled,
         executablePath: config.commandCodeExecutablePath,
         stateDir: config.commandCodeStateDir,
         nativeHomeDir: config.commandCodeNativeHomeDir,
         allowedCwdRoots: config.commandCodeAllowedCwdRoots,
-        expectedVersion: config.commandCodeExpectedVersion,
         maxTurns: config.commandCodeMaxTurns,
         maxWallTimeMs: config.commandCodeMaxWallTimeMs,
         concurrency: config.commandCodeConcurrency,
@@ -71,12 +63,11 @@ async function initialize(): Promise<void> {
 
     setCommandCodeService(commandCodeService);
     // Complete bounded Command Code discovery before the server exposes any
-    // browser/WebSocket or Internal API session path. Live model and effort
-    // evidence, rather than a repository-owned CLI version pin, controls readiness.
+    // browser/WebSocket or Internal API session path.
     await commandCodeService.init();
     browserCommandCodeSessionResolver = async (sessionId, runtime, sessionPath) => {
       if (runtime !== 'commandcode') return true;
-      return sessionId === sessionPath && await commandCodeService.isBrowserSession(sessionId);
+      return sessionId === sessionPath && await commandCodeService.hasSession(sessionId);
     };
 
     // Create WebSocket connection manager

@@ -1,14 +1,14 @@
 import path from 'node:path';
-import {
-  assertCommandCodeEffort,
-  assertCommandCodeModel,
-  type CommandCodeEffort,
-  type CommandCodeRuntimeModel,
-} from './command-code-model-catalog.js';
+import { assertCommandCodeEffort, type CommandCodeEffort, type CommandCodeRuntimeModel } from './command-code-model-catalog.js';
 
 export const COMMAND_CODE_EXECUTION_INSTANCE_ID = 'commandcode-default' as const;
 export type CommandCodeExecutionInstanceId = typeof COMMAND_CODE_EXECUTION_INSTANCE_ID;
-export type CommandCodePermissionProfile = 'agent-os-7f-root-readonly' | 'implementation-child-wide' | 'browser-contained';
+
+/**
+ * The one permission profile: server-owned plan/read-only flags. Callers never
+ * choose argv, executables, env or profiles — this constant is the whole policy.
+ */
+export const COMMAND_CODE_ARGS = ['--trust', '--skip-onboarding', '--no-auto-update', '--plan'] as const;
 
 export interface CommandCodeRuntimeConfig {
   enabled: boolean;
@@ -25,60 +25,14 @@ export interface CommandCodeRuntimeConfig {
   maxStderrBytes: number;
   processGraceMs: number;
   concurrency: number;
-  /** Legacy diagnostic override; readiness follows live discovery and never pins this value. */
-  expectedVersion?: string;
-  /** Browser exposure is separately gated from the Internal API shadow runtime. */
-  browserEnabled?: boolean;
-  /** Agent OS shadow routes remain separately gated from browser sessions. */
-  shadowEnabled?: boolean;
-  /** Explicit exact model allowlist; empty keeps browser containment unavailable. */
-  browserAllowedModels?: string[];
-  /** Explicit browser workspace roots; unlike shadow roots this never defaults to server state. */
-  browserAllowedCwdRoots?: string[];
-  /** Browser-only credential; never falls back to the operator's auth file. */
-  browserAuthFile?: string;
-  /** Server-owned bubblewrap binary used for browser-contained sessions. */
-  browserSandboxExecutablePath?: string;
-  /** Additional read-only runtime roots needed inside the browser sandbox. */
-  browserRuntimeRoots?: string[];
 }
 
 export interface CommandCodeArgOptions {
   executablePath: string;
   model: CommandCodeRuntimeModel;
   maxTurns: number;
-  permissionProfile: CommandCodePermissionProfile;
   nativeSessionId?: string;
   effort?: CommandCodeEffort;
-}
-
-export interface CommandCodeProfile {
-  readonly name: CommandCodePermissionProfile;
-  readonly args: readonly string[];
-}
-
-const ROOT_PROFILE: CommandCodeProfile = {
-  name: 'agent-os-7f-root-readonly',
-  args: ['--trust', '--skip-onboarding', '--no-auto-update', '--plan'],
-};
-const CHILD_PROFILE: CommandCodeProfile = {
-  name: 'implementation-child-wide',
-  // This shadow profile is only reachable through the attested Agent OS path.
-  args: ['--yolo', '--trust', '--skip-onboarding', '--no-auto-update'],
-};
-/** Browser callers can select this name only; they cannot select raw argv. */
-const BROWSER_PROFILE: CommandCodeProfile = {
-  name: 'browser-contained',
-  // Browser sessions are launched inside the server-owned filesystem/process
-  // boundary; the CLI itself remains in plan/read-only permission mode.
-  args: ['--trust', '--skip-onboarding', '--no-auto-update', '--plan'],
-};
-
-export function getCommandCodeProfile(profile: CommandCodePermissionProfile): CommandCodeProfile {
-  if (profile === ROOT_PROFILE.name) return ROOT_PROFILE;
-  if (profile === CHILD_PROFILE.name) return CHILD_PROFILE;
-  if (profile === BROWSER_PROFILE.name) return BROWSER_PROFILE;
-  throw new Error(`Unknown Command Code permission profile: ${String(profile)}`);
 }
 
 export function buildCommandCodeArgs(options: CommandCodeArgOptions): string[] {
@@ -91,19 +45,13 @@ export function buildCommandCodeArgs(options: CommandCodeArgOptions): string[] {
   if (!isValidCommandCodeRuntimeModel(options.model)) {
     throw new Error(`Command Code model is not a valid exact runtime id: ${String(options.model)}`);
   }
-  // The attested shadow profiles remain restricted to the exact Agent OS
-  // pair. Browser sessions are separately authorised by the service against
-  // the freshly advertised catalogue and the browser model allowlist.
-  if (options.permissionProfile !== 'browser-contained' && !assertCommandCodeModel(options.model)) {
-    throw new Error(`Command Code model is not an exact allowlisted executable route: ${options.model}`);
-  }
   assertCommandCodeEffort(options.model, options.effort);
   const args = [
     '-p',
     '--output-format', 'json',
     '--model', options.model,
     '--max-turns', String(options.maxTurns),
-    ...getCommandCodeProfile(options.permissionProfile).args,
+    ...COMMAND_CODE_ARGS,
   ];
   if (options.effort) args.push('--effort', options.effort);
   if (options.nativeSessionId) args.push('--resume', options.nativeSessionId);
@@ -133,13 +81,6 @@ export function defaultCommandCodeConfig(overrides: Partial<CommandCodeRuntimeCo
     maxStderrBytes: 64 * 1024,
     processGraceMs: 2_000,
     concurrency: 1,
-    browserEnabled: false,
-    shadowEnabled: overrides.shadowEnabled ?? overrides.enabled ?? false,
-    browserAllowedModels: [],
-    browserAllowedCwdRoots: [],
-    browserAuthFile: undefined,
-    browserSandboxExecutablePath: '/usr/bin/bwrap',
-    browserRuntimeRoots: [],
     ...overrides,
   };
 }

@@ -63,7 +63,7 @@ describe('sendRuntimeAvailabilityStatus', () => {
     ]));
   });
 
-  it('publishes the complete ordered browser catalogue with runtime freshness metadata even when execution is unavailable', async () => {
+  it('publishes the complete catalogue with a plain availability payload even when execution is unavailable', async () => {
     const claudeService = {
       isAvailable: vi.fn().mockResolvedValue(false),
       validateAuth: vi.fn(),
@@ -77,21 +77,14 @@ describe('sendRuntimeAvailabilityStatus', () => {
       displayName: id,
       provider: 'command-code',
       reasoning: true,
-      runnable: id === 'qwen/qwen3.8-max' || id === 'meta/muse-spark-1.2-contributor',
-      status: id === 'qwen/qwen3.8-max' || id === 'meta/muse-spark-1.2-contributor' ? 'runnable' as const : 'evidence-only' as const,
-      browserRunnable: false,
-      supportsEffort: id === 'qwen/qwen3.8-max',
       effortLevels: id === 'qwen/qwen3.8-max' ? ['low', 'medium', 'xhigh'] as const : [] as const,
       ...(id === 'qwen/qwen3.8-max' ? { defaultEffort: 'medium' as const } : {}),
-      effortCapabilityHash: 'a'.repeat(64),
     }));
     const commandCodeService = {
       init: vi.fn().mockResolvedValue(undefined),
       isEnabled: vi.fn().mockReturnValue(true),
-      isBrowserEnabled: vi.fn().mockReturnValue(true),
-      isBrowserAvailable: vi.fn().mockReturnValue(false),
+      isAvailable: vi.fn().mockReturnValue(false),
       getModels: vi.fn().mockReturnValue(models),
-      getHealth: vi.fn().mockReturnValue({ status: 'version_mismatch', checkedAt: '2026-08-08T03:00:00.000Z' }),
     };
     const sentMessages: Array<{ clientId: string; message: unknown }> = [];
 
@@ -109,15 +102,15 @@ describe('sendRuntimeAvailabilityStatus', () => {
       type: 'commandcode_available',
       available: false,
       enabled: true,
-      availabilityStatus: 'version_mismatch',
-      checkedAt: '2026-08-08T03:00:00.000Z',
-      source: 'live-discovery',
+      error: 'Command Code runtime is unavailable',
     });
+    expect(availability.availabilityStatus).toBeUndefined();
+    expect(availability.checkedAt).toBeUndefined();
+    expect(availability.source).toBeUndefined();
     expect((availability.models as Array<{ id: string }>).map((model) => model.id)).toEqual([...COMMAND_CODE_FULL_MODEL_CATALOGUE]);
-    expect((availability.models as Array<{ status?: string; runnable?: boolean }>).filter((model) => model.runnable).map((model) => model.status)).toEqual(['runnable', 'runnable']);
   });
 
-  it('does not expose the shadow catalogue on the browser availability channel', async () => {
+  it('does not publish Command Code models while the runtime is disabled', async () => {
     const claudeService = {
       isAvailable: vi.fn().mockResolvedValue(false),
       validateAuth: vi.fn(),
@@ -128,11 +121,9 @@ describe('sendRuntimeAvailabilityStatus', () => {
     };
     const commandCodeService = {
       init: vi.fn().mockResolvedValue(undefined),
-      isEnabled: vi.fn().mockReturnValue(true),
-      isBrowserEnabled: vi.fn().mockReturnValue(false),
-      isBrowserAvailable: vi.fn().mockReturnValue(false),
-      getModels: vi.fn().mockReturnValue([{ id: 'qwen/qwen3.8-max' }]),
-      getHealth: vi.fn().mockReturnValue({ status: 'available', checkedAt: '2026-08-08T03:00:00.000Z' }),
+      isEnabled: vi.fn().mockReturnValue(false),
+      isAvailable: vi.fn().mockReturnValue(false),
+      getModels: vi.fn().mockReturnValue([{ id: 'qwen/qwen3.8-max', displayName: 'q', provider: 'command-code', reasoning: true, effortLevels: [] }]),
     };
     const sentMessages: Array<{ clientId: string; message: unknown }> = [];
 

@@ -16,14 +16,10 @@ describe('Command Code private state', () => {
       cwd,
       modelSelector: 'qwen/qwen3.8-max',
       effort: 'xhigh',
-      effortSource: 'explicit',
-      defaultEffort: 'medium',
-      permissionProfile: 'agent-os-7f-root-readonly',
       eventJournalRef: 'cc-1.jsonl',
     });
     expect(created.runtime).toBe('commandcode');
     expect(created.effort).toBe('xhigh');
-    expect(created.effortSource).toBe('explicit');
     expect(created.cwd).toBe(path.resolve(cwd));
     await store.update('cc-1', { state: 'running', nativeSessionId: 'native-1' });
 
@@ -38,60 +34,21 @@ describe('Command Code private state', () => {
     expect(recovered[0]?.lastResult?.stopReason).toBe('server_restart_unknown');
   });
 
-  it('quarantines persisted native-effort metadata that violates the exact model route', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-effort-invalid-'));
+  it('loads legacy records that still carry deleted access-control fields', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-legacy-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const store = new CommandCodeSessionStore(root);
     await store.init();
-    await store.create({ sessionId: 'cc-muse', cwd, modelSelector: 'meta/muse-spark-1.2-contributor', effortSource: 'none', permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-muse.jsonl' });
-    await store.create({ sessionId: 'cc-qwen', cwd, modelSelector: 'qwen/qwen3.8-max', effort: 'xhigh', effortSource: 'explicit', defaultEffort: 'medium', permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-qwen.jsonl' });
-    const museFile = path.join(root, 'sessions', 'cc-muse.json');
-    const qwenFile = path.join(root, 'sessions', 'cc-qwen.json');
-    const museRecord = JSON.parse(await readFile(museFile, 'utf8')) as Record<string, unknown>;
-    museRecord.defaultEffort = 'medium';
-    const qwenRecord = JSON.parse(await readFile(qwenFile, 'utf8')) as Record<string, unknown>;
-    qwenRecord.effectiveEffort = 'high';
-    await import('node:fs/promises').then(({ writeFile }) => Promise.all([
-      writeFile(museFile, JSON.stringify(museRecord)),
-      writeFile(qwenFile, JSON.stringify(qwenRecord)),
-    ]));
-    const restarted = new CommandCodeSessionStore(root);
-    await restarted.init();
-    expect(await restarted.get('cc-muse')).toBeUndefined();
-    expect(await restarted.get('cc-qwen')).toBeUndefined();
-  });
-
-  it('quarantines persisted Qwen records without the native effort binding', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-qwen-binding-'));
-    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
-    const store = new CommandCodeSessionStore(root);
-    await store.init();
-    await store.create({
-      sessionId: 'cc-qwen-binding', cwd, modelSelector: 'qwen/qwen3.8-max', effort: 'xhigh', effortSource: 'explicit', defaultEffort: 'medium',
-      permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-qwen-binding.jsonl',
-    });
-    const file = path.join(root, 'sessions', 'cc-qwen-binding.json');
+    await store.create({ sessionId: 'cc-legacy', cwd, modelSelector: 'qwen/qwen3.8-max', eventJournalRef: 'cc-legacy.jsonl' });
+    const file = path.join(root, 'sessions', 'cc-legacy.json');
     const record = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
-    delete record.effortSource;
-    await import('node:fs/promises').then(({ writeFile }) => writeFile(file, JSON.stringify(record)));
+    record.permissionProfile = 'browser-contained';
+    record.invocationRole = 'conductor-root';
+    record.effortCapabilityHash = 'a'.repeat(64);
+    await (await import('node:fs/promises')).writeFile(file, JSON.stringify(record));
     const restarted = new CommandCodeSessionStore(root);
     await restarted.init();
-    expect(await restarted.get('cc-qwen-binding')).toBeUndefined();
-  });
-
-  it('does not recover persisted role/profile or native-id corruption', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-'));
-    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
-    const store = new CommandCodeSessionStore(root);
-    await store.init();
-    await store.create({ sessionId: 'cc-corrupt', cwd, modelSelector: 'qwen/qwen3.8-max', effort: 'medium', effortSource: 'default', defaultEffort: 'medium', permissionProfile: 'agent-os-7f-root-readonly', invocationRole: 'conductor-root', eventJournalRef: 'cc-corrupt.jsonl' });
-    const file = path.join(root, 'sessions', 'cc-corrupt.json');
-    const record = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
-    record.permissionProfile = 'unbounded';
-    await import('node:fs/promises').then(({ writeFile }) => writeFile(file, JSON.stringify(record)));
-    const restarted = new CommandCodeSessionStore(root);
-    await restarted.init();
-    expect(await restarted.get('cc-corrupt')).toBeUndefined();
+    expect(await restarted.get('cc-legacy')).toBeDefined();
   });
 
   it('quarantines persisted records with malformed lifecycle fields or diagnostic bindings', async () => {
@@ -99,7 +56,7 @@ describe('Command Code private state', () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const store = new CommandCodeSessionStore(root);
     await store.init();
-    await store.create({ sessionId: 'cc-invalid', cwd, modelSelector: 'qwen/qwen3.8-max', effort: 'medium', effortSource: 'default', defaultEffort: 'medium', permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-invalid.jsonl' });
+    await store.create({ sessionId: 'cc-invalid', cwd, modelSelector: 'qwen/qwen3.8-max', eventJournalRef: 'cc-invalid.jsonl' });
     const file = path.join(root, 'sessions', 'cc-invalid.json');
     const record = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
     record.messageCount = -1;
@@ -115,7 +72,7 @@ describe('Command Code private state', () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const store = new CommandCodeSessionStore(root);
     await store.init();
-    await store.create({ sessionId: 'cc-race', cwd, modelSelector: 'qwen/qwen3.8-max', effort: 'medium', effortSource: 'default', defaultEffort: 'medium', permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-race.jsonl' });
+    await store.create({ sessionId: 'cc-race', cwd, modelSelector: 'qwen/qwen3.8-max', eventJournalRef: 'cc-race.jsonl' });
     const update = store.update('cc-race', { state: 'running', activeRunId: 'run-race' });
     const deletion = store.delete('cc-race');
     await Promise.allSettled([update, deletion]);
@@ -128,24 +85,22 @@ describe('Command Code private state', () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const store = new CommandCodeSessionStore(root);
     await store.init();
-    await store.create({ sessionId: 'cc-one', cwd, modelSelector: 'qwen/qwen3.8-max', effort: 'medium', effortSource: 'default', defaultEffort: 'medium', permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-one.jsonl' });
-    await store.create({ sessionId: 'cc-two', cwd, modelSelector: 'qwen/qwen3.8-max', effort: 'medium', effortSource: 'default', defaultEffort: 'medium', permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-two.jsonl' });
+    await store.create({ sessionId: 'cc-one', cwd, modelSelector: 'qwen/qwen3.8-max', eventJournalRef: 'cc-one.jsonl' });
+    await store.create({ sessionId: 'cc-two', cwd, modelSelector: 'qwen/qwen3.8-max', eventJournalRef: 'cc-two.jsonl' });
     await store.bindNativeSession('cc-one', 'native-shared');
     await expect(store.bindNativeSession('cc-two', 'native-shared')).rejects.toThrow(/already bound/i);
     expect((await store.get('cc-two'))?.nativeSessionId).toBeUndefined();
   });
 
-  it('refuses model/profile/native-session drift', async () => {
+  it('refuses model/native-session drift', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const store = new CommandCodeSessionStore(root);
     await store.init();
     await store.create({
-      sessionId: 'cc-1', cwd, modelSelector: 'qwen/qwen3.8-max', effort: 'medium', effortSource: 'default', defaultEffort: 'medium',
-      permissionProfile: 'implementation-child-wide', eventJournalRef: 'cc-1.jsonl',
+      sessionId: 'cc-1', cwd, modelSelector: 'qwen/qwen3.8-max', eventJournalRef: 'cc-1.jsonl',
     });
     await expect(store.bindNativeSession('cc-1', 'native-1')).resolves.toBeDefined();
-    await expect(store.assertBinding('cc-1', { effort: 'xhigh' })).rejects.toThrow(/effort|drift/i);
     await expect(store.bindNativeSession('cc-1', 'native-2')).rejects.toThrow(/drift/i);
     await expect(store.assertBinding('cc-1', { modelSelector: 'meta/muse-spark-1.2-contributor' })).rejects.toThrow(/drift/i);
   });

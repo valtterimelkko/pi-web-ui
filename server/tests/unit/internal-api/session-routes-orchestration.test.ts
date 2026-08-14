@@ -527,15 +527,38 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(texts).toContain('hello back');
     });
 
-    it('hides browser-contained Command Code sessions from transcript reads', async () => {
-      const browserSession = { sessionId: 'browser-1', permissionProfile: 'browser-contained' };
+    it('returns a transcript for Command Code sessions via the private store', async () => {
+      const record = {
+        schemaVersion: 1,
+        sessionId: 'cc-1',
+        runtime: 'commandcode',
+        cwd: '/tmp',
+        modelSelector: 'qwen/qwen3.8-max',
+        executionInstanceId: 'commandcode-default',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        updatedAt: '2026-05-01T00:10:00.000Z',
+        eventJournalRef: 'events/cc-1.jsonl',
+        state: 'idle',
+        messageCount: 1,
+        firstMessage: 'hello',
+      };
       const routes = makeRoutes(undefined, undefined, ['openai', 'openrouter'], {
-        getBrowserSession: vi.fn().mockResolvedValue(browserSession),
+        getSession: vi.fn().mockResolvedValue(record),
+        findSession: vi.fn().mockResolvedValue(record),
+        getReplayEvents: vi.fn().mockResolvedValue([
+          { type: 'message_start', sessionId: 'cc-1', timestamp: 1, data: { id: 'm1', role: 'user', content: 'hello' } },
+          { type: 'message_end', sessionId: 'cc-1', timestamp: 2, data: { id: 'm1' } },
+          { type: 'message_start', sessionId: 'cc-1', timestamp: 3, data: { id: 'm2', role: 'assistant' } },
+          { type: 'message_update', sessionId: 'cc-1', timestamp: 4, data: { id: 'm2', assistantMessageEvent: { type: 'text_delta', delta: 'command-code reply' } } },
+          { type: 'message_end', sessionId: 'cc-1', timestamp: 5, data: { id: 'm2' } },
+        ]),
       });
       const res = createMockRes();
-      await routes.handleSessionTranscript(createJsonReq('GET', '/api/v1/sessions/browser-1/transcript'), res, 'browser-1', new URLSearchParams());
-      expect(res.statusCode).toBe(404);
-      expect(JSON.parse(res.body).code).toBe('SESSION_NOT_FOUND');
+      await routes.handleSessionTranscript(createJsonReq('GET', '/api/v1/sessions/cc-1/transcript'), res, 'cc-1', new URLSearchParams());
+      expect(res.statusCode, res.body).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.runtime).toBe('commandcode');
+      expect(body.items.map((i: any) => i.text).join('')).toContain('command-code reply');
     });
 
     it('returns a transcript for pi sessions via JSONL parse', async () => {
@@ -582,13 +605,15 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(JSON.parse(res.body).code).toBe('INVALID_REQUEST');
     });
 
-    it('hides browser-contained Command Code sessions from transfer', async () => {
+    it('returns 404 when neither the Command Code store nor the registry resolves the source', async () => {
       const routes = makeRoutes(undefined, undefined, ['openai', 'openrouter'], {
-        getBrowserSession: vi.fn().mockResolvedValue({ sessionId: 'browser-1', permissionProfile: 'browser-contained' }),
+        findSession: vi.fn().mockResolvedValue(undefined),
+        getSession: vi.fn().mockResolvedValue(undefined),
       });
-      const req = createJsonReq('POST', '/api/v1/sessions/browser-1/transfer', { createNew: true, targetRuntime: 'claude' });
+      registry.get.mockResolvedValue(undefined);
+      const req = createJsonReq('POST', '/api/v1/sessions/missing/transfer', { createNew: true, targetRuntime: 'claude' });
       const res = createMockRes();
-      await routes.handleSessionTransfer(req, res, 'browser-1');
+      await routes.handleSessionTransfer(req, res, 'missing');
       expect(res.statusCode).toBe(404);
       expect(JSON.parse(res.body).code).toBe('SESSION_NOT_FOUND');
     });
@@ -1309,18 +1334,14 @@ describe('createSessionRoutes orchestration endpoints', () => {
   // ─── POST /sessions/batch/prompt ─────────────────────────────────────────
 
   describe('POST /sessions/batch/prompt', () => {
-    it('dispatches Command Code shadow sessions instead of treating them as missing registry sessions', async () => {
+    it('dispatches Command Code sessions instead of treating them as missing registry sessions', async () => {
       const commandCodeRecord = {
         schemaVersion: 1,
         sessionId: 'commandcode-batch',
         runtime: 'commandcode' as const,
         cwd: '/tmp',
         modelSelector: 'meta/muse-spark-1.2-contributor',
-        effortSource: 'none' as const,
-        effortCapabilityHash: 'f'.repeat(64),
         executionInstanceId: 'commandcode-default' as const,
-        permissionProfile: 'implementation-child-wide' as const,
-        invocationRole: 'implementation-child' as const,
         createdAt: '2026-05-01T00:00:00.000Z',
         updatedAt: '2026-05-01T00:10:00.000Z',
         eventJournalRef: 'events/commandcode-batch.jsonl',
@@ -1329,7 +1350,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
         firstMessage: '',
       };
       const commandCodeService = {
-        findShadowSession: vi.fn().mockResolvedValue(commandCodeRecord),
+        findSession: vi.fn().mockResolvedValue(commandCodeRecord),
         isRunning: vi.fn(() => false),
         sendPrompt: vi.fn(async (_sessionId: string, _message: string, onEvent: (event: NormalizedEvent) => void, onComplete: (error?: Error) => void) => {
           onEvent({ type: 'message_start', sessionId: 'commandcode-batch', timestamp: Date.now(), data: { id: 'assistant-1', role: 'assistant' } });

@@ -123,15 +123,11 @@ describe('createModelsRoutes — handleListModels', () => {
       commandCodeService: {
         isEnabled: vi.fn().mockReturnValue(true),
         isAvailable: vi.fn().mockReturnValue(true),
-        isShadowAvailable: vi.fn().mockReturnValue(true),
-        isShadowEnabled: vi.fn().mockReturnValue(true),
         getModels: vi.fn().mockReturnValue([
-          { id: 'qwen/qwen3.8-max', displayName: 'Qwen 3.8 Max', provider: 'command-code', reasoning: true, runnable: true, supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
-          { id: 'meta/muse-spark-1.2-contributor', displayName: 'Muse Spark 1.2 Contributor', provider: 'command-code', reasoning: true, runnable: true, supportsEffort: false, effortLevels: [] },
-          { id: 'deepseek/deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'command-code', reasoning: true, runnable: false, supportsEffort: true, effortLevels: ['high', 'max'] },
+          { id: 'qwen/qwen3.8-max', displayName: 'Qwen 3.8 Max', provider: 'command-code', reasoning: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
+          { id: 'meta/muse-spark-1.2-contributor', displayName: 'Muse Spark 1.2 Contributor', provider: 'command-code', reasoning: true, effortLevels: [] },
+          { id: 'deepseek/deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'command-code', reasoning: true, effortLevels: ['high', 'max'] },
         ]),
-        getShadowModels: vi.fn().mockReturnValue([]),
-        getCatalogueMetadata: vi.fn().mockReturnValue({ availabilityStatus: 'available', checkedAt: '2026-08-08T03:00:00.000Z', source: 'live-discovery' }),
       } as any,
     });
     const res = createMockRes();
@@ -139,11 +135,11 @@ describe('createModelsRoutes — handleListModels', () => {
     await routes.handleListModels(createMockReq(undefined, 'GET', '/api/v1/models?runtime=commandcode'), res);
 
     expect(JSON.parse(res.body).models.commandcode).toEqual([
-      expect.objectContaining({ id: 'qwen/qwen3.8-max', runnable: true }),
-      expect.objectContaining({ id: 'meta/muse-spark-1.2-contributor', runnable: true }),
-      expect.objectContaining({ id: 'deepseek/deepseek-v4-pro', runnable: false }),
+      expect.objectContaining({ id: 'qwen/qwen3.8-max', effortLevels: ['low', 'medium', 'xhigh'] }),
+      expect.objectContaining({ id: 'meta/muse-spark-1.2-contributor', effortLevels: [] }),
+      expect.objectContaining({ id: 'deepseek/deepseek-v4-pro', effortLevels: ['high', 'max'] }),
     ]);
-    expect(JSON.parse(res.body).catalogueMetadata.commandcode).toEqual({ availabilityStatus: 'available', checkedAt: '2026-08-08T03:00:00.000Z', source: 'live-discovery' });
+    expect(JSON.parse(res.body).catalogueMetadata).toBeUndefined();
   });
 
   it('keeps the full discovered Command Code catalogue visible when the narrow execution gate is unavailable', async () => {
@@ -155,12 +151,10 @@ describe('createModelsRoutes — handleListModels', () => {
       commandCodeService: {
         isEnabled: vi.fn().mockReturnValue(true),
         isAvailable: vi.fn().mockReturnValue(false),
-        isShadowAvailable: vi.fn().mockReturnValue(false),
-        isShadowEnabled: vi.fn().mockReturnValue(true),
         getModels: vi.fn().mockReturnValue([
-          { id: 'qwen/qwen3.8-max', displayName: 'Qwen 3.8 Max', provider: 'command-code', reasoning: true, runnable: false, status: 'evidence-only', browserRunnable: false, supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
-          { id: 'meta/muse-spark-1.2-contributor', displayName: 'Muse Spark 1.2 Contributor', provider: 'command-code', reasoning: true, runnable: false, status: 'evidence-only', browserRunnable: false, supportsEffort: false, effortLevels: [] },
-          { id: 'google/gemini-3.7-flash', displayName: 'Gemini 3.7 Flash', provider: 'command-code', reasoning: true, runnable: false, status: 'evidence-only', browserRunnable: false, supportsEffort: false, effortLevels: [] },
+          { id: 'qwen/qwen3.8-max', displayName: 'Qwen 3.8 Max', provider: 'command-code', reasoning: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
+          { id: 'meta/muse-spark-1.2-contributor', displayName: 'Muse Spark 1.2 Contributor', provider: 'command-code', reasoning: true, effortLevels: [] },
+          { id: 'google/gemini-3.7-flash', displayName: 'Gemini 3.7 Flash', provider: 'command-code', reasoning: true, effortLevels: [] },
         ]),
       } as any,
     });
@@ -169,20 +163,18 @@ describe('createModelsRoutes — handleListModels', () => {
     await routes.handleListModels(createMockReq(undefined, 'GET', '/api/v1/models?runtime=commandcode'), res);
 
     expect(JSON.parse(res.body).models.commandcode).toHaveLength(3);
-    expect(JSON.parse(res.body).models.commandcode[2]).toMatchObject({ id: 'google/gemini-3.7-flash', status: 'evidence-only', runnable: false });
+    expect(JSON.parse(res.body).models.commandcode[2]).toMatchObject({ id: 'google/gemini-3.7-flash', effortLevels: [] });
   });
 
-  it('does not expose browser-only Command Code catalogue entries through the shadow Internal API', async () => {
+  it('does not expose Command Code catalogue entries while the runtime is disabled', async () => {
     const routes = createModelsRoutes({
       piService: { getAvailableModels: vi.fn().mockResolvedValue([]) } as any,
       claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
       opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
       antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
       commandCodeService: {
-        isEnabled: vi.fn().mockReturnValue(true),
-        isShadowEnabled: vi.fn().mockReturnValue(false),
-        getCatalogueMetadata: vi.fn().mockReturnValue({ availabilityStatus: 'available', checkedAt: '2026-08-08T03:00:00.000Z', source: 'live-discovery' }),
-        getModels: vi.fn().mockReturnValue([{ id: 'qwen/qwen3.8-max', provider: 'command-code', runnable: false, status: 'evidence-only', browserRunnable: true, supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'] }]),
+        isEnabled: vi.fn().mockReturnValue(false),
+        getModels: vi.fn().mockReturnValue([{ id: 'qwen/qwen3.8-max', provider: 'command-code', effortLevels: ['low', 'medium', 'xhigh'] }]),
       } as any,
     });
     const res = createMockRes();
@@ -202,16 +194,14 @@ describe('createModelsRoutes — handleListModels', () => {
       commandCodeService: {
         isEnabled: vi.fn().mockReturnValue(true),
         isAvailable: vi.fn().mockReturnValue(true),
-        isShadowAvailable: vi.fn().mockReturnValue(true),
-        isShadowEnabled: vi.fn().mockReturnValue(true),
         getModels: vi.fn().mockReturnValue([
           {
             id: 'qwen/qwen3.8-max', displayName: 'Qwen 3.8 Max', provider: 'command-code', reasoning: true,
-            supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium',
+            effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium',
           },
           {
             id: 'meta/muse-spark-1.2-contributor', displayName: 'Muse Spark 1.2 Contributor', provider: 'command-code', reasoning: true,
-            supportsEffort: false, effortLevels: [],
+            effortLevels: [],
           },
         ]),
       } as any,
@@ -224,8 +214,8 @@ describe('createModelsRoutes — handleListModels', () => {
     );
 
     expect(JSON.parse(res.body).models.commandcode).toEqual([
-      expect.objectContaining({ id: 'qwen/qwen3.8-max', supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' }),
-      expect.objectContaining({ id: 'meta/muse-spark-1.2-contributor', supportsEffort: false, effortLevels: [] }),
+      expect.objectContaining({ id: 'qwen/qwen3.8-max', effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' }),
+      expect.objectContaining({ id: 'meta/muse-spark-1.2-contributor', effortLevels: [] }),
     ]);
   });
 

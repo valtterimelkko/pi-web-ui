@@ -39,19 +39,11 @@ router.get('/', async (req: Request, res: Response) => {
     if (sdkType === 'commandcode') {
       const commandCodeService = getCommandCodeService();
       await commandCodeService?.init();
-      const browserEnabled = commandCodeService?.isBrowserEnabled?.() ?? commandCodeService?.isBrowserAvailable() ?? false;
-      if (!browserEnabled) {
+      if (!commandCodeService?.isEnabled()) {
         res.json({ models: [] });
         return;
       }
-      // Browser metadata carries the complete discovered catalogue. The
-      // browserRunnable flag, not list membership, controls whether a model
-      // can be selected for a contained session. Freshness/status metadata is
-      // additive and remains truthful even when execution is unavailable.
-      res.json({
-        models: commandCodeService?.getModels() ?? [],
-        ...(commandCodeService ? { catalogueMetadata: { commandcode: commandCodeService.getCatalogueMetadata() } } : {}),
-      });
+      res.json({ models: commandCodeService.getModels() });
       return;
     }
 

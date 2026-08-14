@@ -30,7 +30,8 @@ export interface CommandCodeModelInfo {
   status?: CommandCodeModelStatus;
   /** Whether the separately gated browser surface permits this model. */
   browserRunnable?: boolean;
-  supportsEffort: boolean;
+  /** Whether the model exposes a native effort selector. */
+  supportsEffort?: boolean;
   effortLevels: CommandCodeEffort[];
   defaultEffort?: CommandCodeEffort;
   effortCapabilityHash?: string;

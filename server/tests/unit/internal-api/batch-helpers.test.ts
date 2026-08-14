@@ -5,8 +5,7 @@ function makeDeps() {
   let initialised = false;
   const commandCodeService = {
     init: vi.fn(async () => { initialised = true; }),
-    isShadowAvailable: vi.fn(() => initialised),
-    isShadowEnabled: vi.fn(() => true),
+    isEnabled: vi.fn(() => true),
     isAvailable: vi.fn(() => initialised),
     createSession: vi.fn(async (input: { cwd: string; model: string }) => ({
       sessionId: 'commandcode-batch-session',
@@ -15,7 +14,6 @@ function makeDeps() {
       effort: undefined,
       effortSource: 'none' as const,
       defaultEffort: undefined,
-      effortCapabilityHash: 'a'.repeat(64),
       cwd: input.cwd,
     })),
   };
@@ -36,7 +34,7 @@ function makeDeps() {
 }
 
 describe('Command Code batch session creation', () => {
-  it('initialises discovery before evaluating the shadow gate', async () => {
+  it('initialises discovery before evaluating availability', async () => {
     const { deps, commandCodeService } = makeDeps();
 
     const result = await createOneSession({
@@ -45,18 +43,6 @@ describe('Command Code batch session creation', () => {
         runtime: 'commandcode',
         cwd: '/tmp',
         model: 'meta/muse-spark-1.2-contributor',
-        invocationRole: 'implementation-child',
-        commandCodeAttestation: {
-          role: 'implementation-child',
-          model: 'meta/muse-spark-1.2-contributor',
-          cwd: '/tmp',
-          effort: undefined,
-          issuedAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
-          nonce: 'nonce',
-          parentSessionId: 'parent',
-          signature: 'signature',
-        },
       },
     });
 

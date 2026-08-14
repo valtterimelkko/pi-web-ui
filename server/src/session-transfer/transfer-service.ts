@@ -129,8 +129,9 @@ export class TransferService {
 
     if (sourceEntry?.sdkType === 'commandcode'
       && (!this.config.allowBrowserCommandCodeTarget
-        || !this.config.commandCodeService?.isBrowserAvailable()
-        || !(await this.config.commandCodeService.isBrowserSession(sourceEntry.id)))) {
+        || !this.config.commandCodeService?.isEnabled()
+        || !this.config.commandCodeService.isAvailable()
+        || !(await this.config.commandCodeService.hasSession(sourceEntry.id)))) {
       return {
         success: false,
         sourceSessionId: request.sourceSessionId,
@@ -138,7 +139,7 @@ export class TransferService {
         createdNewSession: false,
         error: {
           code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE,
-          message: 'Command Code browser transfer policy is unavailable',
+          message: 'Command Code transfer is unavailable',
         },
       };
     }
@@ -259,8 +260,9 @@ export class TransferService {
             },
           };
         }
-        if (!this.config.commandCodeService?.isBrowserAvailable()
-          || !(await this.config.commandCodeService.isBrowserSession(targetEntry.id))) {
+        if (!this.config.commandCodeService?.isEnabled()
+          || !this.config.commandCodeService.isAvailable()
+          || !(await this.config.commandCodeService.hasSession(targetEntry.id))) {
           return {
             success: false,
             sourceSessionId: request.sourceSessionId,
@@ -520,8 +522,8 @@ export class TransferService {
         if (!this.config.commandCodeService) {
           return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: 'Command Code service unavailable' };
         }
-        if (!this.config.commandCodeService.isBrowserAvailable() || !(await this.config.commandCodeService.isBrowserSession(entry.id))) {
-          return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: 'Command Code browser transfer policy is unavailable' };
+        if (!this.config.commandCodeService.isAvailable() || !(await this.config.commandCodeService.hasSession(entry.id))) {
+          return { transcript: { source, scope: request.scope, itemCount: 0, truncated: false, items: [] }, error: 'Command Code transfer is unavailable' };
         }
         return extractOpenCodeTranscript(
           {
@@ -608,13 +610,13 @@ export class TransferService {
         if (!this.config.allowBrowserCommandCodeTarget) {
           return { success: false, sessionId: '', error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Command Code targets are not enabled for this transfer surface' } };
         }
-        if (!this.config.commandCodeService || !this.config.commandCodeService.isBrowserAvailable()) {
-          return { success: false, sessionId: '', error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Command Code browser runtime unavailable' } };
+        if (!this.config.commandCodeService || !this.config.commandCodeService.isEnabled() || !this.config.commandCodeService.isAvailable()) {
+          return { success: false, sessionId: '', error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Command Code runtime unavailable' } };
         }
         try {
-          const model = this.config.commandCodeService.getBrowserModels()[0]?.id;
-          if (!model) return { success: false, sessionId: '', error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'No Command Code browser model is available' } };
-          const result = await this.config.commandCodeService.createSession({ cwd, model, permissionProfile: 'browser-contained' });
+          const model = this.config.commandCodeService.getModels()[0]?.id;
+          if (!model) return { success: false, sessionId: '', error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'No Command Code model is available' } };
+          const result = await this.config.commandCodeService.createSession({ cwd, model });
           return { success: true, sessionId: result.sessionId, sessionPath: result.sessionId };
         } catch (err) {
           return { success: false, sessionId: '', error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Failed to create Command Code session: ${err instanceof Error ? err.message : String(err)}` } };
@@ -803,8 +805,8 @@ export class TransferService {
         if (!this.config.allowBrowserCommandCodeTarget) {
           return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Command Code targets are not enabled for this transfer surface' } };
         }
-        if (!this.config.commandCodeService || !this.config.commandCodeService.isBrowserAvailable() || !(await this.config.commandCodeService.isBrowserSession(targetSessionId))) {
-          return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Command Code browser runtime unavailable' } };
+        if (!this.config.commandCodeService || !this.config.commandCodeService.isAvailable() || !(await this.config.commandCodeService.hasSession(targetSessionId))) {
+          return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Command Code runtime unavailable' } };
         }
         try {
           await this.awaitTargetAcceptance((onEvent, onComplete) =>

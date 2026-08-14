@@ -1,30 +1,19 @@
 import { access, chmod, lstat, mkdir, open, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
-import type { CommandCodeCatalogueMetadata, NormalizedEvent } from '@pi-web-ui/shared';
+import type { NormalizedEvent } from '@pi-web-ui/shared';
 import {
   COMMAND_CODE_EXECUTION_INSTANCE_ID,
   defaultCommandCodeConfig,
-  type CommandCodePermissionProfile,
   type CommandCodeRuntimeConfig,
 } from './command-code-config.js';
 import {
-  COMMAND_CODE_MODELS,
-  COMMAND_CODE_FULL_MODEL_CATALOGUE,
   COMMAND_CODE_PROVIDER,
-  COMMAND_CODE_EFFORT_LEVELS,
-  COMMAND_CODE_EFFORT_LEVELS_BY_MODEL,
-  validateCommandCodeModelCatalogue,
-  assertCommandCodeModel,
   assertCommandCodeRuntimeModel,
   assertCommandCodeEffort,
-  discoverCommandCodeEfforts,
   discoverCommandCodeModels,
   type CommandCodeEffort,
-  type CommandCodeEffortCapability,
-  type CommandCodeEffortCapabilities,
   type CommandCodeRuntimeModel,
-  type CommandCodeModel,
   type CommandCodeModelDiscovery,
   type CommandCodeDiscoveryRunner,
 } from './command-code-model-catalog.js';
@@ -33,7 +22,6 @@ import {
   adaptCommandCodeOutput,
   createCommandCodeIncrementalAdapterState,
 } from './command-code-event-adapter.js';
-import { verifyCommandCodeRoleAttestation, type CommandCodeRoleAttestation } from './command-code-role-attestation.js';
 import { CommandCodeEventJournal } from './command-code-event-journal.js';
 import {
   CommandCodeProcessRunner,
@@ -45,17 +33,13 @@ import {
   CommandCodeSessionStore,
   canonicalCwd,
   type CommandCodeInternalSessionRecord,
-  type CommandCodeInvocationRole,
 } from './command-code-session-store.js';
 
 export type CommandCodeAvailability =
   | 'disabled'
   | 'executable_missing'
   | 'discovery_error'
-  /** Retained for compatibility with older clients; live readiness no longer emits this state. */
-  | 'version_mismatch'
   | 'exact_model_unavailable'
-  | 'effort_capability_unknown'
   | 'available';
 
 export interface CommandCodeHealth {
@@ -63,11 +47,7 @@ export interface CommandCodeHealth {
   available: boolean;
   status: CommandCodeAvailability;
   version?: string;
-  /** Legacy diagnostic override; it is not used as an execution gate. */
-  expectedVersion?: string;
   advertisedModels: CommandCodeRuntimeModel[];
-  missingModels: CommandCodeModel[];
-  effortCapabilities: Partial<CommandCodeEffortCapabilities>;
   checkedAt: string;
   diagnostic?: string;
 }
@@ -77,18 +57,13 @@ export interface CommandCodeServiceConfig extends Partial<CommandCodeRuntimeConf
   executablePath: string;
   stateDir: string;
   allowedCwdRoots?: string[];
-  /** Legacy diagnostic override; it is not used as an execution gate. */
-  expectedVersion?: string;
 }
 
 export interface CommandCodeCreateInput {
   cwd: string;
   model: CommandCodeRuntimeModel;
-  /** Native effort; undefined means use the model's discovered default. */
+  /** Native effort; undefined means the CLI default applies. */
   effort?: string;
-  permissionProfile: CommandCodePermissionProfile;
-  invocationRole?: CommandCodeInvocationRole;
-  roleAttestation?: CommandCodeRoleAttestation;
 }
 
 export class CommandCodeRuntimeError extends Error {
@@ -112,17 +87,7 @@ export type CommandCodeErrorClass =
   | 'protocol_error'
   | 'effort_unsupported';
 
-type RunnerLike = Pick<CommandCodeProcessRunner, 'run' | 'abort' | 'shutdown' | 'isRunning'> & {
-  browserSandboxReady?: () => boolean;
-  setBrowserPolicyRoots?: (
-    allowedCwdRoots: string[],
-    runtimeRoots: string[],
-    nativeHomeDir?: string,
-    expected?: { allowed: { dev: number; ino: number }[]; runtime: { dev: number; ino: number }[]; nativeHome: { dev: number; ino: number } },
-  ) => void;
-  pinExecutable?: (executablePath?: string, expected?: { dev: number; ino: number }) => void;
-  pinBrowserSandbox?: (sandboxExecutablePath?: string, expected?: { dev: number; ino: number }) => void;
-};
+type RunnerLike = Pick<CommandCodeProcessRunner, 'run' | 'abort' | 'shutdown' | 'isRunning'>;
 
 export class CommandCodeService {
   readonly config: CommandCodeRuntimeConfig;
@@ -131,8 +96,6 @@ export class CommandCodeService {
   private readonly runner: RunnerLike;
   private readonly ownsProcessRunner: boolean;
   private readonly discover: CommandCodeDiscoveryRunner;
-  private readonly discoverEfforts?: typeof discoverCommandCodeEfforts;
-  private readonly usesDefaultDiscovery: boolean;
   private discovery?: CommandCodeModelDiscovery;
   private discoveryDiagnostic?: string;
   private discoveryCheckedAt?: string;
@@ -151,22 +114,14 @@ export class CommandCodeService {
   private readonly inFlightTurns = new Map<string, Promise<void>>();
   private readonly inFlightEffortMutations = new Map<string, Promise<void>>();
   private readonly apiObservers = new Map<string, Set<(event: NormalizedEvent) => void>>();
-  private roleAttestationSecret?: string;
 
   private readonly sessionRegistry?: SessionRegistryManager;
   private registryProjectionError?: string;
-  private browserPolicyReady = false;
-  private browserAuthHandle?: Awaited<ReturnType<typeof open>>;
-  private browserAuthIdentity?: { dev: number; ino: number };
-  private executableIdentity?: { dev: number; ino: number };
-  private browserSandboxIdentity?: { dev: number; ino: number };
 
   constructor(options: {
     config: CommandCodeServiceConfig;
     runner?: RunnerLike;
     discover?: CommandCodeDiscoveryRunner;
-    /** Optional effort-discovery seam for deterministic bounded validation. */
-    discoverEfforts?: typeof discoverCommandCodeEfforts;
     checkExecutable?: boolean;
     sessionRegistry?: SessionRegistryManager;
   }) {
@@ -175,8 +130,6 @@ export class CommandCodeService {
     this.config = {
       ...mergedConfig,
       allowedCwdRoots: options.config.allowedCwdRoots ?? [path.dirname(mergedConfig.stateDir)],
-      browserAllowedCwdRoots: options.config.browserAllowedCwdRoots ?? [],
-      browserRuntimeRoots: options.config.browserRuntimeRoots ?? [],
     };
     this.store = new CommandCodeSessionStore(this.config.stateDir);
     this.journal = new CommandCodeEventJournal(this.config.stateDir, {
@@ -192,13 +145,8 @@ export class CommandCodeService {
       maxPromptBytes: this.config.maxPromptBytes,
       maxStderrBytes: this.config.maxStderrBytes,
       nativeHomeDir: this.config.nativeHomeDir,
-      browserSandboxExecutablePath: this.config.browserSandboxExecutablePath,
-      browserAllowedCwdRoots: this.config.browserAllowedCwdRoots,
-      browserRuntimeRoots: this.config.browserRuntimeRoots,
     });
-    this.usesDefaultDiscovery = !options.discover;
     this.discover = options.discover ?? discoverCommandCodeModels;
-    this.discoverEfforts = options.discoverEfforts;
     this.checkExecutable = options.checkExecutable ?? true;
     this.sessionRegistry = options.sessionRegistry;
   }
@@ -223,27 +171,7 @@ export class CommandCodeService {
       await rm(path.join(this.config.nativeHomeDir, invalidSessionId), { recursive: true, force: true }).catch(() => undefined);
     }
     await this.store.reconcileAfterRestart();
-    const privateRecords = await this.store.list();
-    if (this.sessionRegistry) {
-      // Rebuild the public projection only after discovery and browser-policy
-      // checks complete. In particular, a persisted browser session must not
-      // remain discoverable after the browser gate is disabled or its policy
-      // becomes invalid between restarts.
-      try {
-        for (const entry of await this.sessionRegistry.listBySdkType('commandcode')) {
-          await this.sessionRegistry.delete(entry.id).catch(() => undefined);
-        }
-      } catch {
-        // Registry projection is best-effort; the private store remains the
-        // Command Code source of truth and every public lookup is gated below.
-      }
-    }
-    if (!this.config.enabled && !this.config.browserEnabled) {
-      for (const record of privateRecords) {
-        if (record.permissionProfile === 'browser-contained') {
-          await rm(path.join(this.config.nativeHomeDir, record.sessionId), { recursive: true, force: true }).catch(() => undefined);
-        }
-      }
+    if (!this.config.enabled) {
       this.healthStatus = 'disabled';
       this.initialized = true;
       return;
@@ -251,12 +179,18 @@ export class CommandCodeService {
     if (this.ownsProcessRunner) {
       await this.prepareNativeHomeRoot();
       for (const record of await this.store.list()) {
-        // Native shadow sessions may be rehydrated into their private homes;
-        // browser sessions are prepared lazily only after the browser policy is
-        // validated, so a disabled/invalid browser gate cannot copy credentials.
-        if (record.permissionProfile !== 'browser-contained') {
-          await this.prepareNativeHome(record.sessionId, record.permissionProfile);
+        await this.prepareNativeHome(record.sessionId);
+      }
+    }
+    if (this.sessionRegistry) {
+      // Rebuild the public projection from the private store after discovery.
+      try {
+        for (const entry of await this.sessionRegistry.listBySdkType('commandcode')) {
+          await this.sessionRegistry.delete(entry.id).catch(() => undefined);
         }
+      } catch {
+        // Registry projection is best-effort; the private store remains the
+        // Command Code source of truth.
       }
     }
     try {
@@ -265,18 +199,9 @@ export class CommandCodeService {
         const executableStat = await stat(canonicalExecutable);
         if (!executableStat.isFile()) throw new Error('Command Code executable is not a regular file');
         await access(canonicalExecutable, fsConstants.X_OK);
-        this.executableIdentity = { dev: executableStat.dev, ino: executableStat.ino };
         this.config.executablePath = canonicalExecutable;
       }
-      if (this.config.browserEnabled) await this.validateBrowserPolicy();
-      if (this.ownsProcessRunner) this.runner.pinExecutable?.(this.config.executablePath, this.executableIdentity);
     } catch {
-      await this.browserAuthHandle?.close().catch(() => undefined);
-      this.browserAuthHandle = undefined;
-      this.browserAuthIdentity = undefined;
-      this.browserPolicyReady = false;
-      this.runner.setBrowserPolicyRoots?.([], [], this.config.nativeHomeDir);
-      await this.removeInaccessibleBrowserHomes();
       this.healthStatus = 'executable_missing';
       this.discoveryDiagnostic = 'Configured Command Code executable is not accessible';
       this.initialized = true;
@@ -284,42 +209,10 @@ export class CommandCodeService {
     }
     try {
       const discovered = await this.discover(this.config.executablePath);
-      let effortCapabilities = discovered.effortCapabilities;
-      let effortDiscoveryDiagnostic: string | undefined;
-      if (!effortCapabilities && (this.usesDefaultDiscovery || this.discoverEfforts)) {
-        try {
-          // Extra live catalogue entries remain evidence-only, but the exact
-          // shadow pair must always receive exhaustive probes. The bounded
-          // invalid-value probe is used for every other model so a catalogue
-          // update cannot silently weaken the shadow contract or turn startup
-          // into an unbounded N×probe operation.
-          effortCapabilities = (await (this.discoverEfforts ?? discoverCommandCodeEfforts)(this.config.executablePath, {
-            models: discovered.models,
-            probeAllValues: false,
-            probeAllValuesForModels: COMMAND_CODE_MODELS,
-          })).capabilities;
-        } catch (error) {
-          // Model discovery and effort discovery are separate evidence layers.
-          // Preserve the complete model catalogue when the bounded hybrid
-          // effort pass times out, cannot spawn, or emits malformed output;
-          // only execution authority is withdrawn.
-          effortDiscoveryDiagnostic = scrubDiagnostic(error instanceof Error ? error.message : String(error));
-        }
-      }
-      this.discoveryResult = { ...discovered, ...(effortCapabilities ? { effortCapabilities } : {}) };
-      const catalogueValidation = this.usesDefaultDiscovery
-        ? validateCommandCodeModelCatalogue(discovered.models)
-        : { valid: true as const };
-      if (!catalogueValidation.valid) {
+      this.discoveryResult = discovered;
+      if (discovered.models.length === 0) {
         this.healthStatus = 'exact_model_unavailable';
-        this.discoveryDiagnostic = `Command Code model catalogue is invalid: ${catalogueValidation.reason}`;
-      } else if (discovered.ambiguous.length > 0 || discovered.models.length === 0) {
-        this.healthStatus = 'exact_model_unavailable';
-      } else if (effortDiscoveryDiagnostic || !effortCapabilities || !hasExactEffortCapabilities(effortCapabilities, discovered.models)) {
-        this.healthStatus = 'effort_capability_unknown';
-        this.discoveryDiagnostic = effortDiscoveryDiagnostic
-          ? `Command Code native effort capability discovery failed: ${effortDiscoveryDiagnostic}`
-          : 'Command Code native effort capability discovery was incomplete or drifted; refusing session creation';
+        this.discoveryDiagnostic = 'Command Code advertised no models';
       } else {
         this.healthStatus = 'available';
       }
@@ -327,18 +220,7 @@ export class CommandCodeService {
       this.healthStatus = 'discovery_error';
       this.discoveryDiagnostic = scrubDiagnostic(error instanceof Error ? error.message : String(error));
     }
-    if (this.ownsProcessRunner && this.isBrowserAvailable()) {
-      for (const record of await this.store.list()) {
-        if (record.permissionProfile === 'browser-contained' && this.isSessionRecordAccessible(record)) await this.prepareNativeHome(record.sessionId, record.permissionProfile);
-      }
-    }
-    await this.removeInaccessibleBrowserHomes();
     for (const record of await this.store.list()) {
-      if (record.permissionProfile === 'browser-contained' && !this.isSessionRecordAccessible(record)) {
-        const staleSessionId = (record as CommandCodeInternalSessionRecord).sessionId;
-        await rm(path.join(this.config.nativeHomeDir, staleSessionId), { recursive: true, force: true }).catch(() => undefined);
-        continue;
-      }
       if (this.isSessionRecordAccessible(record)) await this.syncRegistryRecord(record);
     }
     this.initialized = true;
@@ -351,87 +233,29 @@ export class CommandCodeService {
     await this.init();
     if (this.shuttingDown) throw new CommandCodeRuntimeError('Command Code service is shutting down', 'interrupted');
     this.assertRunnable();
-    if (input.permissionProfile !== 'browser-contained' && !this.isShadowAvailable()) {
-      throw new CommandCodeRuntimeError('Command Code shadow catalogue is unavailable under the active policy', 'protocol_error');
-    }
     const model = assertCommandCodeRuntimeModel(input.model, this.discoveryResult?.models ?? []);
     if (!model) throw new CommandCodeRuntimeError('Exact Command Code model is unavailable', 'protocol_error');
-    if (input.permissionProfile !== 'browser-contained' && !assertCommandCodeModel(model)) {
-      throw new CommandCodeRuntimeError('Command Code shadow sessions require one of the exact policy-approved model ids', 'permission_denied');
-    }
-    const effortBinding = this.resolveEffort(model, input.effort);
-    if (input.permissionProfile === 'browser-contained') {
-      if (input.invocationRole) throw new CommandCodeRuntimeError('Browser Command Code sessions cannot carry Agent OS invocation roles', 'permission_denied');
-      if (!this.isBrowserAvailable()) {
-        throw new CommandCodeRuntimeError('Command Code browser containment is unavailable', 'permission_denied');
-      }
-      if (!this.isBrowserModelAllowed(model)) {
-        throw new CommandCodeRuntimeError(`Command Code model ${model} is not approved for browser use`, 'permission_denied');
-      }
-    }
-    if (input.invocationRole === 'conductor-root' && input.permissionProfile !== 'agent-os-7f-root-readonly') throw new CommandCodeRuntimeError('Command Code root role requires the server-owned readonly profile', 'permission_denied');
-    if (input.invocationRole === 'implementation-child' && input.permissionProfile !== 'implementation-child-wide') throw new CommandCodeRuntimeError('Command Code implementation-child role requires the server-owned wide profile', 'permission_denied');
+    const effort = this.resolveEffort(model, input.effort);
     const sessionId = `commandcode-${cryptoRandomId()}`;
     const cwd = await canonicalCwd(input.cwd);
-    const cwdRoots = input.permissionProfile === 'browser-contained'
-      ? (this.config.browserAllowedCwdRoots ?? [])
-      : this.config.allowedCwdRoots;
-    if (cwdRoots.length === 0 || !cwdRoots.some((root) => isWithinRoot(root, cwd))) {
+    if (this.config.allowedCwdRoots.length === 0 || !this.config.allowedCwdRoots.some((root) => isWithinRoot(root, cwd))) {
       throw new CommandCodeRuntimeError('Command Code cwd is outside the configured isolated workspace roots', 'permission_denied');
-    }
-    if (input.invocationRole) {
-      try {
-        const attestedModel = assertCommandCodeModel(model);
-        if (!attestedModel) throw new Error('Agent OS role attestations are restricted to the shadow model routes.');
-        verifyCommandCodeRoleAttestation(this.roleAttestationSecret, input.roleAttestation, { role: input.invocationRole, model: attestedModel, cwd, effort: effortBinding.effort });
-        if (input.invocationRole === 'implementation-child') {
-          const parentId = input.roleAttestation?.parentSessionId;
-          const parent = parentId ? await this.store.get(parentId) : undefined;
-          if (!parent || parent.invocationRole !== 'conductor-root' || parent.state === 'deleted') {
-            throw new Error('Command Code implementation-child parent session is not a live conductor-root session.');
-          }
-        }
-      } catch (error) {
-        throw new CommandCodeRuntimeError(error instanceof Error ? error.message : String(error), 'permission_denied');
-      }
     }
     try {
       const created = await this.store.create({
         sessionId,
         cwd,
         modelSelector: model,
-        ...(effortBinding.effort ? { effort: effortBinding.effort } : {}),
-        effortSource: effortBinding.source,
-        ...(effortBinding.defaultEffort ? { defaultEffort: effortBinding.defaultEffort } : {}),
-        effortCapabilityHash: effortBinding.capabilityHash,
-        permissionProfile: input.permissionProfile,
-        invocationRole: input.invocationRole,
+        ...(effort ? { effort } : {}),
         eventJournalRef: `events/${sessionId}.jsonl`,
       });
-      if (this.ownsProcessRunner) await this.prepareNativeHome(sessionId, input.permissionProfile);
+      if (this.ownsProcessRunner) await this.prepareNativeHome(sessionId);
       await this.syncRegistryRecord(created);
       return created;
     } catch (error) {
       await this.store.delete(sessionId).catch(() => undefined);
       throw error;
     }
-  }
-
-  getEffortCapabilities(): CommandCodeEffortCapabilities {
-    const capabilities = this.discoveryResult?.effortCapabilities;
-    const result: CommandCodeEffortCapabilities = {};
-    if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) return result;
-    for (const [model, capability] of Object.entries(capabilities)) {
-      if (isSafeEffortCapability(capability)) result[model] = { ...capability, effortLevels: [...capability.effortLevels] };
-    }
-    return result;
-  }
-
-  getEffortCapability(model: CommandCodeRuntimeModel): CommandCodeEffortCapability | undefined {
-    const capability = this.discoveryResult?.effortCapabilities?.[model];
-    return isSafeEffortCapability(capability)
-      ? { ...capability, effortLevels: [...capability.effortLevels] }
-      : undefined;
   }
 
   async setEffort(sessionId: string, effort?: string): Promise<CommandCodeInternalSessionRecord> {
@@ -452,14 +276,9 @@ export class CommandCodeService {
       if (!this.isSessionRecordAccessible(record)) {
         throw new CommandCodeRuntimeError('Command Code session is no longer enabled by the active runtime policy', 'permission_denied');
       }
-      const binding = this.resolveEffort(record.modelSelector, effort);
+      const resolved = this.resolveEffort(record.modelSelector, effort);
       try {
-        const updated = await this.store.setEffort(sessionId, {
-          ...(binding.effort ? { effort: binding.effort } : {}),
-          effortSource: binding.source,
-          ...(binding.defaultEffort ? { defaultEffort: binding.defaultEffort } : {}),
-          effortCapabilityHash: binding.capabilityHash,
-        });
+        const updated = await this.store.setEffort(sessionId, resolved);
         await this.syncRegistryRecord(updated);
         return updated;
       } catch (error) {
@@ -478,44 +297,10 @@ export class CommandCodeService {
     return this.isSessionRecordAccessible(record) ? record : undefined;
   }
 
-  /** Internal API / Agent OS may see only the attested shadow profile. */
-  async getShadowSession(sessionId: string): Promise<CommandCodeInternalSessionRecord | undefined> {
-    await this.init();
-    const record = await this.store.get(sessionId);
-    return record && record.permissionProfile !== 'browser-contained' && this.isSessionRecordAccessible(record)
-      ? record
-      : undefined;
-  }
-
   async listSessions(): Promise<CommandCodeInternalSessionRecord[]> {
     await this.init();
-    if (!this.isShadowEnabled() && !this.config.browserEnabled) return [];
+    if (!this.isEnabled()) return [];
     return (await this.store.list()).filter((record) => this.isSessionRecordAccessible(record));
-  }
-
-  async listShadowSessions(): Promise<CommandCodeInternalSessionRecord[]> {
-    await this.init();
-    if (!this.isShadowAvailable()) return [];
-    return (await this.store.list()).filter((record) => record.permissionProfile !== 'browser-contained' && this.isSessionRecordAccessible(record));
-  }
-
-  async listBrowserSessions(): Promise<CommandCodeInternalSessionRecord[]> {
-    await this.init();
-    if (!this.isBrowserAvailable()) return [];
-    return (await this.store.list()).filter((record) => this.isSessionRecordAccessible(record) && this.isBrowserSessionRecord(record));
-  }
-
-  async isBrowserSession(sessionId: string): Promise<boolean> {
-    await this.init();
-    const record = await this.store.get(sessionId);
-    return Boolean(record && this.isSessionRecordAccessible(record) && this.isBrowserSessionRecord(record));
-  }
-
-  /** Browser/WebSocket lookups must never fall back to the shadow-inclusive accessor. */
-  async getBrowserSession(sessionId: string): Promise<CommandCodeInternalSessionRecord | undefined> {
-    await this.init();
-    const record = await this.store.get(sessionId);
-    return record && this.isSessionRecordAccessible(record) && this.isBrowserSessionRecord(record) ? record : undefined;
   }
 
   async isSessionAccessible(sessionId: string): Promise<boolean> {
@@ -527,12 +312,6 @@ export class CommandCodeService {
     const direct = await this.getSession(identifier);
     if (direct) return direct;
     return (await this.listSessions()).find((record) => record.nativeSessionId === identifier);
-  }
-
-  async findShadowSession(identifier: string): Promise<CommandCodeInternalSessionRecord | undefined> {
-    const direct = await this.getShadowSession(identifier);
-    if (direct) return direct;
-    return (await this.listShadowSessions()).find((record) => record.nativeSessionId === identifier);
   }
 
   async sendPrompt(
@@ -559,13 +338,6 @@ export class CommandCodeService {
       if (this.deletedSessions.has(sessionId)) throw new CommandCodeRuntimeError('Command Code session was deleted', 'runtime_error');
       const discoveredModel = assertCommandCodeRuntimeModel(record.modelSelector, this.discoveryResult?.models ?? []);
       if (!discoveredModel) throw new CommandCodeRuntimeError('Command Code session model is no longer advertised', 'protocol_error');
-      const capability = this.capabilityFor(discoveredModel);
-      if (!record.effortCapabilityHash || record.effortCapabilityHash !== capability.capabilityHash) {
-        throw new CommandCodeRuntimeError('Command Code effort capability changed; recreate the session', 'effort_unsupported');
-      }
-      if (record.permissionProfile === 'browser-contained' && !this.isBrowserModelAllowed(record.modelSelector)) {
-        throw new CommandCodeRuntimeError('Command Code browser policy no longer permits this session model', 'permission_denied');
-      }
       if (record.state === 'running' || this.runner.isRunning(sessionId)) throw new CommandCodeRuntimeError('Command Code session is already running', 'runtime_error');
       if (this.activeSessions.size >= this.config.concurrency) throw new CommandCodeRuntimeError('Command Code concurrency limit is exhausted', 'runtime_error');
       if (Buffer.byteLength(prompt, 'utf8') > this.config.maxPromptBytes) throw new CommandCodeRuntimeError('Command Code prompt exceeds byte limit', 'protocol_error');
@@ -604,7 +376,6 @@ export class CommandCodeService {
       if (event.type === 'agent_end') return;
       streamedEvents.push(event);
       streamQueue = streamQueue.then(async () => {
-        await this.recordEffectiveEffort(sessionId, record.modelSelector, event);
         await this.journal.append(sessionId, event);
         this.publishApiEvent(sessionId, event);
         onEvent(event);
@@ -644,10 +415,7 @@ export class CommandCodeService {
 
       const currentCwd = await canonicalCwd(record.cwd);
       if (currentCwd !== record.cwd) throw new CommandCodeRuntimeError('Command Code cwd binding drift', 'permission_denied');
-      const activeCwdRoots = record.permissionProfile === 'browser-contained'
-        ? (this.config.browserAllowedCwdRoots ?? [])
-        : this.config.allowedCwdRoots;
-      if (!activeCwdRoots.some((root) => isWithinRoot(root, currentCwd))) {
+      if (!this.config.allowedCwdRoots.some((root) => isWithinRoot(root, currentCwd))) {
         throw new CommandCodeRuntimeError('Command Code cwd is outside the active workspace policy', 'permission_denied');
       }
       if (this.abortRequested.has(sessionId)) throw new CommandCodeRuntimeError('Command Code run was aborted before spawn', 'interrupted');
@@ -656,13 +424,9 @@ export class CommandCodeService {
         cwd: currentCwd,
         model: record.modelSelector,
         maxTurns: this.config.maxTurns,
-        permissionProfile: record.permissionProfile,
         prompt,
         nativeSessionId: record.nativeSessionId,
         effort: record.effort,
-        ...(record.permissionProfile === 'browser-contained'
-          ? { browserAuthFd: this.browserAuthHandle?.fd, browserAuthIdentity: this.browserAuthIdentity }
-          : {}),
         onEvent: queueStreamEvent,
       });
       await streamQueue;
@@ -701,7 +465,6 @@ export class CommandCodeService {
             streamedKeys.set(key, remaining - 1);
             continue;
           }
-          await this.recordEffectiveEffort(sessionId, record.modelSelector, event);
           await this.journal.append(sessionId, event);
           this.publishApiEvent(sessionId, event);
           onEvent(event);
@@ -811,9 +574,6 @@ export class CommandCodeService {
         await this.runner.shutdown();
       } finally {
         await Promise.allSettled(inFlights);
-        await this.browserAuthHandle?.close().catch(() => undefined);
-        this.browserAuthHandle = undefined;
-        this.browserAuthIdentity = undefined;
       }
     })();
     return this.shutdownPromise;
@@ -838,71 +598,20 @@ export class CommandCodeService {
     }
   }
 
-  setRoleAttestationSecret(secret: string): void { this.roleAttestationSecret = secret || undefined; }
   isRunning(sessionId: string): boolean { return this.runner.isRunning(sessionId); }
   async hasSession(sessionId: string): Promise<boolean> {
     await this.init();
     return this.isSessionRecordAccessible(await this.store.get(sessionId));
   }
-  isEnabled(): boolean { return this.config.enabled || this.config.browserEnabled === true; }
-  isShadowEnabled(): boolean { return this.config.shadowEnabled ?? this.config.enabled; }
-  /** Runtime-wide availability, including dynamically discovered browser models. */
+  isEnabled(): boolean { return this.config.enabled; }
+
+  /** Runtime-wide availability; catalogue drift never changes it. */
   isAvailable(): boolean { return this.healthStatus === 'available'; }
-  /** The narrow Agent OS shadow surface remains separately gated. */
-  isShadowAvailable(): boolean {
-    const models = this.discoveryResult?.models ?? [];
-    const capabilities = this.discoveryResult?.effortCapabilities;
-    return this.isShadowEnabled()
-      && this.isAvailable()
-      && hasOrderedShadowCatalogue(models)
-      && capabilities !== undefined
-      && hasExactEffortCapabilities(capabilities, models);
-  }
-  isBrowserEnabled(): boolean { return this.config.browserEnabled === true; }
-  isBrowserAvailable(): boolean {
-    return this.isAvailable()
-      && this.isBrowserEnabled()
-      && this.browserPolicyReady
-      && (this.config.browserAllowedCwdRoots ?? []).length > 0
-      && (this.config.browserAllowedModels ?? []).some((model) => this.discoveryResult?.models.includes(model) === true)
-      && this.runner.browserSandboxReady?.() === true;
-  }
-  getBrowserModels() {
-    return this.getModels().filter((model) => model.browserRunnable);
-  }
-  /** Publicly usable Agent OS shadow catalogue; extra CLI discovery remains evidence-only. */
-  getShadowModels() {
-    return this.getModels().filter((model) => (COMMAND_CODE_MODELS as readonly string[]).includes(model.id));
-  }
-  getShadowEffortCapabilities(): Partial<CommandCodeEffortCapabilities> {
-    const capabilities = this.getEffortCapabilities();
-    return Object.fromEntries(COMMAND_CODE_MODELS.flatMap((model) => capabilities[model] ? [[model, capabilities[model]]] : []));
-  }
-  private isBrowserModelAllowed(model: CommandCodeRuntimeModel): boolean {
-    const allowlist = this.config.browserAllowedModels ?? [];
-    // Browser containment is a separate execution surface. It may expose any
-    // exact model freshly advertised by the CLI, but never an alias or a model
-    // absent from the explicit operator-owned browser allowlist.
-    return allowlist.length > 0
-      && allowlist.includes(model)
-      && this.discoveryResult?.models.includes(model) === true;
-  }
-  private isBrowserSessionRecord(record: CommandCodeInternalSessionRecord): boolean {
-    return record.permissionProfile === 'browser-contained'
-      && this.isBrowserAvailable()
-      && this.isBrowserModelAllowed(record.modelSelector);
-  }
 
   private isSessionRecordAccessible(record: CommandCodeInternalSessionRecord | undefined): record is CommandCodeInternalSessionRecord {
     if (!record || record.state === 'deleted') return false;
-    const capability = this.getEffortCapability(record.modelSelector);
-    if (!capability || !record.effortCapabilityHash || record.effortCapabilityHash !== capability.capabilityHash) return false;
-    const activeRoots = record.permissionProfile === 'browser-contained'
-      ? (this.config.browserAllowedCwdRoots ?? [])
-      : this.config.allowedCwdRoots;
-    if (activeRoots.length === 0 || !activeRoots.some((root) => isWithinRoot(root, record.cwd))) return false;
-    if (record.permissionProfile === 'browser-contained') return this.isBrowserSessionRecord(record);
-    return assertCommandCodeModel(record.modelSelector) !== undefined && this.isShadowAvailable();
+    if (this.config.allowedCwdRoots.length === 0 || !this.config.allowedCwdRoots.some((root) => isWithinRoot(root, record.cwd))) return false;
+    return true;
   }
 
   getExecutionInstanceId(): 'commandcode-default' { return COMMAND_CODE_EXECUTION_INSTANCE_ID; }
@@ -911,67 +620,33 @@ export class CommandCodeService {
     displayName: string;
     provider: string;
     reasoning: boolean;
-    runnable: boolean;
-    status: 'runnable' | 'evidence-only' | 'unavailable';
-    browserRunnable: boolean;
-    supportsEffort: boolean;
     effortLevels: CommandCodeEffort[];
     defaultEffort?: CommandCodeEffort;
-    effortCapabilityHash?: string;
-    catalogue: CommandCodeCatalogueMetadata;
   }> {
     const available = this.discoveryResult?.models ?? [];
-    const catalogue = this.getCatalogueMetadata();
     return available.map((id) => {
-      const discoveredCapability = this.discoveryResult?.effortCapabilities?.[id];
-      const capability = isSafeEffortCapability(discoveredCapability) ? discoveredCapability : undefined;
-      const isShadowModel = (COMMAND_CODE_MODELS as readonly string[]).includes(id);
-      const shadowRunnable = isShadowModel
-        && this.isShadowAvailable()
-        && capability?.status !== 'unknown'
-        && capability?.source === 'live-preflight';
-      const shadowUnavailable = isShadowModel && this.isShadowEnabled() && !shadowRunnable;
-      const browserRunnable = this.isBrowserAvailable()
-        && this.isBrowserModelAllowed(id)
-        && capability?.status !== 'unknown';
+      const effortSpec = commandCodeEffortSpec(id);
       return {
         id,
         displayName: commandCodeDisplayName(id),
         provider: COMMAND_CODE_PROVIDER,
         reasoning: true,
-        runnable: shadowRunnable,
-        status: shadowRunnable ? 'runnable' : shadowUnavailable || capability?.status === 'unknown' || !capability ? 'unavailable' : 'evidence-only',
-        browserRunnable,
-        supportsEffort: capability?.supportsEffort === true,
-        effortLevels: [...(capability?.effortLevels ?? [])],
-        ...(capability?.defaultEffort ? { defaultEffort: capability.defaultEffort } : {}),
-        ...(capability?.capabilityHash ? { effortCapabilityHash: capability.capabilityHash } : {}),
-        catalogue,
+        effortLevels: [...effortSpec.effortLevels],
+        ...(effortSpec.defaultEffort && effortSpec.effortLevels.length > 0 ? { defaultEffort: effortSpec.defaultEffort } : {}),
       };
     });
   }
-  getCatalogueMetadata(): CommandCodeCatalogueMetadata {
-    const health = this.getHealth();
-    return {
-      availabilityStatus: health.status,
-      checkedAt: health.checkedAt,
-      source: 'live-discovery',
-    };
-  }
   getHealth(): CommandCodeHealth {
-    const missingModels = COMMAND_CODE_MODELS.filter((model) => !this.discoveryResult?.models.includes(model));
     return {
       enabled: this.isEnabled(),
       available: this.isAvailable(),
       status: this.healthStatus,
       ...(this.discoveryResult?.version ? { version: this.discoveryResult.version } : {}),
-      ...(this.config.expectedVersion ? { expectedVersion: this.config.expectedVersion } : {}),
       advertisedModels: [...(this.discoveryResult?.models ?? [])],
-      missingModels,
-      effortCapabilities: this.getEffortCapabilities(),
       checkedAt: this.discoveryCheckedAt ?? new Date().toISOString(),
-      ...(this.discoveryDiagnostic ? { diagnostic: this.discoveryDiagnostic } : {}),
-      ...(this.registryProjectionError ? { diagnostic: `${this.discoveryDiagnostic ? `${this.discoveryDiagnostic}; ` : ''}registry projection: ${this.registryProjectionError}` } : {}),
+      ...(this.discoveryDiagnostic || this.registryProjectionError
+        ? { diagnostic: [this.discoveryDiagnostic, this.registryProjectionError ? `registry projection: ${this.registryProjectionError}` : undefined].filter(Boolean).join('; ') || undefined }
+        : {}),
     };
   }
   async getSessionDiagnostics(sessionId: string): Promise<CommandCodeInternalSessionRecord['diagnostics'] | undefined> {
@@ -994,53 +669,15 @@ export class CommandCodeService {
   }
   isSessionPinned(sessionId: string): boolean { return (this.pinClaims.get(sessionId)?.size ?? 0) > 0; }
 
-  private resolveEffort(model: CommandCodeRuntimeModel, requested: unknown): {
-    effort?: CommandCodeEffort;
-    source: 'explicit' | 'default' | 'automatic' | 'none';
-    defaultEffort?: CommandCodeEffort;
-    capabilityHash: string;
-  } {
-    const capability = this.capabilityFor(model);
-    if (capability.status === 'unknown') {
-      throw new CommandCodeRuntimeError(`Command Code effort capability is unknown for model ${model}`, 'effort_unsupported');
-    }
-    if (!capability.supportsEffort) {
-      if (requested !== undefined) throw new CommandCodeRuntimeError(`Command Code model ${model} does not support native effort`, 'effort_unsupported');
-      return { source: 'none', capabilityHash: capability.capabilityHash };
-    }
-    if (requested !== undefined) {
-      let effort: CommandCodeEffort;
-      try { effort = assertCommandCodeEffort(model, requested) as CommandCodeEffort; }
-      catch (error) { throw new CommandCodeRuntimeError(error instanceof Error ? error.message : String(error), 'effort_unsupported'); }
-      if (!capability.effortLevels.includes(effort)) throw new CommandCodeRuntimeError(`Command Code effort '${effort}' is not advertised for model ${model}`, 'effort_unsupported');
-      return { effort, source: 'explicit', ...(capability.defaultEffort ? { defaultEffort: capability.defaultEffort } : {}), capabilityHash: capability.capabilityHash };
-    }
-    if (!capability.defaultEffort || !capability.effortLevels.includes(capability.defaultEffort)) {
-      // Some Command Code models expose an adjustable effort selector but do
-      // not publish a native default. Automatic must therefore omit --effort;
-      // never guess from the first advertised value.
-      return { source: 'automatic', capabilityHash: capability.capabilityHash };
-    }
-    return { effort: capability.defaultEffort, source: 'default', defaultEffort: capability.defaultEffort, capabilityHash: capability.capabilityHash };
-  }
-
-  private capabilityFor(model: CommandCodeRuntimeModel) {
-    const capability = this.discoveryResult?.effortCapabilities?.[model];
-    if (!capability) throw new CommandCodeRuntimeError(`Command Code effort capability is unavailable for model ${model}`, 'effort_unsupported');
-    return capability;
-  }
-
-  private async recordEffectiveEffort(sessionId: string, model: CommandCodeRuntimeModel, event: NormalizedEvent): Promise<void> {
-    const effectiveEffort = extractEffectiveEffort(event);
-    if (!effectiveEffort) return;
-    const capability = this.capabilityFor(model);
-    if (!capability.effortLevels.includes(effectiveEffort.effort)) {
-      throw new CommandCodeRuntimeError(`Command Code reported unsupported effective effort '${effectiveEffort.effort}'`, 'protocol_error');
-    }
-    await this.store.update(sessionId, {
-      effectiveEffort: effectiveEffort.effort,
-      effortEvidenceMethod: effectiveEffort.method,
-    });
+  /** Resolve a requested effort against the committed effort table for the model. */
+  private resolveEffort(model: CommandCodeRuntimeModel, requested: unknown): CommandCodeEffort | undefined {
+    if (requested === undefined) return undefined;
+    const levels = commandCodeEffortSpec(model).effortLevels;
+    let effort: CommandCodeEffort;
+    try { effort = assertCommandCodeEffort(model, requested) as CommandCodeEffort; }
+    catch (error) { throw new CommandCodeRuntimeError(error instanceof Error ? error.message : String(error), 'effort_unsupported'); }
+    if (!levels.includes(effort)) throw new CommandCodeRuntimeError(`Command Code effort '${effort}' is not advertised for model ${model}`, 'effort_unsupported');
+    return effort;
   }
 
   private async syncRegistryRecord(record: CommandCodeInternalSessionRecord): Promise<void> {
@@ -1067,41 +704,25 @@ export class CommandCodeService {
     }
   }
 
-  private async removeInaccessibleBrowserHomes(): Promise<void> {
-    for (const record of await this.store.list()) {
-      if (record.permissionProfile === 'browser-contained' && !this.isSessionRecordAccessible(record)) {
-        const staleSessionId = (record as CommandCodeInternalSessionRecord).sessionId;
-        await rm(path.join(this.config.nativeHomeDir, staleSessionId), { recursive: true, force: true }).catch(() => undefined);
-      }
-    }
-  }
-
   private async prepareNativeHomeRoot(): Promise<void> {
     await ensurePrivateDirectory(this.config.nativeHomeDir, 'Command Code native home root');
   }
 
-  private async prepareNativeHome(sessionId: string, permissionProfile: CommandCodePermissionProfile): Promise<void> {
+  /** Copy the operator's CLI auth into the session-private native home. */
+  private async prepareNativeHome(sessionId: string): Promise<void> {
     await this.prepareNativeHomeRoot();
     const sessionHome = path.join(this.config.nativeHomeDir, sessionId);
     const commandCodeHome = path.join(sessionHome, '.commandcode');
     await ensurePrivateDirectory(sessionHome, 'Command Code session home');
     await ensurePrivateDirectory(commandCodeHome, 'Command Code private auth directory');
-    const source = permissionProfile === 'browser-contained'
-      ? this.config.browserAuthFile
-      : path.join(process.env.HOME || '/root', '.commandcode', 'auth.json');
+    const source = path.join(process.env.HOME || '/root', '.commandcode', 'auth.json');
     const target = path.join(commandCodeHome, 'auth.json');
-    if (!source) return;
 
     let sourceHandle: Awaited<ReturnType<typeof open>> | undefined;
     let temporaryHandle: Awaited<ReturnType<typeof open>> | undefined;
     const temporary = `${target}.${process.pid}.${cryptoRandomId()}.tmp`;
     try {
-      if (permissionProfile === 'browser-contained') {
-        sourceHandle = this.browserAuthHandle;
-        if (!sourceHandle) throw new Error('Command Code browser auth is not pinned');
-      } else {
-        sourceHandle = await open(source, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-      }
+      sourceHandle = await open(source, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
       const sourceStat = await sourceHandle.stat();
       if (!sourceStat.isFile()) return;
       try {
@@ -1111,89 +732,18 @@ export class CommandCodeService {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
       temporaryHandle = await open(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o400);
-      const contents = permissionProfile === 'browser-contained'
-        ? await readFile(`/proc/self/fd/${sourceHandle.fd}`)
-        : await sourceHandle.readFile();
+      const contents = await sourceHandle.readFile();
       await temporaryHandle.writeFile(contents);
       await temporaryHandle.chmod(0o400);
       await temporaryHandle.close();
       temporaryHandle = undefined;
       await rename(temporary, target);
     } catch (error) {
-      if (permissionProfile === 'browser-contained' || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     } finally {
-      if (sourceHandle && sourceHandle !== this.browserAuthHandle) await sourceHandle.close().catch(() => undefined);
+      await sourceHandle?.close().catch(() => undefined);
       await temporaryHandle?.close().catch(() => undefined);
       await rm(temporary, { force: true }).catch(() => undefined);
-    }
-  }
-
-  private async validateBrowserPolicy(): Promise<void> {
-    this.browserPolicyReady = false;
-    await this.browserAuthHandle?.close().catch(() => undefined);
-    this.browserAuthHandle = undefined;
-    this.browserAuthIdentity = undefined;
-    if (!this.config.browserAuthFile || (this.config.browserRuntimeRoots ?? []).length === 0 || (this.config.browserAllowedCwdRoots ?? []).length === 0 || (this.config.browserAllowedModels ?? []).length === 0) {
-      this.discoveryDiagnostic = 'Command Code browser credential, model allowlist, runtime roots, and workspace roots are all required';
-      return;
-    }
-    try {
-      const authStat = await lstat(this.config.browserAuthFile);
-      if (!authStat.isFile() || authStat.isSymbolicLink()) throw new Error('browser auth must be a regular non-symlink file');
-      const authParent = path.dirname(path.resolve(this.config.browserAuthFile));
-      if (await realpath(authParent) !== authParent) throw new Error('browser auth parent may not contain symlinked path components');
-      const runtimeValidation = await canonicalBrowserDirectories(this.config.browserRuntimeRoots ?? [], 'runtime roots');
-      const workspaceValidation = await canonicalBrowserDirectories(this.config.browserAllowedCwdRoots ?? [], 'workspace roots', true);
-      const canonicalRuntimeRoots = runtimeValidation.paths;
-      const canonicalWorkspaceRoots = workspaceValidation.paths;
-      const canonicalAuth = await realpath(this.config.browserAuthFile);
-      let authHandle: Awaited<ReturnType<typeof open>> | undefined;
-      try {
-        authHandle = await open(canonicalAuth, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-        const openedAuth = await authHandle.stat();
-        if (!openedAuth.isFile() || openedAuth.isSymbolicLink()) throw new Error('browser auth must be a regular file');
-        if (openedAuth.dev !== authStat.dev || openedAuth.ino !== authStat.ino) throw new Error('browser auth changed during validation');
-        if ((openedAuth.mode & 0o077) !== 0) throw new Error('browser auth must not be group/world accessible');
-        if (typeof process.getuid === 'function' && openedAuth.uid !== process.getuid()) throw new Error('browser auth must be owned by the server user');
-      } catch (error) {
-        await authHandle?.close().catch(() => undefined);
-        throw error;
-      }
-      this.browserAuthHandle = authHandle;
-      this.browserAuthIdentity = { dev: (await authHandle.stat()).dev, ino: (await authHandle.stat()).ino };
-      const canonicalSandbox = this.config.browserSandboxExecutablePath ? await realpath(this.config.browserSandboxExecutablePath) : '';
-      const sandboxStat = await stat(canonicalSandbox);
-      if (!sandboxStat.isFile()) throw new Error('browser sandbox launcher is not a regular file');
-      await access(canonicalSandbox, fsConstants.X_OK);
-      this.browserSandboxIdentity = { dev: sandboxStat.dev, ino: sandboxStat.ino };
-      if (canonicalRuntimeRoots.some(isBroadRuntimeRoot) || canonicalWorkspaceRoots.some(isBroadWorkspaceRoot)) throw new Error('browser roots are too broad');
-      const pinnedRootIdentities = this.runner.setBrowserPolicyRoots
-        ? {
-            allowed: workspaceValidation.identities,
-            runtime: runtimeValidation.identities,
-            nativeHome: await identityForDirectory(this.config.nativeHomeDir),
-          }
-        : undefined;
-      this.runner.setBrowserPolicyRoots?.(
-        canonicalWorkspaceRoots,
-        canonicalRuntimeRoots,
-        this.config.nativeHomeDir,
-        pinnedRootIdentities,
-      );
-      if (this.ownsProcessRunner) this.runner.pinBrowserSandbox?.(this.config.browserSandboxExecutablePath, this.browserSandboxIdentity);
-      if (this.runner.browserSandboxReady?.() !== true) throw new Error('browser sandbox launcher is unavailable');
-      this.config.browserRuntimeRoots = canonicalRuntimeRoots;
-      this.config.browserAllowedCwdRoots = canonicalWorkspaceRoots;
-      this.config.browserAuthFile = canonicalAuth;
-      this.config.browserSandboxExecutablePath = canonicalSandbox;
-      this.browserPolicyReady = true;
-    } catch (error) {
-      await this.browserAuthHandle?.close().catch(() => undefined);
-      this.browserAuthHandle = undefined;
-      this.browserAuthIdentity = undefined;
-      this.browserPolicyReady = false;
-      this.runner.setBrowserPolicyRoots?.([], [], this.config.nativeHomeDir);
-      this.discoveryDiagnostic = `Command Code browser containment unavailable: ${scrubDiagnostic(error instanceof Error ? error.message : String(error))}`;
     }
   }
 
@@ -1228,98 +778,12 @@ function commandCodeDisplayName(model: CommandCodeRuntimeModel): string {
     .join(' ');
 }
 
-function isSafeEffortCapability(value: unknown): value is CommandCodeEffortCapability {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const capability = value as Partial<CommandCodeEffortCapability>;
-  if (typeof capability.supportsEffort !== 'boolean'
-    || !Array.isArray(capability.effortLevels)
-    || !capability.effortLevels.every((effort) => typeof effort === 'string' && (COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(effort))
-    || !['adjustable', 'unavailable', 'unknown'].includes(capability.status as string)
-    || capability.source !== 'live-preflight'
-    || typeof capability.capabilityHash !== 'string'
-    || !/^[a-f0-9]{64}$/.test(capability.capabilityHash)
-    || capability.defaultEffort !== undefined
-      && (typeof capability.defaultEffort !== 'string' || !(COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(capability.defaultEffort))) return false;
-  if (capability.status === 'unknown' || capability.status === 'unavailable') {
-    return capability.supportsEffort === false && capability.effortLevels.length === 0 && capability.defaultEffort === undefined;
-  }
-  return capability.supportsEffort === true
-    && capability.effortLevels.length > 0
-    && (capability.defaultEffort === undefined || capability.effortLevels.includes(capability.defaultEffort));
-}
-
-function hasExactEffortCapabilities(
-  capabilities: CommandCodeEffortCapabilities,
-  models: readonly CommandCodeRuntimeModel[],
-): boolean {
-  if (JSON.stringify(Object.keys(capabilities).sort()) !== JSON.stringify([...models].sort())) return false;
-  return models.every((model) => {
-    const capability = capabilities[model];
-    if (!capability
-      || typeof capability.supportsEffort !== 'boolean'
-      || !Array.isArray(capability.effortLevels)
-      || !['adjustable', 'unavailable', 'unknown'].includes(capability.status)
-      || capability.source !== 'live-preflight'
-      || !/^[a-f0-9]{64}$/.test(capability.capabilityHash)
-      || new Set(capability.effortLevels).size !== capability.effortLevels.length
-      || capability.effortLevels.some((effort) => typeof effort !== 'string' || !(COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(effort))) return false;
-    if (capability.status === 'unknown' || capability.status === 'unavailable') {
-      if (capability.supportsEffort || capability.effortLevels.length > 0 || capability.defaultEffort !== undefined) return false;
-    } else if (capability.status === 'adjustable'
-      && (!capability.supportsEffort
-        || capability.effortLevels.length === 0
-        || capability.defaultEffort !== undefined && !capability.effortLevels.includes(capability.defaultEffort))) return false;
-    // Extra catalogue models may have inconclusive effort probes. They remain
-    // explicit unavailable evidence and never become runnable; the approved
-    // pair still has to satisfy its exact capability contract below. An
-    // unknown approved model is never equivalent to a confirmed non-adjustable
-    // model (Muse), even though both carry an empty effort list.
-    if ((COMMAND_CODE_MODELS as readonly string[]).includes(model) && capability.status === 'unknown') return false;
-    if (!(COMMAND_CODE_MODELS as readonly string[]).includes(model) && capability.status === 'unknown') return true;
-    // The shadow contract is model-specific even when the live catalogue also
-    // contains extra evidence-only models. Never let an extra model bypass
-    // drift checks for Qwen or Muse.
-    if ((COMMAND_CODE_MODELS as readonly string[]).includes(model)) {
-      const expectedLevels = COMMAND_CODE_EFFORT_LEVELS_BY_MODEL[model] ?? [];
-      return JSON.stringify(capability.effortLevels) === JSON.stringify(expectedLevels)
-        && (expectedLevels.length === 0 ? capability.defaultEffort === undefined : capability.defaultEffort === 'medium');
-    }
-    return true;
-  });
-}
-
-function hasOrderedShadowCatalogue(models: readonly CommandCodeRuntimeModel[]): boolean {
-  // Once the complete catalogue is present, its exact identity and order are
-  // part of the shadow readiness contract. Do not let an injected/custom
-  // discovery path bypass the same fail-closed rule used by startup discovery.
-  if (models.length === COMMAND_CODE_FULL_MODEL_CATALOGUE.length) {
-    return validateCommandCodeModelCatalogue(models).valid;
-  }
-  const seen = new Set<string>();
-  for (const model of models) {
-    if (seen.has(model)) return false;
-    seen.add(model);
-  }
-  let previousIndex = -1;
-  for (const model of COMMAND_CODE_MODELS) {
-    const index = models.indexOf(model);
-    if (index < 0 || index <= previousIndex) return false;
-    previousIndex = index;
-  }
-  return true;
-}
-
-function extractEffectiveEffort(event: NormalizedEvent): { effort: CommandCodeEffort; method: 'provider-event' | 'provider-result' } | undefined {
-  if (event.type !== 'model_request_end' && event.type !== 'agent_end') return undefined;
-  const data = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
-    ? event.data as Record<string, unknown>
-    : undefined;
-  const value = data?.effort ?? data?.effectiveEffort ?? data?.reasoningEffort;
-  if (typeof value !== 'string' || !['low', 'medium', 'high', 'xhigh', 'max'].includes(value)) return undefined;
-  return {
-    effort: value as CommandCodeEffort,
-    method: data?.effortEvidenceMethod === 'provider-result' ? 'provider-result' : 'provider-event',
-  };
+/**
+ * Effort selector metadata for a model from the committed effort table
+ * (WP2 adds the table; until then no model exposes a selector).
+ */
+function commandCodeEffortSpec(model: CommandCodeRuntimeModel): { effortLevels: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort } {
+  return { effortLevels: [] };
 }
 
 function normalizedEventKey(event: NormalizedEvent): string {
@@ -1361,42 +825,6 @@ function exitCodeClass(code: number | null): CommandCodeErrorClass {
 function isWithinRoot(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
-}
-
-function isBroadWorkspaceRoot(root: string): boolean {
-  const canonical = path.resolve(root);
-  return new Set(['/','/home','/root','/tmp','/var','/etc','/usr','/bin','/sbin','/lib','/lib64']).has(canonical);
-}
-
-function isBroadRuntimeRoot(root: string): boolean {
-  return new Set(['/','/home','/root','/tmp','/var','/usr','/usr/local','/etc','/bin','/sbin','/lib','/lib64']).has(path.resolve(root));
-}
-
-async function identityForDirectory(directory: string): Promise<{ dev: number; ino: number }> {
-  const metadata = await stat(directory);
-  if (!metadata.isDirectory()) throw new Error(`Command Code browser root is not a directory: ${directory}`);
-  return { dev: metadata.dev, ino: metadata.ino };
-}
-
-async function canonicalBrowserDirectories(
-  roots: string[],
-  label: string,
-  rejectSymlinkAliases = false,
-): Promise<{ paths: string[]; identities: Array<{ dev: number; ino: number }> }> {
-  const canonical: string[] = [];
-  const identities: Array<{ dev: number; ino: number }> = [];
-  for (const root of [...new Set(roots.map((value) => path.resolve(value)))]) {
-    const link = await lstat(root);
-    if (!link.isDirectory() || link.isSymbolicLink()) throw new Error(`browser ${label} must be regular directories`);
-    const resolved = await realpath(root);
-    if (rejectSymlinkAliases && resolved !== path.resolve(root)) throw new Error(`browser ${label} may not contain symlinked path components`);
-    const resolvedStat = await stat(resolved);
-    if (!resolvedStat.isDirectory()) throw new Error(`browser ${label} must be directories`);
-    canonical.push(resolved);
-    identities.push({ dev: resolvedStat.dev, ino: resolvedStat.ino });
-  }
-  const uniquePaths = [...new Set(canonical)];
-  return { paths: uniquePaths, identities: identities.slice(0, uniquePaths.length) };
 }
 
 async function ensurePrivateDirectory(directory: string, label: string): Promise<void> {

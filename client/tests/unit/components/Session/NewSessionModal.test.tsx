@@ -22,7 +22,41 @@ const PI_MODELS = [
   { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', provider: 'openai-codex' },
 ];
 
-const sessionState = {
+/** The 35 GOAT-eligible ids the server lists for Command Code (54 advertised minus 19 excluded). */
+const COMMAND_CODE_ELIGIBLE_IDS = [
+  'deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash',
+  'moonshotai/kimi-k3', 'moonshotai/kimi-k2.7-code', 'moonshotai/kimi-k2.7-code-highspeed', 'moonshotai/kimi-k2.6', 'moonshotai/kimi-k2.5',
+  'zai-org/glm-5.2', 'zai-org/glm-5.2-fast', 'zai-org/glm-5.1', 'zai-org/glm-5',
+  'minimaxai/minimax-m3', 'minimaxai/minimax-m2.7', 'minimaxai/minimax-m2.5',
+  'xiaomi/mimo-v2.5-pro', 'xiaomi/mimo-v2.5',
+  'qwen/qwen3.8-max', 'qwen/qwen3.7-max', 'qwen/qwen3.7-plus', 'qwen/qwen3.7-flash', 'qwen/qwen3.6-max-preview', 'qwen/qwen3.6-plus',
+  'stepfun/step-3.7-flash', 'stepfun/step-3.5-flash',
+  'tencent/hy3-paid', 'nvidia/nemotron-3-ultra-550b-a55b',
+  'thinkingmachines/inkling', 'thinkingmachines/inkling-small',
+  'poolside/laguna-s-2.1-free',
+  'gpt-5.6-luna',
+  'google/gemini-3.7-flash',
+  'meta/muse-spark-1.2', 'meta/muse-spark-1.2-contributor',
+  'xai/grok-4.5', 'xai/grok-4.6',
+];
+
+const COMMAND_CODE_EXCLUDED_SAMPLE = ['claude-opus-5', 'gpt-5.5', 'google/gemini-3.6-flash', 'sakana/fugu-ultra'];
+
+function commandCodeModel(id: string) {
+  const effort = id === 'qwen/qwen3.8-max'
+    ? { effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' }
+    : { effortLevels: [] };
+  const leaf = id.split('/').pop() ?? id;
+  return {
+    id,
+    displayName: leaf.replace(/[-_.]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    provider: 'command-code',
+    reasoning: true,
+    ...effort,
+  };
+}
+
+const sessionState: any = {
   claudeAvailable: true,
   claudeAuthError: null,
   opencodeAvailable: true,
@@ -31,12 +65,9 @@ const sessionState = {
   antigravityAuthError: null,
   commandCodeAvailable: true,
   commandCodeEnabled: true,
-  commandCodeModels: [
-    { id: 'qwen/qwen3.8-max', displayName: 'Qwen 3.8 Max', provider: 'command-code', reasoning: true, runnable: true, status: 'runnable', browserRunnable: true, supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
-    { id: 'meta/muse-spark-1.2-contributor', displayName: 'Muse Spark 1.2 Contributor', provider: 'command-code', reasoning: true, runnable: true, status: 'runnable', browserRunnable: true, supportsEffort: false, effortLevels: [] },
-    { id: 'google/gemini-3.7-flash', displayName: 'Gemini 3.7 Flash', provider: 'command-code', reasoning: true, runnable: false, status: 'evidence-only', browserRunnable: true, supportsEffort: false, effortLevels: [] },
-    { id: 'legacy/unverified', displayName: 'Legacy Unverified', provider: 'command-code', reasoning: true, supportsEffort: false, effortLevels: [] },
-  ],
+  commandCodeError: null,
+  commandCodeModels: COMMAND_CODE_ELIGIBLE_IDS.map(commandCodeModel),
+  sessionCreation: { status: 'idle' as 'idle' | 'pending' | 'created' | 'error', requestId: undefined as string | undefined, error: undefined as string | undefined },
 };
 
 vi.mock('../../../../src/store', () => ({
@@ -125,20 +156,87 @@ describe('NewSessionModal — Claude backend selector', () => {
     expect(onCreateSession).toHaveBeenCalledWith('/root', 'pi', 'openai-codex/gpt-5.6-luna');
   });
 
-  it('shows the full Command Code catalogue, enables contained browser models, and omits Muse effort', async () => {
-    const onCreateSession = vi.fn();
-    render(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={onCreateSession} />);
+  it('lists all 35 GOAT-eligible Command Code models and none of the excluded ids', async () => {
+    render(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={vi.fn()} />);
 
     fireEvent.click(screen.getByText('Command Code'));
-    const selector = await screen.findByTestId('commandcode-model-select');
-    expect(screen.getByRole('option', { name: /Gemini 3\.7 Flash/ })).not.toBeDisabled();
-    expect(screen.getByRole('option', { name: /Legacy Unverified/ })).toBeDisabled();
-    expect(screen.getByTestId('commandcode-effort-select')).toBeInTheDocument();
+    const selector = await screen.findByTestId('commandcode-model-select') as unknown as HTMLSelectElement;
+    expect(selector.options).toHaveLength(35);
+    const values = Array.from(selector.options).map((option) => option.value);
+    for (const id of COMMAND_CODE_ELIGIBLE_IDS) expect(values).toContain(id);
+    for (const excluded of COMMAND_CODE_EXCLUDED_SAMPLE) expect(values).not.toContain(excluded);
+    for (const option of Array.from(selector.options)) expect(option).not.toBeDisabled();
+  });
 
-    fireEvent.change(selector, { target: { value: 'meta/muse-spark-1.2-contributor' } });
+  it('keeps a non-first model selected across rerenders and a catalogue refresh', async () => {
+    const { rerender } = render(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={vi.fn()} />);
+
+    fireEvent.click(screen.getByText('Command Code'));
+    const selector = await screen.findByTestId('commandcode-model-select') as unknown as HTMLSelectElement;
+    fireEvent.change(selector, { target: { value: 'zai-org/glm-5.2' } });
+    expect(selector.value).toBe('zai-org/glm-5.2');
+
+    // Rerender (props/store churn) must not snap the selection back to the first entry.
+    rerender(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={vi.fn()} />);
+    expect((screen.getByTestId('commandcode-model-select') as unknown as HTMLSelectElement).value).toBe('zai-org/glm-5.2');
+
+    // A catalogue refresh that still contains the model keeps it selected.
+    sessionState.commandCodeModels = [...COMMAND_CODE_ELIGIBLE_IDS].reverse().map(commandCodeModel);
+    rerender(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={vi.fn()} />);
+    expect((screen.getByTestId('commandcode-model-select') as unknown as HTMLSelectElement).value).toBe('zai-org/glm-5.2');
+    sessionState.commandCodeModels = COMMAND_CODE_ELIGIBLE_IDS.map(commandCodeModel);
+  });
+
+  it('shows exactly the model effort levels and preselects the default; hides the selector when the model has none', async () => {
+    render(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={vi.fn()} />);
+
+    fireEvent.click(screen.getByText('Command Code'));
+    const selector = await screen.findByTestId('commandcode-model-select') as unknown as HTMLSelectElement;
+    fireEvent.change(selector, { target: { value: 'qwen/qwen3.8-max' } });
+
+    const effort = screen.getByTestId('commandcode-effort-select') as unknown as HTMLSelectElement;
+    expect(Array.from(effort.options).map((option) => option.value)).toEqual(['low', 'medium', 'xhigh']);
+    expect(effort.value).toBe('medium');
+
+    fireEvent.change(selector, { target: { value: 'poolside/laguna-s-2.1-free' } });
     expect(screen.queryByTestId('commandcode-effort-select')).toBeNull();
+  });
+
+  it('create emits sdkType, model, effort, cwd and a requestId, and the modal stays open', async () => {
+    const onCreateSession = vi.fn();
+    const onClose = vi.fn();
+    render(<NewSessionModal isOpen onClose={onClose} onCreateSession={onCreateSession} />);
+
+    fireEvent.click(screen.getByText('Command Code'));
+    const selector = await screen.findByTestId('commandcode-model-select') as unknown as HTMLSelectElement;
+    fireEvent.change(selector, { target: { value: 'qwen/qwen3.8-max' } });
+    fireEvent.change(screen.getByTestId('commandcode-effort-select'), { target: { value: 'xhigh' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-    expect(onCreateSession).toHaveBeenCalledWith('/root', 'commandcode', 'meta/muse-spark-1.2-contributor');
+
+    expect(onCreateSession).toHaveBeenCalledTimes(1);
+    expect(onCreateSession).toHaveBeenCalledWith('/root', 'commandcode', 'qwen/qwen3.8-max', undefined, 'xhigh', expect.any(String));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a rejected create preserves the selections and shows the error', async () => {
+    const onCreateSession = vi.fn();
+    const onClose = vi.fn();
+    const view = render(<NewSessionModal isOpen onClose={onClose} onCreateSession={onCreateSession} />);
+
+    fireEvent.click(screen.getByText('Command Code'));
+    const selector = await screen.findByTestId('commandcode-model-select') as unknown as HTMLSelectElement;
+    fireEvent.change(selector, { target: { value: 'zai-org/glm-5.1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    const requestId = onCreateSession.mock.calls[0]?.[5] as string;
+
+    sessionState.sessionCreation = { status: 'error', requestId, error: 'Command Code runtime is disabled' };
+    view.rerender(<NewSessionModal isOpen onClose={onClose} onCreateSession={onCreateSession} />);
+
+    expect(screen.getByText(/Command Code runtime is disabled/i)).toBeInTheDocument();
+    expect((screen.getByTestId('commandcode-model-select') as unknown as HTMLSelectElement).value).toBe('zai-org/glm-5.1');
+    expect(screen.getByRole('button', { name: 'Create' })).not.toBeDisabled();
+    expect(onClose).not.toHaveBeenCalled();
+    sessionState.sessionCreation = { status: 'idle', requestId: undefined, error: undefined };
   });
 
   it('clicking the locked Channel backend does not change the selection', async () => {
