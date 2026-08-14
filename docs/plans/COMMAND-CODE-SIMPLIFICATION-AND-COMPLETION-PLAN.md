@@ -21,11 +21,16 @@ exits. It is also, today, the **largest** runtime module in the repository:
 
 | Runtime module | Lines |
 |---|---|
-| `server/src/command-code/` | **4,423** |
+| `server/src/command-code/` | **3,875** at HEAD (4,423 with the uncommitted sandbox work) |
 | `server/src/claude/` | 6,794 (four backends, SDK, channel, profiles) |
 | `server/src/pi/` | 5,311 (pooling, watchers, extensions, parallel) |
 | `server/src/opencode/` | 2,852 |
 | `server/src/antigravity/` | 1,462 |
+
+> **Every `file:line` reference in this plan is anchored to `HEAD`**, i.e. the
+> tree as it stands *after* WP0 discards the uncommitted sandbox work. The
+> symbol name is the real anchor; if a line has drifted because another agent
+> committed in the meantime, search for the symbol and carry on.
 
 That inversion is the defect. Roughly two-thirds of the Command Code module is
 access-control and containment machinery that **no other runtime has**, built
@@ -41,38 +46,42 @@ model will not stay selected and the session cannot be prompted.*
 
 The chain is:
 
-1. `client/src/components/Session/NewSessionModal.tsx:310` filters the dropdown
-   to `commandCodeModels.filter(m => m.browserRunnable === true)`.
-2. The effect at `NewSessionModal.tsx:323-337` snaps the selection back to
-   `commandCodeBrowserModels[0]`, which is `''` when that list is empty.
-3. `browserRunnable` requires `CommandCodeService.isBrowserAvailable()`
-   (`server/src/command-code/command-code-service.ts:893`), which is a
-   **seven-condition AND**: `browserAuthFile` **&&** `browserEgressExecutablePath`
-   **&&** `browserDnsConfigPath` **&&** `browserCaCertificatesPath` **&&**
-   `browserRuntimeRoots.length > 0` **&&** `browserAllowedCwdRoots.length > 0`
-   **&&** `browserAllowedModels ⊇ all 35` — plus `runner.browserSandboxReady()`.
-4. Every one of those defaults to empty or false
-   (`command-code-config.ts:158-167`).
+1. `client/src/components/Session/NewSessionModal.tsx:273` (`commandCodeBrowserModels`)
+   filters the dropdown to `commandCodeModels.filter(m => m.browserRunnable === true)`.
+2. The effect just below it (`:291`, `commandCodeBrowserModels.find(...) ??
+   commandCodeBrowserModels[0]`) snaps the selection back to the first entry,
+   which is `undefined` when that list is empty — blanking the user's choice.
+3. `browserRunnable` (`:552`) requires `CommandCodeService.isBrowserAvailable()`
+   (`server/src/command-code/command-code-service.ts:862`), which ANDs together
+   `browserAllowedModels ⊇ every eligible model`, `browserAllowedCwdRoots.length > 0`,
+   `browserPolicyReady` (itself requiring `browserAuthFile`, and in the
+   uncommitted work also the egress/DNS/CA paths and `browserRuntimeRoots`) and
+   `runner.browserSandboxReady()`.
+4. Every one of those defaults to empty or false (`command-code-config.ts`,
+   `defaultCommandCodeConfig`, and `parseModelAllowlist` in `server/src/config.ts`
+   which yields `[]` for an unset `PI_COMMAND_CODE_BROWSER_ALLOWED_MODELS`).
 
 So the list is empty, the effect blanks the selection, and create is sent with
-no model. **Deleting the network sandbox alone does not fix this** — it clears
-only four of the seven conditions. The allowlists must go too.
+no model. **Deleting the network sandbox alone does not fix this** — the model
+and CWD allowlists and `browserAuthFile` gate it independently. The allowlists
+must go too.
 
 ### 1.2 The "everything unavailable" machine, root-caused
 
 `COMMAND_CODE_EFFORT_SOURCE = 'live-preflight'`
-(`command-code-model-catalog.ts:191`). At **every server start**,
-`discoverCommandCodeEfforts` spawns a probe subprocess per model, bounded by a
-120s total budget (`:305`). Any timeout or inconclusive parse sets
-`status: 'unknown'`, which is explicitly fail-closed — the model becomes
-unavailable, and for the two legacy models the exhaustive branch issues real
-`-p --model X --effort Y` inference calls.
+(`command-code-model-catalog.ts:112`). At **every server start**,
+`discoverCommandCodeEfforts` spawns a probe subprocess per model, bounded by
+`COMMAND_CODE_DISCOVERY_TOTAL_TIMEOUT_MS = 120_000` (`:220`). Any timeout or
+inconclusive parse sets `status: 'unknown'`, which is explicitly fail-closed —
+the model becomes unavailable, and for the two legacy models the exhaustive
+branch issues real `-p --model X --effort Y` inference calls.
 
-`getModels()` (`:960-989`) then marks a model `runnable` only if
-`capabilityReady` is true, and `isSessionRecordAccessible()` (`:930-941`)
+`getModels()` (`command-code-service.ts:909`) then marks a model `runnable` only
+if `capabilityReady` is true, and `isSessionRecordAccessible()` (`:896`)
 **rejects an existing stored session** whose `effortCapabilityHash` no longer
 matches current discovery — so sessions silently vanish across a restart when
-probe results drift.
+probe results drift. That predicate is load-bearing in ~18 call sites
+(`:330-1072`), which is why deleting the hash simplifies far more than it looks.
 
 This is the mechanism that produces the wall of "unavailable" the operator has
 repeatedly rejected. It is deleted here and replaced with a committed static
@@ -255,22 +264,39 @@ changing behaviour.
 
 ### WP0 — Reset the abandoned sandbox work in progress
 
-The working tree currently carries **~1,682 uncommitted lines** implementing the
-Bubblewrap/`slirp4netns` sandbox — the change that took the host's networking
-down. It is being deleted anyway, so discarding it is free.
+The working tree carries **~1,682 uncommitted lines** across ~51 files
+implementing the Bubblewrap/`slirp4netns` sandbox — the change that took the
+host's networking down. It is being deleted anyway, so discarding it is free.
 
-1. `git status --short` and `git diff > /tmp/claude-*/scratchpad/abandoned-sandbox.patch`
-   (outside the repo) purely as a reference copy.
-2. Move the untracked `server/tests/unit/command-code/command-code-goat-policy.test.ts`
-   out of the repo to the same scratchpad — it is reference material for WP2 and
-   will be rewritten, not kept.
-3. Discard the working tree: `git checkout -- .` then confirm
-   `git status --short` is empty.
-4. Confirm the suite is green at HEAD before touching anything.
+**Another agent works in this repository.** A GLM 5.3 change (`ad03839`,
+`a935f92`) landed while this plan was being written. Never discard the working
+tree blind.
 
-Note that the sandbox is only *partly* uncommitted — HEAD still contains
-Bubblewrap references in `command-code-process-runner.ts` and
-`command-code-config.ts`. WP1 removes those.
+1. `git status --short` and `git diff --stat`. Save a reference copy outside the
+   repo: `git diff > <scratchpad>/abandoned-sandbox.patch`.
+2. **Confirm every dirty path is Command Code / sandbox work** before discarding
+   anything. Today that is: `.env.example`, `shared/src/types.ts`, the
+   `server/src/command-code/*`, `server/src/internal-api/*`,
+   `server/src/live-validation/*`, `server/src/websocket/*`, `scripts/*command-code*`,
+   `scripts/validation-server.ts`, the matching tests, the Command Code docs, and
+   `client/src/{components/Chat/ChatView,components/Session/NewSessionModal,hooks/useWebSocket}.tsx`.
+   **If any path outside that set is dirty, stop and ask the operator** — it is
+   another agent's in-flight work, not yours to discard.
+3. Move the untracked `server/tests/unit/command-code/command-code-goat-policy.test.ts`
+   to the scratchpad — reference material for WP2, to be rewritten, not kept.
+4. Discard **by path**, not with a bare `git checkout -- .`:
+   `git checkout -- <the confirmed paths>`. Then confirm `git status --short` is
+   empty and `git log --oneline -1` is still the commit you started from.
+5. Confirm `npm test` is green at HEAD before touching anything.
+
+Two notes:
+
+- The sandbox is only *partly* uncommitted — HEAD still contains Bubblewrap
+  references in `command-code-process-runner.ts` and `command-code-config.ts`.
+  WP1 removes those.
+- `NewSessionModal.tsx` at HEAD carries another agent's GLM 5.3 copy at lines
+  208 and 685. **Preserve it.** WP4 touches only the Command Code parts of that
+  file.
 
 ### WP1 — Delete the containment and access-control machinery
 
@@ -409,23 +435,25 @@ run-receipt store. Delete `currentRequestedEffort`, `currentAcceptedEffort`,
 
 **Implementation, `NewSessionModal.tsx`:**
 
-- Delete `commandCodeBrowserModels` (line 310) and the reset effect
-  (lines 323-337). Render `commandCodeModels` directly.
+- Delete `commandCodeBrowserModels` (`:273`) and the effect below it that
+  re-derives the selection from that filtered list (`:291`). Render
+  `commandCodeModels` directly.
 - Model default: initialise to `commandCodeModels[0]?.id` **once** when the
   Command Code runtime is selected. Never re-derive it from a filtered list.
 - `onChange` sets the model and sets effort to that model's `defaultEffort`
   (or `''` when it has none). No effect fights the user's choice.
 - Delete the `sdkType === 'commandcode' && currentPath === '/root'` special case
-  (lines 222-227). Command Code uses the same CWD control as every other runtime,
+  if present. Command Code uses the same CWD control as every other runtime,
   validated server-side against `COMMAND_CODE_ALLOWED_CWD_ROOTS`.
-- Delete `browserRunnable` from the option-rendering logic (line 592) and from
+- Delete `browserRunnable` from the option-rendering logic (`:552`) and from
   `shared/src/types.ts`.
 
 **`server/src/websocket/connection.ts`:** the `commandcode_available` payload
 becomes `{ available, enabled, models, error }` — drop `availabilityStatus`,
-`checkedAt`, `source`. `getModels()` replaces `getBrowserModels()` at line 1759
-and in `session-transfer/transfer-service.ts:615`. Collapse the service
-construction (lines 292-314) to the eight surviving config keys.
+`checkedAt`, `source`. `getModels()` replaces `getBrowserModels()` at
+`connection.ts:1756` and `session-transfer/transfer-service.ts:615`.
+Collapse the service construction (`connection.ts:299` onward) to the eight
+surviving config keys, and the create gate at `routes/sessions.ts:897`.
 
 **`server/src/routes/models.ts`:** the `commandcode` branch returns
 `{ models: service.getModels() }` when enabled — delete the `browserEnabled`
@@ -463,10 +491,11 @@ indirection and the `catalogueMetadata` envelope.
 - Delete the `getShadowSession` / `getNonCommandCodeRegistryEntry` split — Command
   Code sessions are ordinary registry sessions. Delete the browser-vs-Internal-API
   session partition; a session is a session.
-- Replace the `isInternalApiEnabled() ?? isShadowEnabled()` ladder at lines
-  903-904 with `service.isEnabled() && service.isAvailable()`.
+- Replace the `isShadowAvailable?.() ?? isAvailable()` / `isShadowEnabled?.() ??
+  isEnabled()` ladder (`sessions.ts:897`) with
+  `service.isEnabled() && service.isAvailable()`.
 
-**`server/src/internal-api/routes/capabilities.ts`:** collapse lines 43-52 to
+**`server/src/internal-api/routes/capabilities.ts`:** collapse `:43-51` to
 `enabled = service?.isEnabled()`, `available = enabled && service?.isAvailable()`,
 `modelCatalogue = enabled ? service.getModels() : []`. Delete the
 `getEffortCapabilities` / `getShadowEffortCapabilities` fallback chain,
@@ -503,8 +532,14 @@ Delete `PI_INTERNAL_API_COMMANDCODE_ENABLED`, `PI_COMMAND_CODE_BROWSER_ENABLED`,
 `PI_COMMAND_CODE_BROWSER_EGRESS_EXECUTABLE_PATH`,
 `PI_COMMAND_CODE_BROWSER_DNS_CONFIG`, `PI_COMMAND_CODE_BROWSER_CA_CERTIFICATES`,
 `COMMAND_CODE_EXPECTED_VERSION`, and the three
-`PI_COMMAND_CODE_BROWSER_VALIDATION_*` entries (`.env.example:302-304`), together
-with `parseModelAllowlist` if it has no other caller.
+`parseModelAllowlist` in `server/src/config.ts`, which has no other caller.
+
+At HEAD `.env.example` carries 13 Command Code variables (`:243-268`); the
+sandbox-only ones (`PI_COMMAND_CODE_BROWSER_DNS_CONFIG`,
+`PI_COMMAND_CODE_BROWSER_CA_CERTIFICATES`,
+`PI_COMMAND_CODE_BROWSER_EGRESS_EXECUTABLE_PATH`, the three
+`PI_COMMAND_CODE_BROWSER_VALIDATION_*` entries) exist only in the uncommitted
+work WP0 discards, so they need no deletion — just do not reintroduce them.
 
 **Documentation** — Command Code is the only runtime with no canonical doc:
 
@@ -541,7 +576,7 @@ The task is not done while any of these fails.
 
 | # | Gate | Threshold / command |
 |---|---|---|
-| B1 | Command Code module size | `wc -l server/src/command-code/*.ts` total **≤ 2,200** (from 4,423) |
+| B1 | Command Code module size | `wc -l server/src/command-code/*.ts` total **≤ 2,200** (from 3,875 at HEAD) |
 | B2 | No containment or attestation machinery survives | `grep -ric "bwrap\|slirp4netns\|unshare-net\|bubblewrap\|attestation\|shadow" server/src client/src scripts .env.example` = **0** |
 | B3 | One process per session | A browser create and an Internal API create each spawn exactly **1** subprocess, with no helper |
 | B4 | Catalogue is denylist-only and fails open | 35 eligible, **0** of the 19 excluded; an unknown advertised id appears; a missing id does **not** change `isAvailable()` |
@@ -589,8 +624,10 @@ Run in this order. Steps 1-6 are blocking; step 8 needs fresh approval.
    model → `DELETE` → assert the process is gone.
 7. `git status --short`, `git diff --stat`, `git diff --check`, and an explicit
    scan of every changed path for tokens, cookies, auth files, session dumps or
-   local machine paths. Then commit and push on the current branch. **Do not
-   create a branch.**
+   local machine paths. **Stage by path** — another agent commits to `master`
+   here, so never `git add -A`. Then commit and push on the current branch;
+   if the push is rejected, `git pull --rebase` and re-run steps 1-2 before
+   pushing again. **Do not create a branch.**
 8. Ask the operator for fresh approval, then `sudo systemctl restart
    pi-web-ui.service` once, set `COMMAND_CODE_ENABLED=true` in the production
    env, and read back the live behaviour (see `prod-deploy-topology`: systemd
