@@ -47,7 +47,7 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
 
-  it('records requested effort at acceptance and provider-reported effective effort separately', async () => {
+  it('records the accepted effort at acceptance and ignores provider effort echoes', async () => {
     const begun = await manager.beginRun({
       ...baseInput,
       sessionId: 'commandcode-effort-session',
@@ -56,24 +56,20 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       model: 'qwen/qwen3.8-max',
       modelSelector: 'qwen/qwen3.8-max',
       effort: 'xhigh',
-      requestedEffort: 'xhigh',
-      effortSource: 'explicit',
-      defaultEffort: 'medium',
     });
     expect(begun.kind).toBe('created');
     if (begun.kind !== 'created') return;
-    expect(begun.receipt).toMatchObject({ effort: 'xhigh', effortSource: 'explicit' });
+    expect(begun.receipt).toMatchObject({ effort: 'xhigh' });
     await manager.observeEvent(begun.receipt.runId, {
       type: 'model_request_end',
       sessionId: 'commandcode-effort-session',
       timestamp: now,
       data: { effort: 'xhigh', effortEvidenceMethod: 'provider-event' },
     });
-    expect(manager.get(begun.receipt.runId)).toMatchObject({
-      effort: 'xhigh',
-      effectiveEffort: 'xhigh',
-      effortEvidenceMethod: 'provider-event',
-    });
+    const receipt = manager.get(begun.receipt.runId);
+    expect(receipt).toMatchObject({ effort: 'xhigh' });
+    expect(receipt && 'effectiveEffort' in receipt).toBe(false);
+    expect(receipt && 'effortEvidenceMethod' in receipt).toBe(false);
   });
 
   it('persists run-scoped Command Code terminal usage and ignores cumulative/session-shaped usage', async () => {
@@ -85,8 +81,6 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       model: 'qwen/qwen3.8-max',
       modelSelector: 'qwen/qwen3.8-max',
       effort: 'medium',
-      effortSource: 'default',
-      defaultEffort: 'medium',
     });
     expect(begun.kind).toBe('created');
     if (begun.kind !== 'created') return;
@@ -117,8 +111,6 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       model: 'qwen/qwen3.8-max',
       modelSelector: 'qwen/qwen3.8-max',
       effort: 'medium',
-      effortSource: 'default',
-      defaultEffort: 'medium',
     });
     expect(malformed.kind).toBe('created');
     if (malformed.kind !== 'created') return;
@@ -140,8 +132,6 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       model: 'qwen/qwen3.8-max',
       modelSelector: 'qwen/qwen3.8-max',
       effort: 'medium',
-      effortSource: 'default',
-      defaultEffort: 'medium',
     });
     expect(begun.kind).toBe('created');
     if (begun.kind !== 'created') return;

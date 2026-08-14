@@ -25,7 +25,6 @@ export interface CommandCodeCatalogueMetadata {
   checkedAt: string;
   source: 'live-discovery';
 }
-export type CommandCodeEffortSource = 'explicit' | 'default' | 'automatic' | 'none';
 
 // ─── Verbosity levels ────────────────────────────────────────────────────────
 
@@ -246,9 +245,6 @@ export interface BatchCreateResultItem {
   modelSelector?: string;
   executionInstanceId?: string;
   effort?: CommandCodeEffort;
-  requestedEffort?: CommandCodeEffort;
-  acceptedEffort?: CommandCodeEffort;
-  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   cwd?: string;
   pinned?: boolean;
@@ -418,12 +414,7 @@ export interface SessionEvidenceResponse {
   lastActivity: string;
   executionInstanceId: string;
   effort?: CommandCodeEffort;
-  requestedEffort?: CommandCodeEffort;
-  acceptedEffort?: CommandCodeEffort;
-  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
-  effectiveEffort?: CommandCodeEffort;
-  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
   /** Latest run-scoped usage observed from the matching terminal result, when available. */
   tokenUsage?: RunTokenUsage;
   activity: {
@@ -548,9 +539,6 @@ export interface CreateSessionResponse {
   /** Canonical creation selector when it differs from the runtime model (for example profile:<id>). */
   modelSelector?: string;
   effort?: CommandCodeEffort;
-  requestedEffort?: CommandCodeEffort;
-  acceptedEffort?: CommandCodeEffort;
-  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   /** Configured runtime instance resolved for the created session. */
   executionInstanceId?: string;
@@ -578,12 +566,7 @@ export interface SessionInfo {
   /** Canonical creation selector, additive for exact profile-backed routes. */
   modelSelector?: string;
   effort?: CommandCodeEffort;
-  requestedEffort?: CommandCodeEffort;
-  acceptedEffort?: CommandCodeEffort;
-  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
-  effectiveEffort?: CommandCodeEffort;
-  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
   status: 'idle' | 'running' | 'error';
   messageCount: number;
   firstMessage: string;
@@ -633,11 +616,7 @@ export interface SessionControlResponse {
   modelId?: string;
   level?: string;
   effort?: CommandCodeEffort;
-  requestedEffort?: CommandCodeEffort;
-  acceptedEffort?: CommandCodeEffort;
-  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
-  effectiveEffort?: CommandCodeEffort;
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */
   pinnedUntil?: string;
@@ -894,12 +873,7 @@ export interface RunReceipt {
   modelSelector?: string;
   /** Native Command Code effort binding; never mapped to thinkingLevel. */
   effort?: CommandCodeEffort;
-  requestedEffort?: CommandCodeEffort;
-  acceptedEffort?: CommandCodeEffort;
-  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
-  effectiveEffort?: CommandCodeEffort;
-  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
   /** Run-scoped provider usage from the matching terminal result, when measured. */
   tokenUsage?: RunTokenUsage;
   /** Payload-free normalized-event output evidence; additive since 1.19.0. */

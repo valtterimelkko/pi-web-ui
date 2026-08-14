@@ -211,13 +211,13 @@ export type ServerMessage =
   | { type: 'connection_status'; status: string }
   | { type: 'error'; message: string; code?: string; sessionPath?: string }
   | { type: 'sessions_list'; sessions: SessionInfo[] }
-  | { type: 'session_created'; sessionId: string; sessionPath: string; sdkType?: SdkType; model?: string; effort?: CommandCodeEffort; requestedEffort?: CommandCodeEffort; acceptedEffort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; effortSource?: 'explicit' | 'default' | 'automatic' | 'none'; defaultEffort?: CommandCodeEffort; effectiveEffort?: CommandCodeEffort; effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved'; effortCapabilityHash?: string }
-  | { type: 'session_switched'; sessionId: string; sessionPath: string; sdkType?: SdkType; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; requestedEffort?: CommandCodeEffort; acceptedEffort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; effortSource?: 'explicit' | 'default' | 'automatic' | 'none'; defaultEffort?: CommandCodeEffort; effectiveEffort?: CommandCodeEffort; effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved'; effortCapabilityHash?: string; contextWindow?: number; contextUsed?: number; contextPercent?: number; messages?: SessionMessage[]; fileTimestamp?: number; isStreaming?: boolean }
+  | { type: 'session_created'; sessionId: string; sessionPath: string; sdkType?: SdkType; model?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort }
+  | { type: 'session_switched'; sessionId: string; sessionPath: string; sdkType?: SdkType; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort; contextWindow?: number; contextUsed?: number; contextPercent?: number; messages?: SessionMessage[]; fileTimestamp?: number; isStreaming?: boolean }
   | { type: 'session_tree'; tree: TreeNode[] }
   | { type: 'session_info'; stats: SessionStats }
   | { type: 'model_changed'; modelId: string }
-  | { type: 'effort_changed'; effort?: CommandCodeEffort; requestedEffort?: CommandCodeEffort; acceptedEffort?: CommandCodeEffort; effortSource: 'explicit' | 'default' | 'automatic' | 'none'; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort; effectiveEffort?: CommandCodeEffort; effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved'; effortCapabilityHash?: string }
-  | { type: 'commandcode_available'; available: boolean; enabled: boolean; models: CommandCodeModelInfo[]; error: string | null; availabilityStatus?: CommandCodeCatalogueMetadata['availabilityStatus']; checkedAt?: string; source?: CommandCodeCatalogueMetadata['source'] }
+  | { type: 'effort_changed'; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort }
+  | { type: 'commandcode_available'; available: boolean; enabled: boolean; models: CommandCodeModelInfo[]; error: string | null }
   | { type: 'thinking_level_changed'; level: string }
   | { type: 'compaction_result'; summary: string; tokensBefore: number; contextWindow?: number; contextUsed?: number; contextPercent?: number }
   | { type: 'context_update'; sessionId: string; contextWindow?: number; contextUsed?: number; contextPercent?: number }

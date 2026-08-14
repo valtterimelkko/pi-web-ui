@@ -204,14 +204,7 @@ describe('RunReceiptStore — durable run ledger', () => {
       model: 'qwen/qwen3.8-max',
       effort: 'ultra',
     } as never))).rejects.toThrow(/effort/i);
-    // Automatic effort sources cannot carry a value.
-    await expect(store.create(receipt({
-      ...commandCodeBase,
-      runId: 'automatic-with-value',
-      model: 'qwen/qwen3.8-max',
-      effort: 'medium',
-      effortSource: 'automatic',
-    } as never))).rejects.toThrow(/automatic/i);
+    // Any advertised model id is a legal receipt route; only the binding must be consistent.
     await expect(store.create(receipt({
       ...commandCodeBase,
       runId: 'bad-commandcode-instance',
@@ -224,6 +217,7 @@ describe('RunReceiptStore — durable run ledger', () => {
       runId: 'eligible-model-ok',
       model: 'deepseek/deepseek-v4-pro',
     } as never))).resolves.toBeUndefined();
+    // Automatic-sourcing is no longer a receipt concept; the effort field stands alone.
   });
 
   it('round-trips run-scoped token usage across restart and rejects malformed totals', async () => {

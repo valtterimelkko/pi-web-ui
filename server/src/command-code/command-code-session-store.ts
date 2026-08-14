@@ -14,10 +14,7 @@ export interface CommandCodeInternalSessionRecord {
   modelSelector: CommandCodeRuntimeModel;
   /** Accepted native effort for the next Command Code turn, when adjustable. */
   effort?: CommandCodeEffort;
-  effortSource?: 'explicit' | 'default' | 'automatic' | 'none';
   defaultEffort?: CommandCodeEffort;
-  effectiveEffort?: CommandCodeEffort;
-  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
   executionInstanceId: 'commandcode-default';
   createdAt: string;
   updatedAt: string;
@@ -137,10 +134,11 @@ export class CommandCodeSessionStore {
 
   async update(sessionId: string, patch: Partial<Pick<CommandCodeInternalSessionRecord,
     'nativeSessionId' | 'activeRunId' | 'state' | 'lastResult' | 'messageCount' | 'firstMessage' |
-    'lastMessage' | 'lastFinalText' | 'diagnostics' | 'effectiveEffort' | 'effortEvidenceMethod'>> & {
+    'lastMessage' | 'lastFinalText' | 'diagnostics'>> & {
     cwd?: string;
     modelSelector?: CommandCodeRuntimeModel;
     effort?: CommandCodeEffort;
+    defaultEffort?: CommandCodeEffort;
   }): Promise<CommandCodeInternalSessionRecord> {
     if (patch.nativeSessionId !== undefined) {
       return this.withNativeBindingLock(() => this.updateRecord(sessionId, patch));
@@ -150,10 +148,11 @@ export class CommandCodeSessionStore {
 
   private async updateRecord(sessionId: string, patch: Partial<Pick<CommandCodeInternalSessionRecord,
     'nativeSessionId' | 'activeRunId' | 'state' | 'lastResult' | 'messageCount' | 'firstMessage' |
-    'lastMessage' | 'lastFinalText' | 'diagnostics' | 'effectiveEffort' | 'effortEvidenceMethod'>> & {
+    'lastMessage' | 'lastFinalText' | 'diagnostics'>> & {
     cwd?: string;
     modelSelector?: CommandCodeRuntimeModel;
     effort?: CommandCodeEffort;
+    defaultEffort?: CommandCodeEffort;
   }): Promise<CommandCodeInternalSessionRecord> {
     await this.init();
     const current = this.records.get(sessionId);
@@ -314,14 +313,9 @@ function validateRecord(value: unknown): CommandCodeInternalSessionRecord {
   if (record.effort !== undefined) {
     try { assertCommandCodeEffort(model, record.effort); } catch { throw new Error('Invalid Command Code effort'); }
   }
-  if (record.effortSource !== undefined && !['explicit', 'default', 'automatic', 'none'].includes(record.effortSource)) throw new Error('Invalid Command Code effort source');
   if (record.defaultEffort !== undefined) {
     try { assertCommandCodeEffort(model, record.defaultEffort); } catch { throw new Error('Invalid Command Code default effort'); }
   }
-  if (record.effectiveEffort !== undefined) {
-    try { assertCommandCodeEffort(model, record.effectiveEffort); } catch { throw new Error('Invalid Command Code effective effort'); }
-  }
-  if (record.effortEvidenceMethod !== undefined && !['provider-event', 'provider-result', 'unobserved'].includes(record.effortEvidenceMethod)) throw new Error('Invalid Command Code effort evidence method');
   if (!record.state || !['created', 'running', 'idle', 'failed', 'aborted', 'deleted'].includes(record.state)) throw new Error('Invalid Command Code session state');
   return record as CommandCodeInternalSessionRecord;
 }

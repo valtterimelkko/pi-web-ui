@@ -2,7 +2,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { RUN_TERMINAL_REASON_ALLOWLIST } from '../types.js';
 import type {
-  CommandCodeEffortSource,
   Phase7PiShadowClassification,
   PromptMode,
   CommandCodeEffort,
@@ -49,9 +48,6 @@ export interface BeginRunInput {
   requireActiveTurn?: boolean;
   /** Command Code-native effort binding, distinct from thinkingLevel. */
   effort?: CommandCodeEffort;
-  requestedEffort?: CommandCodeEffort;
-  effortSource?: CommandCodeEffortSource;
-  defaultEffort?: CommandCodeEffort;
   idempotencyKey?: string;
   /** Server-derived Pi-only shadow evidence; callers cannot provide this field. */
   phase7Shadow?: Phase7PiShadowClassification;
@@ -237,10 +233,6 @@ export class RunReceiptManager {
         model: input.model,
         modelSelector: input.modelSelector,
         effort: input.effort,
-        requestedEffort: input.requestedEffort,
-        acceptedEffort: input.effort,
-        effortSource: input.effortSource,
-        defaultEffort: input.defaultEffort,
         mode: input.mode,
         dispatchMode: input.dispatchMode ?? input.mode,
         status: 'accepted',
@@ -328,7 +320,6 @@ export class RunReceiptManager {
       ? finalizePhase7PiShadow(active.phase7Shadow, observedAtMs)
       : undefined;
     const isCommandCodeRun = active?.runtime === 'commandcode' || this.store.get(runId)?.runtime === 'commandcode';
-    const effortObservation = isCommandCodeRun ? commandCodeEffortObservation(event) : undefined;
     const tokenUsageObservation = isCommandCodeRun ? commandCodeTokenUsageObservation(event) : undefined;
     let activityToPersist: RunActivityObservation | undefined;
     if (active && isEligibleRunActivity(event.type)) {
@@ -344,7 +335,7 @@ export class RunReceiptManager {
       if (persistenceDue) activityToPersist = active.lastEligibleActivity;
     }
     if (event.type !== 'agent_end') {
-      if ((!activityToPersist && !phase7ShadowToPersist && !effortObservation) || !active) return Promise.resolve();
+      if ((!activityToPersist && !phase7ShadowToPersist) || !active) return Promise.resolve();
       // Reserve the write window synchronously before the queued write starts;
       // otherwise a burst can enqueue many snapshots while the first is pending.
       if (activityToPersist) active.lastPersistedActivityAtMs = observedAtMs;
@@ -356,10 +347,6 @@ export class RunReceiptManager {
           patch.liveness = { ...current.liveness, lastEligibleActivity: activityToPersist };
         }
         if (phase7ShadowToPersist) patch.phase7Shadow = phase7ShadowToPersist;
-        if (effortObservation) {
-          patch.effectiveEffort = effortObservation.effort;
-          patch.effortEvidenceMethod = effortObservation.method;
-        }
         if (Object.keys(patch).length > 0) await this.store.patch(runId, patch);
       }).catch((error) => {
         if (activityToPersist && active.lastPersistedActivityAtMs === observedAtMs) {
@@ -371,7 +358,6 @@ export class RunReceiptManager {
     const provenance = terminalProvenance(event);
     return this.withRunLock(runId, async () => {
       if (phase7ShadowToPersist) await this.store.patch(runId, { phase7Shadow: phase7ShadowToPersist });
-      if (effortObservation) await this.store.patch(runId, { effectiveEffort: effortObservation.effort, effortEvidenceMethod: effortObservation.method });
       await this.store.markAgentEnd(
         runId,
         new Date(occurredAtMs).toISOString(),
@@ -448,9 +434,6 @@ export class RunReceiptManager {
     const terminal = await this.store.transition(runId, status, {
       errorCode: outcome.errorCode,
       terminalAt,
-      ...(current.runtime === 'commandcode' && current.effort && !current.effectiveEffort && !current.effortEvidenceMethod
-        ? { effortEvidenceMethod: 'unobserved' as const }
-        : {}),
       ...(liveness ? { liveness } : {}),
       ...(outputEvidence ? { outputEvidence } : {}),
       ...(phase7Shadow ? { phase7Shadow } : {}),
@@ -757,8 +740,6 @@ function requestFingerprint(input: BeginRunInput): string {
     mode: input.mode,
     verbosity: input.verbosity,
     effort: input.effort,
-    requestedEffort: input.requestedEffort,
-    effortSource: input.effortSource,
     detach: input.detach,
     requireActiveTurn: input.requireActiveTurn === true,
   }));
@@ -863,17 +844,6 @@ function finalizeOutputEvidence(output: MutableRunOutputEvidence, terminalSignal
     toolCalls: output.toolCalls,
     disposition: terminalSignal ? (output.assistantTextChars > 0 ? 'text' : 'no-text') : 'unknown',
   };
-}
-
-function commandCodeEffortObservation(event: NormalizedEvent): { effort: CommandCodeEffort; method: 'provider-event' | 'provider-result' } | undefined {
-  if (event.type !== 'model_request_end' && event.type !== 'agent_end') return undefined;
-  const data = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
-    ? event.data as Record<string, unknown>
-    : undefined;
-  const effort = data?.effort ?? data?.effectiveEffort ?? data?.reasoningEffort;
-  if (typeof effort !== 'string' || !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) return undefined;
-  const method = data?.effortEvidenceMethod === 'provider-result' ? 'provider-result' : 'provider-event';
-  return { effort: effort as CommandCodeEffort, method };
 }
 
 function commandCodeTokenUsageObservation(event: NormalizedEvent): RunTokenUsage | undefined {

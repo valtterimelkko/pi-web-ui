@@ -637,10 +637,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       : undefined;
   }
 
-  function commandCodeRequestedEffort(record: CommandCodeInternalSessionRecord): CommandCodeInternalSessionRecord['effort'] {
-    return record.effortSource === 'explicit' ? record.effort : undefined;
-  }
-
   function commandCodeSessionInfo(record: CommandCodeInternalSessionRecord): SessionInfo {
     return {
       sessionId: record.sessionId,
@@ -651,12 +647,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       model: record.modelSelector,
       modelSelector: record.modelSelector,
       effort: record.effort,
-      requestedEffort: commandCodeRequestedEffort(record),
-      acceptedEffort: record.effort,
-      effortSource: record.effortSource,
       defaultEffort: record.defaultEffort,
-      effectiveEffort: record.effectiveEffort,
-      effortEvidenceMethod: record.effortEvidenceMethod,
       status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
       messageCount: record.messageCount,
       firstMessage: record.firstMessage,
@@ -915,9 +906,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             model: created.modelSelector,
             modelSelector: created.modelSelector,
             effort: created.effort,
-            requestedEffort: created.effortSource === 'explicit' ? created.effort : undefined,
-            acceptedEffort: created.effort,
-            effortSource: created.effortSource,
             defaultEffort: created.defaultEffort,
             executionInstanceId: created.executionInstanceId,
             cwd: created.cwd,
@@ -1449,12 +1437,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       lastActivity: record.updatedAt,
       executionInstanceId: record.executionInstanceId,
       effort: record.effort,
-      requestedEffort: commandCodeRequestedEffort(record),
-      acceptedEffort: record.effort,
-      effortSource: record.effortSource,
       defaultEffort: record.defaultEffort,
-      effectiveEffort: record.effectiveEffort,
-      effortEvidenceMethod: record.effortEvidenceMethod,
       ...(receipts[0]?.tokenUsage ? { tokenUsage: receipts[0].tokenUsage } : {}),
       activity: { status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle', lastActivity: record.updatedAt },
       sources: {
@@ -2055,9 +2038,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       model: record.modelSelector,
       modelSelector: record.modelSelector,
       effort: record.effort,
-      requestedEffort: commandCodeRequestedEffort(record),
-      acceptedEffort: record.effort,
-      effortSource: record.effortSource,
       defaultEffort: record.defaultEffort,
       message: body.message,
       mode,
@@ -2699,9 +2679,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             success: true,
             action: 'set_effort',
             effort: updated.effort,
-            requestedEffort: updated.effortSource === 'explicit' ? updated.effort : undefined,
-            acceptedEffort: updated.effort,
-            effortSource: updated.effortSource,
             defaultEffort: updated.defaultEffort,
           } satisfies SessionControlResponse);
         } catch (error) {
@@ -4206,9 +4183,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           modelSelector: created.modelSelector,
           executionInstanceId: created.executionInstanceId,
           effort: created.effort as BatchCreateResultItem['effort'],
-          requestedEffort: created.effortSource === 'explicit' ? created.effort : undefined,
-          acceptedEffort: created.effort,
-          effortSource: created.effortSource,
           defaultEffort: created.defaultEffort,
           cwd: created.cwd,
         };
@@ -4323,9 +4297,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           idempotencyKey: entry.idempotencyKey,
           ...(commandCodeRecord ? {
             effort: commandCodeRecord.effort,
-            requestedEffort: commandCodeRecord.effortSource === 'explicit' ? commandCodeRecord.effort : undefined,
-            acceptedEffort: commandCodeRecord.effort,
-            effortSource: commandCodeRecord.effortSource,
             defaultEffort: commandCodeRecord.defaultEffort,
           } : {}),
           ...(reg.sdkType === 'pi' && config.validationMode

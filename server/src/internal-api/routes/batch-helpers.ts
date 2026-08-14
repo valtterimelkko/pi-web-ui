@@ -15,7 +15,7 @@ import type { SessionRegistryManager } from '../../session-registry.js';
 import type { PiService } from '../../pi/pi-service.js';
 import type { CommandCodeService } from '../../command-code/command-code-service.js';
 import type { CommandCodeEffort } from '../../command-code/command-code-model-catalog.js';
-import type { BatchCreateEntry, CommandCodeEffortSource, SessionRuntime } from '../types.js';
+import type { BatchCreateEntry, SessionRuntime } from '../types.js';
 import { unlink } from 'fs/promises';
 import { config } from '../../config.js';
 import { ErrorCode } from '../error-codes.js';
@@ -56,7 +56,6 @@ export interface CreatedSession {
   modelSelector?: string;
   executionInstanceId?: string;
   effort?: CommandCodeEffort;
-  effortSource?: CommandCodeEffortSource;
   defaultEffort?: CommandCodeEffort;
   effortCapabilityHash?: string;
   cwd: string;
@@ -84,7 +83,7 @@ export async function createOneSession(params: {
         model: entry.model,
         effort: entry.effort,
       });
-      return { sessionId: created.sessionId, sessionPath: created.sessionId, runtime: 'commandcode', model: created.modelSelector, modelSelector: created.modelSelector, executionInstanceId: created.executionInstanceId, effort: created.effort, effortSource: created.effortSource, defaultEffort: created.defaultEffort, cwd: created.cwd };
+      return { sessionId: created.sessionId, sessionPath: created.sessionId, runtime: 'commandcode', model: created.modelSelector, modelSelector: created.modelSelector, executionInstanceId: created.executionInstanceId, effort: created.effort, defaultEffort: created.defaultEffort, cwd: created.cwd };
     }
 
     case 'claude': {
