@@ -47,10 +47,8 @@ describe('validation server env-file loading', () => {
     expect(isolation.ANTIGRAVITY_SESSION_DIR).toBe('/tmp/pi-validation/antigravity-sessions');
     expect(isolation.ANTIGRAVITY_ENABLED).toBe('false');
     expect(isolation.SESSION_REGISTRY_PATH).toBe('/tmp/pi-validation/session-registry.json');
-    expect(isolation.PI_INTERNAL_API_COMMANDCODE_ENABLED).toBe('false');
-    expect(isolation.PI_COMMAND_CODE_BROWSER_ENABLED).toBe('false');
-    expect(isolation.PI_COMMAND_CODE_BROWSER_AUTH_FILE).toBe('');
-    expect(isolation.PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS).toBe('');
+    expect(isolation.COMMAND_CODE_ENABLED).toBe('false');
+    expect(isolation.COMMAND_CODE_EXECUTABLE_PATH).toBe('/root/.npm-global/bin/cmd');
   });
 
   it('configures the provider-free Command Code fixture under the disposable directory', () => {
@@ -63,32 +61,27 @@ describe('validation server env-file loading', () => {
       commandCodeFixture: true,
     });
 
-    expect(isolation.PI_INTERNAL_API_COMMANDCODE_ENABLED).toBe('true');
+    expect(isolation.COMMAND_CODE_ENABLED).toBe('true');
     expect(isolation.COMMAND_CODE_EXECUTABLE_PATH).toBe('/tmp/pi-validation/command-code-fixture-bin/cmd');
     expect(isolation.COMMAND_CODE_STATE_DIR).toBe('/tmp/pi-validation/command-code');
     expect(isolation.COMMAND_CODE_NATIVE_HOME_DIR).toBe('/tmp/pi-validation/command-code-native-home');
     expect(isolation.COMMAND_CODE_ALLOWED_CWD_ROOTS).toBe('/tmp/pi-validation');
   });
 
-  it('configures a browser fixture with a separate credential, workspace root, and read-only runtime roots', () => {
+  it('enables the real installed CLI only through the explicit real mode', () => {
     const isolation = buildValidationIsolationEnv({
       validationDir: '/tmp/pi-validation',
       port: '3091',
       claudeWsPort: '43110',
       claudeHookPort: '43111',
       opencodePort: '44097',
-      commandCodeFixture: true,
-      commandCodeBrowserFixture: true,
+      commandCodeReal: true,
     });
 
-    expect(isolation.PI_INTERNAL_API_COMMANDCODE_ENABLED).toBe('false');
-    expect(isolation.PI_COMMAND_CODE_BROWSER_ENABLED).toBe('true');
-    expect(isolation.PI_COMMAND_CODE_BROWSER_AUTH_FILE).toBe('/tmp/pi-validation/command-code-browser-auth.json');
-    expect(isolation.PI_COMMAND_CODE_BROWSER_ALLOWED_CWD_ROOTS).toBe('/tmp/pi-validation/workspace');
-    expect(isolation.PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS).toContain('/tmp/pi-validation/command-code-fixture-bin');
-    expect(isolation.PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS).toContain('/usr/bin');
-    expect(isolation.PI_COMMAND_CODE_BROWSER_ALLOWED_MODELS).toBe('qwen/qwen3.8-max,meta/muse-spark-1.2-contributor');
-    expect(isolation.COMMAND_CODE_NATIVE_HOME_DIR).toBe('/tmp/pi-validation/command-code-native-home');
+    expect(isolation.COMMAND_CODE_ENABLED).toBe('true');
+    expect(isolation.COMMAND_CODE_EXECUTABLE_PATH).toBe('/root/.npm-global/bin/cmd');
+    expect(isolation.COMMAND_CODE_STATE_DIR).toBe('/tmp/pi-validation/command-code');
+    expect(isolation.COMMAND_CODE_ALLOWED_CWD_ROOTS).toBe('/tmp/pi-validation');
   });
 
   it('resolves --env-file before the environment fallback', () => {

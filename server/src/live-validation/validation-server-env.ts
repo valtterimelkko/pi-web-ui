@@ -9,7 +9,8 @@ interface ValidationIsolationInput {
   claudeHookPort: string;
   opencodePort: string;
   commandCodeFixture?: boolean;
-  commandCodeBrowserFixture?: boolean;
+  /** Enable Command Code against the real installed CLI (bills the plan; explicitly authorised runs only). */
+  commandCodeReal?: boolean;
 }
 
 export function buildValidationIsolationEnv(
@@ -17,10 +18,7 @@ export function buildValidationIsolationEnv(
 ): NodeJS.ProcessEnv {
   const piSessionsDir = join(input.validationDir, 'pi-sessions');
   const commandCodeFixture = input.commandCodeFixture === true;
-  const commandCodeBrowserFixture = input.commandCodeBrowserFixture === true;
-  if (commandCodeBrowserFixture && !commandCodeFixture) {
-    throw new Error('Command Code browser fixture requires the Command Code fixture executable.');
-  }
+  const commandCodeReal = input.commandCodeReal === true;
 
   return {
     PI_WEB_UI_VALIDATION_MODE: 'true',
@@ -37,17 +35,9 @@ export function buildValidationIsolationEnv(
     NOTIFICATIONS_DIR: join(input.validationDir, 'notifications'),
     INTERNAL_API_PIN_DIR: join(input.validationDir, 'pins'),
     // Command Code is excluded from the normal disposable all-runtime matrix;
-    // the explicit fixture mode below is deterministic and provider-free.
-    // Browser fixture validation intentionally keeps the Internal API shadow
-    // gate separate; it is exercised through the authenticated WebSocket path.
-    PI_INTERNAL_API_COMMANDCODE_ENABLED: commandCodeFixture && !commandCodeBrowserFixture ? 'true' : 'false',
-    PI_COMMAND_CODE_BROWSER_ENABLED: commandCodeBrowserFixture ? 'true' : 'false',
-    PI_COMMAND_CODE_BROWSER_ALLOWED_MODELS: commandCodeBrowserFixture ? 'qwen/qwen3.8-max,meta/muse-spark-1.2-contributor' : '',
-    PI_COMMAND_CODE_BROWSER_ALLOWED_CWD_ROOTS: commandCodeBrowserFixture ? join(input.validationDir, 'workspace') : '',
-    PI_COMMAND_CODE_BROWSER_AUTH_FILE: commandCodeBrowserFixture ? join(input.validationDir, 'command-code-browser-auth.json') : '',
-    PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS: commandCodeBrowserFixture
-      ? [join(input.validationDir, 'command-code-fixture-bin'), '/usr/bin', '/usr/lib', '/usr/lib64'].join(',')
-      : '',
+    // the deterministic fixture mode is provider-free. --command-code-real
+    // enables the installed CLI for explicitly authorised end-to-end runs.
+    COMMAND_CODE_ENABLED: commandCodeFixture || commandCodeReal ? 'true' : 'false',
     COMMAND_CODE_EXECUTABLE_PATH: commandCodeFixture
       ? join(input.validationDir, 'command-code-fixture-bin', 'cmd')
       : '/root/.npm-global/bin/cmd',

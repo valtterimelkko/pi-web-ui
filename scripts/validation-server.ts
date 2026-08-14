@@ -54,9 +54,15 @@ async function main(): Promise<void> {
     ? path.resolve(explicitDir)
     : createDefaultValidationDirectory(path.join(os.tmpdir(), 'pi-web-ui-validation'));
   const commandCodeFixture = validationArgs.includes('--command-code-fixture');
+  // Legacy alias from the deleted browser partition: still required for
+  // cookie-authenticated UI driving, now with the single fixture CLI.
   const commandCodeBrowserFixture = validationArgs.includes('--command-code-browser-fixture');
   if (commandCodeBrowserFixture && !commandCodeFixture) {
     throw new Error('--command-code-browser-fixture requires --command-code-fixture.');
+  }
+  const commandCodeReal = validationArgs.includes('--command-code-real');
+  if (commandCodeReal && commandCodeFixture) {
+    throw new Error('--command-code-real and --command-code-fixture are mutually exclusive.');
   }
   const defaultStateRoot = path.join(os.homedir(), '.pi-web-ui');
   const productionFiles = [
@@ -107,8 +113,7 @@ async function main(): Promise<void> {
     }
 
     if (commandCodeFixture) await createCommandCodeValidationFixture(validationDir);
-    if (commandCodeBrowserFixture) {
-      writeFileSync(path.join(validationDir, 'command-code-browser-auth.json'), '{"token":"disposable-fixture"}\n', { encoding: 'utf8', mode: 0o600 });
+    if (commandCodeBrowserFixture || commandCodeReal) {
       // Browser validation uses the same cookie-authenticated route as the UI.
       // The wrapper may inherit NODE_ENV=production from .env, so use a
       // disposable bcrypt hash rather than weakening production auth checks.
@@ -121,7 +126,7 @@ async function main(): Promise<void> {
       claudeHookPort,
       opencodePort,
       commandCodeFixture,
-      commandCodeBrowserFixture,
+      commandCodeReal,
     });
     const socketPath = path.join(validationDir, 'internal-api.sock');
     const tokenPath = path.join(validationDir, 'internal-api-token');
@@ -142,7 +147,7 @@ async function main(): Promise<void> {
     console.error(` claude ws   : ${claudeWsPort}`);
     console.error(` claude hook : ${claudeHookPort}`);
     console.error(` opencode    : ${opencodePort}`);
-    console.error(` commandcode : ${commandCodeFixture ? (commandCodeBrowserFixture ? 'contained browser fixture enabled' : 'deterministic fixture enabled') : 'disabled'}`);
+    console.error(` commandcode : ${commandCodeFixture ? (commandCodeBrowserFixture ? 'fixture enabled (browser/UI auth)' : 'deterministic fixture enabled') : commandCodeReal ? 'REAL CLI enabled' : 'disabled'}`);
     console.error('');
     console.error(' Point a validator at it, e.g.:');
     console.error(`   npm run validate:long-horizon -- --socket ${socketPath} --token-path ${tokenPath} ...`);

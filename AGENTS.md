@@ -82,6 +82,7 @@ Core architectural themes:
 | Claude backend behavior | `server/src/claude/*`, [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md) |
 | Claude provider profiles / backend switching | `server/src/claude/claude-profiles.ts`, `server/src/claude/claude-sdk-service.ts`, [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md) |
 | OpenCode integration / model automation | `server/src/opencode/*`, [`docs/OPENCODE-DIRECT-INTEGRATION.md`](./docs/OPENCODE-DIRECT-INTEGRATION.md), [`docs/OPENCODE-MODEL-AUTOMATION.md`](./docs/OPENCODE-MODEL-AUTOMATION.md) |
+| Command Code integration / catalogue refresh | `server/src/command-code/*`, [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md) |
 | Pi runtime: OpenRouter model automation | `server/src/pi/pi-openrouter-refresh.ts`, `server/src/pi/pi-service.ts`, [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md) |
 | Antigravity integration | `server/src/antigravity/*`, [`docs/ANTIGRAVITY-INTEGRATION.md`](./docs/ANTIGRAVITY-INTEGRATION.md) |
 | Session transfer | `server/src/session-transfer/*`, [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md) |

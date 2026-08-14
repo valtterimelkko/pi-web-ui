@@ -55,20 +55,6 @@ export function parseAbsolutePathList(raw: string | undefined, fallback: string[
   return values.map((value) => parseAbsolutePath(value, value, name));
 }
 
-/** Parse an exact Command Code browser model policy; blank keeps browser unavailable. */
-export function parseModelAllowlist(raw: string | undefined): string[] {
-  if (raw === undefined || raw.trim() === '') return [];
-  if (raw.trim() === '*') throw new Error('PI_COMMAND_CODE_BROWSER_ALLOWED_MODELS must contain explicit exact model ids; * is not permitted');
-  const values = raw.split(',').map((value) => value.trim()).filter(Boolean);
-  if (values.length === 0) return [];
-  for (const value of values) {
-    if (!/^[a-z0-9][a-z0-9._/-]{0,255}$/.test(value)) {
-      throw new Error(`PI_COMMAND_CODE_BROWSER_ALLOWED_MODELS contains an invalid exact model id: ${value}`);
-    }
-  }
-  return [...new Set(values)];
-}
-
 export function parseLogLevel(raw: string | undefined, fallback: LogLevel = 'info'): LogLevel {
   if (!raw) return fallback;
   const value = raw.trim().toLowerCase();
@@ -217,22 +203,10 @@ export interface ServerConfig {
   internalApiBlockedPiProviders: string[];
   /** Feature-gated, server-local Command Code adapter. */
   commandCodeEnabled: boolean;
-  /** Separate browser exposure gate; disabled by default. */
-  commandCodeBrowserEnabled: boolean;
-  /** Explicit exact browser model allowlist; empty keeps browser unavailable. */
-  commandCodeBrowserAllowedModels: string[];
-  /** Explicit browser workspace roots; never falls back to server state. */
-  commandCodeBrowserAllowedCwdRoots: string[];
-  /** Browser-only Command Code credential; blank keeps browser unavailable. */
-  commandCodeBrowserAuthFile?: string;
-  /** Read-only system/runtime roots required by the browser sandbox. */
-  commandCodeBrowserRuntimeRoots: string[];
   commandCodeExecutablePath: string;
   commandCodeStateDir: string;
   commandCodeNativeHomeDir: string;
   commandCodeAllowedCwdRoots: string[];
-  /** Deprecated compatibility setting; live discovery is not version-pinned. */
-  commandCodeExpectedVersion?: string;
   commandCodeMaxTurns: number;
   commandCodeMaxWallTimeMs: number;
   commandCodeConcurrency: number;
@@ -369,23 +343,11 @@ export const config: ServerConfig = {
     ? parsePositiveInteger(process.env.INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN, 256, 'INTERNAL_API_ADMISSION_RESERVED_PIDS_PER_TURN')
     : undefined,
   internalApiBlockedPiProviders: parseBlockedPiProviders(process.env.INTERNAL_API_BLOCKED_PI_PROVIDERS),
-  commandCodeEnabled: process.env.PI_INTERNAL_API_COMMANDCODE_ENABLED === 'true',
-  commandCodeBrowserEnabled: process.env.PI_COMMAND_CODE_BROWSER_ENABLED === 'true',
-  commandCodeBrowserAllowedModels: parseModelAllowlist(process.env.PI_COMMAND_CODE_BROWSER_ALLOWED_MODELS),
-  commandCodeBrowserAllowedCwdRoots: process.env.PI_COMMAND_CODE_BROWSER_ALLOWED_CWD_ROOTS?.trim()
-    ? parseAbsolutePathList(process.env.PI_COMMAND_CODE_BROWSER_ALLOWED_CWD_ROOTS, [], 'PI_COMMAND_CODE_BROWSER_ALLOWED_CWD_ROOTS')
-    : [],
-  commandCodeBrowserAuthFile: process.env.PI_COMMAND_CODE_BROWSER_AUTH_FILE?.trim()
-    ? parseAbsolutePath(process.env.PI_COMMAND_CODE_BROWSER_AUTH_FILE, '', 'PI_COMMAND_CODE_BROWSER_AUTH_FILE')
-    : undefined,
-  commandCodeBrowserRuntimeRoots: process.env.PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS?.trim()
-    ? parseAbsolutePathList(process.env.PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS, [], 'PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS')
-    : [],
+  commandCodeEnabled: process.env.COMMAND_CODE_ENABLED === 'true',
   commandCodeExecutablePath: parseAbsolutePath(process.env.COMMAND_CODE_EXECUTABLE_PATH, '/root/.npm-global/bin/cmd', 'COMMAND_CODE_EXECUTABLE_PATH'),
   commandCodeStateDir: parseAbsolutePath(process.env.COMMAND_CODE_STATE_DIR, path.join(os.homedir(), '.pi-web-ui', 'command-code'), 'COMMAND_CODE_STATE_DIR'),
   commandCodeNativeHomeDir: parseAbsolutePath(process.env.COMMAND_CODE_NATIVE_HOME_DIR, path.join(os.homedir(), '.pi-web-ui', 'command-code-native-home'), 'COMMAND_CODE_NATIVE_HOME_DIR'),
   commandCodeAllowedCwdRoots: parseAbsolutePathList(process.env.COMMAND_CODE_ALLOWED_CWD_ROOTS, [path.dirname(parseAbsolutePath(process.env.COMMAND_CODE_STATE_DIR, path.join(os.homedir(), '.pi-web-ui', 'command-code'), 'COMMAND_CODE_STATE_DIR'))], 'COMMAND_CODE_ALLOWED_CWD_ROOTS'),
-  commandCodeExpectedVersion: process.env.COMMAND_CODE_EXPECTED_VERSION || undefined,
   commandCodeMaxTurns: parsePositiveInteger(process.env.COMMAND_CODE_MAX_TURNS, 8, 'COMMAND_CODE_MAX_TURNS'),
   commandCodeMaxWallTimeMs: parsePositiveInteger(process.env.COMMAND_CODE_MAX_WALL_TIME_MS, 15 * 60 * 1000, 'COMMAND_CODE_MAX_WALL_TIME_MS'),
   commandCodeConcurrency: parsePositiveInteger(process.env.COMMAND_CODE_CONCURRENCY, 1, 'COMMAND_CODE_CONCURRENCY'),

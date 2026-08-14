@@ -161,35 +161,31 @@ Run the current disposable-safe runtime set (Pi, Claude, and OpenCode) against a
 npm run validate:live -- --socket <sock> --token-path <token> --runtime all --scenario all
 ```
 
-For the separately gated provider-free Command Code browser fixture, use a
-fresh disposable directory and the explicit fixture flag. It is not included
-in `--runtime all` and requires Bubblewrap plus an exact browser model policy:
+For the provider-free Command Code fixture, use a fresh disposable directory
+and the explicit fixture flag. It is not included in `--runtime all`:
 
 ```bash
 VALIDATION_DIR="$(mktemp -d /tmp/pi-web-ui-commandcode-validation-XXXXXX)"
 npm run validate:server -- --dir "$VALIDATION_DIR" --port 0 \
-  --command-code-fixture --command-code-browser-fixture \
+  --command-code-fixture \
   >"$VALIDATION_DIR/server.log" 2>&1 &
 VALIDATION_PID=$!
-# The browser fixture intentionally disables the Internal API shadow gate.
-# Validate it over the authenticated WebSocket path (the same path as the UI)
-# and inspect the private native-home/read-only workspace markers:
-PORT="$(awk '/Server] Pi Web UI Server running on port/{print $NF}' "$VALIDATION_DIR/server.log" | tail -1)"
-node scripts/validate-command-code-browser.mjs \
-  --base "http://127.0.0.1:$PORT" --validation-dir "$VALIDATION_DIR"
-# The Internal API commandcode fixture is a separate, non-browser mode:
-# omit --command-code-browser-fixture and run commandcode-fixture-smoke there.
+npm run validate:live -- \
+  --socket "$VALIDATION_DIR/internal-api.sock" \
+  --token-path "$VALIDATION_DIR/internal-api-token" \
+  --runtime commandcode --scenario all
 kill "$VALIDATION_PID" 2>/dev/null || true
 wait "$VALIDATION_PID" 2>/dev/null || true
 rm -rf "$VALIDATION_DIR"
 ```
 
-The fixture is provider-free and uses the browser-contained process path with
-an exact model allowlist. The current smoke path proves normalized events and
-terminal evidence; the companion browser WebSocket validation must also verify
-that only the private native home is writable and the workspace is read-only.
-Production browser rollout still requires separate owner approval for the model,
-roots, credential, and sandbox policy.
+The fixture is provider-free: every advertised model answers deterministically
+without contacting a provider. `--command-code-browser-fixture` is a legacy
+alias that additionally enables the cookie-authenticated UI path for browser
+driving with the fixture CLI. To validate against the real installed CLI
+(bills the plan; explicitly authorised runs only), start the disposable server
+with `--command-code-real` instead and run the Command Code scenarios or drive
+the real UI with `webapp-testing`.
 
 `--runtime all` is intentionally not a synonym for all runtime families:
 `live-validate.ts` currently expands it to `pi`, `claude`, and `opencode`.

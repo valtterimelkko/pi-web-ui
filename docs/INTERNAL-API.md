@@ -56,7 +56,7 @@ Under the hood, each runtime slot exists for a different reason:
 | **Claude Code** | profile-driven SDK backend, legacy `claude -p`, **or** the channel-backed Claude Code path | Claude's monthly subscription does not allow external coding-agent harnesses to use Claude via the Anthropic API — Claude Code must be the agent environment. Pi Web UI therefore runs Claude Code directly, normalizes SDK messages, legacy NDJSON, or channel/plugin events into the common event model, and owns the replay/persistence layer so sessions survive restarts. Explicit provider profiles also let the same browser UI route Claude sessions through native Claude subscription or Anthropic-compatible providers such as GLM/Z.ai. |
 | **OpenCode** | `opencode serve` HTTP/SSE backend | Z.AI's GLM models (via the coding-plan provider) currently recognise OpenCode as a valid coding-agent harness but not Pi. Rather than bypass this, Pi Web UI integrates with the OpenCode server backend, adapting OpenCode SSE events into the same common event model. The OpenCode backend owns transcript storage; Pi Web UI stores registry metadata and replay transforms. |
 | **Antigravity** | `agy -p` subprocess-per-turn backend | Google Gemini via Antigravity CLI. Pi Web UI runs `agy` directly, stores Pi-owned turn logs for replay, and correlates them with agy-owned conversation SQLite DBs for follow-up continuity. |
-| **Command Code** | separately gated `cmd -p --output-format json` subprocess | The authenticated Internal API retains narrow Agent OS shadow routes; the browser can be enabled separately only with a non-empty exact model allowlist, canonical workspace roots, a browser-only credential, pinned read-only runtime mounts, and Bubblewrap containment with an unshared network namespace. The browser path is represented in shared/WebSocket/session-transfer/notification surfaces, while MCP and disposable `--runtime all` remain intentionally excluded. Internal API shadow creation requires a short-lived token-bound HMAC role attestation and a cwd under `COMMAND_CODE_ALLOWED_CWD_ROOTS`; browser requests cannot choose executable paths, argv, environment, auth paths, native ids, or permission profiles. Exact model ids and native effort values come from fresh discovery. |
+| **Command Code** | single-gated `cmd -p --output-format json` subprocess | One direct subprocess per session with ordinary host networking, identical for browser and Internal API callers. Creation (contract 1.20.0) requires only a model id returned by `/models` and a cwd under `COMMAND_CODE_ALLOWED_CWD_ROOTS`; the legacy `invocationRole`/`commandCodeAttestation` fields are accepted and ignored. Callers cannot choose executable paths, argv, environment, auth paths, or native ids. Eligible models are the CLI's advertised catalogue minus a committed premium-model exclusion list; per-model effort selectors come from a committed table. MCP and disposable `--runtime all` remain intentionally excluded. |
 
 All runtime paths are surfaced through a **unified session list** so the
 runtime difference is transparent at the UI level — you create sessions,
@@ -128,11 +128,10 @@ The current surface is strong enough for the full Tier-1 orchestration loop:
 - discover runtimes and models
 - create child sessions on different runtime paths
 
-Command Code is a special case: the Internal API exposes only its attested
-Agent OS shadow profile. Browser-contained Command Code sessions are not visible
+Command Code sessions are ordinary sessions once created: they are visible
 through Internal API session/diagnostic/notification/receipt routes, and
 Internal API transfer never creates or targets them. Browser transfer remains a
-WebSocket-only surface with the active browser containment policy.
+WebSocket-only surface.
 - dispatch prompts
 - monitor progress
 - wait for completion
@@ -366,7 +365,7 @@ Models are always queried live — new models appear immediately. Each model may
 
 Pi model levels come from the Pi SDK catalogue. Claude's base `sonnet` and `opus` aliases and provider profiles that support the Claude/Z.AI effort ceiling advertise `max`; `haiku` keeps the legacy ceiling. A client should use the selected model's `thinkingLevels` before requesting `max`.
 
-When Command Code is enabled, its entries appear only after fresh live model/catalogue/effort discovery; the observed CLI version is diagnostic rather than a readiness pin. The initial shadow routes are `qwen/qwen3.8-max` and `meta/muse-spark-1.2-contributor`; Qwen advertises native `effortLevels: ["low", "medium", "xhigh"]` with `defaultEffort: "medium"`, while Muse advertises `supportsEffort: false` and an empty level list. Native `effort` is distinct from generic `thinkingLevel`; unknown or drifted capability metadata fails closed. Browser sessions require a separate non-empty exact model allowlist, canonical non-symlink workspace roots, a browser-only credential, pinned read-only runtime roots, and Bubblewrap's unshared network namespace. The runtime is excluded from MCP and disposable `--runtime all` validation.
+When Command Code is enabled, its entries are what the CLI advertises minus a committed 19-model premium exclusion list (denylist, fails open); the observed CLI version is diagnostic rather than a readiness pin. Per-model `effortLevels`/`defaultEffort` come from the committed effort table (regenerate with `npm run commandcode:refresh-models`); a model without a table entry has no selector and stays runnable. Native `effort` is distinct from generic `thinkingLevel`. The runtime is excluded from MCP and disposable `--runtime all` validation.
 
 **Query parameters:**
 
@@ -513,13 +512,13 @@ POST /api/v1/sessions
 | `cwd` | string | No | `process.cwd()` | Working directory |
 | `model` | string | No | runtime default | Model ID (from `/models`). For Claude, may be a base alias such as `sonnet` or a specific profile entry such as `profile:glm52-claude-sdk`; Command Code requires one exact discovered id: `qwen/qwen3.8-max` or `meta/muse-spark-1.2-contributor`. |
 | `thinkingLevel` | string | No | runtime default | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use the selected model's `thinkingLevels` from `/models` as the capability source. Not used by Command Code native effort. |
-| `effort` | `low`, `medium`, `high`, `xhigh`, or `max` | Command Code only | model default | Native Command Code effort. Use only the selected model's advertised `effortLevels`; Qwen currently accepts `low`, `medium`, `xhigh`, while Muse accepts none. Unsupported values fail closed. |
+| `effort` | `low`, `medium`, `high`, `xhigh`, or `max` | Command Code only | model default | Native Command Code effort. Use only the selected model's `effortLevels` from `/models`; a model without a selector rejects any value. Unsupported values fail closed. |
 | `retention` | object | No | — | Required source-owned lease. `durable` preserves recoverability without forcing runtime residency; `resident` additionally keeps the runtime loaded. Requires `ownerId`; optional `ttlSeconds` (default 24h, max 7d) and `label`. Creation rolls back if the guarantee fails. |
 | `pin` | boolean | No | `false` | Legacy Internal API compatibility projection. Mutually exclusive with `retention`; does not consume a human Web UI pin slot. |
 | `pinTtlSeconds` | number | No | `86400` (24h) | Legacy pin lifetime. Clamped to a hard max of 7 days. |
 | `profileId` | string | No | — | Claude-only explicit profile selector. Equivalent to `model: "profile:<id>"` but sometimes easier for automation clients. Supplying both forms with different ids is rejected. An explicit profile never falls back to another profile/backend when unavailable. |
-| `invocationRole` | `conductor-root` or `implementation-child` | Command Code only | — | Required for `runtime: "commandcode"`; mapped server-side to fixed permission profiles. Raw flags, environment, executable paths, and native ids are never accepted. |
-| `commandCodeAttestation` | object | Command Code only | — | Required for `runtime: "commandcode"`; strict short-lived HMAC binding of `role`, exact `model`, optional native `effort`, canonical `cwd`/`worktreeRoot`, `leaseId`, timestamp, signature, and (for `implementation-child`) `parentSessionId`. The server also enforces `COMMAND_CODE_ALLOWED_CWD_ROOTS`. Agent OS generates this from the owner-only API token; callers must not log or persist the secret. |
+| `invocationRole` | `conductor-root` or `implementation-child` | Command Code only | — | Accepted and ignored (contract 1.20.0). Legacy field from the removed role machinery. Raw flags, environment, executable paths, and native ids are never accepted. |
+| `commandCodeAttestation` | object | Command Code only | — | Accepted and ignored (contract 1.20.0). Legacy field from the removed role-attestation machinery; no longer required or verified. |
 
 **Response (201):**
 ```json
@@ -1275,8 +1274,7 @@ GET /api/v1/sessions/:sessionId/diagnostics   # scoped to one session
 ```
 
 The session-scoped diagnostics route returns `404 SESSION_NOT_FOUND` for a
-browser-contained Command Code id. Global operational counts include only
-Internal-API-visible Command Code shadow records; browser records are excluded.
+Command Code id. Global operational counts include all Command Code records.
 
 Each record is a scrubbed structured log line. Secret values (tokens, passwords,
 `Bearer …`, `sk-…` keys, sensitive keys like `apiKey`/`authorization`) are
