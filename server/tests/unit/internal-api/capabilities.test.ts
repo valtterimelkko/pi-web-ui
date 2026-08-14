@@ -133,6 +133,25 @@ describe('createCapabilitiesRoutes', () => {
   });
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
+  it('initializes Command Code before projecting its catalogue and effort capabilities', async () => {
+    const init = vi.fn().mockResolvedValue(undefined);
+    const routes = createCapabilitiesRoutes({
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false), getBackendMode: vi.fn().mockResolvedValue('direct'), getProfiles: vi.fn().mockReturnValue([]) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      commandCodeService: {
+        init,
+        isEnabled: vi.fn().mockReturnValue(true),
+        isShadowEnabled: vi.fn().mockReturnValue(true),
+        isAvailable: vi.fn().mockReturnValue(true),
+        getEffortCapabilities: vi.fn().mockReturnValue({}),
+        getModels: vi.fn().mockReturnValue([]),
+      } as any,
+    });
+    await routes.handleGetCapabilities(createMockReq(), createMockRes());
+    expect(init).toHaveBeenCalledOnce();
+  });
+
   it('advertises native effort support per Command Code model without enabling generic thinking levels', async () => {
     const routes = createCapabilitiesRoutes({
       claudeService: {
@@ -161,6 +180,84 @@ describe('createCapabilitiesRoutes', () => {
         'meta/muse-spark-1.2-contributor': { supportsEffort: false, effortLevels: [] },
       },
     });
+  });
+
+  it('publishes the full Command Code model status projection alongside effort evidence', async () => {
+    const routes = createCapabilitiesRoutes({
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false), getBackendMode: vi.fn().mockResolvedValue('direct'), getProfiles: vi.fn().mockReturnValue([]) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      commandCodeService: {
+        isEnabled: vi.fn().mockReturnValue(true),
+        isShadowEnabled: vi.fn().mockReturnValue(true),
+        isAvailable: vi.fn().mockReturnValue(true),
+        isShadowAvailable: vi.fn().mockReturnValue(true),
+        getModels: vi.fn().mockReturnValue([
+          { id: 'qwen/qwen3.8-max', displayName: 'Qwen 3.8 Max', provider: 'command-code', reasoning: true, runnable: true, status: 'runnable', browserRunnable: true, supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
+          { id: 'meta/muse-spark-1.2-contributor', displayName: 'Muse Spark 1.2 Contributor', provider: 'command-code', reasoning: true, runnable: true, status: 'runnable', browserRunnable: false, supportsEffort: false, effortLevels: [] },
+          { id: 'deepseek/deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'command-code', reasoning: true, runnable: false, status: 'evidence-only', browserRunnable: false, supportsEffort: true, effortLevels: ['high', 'max'] },
+        ]),
+        getEffortCapabilities: vi.fn().mockReturnValue({}),
+      } as any,
+    });
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+    expect(JSON.parse(res.body).runtimes.commandcode.modelCatalogue).toEqual([
+      expect.objectContaining({ id: 'qwen/qwen3.8-max', status: 'runnable', browserRunnable: true }),
+      expect.objectContaining({ id: 'meta/muse-spark-1.2-contributor', status: 'runnable', browserRunnable: false }),
+      expect.objectContaining({ id: 'deepseek/deepseek-v4-pro', status: 'evidence-only', runnable: false }),
+    ]);
+  });
+
+  it('keeps full discovered Command Code effort evidence separate from the shadow projection', async () => {
+    const routes = createCapabilitiesRoutes({
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false), getBackendMode: vi.fn().mockResolvedValue('direct'), getProfiles: vi.fn().mockReturnValue([]) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      commandCodeService: {
+        isEnabled: vi.fn().mockReturnValue(true),
+        isShadowEnabled: vi.fn().mockReturnValue(true),
+        isAvailable: vi.fn().mockReturnValue(true),
+        isShadowAvailable: vi.fn().mockReturnValue(true),
+        getEffortCapabilities: vi.fn().mockReturnValue({
+          'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium', status: 'adjustable', source: 'live-preflight', capabilityHash: 'a'.repeat(64) },
+          'meta/muse-spark-1.2-contributor': { supportsEffort: false, effortLevels: [], status: 'unavailable', source: 'live-preflight', capabilityHash: 'b'.repeat(64) },
+          'deepseek/deepseek-v4-pro': { supportsEffort: true, effortLevels: ['high', 'max'], status: 'adjustable', source: 'live-preflight', capabilityHash: 'c'.repeat(64) },
+        }),
+        getShadowEffortCapabilities: vi.fn().mockReturnValue({
+          'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium', status: 'adjustable', source: 'live-preflight', capabilityHash: 'a'.repeat(64) },
+          'meta/muse-spark-1.2-contributor': { supportsEffort: false, effortLevels: [], status: 'unavailable', source: 'live-preflight', capabilityHash: 'b'.repeat(64) },
+        }),
+      } as any,
+    });
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+    expect(JSON.parse(res.body).runtimes.commandcode.effortCapabilities).toEqual(expect.objectContaining({
+      'deepseek/deepseek-v4-pro': expect.objectContaining({ effortLevels: ['high', 'max'] }),
+    }));
+  });
+
+  it('does not project browser-only Command Code catalogue evidence onto the shadow Internal API capability surface', async () => {
+    const routes = createCapabilitiesRoutes({
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false), getBackendMode: vi.fn().mockResolvedValue('direct'), getProfiles: vi.fn().mockReturnValue([]) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      commandCodeService: {
+        isEnabled: vi.fn().mockReturnValue(true),
+        isShadowEnabled: vi.fn().mockReturnValue(false),
+        isAvailable: vi.fn().mockReturnValue(true),
+        getModels: vi.fn().mockReturnValue([{ id: 'qwen/qwen3.8-max', status: 'evidence-only', runnable: false, browserRunnable: true }]),
+        getEffortCapabilities: vi.fn().mockReturnValue({ 'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], status: 'adjustable', source: 'live-preflight', capabilityHash: 'a'.repeat(64) } }),
+        getCatalogueMetadata: vi.fn().mockReturnValue({ availabilityStatus: 'available', checkedAt: '2026-08-08T03:00:00.000Z', source: 'live-discovery' }),
+      } as any,
+    });
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+    const runtime = JSON.parse(res.body).runtimes.commandcode;
+    expect(runtime.enabled).toBe(false);
+    expect(runtime.modelCatalogue).toEqual([]);
+    expect(runtime.effortCapabilities).toEqual({});
+    expect(runtime.catalogue).toBeUndefined();
   });
 
   it('downgrades Claude-specific capability flags in direct mode', async () => {

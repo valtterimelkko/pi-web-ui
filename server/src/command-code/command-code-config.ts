@@ -1,6 +1,7 @@
 import path from 'node:path';
 import {
   assertCommandCodeEffort,
+  assertCommandCodeModel,
   type CommandCodeEffort,
   type CommandCodeRuntimeModel,
 } from './command-code-model-catalog.js';
@@ -88,6 +89,9 @@ export function buildCommandCodeArgs(options: CommandCodeArgOptions): string[] {
   }
   if (!isValidCommandCodeRuntimeModel(options.model)) {
     throw new Error(`Command Code model is not a valid exact runtime id: ${String(options.model)}`);
+  }
+  if (!assertCommandCodeModel(options.model)) {
+    throw new Error(`Command Code model is not an exact allowlisted executable route: ${options.model}`);
   }
   assertCommandCodeEffort(options.model, options.effort);
   const args = [

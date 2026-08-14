@@ -184,6 +184,54 @@ describe('RunReceiptStore — durable run ledger', () => {
     expect(restarted.get('legacy-run')).not.toHaveProperty('liveness');
   });
 
+  it('rejects native effort metadata that contradicts the exact Command Code route', async () => {
+    const store = new RunReceiptStore(dir);
+    await store.init();
+    const commandCodeBase = {
+      runtime: 'commandcode' as const,
+      executionInstanceId: 'commandcode-default',
+      invocationRole: 'implementation-child' as const,
+      permissionProfile: 'implementation-child-wide' as const,
+    };
+    await expect(store.create(receipt({
+      ...commandCodeBase,
+      model: 'meta/muse-spark-1.2-contributor',
+      effort: 'medium',
+    } as never))).rejects.toThrow(/effort|Muse|route/i);
+    await expect(store.create(receipt({
+      ...commandCodeBase,
+      runId: 'muse-missing-effort-source',
+      model: 'meta/muse-spark-1.2-contributor',
+    } as never))).rejects.toThrow(/effort|source|Muse/i);
+    await expect(store.create(receipt({
+      ...commandCodeBase,
+      runId: 'qwen-missing-effort-binding',
+      model: 'qwen/qwen3.8-max',
+    } as never))).rejects.toThrow(/effort|Qwen|binding/i);
+    await expect(store.create(receipt({
+      ...commandCodeBase,
+      runId: 'bad-qwen-effort',
+      model: 'qwen/qwen3.8-max',
+      effort: 'high',
+      acceptedEffort: 'high',
+    } as never))).rejects.toThrow(/effort|route/i);
+    await expect(store.create(receipt({
+      ...commandCodeBase,
+      runId: 'bad-commandcode-instance',
+      executionInstanceId: 'other-commandcode-instance',
+      model: 'qwen/qwen3.8-max',
+      effort: 'medium',
+      acceptedEffort: 'medium',
+      effortSource: 'default',
+      defaultEffort: 'medium',
+    } as never))).rejects.toThrow(/execution|instance/i);
+    await expect(store.create(receipt({
+      ...commandCodeBase,
+      runId: 'evidence-only-model',
+      model: 'deepseek/deepseek-v4-pro',
+    } as never))).rejects.toThrow(/allowlist|model|route/i);
+  });
+
   it('round-trips run-scoped token usage across restart and rejects malformed totals', async () => {
     const first = new RunReceiptStore(dir);
     await first.init();
@@ -193,6 +241,8 @@ describe('RunReceiptStore — durable run ledger', () => {
       executionInstanceId: 'commandcode-default',
       invocationRole: 'implementation-child',
       permissionProfile: 'implementation-child-wide',
+      model: 'meta/muse-spark-1.2-contributor',
+      effortSource: 'none',
       status: 'completed',
       terminalAt: '2026-07-15T12:00:02.000Z',
       tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18 },
@@ -209,6 +259,8 @@ describe('RunReceiptStore — durable run ledger', () => {
       executionInstanceId: 'commandcode-default',
       invocationRole: 'implementation-child',
       permissionProfile: 'implementation-child-wide',
+      model: 'meta/muse-spark-1.2-contributor',
+      effortSource: 'none',
       tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 99 },
     } as never))).rejects.toThrow(/token|usage|total/i);
   });

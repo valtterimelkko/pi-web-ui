@@ -136,7 +136,7 @@ export async function sendRuntimeAvailabilityStatus(
   opencodeService: OpenCodeAvailabilityService,
   sendMessage: (clientId: string, message: ServerMessage) => void,
   antigravityService?: AntigravityAvailabilityService,
-  commandCodeService?: Pick<CommandCodeService, 'isEnabled' | 'isBrowserAvailable' | 'getBrowserModels'> & { init?: () => Promise<void> },
+  commandCodeService?: Pick<CommandCodeService, 'isBrowserEnabled' | 'isBrowserAvailable' | 'getModels' | 'getBrowserModels' | 'getHealth'> & { init?: () => Promise<void> },
 ): Promise<void> {
   await Promise.all([
     (async () => {
@@ -219,16 +219,27 @@ export async function sendRuntimeAvailabilityStatus(
       if (!commandCodeService) return;
       try {
         await commandCodeService.init?.();
-        const available = commandCodeService.isBrowserAvailable();
+        const enabled = commandCodeService.isBrowserEnabled();
+        const available = enabled && commandCodeService.isBrowserAvailable();
+        const health = commandCodeService.getHealth();
+        const catalogue = {
+          availabilityStatus: health.status,
+          checkedAt: health.checkedAt,
+          source: 'live-discovery' as const,
+        };
         sendMessage(clientId, {
           type: 'commandcode_available',
           available,
-          enabled: commandCodeService.isEnabled(),
-          models: available ? commandCodeService.getBrowserModels() : [],
-          error: available ? null : commandCodeService.isEnabled() ? 'Command Code browser runtime is unavailable' : 'Command Code browser runtime is disabled',
+          enabled,
+          models: enabled ? commandCodeService.getModels() : [],
+          availabilityStatus: catalogue.availabilityStatus,
+          checkedAt: catalogue.checkedAt,
+          source: catalogue.source,
+          error: available ? null : enabled ? 'Command Code browser runtime is unavailable' : 'Command Code browser runtime is disabled',
         });
       } catch {
-        sendMessage(clientId, { type: 'commandcode_available', available: false, enabled: commandCodeService.isEnabled(), models: [], error: 'Command Code availability check failed' });
+        const enabled = commandCodeService.isBrowserEnabled();
+        sendMessage(clientId, { type: 'commandcode_available', available: false, enabled, models: [], error: 'Command Code availability check failed' });
       }
     })(),
   ]);
@@ -1078,6 +1089,20 @@ export class WebSocketConnectionManager {
     await withCorrelation({ requestId: newRequestId(), sessionId: correlationSessionId }, async () => {
       // Dispatch to appropriate runtime handler
       if (this.commandCodeSessionIds.has(sessionPath)) {
+        // The in-memory id set is only a routing hint. Revalidate the private
+        // browser record before every prompt so a deleted, stale, or policy
+        // invalid session cannot fall through to the Pi handler after a
+        // restart/configuration change.
+        const accessible = await this.commandCodeService.isBrowserSession(sessionPath).catch(() => false);
+        if (!accessible) {
+          this.commandCodeSessionIds.delete(sessionPath);
+          this.sendMessage(clientId, {
+            type: 'error',
+            message: 'Command Code browser session is no longer available',
+            code: 'COMMANDCODE_UNAVAILABLE',
+          });
+          return;
+        }
         await this.handleCommandCodePrompt(clientId, sessionPath, message.message);
         return;
       }
@@ -1723,7 +1748,7 @@ export class WebSocketConnectionManager {
         if (!this.commandCodeService.isBrowserAvailable()) {
           this.sendMessage(clientId, {
             type: 'error',
-            message: this.commandCodeService.isEnabled() ? 'Command Code browser runtime is unavailable' : 'Command Code browser runtime is disabled',
+            message: this.commandCodeService.isBrowserEnabled() ? 'Command Code browser runtime is unavailable' : 'Command Code browser runtime is disabled',
             code: 'COMMANDCODE_UNAVAILABLE',
           });
           return;
@@ -1751,8 +1776,14 @@ export class WebSocketConnectionManager {
           sdkType: 'commandcode',
           model: created.modelSelector,
           effort: created.effort,
+          requestedEffort: created.effortSource === 'explicit' ? created.effort : undefined,
+          acceptedEffort: created.effort,
           effortLevels: effortCapability?.effortLevels,
           effortSource: created.effortSource,
+          defaultEffort: created.defaultEffort,
+          effectiveEffort: created.effectiveEffort,
+          effortEvidenceMethod: created.effortEvidenceMethod,
+          effortCapabilityHash: created.effortCapabilityHash,
         } as unknown as ServerMessage);
       } catch (error) {
         this.sendMessage(clientId, { type: 'error', message: error instanceof Error ? error.message : 'Failed to create Command Code session', code: 'COMMANDCODE_CREATE_FAILED' });
@@ -1998,17 +2029,16 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    let isCommandCodeSession = this.commandCodeSessionIds.has(sessionPath);
-    if (!isCommandCodeSession) {
-      try {
-        const entry = await getSessionRegistry().get(sessionPath);
-        if (entry?.sdkType === 'commandcode' && await this.commandCodeService.isBrowserSession(sessionPath)) {
-          isCommandCodeSession = true;
-          this.commandCodeSessionIds.add(sessionPath);
-        }
-      } catch {
-        // ignore registry lookup failures
-      }
+    // The in-memory set is only a hint. Revalidate the private browser record
+    // before every resume so a deleted or policy-invalid session cannot be
+    // switched into after a restart/configuration change.
+    let isCommandCodeSession = false;
+    try {
+      isCommandCodeSession = await this.commandCodeService.isBrowserSession(sessionPath);
+      if (isCommandCodeSession) this.commandCodeSessionIds.add(sessionPath);
+      else this.commandCodeSessionIds.delete(sessionPath);
+    } catch {
+      this.commandCodeSessionIds.delete(sessionPath);
     }
     if (isCommandCodeSession) {
       if (oldSessionPath && oldSessionPath !== sessionPath) {
@@ -2244,7 +2274,14 @@ export class WebSocketConnectionManager {
       sdkType: 'commandcode',
       model: record.modelSelector,
       effort: record.effort,
+      requestedEffort: record.effortSource === 'explicit' ? record.effort : undefined,
+      acceptedEffort: record.effort,
       effortLevels: capability?.effortLevels,
+      effortSource: record.effortSource,
+      defaultEffort: record.defaultEffort,
+      effectiveEffort: record.effectiveEffort,
+      effortEvidenceMethod: record.effortEvidenceMethod,
+      effortCapabilityHash: record.effortCapabilityHash,
       isStreaming: this.commandCodeService.isRunning(sessionId),
       messages: [],
       fileTimestamp: Date.parse(record.updatedAt),
@@ -2428,7 +2465,14 @@ export class WebSocketConnectionManager {
           sdkType: 'commandcode' as const,
           model: entry.modelSelector,
           effort: entry.effort,
+          requestedEffort: entry.effortSource === 'explicit' ? entry.effort : undefined,
+          acceptedEffort: entry.effort,
           effortLevels: capability?.effortLevels,
+          effortSource: entry.effortSource,
+          defaultEffort: entry.defaultEffort,
+          effectiveEffort: entry.effectiveEffort,
+          effortEvidenceMethod: entry.effortEvidenceMethod,
+          effortCapabilityHash: entry.effortCapabilityHash,
           firstMessage: entry.firstMessage || '',
           messageCount: entry.messageCount || 0,
           cwd: entry.cwd || '',
@@ -2485,7 +2529,14 @@ export class WebSocketConnectionManager {
           messageCount: record.messageCount,
           model: record.modelSelector,
           effort: record.effort,
+          requestedEffort: record.effortSource === 'explicit' ? record.effort : undefined,
+          acceptedEffort: record.effort,
           effortLevels: capability?.effortLevels,
+          effortSource: record.effortSource,
+          defaultEffort: record.defaultEffort,
+          effectiveEffort: record.effectiveEffort,
+          effortEvidenceMethod: record.effortEvidenceMethod,
+          effortCapabilityHash: record.effortCapabilityHash,
           lastActivityAt: Date.parse(record.updatedAt),
         },
       } as unknown as ServerMessage);
@@ -2783,8 +2834,14 @@ export class WebSocketConnectionManager {
         this.sendMessage(subId, {
           type: 'effort_changed',
           effort: updated.effort,
+          requestedEffort: updated.effortSource === 'explicit' ? updated.effort : undefined,
+          acceptedEffort: updated.effort,
           effortSource: updated.effortSource ?? 'none',
           effortLevels: capability?.effortLevels,
+          defaultEffort: updated.defaultEffort,
+          effectiveEffort: updated.effectiveEffort,
+          effortEvidenceMethod: updated.effortEvidenceMethod,
+          effortCapabilityHash: updated.effortCapabilityHash,
         });
       }
     } catch (error) {
@@ -3071,15 +3128,11 @@ export class WebSocketConnectionManager {
   ): Promise<void> {
     const sessionPath = message.sessionPath;
 
-    // Command Code session subscribe
-    let isCommandCodeSub = this.commandCodeSessionIds.has(sessionPath);
-    if (!isCommandCodeSub) {
-      const entry = await getSessionRegistry().get(sessionPath).catch(() => undefined);
-      if (entry?.sdkType === 'commandcode' && await this.commandCodeService.isBrowserSession(sessionPath)) {
-        isCommandCodeSub = true;
-        this.commandCodeSessionIds.add(sessionPath);
-      }
-    }
+    // Command Code session subscribe. Revalidate the private browser record;
+    // registry membership and a stale in-memory set are not execution authority.
+    const isCommandCodeSub = await this.commandCodeService.isBrowserSession(sessionPath).catch(() => false);
+    if (isCommandCodeSub) this.commandCodeSessionIds.add(sessionPath);
+    else this.commandCodeSessionIds.delete(sessionPath);
     if (isCommandCodeSub) {
       this.clientViewingSession.set(clientId, sessionPath);
       this.subscribeCommandCode(clientId, sessionPath);

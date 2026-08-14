@@ -23,7 +23,12 @@ const base = flag('base');
 const validationDir = flag('validation-dir');
 const cwd = flag('cwd', validationDir ? path.join(validationDir, 'workspace') : undefined);
 const model = flag('model', 'qwen/qwen3.8-max');
-const effort = flag('effort', 'medium');
+const hasEffortFlag = process.argv.includes('--effort');
+const effort = flag('effort', model === 'meta/muse-spark-1.2-contributor' ? undefined : 'medium');
+const expectedText = flag('expected-text', model === 'meta/muse-spark-1.2-contributor' ? 'MUSE-LIVE-OK' : 'COMMAND-CODE-BROWSER-LIVE-OK');
+if (model === 'meta/muse-spark-1.2-contributor' && hasEffortFlag) {
+  throw new Error('Muse does not support native effort; omit --effort');
+}
 const password = flag('password', process.env.WS_VALIDATE_PASSWORD ?? 'validation-pass');
 const origin = flag('origin', 'https://tmux.letsautomate.work');
 const timeoutMs = Number(flag('timeout', '90000'));
@@ -60,7 +65,10 @@ await new Promise((resolve, reject) => {
       return;
     }
     if (message.type === 'authenticated') {
-      ws.send(JSON.stringify({ type: 'new_session', sdkType: 'commandcode', cwd, model, effort }));
+      ws.send(JSON.stringify({
+        type: 'new_session', sdkType: 'commandcode', cwd, model,
+        ...(effort === undefined ? {} : { effort }),
+      }));
       return;
     }
     if (message.type === 'error') {
@@ -71,7 +79,7 @@ await new Promise((resolve, reject) => {
       created = message;
       sessionId = message.sessionPath;
       events.push({ type: 'session_created', sessionId, sdkType: message.sdkType, model: message.model, effort: message.effort });
-      ws.send(JSON.stringify({ type: 'prompt', sessionId, message: 'Reply with the exact text COMMAND-CODE-BROWSER-LIVE-OK and nothing else.' }));
+      ws.send(JSON.stringify({ type: 'prompt', sessionId, message: `Reply with the exact text ${expectedText} and nothing else.` }));
       return;
     }
     if (message.type !== 'session_event') return;
@@ -92,6 +100,7 @@ await new Promise((resolve, reject) => {
 });
 ws.close();
 
+let replaySession;
 const replayAssistantText = await new Promise((resolve, reject) => {
   const replayWs = new WebSocket(`${base.replace(/^http/, 'ws')}/ws`, { headers: { cookie, origin } });
   let text = '';
@@ -110,6 +119,10 @@ const replayAssistantText = await new Promise((resolve, reject) => {
     try { message = JSON.parse(raw.toString()); } catch { return; }
     if (message.type === 'authenticated') {
       replayWs.send(JSON.stringify({ type: 'switch_session', sessionPath: sessionId }));
+      return;
+    }
+    if (message.type === 'session_switched') {
+      replaySession = message;
       return;
     }
     if (message.type === 'session_event') {
@@ -133,8 +146,8 @@ await access(browserMarker);
 let workspaceWriteSucceeded = false;
 try { await access(workspaceMarker); workspaceWriteSucceeded = true; } catch { /* expected: read-only workspace */ }
 const browserMode = (await stat(browserMarker)).mode & 0o777;
-const websocketEvidence = { availability, created, events, assistantText, replayAssistantText };
-assertBrowserWebSocketEvidence(websocketEvidence, { model, effort });
+const websocketEvidence = { availability, created, replaySession, events, assistantText, replayAssistantText };
+assertBrowserWebSocketEvidence(websocketEvidence, { model, effort, expectedText });
 if (workspaceWriteSucceeded) throw new Error('Command Code browser containment failed: workspace is writable');
 
 const token = (await import('node:fs/promises')).readFile;
@@ -214,8 +227,10 @@ const report = {
   sessionId,
   model,
   effort,
+  expectedText,
   availability,
   created,
+  replaySession,
   events,
   assistantText,
   replayAssistantText,

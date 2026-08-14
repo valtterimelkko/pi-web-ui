@@ -67,13 +67,12 @@ describe('Command Code Internal API lifecycle', () => {
         models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'],
         ambiguous: [],
         effortCapabilities: {
-          'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium', source: 'live-preflight', capabilityHash: 'a'.repeat(64) },
-          'meta/muse-spark-1.2-contributor': { supportsEffort: false, effortLevels: [], source: 'live-preflight', capabilityHash: 'b'.repeat(64) },
+          'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium', status: 'adjustable', source: 'live-preflight', capabilityHash: 'a'.repeat(64) },
+          'meta/muse-spark-1.2-contributor': { supportsEffort: false, effortLevels: [], status: 'unavailable', source: 'live-preflight', capabilityHash: 'b'.repeat(64) },
         },
       }),
       checkExecutable: false,
     });
-    await commandCodeService.init();
     commandCodeService.setRoleAttestationSecret('route-secret');
     const attestation = createCommandCodeRoleAttestation('route-secret', {
       role: 'conductor-root', model: 'qwen/qwen3.8-max', effort: 'xhigh', cwd, worktreeRoot: cwd,

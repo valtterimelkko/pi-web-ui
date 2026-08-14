@@ -2,8 +2,10 @@ import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type { CommandCodeModelDiscovery } from '../../../src/command-code/command-code-model-catalog.js';
 import type { CommandCodeProcessRunInput, CommandCodeProcessRunResult } from '../../../src/command-code/command-code-process-runner.js';
+import { COMMAND_CODE_FULL_MODEL_CATALOGUE, COMMAND_CODE_MODELS } from '../../../src/command-code/command-code-model-catalog.js';
 import { CommandCodeService } from '../../../src/command-code/command-code-service.js';
 import { createCommandCodeRoleAttestation } from '../../../src/command-code/command-code-role-attestation.js';
 
@@ -33,12 +35,14 @@ const discovery: CommandCodeModelDiscovery = {
       supportsEffort: true,
       effortLevels: ['low', 'medium', 'xhigh'],
       defaultEffort: 'medium',
+      status: 'adjustable',
       source: 'live-preflight',
       capabilityHash: 'a'.repeat(64),
     },
     'meta/muse-spark-1.2-contributor': {
       supportsEffort: false,
       effortLevels: [],
+      status: 'unavailable',
       source: 'live-preflight',
       capabilityHash: 'b'.repeat(64),
     },
@@ -59,6 +63,57 @@ function success(nativeSessionId: string, finalText: string): CommandCodeProcess
 }
 
 describe('Command Code service', () => {
+  it('rejects a default-discovered catalogue that is missing a model row', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-catalogue-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const executable = path.join(stateDir, 'cmd');
+    await writeFile(executable, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const model = args[args.indexOf('--model') + 1] || '';
+const effort = args[args.indexOf('--effort') + 1] || '';
+if (args.includes('--version')) { console.log('Command Code v1.19.0'); process.exit(0); }
+if (args.includes('--list-models')) {
+  console.log('qwen/qwen3.8-max                      fixture adjustable model');
+  console.log('meta/muse-spark-1.2-contributor       fixture non-adjustable model');
+  process.exit(0);
+}
+if (model === 'qwen/qwen3.8-max' && ['low', 'medium', 'xhigh'].includes(effort)) { console.error('authentication required'); process.exit(3); }
+if (model === 'qwen/qwen3.8-max' && effort === '__pi_web_ui_capability_probe__') { console.error('Unknown effort. Supported: low, medium, xhigh.'); process.exit(2); }
+if (model === 'meta/muse-spark-1.2-contributor') { console.error('Model does not support adjustable reasoning effort.'); process.exit(2); }
+process.exit(2);
+`, { mode: 0o700 });
+    try {
+      const service = new CommandCodeService({
+        config: { enabled: true, executablePath: executable, stateDir, allowedCwdRoots: [cwd], expectedVersion: '1.19.0' },
+        checkExecutable: false,
+      });
+      await service.init();
+      expect(service.getHealth()).toMatchObject({ status: 'exact_model_unavailable', advertisedModels: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'] });
+      await service.shutdown();
+    } finally {
+      await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+    }
+  });
+
+  it('marks the exact policy models unavailable when the pinned runtime version drifts', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-version-drift-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({ ...discovery, version: '1.23.2' }),
+      checkExecutable: false,
+    });
+    await service.init();
+    expect(service.getHealth()).toMatchObject({ status: 'version_mismatch', version: '1.23.2' });
+    expect(service.getModels().map((model) => ({ id: model.id, status: model.status, runnable: model.runnable }))).toEqual([
+      { id: 'qwen/qwen3.8-max', status: 'unavailable', runnable: false },
+      { id: 'meta/muse-spark-1.2-contributor', status: 'unavailable', runnable: false },
+    ]);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
   it('copies operator auth into each private native home without a shared auth symlink', async () => {
     const operatorHome = await mkdtemp(path.join(os.tmpdir(), 'command-code-operator-home-'));
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
@@ -240,20 +295,286 @@ describe('Command Code service', () => {
     });
     await service.init();
 
-    const created = await service.createSession({
+    await expect(service.createSession({
       cwd,
       model: model as any,
       permissionProfile: 'implementation-child-wide',
-    });
-
-    expect(created.modelSelector).toBe(model);
-    expect(created.effort).toBeUndefined();
+    })).rejects.toThrow(/allowlist|shadow|unavailable|policy/i);
     expect(service.getModels()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: model, effortLevels: ['high', 'max'], supportsEffort: true }),
     ]));
   });
 
-  it('allows only policy-approved discovered models through the server-owned browser profile', async () => {
+  it('fails closed when an extra discovered model carries drifted approved-model capability metadata', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const extraModel = 'deepseek/deepseek-v4-pro';
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({
+        version: '1.19.0',
+        models: [...discovery.models, extraModel],
+        ambiguous: [],
+        effortCapabilities: {
+          ...discovery.effortCapabilities!,
+          'qwen/qwen3.8-max': { ...discovery.effortCapabilities!['qwen/qwen3.8-max'], effortLevels: ['low', 'medium'], capabilityHash: 'd'.repeat(64) },
+          [extraModel]: { supportsEffort: true, effortLevels: ['high', 'max'], status: 'adjustable', source: 'live-preflight', capabilityHash: 'c'.repeat(64) },
+        },
+      }),
+      checkExecutable: false,
+    });
+    await service.init();
+    expect(service.isAvailable()).toBe(false);
+    await expect(service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide' })).rejects.toThrow(/available|effort|capability|catalogue/i);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('exposes the full discovered catalogue with runnable status while retaining the narrow shadow projection', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const extraModel = 'deepseek/deepseek-v4-pro';
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({
+        version: '1.19.0',
+        models: [...discovery.models, extraModel],
+        ambiguous: [],
+        effortCapabilities: {
+          ...discovery.effortCapabilities!,
+          [extraModel]: {
+            supportsEffort: true,
+            effortLevels: ['high', 'max'],
+            status: 'adjustable',
+            source: 'live-preflight',
+            capabilityHash: 'c'.repeat(64),
+          },
+        },
+      }),
+      checkExecutable: false,
+    });
+    await service.init();
+    expect(service.isShadowAvailable()).toBe(true);
+    expect(service.getModels().map((model) => model.id)).toEqual([...discovery.models, extraModel]);
+    expect(service.getModels().map((model) => model.runnable)).toEqual([true, true, false]);
+    expect(service.getModels().map((model) => model.status)).toEqual(['runnable', 'runnable', 'evidence-only']);
+    expect(service.getModels().map((model) => model.browserRunnable)).toEqual([false, false, false]);
+    expect(service.getShadowModels().map((model) => model.id)).toEqual([...COMMAND_CODE_MODELS]);
+    expect(service.getShadowEffortCapabilities()).toEqual({
+      'qwen/qwen3.8-max': expect.objectContaining({ effortLevels: ['low', 'medium', 'xhigh'] }),
+      'meta/muse-spark-1.2-contributor': expect.objectContaining({ effortLevels: [] }),
+    });
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('keeps the approved pair available when an extra catalogue model has unknown evidence', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const effortCapabilities = Object.fromEntries(COMMAND_CODE_FULL_MODEL_CATALOGUE.map((model) => [
+      model,
+      discovery.effortCapabilities?.[model] ?? {
+        supportsEffort: false,
+        effortLevels: [],
+        status: 'unknown' as const,
+        source: 'live-preflight' as const,
+        capabilityHash: 'c'.repeat(64),
+      },
+    ]));
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({
+        version: '1.19.0',
+        models: [...COMMAND_CODE_FULL_MODEL_CATALOGUE],
+        ambiguous: [],
+        effortCapabilities,
+      }),
+      checkExecutable: false,
+    });
+    await service.init();
+    expect(service.isAvailable()).toBe(true);
+    expect(service.getModels()).toHaveLength(COMMAND_CODE_FULL_MODEL_CATALOGUE.length);
+    expect(service.getModels().find((model) => model.id === 'google/gemini-3.7-flash')).toMatchObject({ status: 'unavailable', runnable: false });
+    expect(service.getModels().filter((model) => model.runnable).map((model) => model.id)).toEqual([...COMMAND_CODE_MODELS]);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('fails closed when unknown extra-model effort evidence carries a plausible selector', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-unknown-extra-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const effortCapabilities = Object.fromEntries(COMMAND_CODE_FULL_MODEL_CATALOGUE.map((model) => [
+      model,
+      model === 'deepseek/deepseek-v4-pro'
+        ? { supportsEffort: true, effortLevels: ['high'], status: 'unknown' as const, source: 'live-preflight' as const, capabilityHash: 'd'.repeat(64) }
+        : discovery.effortCapabilities?.[model] ?? { supportsEffort: false, effortLevels: [], status: 'unknown' as const, source: 'live-preflight' as const, capabilityHash: 'c'.repeat(64) },
+    ]));
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({ version: '1.19.0', models: [...COMMAND_CODE_FULL_MODEL_CATALOGUE], ambiguous: [], effortCapabilities }),
+      checkExecutable: false,
+    });
+    await service.init();
+    expect(service.isAvailable()).toBe(false);
+    const extraProjection = service.getModels().find((model) => model.id === 'deepseek/deepseek-v4-pro');
+    expect(extraProjection).toMatchObject({ supportsEffort: false, effortLevels: [] });
+    expect(extraProjection?.defaultEffort).toBeUndefined();
+    await expect(service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide' })).rejects.toThrow(/available|effort|capability|catalogue/i);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('fails closed when approved Muse effort discovery is unknown', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-muse-unknown-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, allowedCwdRoots: [cwd], expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({
+        ...discovery,
+        effortCapabilities: {
+          ...discovery.effortCapabilities!,
+          'meta/muse-spark-1.2-contributor': {
+            ...discovery.effortCapabilities!['meta/muse-spark-1.2-contributor'],
+            status: 'unknown',
+          },
+        },
+      }),
+      checkExecutable: false,
+    });
+    await service.init();
+    expect(service.isAvailable()).toBe(false);
+    await expect(service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide' })).rejects.toThrow(/available|effort|capability|catalogue/i);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('fails closed when effort capability status evidence is malformed', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-capability-status-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, allowedCwdRoots: [cwd], expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({
+        ...discovery,
+        effortCapabilities: {
+          ...discovery.effortCapabilities!,
+          'meta/muse-spark-1.2-contributor': {
+            ...discovery.effortCapabilities!['meta/muse-spark-1.2-contributor'],
+            status: 'not-a-status' as any,
+          },
+        },
+      }),
+      checkExecutable: false,
+    });
+    await service.init();
+    expect(service.isAvailable()).toBe(false);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('fails closed without throwing when effort-level evidence is malformed', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-capability-shape-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, allowedCwdRoots: [cwd], expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({
+        ...discovery,
+        effortCapabilities: {
+          ...discovery.effortCapabilities!,
+          'qwen/qwen3.8-max': {
+            ...discovery.effortCapabilities!['qwen/qwen3.8-max'],
+            effortLevels: undefined as any,
+          },
+        },
+      }),
+      checkExecutable: false,
+    });
+    await service.init();
+    expect(() => service.getHealth()).not.toThrow();
+    expect(service.getHealth()).toMatchObject({ status: 'effort_capability_unknown' });
+    expect(service.isAvailable()).toBe(false);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('retains the discovered catalogue when hybrid effort discovery fails', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-effort-discovery-failure-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    let effortDiscoveryCalled = false;
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, allowedCwdRoots: [cwd], expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({ version: '1.19.0', models: [...COMMAND_CODE_FULL_MODEL_CATALOGUE], ambiguous: [] }),
+      discoverEfforts: async () => {
+        effortDiscoveryCalled = true;
+        throw new Error('bounded effort discovery failed');
+      },
+      checkExecutable: false,
+    } as any);
+    await service.init();
+    expect(effortDiscoveryCalled).toBe(true);
+    expect(service.getHealth()).toMatchObject({ status: 'effort_capability_unknown', advertisedModels: [...COMMAND_CODE_FULL_MODEL_CATALOGUE] });
+    expect(service.getModels()).toHaveLength(COMMAND_CODE_FULL_MODEL_CATALOGUE.length);
+    expect(service.getModels().every((model) => model.runnable === false)).toBe(true);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('fails closed when the approved shadow catalogue is reordered in discovery', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({
+        ...discovery,
+        models: [...discovery.models].reverse(),
+      }),
+      checkExecutable: false,
+    });
+    await service.init();
+    expect(service.isShadowAvailable()).toBe(false);
+    await expect(service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide' })).rejects.toThrow(/available|catalogue|order|policy/i);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('requires the full canonical catalogue order before exposing the shadow gate', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-catalogue-order-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const effortCapabilities = Object.fromEntries(COMMAND_CODE_FULL_MODEL_CATALOGUE.map((model) => [
+      model,
+      discovery.effortCapabilities?.[model] ?? {
+        supportsEffort: false,
+        effortLevels: [],
+        status: 'unknown' as const,
+        source: 'live-preflight' as const,
+        capabilityHash: 'c'.repeat(64),
+      },
+    ]));
+    const reordered = [...COMMAND_CODE_FULL_MODEL_CATALOGUE];
+    [reordered[0], reordered[1]] = [reordered[1], reordered[0]];
+    const service = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => ({ version: '1.19.0', models: reordered, ambiguous: [], effortCapabilities }),
+      checkExecutable: false,
+    });
+    await service.init();
+    expect(service.isAvailable()).toBe(true);
+    expect(service.isShadowAvailable()).toBe(false);
+    await expect(service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide' })).rejects.toThrow(/available|catalogue|order|policy/i);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
+  it('marks only exact policy models runnable through the browser profile', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const browserAuthFile = path.join(cwd, 'browser-auth.json');
@@ -286,7 +607,7 @@ describe('Command Code service', () => {
     });
     (service as any).runner.browserSandboxReady = () => true;
     await service.init();
-    await expect(service.createSession({ cwd, model, permissionProfile: 'browser-contained' } as any)).resolves.toMatchObject({ modelSelector: model, permissionProfile: 'browser-contained' });
+    await expect(service.createSession({ cwd, model, permissionProfile: 'browser-contained' } as any)).rejects.toThrow(/policy|allowlist|model|containment/i);
     await expect(service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'browser-contained' } as any)).rejects.toThrow(/policy|browser|allowlist/i);
   });
 
@@ -395,6 +716,42 @@ describe('Command Code service', () => {
     ]);
   });
 
+  it('does not expose a persisted session after capability evidence changes', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-capability-reload-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const first = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, allowedCwdRoots: [cwd], expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => discovery,
+      checkExecutable: false,
+    });
+    await first.init();
+    const created = await first.createSession({ cwd, model: 'qwen/qwen3.8-max', effort: 'medium', permissionProfile: 'implementation-child-wide' });
+    await first.shutdown();
+
+    const drifted = {
+      ...discovery,
+      effortCapabilities: {
+        ...discovery.effortCapabilities!,
+        'qwen/qwen3.8-max': {
+          ...discovery.effortCapabilities!['qwen/qwen3.8-max'],
+          capabilityHash: 'd'.repeat(64),
+        },
+      },
+    };
+    const second = new CommandCodeService({
+      config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, allowedCwdRoots: [cwd], expectedVersion: '1.19.0' },
+      runner: new FakeRunner(),
+      discover: async () => drifted,
+      checkExecutable: false,
+    });
+    await second.init();
+    await expect(second.getSession(created.sessionId)).resolves.toBeUndefined();
+    await expect(second.listShadowSessions()).resolves.toEqual([]);
+    await second.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
+  });
+
   it('refuses native effort for a model with no adjustable effort capability', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
@@ -484,6 +841,39 @@ describe('Command Code service', () => {
     expect(events.filter((type) => type === 'agent_end')).toHaveLength(1);
     expect(replay.filter((event) => event.type === 'agent_end')).toHaveLength(1);
     expect((await service.getSession(session.sessionId))?.state).toBe('failed');
+  });
+
+  it('preserves terminal effort and usage when the runtime emits an early terminal marker', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-terminal-evidence-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const runner = new FakeRunner();
+    runner.results.push({
+      exitCode: 0,
+      signal: null,
+      stderrTail: '',
+      parsed: {
+        events: [{ event: { type: 'agent_end', reason: 'turn-ended' }, lineNumber: 1 }],
+        terminal: { type: 'result', subtype: 'success', sessionId: 'native-terminal-evidence', effort: 'xhigh', finalText: 'done', usage: { input: 2, output: 3, total: 5 } },
+        unknownEventTypes: [], suppressedDuplicateCount: 0, bytes: 1, lineCount: 2,
+      },
+    });
+    vi.spyOn(runner, 'run').mockImplementation(async (input) => {
+      runner.inputs.push(input);
+      const result = runner.results.shift()!;
+      for (const event of result.parsed?.events ?? []) input.onEvent?.(event);
+      return result;
+    });
+    const service = new CommandCodeService({ config: { enabled: true, executablePath: '/opt/bin/cmd', stateDir, expectedVersion: '1.19.0' }, runner, discover: async () => discovery, checkExecutable: false });
+    await service.init();
+    const session = await service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'implementation-child-wide' });
+    const events: NormalizedEvent[] = [];
+    await service.sendPrompt(session.sessionId, 'terminal evidence', (event) => events.push(event));
+    const terminal = events.filter((event) => event.type === 'agent_end');
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]?.data).toMatchObject({ effort: 'xhigh', effortEvidenceMethod: 'provider-result', tokenUsage: { input: 2, output: 3, total: 5 } });
+    expect((await service.getSession(session.sessionId))?.effectiveEffort).toBe('xhigh');
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
   });
 
   it('revalidates the active workspace policy before spawning a turn', async () => {

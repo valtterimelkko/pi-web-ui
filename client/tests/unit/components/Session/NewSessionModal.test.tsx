@@ -29,6 +29,14 @@ const sessionState = {
   opencodeAuthError: null,
   antigravityAvailable: false,
   antigravityAuthError: null,
+  commandCodeAvailable: true,
+  commandCodeEnabled: true,
+  commandCodeModels: [
+    { id: 'qwen/qwen3.8-max', displayName: 'Qwen 3.8 Max', provider: 'command-code', reasoning: true, runnable: true, status: 'runnable', browserRunnable: true, supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
+    { id: 'meta/muse-spark-1.2-contributor', displayName: 'Muse Spark 1.2 Contributor', provider: 'command-code', reasoning: true, runnable: true, status: 'runnable', browserRunnable: true, supportsEffort: false, effortLevels: [] },
+    { id: 'google/gemini-3.7-flash', displayName: 'Gemini 3.7 Flash', provider: 'command-code', reasoning: true, runnable: false, status: 'evidence-only', browserRunnable: false, supportsEffort: false, effortLevels: [] },
+    { id: 'legacy/unverified', displayName: 'Legacy Unverified', provider: 'command-code', reasoning: true, supportsEffort: false, effortLevels: [] },
+  ],
 };
 
 vi.mock('../../../../src/store', () => ({
@@ -115,6 +123,22 @@ describe('NewSessionModal — Claude backend selector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
     expect(onCreateSession).toHaveBeenCalledWith('/root', 'pi', 'openai-codex/gpt-5.6-luna');
+  });
+
+  it('shows the full Command Code catalogue but disables evidence-only models and omits Muse effort', async () => {
+    const onCreateSession = vi.fn();
+    render(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={onCreateSession} />);
+
+    fireEvent.click(screen.getByText('Command Code'));
+    const selector = await screen.findByTestId('commandcode-model-select');
+    expect(screen.getByRole('option', { name: /Gemini 3\.7 Flash/ })).toBeDisabled();
+    expect(screen.getByRole('option', { name: /Legacy Unverified/ })).toBeDisabled();
+    expect(screen.getByTestId('commandcode-effort-select')).toBeInTheDocument();
+
+    fireEvent.change(selector, { target: { value: 'meta/muse-spark-1.2-contributor' } });
+    expect(screen.queryByTestId('commandcode-effort-select')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(onCreateSession).toHaveBeenCalledWith('/root', 'commandcode', 'meta/muse-spark-1.2-contributor');
   });
 
   it('clicking the locked Channel backend does not change the selection', async () => {

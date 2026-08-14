@@ -71,6 +71,31 @@ describe('InternalApiClient request evidence', () => {
     expect(client.getLastPromptEvidence('session-1')).toBeUndefined();
   });
 
+  it('omits native effort when creating the non-adjustable Muse fixture route', async () => {
+    let body = '';
+    const socketPath = await listen((req, res) => {
+      req.on('data', (chunk) => { body += chunk.toString(); });
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ sessionId: 'muse-session', runtime: 'commandcode', model: 'meta/muse-spark-1.2-contributor' }));
+      });
+    });
+    const client = new InternalApiClient({ socketPath, token: 'test' });
+    await client.createSession({
+      runtime: 'commandcode',
+      cwd: '/tmp/muse-fixture',
+      model: 'meta/muse-spark-1.2-contributor',
+      source: 'live-validation-commandcode-fixture',
+    });
+    const request = JSON.parse(body) as Record<string, unknown>;
+    expect(request.effort).toBeUndefined();
+    expect(request.commandCodeAttestation).toMatchObject({
+      model: 'meta/muse-spark-1.2-contributor',
+      role: 'conductor-root',
+    });
+    expect(request.commandCodeAttestation).not.toHaveProperty('effort');
+  });
+
   it('fetches session evidence with an encoded identifier and bounded expansion query', async () => {
     const socketPath = await listen((req, res) => {
       expect(req.url).toBe('/api/v1/sessions/path%2Fid/evidence?expand=diagnostics');

@@ -87,6 +87,7 @@ describe('validation server env-file loading', () => {
     expect(isolation.PI_COMMAND_CODE_BROWSER_ALLOWED_CWD_ROOTS).toBe('/tmp/pi-validation/workspace');
     expect(isolation.PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS).toContain('/tmp/pi-validation/command-code-fixture-bin');
     expect(isolation.PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS).toContain('/usr/bin');
+    expect(isolation.PI_COMMAND_CODE_BROWSER_ALLOWED_MODELS).toBe('qwen/qwen3.8-max,meta/muse-spark-1.2-contributor');
     expect(isolation.COMMAND_CODE_NATIVE_HOME_DIR).toBe('/tmp/pi-validation/command-code-native-home');
   });
 

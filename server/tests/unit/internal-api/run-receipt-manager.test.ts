@@ -58,7 +58,9 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       invocationRole: 'conductor-root',
       permissionProfile: 'agent-os-7f-root-readonly',
       effort: 'xhigh',
+      requestedEffort: 'xhigh',
       effortSource: 'explicit',
+      defaultEffort: 'medium',
     });
     expect(begun.kind).toBe('created');
     if (begun.kind !== 'created') return;
@@ -86,6 +88,9 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       modelSelector: 'qwen/qwen3.8-max',
       invocationRole: 'implementation-child',
       permissionProfile: 'implementation-child-wide',
+      effort: 'medium',
+      effortSource: 'default',
+      defaultEffort: 'medium',
     });
     expect(begun.kind).toBe('created');
     if (begun.kind !== 'created') return;
@@ -117,6 +122,9 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       modelSelector: 'qwen/qwen3.8-max',
       invocationRole: 'implementation-child',
       permissionProfile: 'implementation-child-wide',
+      effort: 'medium',
+      effortSource: 'default',
+      defaultEffort: 'medium',
     });
     expect(malformed.kind).toBe('created');
     if (malformed.kind !== 'created') return;
@@ -139,6 +147,9 @@ describe('RunReceiptManager — idempotent dispatch and terminal lifecycle', () 
       modelSelector: 'qwen/qwen3.8-max',
       invocationRole: 'implementation-child',
       permissionProfile: 'implementation-child-wide',
+      effort: 'medium',
+      effortSource: 'default',
+      defaultEffort: 'medium',
     });
     expect(begun.kind).toBe('created');
     if (begun.kind !== 'created') return;

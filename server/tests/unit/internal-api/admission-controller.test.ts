@@ -33,6 +33,21 @@ describe('AdmissionController', () => {
     expect(controller.snapshot()).toMatchObject({ available: false, reason: 'memory_pressure', activeTurns: 0 });
   });
 
+  it('uses the configured Command Code concurrency as its admission runtime limit', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 6,
+      interactiveReserve: 1,
+      runtimeMaxActiveTurns: { commandcode: 1 },
+      memory: () => ({ currentBytes: 100, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 100,
+      reservedBytesPerTurn: 1,
+    });
+    const lease = await controller.acquire('commandcode');
+    await expect(controller.acquire('commandcode')).rejects.toMatchObject({ reason: 'runtime_limit' });
+    expect(controller.snapshot().runtimes.commandcode).toMatchObject({ activeTurns: 1, maxActiveTurns: 1 });
+    lease.release();
+  });
+
   it('enforces optional runtime-specific limits without fixing session counts', async () => {
     const controller = new AdmissionController({
       maxActiveTurns: 6,

@@ -12,6 +12,7 @@ import type {
   RunOutputEvidence,
 } from '../types.js';
 import { createLogger } from '../../logging/logger.js';
+import { assertCommandCodeEffort, assertCommandCodeModel } from '../../command-code/command-code-model-catalog.js';
 
 const logger = createLogger('RunReceiptStore');
 
@@ -424,6 +425,7 @@ export class RunReceiptStore {
       throw new Error('Invalid receipt runtime');
     }
     if (record.runtime === 'commandcode') {
+      if (record.executionInstanceId !== 'commandcode-default') throw new Error('Command Code receipts require the commandcode-default execution instance');
       if (record.permissionProfile !== 'agent-os-7f-root-readonly' && record.permissionProfile !== 'implementation-child-wide' && record.permissionProfile !== 'browser-contained') {
         throw new Error('Invalid Command Code receipt permission profile');
       }
@@ -441,10 +443,41 @@ export class RunReceiptStore {
     if (record.effort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.effort)) throw new Error('Invalid Command Code effort');
     if (record.requestedEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.requestedEffort)) throw new Error('Invalid Command Code requested effort');
     if (record.acceptedEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.acceptedEffort)) throw new Error('Invalid Command Code accepted effort');
+    if (record.runtime === 'commandcode') {
+      const model = record.model ?? record.modelSelector;
+      if (!model || assertCommandCodeModel(model) === undefined) {
+        throw new Error('Command Code receipts require an exact allowlisted model route');
+      }
+      if (record.model !== undefined && record.modelSelector !== undefined && record.model !== record.modelSelector) {
+        throw new Error('Command Code receipt model and modelSelector bindings differ');
+      }
+      if (record.effort !== undefined || record.requestedEffort !== undefined || record.acceptedEffort !== undefined || record.defaultEffort !== undefined || record.effectiveEffort !== undefined) {
+        try {
+          for (const value of [record.effort, record.requestedEffort, record.acceptedEffort, record.defaultEffort, record.effectiveEffort]) {
+            if (value !== undefined) assertCommandCodeEffort(model, value);
+          }
+        } catch {
+          throw new Error('Command Code receipt native effort does not match the exact model route');
+        }
+      }
+      if (model === 'qwen/qwen3.8-max'
+        && (!['explicit', 'default'].includes(record.effortSource ?? '')
+          || record.effort === undefined
+          || record.defaultEffort !== 'medium'
+          || record.effortSource === 'explicit' && record.requestedEffort !== record.effort
+          || record.effortSource === 'default' && record.requestedEffort !== undefined)) {
+        throw new Error('Qwen Command Code receipts must preserve the native effort binding and medium default effort');
+      }
+      if (model === 'meta/muse-spark-1.2-contributor'
+        && (record.effortSource !== 'none' || record.effort !== undefined || record.requestedEffort !== undefined || record.acceptedEffort !== undefined || record.defaultEffort !== undefined || record.effectiveEffort !== undefined)) {
+        throw new Error('Muse Command Code receipts must preserve effortSource none and cannot carry native effort metadata');
+      }
+    }
     if (record.acceptedEffort !== undefined && record.acceptedEffort !== record.effort) throw new Error('Command Code accepted effort must match the canonical effort binding');
     if (record.requestedEffort !== undefined && record.acceptedEffort !== undefined && record.requestedEffort !== record.acceptedEffort) throw new Error('Command Code requested and accepted effort must match after fail-closed validation');
     if (record.effortSource !== undefined && !['explicit', 'default', 'automatic', 'none'].includes(record.effortSource)) throw new Error('Invalid Command Code effort source');
-    if ((record.effortSource === 'none' || record.effortSource === 'automatic') && record.effort !== undefined) throw new Error('Automatic/non-adjustable Command Code effort cannot carry a value');
+    if ((record.effortSource === 'none' || record.effortSource === 'automatic')
+      && [record.effort, record.requestedEffort, record.acceptedEffort].some((value) => value !== undefined)) throw new Error('Automatic/non-adjustable Command Code effort cannot carry a value');
     if ((record.effortSource === 'explicit' || record.effortSource === 'default') && record.effort === undefined) throw new Error('Command Code effort source requires a value');
     if (record.defaultEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.defaultEffort)) throw new Error('Invalid Command Code default effort');
     if (record.effectiveEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.effectiveEffort)) throw new Error('Invalid Command Code effective effort');

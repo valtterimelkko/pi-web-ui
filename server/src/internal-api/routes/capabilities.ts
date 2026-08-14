@@ -29,6 +29,7 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
     _req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
+    await commandCodeService?.init?.();
     const [claudeAvailable, claudeBackendMode, opencodeAvailable, antigravityAvailable] = await Promise.all([
       claudeService.isAvailable().catch(() => false),
       claudeService.getBackendMode().catch(() => 'direct' as const),
@@ -41,8 +42,14 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
     const opencodeEnabled = opencodeService.isEnabled();
     const commandCodeEnabled = Boolean(commandCodeService?.isShadowEnabled?.() ?? commandCodeService?.isEnabled());
     const commandCodeAvailable = Boolean(commandCodeService?.isShadowAvailable?.() ?? commandCodeService?.isAvailable());
-    const commandCodeEffortCapabilities = commandCodeService?.getEffortCapabilities?.() ?? {};
-    const commandCodeSupportsEffort = Object.values(commandCodeEffortCapabilities).some((capability) => capability.supportsEffort === true);
+    const commandCodeEffortCapabilities = commandCodeEnabled
+      ? (commandCodeService?.getEffortCapabilities?.()
+        ?? commandCodeService?.getShadowEffortCapabilities?.()
+        ?? {})
+      : {};
+    const commandCodeSupportsEffort = Object.values(commandCodeEffortCapabilities).some((capability) => capability?.supportsEffort === true);
+    const commandCodeModels = commandCodeEnabled ? (commandCodeService?.getModels?.() ?? []) : [];
+    const commandCodeCatalogue = commandCodeEnabled ? commandCodeService?.getCatalogueMetadata?.() : undefined;
 
     const body: CapabilitiesResponse = {
       status: 'ok',
@@ -139,7 +146,16 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsModelSwitch: false,
           supportsThinkingLevel: false,
           supportsEffort: commandCodeSupportsEffort,
-          effortCapabilities: commandCodeEffortCapabilities,
+          ...(commandCodeCatalogue ? { catalogue: commandCodeCatalogue } : {}),
+          modelCatalogue: commandCodeModels.map((model) => ({
+            id: model.id,
+            status: model.status,
+            runnable: model.runnable,
+            browserRunnable: model.browserRunnable,
+          })),
+          effortCapabilities: Object.fromEntries(
+            Object.entries(commandCodeEffortCapabilities).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => entry[1] !== undefined),
+          ),
           supportsPinning: true,
           supportsReplayHistory: true,
           supportsApprovals: false,

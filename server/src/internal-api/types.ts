@@ -10,6 +10,20 @@ import type { NormalizedEvent, ScreenView } from '@pi-web-ui/shared';
 import type { CommandCodeEffort as NativeCommandCodeEffort } from '../command-code/command-code-model-catalog.js';
 
 export type CommandCodeEffort = NativeCommandCodeEffort;
+export type CommandCodeModelStatus = 'runnable' | 'evidence-only' | 'unavailable';
+export type CommandCodeAvailabilityStatus =
+  | 'disabled'
+  | 'executable_missing'
+  | 'discovery_error'
+  | 'version_mismatch'
+  | 'exact_model_unavailable'
+  | 'effort_capability_unknown'
+  | 'available';
+export interface CommandCodeCatalogueMetadata {
+  availabilityStatus: CommandCodeAvailabilityStatus;
+  checkedAt: string;
+  source: 'live-discovery';
+}
 export type CommandCodeEffortSource = 'explicit' | 'default' | 'automatic' | 'none';
 
 // ─── Verbosity levels ────────────────────────────────────────────────────────
@@ -954,6 +968,12 @@ export interface ModelInfo {
   aliases?: string[];
   /** Whether the model exposes a reasoning/thinking capability. */
   reasoning?: boolean;
+  /** Whether the server permits new sessions for this discovered model. */
+  runnable?: boolean;
+  /** Explicit catalogue status; visibility is independent from execution authority. */
+  status?: CommandCodeModelStatus;
+  /** Whether the separately gated browser surface permits this model. */
+  browserRunnable?: boolean;
   /** Runtime-resolved model-specific levels. Pi populates this from its SDK catalogue. */
   thinkingLevels?: string[];
   /** Command Code-native model-specific effort support. */
@@ -961,6 +981,8 @@ export interface ModelInfo {
   effortLevels?: string[];
   defaultEffort?: string;
   effortCapabilityHash?: string;
+  /** Runtime catalogue freshness/source, shared by all Command Code projections. */
+  catalogue?: CommandCodeCatalogueMetadata;
   /** For Claude profile entries: the backend that drives this profile. */
   backend?: 'sdk-subscription' | 'cli-direct' | 'channel';
   /** For Claude profile entries: the underlying model alias (sonnet/opus/haiku). */
@@ -975,6 +997,8 @@ export interface ModelsResponse {
     /** Optional Internal-API-only runtime; absent from older servers/clients. */
     commandcode?: ModelInfo[];
   };
+  /** Additive runtime catalogue freshness metadata. */
+  catalogueMetadata?: Partial<Record<SessionRuntime, CommandCodeCatalogueMetadata>>;
 }
 
 /** Result of POST /api/v1/models/refresh. Ids only — never any credentials. */
@@ -1023,6 +1047,15 @@ export interface RuntimeCapabilities {
   supportsThinkingLevel: boolean;
   /** Native Command Code effort support; generic runtimes omit this. */
   supportsEffort?: boolean;
+  /** Full discovered Command Code model projection; execution status is per model. */
+  modelCatalogue?: Array<{
+    id: string;
+    status: CommandCodeModelStatus;
+    runnable: boolean;
+    browserRunnable: boolean;
+  }>;
+  /** Runtime catalogue freshness/status; separate from per-model execution status. */
+  catalogue?: CommandCodeCatalogueMetadata;
   effortCapabilities?: Record<string, {
     supportsEffort: boolean;
     effortLevels: string[];

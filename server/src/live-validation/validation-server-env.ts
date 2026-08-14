@@ -42,7 +42,7 @@ export function buildValidationIsolationEnv(
     // gate separate; it is exercised through the authenticated WebSocket path.
     PI_INTERNAL_API_COMMANDCODE_ENABLED: commandCodeFixture && !commandCodeBrowserFixture ? 'true' : 'false',
     PI_COMMAND_CODE_BROWSER_ENABLED: commandCodeBrowserFixture ? 'true' : 'false',
-    PI_COMMAND_CODE_BROWSER_ALLOWED_MODELS: commandCodeBrowserFixture ? 'qwen/qwen3.8-max' : '',
+    PI_COMMAND_CODE_BROWSER_ALLOWED_MODELS: commandCodeBrowserFixture ? 'qwen/qwen3.8-max,meta/muse-spark-1.2-contributor' : '',
     PI_COMMAND_CODE_BROWSER_ALLOWED_CWD_ROOTS: commandCodeBrowserFixture ? join(input.validationDir, 'workspace') : '',
     PI_COMMAND_CODE_BROWSER_AUTH_FILE: commandCodeBrowserFixture ? join(input.validationDir, 'command-code-browser-auth.json') : '',
     PI_COMMAND_CODE_BROWSER_RUNTIME_ROOTS: commandCodeBrowserFixture

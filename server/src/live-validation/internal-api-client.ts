@@ -218,7 +218,7 @@ export class InternalApiClient implements InternalApiClientLike {
       const cwd = input.cwd ?? process.cwd();
       const model = input.model ?? 'qwen/qwen3.8-max';
       request.model = model;
-      request.effort = 'medium';
+      if (model === 'qwen/qwen3.8-max') request.effort = 'medium';
       request.invocationRole = 'conductor-root';
       request.commandCodeAttestation = createCommandCodeFixtureAttestation(this.token, model, cwd);
     }

@@ -1309,6 +1309,53 @@ describe('createSessionRoutes orchestration endpoints', () => {
   // ─── POST /sessions/batch/prompt ─────────────────────────────────────────
 
   describe('POST /sessions/batch/prompt', () => {
+    it('dispatches Command Code shadow sessions instead of treating them as missing registry sessions', async () => {
+      const commandCodeRecord = {
+        schemaVersion: 1,
+        sessionId: 'commandcode-batch',
+        runtime: 'commandcode' as const,
+        cwd: '/tmp',
+        modelSelector: 'meta/muse-spark-1.2-contributor',
+        effortSource: 'none' as const,
+        effortCapabilityHash: 'f'.repeat(64),
+        executionInstanceId: 'commandcode-default' as const,
+        permissionProfile: 'implementation-child-wide' as const,
+        invocationRole: 'implementation-child' as const,
+        createdAt: '2026-05-01T00:00:00.000Z',
+        updatedAt: '2026-05-01T00:10:00.000Z',
+        eventJournalRef: 'events/commandcode-batch.jsonl',
+        state: 'idle' as const,
+        messageCount: 0,
+        firstMessage: '',
+      };
+      const commandCodeService = {
+        findShadowSession: vi.fn().mockResolvedValue(commandCodeRecord),
+        isRunning: vi.fn(() => false),
+        sendPrompt: vi.fn(async (_sessionId: string, _message: string, onEvent: (event: NormalizedEvent) => void, onComplete: (error?: Error) => void) => {
+          onEvent({ type: 'message_start', sessionId: 'commandcode-batch', timestamp: Date.now(), data: { id: 'assistant-1', role: 'assistant' } });
+          onEvent({ type: 'message_update', sessionId: 'commandcode-batch', timestamp: Date.now(), data: { id: 'assistant-1', assistantMessageEvent: { type: 'text_delta', delta: 'batch-ok' } } });
+          onEvent({ type: 'message_end', sessionId: 'commandcode-batch', timestamp: Date.now(), data: { id: 'assistant-1' } });
+          onEvent({ type: 'agent_end', sessionId: 'commandcode-batch', timestamp: Date.now(), data: { usage: { input_tokens: 1, output_tokens: 2 } } });
+          onComplete();
+        }),
+      };
+      const receipts = new RunReceiptManager({ store: new RunReceiptStore(path.join(tempDir, 'commandcode-batch-receipts')) });
+      const routes = makeRoutes(receipts, undefined, ['openai', 'openrouter'], commandCodeService);
+      const req = createJsonReq('POST', '/api/v1/sessions/batch/prompt', {
+        prompts: [{ sessionId: 'commandcode-batch', message: 'hello' }],
+      });
+      const res = createMockRes();
+
+      await routes.handleBatchPrompt(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toMatchObject({
+        successCount: 1,
+        results: [{ sessionId: 'commandcode-batch', success: true, content: 'batch-ok' }],
+      });
+      expect(commandCodeService.sendPrompt).toHaveBeenCalledOnce();
+    });
+
     it('rejects empty prompts array', async () => {
       const routes = makeRoutes();
       const req = createJsonReq('POST', '/api/v1/sessions/batch/prompt', { prompts: [] });

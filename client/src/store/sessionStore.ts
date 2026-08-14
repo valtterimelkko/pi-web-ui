@@ -12,7 +12,7 @@ import {
   clearDisplayNamePref,
 } from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
-import type { CommandCodeEffort, CommandCodeModelInfo, SubagentToolSummary } from '@pi-web-ui/shared';
+import type { CommandCodeAvailabilityStatus, CommandCodeEffort, CommandCodeModelInfo, SubagentToolSummary } from '@pi-web-ui/shared';
 
 import { useTransferStore } from './transferStore';
 import { useGoalStore } from './goalStore';
@@ -211,7 +211,14 @@ export interface Session {
   sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';  // optional for backward compatibility
   model?: string;              // current model
   effort?: CommandCodeEffort;
+  requestedEffort?: CommandCodeEffort;
+  acceptedEffort?: CommandCodeEffort;
   effortLevels?: CommandCodeEffort[];
+  effortSource?: 'explicit' | 'default' | 'automatic' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effectiveEffort?: CommandCodeEffort;
+  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
+  effortCapabilityHash?: string;
   createdAt?: string;
   lastActivity?: string;
 }
@@ -365,7 +372,14 @@ export interface SessionStats {
   cost: number;
   model?: string;
   effort?: CommandCodeEffort;
+  requestedEffort?: CommandCodeEffort;
+  acceptedEffort?: CommandCodeEffort;
   effortLevels?: CommandCodeEffort[];
+  effortSource?: 'explicit' | 'default' | 'automatic' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effectiveEffort?: CommandCodeEffort;
+  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
+  effortCapabilityHash?: string;
   contextWindow?: number;
   contextUsed?: number;
   contextPercent?: number;
@@ -383,7 +397,14 @@ interface SessionState {
   currentModel: string | null;
   currentThinkingLevel: string | null;
   currentEffort: CommandCodeEffort | null;
+  currentRequestedEffort: CommandCodeEffort | null;
+  currentAcceptedEffort: CommandCodeEffort | null;
   currentEffortLevels: CommandCodeEffort[];
+  currentEffortSource: 'explicit' | 'default' | 'automatic' | 'none' | null;
+  currentDefaultEffort: CommandCodeEffort | null;
+  currentEffectiveEffort: CommandCodeEffort | null;
+  currentEffortEvidenceMethod: 'provider-event' | 'provider-result' | 'unobserved' | null;
+  currentEffortCapabilityHash: string | null;
 
   messages: Message[];
   isStreaming: boolean;
@@ -463,6 +484,9 @@ interface SessionState {
   commandCodeAvailable: boolean;
   commandCodeEnabled: boolean;
   commandCodeError: string | null;
+  commandCodeAvailabilityStatus: CommandCodeAvailabilityStatus | null;
+  commandCodeCatalogueCheckedAt: string | null;
+  commandCodeCatalogueSource: 'live-discovery' | null;
   commandCodeModels: CommandCodeModelInfo[];
 
   // Actions
@@ -531,7 +555,7 @@ interface SessionState {
 
   // Antigravity availability
   setAntigravityAvailable: (available: boolean, error?: string | null) => void;
-  setCommandCodeAvailable: (available: boolean, enabled: boolean, models: CommandCodeModelInfo[], error?: string | null) => void;
+  setCommandCodeAvailable: (available: boolean, enabled: boolean, models: CommandCodeModelInfo[], error?: string | null, catalogue?: { availabilityStatus?: CommandCodeAvailabilityStatus; checkedAt?: string; source?: 'live-discovery' }) => void;
 
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -546,7 +570,14 @@ export const useSessionStore = create<SessionState>()(
       currentModel: null,
       currentThinkingLevel: null,
       currentEffort: null,
+      currentRequestedEffort: null,
+      currentAcceptedEffort: null,
       currentEffortLevels: [],
+      currentEffortSource: null,
+      currentDefaultEffort: null,
+      currentEffectiveEffort: null,
+      currentEffortEvidenceMethod: null,
+      currentEffortCapabilityHash: null,
       messages: [],
       isStreaming: false,
       lastStreamEventAt: null,
@@ -597,6 +628,9 @@ export const useSessionStore = create<SessionState>()(
       commandCodeAvailable: false,
       commandCodeEnabled: false,
       commandCodeError: null,
+      commandCodeAvailabilityStatus: null,
+      commandCodeCatalogueCheckedAt: null,
+      commandCodeCatalogueSource: null,
       commandCodeModels: [],
 
       // Worker status tracking implementation
@@ -634,7 +668,15 @@ export const useSessionStore = create<SessionState>()(
       setClaudeAvailable: (available, error = null) => set({ claudeAvailable: available, claudeAuthError: error }),
       setOpencodeAvailable: (available, error = null) => set({ opencodeAvailable: available, opencodeAuthError: error }),
       setAntigravityAvailable: (available, error = null) => set({ antigravityAvailable: available, antigravityAuthError: error }),
-      setCommandCodeAvailable: (available, enabled, models, error = null) => set({ commandCodeAvailable: available, commandCodeEnabled: enabled, commandCodeModels: models, commandCodeError: error }),
+      setCommandCodeAvailable: (available, enabled, models, error = null, catalogue) => set({
+        commandCodeAvailable: available,
+        commandCodeEnabled: enabled,
+        commandCodeModels: models,
+        commandCodeError: error,
+        commandCodeAvailabilityStatus: catalogue?.availabilityStatus ?? null,
+        commandCodeCatalogueCheckedAt: catalogue?.checkedAt ?? null,
+        commandCodeCatalogueSource: catalogue?.source ?? null,
+      }),
 
       setOpencodeAgentMode: (sessionId, mode) => set((state) => ({
         opencodeAgentModes: { ...state.opencodeAgentModes, [sessionId]: mode },
@@ -1337,7 +1379,7 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'session_created': {
-            const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode'; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; effortSource?: string };
+            const createdMsg = msg as unknown as { sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode'; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; requestedEffort?: CommandCodeEffort; acceptedEffort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; effortSource?: 'explicit' | 'default' | 'automatic' | 'none'; defaultEffort?: CommandCodeEffort; effectiveEffort?: CommandCodeEffort; effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved'; effortCapabilityHash?: string };
             set({ 
               currentSessionId: createdMsg.sessionId,
               currentSessionSdkType: createdMsg.sdkType ?? null,
@@ -1347,7 +1389,14 @@ export const useSessionStore = create<SessionState>()(
               currentModel: createdMsg.model ?? null,
               currentThinkingLevel: createdMsg.thinkingLevel ?? null,
               currentEffort: createdMsg.effort ?? null,
+              currentRequestedEffort: createdMsg.requestedEffort ?? null,
+              currentAcceptedEffort: createdMsg.acceptedEffort ?? null,
               currentEffortLevels: createdMsg.effortLevels ?? [],
+              currentEffortSource: createdMsg.effortSource ?? null,
+              currentDefaultEffort: createdMsg.defaultEffort ?? null,
+              currentEffectiveEffort: createdMsg.effectiveEffort ?? null,
+              currentEffortEvidenceMethod: createdMsg.effortEvidenceMethod ?? null,
+              currentEffortCapabilityHash: createdMsg.effortCapabilityHash ?? null,
               messages: [], // Clear messages for new session
               contextPercent: 0,
               contextUsed: 0,
@@ -1370,7 +1419,7 @@ export const useSessionStore = create<SessionState>()(
               const updatedSessions = existingSession
                 ? state.sessions.map((s) =>
                     s.id === createdMsg.sessionId
-                      ? { ...s, path: createdMsg.sessionPath, sdkType: createdMsg.sdkType ?? s.sdkType, model: createdMsg.model ?? s.model, effort: createdMsg.effort ?? s.effort, effortLevels: createdMsg.effortLevels ?? s.effortLevels }
+                      ? { ...s, path: createdMsg.sessionPath, sdkType: createdMsg.sdkType ?? s.sdkType, model: createdMsg.model ?? s.model, effort: createdMsg.effort ?? s.effort, requestedEffort: createdMsg.requestedEffort ?? s.requestedEffort, acceptedEffort: createdMsg.acceptedEffort ?? s.acceptedEffort, effortLevels: createdMsg.effortLevels ?? s.effortLevels, effortSource: createdMsg.effortSource ?? s.effortSource, defaultEffort: createdMsg.defaultEffort ?? s.defaultEffort, effectiveEffort: createdMsg.effectiveEffort ?? s.effectiveEffort, effortEvidenceMethod: createdMsg.effortEvidenceMethod ?? s.effortEvidenceMethod, effortCapabilityHash: createdMsg.effortCapabilityHash ?? s.effortCapabilityHash }
                       : s
                   )
                 : [
@@ -1383,7 +1432,14 @@ export const useSessionStore = create<SessionState>()(
                       sdkType: createdMsg.sdkType ?? undefined,
                       model: createdMsg.model,
                       effort: createdMsg.effort,
+                      requestedEffort: createdMsg.requestedEffort,
+                      acceptedEffort: createdMsg.acceptedEffort,
                       effortLevels: createdMsg.effortLevels,
+                      effortSource: createdMsg.effortSource,
+                      defaultEffort: createdMsg.defaultEffort,
+                      effectiveEffort: createdMsg.effectiveEffort,
+                      effortEvidenceMethod: createdMsg.effortEvidenceMethod,
+                      effortCapabilityHash: createdMsg.effortCapabilityHash,
                     },
                     ...state.sessions,
                   ];
@@ -1404,7 +1460,14 @@ export const useSessionStore = create<SessionState>()(
               model?: string;
               thinkingLevel?: string;
               effort?: CommandCodeEffort;
+              requestedEffort?: CommandCodeEffort;
+              acceptedEffort?: CommandCodeEffort;
               effortLevels?: CommandCodeEffort[];
+              effortSource?: 'explicit' | 'default' | 'automatic' | 'none';
+              defaultEffort?: CommandCodeEffort;
+              effectiveEffort?: CommandCodeEffort;
+              effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
+              effortCapabilityHash?: string;
               contextWindow?: number;
               contextUsed?: number;
               contextPercent?: number;
@@ -1481,7 +1544,7 @@ export const useSessionStore = create<SessionState>()(
               const updatedSessions = switchMsg.sdkType
                 ? state.sessions.map((s) =>
                     s.id === switchMsg.sessionId
-                      ? { ...s, sdkType: switchMsg.sdkType, model: switchMsg.model ?? s.model, effort: switchMsg.effort ?? s.effort, effortLevels: switchMsg.effortLevels ?? s.effortLevels }
+                      ? { ...s, sdkType: switchMsg.sdkType, model: switchMsg.model ?? s.model, effort: switchMsg.effort ?? s.effort, requestedEffort: switchMsg.requestedEffort ?? s.requestedEffort, acceptedEffort: switchMsg.acceptedEffort ?? s.acceptedEffort, effortLevels: switchMsg.effortLevels ?? s.effortLevels, effortSource: switchMsg.effortSource ?? s.effortSource, defaultEffort: switchMsg.defaultEffort ?? s.defaultEffort, effectiveEffort: switchMsg.effectiveEffort ?? s.effectiveEffort, effortEvidenceMethod: switchMsg.effortEvidenceMethod ?? s.effortEvidenceMethod, effortCapabilityHash: switchMsg.effortCapabilityHash ?? s.effortCapabilityHash }
                       : s
                   )
                 : state.sessions;
@@ -1494,7 +1557,14 @@ export const useSessionStore = create<SessionState>()(
                 extensionStatuses: state.sessionExtensionStatuses[switchMsg.sessionId] ?? {},
                 currentThinkingLevel: switchMsg.thinkingLevel ?? null,
                 currentEffort: switchMsg.effort ?? null,
+                currentRequestedEffort: switchMsg.requestedEffort ?? null,
+                currentAcceptedEffort: switchMsg.acceptedEffort ?? null,
                 currentEffortLevels: switchMsg.effortLevels ?? [],
+                currentEffortSource: switchMsg.effortSource ?? null,
+                currentDefaultEffort: switchMsg.defaultEffort ?? null,
+                currentEffectiveEffort: switchMsg.effectiveEffort ?? null,
+                currentEffortEvidenceMethod: switchMsg.effortEvidenceMethod ?? null,
+                currentEffortCapabilityHash: switchMsg.effortCapabilityHash ?? null,
                 messages: clientMessages,
                 contextPercent: switchMsg.contextPercent ?? 0,
                 contextUsed: switchMsg.contextUsed ?? 0,
@@ -1987,14 +2057,28 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'effort_changed': {
-            const effortMsg = msg as unknown as { effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[] };
-            set({ currentEffort: effortMsg.effort ?? null, currentEffortLevels: effortMsg.effortLevels ?? get().currentEffortLevels });
+            const effortMsg = msg as unknown as { effort?: CommandCodeEffort; requestedEffort?: CommandCodeEffort; acceptedEffort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; effortSource: 'explicit' | 'default' | 'automatic' | 'none'; defaultEffort?: CommandCodeEffort; effectiveEffort?: CommandCodeEffort; effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved'; effortCapabilityHash?: string };
+            set({ currentEffort: effortMsg.effort ?? null, currentRequestedEffort: effortMsg.requestedEffort ?? null, currentAcceptedEffort: effortMsg.acceptedEffort ?? null, currentEffortLevels: effortMsg.effortLevels ?? get().currentEffortLevels, currentEffortSource: effortMsg.effortSource, currentDefaultEffort: effortMsg.defaultEffort ?? get().currentDefaultEffort, currentEffectiveEffort: effortMsg.effectiveEffort ?? get().currentEffectiveEffort, currentEffortEvidenceMethod: effortMsg.effortEvidenceMethod ?? get().currentEffortEvidenceMethod, currentEffortCapabilityHash: effortMsg.effortCapabilityHash ?? get().currentEffortCapabilityHash });
             break;
           }
 
           case 'commandcode_available': {
-            const commandCodeMsg = msg as unknown as { available: boolean; enabled: boolean; models?: CommandCodeModelInfo[]; error?: string | null };
-            get().setCommandCodeAvailable(commandCodeMsg.available, commandCodeMsg.enabled, commandCodeMsg.models ?? [], commandCodeMsg.error ?? null);
+            const commandCodeMsg = msg as unknown as {
+              available: boolean;
+              enabled: boolean;
+              models?: CommandCodeModelInfo[];
+              error?: string | null;
+              availabilityStatus?: CommandCodeAvailabilityStatus;
+              checkedAt?: string;
+              source?: 'live-discovery';
+            };
+            get().setCommandCodeAvailable(
+              commandCodeMsg.available,
+              commandCodeMsg.enabled,
+              commandCodeMsg.models ?? [],
+              commandCodeMsg.error ?? null,
+              { availabilityStatus: commandCodeMsg.availabilityStatus, checkedAt: commandCodeMsg.checkedAt, source: commandCodeMsg.source },
+            );
             break;
           }
 
@@ -2007,6 +2091,13 @@ export const useSessionStore = create<SessionState>()(
                 contextWindow: stats.contextWindow ?? get().contextWindow,
                 contextUsed: stats.contextUsed ?? 0,
                 contextPercent: stats.contextPercent ?? 0,
+                currentRequestedEffort: stats.requestedEffort ?? get().currentRequestedEffort,
+                currentAcceptedEffort: stats.acceptedEffort ?? get().currentAcceptedEffort,
+                currentEffortSource: stats.effortSource ?? get().currentEffortSource,
+                currentDefaultEffort: stats.defaultEffort ?? get().currentDefaultEffort,
+                currentEffectiveEffort: stats.effectiveEffort ?? get().currentEffectiveEffort,
+                currentEffortEvidenceMethod: stats.effortEvidenceMethod ?? get().currentEffortEvidenceMethod,
+                currentEffortCapabilityHash: stats.effortCapabilityHash ?? get().currentEffortCapabilityHash,
                 contextUsageEstimated: false,
               } : {}),
             });

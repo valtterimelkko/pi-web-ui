@@ -267,21 +267,28 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     return resolveProfileId(claudeModels, claudeProvider, claudeBackend, claudeModel) || claudeModel;
   };
 
+  // Catalogue visibility is not execution authority. Only an explicit
+  // server-owned browserRunnable=true bit may reach the create request;
+  // missing/stale evidence is disabled rather than guessed runnable.
+  const commandCodeBrowserModels = commandCodeModels.filter((model) => model.browserRunnable === true);
+
+  const selectedCommandCodeModel = commandCodeBrowserModels.find((model) => model.id === commandCodeModel);
+
   const selectedModelArg = () => {
     if (sdkType === 'pi') return piModel || undefined;
-    if (sdkType === 'commandcode') return commandCodeModel || commandCodeModels[0]?.id;
+    if (sdkType === 'commandcode') return selectedCommandCodeModel?.id || commandCodeBrowserModels[0]?.id;
     return claudeModelArg();
   };
 
   const selectedEffortArg = () => sdkType === 'commandcode' && commandCodeEffort ? commandCodeEffort : undefined;
 
   useEffect(() => {
-    if (commandCodeModels.length === 0) {
+    if (commandCodeBrowserModels.length === 0) {
       setCommandCodeModel('');
       setCommandCodeEffort('');
       return;
     }
-    const selected = commandCodeModels.find((model) => model.id === commandCodeModel) ?? commandCodeModels[0];
+    const selected = commandCodeBrowserModels.find((model) => model.id === commandCodeModel) ?? commandCodeBrowserModels[0];
     if (selected.id !== commandCodeModel) setCommandCodeModel(selected.id);
     if (!selected.supportsEffort) {
       setCommandCodeEffort('');
@@ -290,7 +297,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     const levels = selected.effortLevels;
     if (commandCodeEffort && levels.includes(commandCodeEffort)) return;
     setCommandCodeEffort(selected.defaultEffort && levels.includes(selected.defaultEffort) ? selected.defaultEffort : '');
-  }, [commandCodeModels, commandCodeModel, commandCodeEffort]);
+  }, [commandCodeBrowserModels, commandCodeModel, commandCodeEffort]);
 
   // Derived lists for the structured Claude selector.
   const providerList = providersOf(claudeModels);
@@ -541,13 +548,19 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                   data-testid="commandcode-model-select"
                   className="w-full px-3 py-2 bg-gray-50 rounded-lg text-sm text-gray-900 border border-gray-200 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
                 >
-                  {commandCodeModels.map((model) => (
-                    <option key={model.id} value={model.id}>{model.displayName} ({model.id})</option>
-                  ))}
+                  {commandCodeModels.map((model) => {
+                    const selectable = model.browserRunnable === true;
+                    const statusLabel = model.status && model.status !== 'runnable' ? ` — ${model.status}` : '';
+                    return (
+                      <option key={model.id} value={model.id} disabled={!selectable}>
+                        {model.displayName} ({model.id}){statusLabel}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
               {(() => {
-                const selected = commandCodeModels.find((model) => model.id === commandCodeModel);
+                const selected = commandCodeBrowserModels.find((model) => model.id === commandCodeModel);
                 if (!selected?.supportsEffort) {
                   return <p className="text-xs text-gray-500">This model does not expose adjustable native effort.</p>;
                 }

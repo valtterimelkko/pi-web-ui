@@ -122,6 +122,26 @@ describe('S4: unified prompt-boundary on prompt / steer / follow_up', () => {
     expect(sent.find((entry) => entry.message.code === 'SESSION_STUCK')).toBeUndefined();
   });
 
+  it('revalidates a stale Command Code browser session before dispatching a prompt', async () => {
+    const commandCodeService = {
+      isBrowserSession: vi.fn().mockResolvedValue(false),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    (mgr as any).commandCodeService = commandCodeService;
+    (mgr as any).commandCodeSessionIds.add('/commandcode/stale');
+    (mgr as any).clientViewingSession.set('c1', '/commandcode/stale');
+
+    await (mgr as any).handlePrompt('c1', {
+      type: 'prompt',
+      sessionId: 'stale',
+      message: BENIGN,
+    });
+
+    expect(commandCodeService.isBrowserSession).toHaveBeenCalledWith('/commandcode/stale');
+    expect(sent.find((entry) => entry.message.code === 'COMMANDCODE_UNAVAILABLE')).toBeDefined();
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
+
   it('identifies browser-created Pi sessions as Pi in session_created', async () => {
     (mgr as any).multiSessionManager.createAndSubscribe = vi.fn().mockResolvedValue({
       sessionId: 'pi-session',

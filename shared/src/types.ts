@@ -2,16 +2,39 @@
 export type SdkType = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
 
 export type CommandCodeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type CommandCodeModelStatus = 'runnable' | 'evidence-only' | 'unavailable';
+export type CommandCodeAvailabilityStatus =
+  | 'disabled'
+  | 'executable_missing'
+  | 'discovery_error'
+  | 'version_mismatch'
+  | 'exact_model_unavailable'
+  | 'effort_capability_unknown'
+  | 'available';
+
+export interface CommandCodeCatalogueMetadata {
+  availabilityStatus: CommandCodeAvailabilityStatus;
+  checkedAt: string;
+  source: 'live-discovery';
+}
 
 export interface CommandCodeModelInfo {
   id: string;
   displayName: string;
   provider: string;
   reasoning: boolean;
+  /** Whether the server permits new sessions for this discovered model. */
+  runnable?: boolean;
+  /** Explicit catalogue status; visibility is independent from execution authority. */
+  status?: CommandCodeModelStatus;
+  /** Whether the separately gated browser surface permits this model. */
+  browserRunnable?: boolean;
   supportsEffort: boolean;
   effortLevels: CommandCodeEffort[];
   defaultEffort?: CommandCodeEffort;
   effortCapabilityHash?: string;
+  /** Runtime catalogue freshness/source, shared by every browser projection. */
+  catalogue?: CommandCodeCatalogueMetadata;
 }
 
 // WebSocket Message Types
@@ -47,6 +70,14 @@ export interface SessionInfo {
   messageCount: number;
   firstMessage: string;
   model?: string;                   // current model name for display
+  effort?: CommandCodeEffort;
+  requestedEffort?: CommandCodeEffort;
+  acceptedEffort?: CommandCodeEffort;
+  effortSource?: 'explicit' | 'default' | 'automatic' | 'none';
+  defaultEffort?: CommandCodeEffort;
+  effectiveEffort?: CommandCodeEffort;
+  effortEvidenceMethod?: 'provider-event' | 'provider-result' | 'unobserved';
+  effortCapabilityHash?: string;
   claudeSessionId?: string;         // Claude Code session ID (for claude type)
   commandCodeNativeSessionId?: string; // Command Code native resume/session id
 }

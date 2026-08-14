@@ -1,5 +1,6 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { COMMAND_CODE_FULL_MODEL_CATALOGUE } from '../command-code/command-code-model-catalog.js';
 
 /**
  * Creates a deterministic local Command Code-compatible CLI for disposable
@@ -16,12 +17,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const modelIndex = args.indexOf('--model');
 const model = modelIndex >= 0 ? args[modelIndex + 1] : '';
+const modelCatalogue = ${JSON.stringify([...COMMAND_CODE_FULL_MODEL_CATALOGUE])};
 const effortIndex = args.indexOf('--effort');
 const effort = effortIndex >= 0 ? args[effortIndex + 1] : '';
 if (args.includes('--version')) { console.log('Command Code v1.19.0'); process.exit(0); }
 if (args.includes('--list-models')) {
-  console.log('qwen/qwen3.8-max                      fixture adjustable model');
-  console.log('meta/muse-spark-1.2-contributor       fixture non-adjustable model');
+  for (const id of modelCatalogue) console.log(id + ' '.repeat(Math.max(2, 42 - id.length)) + 'fixture model');
   process.exit(0);
 }
 if (effort === '__pi_web_ui_capability_probe__') {
@@ -49,7 +50,8 @@ process.stdin.on('end', () => {
     process.stderr.write(String(error));
   }
   const text = prompt.includes('COMMAND-CODE-BROWSER-LIVE-OK') ? 'COMMAND-CODE-BROWSER-LIVE-OK'
-    : prompt.includes('RUN-RECEIPT-LIVE-OK') ? 'RUN-RECEIPT-LIVE-OK'
+    : prompt.includes('MUSE-LIVE-OK') ? 'MUSE-LIVE-OK'
+      : prompt.includes('RUN-RECEIPT-LIVE-OK') ? 'RUN-RECEIPT-LIVE-OK'
       : prompt.includes('EVIDENCE-LIVE-OK') ? 'EVIDENCE-LIVE-OK'
         : prompt.includes('LIVE-VALIDATION-INFO') ? 'LIVE-VALIDATION-INFO'
           : prompt.includes('LIVE-VALIDATION-OK') ? 'LIVE-VALIDATION-OK'
@@ -60,7 +62,7 @@ process.stdin.on('end', () => {
   emit({ type: 'event', event: { type: 'message_start', message: { id: 'fixture-assistant', role: 'assistant' } } });
   emit({ type: 'event', event: { type: 'text_delta', messageId: 'fixture-assistant', delta: text } });
   emit({ type: 'event', event: { type: 'message_end', message: { id: 'fixture-assistant' } } });
-  emit({ type: 'result', subtype: 'success', sessionId, finalText: text, effort: effort || 'medium', usage: { input: 3, output: 4, total: 7 } });
+  emit({ type: 'result', subtype: 'success', sessionId, finalText: text, ...(model === 'qwen/qwen3.8-max' ? { effort: effort || 'medium' } : {}), usage: { input: 3, output: 4, total: 7 } });
 });
 `;
   await writeFile(executable, source, { encoding: 'utf8', mode: 0o700 });

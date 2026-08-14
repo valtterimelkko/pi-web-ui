@@ -885,7 +885,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       switch (runtime) {
         case 'commandcode': {
-          if (!commandCodeService || !(commandCodeService.isShadowAvailable?.() ?? commandCodeService.isAvailable()) || !(commandCodeService.isShadowEnabled?.() ?? commandCodeService.isEnabled())) {
+          if (!commandCodeService) {
+            sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code shadow runtime is not configured'));
+            return;
+          }
+          // Session creation can be called directly by focused route users as
+          // well as through the booted server. Initialise here too so the
+          // exact catalogue/capability gate is never evaluated on its
+          // pre-discovery default state.
+          await commandCodeService.init();
+          if (!(commandCodeService.isShadowAvailable?.() ?? commandCodeService.isAvailable()) || !(commandCodeService.isShadowEnabled?.() ?? commandCodeService.isEnabled())) {
             sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code shadow runtime is disabled or unavailable'));
             return;
           }
@@ -3712,6 +3721,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     poll();
   }
 
+  function commandCodeRecordAsRegistryEntry(record: CommandCodeInternalSessionRecord): RegistryEntry {
+    return {
+      id: record.sessionId,
+      path: record.sessionId,
+      sdkType: 'commandcode',
+      commandCodeNativeSessionId: record.nativeSessionId,
+      cwd: record.cwd,
+      model: record.modelSelector,
+      firstMessage: record.firstMessage,
+      messageCount: record.messageCount,
+      createdAt: record.createdAt,
+      lastActivity: record.updatedAt,
+      status: record.state === 'running' ? 'running' : record.state === 'failed' || record.state === 'aborted' ? 'error' : 'idle',
+    };
+  }
+
   async function getNonCommandCodeRegistryEntry(sessionId: string): Promise<RegistryEntry | undefined> {
     const entry = await sessionRegistry.get(sessionId);
     return entry?.sdkType === 'commandcode' ? undefined : entry;
@@ -4308,7 +4333,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
       let reservedRunId: string | undefined;
       try {
-        const reg = await getNonCommandCodeRegistryEntry(entry.sessionId);
+        const commandCodeRecord = await commandCodeService?.findShadowSession(entry.sessionId);
+        const reg = commandCodeRecord
+          ? commandCodeRecordAsRegistryEntry(commandCodeRecord)
+          : await getNonCommandCodeRegistryEntry(entry.sessionId);
         if (!reg) {
           return {
             index,
@@ -4335,12 +4363,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           runtime: reg.sdkType as SessionRuntime,
           executionInstanceId: resolveExecutionInstanceId(reg),
           model: currentRunModel(reg),
-          modelSelector: modelSelectorForEntry(reg),
+          modelSelector: commandCodeRecord?.modelSelector ?? modelSelectorForEntry(reg),
           message: entry.message,
           mode: 'prompt' as const,
           verbosity: 'answers' as const,
           detach: false,
           idempotencyKey: entry.idempotencyKey,
+          ...(commandCodeRecord ? {
+            effort: commandCodeRecord.effort,
+            requestedEffort: commandCodeRecord.effortSource === 'explicit' ? commandCodeRecord.effort : undefined,
+            acceptedEffort: commandCodeRecord.effort,
+            effortSource: commandCodeRecord.effortSource,
+            defaultEffort: commandCodeRecord.defaultEffort,
+            effortCapabilityHash: commandCodeRecord.effortCapabilityHash,
+            invocationRole: commandCodeRecord.invocationRole,
+            permissionProfile: commandCodeRecord.permissionProfile,
+          } : {}),
           ...(reg.sdkType === 'pi' && config.validationMode
             ? { phase7Shadow: classifyPhase7PiShadow({ sessionId: entry.sessionId, message: entry.message }) }
             : {}),
@@ -4403,7 +4441,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           ? claudeService.isRunning(entry.sessionId)
           : reg.sdkType === 'opencode'
             ? opencodeService.isRunning(entry.sessionId)
-            : false;
+            : reg.sdkType === 'commandcode'
+              ? Boolean(commandCodeService?.isRunning(entry.sessionId) || commandCodeRecord?.state === 'running')
+              : false;
         if (isBusy) {
           return {
             index,
@@ -4465,10 +4505,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               ? opencodeService.isRunning(entry.sessionId)
               : reg.sdkType === 'antigravity'
                 ? antigravityService.isRunning(entry.sessionId)
-                : (() => {
-                    const status = multiSessionManager.getSessionStatus?.(reg.path)?.status;
-                    return status === 'busy' || status === 'streaming';
-                  })();
+                : reg.sdkType === 'commandcode'
+                  ? Boolean(commandCodeService?.isRunning(entry.sessionId) || commandCodeRecord?.state === 'running')
+                  : (() => {
+                      const status = multiSessionManager.getSessionStatus?.(reg.path)?.status;
+                      return status === 'busy' || status === 'streaming';
+                    })();
         } catch (error) {
           await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
           logger.errorObject(`Failed to re-check session state for batch run ${runId}`, error);

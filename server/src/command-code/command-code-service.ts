@@ -1,7 +1,7 @@
 import { access, chmod, lstat, mkdir, open, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
-import type { NormalizedEvent } from '@pi-web-ui/shared';
+import type { CommandCodeCatalogueMetadata, NormalizedEvent } from '@pi-web-ui/shared';
 import {
   COMMAND_CODE_EXECUTION_INSTANCE_ID,
   defaultCommandCodeConfig,
@@ -10,15 +10,19 @@ import {
 } from './command-code-config.js';
 import {
   COMMAND_CODE_MODELS,
+  COMMAND_CODE_FULL_MODEL_CATALOGUE,
   COMMAND_CODE_PROVIDER,
   COMMAND_CODE_VERSION,
+  COMMAND_CODE_EFFORT_LEVELS,
   COMMAND_CODE_EFFORT_LEVELS_BY_MODEL,
+  validateCommandCodeModelCatalogue,
   assertCommandCodeModel,
   assertCommandCodeRuntimeModel,
   assertCommandCodeEffort,
   discoverCommandCodeEfforts,
   discoverCommandCodeModels,
   type CommandCodeEffort,
+  type CommandCodeEffortCapability,
   type CommandCodeEffortCapabilities,
   type CommandCodeRuntimeModel,
   type CommandCodeModel,
@@ -125,9 +129,11 @@ export class CommandCodeService {
   private readonly runner: RunnerLike;
   private readonly ownsProcessRunner: boolean;
   private readonly discover: CommandCodeDiscoveryRunner;
+  private readonly discoverEfforts?: typeof discoverCommandCodeEfforts;
   private readonly usesDefaultDiscovery: boolean;
   private discovery?: CommandCodeModelDiscovery;
   private discoveryDiagnostic?: string;
+  private discoveryCheckedAt?: string;
   private healthStatus: CommandCodeAvailability = 'disabled';
   private initialized = false;
   private initPromise?: Promise<void>;
@@ -157,6 +163,8 @@ export class CommandCodeService {
     config: CommandCodeServiceConfig;
     runner?: RunnerLike;
     discover?: CommandCodeDiscoveryRunner;
+    /** Optional effort-discovery seam for deterministic bounded validation. */
+    discoverEfforts?: typeof discoverCommandCodeEfforts;
     checkExecutable?: boolean;
     sessionRegistry?: SessionRegistryManager;
   }) {
@@ -188,6 +196,7 @@ export class CommandCodeService {
     });
     this.usesDefaultDiscovery = !options.discover;
     this.discover = options.discover ?? discoverCommandCodeModels;
+    this.discoverEfforts = options.discoverEfforts;
     this.checkExecutable = options.checkExecutable ?? true;
     this.sessionRegistry = options.sessionRegistry;
   }
@@ -197,7 +206,12 @@ export class CommandCodeService {
   async init(): Promise<void> {
     if (this.initialized) return;
     if (this.initPromise) return this.initPromise;
-    this.initPromise = this.initialize();
+    this.initPromise = this.initialize().finally(() => {
+      // One immutable timestamp per initial discovery attempt makes freshness
+      // evidence meaningful across every projection instead of changing on
+      // each read of getHealth().
+      this.discoveryCheckedAt ??= new Date().toISOString();
+    });
     await this.initPromise;
   }
 
@@ -268,23 +282,44 @@ export class CommandCodeService {
     }
     try {
       const discovered = await this.discover(this.config.executablePath);
-      const effortCapabilities = discovered.effortCapabilities
-        ?? (this.usesDefaultDiscovery
-          ? (await discoverCommandCodeEfforts(this.config.executablePath, {
-              models: discovered.models,
-              probeAllValues: this.usesDefaultDiscovery
-                && discovered.models.length === COMMAND_CODE_MODELS.length
-                && discovered.models.every((model) => (COMMAND_CODE_MODELS as readonly string[]).includes(model)),
-            })).capabilities
-          : undefined);
+      let effortCapabilities = discovered.effortCapabilities;
+      let effortDiscoveryDiagnostic: string | undefined;
+      if (!effortCapabilities && (this.usesDefaultDiscovery || this.discoverEfforts)) {
+        try {
+          // Extra live catalogue entries remain evidence-only, but the exact
+          // shadow pair must always receive exhaustive probes. The bounded
+          // invalid-value probe is used for every other model so a catalogue
+          // update cannot silently weaken the shadow contract or turn startup
+          // into an unbounded N×probe operation.
+          effortCapabilities = (await (this.discoverEfforts ?? discoverCommandCodeEfforts)(this.config.executablePath, {
+            models: discovered.models,
+            probeAllValues: false,
+            probeAllValuesForModels: COMMAND_CODE_MODELS,
+          })).capabilities;
+        } catch (error) {
+          // Model discovery and effort discovery are separate evidence layers.
+          // Preserve the complete model catalogue when the bounded hybrid
+          // effort pass times out, cannot spawn, or emits malformed output;
+          // only execution authority is withdrawn.
+          effortDiscoveryDiagnostic = scrubDiagnostic(error instanceof Error ? error.message : String(error));
+        }
+      }
       this.discoveryResult = { ...discovered, ...(effortCapabilities ? { effortCapabilities } : {}) };
-      if (discovered.version !== this.config.expectedVersion) {
+      const catalogueValidation = this.usesDefaultDiscovery
+        ? validateCommandCodeModelCatalogue(discovered.models)
+        : { valid: true as const };
+      if (!catalogueValidation.valid) {
+        this.healthStatus = 'exact_model_unavailable';
+        this.discoveryDiagnostic = `Command Code model catalogue is invalid: ${catalogueValidation.reason}`;
+      } else if (discovered.version !== this.config.expectedVersion) {
         this.healthStatus = 'version_mismatch';
       } else if (discovered.ambiguous.length > 0 || discovered.models.length === 0) {
         this.healthStatus = 'exact_model_unavailable';
-      } else if (!effortCapabilities || !hasExactEffortCapabilities(effortCapabilities, discovered.models)) {
+      } else if (effortDiscoveryDiagnostic || !effortCapabilities || !hasExactEffortCapabilities(effortCapabilities, discovered.models)) {
         this.healthStatus = 'effort_capability_unknown';
-        this.discoveryDiagnostic = 'Command Code native effort capability discovery was incomplete or drifted; refusing session creation';
+        this.discoveryDiagnostic = effortDiscoveryDiagnostic
+          ? `Command Code native effort capability discovery failed: ${effortDiscoveryDiagnostic}`
+          : 'Command Code native effort capability discovery was incomplete or drifted; refusing session creation';
       } else {
         this.healthStatus = 'available';
       }
@@ -316,16 +351,21 @@ export class CommandCodeService {
     await this.init();
     if (this.shuttingDown) throw new CommandCodeRuntimeError('Command Code service is shutting down', 'interrupted');
     this.assertRunnable();
+    if (input.permissionProfile !== 'browser-contained' && !this.isShadowAvailable()) {
+      throw new CommandCodeRuntimeError('Command Code shadow catalogue is unavailable under the active policy', 'protocol_error');
+    }
     const model = assertCommandCodeRuntimeModel(input.model, this.discoveryResult?.models ?? []);
     if (!model) throw new CommandCodeRuntimeError('Exact Command Code model is unavailable', 'protocol_error');
+    if (input.permissionProfile !== 'browser-contained' && !assertCommandCodeModel(model)) {
+      throw new CommandCodeRuntimeError('Command Code shadow sessions require one of the exact policy-approved model ids', 'permission_denied');
+    }
     const effortBinding = this.resolveEffort(model, input.effort);
     if (input.permissionProfile === 'browser-contained') {
       if (input.invocationRole) throw new CommandCodeRuntimeError('Browser Command Code sessions cannot carry Agent OS invocation roles', 'permission_denied');
       if (!this.isBrowserAvailable()) {
         throw new CommandCodeRuntimeError('Command Code browser containment is unavailable', 'permission_denied');
       }
-      const allowedModels = this.config.browserAllowedModels ?? [];
-      if (allowedModels.length === 0 || !allowedModels.includes(model)) {
+      if (!this.isBrowserModelAllowed(model)) {
         throw new CommandCodeRuntimeError(`Command Code model ${model} is not approved for browser use`, 'permission_denied');
       }
     }
@@ -380,16 +420,18 @@ export class CommandCodeService {
   getEffortCapabilities(): CommandCodeEffortCapabilities {
     const capabilities = this.discoveryResult?.effortCapabilities;
     const result: CommandCodeEffortCapabilities = {};
-    if (!capabilities) return result;
+    if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) return result;
     for (const [model, capability] of Object.entries(capabilities)) {
-      if (capability) result[model] = { ...capability, effortLevels: [...capability.effortLevels] };
+      if (isSafeEffortCapability(capability)) result[model] = { ...capability, effortLevels: [...capability.effortLevels] };
     }
     return result;
   }
 
-  getEffortCapability(model: CommandCodeRuntimeModel) {
+  getEffortCapability(model: CommandCodeRuntimeModel): CommandCodeEffortCapability | undefined {
     const capability = this.discoveryResult?.effortCapabilities?.[model];
-    return capability ? { ...capability, effortLevels: [...capability.effortLevels] } : undefined;
+    return isSafeEffortCapability(capability)
+      ? { ...capability, effortLevels: [...capability.effortLevels] }
+      : undefined;
   }
 
   async setEffort(sessionId: string, effort?: string): Promise<CommandCodeInternalSessionRecord> {
@@ -554,6 +596,12 @@ export class CommandCodeService {
     const queueStreamEvent = (parsed: Parameters<NonNullable<CommandCodeProcessRunInput['onEvent']>>[0]): void => {
       const event = adaptCommandCodeEvent({ sessionId, parsed, state: streamState, observedAt });
       if (!event) return;
+      // The native stream can emit turn/run/session end markers before the
+      // terminal result frame. Hold every normalized terminal marker back: the
+      // final adapter emits one authoritative agent_end carrying terminal
+      // effort and usage evidence, avoiding duplicate or under-specified
+      // receipts when the early marker lacks those fields.
+      if (event.type === 'agent_end') return;
       streamedEvents.push(event);
       streamQueue = streamQueue.then(async () => {
         await this.recordEffectiveEffort(sessionId, record.modelSelector, event);
@@ -802,24 +850,41 @@ export class CommandCodeService {
   isAvailable(): boolean { return this.healthStatus === 'available'; }
   /** The narrow Agent OS shadow surface remains separately gated. */
   isShadowAvailable(): boolean {
+    const models = this.discoveryResult?.models ?? [];
+    const capabilities = this.discoveryResult?.effortCapabilities;
     return this.isShadowEnabled()
       && this.isAvailable()
-      && COMMAND_CODE_MODELS.every((model) => this.discoveryResult?.models.includes(model));
+      && hasOrderedShadowCatalogue(models)
+      && capabilities !== undefined
+      && hasExactEffortCapabilities(capabilities, models);
   }
+  isBrowserEnabled(): boolean { return this.config.browserEnabled === true; }
   isBrowserAvailable(): boolean {
     return this.isAvailable()
-      && this.config.browserEnabled === true
+      && this.isBrowserEnabled()
       && this.browserPolicyReady
       && (this.config.browserAllowedCwdRoots ?? []).length > 0
+      && (this.config.browserAllowedModels ?? []).some((model) => assertCommandCodeModel(model) !== undefined)
       && this.runner.browserSandboxReady?.() === true;
   }
   getBrowserModels() {
-    const allowlist = this.config.browserAllowedModels ?? [];
-    return this.getModels().filter((model) => allowlist.length > 0 && allowlist.includes(model.id));
+    return this.getModels().filter((model) => model.browserRunnable);
+  }
+  /** Publicly usable Agent OS shadow catalogue; extra CLI discovery remains evidence-only. */
+  getShadowModels() {
+    return this.getModels().filter((model) => (COMMAND_CODE_MODELS as readonly string[]).includes(model.id));
+  }
+  getShadowEffortCapabilities(): Partial<CommandCodeEffortCapabilities> {
+    const capabilities = this.getEffortCapabilities();
+    return Object.fromEntries(COMMAND_CODE_MODELS.flatMap((model) => capabilities[model] ? [[model, capabilities[model]]] : []));
   }
   private isBrowserModelAllowed(model: CommandCodeRuntimeModel): boolean {
     const allowlist = this.config.browserAllowedModels ?? [];
-    return allowlist.length > 0 && allowlist.includes(model);
+    // Browser containment is a separate gate, not a second execution policy:
+    // the exact two approved routes remain the only models executable on any
+    // surface, even if an operator accidentally lists an evidence-only model
+    // in the browser environment.
+    return assertCommandCodeModel(model) !== undefined && allowlist.length > 0 && allowlist.includes(model);
   }
   private isBrowserSessionRecord(record: CommandCodeInternalSessionRecord): boolean {
     return record.permissionProfile === 'browser-contained'
@@ -829,12 +894,14 @@ export class CommandCodeService {
 
   private isSessionRecordAccessible(record: CommandCodeInternalSessionRecord | undefined): record is CommandCodeInternalSessionRecord {
     if (!record || record.state === 'deleted') return false;
+    const capability = this.getEffortCapability(record.modelSelector);
+    if (!capability || !record.effortCapabilityHash || record.effortCapabilityHash !== capability.capabilityHash) return false;
     const activeRoots = record.permissionProfile === 'browser-contained'
       ? (this.config.browserAllowedCwdRoots ?? [])
       : this.config.allowedCwdRoots;
     if (activeRoots.length === 0 || !activeRoots.some((root) => isWithinRoot(root, record.cwd))) return false;
     if (record.permissionProfile === 'browser-contained') return this.isBrowserSessionRecord(record);
-    return this.isShadowAvailable();
+    return assertCommandCodeModel(record.modelSelector) !== undefined && this.isShadowAvailable();
   }
 
   getExecutionInstanceId(): 'commandcode-default' { return COMMAND_CODE_EXECUTION_INSTANCE_ID; }
@@ -843,25 +910,52 @@ export class CommandCodeService {
     displayName: string;
     provider: string;
     reasoning: boolean;
+    runnable: boolean;
+    status: 'runnable' | 'evidence-only' | 'unavailable';
+    browserRunnable: boolean;
     supportsEffort: boolean;
     effortLevels: CommandCodeEffort[];
     defaultEffort?: CommandCodeEffort;
     effortCapabilityHash?: string;
+    catalogue: CommandCodeCatalogueMetadata;
   }> {
     const available = this.discoveryResult?.models ?? [];
+    const catalogue = this.getCatalogueMetadata();
     return available.map((id) => {
-      const capability = this.discoveryResult?.effortCapabilities?.[id];
+      const discoveredCapability = this.discoveryResult?.effortCapabilities?.[id];
+      const capability = isSafeEffortCapability(discoveredCapability) ? discoveredCapability : undefined;
+      const isShadowModel = (COMMAND_CODE_MODELS as readonly string[]).includes(id);
+      const shadowRunnable = isShadowModel
+        && this.isShadowAvailable()
+        && capability?.status !== 'unknown'
+        && capability?.source === 'live-preflight';
+      const shadowUnavailable = isShadowModel && this.isShadowEnabled() && !shadowRunnable;
+      const browserRunnable = this.isBrowserAvailable()
+        && this.isBrowserModelAllowed(id)
+        && capability?.status !== 'unknown';
       return {
         id,
         displayName: commandCodeDisplayName(id),
         provider: COMMAND_CODE_PROVIDER,
         reasoning: true,
+        runnable: shadowRunnable,
+        status: shadowRunnable ? 'runnable' : shadowUnavailable || capability?.status === 'unknown' || !capability ? 'unavailable' : 'evidence-only',
+        browserRunnable,
         supportsEffort: capability?.supportsEffort === true,
         effortLevels: [...(capability?.effortLevels ?? [])],
         ...(capability?.defaultEffort ? { defaultEffort: capability.defaultEffort } : {}),
         ...(capability?.capabilityHash ? { effortCapabilityHash: capability.capabilityHash } : {}),
+        catalogue,
       };
     });
+  }
+  getCatalogueMetadata(): CommandCodeCatalogueMetadata {
+    const health = this.getHealth();
+    return {
+      availabilityStatus: health.status,
+      checkedAt: health.checkedAt,
+      source: 'live-discovery',
+    };
   }
   getHealth(): CommandCodeHealth {
     const missingModels = COMMAND_CODE_MODELS.filter((model) => !this.discoveryResult?.models.includes(model));
@@ -874,7 +968,7 @@ export class CommandCodeService {
       advertisedModels: [...(this.discoveryResult?.models ?? [])],
       missingModels,
       effortCapabilities: this.getEffortCapabilities(),
-      checkedAt: new Date().toISOString(),
+      checkedAt: this.discoveryCheckedAt ?? new Date().toISOString(),
       ...(this.discoveryDiagnostic ? { diagnostic: this.discoveryDiagnostic } : {}),
       ...(this.registryProjectionError ? { diagnostic: `${this.discoveryDiagnostic ? `${this.discoveryDiagnostic}; ` : ''}registry projection: ${this.registryProjectionError}` } : {}),
     };
@@ -1133,25 +1227,85 @@ function commandCodeDisplayName(model: CommandCodeRuntimeModel): string {
     .join(' ');
 }
 
+function isSafeEffortCapability(value: unknown): value is CommandCodeEffortCapability {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const capability = value as Partial<CommandCodeEffortCapability>;
+  if (typeof capability.supportsEffort !== 'boolean'
+    || !Array.isArray(capability.effortLevels)
+    || !capability.effortLevels.every((effort) => typeof effort === 'string' && (COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(effort))
+    || !['adjustable', 'unavailable', 'unknown'].includes(capability.status as string)
+    || capability.source !== 'live-preflight'
+    || typeof capability.capabilityHash !== 'string'
+    || !/^[a-f0-9]{64}$/.test(capability.capabilityHash)
+    || capability.defaultEffort !== undefined
+      && (typeof capability.defaultEffort !== 'string' || !(COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(capability.defaultEffort))) return false;
+  if (capability.status === 'unknown' || capability.status === 'unavailable') {
+    return capability.supportsEffort === false && capability.effortLevels.length === 0 && capability.defaultEffort === undefined;
+  }
+  return capability.supportsEffort === true
+    && capability.effortLevels.length > 0
+    && (capability.defaultEffort === undefined || capability.effortLevels.includes(capability.defaultEffort));
+}
+
 function hasExactEffortCapabilities(
   capabilities: CommandCodeEffortCapabilities,
   models: readonly CommandCodeRuntimeModel[],
 ): boolean {
   if (JSON.stringify(Object.keys(capabilities).sort()) !== JSON.stringify([...models].sort())) return false;
-  const shadowCatalogue = models.length === COMMAND_CODE_MODELS.length
-    && models.every((model) => (COMMAND_CODE_MODELS as readonly string[]).includes(model));
   return models.every((model) => {
     const capability = capabilities[model];
     if (!capability
-      || capability.status === 'unknown'
+      || typeof capability.supportsEffort !== 'boolean'
+      || !Array.isArray(capability.effortLevels)
+      || !['adjustable', 'unavailable', 'unknown'].includes(capability.status)
       || capability.source !== 'live-preflight'
       || !/^[a-f0-9]{64}$/.test(capability.capabilityHash)
-      || capability.supportsEffort !== (capability.effortLevels.length > 0)) return false;
-    if (!shadowCatalogue) return true;
-    const expectedLevels = COMMAND_CODE_EFFORT_LEVELS_BY_MODEL[model] ?? [];
-    return JSON.stringify(capability.effortLevels) === JSON.stringify(expectedLevels)
-      && (expectedLevels.length === 0 ? capability.defaultEffort === undefined : capability.defaultEffort === 'medium');
+      || new Set(capability.effortLevels).size !== capability.effortLevels.length
+      || capability.effortLevels.some((effort) => typeof effort !== 'string' || !(COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(effort))) return false;
+    if (capability.status === 'unknown' || capability.status === 'unavailable') {
+      if (capability.supportsEffort || capability.effortLevels.length > 0 || capability.defaultEffort !== undefined) return false;
+    } else if (capability.status === 'adjustable'
+      && (!capability.supportsEffort
+        || capability.effortLevels.length === 0
+        || capability.defaultEffort !== undefined && !capability.effortLevels.includes(capability.defaultEffort))) return false;
+    // Extra catalogue models may have inconclusive effort probes. They remain
+    // explicit unavailable evidence and never become runnable; the approved
+    // pair still has to satisfy its exact capability contract below. An
+    // unknown approved model is never equivalent to a confirmed non-adjustable
+    // model (Muse), even though both carry an empty effort list.
+    if ((COMMAND_CODE_MODELS as readonly string[]).includes(model) && capability.status === 'unknown') return false;
+    if (!(COMMAND_CODE_MODELS as readonly string[]).includes(model) && capability.status === 'unknown') return true;
+    // The shadow contract is model-specific even when the live catalogue also
+    // contains extra evidence-only models. Never let an extra model bypass
+    // drift checks for Qwen or Muse.
+    if ((COMMAND_CODE_MODELS as readonly string[]).includes(model)) {
+      const expectedLevels = COMMAND_CODE_EFFORT_LEVELS_BY_MODEL[model] ?? [];
+      return JSON.stringify(capability.effortLevels) === JSON.stringify(expectedLevels)
+        && (expectedLevels.length === 0 ? capability.defaultEffort === undefined : capability.defaultEffort === 'medium');
+    }
+    return true;
   });
+}
+
+function hasOrderedShadowCatalogue(models: readonly CommandCodeRuntimeModel[]): boolean {
+  // Once the complete catalogue is present, its exact identity and order are
+  // part of the shadow readiness contract. Do not let an injected/custom
+  // discovery path bypass the same fail-closed rule used by startup discovery.
+  if (models.length === COMMAND_CODE_FULL_MODEL_CATALOGUE.length) {
+    return validateCommandCodeModelCatalogue(models).valid;
+  }
+  const seen = new Set<string>();
+  for (const model of models) {
+    if (seen.has(model)) return false;
+    seen.add(model);
+  }
+  let previousIndex = -1;
+  for (const model of COMMAND_CODE_MODELS) {
+    const index = models.indexOf(model);
+    if (index < 0 || index <= previousIndex) return false;
+    previousIndex = index;
+  }
+  return true;
 }
 
 function extractEffectiveEffort(event: NormalizedEvent): { effort: CommandCodeEffort; method: 'provider-event' | 'provider-result' } | undefined {

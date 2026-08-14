@@ -72,7 +72,13 @@ export async function createOneSession(params: {
 
   switch (runtime) {
     case 'commandcode': {
-      if (!deps.commandCodeService || !(deps.commandCodeService.isShadowAvailable?.() ?? deps.commandCodeService.isAvailable()) || !(deps.commandCodeService.isShadowEnabled?.() ?? deps.commandCodeService.isEnabled())) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code shadow runtime is disabled or unavailable');
+      if (!deps.commandCodeService) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code shadow runtime is not configured');
+      // Batch creation can be exercised directly by focused route users as
+      // well as through the booted server. Initialise discovery here so the
+      // exact catalogue/capability gate is never evaluated in its default
+      // pre-discovery state.
+      await deps.commandCodeService.init();
+      if (!(deps.commandCodeService.isShadowAvailable?.() ?? deps.commandCodeService.isAvailable()) || !(deps.commandCodeService.isShadowEnabled?.() ?? deps.commandCodeService.isEnabled())) throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Command Code shadow runtime is disabled or unavailable');
       if (!deps.commandCodeService.isAvailable()) throw new RuntimeOpError(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code runtime is not available');
       if (entry.model !== 'qwen/qwen3.8-max' && entry.model !== 'meta/muse-spark-1.2-contributor') {
         throw new RuntimeOpError(ErrorCode.COMMANDCODE_MODEL_UNAVAILABLE, 'Command Code shadow routes require one exact allowlisted model id');

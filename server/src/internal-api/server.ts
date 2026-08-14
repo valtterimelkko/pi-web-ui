@@ -51,7 +51,7 @@ import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
 import { bindOwnerOnlyUnixSocket, UnixSocketOwner } from './unix-socket-owner.js';
 import { getWorkerPool } from '../routes/sessions.js';
-import { AdmissionController, admissionStartupStatus } from './admission-controller.js';
+import { AdmissionController, admissionStartupStatus, type AdmissionControllerOptions } from './admission-controller.js';
 import { CommandCodeService } from '../command-code/command-code-service.js';
 
 const logger = createLogger('InternalAPI');
@@ -95,6 +95,8 @@ export interface InternalApiConfig {
   admissionHostMinimumHeadroomBytes?: number;
   admissionReservedBytesPerTurn?: number;
   admissionReservedPidsPerTurn?: number;
+  /** Command Code turn concurrency; mirrored as the commandcode admission limit. */
+  commandCodeConcurrency?: number;
 }
 
 const DEFAULT_SOCKET_PATH = path.join(os.homedir(), '.pi-web-ui', 'internal-api.sock');
@@ -103,6 +105,33 @@ const DEFAULT_WATCH_DIR = path.join(os.homedir(), '.pi-web-ui', 'watches');
 const DEFAULT_PIN_DIR = path.join(os.homedir(), '.pi-web-ui', 'pins');
 const DEFAULT_RUN_RECEIPT_DIR = path.join(os.homedir(), '.pi-web-ui', 'run-receipts');
 const DEFAULT_NOTIFICATIONS_DIR = path.join(os.homedir(), '.pi-web-ui', 'notifications');
+
+/**
+ * Build the shared admission options from the server boundary. Command Code's
+ * own process semaphore and Internal API admission must expose the same limit;
+ * otherwise capacity can claim a slot that the runtime will immediately refuse.
+ */
+export function resolveInternalApiAdmissionOptions(input: Pick<InternalApiConfig,
+  'admissionMaxActiveTurns'
+  | 'admissionInteractiveReserve'
+  | 'admissionMinimumHeadroomBytes'
+  | 'admissionHostMinimumHeadroomBytes'
+  | 'admissionReservedBytesPerTurn'
+  | 'admissionReservedPidsPerTurn'
+  | 'commandCodeConcurrency'
+>): AdmissionControllerOptions {
+  return {
+    maxActiveTurns: input.admissionMaxActiveTurns,
+    interactiveReserve: input.admissionInteractiveReserve,
+    minimumHeadroomBytes: input.admissionMinimumHeadroomBytes,
+    hostMinimumHeadroomBytes: input.admissionHostMinimumHeadroomBytes,
+    reservedBytesPerTurn: input.admissionReservedBytesPerTurn,
+    reservedPidsPerTurn: input.admissionReservedPidsPerTurn,
+    runtimeMaxActiveTurns: input.commandCodeConcurrency === undefined
+      ? undefined
+      : { commandcode: input.commandCodeConcurrency },
+  };
+}
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 
@@ -214,6 +243,7 @@ export class InternalApiServer {
           if (commandCodeEntry) return !this.commandCodeService.isRunning(sessionId);
           const entry = await this.sessionRegistry.get(sessionId);
           if (!entry) return true; // session gone -> quiescent
+          if (entry.sdkType === 'commandcode') return !this.commandCodeService.isRunning(sessionId);
           if (entry.sdkType === 'claude') return !this.claudeService.isRunning(sessionId);
           if (entry.sdkType === 'opencode') return !this.opencodeService.isRunning(sessionId);
           if (entry.sdkType === 'antigravity') return !this.antigravityService.isRunning(sessionId);
@@ -228,14 +258,7 @@ export class InternalApiServer {
 
     // One process-local admission authority sees all Internal API conductors.
     // It preserves explicit headroom for interactive Web UI turns.
-    const admissionOptions = {
-      maxActiveTurns: this.config.admissionMaxActiveTurns,
-      interactiveReserve: this.config.admissionInteractiveReserve,
-      minimumHeadroomBytes: this.config.admissionMinimumHeadroomBytes,
-      hostMinimumHeadroomBytes: this.config.admissionHostMinimumHeadroomBytes,
-      reservedBytesPerTurn: this.config.admissionReservedBytesPerTurn,
-      reservedPidsPerTurn: this.config.admissionReservedPidsPerTurn,
-    };
+    const admissionOptions = resolveInternalApiAdmissionOptions(this.config);
     // Resolve + apply conservative production defaults for any unset safety knob
     // (a missing/mis-loaded .env.production cannot make the server run
     // non-conservative CPU-derived admission), and surface the result at startup.

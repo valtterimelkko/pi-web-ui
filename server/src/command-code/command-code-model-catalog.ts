@@ -13,7 +13,89 @@ export const COMMAND_CODE_MODELS = [
   'meta/muse-spark-1.2-contributor',
 ] as const;
 
+/**
+ * Full catalogue observed from the current Command Code model listing.
+ * Visibility follows this order; execution remains restricted to COMMAND_CODE_MODELS.
+ * The pinned runtime contract still controls execution separately.
+ */
+export const COMMAND_CODE_FULL_MODEL_CATALOGUE = [
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+  'moonshotai/kimi-k3',
+  'moonshotai/kimi-k2.7-code',
+  'moonshotai/kimi-k2.7-code-highspeed',
+  'moonshotai/kimi-k2.6',
+  'moonshotai/kimi-k2.5',
+  'zai-org/glm-5.2',
+  'zai-org/glm-5.2-fast',
+  'zai-org/glm-5.1',
+  'zai-org/glm-5',
+  'minimaxai/minimax-m3',
+  'minimaxai/minimax-m2.7',
+  'minimaxai/minimax-m2.5',
+  'xiaomi/mimo-v2.5-pro',
+  'xiaomi/mimo-v2.5',
+  'qwen/qwen3.8-max',
+  'qwen/qwen3.7-max',
+  'qwen/qwen3.7-plus',
+  'qwen/qwen3.7-flash',
+  'qwen/qwen3.6-max-preview',
+  'qwen/qwen3.6-plus',
+  'stepfun/step-3.7-flash',
+  'stepfun/step-3.5-flash',
+  'tencent/hy3-paid',
+  'nvidia/nemotron-3-ultra-550b-a55b',
+  'thinkingmachines/inkling',
+  'thinkingmachines/inkling-small',
+  'poolside/laguna-s-2.1-free',
+  'claude-sonnet-5',
+  'claude-sonnet-4-6',
+  'claude-fable-5',
+  'claude-opus-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-haiku-4-5',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.3-codex',
+  'gpt-5.4-mini',
+  'google/gemini-3.7-flash',
+  'google/gemini-3.6-flash',
+  'google/gemini-3.5-flash',
+  'google/gemini-3.5-flash-lite',
+  'google/gemini-3.1-flash-lite',
+  'sakana/fugu-ultra',
+  'meta/muse-spark-1.1',
+  'meta/muse-spark-1.2',
+  'meta/muse-spark-1.2-contributor',
+  'xai/grok-4.5',
+  'xai/grok-4.6',
+] as const;
+
 export type CommandCodeModel = (typeof COMMAND_CODE_MODELS)[number];
+
+export type CommandCodeModelCatalogueValidation =
+  | { valid: true }
+  | { valid: false; reason: 'invalid_model' | 'duplicate_model' | 'missing_model' | 'extra_model' | 'reordered_model' };
+
+/** Validate exact IDs, cardinality, uniqueness, and canonical order. */
+export function validateCommandCodeModelCatalogue(
+  models: readonly CommandCodeRuntimeModel[],
+): CommandCodeModelCatalogueValidation {
+  if (models.some((model) => typeof model !== 'string' || !/^[a-z0-9][a-z0-9._/-]*$/.test(model))) {
+    return { valid: false, reason: 'invalid_model' };
+  }
+  if (new Set(models).size !== models.length) return { valid: false, reason: 'duplicate_model' };
+  if (models.length < COMMAND_CODE_FULL_MODEL_CATALOGUE.length) return { valid: false, reason: 'missing_model' };
+  if (models.length > COMMAND_CODE_FULL_MODEL_CATALOGUE.length) return { valid: false, reason: 'extra_model' };
+  const expected = COMMAND_CODE_FULL_MODEL_CATALOGUE as readonly string[];
+  if (models.some((model) => !expected.includes(model))) return { valid: false, reason: 'extra_model' };
+  if (models.some((model, index) => model !== expected[index])) return { valid: false, reason: 'reordered_model' };
+  return { valid: true };
+}
 /** A model id returned by the current Command Code catalogue. */
 export type CommandCodeRuntimeModel = string;
 export const COMMAND_CODE_VERSION = '1.19.0' as const;
@@ -80,7 +162,7 @@ export function assertCommandCodeEffort(model: CommandCodeRuntimeModel, value: u
  * as ambiguous rather than silently deduplicated into a usable route.
  */
 export function parseCommandCodeModelList(stdout: string): CommandCodeModelDiscovery {
-  const version = stdout.match(/(?:Command\s+Code\s+)?v?(\d+(?:\.\d+){2})/i)?.[1] ?? 'unknown';
+  const version = parseCommandCodeVersion(stdout) ?? 'unknown';
   const lines = stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
   const ids = lines
     .map(parseAdvertisedModelId)
@@ -90,6 +172,14 @@ export function parseCommandCodeModelList(stdout: string): CommandCodeModelDisco
   const models = [...new Set(ids)];
   const ambiguous = [...counts.entries()].filter(([, count]) => count > 1).map(([id]) => id);
   return { version, models, ambiguous };
+}
+
+function parseCommandCodeVersion(output: string): string | undefined {
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:(?:command\s+code)(?:\s+cli)?(?:\s+version)?\s+|cmd(?:\s+version)?\s+)?v?(\d+(?:\.\d+){2})\s*$/i);
+    if (match) return match[1];
+  }
+  return undefined;
 }
 
 function parseAdvertisedModelId(line: string): CommandCodeRuntimeModel | undefined {
@@ -103,8 +193,10 @@ function parseAdvertisedModelId(line: string): CommandCodeRuntimeModel | undefin
 }
 
 export interface CommandCodeDiscoveryOptions {
-  /** Bound startup discovery so a broken executable cannot wedge readiness. */
+  /** Bound each child-process discovery probe so a broken executable cannot wedge readiness. */
   timeoutMs?: number;
+  /** Bound the complete hybrid effort catalogue discovery, not just one probe. */
+  totalTimeoutMs?: number;
   /** Restrict effort discovery to the freshly advertised exact ids. */
   models?: readonly CommandCodeRuntimeModel[];
   /**
@@ -112,6 +204,11 @@ export interface CommandCodeDiscoveryOptions {
    * can use one invalid-value probe and parse the CLI's supported-values list.
    */
   probeAllValues?: boolean;
+  /**
+   * Exact policy models that still require exhaustive probes when the broader
+   * discovered catalogue uses the bounded invalid-value probe.
+   */
+  probeAllValuesForModels?: readonly CommandCodeRuntimeModel[];
 }
 
 export interface CommandCodeDiscoveryRunner {
@@ -119,6 +216,7 @@ export interface CommandCodeDiscoveryRunner {
 }
 
 export const COMMAND_CODE_DISCOVERY_TIMEOUT_MS = 10_000;
+export const COMMAND_CODE_DISCOVERY_TOTAL_TIMEOUT_MS = 120_000;
 
 /** Startup-only model discovery. It uses an isolated home and never reads native auth/config files. */
 export const discoverCommandCodeModels: CommandCodeDiscoveryRunner = async (executablePath, options = {}) => {
@@ -127,8 +225,12 @@ export const discoverCommandCodeModels: CommandCodeDiscoveryRunner = async (exec
     const versionProbe = await runDiscoveryCommand(executablePath, ['--no-auto-update', '--version'], options.timeoutMs, environment);
     const modelsProbe = await runDiscoveryCommand(executablePath, ['--no-auto-update', '--list-models'], options.timeoutMs, environment);
     const parsed = parseCommandCodeModelList(modelsProbe.stdout);
+    const versionProbeVersion = parseCommandCodeVersion(versionProbe.stdout);
+    if (parsed.version !== 'unknown' && versionProbeVersion !== undefined && parsed.version !== versionProbeVersion) {
+      throw new Error(`Command Code version probes disagree: --version=${versionProbeVersion}, --list-models=${parsed.version}`);
+    }
     const version = parsed.version === 'unknown'
-      ? versionProbe.stdout.trim().match(/(?:v)?(\d+(?:\.\d+){2})/)?.[1] ?? 'unknown'
+      ? versionProbeVersion ?? 'unknown'
       : parsed.version;
     return { ...parsed, version };
   });
@@ -147,37 +249,38 @@ export async function discoverCommandCodeEfforts(
     const environment = controlledDiscoveryEnvironment(homeDir);
     const capabilities = {} as CommandCodeEffortCapabilities;
     const models = options.models?.length ? [...options.models] : [...COMMAND_CODE_MODELS];
+    const totalTimeoutMs = options.totalTimeoutMs ?? COMMAND_CODE_DISCOVERY_TOTAL_TIMEOUT_MS;
+    if (!Number.isFinite(totalTimeoutMs) || totalTimeoutMs <= 0) throw new Error('Command Code total discovery timeout must be positive');
+    const deadline = Date.now() + totalTimeoutMs;
+    const probeTimeout = (): number => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error(`Command Code effort discovery timed out after ${totalTimeoutMs}ms`);
+      return Math.min(options.timeoutMs ?? COMMAND_CODE_DISCOVERY_TIMEOUT_MS, remaining);
+    };
     for (const model of models) {
       const supported: CommandCodeEffort[] = [];
       let unknown = false;
       let defaultEffort: CommandCodeEffort | undefined;
 
-      if (options.probeAllValues === false) {
-        try {
-          const probe = await runDiscoveryCommand(
-            executablePath,
-            ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1', '--trust', '--skip-onboarding', '--no-auto-update', '--effort', '__pi_web_ui_capability_probe__'],
-            options.timeoutMs,
-            environment,
-            true,
-          );
-          const parsed = parseSupportedEfforts(probe.stdout, probe.stderr);
-          if (parsed) supported.push(...parsed);
-          else if (isNoAdjustableEffort(probe.stdout, probe.stderr)) {
-            // Explicitly non-adjustable; this is a valid capability result.
-          } else {
-            unknown = true;
-          }
-        } catch {
-          unknown = true;
-        }
+      const probeAllValues = options.probeAllValuesForModels?.includes(model)
+        || options.probeAllValues !== false;
+      if (!probeAllValues) {
+        const result = await probeEffortList(
+          executablePath,
+          model,
+          probeTimeout(),
+          environment,
+        );
+        supported.push(...result.values);
+        unknown ||= result.unknown;
+        if (model === 'qwen/qwen3.8-max' && supported.includes('medium')) defaultEffort = 'medium';
       } else {
         for (const effort of COMMAND_CODE_EFFORT_LEVELS) {
           try {
             const probe = await runDiscoveryCommand(
               executablePath,
               ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1', '--trust', '--skip-onboarding', '--no-auto-update', '--effort', effort],
-              options.timeoutMs,
+              probeTimeout(),
               environment,
               true,
             );
@@ -188,10 +291,28 @@ export async function discoverCommandCodeEfforts(
             unknown = true;
           }
         }
+        // The exact shadow models are exhaustively probed, but also receive a
+        // bounded invalid-value probe when the caller explicitly requests the
+        // hybrid mode. This catches a CLI update that adds a new native value
+        // instead of silently truncating it to the repository enum.
+        if (options.probeAllValues === false && options.probeAllValuesForModels?.includes(model)) {
+          const result = await probeEffortList(
+            executablePath,
+            model,
+            probeTimeout(),
+            environment,
+          );
+          unknown ||= result.unknown || result.values.some((effort) => !supported.includes(effort));
+          supported.push(...result.values);
+        }
         defaultEffort = supported.includes('medium') ? 'medium' : supported[0];
       }
+      if (Date.now() >= deadline) throw new Error(`Command Code effort discovery timed out after ${totalTimeoutMs}ms`);
 
-      const effortLevels = [...new Set(supported)];
+      // An inconclusive probe must not leave a plausible selector behind. Keep
+      // the whole capability atomically fail-closed: unknown means no usable
+      // levels, no default, and no native effort claim.
+      const effortLevels = unknown ? [] : [...new Set(supported)];
       const status = unknown ? 'unknown' : effortLevels.length > 0 ? 'adjustable' : 'unavailable';
       const supportsEffort = effortLevels.length > 0 && !unknown;
       capabilities[model] = {
@@ -271,13 +392,47 @@ async function runDiscoveryCommand(
 
 type EffortProbeClassification = 'accepted' | 'unsupported' | 'unknown';
 
-function parseSupportedEfforts(stdout: string, stderr: string): CommandCodeEffort[] | undefined {
+interface ParsedSupportedEfforts {
+  values: CommandCodeEffort[];
+  unknown: boolean;
+}
+
+async function probeEffortList(
+  executablePath: string,
+  model: CommandCodeRuntimeModel,
+  timeoutMs: number | undefined,
+  environment: NodeJS.ProcessEnv,
+): Promise<ParsedSupportedEfforts> {
+  try {
+    const probe = await runDiscoveryCommand(
+      executablePath,
+      ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1', '--trust', '--skip-onboarding', '--no-auto-update', '--effort', '__pi_web_ui_capability_probe__'],
+      timeoutMs,
+      environment,
+      true,
+    );
+    const parsed = parseSupportedEfforts(probe.stdout, probe.stderr);
+    if (parsed) return parsed;
+    if (isNoAdjustableEffort(probe.stdout, probe.stderr)) return { values: [], unknown: false };
+    return { values: [], unknown: true };
+  } catch {
+    return { values: [], unknown: true };
+  }
+}
+
+function parseSupportedEfforts(stdout: string, stderr: string): ParsedSupportedEfforts | undefined {
   const diagnostics = `${stdout}\n${stderr}`;
-  const match = diagnostics.match(/supported:\s*([^.!?\r\n]+)/i);
+  const match = diagnostics.match(/supported(?:\s+values?)?:\s*([^.!?\r\n]+)/i);
   if (!match) return undefined;
-  const values = match[1].split(',').map((value) => value.trim().toLowerCase());
+  const values = match[1]
+    .split(',')
+    .map((value) => value.trim().toLowerCase().replace(/^or\s+/, '').replace(/^['"`]+|['"`]+$/g, ''))
+    .filter(Boolean);
   const supported = values.filter((value): value is CommandCodeEffort => (COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(value));
-  return supported.length > 0 ? supported : [];
+  return {
+    values: [...new Set(supported)],
+    unknown: values.some((value) => !(COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(value)),
+  };
 }
 
 function isNoAdjustableEffort(stdout: string, stderr: string): boolean {

@@ -361,9 +361,24 @@ function validateRecord(value: unknown): CommandCodeInternalSessionRecord {
   if (record.effortSource !== undefined && !['explicit', 'default', 'automatic', 'none'].includes(record.effortSource)) throw new Error('Invalid Command Code effort source');
   if ((record.effortSource === 'none' || record.effortSource === 'automatic') && record.effort !== undefined) throw new Error('Command Code automatic/non-adjustable effort cannot carry a value');
   if ((record.effortSource === 'explicit' || record.effortSource === 'default') && record.effort === undefined) throw new Error('Command Code adjustable effort source requires a value');
-  if (record.defaultEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.defaultEffort)) throw new Error('Invalid Command Code default effort');
+  if (record.defaultEffort !== undefined) {
+    try { assertCommandCodeEffort(model, record.defaultEffort); } catch { throw new Error('Invalid Command Code default effort'); }
+  }
   if (record.effortCapabilityHash !== undefined && !/^[a-f0-9]{64}$/.test(record.effortCapabilityHash)) throw new Error('Invalid Command Code effort capability hash');
-  if (record.effectiveEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(record.effectiveEffort)) throw new Error('Invalid Command Code effective effort');
+  if (record.effectiveEffort !== undefined) {
+    try { assertCommandCodeEffort(model, record.effectiveEffort); } catch { throw new Error('Invalid Command Code effective effort'); }
+  }
+  if (model === 'qwen/qwen3.8-max'
+    && (!['explicit', 'default'].includes(record.effortSource ?? '')
+      || record.effort === undefined
+      || record.defaultEffort !== 'medium'
+      || record.effortSource === 'default' && record.effort !== 'medium')) {
+    throw new Error('Qwen Command Code records must preserve the native effort binding and medium default effort');
+  }
+  if (model === 'meta/muse-spark-1.2-contributor'
+    && (record.effortSource !== 'none' || record.effort !== undefined || record.defaultEffort !== undefined || record.effectiveEffort !== undefined)) {
+    throw new Error('Muse Command Code records must preserve effortSource none and cannot carry native effort metadata');
+  }
   if (record.effortEvidenceMethod !== undefined && !['provider-event', 'provider-result', 'unobserved'].includes(record.effortEvidenceMethod)) throw new Error('Invalid Command Code effort evidence method');
   if (!['created', 'running', 'idle', 'failed', 'aborted', 'deleted'].includes(record.state)) throw new Error('Invalid Command Code session state');
   return record as CommandCodeInternalSessionRecord;

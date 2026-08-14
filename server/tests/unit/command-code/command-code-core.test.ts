@@ -4,11 +4,13 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   COMMAND_CODE_MODELS,
+  COMMAND_CODE_FULL_MODEL_CATALOGUE,
   COMMAND_CODE_VERSION,
   assertCommandCodeModel,
   discoverCommandCodeEfforts,
   discoverCommandCodeModels,
   parseCommandCodeModelList,
+  validateCommandCodeModelCatalogue,
 } from '../../../src/command-code/command-code-model-catalog.js';
 import {
   CommandCodeNdjsonParser,
@@ -21,6 +23,29 @@ import {
 } from '../../../src/command-code/command-code-config.js';
 
 describe('Command Code model identity', () => {
+  it('pins the complete 54-model catalogue and rejects catalogue drift', () => {
+    expect(COMMAND_CODE_FULL_MODEL_CATALOGUE).toHaveLength(54);
+    expect(COMMAND_CODE_FULL_MODEL_CATALOGUE).toContain('google/gemini-3.7-flash');
+    expect(validateCommandCodeModelCatalogue(COMMAND_CODE_FULL_MODEL_CATALOGUE)).toEqual({ valid: true });
+    expect(validateCommandCodeModelCatalogue([
+      ...COMMAND_CODE_FULL_MODEL_CATALOGUE.slice(0, 10),
+      'unknown/provider-model',
+      ...COMMAND_CODE_FULL_MODEL_CATALOGUE.slice(11),
+    ])).toMatchObject({ valid: false, reason: 'extra_model' });
+    expect(validateCommandCodeModelCatalogue([
+      ...COMMAND_CODE_FULL_MODEL_CATALOGUE.slice(0, 4),
+      COMMAND_CODE_FULL_MODEL_CATALOGUE[3],
+      ...COMMAND_CODE_FULL_MODEL_CATALOGUE.slice(5),
+    ])).toMatchObject({ valid: false, reason: 'duplicate_model' });
+    expect(validateCommandCodeModelCatalogue([
+      COMMAND_CODE_FULL_MODEL_CATALOGUE[1],
+      COMMAND_CODE_FULL_MODEL_CATALOGUE[0],
+      ...COMMAND_CODE_FULL_MODEL_CATALOGUE.slice(2),
+    ])).toMatchObject({ valid: false, reason: 'reordered_model' });
+    expect(validateCommandCodeModelCatalogue(COMMAND_CODE_FULL_MODEL_CATALOGUE.slice(0, -1))).toMatchObject({ valid: false, reason: 'missing_model' });
+    expect(validateCommandCodeModelCatalogue([...COMMAND_CODE_FULL_MODEL_CATALOGUE, 'extra/model'])).toMatchObject({ valid: false, reason: 'extra_model' });
+  });
+
   it('accepts only the two exact discovered model ids', () => {
     expect(COMMAND_CODE_MODELS).toEqual([
       'qwen/qwen3.8-max',
@@ -43,6 +68,26 @@ describe('Command Code model identity', () => {
 
   it('accepts the current bare cmd --version format', () => {
     expect(parseCommandCodeModelList('1.19.0\n')).toMatchObject({ version: '1.19.0' });
+  });
+
+  it('fails closed when the version probe and model-list version disagree', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-version-drift-'));
+    const script = path.join(root, 'fake-cmd.mjs');
+    const catalogueRows = COMMAND_CODE_FULL_MODEL_CATALOGUE
+      .map((model) => `${model}             fixture model`)
+      .join('\\n');
+    await import('node:fs/promises').then(({ writeFile }) => writeFile(script, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes('--version')) { console.log('1.19.0'); process.exit(0); }
+if (args.includes('--list-models')) { console.log('Command Code v1.23.1\\nAvailable models  ·  54 models\\n${catalogueRows}'); process.exit(0); }
+process.exit(0);
+`));
+    await chmod(script, 0o700);
+    try {
+      await expect(discoverCommandCodeModels(script)).rejects.toThrow(/version.*(disagree|mismatch)|mismatch.*version/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('ignores prose and single-space aliases instead of treating them as executable model ids', () => {
@@ -145,6 +190,68 @@ else { console.error('Muse Spark 1.2 Contributor has no adjustable reasoning eff
     }
   });
 
+  it('uses exhaustive probes for approved models while using bounded list probes for extra discoveries', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-effort-hybrid-probe-'));
+    const script = path.join(root, 'fake-cmd.mjs');
+    const calls = path.join(root, 'calls.jsonl');
+    const scriptBody = `import { appendFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+const model = args[args.indexOf('--model') + 1] || '';
+const effort = args[args.indexOf('--effort') + 1] || '';
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ model, effort }) + '\\n');
+if (model === 'qwen/qwen3.8-max' && ['low', 'medium', 'xhigh'].includes(effort)) { console.error('authentication required'); process.exit(3); }
+if (model === 'qwen/qwen3.8-max') { console.error('Unknown effort. Supported: low, medium, xhigh.'); process.exit(2); }
+if (model === 'deepseek/deepseek-v4-pro') { console.error('Unknown effort. Supported: high, max.'); process.exit(2); }
+console.error('unsupported reasoning effort'); process.exit(2);
+`;
+    await import('node:fs/promises').then(({ writeFile }) => writeFile(script, `#!/usr/bin/env node\n${scriptBody}`));
+    await chmod(script, 0o700);
+    try {
+      const discovered = await discoverCommandCodeEfforts(script, {
+        models: ['qwen/qwen3.8-max', 'deepseek/deepseek-v4-pro'],
+        probeAllValues: false,
+        probeAllValuesForModels: ['qwen/qwen3.8-max'],
+      });
+      expect(discovered.capabilities['qwen/qwen3.8-max']).toMatchObject({ supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' });
+      expect(discovered.capabilities['deepseek/deepseek-v4-pro']).toMatchObject({ supportsEffort: true, effortLevels: ['high', 'max'] });
+      expect(discovered.capabilities['deepseek/deepseek-v4-pro']?.defaultEffort).toBeUndefined();
+      const probes = (await readFile(calls, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { model: string; effort: string });
+      expect(probes.filter((probe) => probe.model === 'qwen/qwen3.8-max').map((probe) => probe.effort)).toEqual(expect.arrayContaining(['low', 'medium', 'xhigh']));
+      expect(probes.filter((probe) => probe.model === 'deepseek/deepseek-v4-pro').map((probe) => probe.effort)).toEqual(['__pi_web_ui_capability_probe__']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when an approved model advertises a newly added native effort value', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-effort-drift-probe-'));
+    const script = path.join(root, 'fake-cmd.mjs');
+    const scriptBody = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const model = args[args.indexOf('--model') + 1];
+const effort = args[args.indexOf('--effort') + 1];
+if (effort === '__pi_web_ui_capability_probe__') { console.error('Unknown effort. Supported: low, medium, xhigh, ultra.'); process.exit(2); }
+if (model === 'qwen/qwen3.8-max' && ['low', 'medium', 'xhigh'].includes(effort)) { console.error('authentication required'); process.exit(3); }
+console.error('unsupported reasoning effort'); process.exit(2);
+`;
+    await import('node:fs/promises').then(({ writeFile }) => writeFile(script, scriptBody));
+    await chmod(script, 0o700);
+    try {
+      const discovered = await discoverCommandCodeEfforts(script, {
+        models: ['qwen/qwen3.8-max'],
+        probeAllValues: false,
+        probeAllValuesForModels: ['qwen/qwen3.8-max'],
+      });
+      expect(discovered.capabilities['qwen/qwen3.8-max']).toMatchObject({
+        supportsEffort: false,
+        effortLevels: [],
+        status: 'unknown',
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('parses native effort lists from one model-specific invalid-value probe', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-effort-list-probe-'));
     const script = path.join(root, 'fake-cmd.mjs');
@@ -162,9 +269,25 @@ process.exit(1);
         models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'],
         probeAllValues: false,
       });
-      expect(discovered.capabilities['qwen/qwen3.8-max']).toMatchObject({ supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'] });
-      expect(discovered.capabilities['qwen/qwen3.8-max']?.defaultEffort).toBeUndefined();
+      expect(discovered.capabilities['qwen/qwen3.8-max']).toMatchObject({ supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' });
       expect(discovered.capabilities['meta/muse-spark-1.2-contributor']).toMatchObject({ supportsEffort: false, effortLevels: [], status: 'unavailable' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds the complete hybrid effort discovery budget', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-effort-total-timeout-'));
+    const script = path.join(root, 'slow-cmd.mjs');
+    await import('node:fs/promises').then(({ writeFile }) => writeFile(script, '#!/usr/bin/env node\nsetTimeout(() => {}, 1000);'));
+    await chmod(script, 0o700);
+    try {
+      await expect(discoverCommandCodeEfforts(script, {
+        models: ['qwen/qwen3.8-max'],
+        probeAllValues: false,
+        totalTimeoutMs: 1,
+        timeoutMs: 50,
+      })).rejects.toThrow(/effort discovery timed out/i);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -212,6 +335,13 @@ describe('Command Code command construction', () => {
     expect(COMMAND_CODE_EXECUTION_INSTANCE_ID).toBe('commandcode-default');
     expect(getCommandCodeProfile('implementation-child-wide').args).toContain('--yolo');
     expect(() => getCommandCodeProfile('invalid-profile' as never)).toThrow(/unknown.*profile/i);
+  });
+
+  it('rejects evidence-only catalogue models at the executable argument boundary', () => {
+    expect(() => buildCommandCodeArgs({
+      executablePath: '/opt/bin/cmd', model: 'deepseek/deepseek-v4-pro', maxTurns: 2,
+      permissionProfile: 'implementation-child-wide',
+    })).toThrow(/allowlist|policy|approved|exact/i);
   });
 
   it('validates native effort against the exact model capability', () => {

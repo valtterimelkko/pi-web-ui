@@ -70,6 +70,11 @@ async function initialize(): Promise<void> {
     });
 
     setCommandCodeService(commandCodeService);
+    // Complete bounded Command Code discovery before the server exposes any
+    // browser/WebSocket or Internal API session path. Catalogue evidence may
+    // still be projected on version drift, but execution gates must never be
+    // observed in their pre-discovery default state.
+    await commandCodeService.init();
     browserCommandCodeSessionResolver = async (sessionId, runtime, sessionPath) => {
       if (runtime !== 'commandcode') return true;
       return sessionId === sessionPath && await commandCodeService.isBrowserSession(sessionId);
@@ -166,6 +171,7 @@ async function initialize(): Promise<void> {
             admissionHostMinimumHeadroomBytes: config.internalApiAdmissionHostMinimumHeadroomBytes,
             admissionReservedBytesPerTurn: config.internalApiAdmissionReservedBytesPerTurn,
             admissionReservedPidsPerTurn: config.internalApiAdmissionReservedPidsPerTurn,
+            commandCodeConcurrency: config.commandCodeConcurrency,
             enabled: config.internalApiEnabled,
             // Notify all WebSocket clients when a session is created via the API
             onSessionCreated: (sessionId, sessionPath, runtime) => {
