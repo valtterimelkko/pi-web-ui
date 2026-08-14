@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { COMMAND_CODE_FULL_MODEL_CATALOGUE } from '../../../src/command-code/command-code-model-catalog.js';
+import { COMMAND_CODE_EFFORT_TABLE } from '../../../src/command-code/command-code-model-efforts.js';
 import { createCommandCodeValidationFixture } from '../../../src/live-validation/command-code-fixture.js';
 
 describe('Command Code validation fixture', () => {
@@ -21,7 +21,7 @@ describe('Command Code validation fixture', () => {
       const exitCode = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
       expect(exitCode).toBe(0);
       const ids = stdout.split(/\r?\n/).filter(Boolean).map((line) => line.trim().split(/\s{2,}/)[0]);
-      expect(ids).toEqual([...COMMAND_CODE_FULL_MODEL_CATALOGUE]);
+      expect(ids).toEqual(Object.keys(COMMAND_CODE_EFFORT_TABLE));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { buildCommandCodeArgs } from '../../../src/command-code/command-code-config.js';
+import { commandCodeEffortSpec } from '../../../src/command-code/command-code-model-catalog.js';
 import { CommandCodeService } from '../../../src/command-code/command-code-service.js';
 import type { CommandCodeProcessRunInput, CommandCodeProcessRunResult } from '../../../src/command-code/command-code-process-runner.js';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
@@ -13,9 +14,14 @@ import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-rece
 
 const CONTAINMENT_TOKENS = ['bwrap', 'slirp4netns', '--unshare-net', '--yolo'];
 
-function argvWithoutResume(args: string[]): string[] {
-  const index = args.indexOf('--resume');
-  return index === -1 ? args : [...args.slice(0, index), ...args.slice(index + 2)];
+/** Argv shape comparison ignores per-session resume ids and per-request effort values. */
+function argvShape(args: string[]): string[] {
+  let shape = args;
+  for (const flag of ['--resume', '--effort']) {
+    const index = shape.indexOf(flag);
+    if (index !== -1) shape = [...shape.slice(0, index), ...shape.slice(index + 2)];
+  }
+  return shape;
 }
 
 function req(body: unknown): any {
@@ -70,7 +76,8 @@ describe('Command Code simplicity gates', () => {
       'unknown/new-model',
     ];
     for (const model of models) {
-      for (const effort of [undefined, 'medium', 'xhigh']) {
+      const spec = commandCodeEffortSpec(model);
+      for (const effort of [undefined, ...spec.effortLevels]) {
         const args = buildCommandCodeArgs({ executablePath: '/opt/bin/cmd', model, maxTurns: 8, effort });
         const joined = args.join(' ');
         for (const token of CONTAINMENT_TOKENS) {
@@ -145,8 +152,8 @@ describe('Command Code simplicity gates', () => {
       executablePath: '/opt/bin/cmd', model: apiTurn.model, maxTurns: apiTurn.maxTurns,
       effort: apiTurn.effort, nativeSessionId: apiTurn.nativeSessionId,
     });
-    // Same argv shape modulo the per-session --resume identity.
-    expect(argvWithoutResume(browserArgv)).toEqual(argvWithoutResume(apiArgv));
+    // Same argv shape modulo the per-session --resume identity and effort value.
+    expect(argvShape(browserArgv)).toEqual(argvShape(apiArgv));
     for (const argv of [browserArgv, apiArgv]) {
       for (const token of CONTAINMENT_TOKENS) expect(argv.join(' ')).not.toContain(token);
     }

@@ -65,7 +65,7 @@ export const ErrorCode = {
   COMMANDCODE_NETWORK_FAILURE: 'COMMANDCODE_NETWORK_FAILURE',
   COMMANDCODE_PROVIDER_FAILURE: 'COMMANDCODE_PROVIDER_FAILURE',
   COMMANDCODE_RESUME_IDENTITY_DRIFT: 'COMMANDCODE_RESUME_IDENTITY_DRIFT',
-  COMMANDCODE_ROLE_REFUSED: 'COMMANDCODE_ROLE_REFUSED',
+  COMMANDCODE_PLAN_INELIGIBLE: 'COMMANDCODE_PLAN_INELIGIBLE',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -374,10 +374,11 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'A resume result did not match the session-bound native id.',
     docs: 'docs/INTERNAL-API-CONTRACT.md',
   },
-  [ErrorCode.COMMANDCODE_ROLE_REFUSED]: {
-    httpStatus: 403,
-    description: 'The Command Code invocation role is not admitted for this session.',
-    cause: 'The role/worktree evidence does not satisfy the server-owned profile boundary.',
+  [ErrorCode.COMMANDCODE_PLAN_INELIGIBLE]: {
+    httpStatus: 400,
+    description: 'The Command Code model is not available on the current subscription plan.',
+    cause: 'The requested model id is on the committed premium-model exclusion list.',
+    hint: 'Choose one of the models returned by GET /api/v1/models?runtime=commandcode.',
     docs: 'docs/INTERNAL-API-CONTRACT.md',
   },
   [ErrorCode.IDEMPOTENCY_KEY_CONFLICT]: {

@@ -11,7 +11,9 @@ import {
   COMMAND_CODE_PROVIDER,
   assertCommandCodeRuntimeModel,
   assertCommandCodeEffort,
+  commandCodeEffortSpec,
   discoverCommandCodeModels,
+  isCommandCodeEligible,
   type CommandCodeEffort,
   type CommandCodeRuntimeModel,
   type CommandCodeModelDiscovery,
@@ -77,6 +79,7 @@ export type CommandCodeErrorClass =
   | 'runtime_error'
   | 'auth_required'
   | 'permission_denied'
+  | 'plan_ineligible'
   | 'rate_limited'
   | 'network_failure'
   | 'provider_failure'
@@ -235,6 +238,9 @@ export class CommandCodeService {
     this.assertRunnable();
     const model = assertCommandCodeRuntimeModel(input.model, this.discoveryResult?.models ?? []);
     if (!model) throw new CommandCodeRuntimeError('Exact Command Code model is unavailable', 'protocol_error');
+    if (!isCommandCodeEligible(model)) {
+      throw new CommandCodeRuntimeError(`Command Code model ${model} is not available on the current plan`, 'plan_ineligible');
+    }
     const effort = this.resolveEffort(model, input.effort);
     const sessionId = `commandcode-${cryptoRandomId()}`;
     const cwd = await canonicalCwd(input.cwd);
@@ -624,7 +630,7 @@ export class CommandCodeService {
     defaultEffort?: CommandCodeEffort;
   }> {
     const available = this.discoveryResult?.models ?? [];
-    return available.map((id) => {
+    return available.filter(isCommandCodeEligible).map((id) => {
       const effortSpec = commandCodeEffortSpec(id);
       return {
         id,
@@ -776,14 +782,6 @@ function commandCodeDisplayName(model: CommandCodeRuntimeModel): string {
     .filter(Boolean)
     .map((part) => part[0]?.toUpperCase() + part.slice(1))
     .join(' ');
-}
-
-/**
- * Effort selector metadata for a model from the committed effort table
- * (WP2 adds the table; until then no model exposes a selector).
- */
-function commandCodeEffortSpec(model: CommandCodeRuntimeModel): { effortLevels: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort } {
-  return { effortLevels: [] };
 }
 
 function normalizedEventKey(event: NormalizedEvent): string {

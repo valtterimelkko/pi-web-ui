@@ -1,6 +1,6 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { COMMAND_CODE_FULL_MODEL_CATALOGUE } from '../command-code/command-code-model-catalog.js';
+import { COMMAND_CODE_EFFORT_TABLE } from '../command-code/command-code-model-efforts.js';
 
 /**
  * Creates a deterministic local Command Code-compatible CLI for disposable
@@ -17,7 +17,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const modelIndex = args.indexOf('--model');
 const model = modelIndex >= 0 ? args[modelIndex + 1] : '';
-const modelCatalogue = ${JSON.stringify([...COMMAND_CODE_FULL_MODEL_CATALOGUE])};
+const modelCatalogue = ${JSON.stringify(Object.keys(COMMAND_CODE_EFFORT_TABLE))};
 const effortIndex = args.indexOf('--effort');
 const effort = effortIndex >= 0 ? args[effortIndex + 1] : '';
 if (args.includes('--version')) { console.log('Command Code v1.19.0'); process.exit(0); }

@@ -3,9 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  COMMAND_CODE_VERSION,
-  COMMAND_CODE_FULL_MODEL_CATALOGUE,
-  validateCommandCodeModelCatalogue,
+  COMMAND_CODE_EXCLUDED_MODELS,
+  isCommandCodeEligible,
   parseCommandCodeModelList,
   discoverCommandCodeModels,
 } from '../../../src/command-code/command-code-model-catalog.js';
@@ -24,22 +23,23 @@ describe('Command Code model discovery', () => {
     expect(defaultCommandCodeConfig().maxTurns).toBe(8);
   });
 
-  it('pins the complete 54-model catalogue and rejects catalogue drift', () => {
-    expect(COMMAND_CODE_FULL_MODEL_CATALOGUE).toHaveLength(54);
-    expect(COMMAND_CODE_FULL_MODEL_CATALOGUE).toContain('google/gemini-3.7-flash');
-    expect(validateCommandCodeModelCatalogue(COMMAND_CODE_FULL_MODEL_CATALOGUE)).toEqual({ valid: true });
-    expect(validateCommandCodeModelCatalogue([
-      ...COMMAND_CODE_FULL_MODEL_CATALOGUE.slice(0, 10),
-      'unknown/provider-model',
-      ...COMMAND_CODE_FULL_MODEL_CATALOGUE.slice(11),
-    ])).toMatchObject({ valid: false, reason: 'extra_model' });
-    expect(validateCommandCodeModelCatalogue(COMMAND_CODE_FULL_MODEL_CATALOGUE.slice(0, -1))).toMatchObject({ valid: false, reason: 'missing_model' });
+  it('excludes exactly the 19 premium models and nothing else', () => {
+    expect(COMMAND_CODE_EXCLUDED_MODELS).toHaveLength(19);
+    expect(isCommandCodeEligible('qwen/qwen3.8-max')).toBe(true);
+    expect(isCommandCodeEligible('gpt-5.6-luna')).toBe(true);
+    expect(isCommandCodeEligible('google/gemini-3.7-flash')).toBe(true);
+    expect(isCommandCodeEligible('meta/muse-spark-1.2-contributor')).toBe(true);
+    for (const excluded of COMMAND_CODE_EXCLUDED_MODELS) {
+      expect(isCommandCodeEligible(excluded)).toBe(false);
+    }
+    // An unknown id is eligible by default: the denylist fails open.
+    expect(isCommandCodeEligible('unknown/new-model')).toBe(true);
   });
 
   it('keeps version and exact ids from a fresh cmd --list-models probe', () => {
-    const probe = `Command Code v${COMMAND_CODE_VERSION}\nqwen/qwen3.8-max             autonomous description\nmeta/muse-spark-1.2-contributor             contributor description`;
+    const probe = 'Command Code v1.19.0\nqwen/qwen3.8-max             autonomous description\nmeta/muse-spark-1.2-contributor             contributor description';
     expect(parseCommandCodeModelList(probe)).toEqual({
-      version: COMMAND_CODE_VERSION,
+      version: '1.19.0',
       models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'],
       ambiguous: [],
     });

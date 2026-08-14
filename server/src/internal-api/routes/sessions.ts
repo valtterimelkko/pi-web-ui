@@ -158,7 +158,7 @@ function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
       case 'no_response': return ErrorCode.COMMANDCODE_NO_RESPONSE;
       case 'protocol_error': return ErrorCode.COMMANDCODE_PROTOCOL_ERROR;
       case 'interrupted': return ErrorCode.RUNTIME_ERROR;
-      case 'permission_denied': return ErrorCode.COMMANDCODE_ROLE_REFUSED;
+      case 'plan_ineligible': return ErrorCode.COMMANDCODE_PLAN_INELIGIBLE;
       case 'effort_unsupported': return ErrorCode.COMMANDCODE_EFFORT_UNSUPPORTED;
       default: return ErrorCode.RUNTIME_ERROR;
     }
@@ -1138,12 +1138,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       onSessionCreated?.(base.sessionId, base.sessionPath, base.runtime);
     } catch (err) {
       if (createdCommandCodeSessionId) await commandCodeService?.deleteSession(createdCommandCodeSessionId).catch(() => undefined);
-      if (err instanceof CommandCodeRuntimeError && err.code === 'permission_denied') {
-        sendJson(res, 403, enrichedErrorBody(ErrorCode.COMMANDCODE_ROLE_REFUSED, err.message));
+      if (err instanceof CommandCodeRuntimeError && err.code === 'plan_ineligible') {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.COMMANDCODE_PLAN_INELIGIBLE, err.message));
         return;
       }
       if (err instanceof CommandCodeRuntimeError && err.code === 'effort_unsupported') {
         sendJson(res, 400, enrichedErrorBody(ErrorCode.COMMANDCODE_EFFORT_UNSUPPORTED, err.message));
+        return;
+      }
+      if (err instanceof CommandCodeRuntimeError && err.code === 'permission_denied') {
+        sendJson(res, 403, enrichedErrorBody(ErrorCode.INVALID_REQUEST, err.message));
         return;
       }
       logger.errorObject('Failed to create session', err);
@@ -4229,8 +4233,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           error: {
             code: err instanceof RuntimeOpError
               ? err.code
-              : err instanceof CommandCodeRuntimeError && err.code === 'permission_denied'
-                ? ErrorCode.COMMANDCODE_ROLE_REFUSED
+              : err instanceof CommandCodeRuntimeError && err.code === 'plan_ineligible'
+                ? ErrorCode.COMMANDCODE_PLAN_INELIGIBLE
                 : err instanceof CommandCodeRuntimeError && err.code === 'effort_unsupported'
                   ? ErrorCode.COMMANDCODE_EFFORT_UNSUPPORTED
                   : ErrorCode.SESSION_CREATE_FAILED,

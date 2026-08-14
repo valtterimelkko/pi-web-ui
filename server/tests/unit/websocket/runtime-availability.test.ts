@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { sendRuntimeAvailabilityStatus } from '../../../src/websocket/connection.js';
-import { COMMAND_CODE_FULL_MODEL_CATALOGUE } from '../../../src/command-code/command-code-model-catalog.js';
+import { ADVERTISED_IDS } from '../command-code/command-code-fixture.js';
 
 describe('sendRuntimeAvailabilityStatus', () => {
   it('sends Claude Direct and OpenCode Direct availability when both runtimes are usable', async () => {
@@ -72,7 +72,7 @@ describe('sendRuntimeAvailabilityStatus', () => {
       isAvailable: vi.fn().mockResolvedValue(false),
       validateSetup: vi.fn(),
     };
-    const models = COMMAND_CODE_FULL_MODEL_CATALOGUE.map((id) => ({
+    const models = ADVERTISED_IDS.map((id) => ({
       id,
       displayName: id,
       provider: 'command-code',
@@ -107,7 +107,7 @@ describe('sendRuntimeAvailabilityStatus', () => {
     expect(availability.availabilityStatus).toBeUndefined();
     expect(availability.checkedAt).toBeUndefined();
     expect(availability.source).toBeUndefined();
-    expect((availability.models as Array<{ id: string }>).map((model) => model.id)).toEqual([...COMMAND_CODE_FULL_MODEL_CATALOGUE]);
+    expect((availability.models as Array<{ id: string }>).map((model) => model.id)).toEqual([...ADVERTISED_IDS]);
   });
 
   it('does not publish Command Code models while the runtime is disabled', async () => {

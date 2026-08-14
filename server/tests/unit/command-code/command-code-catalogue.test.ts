@@ -13,7 +13,7 @@ function listModelsFixture(ids: readonly string[]): string {
   return ['Available models', '', ...ids.map((id) => `${id}  advertised model`)].join('\n');
 }
 
-async function buildService(models: readonly string[]): Promise<CommandCodeService> {
+async function buildService(models: readonly string[]): Promise<{ service: CommandCodeService; cwd: string }> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-catalogue-'));
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-catalogue-cwd-'));
   const service = new CommandCodeService({
@@ -22,7 +22,7 @@ async function buildService(models: readonly string[]): Promise<CommandCodeServi
     checkExecutable: false,
   });
   await service.init();
-  return service;
+  return { service, cwd };
 }
 
 describe('Command Code catalogue — denylist, fails open', () => {
@@ -33,7 +33,7 @@ describe('Command Code catalogue — denylist, fails open', () => {
   });
 
   it('lists exactly the 35 GOAT-eligible models and none of the 19 excluded ids', async () => {
-    const service = await buildService(ADVERTISED_IDS);
+    const { service } = await buildService(ADVERTISED_IDS);
     const models = service.getModels();
     expect(models).toHaveLength(35);
     for (const excluded of COMMAND_CODE_EXCLUDED_IDS) {
@@ -57,9 +57,9 @@ describe('Command Code catalogue — denylist, fails open', () => {
   });
 
   it('an unknown advertised id appears (fails open) and does not change isAvailable()', async () => {
-    const before = await buildService(ADVERTISED_IDS);
+    const { service: before } = await buildService(ADVERTISED_IDS);
     expect(before.isAvailable()).toBe(true);
-    const after = await buildService([...ADVERTISED_IDS, 'unknown/new-model']);
+    const { service: after } = await buildService([...ADVERTISED_IDS, 'unknown/new-model']);
     expect(after.isAvailable()).toBe(true);
     const ids = after.getModels().map((model) => model.id);
     expect(ids).toHaveLength(36);
@@ -72,13 +72,13 @@ describe('Command Code catalogue — denylist, fails open', () => {
 
   it('a missing advertised id does not make the runtime unavailable', async () => {
     const reduced = ADVERTISED_IDS.filter((id) => id !== 'thinkingmachines/inkling');
-    const service = await buildService(reduced);
+    const { service } = await buildService(reduced);
     expect(service.isAvailable()).toBe(true);
     expect(service.getModels()).toHaveLength(34);
   });
 
   it('the CLI version is reported, never a gate', async () => {
-    const service = await buildService(ADVERTISED_IDS);
+    const { service } = await buildService(ADVERTISED_IDS);
     const health = service.getHealth();
     expect(service.isAvailable()).toBe(true);
     expect(health.version).toBe('1.23.2');
@@ -87,7 +87,7 @@ describe('Command Code catalogue — denylist, fails open', () => {
 
 describe('Command Code effort table', () => {
   it('serves a listed model with exactly its committed effort levels and default', async () => {
-    const service = await buildService(ADVERTISED_IDS);
+    const { service } = await buildService(ADVERTISED_IDS);
     const qwen = service.getModels().find((model) => model.id === 'qwen/qwen3.8-max')!;
     expect(qwen.effortLevels).toEqual(['low', 'medium', 'xhigh']);
     expect((qwen as Record<string, unknown>).defaultEffort).toBe('medium');
@@ -107,9 +107,8 @@ describe('Command Code effort table', () => {
     })).toContain('xhigh');
   });
 
-  it('creates and prompts a session for a model absent from the effort table without --effort', async () => {
-    const service = await buildService([...ADVERTISED_IDS, 'unknown/new-model']);
-    const cwd = path.dirname(await mkdtemp(path.join(os.tmpdir(), 'command-code-catalogue-cwd-')));
+  it('creates a session for a model absent from the effort table without --effort', async () => {
+    const { service, cwd } = await buildService([...ADVERTISED_IDS, 'unknown/new-model']);
     const session = await service.createSession({ cwd, model: 'unknown/new-model' });
     expect(session.modelSelector).toBe('unknown/new-model');
     expect((session as Record<string, unknown>).effort).toBeUndefined();

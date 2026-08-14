@@ -1,45 +1,16 @@
-import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { COMMAND_CODE_EFFORT_TABLE } from './command-code-model-efforts.js';
 
 /**
- * Full catalogue observed from the current Command Code model listing.
- * Visibility follows this order; execution remains restricted to COMMAND_CODE_MODELS.
- * Runtime readiness follows the freshly discovered catalogue and effort evidence;
- * the observed CLI version is diagnostic only.
+ * The single source of model policy: premium models the operator's GOAT
+ * subscription cannot use. Everything the CLI advertises minus this list is
+ * eligible; the catalogue therefore fails OPEN — a newly advertised model
+ * simply appears, and nothing here can take the whole runtime down.
  */
-export const COMMAND_CODE_FULL_MODEL_CATALOGUE = [
-  'deepseek/deepseek-v4-pro',
-  'deepseek/deepseek-v4-flash',
-  'moonshotai/kimi-k3',
-  'moonshotai/kimi-k2.7-code',
-  'moonshotai/kimi-k2.7-code-highspeed',
-  'moonshotai/kimi-k2.6',
-  'moonshotai/kimi-k2.5',
-  'zai-org/glm-5.2',
-  'zai-org/glm-5.2-fast',
-  'zai-org/glm-5.1',
-  'zai-org/glm-5',
-  'minimaxai/minimax-m3',
-  'minimaxai/minimax-m2.7',
-  'minimaxai/minimax-m2.5',
-  'xiaomi/mimo-v2.5-pro',
-  'xiaomi/mimo-v2.5',
-  'qwen/qwen3.8-max',
-  'qwen/qwen3.7-max',
-  'qwen/qwen3.7-plus',
-  'qwen/qwen3.7-flash',
-  'qwen/qwen3.6-max-preview',
-  'qwen/qwen3.6-plus',
-  'stepfun/step-3.7-flash',
-  'stepfun/step-3.5-flash',
-  'tencent/hy3-paid',
-  'nvidia/nemotron-3-ultra-550b-a55b',
-  'thinkingmachines/inkling',
-  'thinkingmachines/inkling-small',
-  'poolside/laguna-s-2.1-free',
+export const COMMAND_CODE_EXCLUDED_MODELS = [
   'claude-sonnet-5',
   'claude-sonnet-4-6',
   'claude-fable-5',
@@ -49,53 +20,31 @@ export const COMMAND_CODE_FULL_MODEL_CATALOGUE = [
   'claude-haiku-4-5',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
-  'gpt-5.6-luna',
   'gpt-5.5',
   'gpt-5.4',
   'gpt-5.3-codex',
   'gpt-5.4-mini',
-  'google/gemini-3.7-flash',
   'google/gemini-3.6-flash',
   'google/gemini-3.5-flash',
   'google/gemini-3.5-flash-lite',
   'google/gemini-3.1-flash-lite',
   'sakana/fugu-ultra',
   'meta/muse-spark-1.1',
-  'meta/muse-spark-1.2',
-  'meta/muse-spark-1.2-contributor',
-  'xai/grok-4.5',
-  'xai/grok-4.6',
 ] as const;
 
-export type CommandCodeModel = string;
-
-export type CommandCodeModelCatalogueValidation =
-  | { valid: true }
-  | { valid: false; reason: 'invalid_model' | 'duplicate_model' | 'missing_model' | 'extra_model' | 'reordered_model' };
-
-/** Validate exact IDs, cardinality, uniqueness, and canonical order. */
-export function validateCommandCodeModelCatalogue(
-  models: readonly CommandCodeRuntimeModel[],
-): CommandCodeModelCatalogueValidation {
-  if (models.some((model) => typeof model !== 'string' || !/^[a-z0-9][a-z0-9._/-]*$/.test(model))) {
-    return { valid: false, reason: 'invalid_model' };
-  }
-  if (new Set(models).size !== models.length) return { valid: false, reason: 'duplicate_model' };
-  if (models.length < COMMAND_CODE_FULL_MODEL_CATALOGUE.length) return { valid: false, reason: 'missing_model' };
-  if (models.length > COMMAND_CODE_FULL_MODEL_CATALOGUE.length) return { valid: false, reason: 'extra_model' };
-  const expected = COMMAND_CODE_FULL_MODEL_CATALOGUE as readonly string[];
-  if (models.some((model) => !expected.includes(model))) return { valid: false, reason: 'extra_model' };
-  if (models.some((model, index) => model !== expected[index])) return { valid: false, reason: 'reordered_model' };
-  return { valid: true };
+export function isCommandCodeEligible(model: CommandCodeRuntimeModel): boolean {
+  return !(COMMAND_CODE_EXCLUDED_MODELS as readonly string[]).includes(model);
 }
+
 /** A model id returned by the current Command Code catalogue. */
 export type CommandCodeRuntimeModel = string;
-export const COMMAND_CODE_VERSION = '1.19.0' as const;
+export type CommandCodeModel = string;
 export const COMMAND_CODE_PROVIDER = 'command-code' as const;
 
 /** Native Command Code effort values are intentionally not the generic API thinking levels. */
 export const COMMAND_CODE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type CommandCodeEffort = (typeof COMMAND_CODE_EFFORT_LEVELS)[number];
+
 export interface CommandCodeModelDiscovery {
   version: string;
   models: CommandCodeRuntimeModel[];
@@ -110,9 +59,30 @@ export function assertCommandCodeRuntimeModel(
   return typeof value === 'string' && advertisedModels.includes(value) ? value : undefined;
 }
 
+/**
+ * Effort selector metadata for a model, from the committed effort table
+ * (regenerate with `npm run commandcode:refresh-models`). A model absent from
+ * the table has no selector: it stays fully runnable and `--effort` is omitted.
+ */
+export function commandCodeEffortSpec(model: CommandCodeRuntimeModel): { effortLevels: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort } {
+  const entry = COMMAND_CODE_EFFORT_TABLE[model];
+  if (!entry) return { effortLevels: [] };
+  const effortLevels = entry.effortLevels.filter((value): value is CommandCodeEffort =>
+    (COMMAND_CODE_EFFORT_LEVELS as readonly string[]).includes(value));
+  const defaultEffort = entry.defaultEffort !== undefined && effortLevels.includes(entry.defaultEffort as CommandCodeEffort)
+    ? entry.defaultEffort as CommandCodeEffort
+    : undefined;
+  return {
+    effortLevels,
+    ...(defaultEffort ? { defaultEffort } : {}),
+  };
+}
+
+/** Validate an explicit effort against the committed table entry for the model. */
 export function assertCommandCodeEffort(model: CommandCodeRuntimeModel, value: unknown): CommandCodeEffort | undefined {
   if (value === undefined) return undefined;
-  if (!(COMMAND_CODE_EFFORT_LEVELS as readonly unknown[]).includes(value)) {
+  const allowed = commandCodeEffortSpec(model).effortLevels;
+  if (!(allowed as readonly unknown[]).includes(value)) {
     throw new Error(`Command Code effort '${String(value)}' is not supported for model ${model}`);
   }
   return value as CommandCodeEffort;
@@ -166,7 +136,7 @@ export interface CommandCodeDiscoveryRunner {
 
 export const COMMAND_CODE_DISCOVERY_TIMEOUT_MS = 10_000;
 
-/** Startup-only model discovery. It uses an isolated home and never reads native auth/config files. */
+/** Startup-only model discovery (one --version + one --list-models probe). */
 export const discoverCommandCodeModels: CommandCodeDiscoveryRunner = async (executablePath, options = {}) => {
   return withIsolatedDiscoveryHome(async (homeDir) => {
     const environment = controlledDiscoveryEnvironment(homeDir);
@@ -174,9 +144,8 @@ export const discoverCommandCodeModels: CommandCodeDiscoveryRunner = async (exec
     const modelsProbe = await runDiscoveryCommand(executablePath, ['--no-auto-update', '--list-models'], options.timeoutMs, environment);
     const parsed = parseCommandCodeModelList(modelsProbe.stdout);
     const versionProbeVersion = parseCommandCodeVersion(versionProbe.stdout);
-    if (parsed.version !== 'unknown' && versionProbeVersion !== undefined && parsed.version !== versionProbeVersion) {
-      throw new Error(`Command Code version probes disagree: --version=${versionProbeVersion}, --list-models=${parsed.version}`);
-    }
+    // The observed CLI version is diagnostic only; a disagreement between the
+    // two probes is reported, never a gate.
     const version = parsed.version === 'unknown'
       ? versionProbeVersion ?? 'unknown'
       : parsed.version;
@@ -245,7 +214,8 @@ async function runDiscoveryCommand(
   });
 }
 
-async function withIsolatedDiscoveryHome<T>(fn: (homeDir: string) => Promise<T>): Promise<T> {  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-discovery-home-'));
+async function withIsolatedDiscoveryHome<T>(fn: (homeDir: string) => Promise<T>): Promise<T> {
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-discovery-home-'));
   try {
     return await fn(homeDir);
   } finally {
