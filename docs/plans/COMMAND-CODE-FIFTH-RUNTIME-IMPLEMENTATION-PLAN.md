@@ -1,5 +1,7 @@
 # Command Code Fifth Browser Runtime — Execution Plan
 
+> **Historical status:** superseded for current product work by [`COMMAND-CODE-FULL-CATALOGUE-MINIMAL-SOLUTION-PLAN.md`](./COMMAND-CODE-FULL-CATALOGUE-MINIMAL-SOLUTION-PLAN.md), which records the operator-authorised GOAT-entitlement, full Internal API cohort, and provider-capable browser egress decisions. Preserve this document only as implementation history; do not use its pair-only or mandatory no-network boundaries as current authority.
+>
 > Status: implementation complete; security hardening and release review in progress
 >
 > Goal: promote the existing feature-gated Command Code Internal API adapter into a secure fifth Pi Web UI runtime with truthful model/effort capability discovery, browser lifecycle/replay/streaming, shared session discoverability, notifications, and documented validation.
