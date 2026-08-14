@@ -145,8 +145,8 @@ If the child is a Claude session and you care about the exact backend/provider, 
 
 That lets one orchestration run compare, for example:
 - native Claude via SDK profile
-- GLM 5.2 via Claude SDK profile
-- GLM 5.2 via Claude direct CLI fallback profile
+- GLM 5.3 via Claude SDK profile
+- GLM 5.3 via Claude direct CLI fallback profile
 
 ### 3. Prepare child sessions if needed
 

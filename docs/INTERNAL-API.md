@@ -387,7 +387,7 @@ When Command Code is enabled, its entries appear only after fresh live model/cat
       { "id": "haiku", "displayName": "Haiku", "provider": "anthropic", "reasoning": true, "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh"] },
       {
         "id": "profile:glm52-claude-sdk",
-        "displayName": "GLM 5.2 — Claude SDK",
+        "displayName": "GLM 5.3 — Claude SDK",
         "provider": "zai",
         "backend": "sdk-subscription",
         "claudeModel": "sonnet"

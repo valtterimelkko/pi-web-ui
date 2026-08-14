@@ -313,8 +313,8 @@ async function scenario3_sdkGlmSmoke(
     const apiKeySource = initData?.apiKeySource as string | undefined;
 
     assert(r, 'session_init event present', !!initEvent);
-    assert(r, 'model is GLM 5.2 (not Claude)',
-      !!modelInInit && modelInInit.toLowerCase().includes('glm'),
+    assert(r, 'model is GLM 5.3 (not Claude)',
+      !!modelInInit && modelInInit.toLowerCase().includes('glm-5.3'),
       `init model=${modelInInit}`);
     assert(r, 'model is NOT a Claude model',
       !modelInInit?.toLowerCase().includes('claude'),
@@ -389,8 +389,8 @@ async function scenario4_directCliGlm(
     const modelInInit = initData?.model as string | undefined;
     const apiKeySource = initData?.apiKeySource as string | undefined;
 
-    assert(r, 'model is GLM (direct CLI path)',
-      !!modelInInit && modelInInit.toLowerCase().includes('glm'),
+    assert(r, 'model is GLM 5.3 (direct CLI path)',
+      !!modelInInit && modelInInit.toLowerCase().includes('glm-5.3'),
       `init model=${modelInInit}`);
     assert(r, 'apiKeySource is none (direct CLI also uses subscription token)',
       apiKeySource === 'none',

@@ -490,7 +490,7 @@ export function redactSecrets(env: NodeJS.ProcessEnv): Record<string, string | u
 
 /**
  * Reasoning effort levels understood by Claude Code (CLI `--effort` and SDK
- * `options.effort`).  GLM 5.2 only exposes a few internal reasoning steps, but
+ * `options.effort`).  GLM 5.3 only exposes a few internal reasoning steps, but
  * the Z.ai coding-plan endpoint accepts and maps these Claude-native effort
  * levels itself, so we always speak the Claude vocabulary regardless of
  * provider.

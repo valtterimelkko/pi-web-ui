@@ -12,8 +12,8 @@ const CLAUDE_PROFILE_MODELS = [
   { id: 'profile:claude-sonnet-sdk', displayName: 'Claude Sonnet', provider: 'anthropic', backend: 'sdk-subscription', claudeModel: 'sonnet' },
   { id: 'profile:claude-opus-cli-direct', displayName: 'Claude Opus', provider: 'anthropic', backend: 'cli-direct', claudeModel: 'opus' },
   { id: 'profile:claude-sonnet-channel', displayName: 'Claude Sonnet', provider: 'anthropic', backend: 'channel', claudeModel: 'sonnet' },
-  { id: 'profile:glm52-claude-sdk', displayName: 'GLM 5.2 via Claude SDK', provider: 'zai', backend: 'sdk-subscription', claudeModel: 'glm-5.2[1m]' },
-  { id: 'profile:glm52-cli-direct', displayName: 'GLM 5.2 via CLI direct', provider: 'zai', backend: 'cli-direct', claudeModel: 'glm-5.2[1m]' },
+  { id: 'profile:glm52-claude-sdk', displayName: 'GLM 5.3 via Claude SDK', provider: 'zai', backend: 'sdk-subscription', claudeModel: 'glm-5.3[1m]' },
+  { id: 'profile:glm52-cli-direct', displayName: 'GLM 5.3 via CLI direct', provider: 'zai', backend: 'cli-direct', claudeModel: 'glm-5.3[1m]' },
 ];
 
 const PI_MODELS = [
@@ -160,5 +160,16 @@ describe('NewSessionModal — Claude backend selector', () => {
       // GLM only exposes SDK + CLI direct — Channel must not be present.
       expect(screen.queryByTestId('claude-backend-channel')).toBeNull();
     }
+  });
+
+  it('describes the resolved GLM profile as GLM 5.3 with a 1M context window', async () => {
+    await selectClaude();
+
+    fireEvent.click(screen.getByTestId('claude-provider-glm'));
+
+    const hint = screen.getByTestId('claude-resolved-profile');
+    expect(hint.textContent).toContain('GLM 5.3');
+    expect(hint.textContent).not.toContain('5.2');
+    expect(hint.textContent).toContain('1M context window');
   });
 });

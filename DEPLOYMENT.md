@@ -15,7 +15,7 @@ Operationally, this means deployment must consider:
 - the Node/Express server itself
 - Pi worker capacity and memory
 - availability of `claude` if the Claude Code path is needed
-- profile config and token env vars if you want provider-routed Claude sessions (e.g. GLM 5.2 / Z.ai)
+- profile config and token env vars if you want provider-routed Claude sessions (e.g. GLM 5.3 / Z.ai)
 - availability of Bun if the channel-backed Claude path is enabled
 - availability of `opencode` if OpenCode is needed
 - availability of `agy` if Antigravity is needed

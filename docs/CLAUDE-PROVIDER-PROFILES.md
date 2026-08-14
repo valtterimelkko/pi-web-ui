@@ -47,7 +47,7 @@ CLAUDE_BACKEND_DEFAULT=direct
 {
   "profiles": [
     { "id": "claude-sonnet-sdk", "label": "Claude Sonnet — SDK", ... },
-    { "id": "glm52-claude-sdk",  "label": "GLM 5.2 — Claude SDK", ... }
+    { "id": "glm52-claude-sdk",  "label": "GLM 5.3 — Claude SDK", ... }
   ],
   "defaultProfileId": "claude-sonnet-sdk"
 }
@@ -70,7 +70,7 @@ CLAUDE_BACKEND_DEFAULT=direct
 | `authMode` | `subscription` \| `anthropic-compatible-token` \| `wrapper` | no | — | Auth semantics hint. Informational; not mechanically enforced. |
 | `model` | string | yes | — | Model name or Claude alias (e.g. `sonnet`, `opus`). |
 | `modelMode` | `claude-alias` \| `pass-through` | no | `claude-alias` | How the `model` field is interpreted by the SDK. |
-| `modelAliases` | object (string→string) | no | — | Env vars injected to override Claude model aliases, e.g. `{ "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]" }`. |
+| `modelAliases` | object (string→string) | no | — | Env vars injected to override Claude model aliases, e.g. `{ "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3[1m]" }`. |
 | `env` | object (string→string) | no | — | Extra non-secret env vars applied at launch. Use for operational knobs such as the GLM 1M-context settings (see below). `ANTHROPIC_API_KEY` is silently dropped from this block — secrets must use `authTokenEnv`/`authTokenPath`. |
 | `settingSources` | array of `user` \| `project` \| `local` | no | `["user","project"]` | Which Claude settings source levels to load for this profile. |
 | `skills` | `"all"` \| string[] | no | — | Skills to enable. `"all"` enables every available skill. Empty array disables all. |
@@ -99,23 +99,23 @@ Uses the existing Claude Code subscription. No extra token needed.
 }
 ```
 
-### GLM 5.2 via Z.ai Coding Plan — SDK backend
+### GLM 5.3 via Z.ai Coding Plan — SDK backend
 
 Routes through the Z.ai GLM Coding Plan endpoint as an Anthropic-compatible provider.
-The `modelAliases` entry overrides Claude's internal sonnet alias to resolve to `glm-5.2[1m]`.
+The `modelAliases` entry overrides Claude's internal sonnet alias to resolve to `glm-5.3[1m]`.
 
 ```json
 {
   "id": "glm52-claude-sdk",
-  "label": "GLM 5.2 — Claude SDK",
+  "label": "GLM 5.3 — Claude SDK",
   "backend": "sdk-subscription",
   "launcherType": "native-env",
   "baseUrl": "https://api.z.ai/api/anthropic",
   "authTokenEnv": "GLM_CODING_PLAN_TOKEN",
   "model": "sonnet",
   "modelAliases": {
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2[1m]",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3[1m]",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7"
   },
   "env": {
@@ -130,12 +130,12 @@ The `modelAliases` entry overrides Claude's internal sonnet alias to resolve to 
 
 Set `GLM_CODING_PLAN_TOKEN=<your-token>` in your `.env` or systemd unit. Never put the token value in the profile file.
 
-#### GLM 5.2 1M context window
+#### GLM 5.3 1M context window
 
 The 1M-token context window is **not** enabled by the model name alone. Per Z.ai's
 [Claude Code guide](https://docs.z.ai/devpack/tool/claude) it needs three things together:
 
-1. The `[1m]` model suffix (`glm-5.2[1m]`) via `modelAliases`.
+1. The `[1m]` model suffix (`glm-5.3[1m]`) via `modelAliases`.
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000` so Claude Code does not auto-compact below 1M.
 3. `API_TIMEOUT_MS=3000000` so long-context turns do not time out.
 
@@ -155,26 +155,26 @@ Claude-native effort level and applies it to every backend:
 | high | `high` | `options.effort` | `--effort high` | `/effort high` |
 | xhigh | `xhigh` | `options.effort` | `--effort xhigh` | `/effort` (clamped) |
 
-GLM 5.2 exposes only a few internal reasoning steps, but the Z.ai endpoint maps
+GLM 5.3 exposes only a few internal reasoning steps, but the Z.ai endpoint maps
 these Claude-native effort levels itself, so the same vocabulary works for both
 native Claude and GLM. Changing the Thinking Level mid-session takes effect on the
 next prompt.
 
-### GLM 5.2 via direct CLI backend
+### GLM 5.3 via direct CLI backend
 
 Uses `claude -p` subprocess dispatch with profile-resolved env instead of the SDK. Useful as a fallback or for tooling that behaves differently under the SDK path.
 
 ```json
 {
   "id": "glm52-claude-cli-direct",
-  "label": "GLM 5.2 — CLI Direct",
+  "label": "GLM 5.3 — CLI Direct",
   "backend": "cli-direct",
   "launcherType": "native-env",
   "baseUrl": "https://api.z.ai/api/anthropic",
   "authTokenEnv": "GLM_CODING_PLAN_TOKEN",
   "model": "sonnet",
   "modelAliases": {
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]"
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3[1m]"
   },
   "permissionMode": "dontAsk"
 }
@@ -349,13 +349,13 @@ This is expected behaviour: `ANTHROPIC_API_KEY` is always stripped from the envi
 
 For terminal use outside the web UI, the repo ships [`bin/glm`](../bin/glm) — a tiny
 Clother-style wrapper around the real `claude` CLI. It exports the same Z.ai env
-that the GLM profiles use (base URL, auth token, `glm-5.2[1m]` aliases, the 1M
+that the GLM profiles use (base URL, auth token, `glm-5.3[1m]` aliases, the 1M
 context knobs, and the long timeout) and then `exec`s `claude`, **without** touching
 `~/.claude/settings.json`. Plain `claude` keeps using your native Anthropic
 subscription; `glm` is the temporary GLM-flavoured shell.
 
 ```bash
-./bin/glm                     # interactive Claude Code on GLM 5.2 [1M]
+./bin/glm                     # interactive Claude Code on GLM 5.3 [1M]
 ./bin/glm -p "do the thing"   # one-shot print mode
 ./bin/glm /effort xhigh       # any normal claude args pass straight through
 ```

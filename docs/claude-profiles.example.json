@@ -3,7 +3,7 @@
   "profiles": [
     {
       "id": "glm52-claude-sdk-native-profile",
-      "label": "GLM 5.2 — Claude SDK",
+      "label": "GLM 5.3 — Claude SDK",
       "backend": "sdk-subscription",
       "launcherType": "native-env",
       "baseUrl": "https://api.z.ai/api/anthropic",
@@ -12,9 +12,9 @@
       "model": "sonnet",
       "modelMode": "claude-alias",
       "modelAliases": {
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3[1m]",
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2[1m]"
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3[1m]"
       },
       "settingSources": [
         "user",
@@ -76,7 +76,7 @@
     },
     {
       "id": "glm52-claude-cli-direct",
-      "label": "GLM 5.2 — Claude CLI direct fallback",
+      "label": "GLM 5.3 — Claude CLI direct fallback",
       "backend": "cli-direct",
       "launcherType": "native-env",
       "baseUrl": "https://api.z.ai/api/anthropic",
@@ -85,9 +85,9 @@
       "model": "sonnet",
       "modelMode": "claude-alias",
       "modelAliases": {
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3[1m]",
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2[1m]"
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3[1m]"
       },
       "settingSources": [
         "user",

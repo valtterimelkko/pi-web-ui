@@ -125,7 +125,7 @@ Read [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md) 
 ### Claude Code-focused first run
 For the current best Claude experience, start with the **profile-enabled SDK path** even if you only want native Claude at first. That gives you the same browser surface for:
 - native Claude subscription sessions
-- GLM 5.2 / Z.ai provider profiles
+- GLM 5.3 / Z.ai provider profiles
 - direct CLI fallback and channel fallback later if you need them
 
 Minimal Claude-first setup:

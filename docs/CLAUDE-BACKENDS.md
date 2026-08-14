@@ -197,14 +197,14 @@ Claude backend.
 ```json
 {
   "id": "glm52-claude-sdk",
-  "label": "GLM 5.2 — Claude SDK",
+  "label": "GLM 5.3 — Claude SDK",
   "backend": "sdk-subscription",
   "launcherType": "native-env",
   "baseUrl": "https://api.z.ai/api/anthropic",
   "authTokenEnv": "GLM_CODING_PLAN_TOKEN",
   "model": "sonnet",
   "modelAliases": {
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]"
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3[1m]"
   },
   "skills": "all",
   "permissionMode": "dontAsk"

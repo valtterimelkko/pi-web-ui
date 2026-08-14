@@ -208,7 +208,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   }, [isOpen, sdkType, piModels.length]);
 
   // Fetch Claude models/profiles when the Claude session type is chosen so the
-  // user can pick a backend/provider profile (e.g. GLM 5.2 via SDK) before the
+  // user can pick a backend/provider profile (e.g. GLM 5.3 via SDK) before the
   // session opens. Profiles surface as `profile:<id>` model entries.
   useEffect(() => {
     if (!isOpen || sdkType !== 'claude' || claudeModels.length > 0) return;
@@ -685,7 +685,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
 
                   <p className="text-[11px] text-gray-400" data-testid="claude-resolved-profile">
                     {claudeProvider === 'glm'
-                      ? 'GLM 5.2 · 1M context window, via the selected backend. Reasoning effort follows the Thinking Level in Settings.'
+                      ? 'GLM 5.3 · 1M context window, via the selected backend. Reasoning effort follows the Thinking Level in Settings.'
                       : 'Native Claude subscription via the selected backend.'}
                   </p>
                 </>
