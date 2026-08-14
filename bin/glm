@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# glm — a tiny Clother-style launcher for Claude Code against GLM 5.2 (Z.ai).
+# glm — a tiny Clother-style launcher for Claude Code against GLM 5.3 (Z.ai).
 #
 # It runs the *real* `claude` CLI with the environment Claude Code needs to use
-# GLM 5.2 with its native 1M context window and the correct reasoning-effort
+# GLM 5.3 with its native 1M context window and the correct reasoning-effort
 # behaviour, WITHOUT touching ~/.claude/settings.json. Plain `claude` keeps
 # using your native Anthropic subscription; `glm` is the temporary GLM shell.
 #
@@ -11,7 +11,7 @@
 #   https://docs.z.ai/devpack/tool/claude
 #
 # Usage:
-#   glm                       # interactive Claude Code on GLM 5.2 [1M]
+#   glm                       # interactive Claude Code on GLM 5.3 [1M]
 #   glm -p "do the thing"     # one-shot print mode
 #   glm /effort xhigh         # any normal claude args/flags pass straight through
 #
@@ -50,7 +50,7 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
-# ── GLM 5.2 environment (Z.ai Anthropic-compatible endpoint) ──────────────────
+# ── GLM 5.3 environment (Z.ai Anthropic-compatible endpoint) ──────────────────
 # Never fall back to pay-per-use Anthropic billing.
 unset ANTHROPIC_API_KEY
 
@@ -58,9 +58,9 @@ export ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"
 export ANTHROPIC_AUTH_TOKEN="${TOKEN}"
 
 # Map Claude model aliases to GLM models. The [1m] suffix + AUTO_COMPACT_WINDOW
-# are what actually unlock GLM 5.2's 1M-token context window.
-export ANTHROPIC_DEFAULT_OPUS_MODEL="${GLM_OPUS_MODEL:-glm-5.2[1m]}"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="${GLM_SONNET_MODEL:-glm-5.2[1m]}"
+# are what actually unlock GLM 5.3's 1M-token context window.
+export ANTHROPIC_DEFAULT_OPUS_MODEL="${GLM_OPUS_MODEL:-glm-5.3[1m]}"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="${GLM_SONNET_MODEL:-glm-5.3[1m]}"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="${GLM_HAIKU_MODEL:-glm-4.7}"
 
 # 1M context window + generous timeout for large contexts.
