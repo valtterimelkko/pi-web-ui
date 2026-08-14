@@ -2,7 +2,7 @@
 
 > **Historical evidence only — do not execute.** The Bubblewrap/slirp4netns design, B-NET gates, namespace attestation, privileged-container workflow and disposable-VM requirement recorded by the former report were abandoned by explicit operator direction.
 >
-> **Current canonical plan:** [`COMMAND-CODE-35-MODEL-MINIMUM-COMPLETION-PLAN.md`](./COMMAND-CODE-35-MODEL-MINIMUM-COMPLETION-PLAN.md)
+> **Current canonical plan:** [`COMMAND-CODE-SIMPLIFICATION-AND-COMPLETION-PLAN.md`](./COMMAND-CODE-SIMPLIFICATION-AND-COMPLETION-PLAN.md)
 
 ## What remains useful
 
