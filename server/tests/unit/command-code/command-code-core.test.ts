@@ -75,6 +75,16 @@ describe('Command Code model identity', () => {
     expect(parseCommandCodeModelList('1.19.0\n')).toMatchObject({ version: '1.19.0' });
   });
 
+  it('allows a discovered model only through the contained browser profile', () => {
+    const options = {
+      executablePath: '/opt/bin/cmd',
+      model: 'deepseek/deepseek-v4-pro',
+      maxTurns: 1,
+    } as const;
+    expect(buildCommandCodeArgs({ ...options, permissionProfile: 'browser-contained' })).toContain('deepseek/deepseek-v4-pro');
+    expect(() => buildCommandCodeArgs({ ...options, permissionProfile: 'implementation-child-wide' })).toThrow(/allowlisted executable route/i);
+  });
+
   it('fails closed when the version probe and model-list version disagree', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-version-drift-'));
     const script = path.join(root, 'fake-cmd.mjs');

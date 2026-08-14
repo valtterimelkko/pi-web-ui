@@ -864,7 +864,7 @@ export class CommandCodeService {
       && this.isBrowserEnabled()
       && this.browserPolicyReady
       && (this.config.browserAllowedCwdRoots ?? []).length > 0
-      && (this.config.browserAllowedModels ?? []).some((model) => assertCommandCodeModel(model) !== undefined)
+      && (this.config.browserAllowedModels ?? []).some((model) => this.discoveryResult?.models.includes(model) === true)
       && this.runner.browserSandboxReady?.() === true;
   }
   getBrowserModels() {
@@ -880,11 +880,12 @@ export class CommandCodeService {
   }
   private isBrowserModelAllowed(model: CommandCodeRuntimeModel): boolean {
     const allowlist = this.config.browserAllowedModels ?? [];
-    // Browser containment is a separate gate, not a second execution policy:
-    // the exact two approved routes remain the only models executable on any
-    // surface, even if an operator accidentally lists an evidence-only model
-    // in the browser environment.
-    return assertCommandCodeModel(model) !== undefined && allowlist.length > 0 && allowlist.includes(model);
+    // Browser containment is a separate execution surface. It may expose any
+    // exact model freshly advertised by the CLI, but never an alias or a model
+    // absent from the explicit operator-owned browser allowlist.
+    return allowlist.length > 0
+      && allowlist.includes(model)
+      && this.discoveryResult?.models.includes(model) === true;
   }
   private isBrowserSessionRecord(record: CommandCodeInternalSessionRecord): boolean {
     return record.permissionProfile === 'browser-contained'

@@ -573,7 +573,7 @@ process.exit(2);
     await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
   });
 
-  it('marks only exact policy models runnable through the browser profile', async () => {
+  it('allows an explicitly discovered model through the browser profile without widening shadow routes', async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
     const browserAuthFile = path.join(cwd, 'browser-auth.json');
@@ -591,7 +591,7 @@ process.exit(2);
         stateDir,
         expectedVersion: '1.19.0',
       } as any,
-      runner: new FakeRunner(),
+      runner: Object.assign(new FakeRunner(), { browserSandboxReady: () => true }),
       discover: async () => ({
         version: '1.19.0',
         models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor', model],
@@ -604,10 +604,13 @@ process.exit(2);
       }),
       checkExecutable: false,
     });
-    (service as any).runner.browserSandboxReady = () => true;
     await service.init();
-    await expect(service.createSession({ cwd, model, permissionProfile: 'browser-contained' } as any)).rejects.toThrow(/policy|allowlist|model|containment/i);
+    expect(service.isBrowserAvailable()).toBe(true);
+    expect(service.getModels().find((entry) => entry.id === model)).toMatchObject({ browserRunnable: true });
+    await expect(service.createSession({ cwd, model, permissionProfile: 'browser-contained' } as any)).resolves.toMatchObject({ modelSelector: model });
     await expect(service.createSession({ cwd, model: 'qwen/qwen3.8-max', permissionProfile: 'browser-contained' } as any)).rejects.toThrow(/policy|browser|allowlist/i);
+    await service.shutdown();
+    await Promise.all([rm(stateDir, { recursive: true, force: true }), rm(cwd, { recursive: true, force: true })]);
   });
 
   it('refuses a browser workspace symlink that resolves outside the configured root', async () => {

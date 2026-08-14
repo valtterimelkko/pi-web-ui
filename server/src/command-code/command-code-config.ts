@@ -91,7 +91,10 @@ export function buildCommandCodeArgs(options: CommandCodeArgOptions): string[] {
   if (!isValidCommandCodeRuntimeModel(options.model)) {
     throw new Error(`Command Code model is not a valid exact runtime id: ${String(options.model)}`);
   }
-  if (!assertCommandCodeModel(options.model)) {
+  // The attested shadow profiles remain restricted to the exact Agent OS
+  // pair. Browser sessions are separately authorised by the service against
+  // the freshly advertised catalogue and the browser model allowlist.
+  if (options.permissionProfile !== 'browser-contained' && !assertCommandCodeModel(options.model)) {
     throw new Error(`Command Code model is not an exact allowlisted executable route: ${options.model}`);
   }
   assertCommandCodeEffort(options.model, options.effort);
