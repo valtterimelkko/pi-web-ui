@@ -59,6 +59,42 @@ Runtime rules:
 - an effort outside the model's `effortLevels` → `COMMANDCODE_EFFORT_UNSUPPORTED`
   (400) before spawn.
 
+## Weekly catalogue automation
+
+`npm run commandcode:weekly-refresh` keeps both committed catalogue artefacts
+current as the CLI advertises new models (typically weekly). One run:
+
+1. diffs `cmd --list-models` against the committed effort table and exclusion
+   list to find **unseen** model ids;
+2. probes each unseen id's plan eligibility with the operator's own CLI auth —
+   one tiny billed one-turn probe per model, gated by a control probe against a
+   known-good model, and conservative enough that timeouts/rate limits are
+   inconclusive rather than exclusions (`classifyEligibilityProbe` in
+   `server/src/command-code/command-code-catalogue-maintenance.ts`);
+3. regenerates the effort table (provider-free probes) so new models gain
+   their effort selector, and grows `COMMAND_CODE_EXCLUDED_MODELS` by the
+   proven-ineligible ids;
+4. typechecks the server, runs the focused command-code unit tests, rebuilds
+   `server/dist`, commits and pushes exactly the two catalogue files on the
+   current branch;
+5. restarts `pi-web-ui` once the Internal API reports no active turns
+   (startup discovery is when the new models go live in the browser selector
+   and the Internal API), then posts a Telegram summary via `scripts/notify.sh`.
+
+Nothing here bumps the Internal API contract: catalogue growth is data, not an
+API change, and the runtime catalogue fails open, so even a skipped week only
+means a new model lacks its effort selector until the next run.
+
+Flags: `--dry-run` (detect and probe only — no writes, git, or restart),
+`--no-git`, `--no-restart`, `--json`. The job refuses to commit when the git
+staging area is not empty.
+
+Scheduling: `deploy/systemd/command-code-model-refresh.{service,timer}`
+(Mondays 04:45, `Persistent=true`). Install per the unit's header comment.
+Because the catalogue fails open, the runtime never depends on the timer; the
+timer only keeps selector metadata and exclusions current.
+
+
 ## Configuration
 
 Eight variables, one gate:

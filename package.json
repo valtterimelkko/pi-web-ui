@@ -26,6 +26,7 @@
     "validate:claude-profiles": "npx tsx scripts/validate-claude-profiles.ts",
     "validate:phase6-worker-cgroup": "npx tsx scripts/validate-worker-cgroup-conformance.ts",
     "commandcode:refresh-models": "tsx scripts/command-code-refresh-models.ts",
+    "commandcode:weekly-refresh": "tsx scripts/command-code-weekly-refresh.ts",
     "opencode:refresh-models": "npx tsx scripts/opencode-refresh-models.ts",
     "pi:refresh-models": "npx tsx scripts/pi-refresh-openrouter-models.ts",
     "debug:where": "node scripts/debug-where.mjs",

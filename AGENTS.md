@@ -145,6 +145,7 @@ Core architectural themes:
 - Long-horizon validation: the watch ledger preserves already-recorded evidence across restarts, but a reloaded watch is detached and must be registered again to resume observation; start `npm run validate:server`, then run `npm run validate:long-horizon -- --socket <validation.sock> --token-path <validation-token> --subject <runtime> --seed "<prompt>" --watch-text <substr> --interval <seconds>` — see [`docs/LONG-HORIZON-VALIDATION.md`](./docs/LONG-HORIZON-VALIDATION.md)
 - Fast runtime/session lookup: first run `npm run debug:where -- <session-id-or-runtime-id-or-path>`; it resolves the registry/native identity and prints runtime-specific evidence paths. Prefer the Internal API `transcript?view=screen` and scoped diagnostics before raw-file or global-log searches.
 - OpenCode model catalogue refresh: `npm run opencode:refresh-models`
+- Command Code catalogue refresh: `npm run commandcode:refresh-models` (effort table) and `npm run commandcode:weekly-refresh` (weekly new-model detection, GOAT eligibility probes, commit+push+idle-aware restart; see [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md))
 - Pi runtime OpenRouter catalogue refresh: `npm run pi:refresh-models` (see [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md))
 
 If you touch runtime behavior, read [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) and run the relevant scenario(s).

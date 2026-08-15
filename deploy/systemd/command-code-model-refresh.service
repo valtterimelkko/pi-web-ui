@@ -1,0 +1,30 @@
+# Pi Web UI — weekly Command Code catalogue refresh (oneshot, triggered by the .timer).
+#
+# Detects newly advertised CLI models, probes their GOAT-plan eligibility with
+# the operator's own CLI auth (one tiny billed turn per new model), regenerates
+# the committed effort table, grows the exclusion list, commits+pushes the two
+# catalogue files, and restarts pi-web-ui once no turn is active. Summary goes
+# to Telegram via scripts/notify.sh.
+#
+# Install (host-specific copy lives in /etc/systemd/system, NOT in the repo):
+#   sudo cp deploy/systemd/command-code-model-refresh.* /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now command-code-model-refresh.timer
+#
+# Adjust WorkingDirectory / User / PATH below to match your deployment.
+
+[Unit]
+Description=Pi Web UI - Weekly Command Code catalogue refresh
+After=network.target pi-web-ui.service
+Wants=pi-web-ui.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/pi-web-ui
+# PATH must include node/npm and the `cmd` binary (for discovery and probes).
+Environment=PATH=/root/.npm-global/bin:/root/.local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/npm run commandcode:weekly-refresh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=command-code-model-refresh
