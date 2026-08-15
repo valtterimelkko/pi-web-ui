@@ -112,7 +112,12 @@ COMMAND_CODE_CONCURRENCY=1
 
 `COMMAND_CODE_ALLOWED_CWD_ROOTS` is the CWD policy: sessions outside these
 canonical roots are refused. Browser and Internal API callers share the same
-runtime and the same policy; a session is a session.
+runtime and the same policy; a session is a session. Set it to the roots the
+operator actually picks session folders from (for example `/root`): the browser
+folder picker is not constrained by this list, so a root narrower than the
+pickable folders surfaces as a create-time `permission_denied` error.
+Sessions created under a root that is later removed from the list also
+disappear from the session list until the root is restored.
 
 ## Error codes
 
