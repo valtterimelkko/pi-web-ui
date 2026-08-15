@@ -1,5 +1,5 @@
-import { access, chmod, lstat, mkdir, open, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
+import { access, chmod, copyFile, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
+import { constants as fsConstants, type Dirent } from 'node:fs';
 import path from 'node:path';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import {
@@ -696,6 +696,7 @@ export class CommandCodeService {
     const commandCodeHome = path.join(sessionHome, '.commandcode');
     await ensurePrivateDirectory(sessionHome, 'Command Code session home');
     await ensurePrivateDirectory(commandCodeHome, 'Command Code private auth directory');
+    await this.prepareNativeHomeMods(commandCodeHome);
     const source = path.join(process.env.HOME || '/root', '.commandcode', 'auth.json');
     const target = path.join(commandCodeHome, 'auth.json');
 
@@ -725,6 +726,36 @@ export class CommandCodeService {
       await sourceHandle?.close().catch(() => undefined);
       await temporaryHandle?.close().catch(() => undefined);
       await rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Mirror the operator's user-scope mods into the session-private native
+   * home. The harness auto-loads mods from $HOME/.commandcode/mods only, and
+   * each web-UI session runs with its own HOME, so without this copy the
+   * operator's installed mods are invisible to spawned sessions. Best-effort:
+   * mods must never break session creation, and symlinks are never followed
+   * into the session home (regular files only, flat directory by convention).
+   */
+  private async prepareNativeHomeMods(commandCodeHome: string): Promise<void> {
+    const sourceDir = path.join(process.env.HOME || '/root', '.commandcode', 'mods');
+    let entries: Dirent<string>[];
+    try {
+      entries = await readdir(sourceDir, { withFileTypes: true });
+    } catch {
+      return; // No user-scope mods installed.
+    }
+    const targetDir = path.join(commandCodeHome, 'mods');
+    for (const entry of entries) {
+      // Dirent is lstat-based: isFile() is false for symlinks, so escapes
+      // like a mods/escape.ts -> /etc/passwd link are skipped outright.
+      if (!entry.isFile()) continue;
+      try {
+        await ensurePrivateDirectory(targetDir, 'Command Code session mods directory');
+        await copyFile(path.join(sourceDir, entry.name), path.join(targetDir, entry.name));
+      } catch {
+        // A single unreadable mod must not block the others or the session.
+      }
     }
   }
 

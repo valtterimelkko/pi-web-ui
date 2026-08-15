@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -42,6 +42,25 @@ async function harness(options: { models?: string[]; enabled?: boolean } = {}) {
     checkExecutable: false,
   });
   return { root, cwd, runner, service };
+}
+
+// Native-home preparation only runs when the service owns its process runner
+// (ownsProcessRunner = !options.runner), so tests covering it must not inject
+// a fake runner. The real runner never spawns a process until sendPrompt.
+async function harnessOwningRunner() {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-cwd-'));
+  const service = new CommandCodeService({
+    config: {
+      enabled: true,
+      executablePath: '/opt/bin/cmd',
+      stateDir: root,
+      allowedCwdRoots: [cwd],
+    },
+    discover: async () => ({ version: '1.23.2', models: ['qwen/qwen3.8-max'], ambiguous: [] }),
+    checkExecutable: false,
+  });
+  return { root, cwd, service };
 }
 
 describe('Command Code service', () => {
@@ -141,5 +160,40 @@ describe('Command Code service', () => {
     // Accessibility no longer depends on capability hashes or shadow gates;
     // only existence, deletion state, and the cwd root policy matter.
     expect((await service.getSession(created.sessionId))?.sessionId).toBe(created.sessionId);
+  });
+
+  it('mirrors the operator\'s user-scope mods into the session native home', async () => {
+    const fakeHome = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-home-'));
+    const modsDir = path.join(fakeHome, '.commandcode', 'mods');
+    await mkdir(modsDir, { recursive: true });
+    await writeFile(path.join(modsDir, 'test-mod.ts'), '// test mod\n');
+    // Symlinks point outside the operator home and must never be followed
+    // into the session-private native home.
+    await symlink('/etc/hostname', path.join(modsDir, 'escape.ts'));
+    vi.stubEnv('HOME', fakeHome);
+    try {
+      const { root, cwd, service } = await harnessOwningRunner();
+      await service.init();
+      const created = await service.createSession({ cwd, model: 'qwen/qwen3.8-max' });
+      const sessionMods = path.join(root, 'native-home', created.sessionId, '.commandcode', 'mods');
+      expect(await readFile(path.join(sessionMods, 'test-mod.ts'), 'utf8')).toBe('// test mod\n');
+      // The symlink is skipped outright, not copied through.
+      expect(await lstat(path.join(sessionMods, 'escape.ts')).catch(() => undefined)).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('creates sessions normally when the operator has no user-scope mods installed', async () => {
+    const fakeHome = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-home-'));
+    vi.stubEnv('HOME', fakeHome);
+    try {
+      const { cwd, service } = await harnessOwningRunner();
+      await service.init();
+      const created = await service.createSession({ cwd, model: 'qwen/qwen3.8-max' });
+      expect((await service.getSession(created.sessionId))?.sessionId).toBe(created.sessionId);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

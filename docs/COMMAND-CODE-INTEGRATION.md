@@ -16,7 +16,10 @@ Every session:
 2. writes the prompt to stdin and reads bounded NDJSON from stdout;
 3. is killed as a process group on abort, timeout, or shutdown;
 4. gets a private per-session native home under `COMMAND_CODE_NATIVE_HOME_DIR`,
-   with the operator's `~/.commandcode/auth.json` copied in read-only;
+   with the operator's `~/.commandcode/auth.json` copied in read-only and the
+   operator's user-scope mods (`~/.commandcode/mods/`, regular files only,
+   symlinks skipped) mirrored in so installed mods apply to web-UI sessions
+   too (`prepareNativeHomeMods` in `command-code-service.ts`);
 5. journals normalized events for replay; stderr, credentials, and native
    transcript paths stay private.
 

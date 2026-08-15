@@ -150,6 +150,9 @@ disposable matrix.
 ### Server-spawned native transcripts are not in the shared `~/.commandcode` tree
 Each server-spawned Command Code session runs with a per-session native home under `~/.pi-web-ui/command-code-native-home/<internalId>/` (server default from `commandCodeNativeHomeDir` in `server/src/config.ts`; `COMMAND_CODE_NATIVE_HOME_DIR` overrides), so its native CLI transcript lands at `~/.pi-web-ui/command-code-native-home/<internalId>/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl` — not in the operator's shared `~/.commandcode/projects/` tree, which only holds plain CLI sessions. If you are hunting for a server-spawned session's native transcript in `~/.commandcode`, you are looking in vain; start from the Pi Web UI record at `~/.pi-web-ui/command-code/sessions/<internalId>.json` and the normalized journal at `~/.pi-web-ui/command-code/events/<internalId>.jsonl`.
 
+### Mods are mirrored, not shared
+The same per-session HOME means the harness's user-scope mod directory (`$HOME/.commandcode/mods`) points into the session home, not the operator's real one. The service copies regular files from the operator's `~/.commandcode/mods/` into each session home at session creation and re-mirrors every session home at server init (`prepareNativeHomeMods`); symlinks and subdirectories are skipped. Consequence: installing or editing a mod never affects already-running sessions — start a new session (or restart the server) to pick up mod changes, and debug "mod didn't fire" by checking the copy at `~/.pi-web-ui/command-code-native-home/<internalId>/.commandcode/mods/` first.
+
 ## Pi Coding Agent
 
 ### `agentSession.dispose()` must be try/catch guarded
