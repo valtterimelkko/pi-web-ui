@@ -43,7 +43,9 @@ export function buildValidationIsolationEnv(
       : '/root/.npm-global/bin/cmd',
     COMMAND_CODE_STATE_DIR: join(input.validationDir, 'command-code'),
     COMMAND_CODE_NATIVE_HOME_DIR: join(input.validationDir, 'command-code-native-home'),
-    COMMAND_CODE_ALLOWED_CWD_ROOTS: input.validationDir,
+    // An operator-provided root wins (real-CLI UI validation needs a workspace
+    // the cookie-authenticated file browser can reach, which /tmp is not).
+    COMMAND_CODE_ALLOWED_CWD_ROOTS: process.env.COMMAND_CODE_ALLOWED_CWD_ROOTS?.trim() || input.validationDir,
     SESSION_REGISTRY_PATH: join(input.validationDir, 'session-registry.json'),
     SESSION_DIR: piSessionsDir,
     PI_SESSIONS_DIR: piSessionsDir,
