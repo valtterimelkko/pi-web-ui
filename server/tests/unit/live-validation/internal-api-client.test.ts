@@ -89,11 +89,8 @@ describe('InternalApiClient request evidence', () => {
     });
     const request = JSON.parse(body) as Record<string, unknown>;
     expect(request.effort).toBeUndefined();
-    expect(request.commandCodeAttestation).toMatchObject({
-      model: 'meta/muse-spark-1.2-contributor',
-      role: 'conductor-root',
-    });
-    expect(request.commandCodeAttestation).not.toHaveProperty('effort');
+    expect(request.invocationRole).toBeUndefined();
+    expect(request.commandCodeAttestation).toBeUndefined();
   });
 
   it('fetches session evidence with an encoded identifier and bounded expansion query', async () => {
