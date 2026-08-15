@@ -106,7 +106,7 @@ grep '"requestId":"req_…' /tmp/v-server.log
 > **Caveat:** the correlation context propagates across `await` boundaries
 > **in-process**. The Pi Coding Agent runs its model turn in a **worker process**,
 > so Pi's in-turn worker logs do not carry the `requestId` (the in-process
-> request/dispatch/complete logs do). Claude/OpenCode/Antigravity turns are more
+> request/dispatch/complete logs do). Claude/OpenCode/Antigravity/Command Code turns are more
 > in-process, so their adapter logs correlate more fully.
 
 ## Diagnostics

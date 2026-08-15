@@ -1424,7 +1424,7 @@ other reasoning-capable gateway models → `reasoning_effort`; non-reasoning mod
 GET /api/v1/sessions/:sessionId/history
 ```
 
-Returns normalized replay events. The ordinary four runtimes are supported; feature-gated Command Code sessions replay from the private normalized journal:
+Returns normalized replay events. All five runtimes are supported; Command Code sessions replay from the private normalized journal:
 - **Claude** and **OpenCode** return native normalized replay events.
 - **Antigravity** returns replay events reduced from Pi-owned turn logs.
 - **Pi** returns a synthesized event list derived from the Pi session
@@ -1601,7 +1601,9 @@ prompt (or several), then call `/wait` on each.
 GET /api/v1/sessions/:sessionId/transcript?scope=visible_recent
 ```
 
-Returns a runtime-agnostic transcript for any ordinary runtime, plus feature-gated Command Code sessions from their private normalized journal,
+Returns a runtime-agnostic transcript for any runtime — the other four
+runtimes from their native replay paths, Command Code sessions from their
+private normalized journal —
 suitable for an orchestrator that needs to read child-session results
 without parsing runtime-specific files.
 
@@ -1692,7 +1694,8 @@ default:
 | `tools` | full (truncated-to-200-char) tool output, and un-groups tool groups into individual tool items |
 | `thinking` | the full thinking text behind the summarized thinking items |
 
-The ordinary runtimes are supported (Pi, Claude, OpenCode, Antigravity); feature-gated Command Code is Internal-API-only; a
+All five runtimes are supported (Pi, Claude, OpenCode, Antigravity, Command Code) — including
+Command Code sessions created from either the browser or the Internal API; a
 thin/empty session yields a valid (empty) view rather than an error.
 
 **Response (200):**

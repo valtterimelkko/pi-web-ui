@@ -4,7 +4,7 @@
 
 ## Current runtime ownership
 
-Pi Web UI supports four runtime families. Their execution shapes differ:
+Pi Web UI supports five runtime families. Their execution shapes differ:
 
 | Runtime/path | Current execution owner |
 |---|---|

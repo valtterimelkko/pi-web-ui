@@ -5,7 +5,7 @@
 ## Frontend (`client/src/`)
 
 ### State
-- `store/sessionStore.ts` — Main frontend session state: messages, streaming, switching, LRU cache (2 sessions), pinning, archiving, worker status, Claude/OpenCode availability. Uses throttled persist storage and individual Zustand selectors for mobile runtime performance.
+- `store/sessionStore.ts` — Main frontend session state: messages, streaming, switching, LRU cache (2 sessions), pinning, archiving, worker status, runtime availability. Uses throttled persist storage and individual Zustand selectors for mobile runtime performance.
 - `store/filesStore.ts` — Files tab state: file-tree navigation, read preview + truncation signal, and Markdown edit/save state (edit buffer, dirty flag, Save through `/api/files/write`, truncation guard).
 - `store/transferStore.ts` — Session context transfer UI state.
 - `store/uiStore.ts` — UI chrome state (modals, toasts, navigation).
@@ -17,7 +17,7 @@
 - `lib/session-websocket.ts` — Session-specific WebSocket client.
 
 ### Session / Chat UI
-- `components/Session/NewSessionModal.tsx` — Runtime picker (Pi / Claude / OpenCode / Antigravity).
+- `components/Session/NewSessionModal.tsx` — Runtime picker (Pi / Claude / OpenCode / Antigravity / Command Code, the latter with a combined model + effort selector).
 - `components/Sidebar/SessionItem.tsx` — Sidebar session row (drag source, pin, archive, rename, notification toggle host).
 - `components/Sidebar/SessionNotifyToggle.tsx` — Per-session notification bell; cookie-auth browser calls to opt in/out of `agent_end` notifications.
 - `components/Sidebar/SessionList.tsx` — Sidebar container.
@@ -47,7 +47,7 @@
 ## Backend (`server/src/`)
 
 ### WebSocket / Routing
-- `websocket/connection.ts` — **Main runtime router.** All Pi/Claude/OpenCode prompts, aborts, switches, and events flow through here. Contains `normEventToPiFormat()` and subscriber fanout.
+- `websocket/connection.ts` — **Main runtime router.** All Pi/Claude/OpenCode/Antigravity/Command Code prompts, aborts, switches, and events flow through here. Contains `normEventToPiFormat()` and subscriber fanout.
 - `websocket/protocol.ts` — Shared WebSocket message type definitions and guards.
 - `websocket/session-websocket.ts` — JSON-RPC endpoint for Pi Coding Agent worker communication (`/ws/sessions/:sessionId`).
 - `websocket/handlers.ts` — Legacy WebSocket message handlers.
@@ -101,6 +101,17 @@
 - `antigravity/antigravity-history-replay.ts` — Converts stored Antigravity turns into replay events.
 - `antigravity/antigravity-session-subscribers.ts` — Multi-viewer fanout for Antigravity sessions.
 
+### Command Code Path (`server/src/command-code/`)
+- `command-code/command-code-service.ts` — Command Code lifecycle: session create/delete, per-session native home preparation, registry projection, replay from the normalized journal, native-id binding and drift guards.
+- `command-code/command-code-process-runner.ts` — Spawns one `cmd -p --output-format json` subprocess per session with a controlled per-session `HOME` (native transcripts land under the session's own home, not the operator's shared `~/.commandcode`).
+- `command-code/command-code-session-store.ts` — Private atomic session records at `~/.pi-web-ui/command-code/sessions/<id>.json`.
+- `command-code/command-code-event-journal.ts` — Normalized event journal at `~/.pi-web-ui/command-code/events/<id>.jsonl`; the replay source, retained across API session deletion.
+- `command-code/command-code-event-adapter.ts` / `command-code-ndjson-parser.ts` — Adapt the `cmd` NDJSON stream into `NormalizedEvent`, suppressing duplicate cumulative snapshots.
+- `command-code/command-code-model-catalog.ts` / `command-code-model-efforts.ts` — Exact live model catalogue from `cmd --list-models` with the central denylist, and the per-model effort table.
+- `command-code/command-code-catalogue-maintenance.ts` — Pure logic behind the weekly catalogue refresh (new-model detection, conservative GOAT-exclusion probes).
+- `command-code/command-code-config.ts` — Config schema/defaults (`stateDir`, `nativeHomeDir`, `allowedCwdRoots`).
+- `command-code/command-code-instance.ts` — Process-owned service singleton.
+
 ### Session Transfer (`server/src/session-transfer/`)
 - `session-transfer/transfer-service.ts` — Orchestrates cross-runtime context transfer.
 - `session-transfer/visible-transcript.ts` — Builds canonical visible transcript from replay events.
@@ -139,7 +150,7 @@
 
 ### REST Routes (`server/src/routes/`)
 - `routes/health.ts` — Health/readiness probes, runtime availability.
-- `routes/models.ts` — Browser model listing (Pi, Claude, OpenCode, and Antigravity).
+- `routes/models.ts` — Browser model listing (Pi, Claude, OpenCode, Antigravity, and Command Code).
 - `routes/auth.ts` — Login/logout.
 - `routes/sessions.ts` — Session CRUD, export.
 - `routes/files.ts` — File browsing and reading (with path validation).
@@ -172,7 +183,7 @@
 - `index.ts` — Server entry point.
 
 ### Operational Helpers
-- `scripts/debug-where.mjs` — Fast session locator: maps a session id, runtime-native id, path, or Antigravity conversation id to the relevant logs, registry entry, and runtime-owned files; `--json` emits offline bounded locator evidence.
+- `scripts/debug-where.mjs` — Fast session locator: maps a session id, runtime-native id (Claude/OpenCode/Command Code), path, or Antigravity conversation id to the relevant logs, registry entry, and runtime-owned files; `--json` emits offline bounded locator evidence.
 - `scripts/validate-claude-profiles.ts` — Profile-specific validation runner. Validates SDK backend, direct CLI backend, tool visibility, skills, follow-up, and concurrency through a disposable server. Run via `npm run validate:claude-profiles`.
 - `scripts/concurrency-test.ts` — Tests simultaneous Claude + provider-profile sessions for cross-contamination. Run directly with `npx tsx scripts/concurrency-test.ts`.
 - `pi-claude-channel/server.ts` — Local Claude channel/plugin bridge process.

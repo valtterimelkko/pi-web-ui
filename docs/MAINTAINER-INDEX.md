@@ -19,7 +19,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - **Internal API contract history** — `1.5.0` added notifications, `1.6.x` added run receipts/idempotency, `1.7.0` added model-aware thinking levels, `1.8.0` hardened multi-client/notification ingress, `1.9.0` added runtime-health and operational diagnostics, `1.10.x` added compact evidence and corrected Pi completion, `1.11.0` added exact fail-closed Claude profile binding, `1.12.0` added source-owned retention plus resource-aware execution admission, `1.13.0` added truthful dispatch/approval/watchdog semantics plus Pi identity integrity, and `1.14.0` added durable payload-free run-liveness and bounded recovery evidence. [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) is the version authority.
 - **Observability/introspection** — `GET /api/v1/diagnostics`, session-scoped diagnostics, event-type introspection, correlation filters, and a bounded operational snapshot are documented in [`OBSERVABILITY.md`](./OBSERVABILITY.md) and [`INTERNAL-API.md`](./INTERNAL-API.md)
 - **Pi runtime OpenRouter model automation** — Pi can now surface a broader OpenRouter-backed model catalogue; see [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md)
-- **Notification layer (Telegram on `agent_end`)** — one-way operator notifications when an agent yields control, across all 4 runtimes, with a durable outbox; see [`NOTIFICATIONS.md`](./NOTIFICATIONS.md)
+- **Notification layer (Telegram on `agent_end`)** — one-way operator notifications when an agent yields control, across all five runtimes, with a durable outbox; see [`NOTIFICATIONS.md`](./NOTIFICATIONS.md)
 - **Run receipts and execution instance identity** — durable Internal-API dispatch identity, session-scoped idempotency, restart recovery, and configured runtime-instance projection; see [`INTERNAL-API.md`](./INTERNAL-API.md) and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md)
 - **Fast delta summary:** [`RECENT-CHANGES.md`](./RECENT-CHANGES.md)
 
@@ -34,7 +34,7 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 ## 3. System structure
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — high-level architecture, runtime paths, responsibilities
 - [`CODEBASE-MAP.md`](./CODEBASE-MAP.md) — granular file-to-purpose index
-- [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md) — how native events from Pi, Claude, OpenCode, and Antigravity converge into one frontend stream
+- [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md) — how native events from Pi, Claude, OpenCode, Antigravity, and Command Code converge into one frontend stream
 - [`OBSERVABILITY.md`](./OBSERVABILITY.md) — logging (levels/namespaces/format), correlation IDs, diagnostics endpoint, error-code catalog, request logging, fatal-error handlers
 
 ## 4. WebSocket contract
@@ -51,7 +51,8 @@ If you are debugging anything runtime-related, start with [`TROUBLESHOOTING.md`]
 - [`PI-OPENROUTER-MODEL-AUTOMATION.md`](./PI-OPENROUTER-MODEL-AUTOMATION.md) — keeping the Pi runtime model list current with the OpenRouter gateway automatically (weekly refresh, no secrets stored)
 - [`PI-CODEX-COMPACTION-SESSION-ID.md`](./PI-CODEX-COMPACTION-SESSION-ID.md) — RETIRED: the Codex compaction session-ID patch ecosystem (postinstall patch, auto-heal extension probe), why it existed, and how it was retired after OpenAI's server-side fix
 - [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md) — Antigravity / `agy` architecture, logs, and failure modes
-- [`KIMI-CODE-RUNTIME-INTEGRATION-DESIGN.md`](./KIMI-CODE-RUNTIME-INTEGRATION-DESIGN.md) — proposed Kimi Code fifth-runtime feasibility evidence, KAP-first architecture, fidelity findings, risks, and staged delivery plan; not yet implemented
+- [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md) — Command Code (`cmd`) as the fifth runtime family: single env gate, model+effort catalogue and weekly refresh, session/event storage, and fixture-based validation
+- [`KIMI-CODE-RUNTIME-INTEGRATION-DESIGN.md`](./KIMI-CODE-RUNTIME-INTEGRATION-DESIGN.md) — proposed Kimi Code sixth-runtime feasibility evidence, KAP-first architecture, fidelity findings, risks, and staged delivery plan; not yet implemented
 
 ## 6. Internal API and orchestration
 - [`INTERNAL-API.md`](./INTERNAL-API.md) — canonical local automation API reference (including transcript vs screen-view vs history read paths)

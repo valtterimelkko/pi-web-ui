@@ -40,7 +40,7 @@ Use `ws://` locally and `wss://` in production.
 ```typescript
 { type: 'auth', csrfToken: string }
 { type: 'get_sessions', cwd?: string }
-{ type: 'new_session', cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' }
+{ type: 'new_session', cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' }
 { type: 'switch_session', sessionPath: string }
 { type: 'prompt', sessionId: string, message: string, images?: ImageContent[] }
 { type: 'follow_up', message: string }
@@ -67,6 +67,7 @@ Use `ws://` locally and `wss://` in production.
 { type: 'claude_available', available: boolean, error: string | null }
 { type: 'opencode_available', available: boolean, error: string | null }
 { type: 'antigravity_available', available: boolean, error: string | null }
+{ type: 'commandcode_available', available: boolean, enabled: boolean, models: CommandCodeModelInfo[], error: string | null }
 { type: 'extension_ui_request', request: ExtensionUIRequest }
 { type: 'error', message: string, code?: string }
 ```
@@ -97,6 +98,13 @@ Use `ws://` locally and `wss://` in production.
 - Pi Web UI stores Antigravity turn logs under `~/.pi-web-ui/antigravity-sessions/`
 - agy owns the resumed-conversation SQLite DBs under `~/.gemini/antigravity-cli/conversations/`
 
+#### Command Code
+- Uses `cmd -p --output-format json` via one server-side subprocess per session, identical for browser and Internal API callers
+- Gated by a single env flag, `COMMAND_CODE_ENABLED` (default off); availability is announced with `commandcode_available`
+- Model and per-model effort are chosen at session creation; the eligible catalogue is the CLI's advertised models minus a centrally managed premium-model denylist
+- Session records and the normalized event journal live under `~/.pi-web-ui/command-code/`
+- Full reference: [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md)
+
 For complete message shapes and event semantics, see [`docs/PROTOCOL.md`](./docs/PROTOCOL.md).
 
 ## Internal API
@@ -111,11 +119,11 @@ It began as the preferred surface for **live end-to-end validation against real 
 Reference docs:
 - [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md) — endpoint reference and known limitations
 - [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md) — contract metadata, compatibility rules, and local-consumer coordination notes
-- [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity
+- [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md) — recommended orchestration patterns across Pi / Claude / OpenCode / Antigravity / Command Code
 - [`docs/LIVE-VALIDATION.md`](./docs/LIVE-VALIDATION.md) — validation runner built on the same API
 - [`docs/MCP-SERVER.md`](./docs/MCP-SERVER.md) — retained inactive seven-tool stdio MCP experiment over the Internal API
 
-`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.19.0`) for local consumers such as Agent OS. Contract `1.12.0` added source-owned durable/resident retention leases and resource-aware execution admission; `1.13.0` added truthful dispatch/approval/watchdog/session-identity semantics; `1.14.0` added payload-free run-liveness and bounded recovery evidence; `1.15.0` made disabled runtimes explicit; `1.16.0` adds the Internal API-only Pi-provider execution policy; and `1.19.0` adds normalized-output evidence on run receipts. Health also exposes per-runtime `runtimeHealth`, while diagnostics and `/sessions/:id/evidence` provide bounded troubleshooting evidence.
+`GET /api/v1/health` and `GET /api/v1/capabilities` publish contract metadata (`pi-web-ui-internal-api`, `/api/v1`, current contract version `1.20.0`) for local consumers such as Agent OS. Contract `1.12.0` added source-owned durable/resident retention leases and resource-aware execution admission; `1.13.0` added truthful dispatch/approval/watchdog/session-identity semantics; `1.14.0` added payload-free run-liveness and bounded recovery evidence; `1.15.0` made disabled runtimes explicit; `1.16.0` adds the Internal API-only Pi-provider execution policy; `1.17.0` added the Command Code runtime path; `1.18.0` added run-scoped Command Code usage evidence; `1.19.0` adds normalized-output evidence on run receipts; and `1.20.0` removed the Command Code invocation-role/attestation fields. Health also exposes per-runtime `runtimeHealth`, while diagnostics and `/sessions/:id/evidence` provide bounded troubleshooting evidence.
 
 Important endpoints include:
 - `GET /api/v1/capabilities`

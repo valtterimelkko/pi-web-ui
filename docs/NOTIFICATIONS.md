@@ -4,8 +4,8 @@ A unified, **one-way** notification subsystem inside Pi Web UI that pings the
 operator on **Telegram** when an agent session **yields control back to the
 human** — i.e. on `agent_end` (the agent either finished its work or stopped to
 ask a question). It works across the five runtime families when their relevant
-feature gate is enabled (Pi, Claude, OpenCode, Antigravity, and contained
-Command Code browser sessions) and is architected to extend cleanly to richer
+feature gate is enabled (Pi, Claude, OpenCode, Antigravity, and Command Code)
+and is architected to extend cleanly to richer
 notifications later without a rewrite.
 
 > See [`NOTIFICATION-LAYER-MVP-PLAN.md`](./NOTIFICATION-LAYER-MVP-PLAN.md) for
@@ -384,10 +384,12 @@ operator. The title is the one-line headline; the body is the detail.
 
 `claude`, `glm`, `pi`, `opencode`, and `agy` each expose a Bash tool and
 operate at the repo root, so the same script and the same activation prompt
-work for all of them — one mechanism, not five. Contained Command Code browser
-sessions use the same browser-facing notification path when that gate is
-enabled. They are intentionally not opt-in-able through the Internal API shadow
-route; browser identities are checked against the active browser policy.
+work for all of them — one mechanism, not five. Command Code sessions use the
+same notification path when `COMMAND_CODE_ENABLED` is on; opt-in for a Command
+Code session is accepted only while the server-side Command Code service can
+resolve the session (server-spawned sessions recorded in the Pi Web UI session
+store). The legacy attested-shadow route and browser-policy check were removed
+in contract 1.20.0.
 (`glm` is just `claude` run with GLM/Z.ai env, so it shares Claude Code's Bash
 tool entirely.)
 

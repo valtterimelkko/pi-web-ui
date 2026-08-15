@@ -84,7 +84,7 @@ Important parts of it are still:
 - incomplete
 - evolving
 - operationally uneven across runtimes
-- limited by the different native capabilities of Pi Coding Agent, Claude Code, OpenCode, and Antigravity
+- limited by the different native capabilities of Pi Coding Agent, Claude Code, OpenCode, Antigravity, and Command Code
 
 So the right current public framing is:
 

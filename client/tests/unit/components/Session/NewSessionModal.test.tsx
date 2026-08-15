@@ -168,6 +168,13 @@ describe('NewSessionModal — Claude backend selector', () => {
     for (const option of Array.from(selector.options)) expect(option).not.toBeDisabled();
   });
 
+  it('describes Command Code by its catalogue, not the removed containment framing', () => {
+    render(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={vi.fn()} />);
+
+    expect(screen.getByText('Model catalogue • Native effort')).toBeInTheDocument();
+    expect(screen.queryByText(/Contained/)).not.toBeInTheDocument();
+  });
+
   it('keeps a non-first model selected across rerenders and a catalogue refresh', async () => {
     const { rerender } = render(<NewSessionModal isOpen onClose={vi.fn()} onCreateSession={vi.fn()} />);
 

@@ -25,6 +25,7 @@ without prompt text or credentials. `debug:where` reads `~/.pi-web-ui/session-re
 | Claude native session id | `entry.claudeSessionId` |
 | OpenCode native session id | `entry.opencodeSessionId` |
 | Antigravity conversation id | `entry.antigravityConversationId` |
+| Command Code native session id | `entry.commandCodeNativeSessionId` |
 
 Keep the resolved **internal id**, runtime, and any native id from the report. The internal id is the safest correlation key for diagnostics and run receipts. If the session belongs to a disposable validation server, point the locator at that server's registry with `--registry <validation-dir>/session-registry.json`; use the validation server's printed socket/token and file roots for subsequent evidence calls. `--registry` changes the lookup file, not the helper's home-directory path hints, so for disposable runs treat the validation directory and the registry entry's actual `path` as authoritative.
 
@@ -105,7 +106,7 @@ The diagnostics ring and operational snapshot are process-local and reset on res
 
 ### 5. Inspect the runtime-specific evidence printed by the locator
 
-Only after the API-first checks, follow the report's runtime branch. It tells you whether to inspect Pi JSONL, the Pi-owned Claude replay file plus Claude-native JSONL, OpenCode APIs/logs, or Antigravity JSONL/DB/`agy` logs. For central logs, use a bounded time window and the correlation field:
+Only after the API-first checks, follow the report's runtime branch. It tells you whether to inspect Pi JSONL, the Pi-owned Claude replay file plus Claude-native JSONL, OpenCode APIs/logs, Antigravity JSONL/DB/`agy` logs, or the Command Code session record, normalized event journal, and per-session native home. For central logs, use a bounded time window and the correlation field:
 
 ```bash
 sudo journalctl -u pi-web-ui --since '15 minutes ago' | grep -F -- "sid=$CANONICAL_ID"
@@ -165,6 +166,8 @@ If the Internal API is unavailable:
 | **OpenCode** | Registry metadata in `~/.pi-web-ui/session-registry.json`; transcript storage is OpenCode-owned | `journalctl -u opencode-serve -f` if separate service, otherwise the main service log | Pi Web UI does not own the full OpenCode transcript. |
 | **Antigravity (agy)** | `~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl` (Pi-owned JSONL turn log) plus per-turn logs under `~/.pi-web-ui/antigravity-sessions/agy-logs/` | `journalctl -u pi-web-ui -f \| grep -i antigravity` | Each turn is one JSON line: prompt, response, model, conversationId, rawStdoutLength. The per-turn agy log records the actual `Print mode: conversation=<uuid>` target. |
 | **Antigravity conversation state** | `~/.gemini/antigravity-cli/conversations/<uuid>.db` (SQLite, agy-owned) | `agy --version`, `agy models` | The conversation UUID in the JSONL must match a `.db` file here for continuity to work. |
+| **Command Code (Pi Web UI-owned)** | `~/.pi-web-ui/command-code/sessions/<internal-id>.json` (session record) and `~/.pi-web-ui/command-code/events/<internal-id>.jsonl` (normalized event journal, the replay source) | `journalctl -u pi-web-ui -f \| grep -i commandcode` | Journal survives API session deletion (`nativeTranscriptRetained`); the record and native home do not. |
+| **Command Code native transcripts** | `~/.pi-web-ui/command-code-native-home/<internal-id>/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl` for server-spawned sessions; `~/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl` for plain `cmdc` CLI runs (plus `.meta.json`/`.checkpoints.jsonl` siblings) | — | cwd encoding joins path segments with dashes and strips dots (`/root/pi-web-ui` → `root-pi-web-ui`). Server default from `commandCodeNativeHomeDir` in `server/src/config.ts`; `COMMAND_CODE_NATIVE_HOME_DIR` overrides. |
 | **Notification layer** | `~/.pi-web-ui/notifications/` | `journalctl -u pi-web-ui -f`, `GET /api/v1/notifications` | Contains opt-ins, durable outbox/status ledger, and `ingress/` terminal-client spool. |
 | **Unified registry** | `~/.pi-web-ui/session-registry.json` | `journalctl -u pi-web-ui -f` | Cross-runtime source of truth for sidebar metadata. |
 | **Internal API** | `~/.pi-web-ui/internal-api.sock`, `~/.pi-web-ui/internal-api-token` | `journalctl -u pi-web-ui -f` | Useful when debugging local consumers of the backend API. |
@@ -284,7 +287,8 @@ When correlating failures, distinguish between:
 - **Registry path/file references** — stored in `~/.pi-web-ui/session-registry.json`
 
 `npm run debug:where -- <id>` accepts the registry's internal id, path, Claude
-native id, OpenCode native id, and Antigravity conversation id. For Pi ids
+native id, OpenCode native id, Antigravity conversation id, and Command Code
+native id. For Pi ids
 missing from the registry, it also performs one exact filename glob under the
 configured Pi session root. If that bounded fallback still reports no match,
 the identifier may be stale or malformed; do not begin with a repository-wide
@@ -486,6 +490,48 @@ curl "http://localhost:<server-port>/api/models?sdkType=antigravity"
 - **Conversation ID is null after first turn** → the per-run log did not contain a sent-conversation line and the `.db` fallback failed to detect the new file; check the conversations directory for a file newer than the turn's timestamp.
 - **agy hangs / timeout** → inspect `--print-timeout` setting (default 10m); check the latest agy log file in `~/.gemini/antigravity-cli/log/`
 - **Auth expired** → `agy -p "Reply OK"` will prompt to re-login; complete auth via `agy` interactively
+
+## Command Code (`cmd`)
+
+### Check first
+
+- `server/src/command-code/command-code-service.ts`
+- `server/src/command-code/command-code-session-store.ts`
+- `server/src/command-code/command-code-event-journal.ts`
+- `server/src/command-code/command-code-process-runner.ts`
+- Canonical reference: [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md)
+
+### Session files
+
+```bash
+# Pi Web UI-owned record + normalized event journal (replay source)
+cat ~/.pi-web-ui/command-code/sessions/<internal-id>.json | python3 -m json.tool
+jq -c '.' ~/.pi-web-ui/command-code/events/<internal-id>.jsonl | head
+
+# Native CLI transcript of a server-spawned session (per-session home)
+ls -la ~/.pi-web-ui/command-code-native-home/<internal-id>/.commandcode/projects/*/
+
+# Native transcript of a plain `cmd` CLI session (operator's shared home)
+ls -la ~/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl
+```
+
+The native id is `commandCodeNativeSessionId` in the registry; `npm run debug:where -- <any id form>` prints all of these paths resolved for a concrete session. cwd encoding joins path segments with dashes and strips dots (`/root/pi-web-ui` → `root-pi-web-ui`). Lifecycle: deleting a session through the API removes the record and the per-session native home but retains the event journal. A plain CLI session (run in a terminal, not through Pi Web UI) has no Pi Web UI record at all — find it directly under `~/.commandcode/projects/`.
+
+### Useful commands
+
+```bash
+which cmd && cmd --version
+curl http://localhost:<server-port>/api/health/ready | jq '.checks.commandcode'
+curl "http://localhost:<server-port>/api/models?sdkType=commandcode"
+```
+
+### Typical symptoms
+
+- **Runtime unavailable / not in picker** → `COMMAND_CODE_ENABLED=true` missing from the server env; check startup discovery logs.
+- **Create fails with "cwd is outside the configured isolated workspace roots"** → the folder is outside `COMMAND_CODE_ALLOWED_CWD_ROOTS`; the folder picker is not constrained by the roots list, so this surfaces only at create time.
+- **Model missing from the selector** → it is on the denylist or the catalogue is stale; run `npm run commandcode:refresh-models` (weekly automation runs on a systemd timer — `journalctl -u command-code-model-refresh.service`).
+- **Session gone from the sidebar but evidence needed** → the event journal `events/<internal-id>.jsonl` survives API deletion; native transcripts under `command-code-native-home/` do not.
+- **Freshly created session returns `SESSION_NOT_FOUND` on first prompt** → transient create/projection race observed on production; retry the prompt (a `GET /api/v1/sessions` in between also settles it).
 
 ## WebSocket / Frontend State
 

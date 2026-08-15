@@ -57,7 +57,7 @@ If built well, this could give Pi Web UI:
 - **more usable context window** for real work, not just lower billed tokens — directly achievable for Pi Coding Agent and Claude channel-backed
 - **better handling of noisy artefacts** such as logs, large search results, directory listings, diagnostics, and long files
 - **reversible retrieval** of originals when the agent really needs them — via CCR/`headroom_retrieve`
-- **common observability** across all four runtimes — measurable even where live compression is not possible (OpenCode, Antigravity)
+- **common observability** across all five runtimes — measurable even where live compression is not possible (OpenCode, Antigravity)
 - **benchmarkable policies** instead of anecdotal prompt tweaking
 
 ## What we would borrow from Headroom
@@ -219,7 +219,7 @@ If a file changes after a compressed `Read`, a `retrieve_original` call returns 
 
 A Pi Coding Agent extension installed in `~/.pi/agent/extensions/` is active across all Pi sessions globally — including unrelated projects and sessions where the user has not opted into compression. The compression extension should be project-local by default (`.pi/extensions/`) or require explicit opt-in, not be globally installed.
 
-## The four runtime paths and integration strategy
+## Runtime paths and integration strategy
 
 ### 1. Pi Coding Agent runtime
 

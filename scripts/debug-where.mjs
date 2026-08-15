@@ -17,6 +17,26 @@ function getNativeClaudeSessionPath({ homeDir, cwd, claudeSessionId }) {
   return path.join(homeDir, '.claude', 'projects', encodeClaudeProjectDir(cwd), `${claudeSessionId}.jsonl`);
 }
 
+// Command Code encodes the cwd by joining path segments with dashes and
+// stripping dots: /root/pi-web-ui -> root-pi-web-ui, /root/.cc-probe -> root-cc-probe
+function encodeCommandCodeProjectDir(cwd) {
+  return cwd.split(path.sep).filter(Boolean).join('-').replace(/\./g, '');
+}
+
+function getNativeCommandCodeSessionPaths({ homeDir, cwd, nativeSessionId, internalId }) {
+  if (!cwd || !nativeSessionId) return { serverSpawned: null, plainCli: null };
+  const projectDir = encodeCommandCodeProjectDir(cwd);
+  const fileName = `${nativeSessionId}.jsonl`;
+  return {
+    // Mirrors the server default in server/src/config.ts (commandCodeNativeHomeDir);
+    // COMMAND_CODE_NATIVE_HOME_DIR can override it.
+    serverSpawned: internalId
+      ? path.join(homeDir, '.pi-web-ui', 'command-code-native-home', internalId, '.commandcode', 'projects', projectDir, fileName)
+      : null,
+    plainCli: path.join(homeDir, '.commandcode', 'projects', projectDir, fileName),
+  };
+}
+
 export function findSessionEntry(entries, query) {
   return entries.find((entry) => (
     entry.id === query
@@ -101,6 +121,12 @@ export function buildSessionDebugReport(entry, opts = {}) {
   }
 
   if (entry.sdkType === 'commandcode') {
+    const nativePaths = getNativeCommandCodeSessionPaths({
+      homeDir,
+      cwd: entry.cwd,
+      nativeSessionId: entry.commandCodeNativeSessionId,
+      internalId: entry.id,
+    });
     lines.push(
       '  - Command Code service journal: sudo journalctl -u pi-web-ui -f | grep -i commandcode',
       '',
@@ -108,13 +134,15 @@ export function buildSessionDebugReport(entry, opts = {}) {
       `  - Private session record:    ${path.join(homeDir, '.pi-web-ui', 'command-code', 'sessions', `${entry.id}.json`)}`,
       `  - Normalized event journal:  ${path.join(homeDir, '.pi-web-ui', 'command-code', 'events', `${entry.id}.jsonl`)}`,
       `  - Native session id:         ${entry.commandCodeNativeSessionId || 'N/A'}`,
+      `  - Native transcript (server-spawned): ${nativePaths.serverSpawned || 'N/A'}`,
+      `  - Native transcript (plain CLI run):  ${nativePaths.plainCli || 'N/A'}`,
       '  - Native auth/config:        server-owned per-session home (not exposed to the browser)',
       '',
       'Useful checks:',
       '  - Command Code health:       curl http://localhost:<server-port>/api/health/ready | jq ".checks.commandcode"',
       '  - Command Code models:        curl "http://localhost:<server-port>/api/models?sdkType=commandcode"',
     );
-    return lines.join('\\n');
+    return lines.join('\n');
   }
 
   if (entry.sdkType === 'antigravity') {

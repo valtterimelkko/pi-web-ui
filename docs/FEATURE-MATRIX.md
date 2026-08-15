@@ -32,6 +32,7 @@ Use this matrix to distinguish behavior owned by this repository from behavior s
 | Claude Code | SDK profiles, direct CLI, or channel-backed path | Multiple intentional backends; behavior and auth differ by backend |
 | OpenCode | `opencode serve` HTTP/SSE | Supported server integration with OpenCode-owned transcript storage |
 | Antigravity | `agy -p` subprocess per turn | Wrapper-oriented, batch output, runtime-owned conversation DB plus Pi Web UI turn logs |
+| Command Code | `cmd -p --output-format json` subprocess per session | Single `COMMAND_CODE_ENABLED` gate; NDJSON event stream normalized into a private replay journal; centrally managed model catalogue denylist |
 
 ## Documentation rule
 

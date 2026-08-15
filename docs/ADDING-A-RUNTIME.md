@@ -1,6 +1,6 @@
 # Adding a New Runtime to Pi Web UI
 
-> Checklist for integrating another backend runtime alongside the existing Pi Coding Agent, Claude runtime family, OpenCode, and Antigravity paths.
+> Checklist for integrating another backend runtime alongside the existing Pi Coding Agent, Claude runtime family, OpenCode, Antigravity, and Command Code paths.
 
 ## 1. Shared Types
 

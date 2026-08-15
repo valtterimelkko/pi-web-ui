@@ -59,7 +59,7 @@ The app uses JSON messages with a `type` field rather than strict JSON-RPC frami
 ### Session lifecycle
 
 ```typescript
-{ type: 'new_session', cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' }
+{ type: 'new_session', cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' }
 { type: 'switch_session', sessionPath: string }
 { type: 'subscribe_session', sessionPath: string }
 { type: 'unsubscribe_session', sessionPath: string }

@@ -130,10 +130,10 @@ npm run test:e2e
 ```
 
 ### Runtime-path change
-If you touched Pi Coding Agent / the Claude runtime family / OpenCode / Antigravity routing or replay logic, prefer:
+If you touched Pi Coding Agent / the Claude runtime family / OpenCode / Antigravity / Command Code routing or replay logic, prefer:
 - unit tests for the affected runtime module(s)
 - relevant WebSocket tests
-- `npm run validate:live -- --socket <validation-sock> --token-path <validation-token> --runtime <pi|claude|opencode|antigravity|all> --scenario <id>` (use `--allow-production` only when explicitly authorised; disposable `all` expands to Pi/Claude/OpenCode)
+- `npm run validate:live -- --socket <validation-sock> --token-path <validation-token> --runtime <pi|claude|opencode|antigravity|all> --scenario <id>` (use `--allow-production` only when explicitly authorised; disposable `all` expands to Pi/Claude/OpenCode). Command Code is excluded from `all`; validate it by starting the validation server with `--command-code-fixture` (deterministic, no provider) or `--command-code-real` — see docs/COMMAND-CODE-INTEGRATION.md
 - relevant E2E runtime tests
 
 ## Notes

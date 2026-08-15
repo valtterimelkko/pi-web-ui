@@ -510,10 +510,10 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
             >
               <span className="text-sm font-medium">Command Code</span>
               <span className="text-xs text-gray-500 mt-0.5 hidden sm:inline">
-                {commandCodeAvailable ? 'Contained browser runtime' : 'Not available'}
+                {commandCodeAvailable ? 'Model catalogue • Native effort' : 'Not available'}
               </span>
               <span className="text-xs text-gray-500 mt-0.5 sm:hidden">
-                {commandCodeAvailable ? 'Contained' : 'Unavailable'}
+                {commandCodeAvailable ? 'Model catalogue' : 'Unavailable'}
               </span>
             </button>
           </div>

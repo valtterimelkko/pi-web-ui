@@ -26,7 +26,9 @@ The adapter does not mount MCP routes in the Express application, import runtime
 services, open a TCP listener, or provide a generic HTTP proxy. A client that
 can launch this process receives the same trusted same-host control authority as
 any holder of the configured Internal API token. The MCP process is therefore a
-high-trust local integration, not a tenant-isolation boundary.
+high-trust local integration, not a tenant-isolation boundary. Command Code is
+deliberately excluded from the adapter's runtime projection — its sessions are
+driven through the browser UI and the Internal API directly.
 
 ## The seven-tool MVP
 
@@ -34,7 +36,7 @@ The tool catalogue is deliberately closed:
 
 | Tool | Operation | Safety annotation |
 |---|---|---|
-| `pi_web_ui_get_capabilities` | Read `/api/v1/capabilities`; only the four ordinary runtimes and provider policy are projected | read-only |
+| `pi_web_ui_get_capabilities` | Read `/api/v1/capabilities`; only the four ordinary runtimes (Command Code is deliberately excluded) and provider policy are projected | read-only |
 | `pi_web_ui_list_models` | Read `/api/v1/models`, optionally filtered by `pi`, `claude`, `opencode`, or `antigravity` | read-only |
 | `pi_web_ui_list_sessions` | Read bounded, runtime-neutral session metadata | read-only |
 | `pi_web_ui_create_session` | Create one ordinary runtime session; optional model must be an advertised selector | write, non-destructive |

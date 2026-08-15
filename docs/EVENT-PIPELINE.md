@@ -1,6 +1,6 @@
 # Pi Web UI Event Pipeline
 
-> How Pi, Claude, OpenCode, and Antigravity backend paths produce a single frontend event stream.
+> How Pi, Claude, OpenCode, Antigravity, and Command Code backend paths produce a single frontend event stream. (Command Code: the server spawns a `cmd` subprocess per session, reads its NDJSON events, and normalizes them into the private journal — see [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md).)
 
 ## High-level Flow
 
@@ -147,7 +147,7 @@ All paths converge in `client/src/store/sessionStore.ts` via `handleServerMessag
 
 - `session_event` → routed to the correct session, updates `sessionData`, `messages`, `streamingSessions`
 - `session_status` → updates session status (idle/busy/streaming/error)
-- `claude_available` / `opencode_available` / `antigravity_available` → sets runtime availability flags
+- `claude_available` / `opencode_available` / `antigravity_available` / `commandcode_available` → sets runtime availability flags
 - `extension_ui_request` → surfaced as approval/dialog UI (used by Pi extensions, OpenCode permissions, and **Claude SDK `AskUserQuestion` requests**)
 - `extension_ui_cancel` → closes an open dialog when the request was resolved for a non-answer reason (e.g. `AskUserQuestion` timeout/disconnect)
 

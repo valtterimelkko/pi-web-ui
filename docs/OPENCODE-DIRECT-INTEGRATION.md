@@ -18,7 +18,7 @@ Recommended public framing:
 
 ## Summary
 
-OpenCode is one of the four runtime paths in Pi Web UI.
+OpenCode is one of the five runtime paths in Pi Web UI.
 
 Its job is to let Pi Web UI remain the browser interface while a **real OpenCode runtime** handles the backend session execution.
 
@@ -37,12 +37,13 @@ This is an operator capacity/availability decision, not a removal. See [`docs/IN
 
 ## Why This Path Exists
 
-Pi Web UI has four runtime paths:
+Pi Web UI has five runtime paths:
 
 1. **Pi Coding Agent** — Pi-native sessions and extensions
 2. **Claude runtime** — legacy `claude -p` or the channel-backed Claude Code path
 3. **OpenCode** — `opencode serve` backend sessions
 4. **Antigravity** — `agy -p` Gemini sessions
+5. **Command Code** — `cmd` subprocess sessions (gated by `COMMAND_CODE_ENABLED`)
 
 OpenCode exists because:
 - OpenCode is the supported backend tool for the relevant OpenCode/Z.AI workflows

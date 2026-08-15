@@ -1,6 +1,6 @@
 # Runtime Overview
 
-Pi Web UI can present **five runtime families in one browser UI**. Command Code is separately feature-gated and disabled by default.
+Pi Web UI can present **five runtime families in one browser UI**. Command Code is a full runtime path behind its own env gate (`COMMAND_CODE_ENABLED`, disabled by default).
 
 This guide helps you choose where to start.
 

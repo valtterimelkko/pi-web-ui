@@ -11,6 +11,7 @@ Quick jump:
 - [Claude channel-backed mode](#claude-channel-backed-mode)
 - [OpenCode](#opencode)
 - [Antigravity](#antigravity)
+- [Command Code](#command-code)
 - [Pi Coding Agent](#pi-coding-agent)
 - [Session Registry](#session-registry)
 - [WebSocket / Auth](#websocket--auth)
@@ -19,13 +20,13 @@ Quick jump:
 ## Session-ID diagnosis
 
 - **Do not start with a global grep.** Run `npm run debug:where -- <id-or-path>` first. It resolves the registry entry and prints the relevant runtime-owned session file, native id, log source, and useful checks.
-- **Identifier forms are not interchangeable in every route.** The locator accepts the Pi Web UI internal id, registry path, Claude native id, OpenCode native id, and Antigravity conversation id. The read-only `transcript?view=screen` route resolves those forms; session-scoped diagnostics use the resolved internal id, while `GET /runs/:runId` uses the `runId` returned by prompt dispatch.
+- **Identifier forms are not interchangeable in every route.** The locator accepts the Pi Web UI internal id, registry path, Claude native id, OpenCode native id, Antigravity conversation id, and Command Code native id (registry field `commandCodeNativeSessionId`). The read-only `transcript?view=screen` route resolves those forms; session-scoped diagnostics use the resolved internal id, while `GET /runs/:runId` uses the `runId` returned by prompt dispatch.
 - **Use narrow evidence in order:** screen transcript → scoped diagnostics → run receipt / durable ledger → runtime-specific file and bounded journal query. `LOG_FORMAT=json` is for field filtering; pretty logs use `sid=`, `run=`, `req=`, `rt=`, and `exec=` suffixes.
 
 ## Internal API / validation
 
 - **The default Unix socket is production.** Live validation must use the socket/token printed by `npm run validate:server`; production requires explicit `--allow-production` (and user authorisation).
-- **`--runtime all` is not all four runtimes in disposable mode.** The runner's current `all` set is Pi, Claude, and OpenCode. Antigravity is disabled by disposable validation because `agy` has no supported isolated conversation directory; validate it only through an explicitly authorised workflow.
+- **`--runtime all` is not all five runtimes in disposable mode.** The runner's current `all` set is Pi, Claude, and OpenCode. Antigravity is disabled by disposable validation because `agy` has no supported isolated conversation directory; validate it only through an explicitly authorised workflow. Command Code is likewise excluded from `all`; validate it explicitly with `--command-code-fixture` or `--command-code-real`.
 - **A detached prompt is the disconnect-safe path.** `verbosity=answers` with `detach:true` keeps the turn running after the caller disconnects. `tasks`/`full` streaming is supervision, not fire-and-forget: a client disconnect cancels the run and aborts the runtime.
 - **A watch's ledger survives restart, not its observer.** A reloaded watch is `detached`; past firings remain readable, but it must be registered again to observe new events. A watch owns a distinct `watch:<watchId>` residency claim; replacement/deletion releases exactly that claim without affecting human UI or Internal API lease claims.
 
@@ -143,6 +144,11 @@ The disposable validation server disables Antigravity because `agy` writes its
 conversation DB under the user's `~/.gemini` tree. An Antigravity live check is
 an explicitly authorised operation, not part of the normal `--runtime all`
 disposable matrix.
+
+## Command Code
+
+### Server-spawned native transcripts are not in the shared `~/.commandcode` tree
+Each server-spawned Command Code session runs with a per-session native home under `~/.pi-web-ui/command-code-native-home/<internalId>/` (server default from `commandCodeNativeHomeDir` in `server/src/config.ts`; `COMMAND_CODE_NATIVE_HOME_DIR` overrides), so its native CLI transcript lands at `~/.pi-web-ui/command-code-native-home/<internalId>/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl` — not in the operator's shared `~/.commandcode/projects/` tree, which only holds plain CLI sessions. If you are hunting for a server-spawned session's native transcript in `~/.commandcode`, you are looking in vain; start from the Pi Web UI record at `~/.pi-web-ui/command-code/sessions/<internalId>.json` and the normalized journal at `~/.pi-web-ui/command-code/events/<internalId>.jsonl`.
 
 ## Pi Coding Agent
 

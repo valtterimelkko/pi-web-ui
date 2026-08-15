@@ -40,7 +40,7 @@ Do not stop, restart, or redeploy `pi-web-ui.service` during validation unless t
 
 ## What the Internal API can do today
 
-Across the four ordinary runtime paths, plus the feature-gated server-local Command Code path, the current Internal API can now cover the
+Across the five runtime paths — Pi, Claude, OpenCode, Antigravity, and Command Code (gated by `COMMAND_CODE_ENABLED`) — the current Internal API can now cover the
 full Tier-1 orchestration loop:
 
 1. **Discover** — `GET /capabilities`, `GET /models`
@@ -404,7 +404,7 @@ agents on other runtimes:
 - **Claude child** — use `/events` only if you truly need live progress; for
   robustness prefer `/wait` + `/transcript`
 
-That gives you broad functional coverage across all four runtime paths without
+That gives you broad functional coverage across these four runtime paths without
 assuming identical runtime behaviour where the backends are actually different.
 
 ## Transcript vs screen view vs history

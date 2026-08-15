@@ -30,7 +30,7 @@ Full details: [`PLATFORM-SUPPORT.md`](./PLATFORM-SUPPORT.md)
 
 ## 3. Choose one runtime first
 
-Most adopters should start with **one runtime**, not all four.
+Most adopters should start with **one runtime**, not all five.
 
 Good first choices:
 
@@ -170,6 +170,16 @@ Check:
 ANTIGRAVITY_ENABLED=true
 ANTIGRAVITY_DEFAULT_MODEL=Gemini 3.5 Flash (Medium)
 ```
+
+### Command Code-focused first run
+Check:
+
+```bash
+COMMAND_CODE_ENABLED=true
+COMMAND_CODE_ALLOWED_CWD_ROOTS=/path/to/workspace-root
+```
+
+Read [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md) for the model/effort catalogue and the remaining `COMMAND_CODE_*` knobs.
 
 ## 9. Start the app locally
 

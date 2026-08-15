@@ -114,6 +114,50 @@ test('buildSessionDebugReport includes Antigravity session, conversation, and lo
   assert.match(report, /Session registry:/i);
 });
 
+test('buildSessionDebugReport includes Command Code session files with real newlines', () => {
+  const report = buildSessionDebugReport({
+    id: 'commandcode-1',
+    sdkType: 'commandcode',
+    path: 'commandcode-1',
+    commandCodeNativeSessionId: '9ad4547f-994d-45ba-997c-064286f98873',
+    cwd: '/root/pi-web-ui',
+    firstMessage: '',
+    messageCount: 6,
+    createdAt: '2026-08-15T00:00:00.000Z',
+    lastActivity: '2026-08-15T01:00:00.000Z',
+    status: 'idle',
+  }, { homeDir: '/home/test' });
+
+  assert.match(report, /Runtime:\s+commandcode/i);
+  assert.match(report, /command-code\/sessions\/commandcode-1\.json/i);
+  assert.match(report, /command-code\/events\/commandcode-1\.jsonl/i);
+  assert.match(report, /Native session id:\s+9ad4547f-994d-45ba-997c-064286f98873/i);
+  // Regression: the commandcode branch joined lines with a literal '\n' string.
+  assert.equal(report.includes('\\n'), false);
+  // Native transcript locators, both server-spawned and plain CLI runs.
+  // Server default native home: ~/.pi-web-ui/command-code-native-home (config.ts).
+  assert.match(report, /command-code-native-home\/commandcode-1\/\.commandcode\/projects\/root-pi-web-ui\/9ad4547f-994d-45ba-997c-064286f98873\.jsonl/i);
+  assert.match(report, /\/home\/test\/\.commandcode\/projects\/root-pi-web-ui\/9ad4547f-994d-45ba-997c-064286f98873\.jsonl/i);
+});
+
+test('buildSessionDebugReport strips dots when encoding Command Code project dirs', () => {
+  const report = buildSessionDebugReport({
+    id: 'commandcode-2',
+    sdkType: 'commandcode',
+    path: 'commandcode-2',
+    commandCodeNativeSessionId: '22d52521-ef00-49f5-9275-f44d4a5a65ea',
+    cwd: '/root/.cc-probe',
+    firstMessage: '',
+    messageCount: 1,
+    createdAt: '2026-08-15T00:00:00.000Z',
+    lastActivity: '2026-08-15T01:00:00.000Z',
+    status: 'idle',
+  }, { homeDir: '/home/test' });
+
+  // Observed on disk: /root/.cc-probe encodes to root-cc-probe (dots removed).
+  assert.match(report, /projects\/root-cc-probe\/22d52521-ef00-49f5-9275-f44d4a5a65ea\.jsonl/i);
+});
+
 test('buildSessionEvidenceJson is bounded offline locator evidence and omits prompt text', () => {
   const evidence = buildSessionEvidenceJson({
     id: 'ag-1',

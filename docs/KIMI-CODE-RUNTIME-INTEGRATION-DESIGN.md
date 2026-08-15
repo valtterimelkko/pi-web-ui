@@ -10,13 +10,13 @@
 >
 > **Implementation checklist:** [`ADDING-A-RUNTIME.md`](./ADDING-A-RUNTIME.md)
 
-This document records the feasibility research, local runtime experiments, architectural decision, risks, and proposed delivery plan for adding the renewed [MoonshotAI Kimi Code](https://github.com/MoonshotAI/kimi-code) CLI as a fifth Pi Web UI runtime alongside Pi Coding Agent, Claude Code, OpenCode, and Antigravity.
+This document records the feasibility research, local runtime experiments, architectural decision, risks, and proposed delivery plan for adding the renewed [MoonshotAI Kimi Code](https://github.com/MoonshotAI/kimi-code) CLI as a sixth Pi Web UI runtime alongside Pi Coding Agent, Claude Code, OpenCode, Antigravity, and Command Code (which has since shipped as the fifth).
 
 It is deliberately a **prospective design document**, not a statement that Kimi support is already shipped. When implementation begins, code and emitted runtime contracts take precedence over this research according to [`DOCS-GOVERNANCE.md`](./DOCS-GOVERNANCE.md).
 
 ## Executive summary
 
-Kimi Code is a strong candidate for a native-quality fifth runtime. The renewed TypeScript CLI exposes substantially better programmatic integration surfaces than the Antigravity print-mode path:
+Kimi Code is a strong candidate for a native-quality sixth runtime. The renewed TypeScript CLI exposes substantially better programmatic integration surfaces than the Antigravity print-mode path:
 
 - structured, streaming assistant and thinking deltas;
 - structured tool invocation, progress, results, retries, approvals, and questions;

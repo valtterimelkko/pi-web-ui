@@ -4,6 +4,13 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Command Code becomes a full runtime path (`1.17.0`–`1.20.0`)**
+  - Browser session creation with a combined model + effort selector fed by exact live discovery (`cmd --list-models`), and full Internal API session/prompt/receipt/transcript support.
+  - One env gate (`COMMAND_CODE_ENABLED`, default off); the earlier containment, role-attestation, and separate browser-policy machinery was removed in `1.20.0`.
+  - Weekly automated catalogue refresh (new-model detection, conservative plan-eligibility probes, commit+push, idle-aware restart) via `npm run commandcode:weekly-refresh` and the `command-code-model-refresh` systemd timer.
+  - Session evidence: `debug:where` resolves `commandCodeNativeSessionId` and prints the record, normalized event journal, and native transcript paths; see the Command Code section in [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md).
+  - Canonical docs: [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md), [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md)
+
 - **Internal API Pi-provider execution policy (`1.16.0`)**
   - The automation surface omits and rejects exact Pi providers `openai` and `openrouter` by default while retaining the distinct subscription-backed `openai-codex` provider.
   - Enforcement covers discovery, create/batch-create, model switching, all prompt modes, batch prompt, existing browser-created sessions addressed through the Internal API, and transfer targets.

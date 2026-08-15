@@ -41,7 +41,7 @@ v2 fixes both structurally: **one keyed model, one write channel, one sync rule.
 }
 ```
 
-- **Key = `${runtime}:${sessionId}`** (`runtime` ∈ `pi|claude|opencode|antigravity`).
+- **Key = `${runtime}:${sessionId}`** (`runtime` ∈ `pi|claude|opencode|antigravity|commandcode`).
   - Pi sessions are keyed `pi:<uuid>`, where the uuid is the one in the `.jsonl`
     filename (which equals the `type:"session"` header id). This makes metadata
     **immune to Pi renaming the `.jsonl` file**.

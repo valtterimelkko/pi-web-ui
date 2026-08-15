@@ -1,6 +1,6 @@
 # Pi Web UI
 
-> **Latest work:** Command Code is now a separately gated fifth runtime with exact live model/effort discovery, private normalized replay, and a fail-closed contained browser path. The narrow attested shadow path, MCP boundary, and disposable `--runtime all` matrix remain separate. See [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md) and [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md).
+> **Latest work:** Command Code is now a full fifth runtime path — browser session creation with exact live model/effort discovery, private normalized replay, Internal API orchestration, and weekly automated model-catalogue refresh. It sits behind one env gate (`COMMAND_CODE_ENABLED`, default off). See [`docs/RUNTIME-OVERVIEW.md`](./docs/RUNTIME-OVERVIEW.md) and [`docs/RECENT-CHANGES.md`](./docs/RECENT-CHANGES.md).
 
 Built for a simple reality: **one agent runtime and one subscription is often not enough.**
 
@@ -16,7 +16,7 @@ Currently supported runtime paths:
 - **Claude Code** (SDK/profile-backed, direct `claude -p`, or channel-backed Claude Code)
 - **OpenCode**
 - **Antigravity** (`agy -p` / Gemini)
-- **Command Code** (`cmd -p`, separately feature-gated and disabled by default)
+- **Command Code** (`cmdc`, behind the `COMMAND_CODE_ENABLED` gate, disabled by default)
 
 ## Why this exists
 
@@ -33,7 +33,7 @@ For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY
 
 ## What makes it different
 
-- **Five runtime families behind one UI** (Command Code remains separately disabled until its browser policy is configured)
+- **Five runtime families behind one UI** (Command Code is a full path for browser and Internal API callers once `COMMAND_CODE_ENABLED=true`)
 - **Unified session list and replay model** across runtimes with very different backends
 - **Local automation API** for live validation, integrations, and orchestration experiments
 - **Optional per-session Telegram notifications** when an agent yields control back to you
@@ -48,7 +48,7 @@ For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY
 | **Claude Code** | Claude Agent SDK (profiles), `claude -p`, or channel-backed Claude Code | Harder coding work on Claude Code; multi-provider access via provider profiles | Medium–higher |
 | **OpenCode** | `opencode serve` + HTTP/SSE | OpenCode-backed workflows, especially OpenCode/Z.AI setups | Low–medium |
 | **Antigravity** | `agy -p` subprocess-per-turn | Gemini/Antigravity workflows in the same UI | Higher |
-| **Command Code** | Server-owned exact-discovery subprocess; Bubblewrap for browser sessions | Isolated fifth-runtime workflows with native effort where advertised | High |
+| **Command Code** | Server-owned `cmd` subprocess per session with exact live model/effort discovery and a private normalized replay journal | Command Code catalogue workflows with native effort where advertised | High |
 
 The important truth is that these paths are **not equally official in the eyes of their upstreams**:
 
@@ -104,6 +104,7 @@ Choose one of:
 - **OpenCode-focused setup**
 - **Claude Code-focused setup**
 - **Antigravity-focused setup**
+- **Command Code-focused setup**
 
 Then add more runtimes later.
 
@@ -169,6 +170,7 @@ Browser (React + Zustand + Vite)
             ├─ Claude Code path
             ├─ OpenCode runtime path
             ├─ Antigravity runtime path
+            ├─ Command Code runtime path
             └─ local automation API over a Unix socket
 ```
 
@@ -185,6 +187,7 @@ Canonical architecture doc:
 - **Vision / direction of travel:** [`docs/VISION.md`](./docs/VISION.md)
 - **Claude backend modes:** [`docs/CLAUDE-BACKENDS.md`](./docs/CLAUDE-BACKENDS.md)
 - **Claude provider profiles / GLM routing:** [`docs/CLAUDE-PROVIDER-PROFILES.md`](./docs/CLAUDE-PROVIDER-PROFILES.md)
+- **Command Code runtime:** [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md)
 - **Companion repos:** [`docs/RUNTIME-COMPANIONS.md`](./docs/RUNTIME-COMPANIONS.md)
 - **Automation API:** [`docs/INTERNAL-API.md`](./docs/INTERNAL-API.md)
 - **Automation API contract:** [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)
@@ -230,7 +233,7 @@ That does not mean it must stay private to localhost, but it does mean you shoul
 This project builds on top of other agent ecosystems rather than replacing them.
 
 - **Pi Coding Agent** is the original foundation and inspiration for the first runtime path. See [shittycodingagent.ai](https://shittycodingagent.ai/) and [the upstream codebase](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent).
-- **Claude Code**, **OpenCode**, and **Antigravity** each provide their own runtime capabilities; Pi Web UI adds a browser layer, persistence layer, replay layer, and cross-runtime UX around them.
+- **Claude Code**, **OpenCode**, **Antigravity**, and **Command Code** each provide their own runtime capabilities; Pi Web UI adds a browser layer, persistence layer, replay layer, and cross-runtime UX around them.
 
 ## License
 

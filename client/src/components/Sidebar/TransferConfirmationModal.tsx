@@ -328,7 +328,7 @@ export function TransferConfirmationModal({ onConfirm }: TransferConfirmationMod
                   >
                     <span className="text-sm font-medium">Command Code</span>
                     <span className="text-xs text-gray-500 mt-0.5">
-                      {commandCodeAvailable ? 'Contained' : 'Not available'}
+                      {commandCodeAvailable ? 'Model catalogue' : 'Not available'}
                     </span>
                   </button>
                 </div>

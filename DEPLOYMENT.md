@@ -4,12 +4,13 @@
 
 ## What You Are Deploying
 
-Pi Web UI is a single web application that fronts four runtime paths:
+Pi Web UI is a single web application that fronts five runtime paths:
 
 - **Pi Coding Agent** — worker-managed Pi sessions
 - **Claude Code** — profile-driven SDK backend, direct `claude -p` fallback, or the channel-backed Claude Code path
 - **OpenCode** — `opencode serve`-backed sessions
 - **Antigravity** — `agy -p` Gemini sessions with Pi-owned turn logs plus agy-owned conversation DBs
+- **Command Code** — one `cmd` subprocess per session behind the single `COMMAND_CODE_ENABLED` gate, with a centrally managed catalogue denylist
 
 Operationally, this means deployment must consider:
 - the Node/Express server itself
@@ -19,6 +20,7 @@ Operationally, this means deployment must consider:
 - availability of Bun if the channel-backed Claude path is enabled
 - availability of `opencode` if OpenCode is needed
 - availability of `agy` if Antigravity is needed
+- availability of `cmd` if Command Code is needed
 
 ## Recommended deployment shapes
 
@@ -214,6 +216,16 @@ If you enable notifications, make sure `NOTIFICATIONS_PUBLIC_BASE_URL` resolves 
 | `ANTIGRAVITY_MAX_SESSIONS` | `4` | max in-memory Antigravity sessions tracked |
 | `ANTIGRAVITY_MAX_PINNED_SESSIONS` | `2` | max pinned Antigravity sessions |
 | `ANTIGRAVITY_CLEANUP_INTERVAL_MS` | `60000` | cleanup loop interval |
+
+### Command Code
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `COMMAND_CODE_ENABLED` | `false` | single gate for the Command Code runtime (browser and Internal API) |
+| `COMMAND_CODE_EXECUTABLE_PATH` | `/root/.npm-global/bin/cmd` | path to the `cmd` CLI |
+| `COMMAND_CODE_ALLOWED_CWD_ROOTS` | parent of the state dir | comma-separated workspace roots; sessions outside them are refused |
+
+The remaining `COMMAND_CODE_*` knobs (state/native-home dirs, turn/wall-time limits, concurrency) are documented in [`.env.example`](./.env.example) and [`docs/COMMAND-CODE-INTEGRATION.md`](./docs/COMMAND-CODE-INTEGRATION.md).
 
 ## Runtime Capacity Notes
 

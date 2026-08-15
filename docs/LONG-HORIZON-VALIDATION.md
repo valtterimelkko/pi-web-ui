@@ -32,7 +32,7 @@ firing-count/state automatically; use a new runner/state file (or a custom
 Internal-API client that explicitly reconciles the two ledgers) rather than
 claiming uninterrupted observation.
 
-Because conditions match on the runtime-neutral `NormalizedEvent` shape, the watch needs **zero per-runtime code** — it works the same across Pi, Claude, OpenCode, and Antigravity.
+Because conditions match on the runtime-neutral `NormalizedEvent` shape, the watch needs **zero per-runtime code** — it works the same across Pi, Claude, OpenCode, Antigravity, and Command Code.
 
 ### 2. The Runner — a headless, restart-tolerant evidence collector
 
