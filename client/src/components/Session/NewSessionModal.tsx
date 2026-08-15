@@ -295,13 +295,16 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   }, [sdkType, commandCodeModels, commandCodeModel]);
 
   // A rejected create re-enables the button while preserving every selection;
-  // a successful create is closed by ChatView when the session appears.
+  // a successful create closes the modal — whichever parent opened it.
   useEffect(() => {
     if (sessionCreation.requestId && sessionCreation.requestId === creationRequestId.current) {
       if (sessionCreation.status === 'error') setIsCreating(false);
-      if (sessionCreation.status === 'created') creationRequestId.current = undefined;
+      if (sessionCreation.status === 'created') {
+        creationRequestId.current = undefined;
+        onClose();
+      }
     }
-  }, [sessionCreation]);
+  }, [sessionCreation, onClose]);
 
   // Derived lists for the structured Claude selector.
   const providerList = providersOf(claudeModels);
@@ -348,8 +351,8 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     if (isCreating) return;
     setIsCreating(true);
     addRecentFolder(currentPath);
-    // Stay open until the matching session_created arrives; ChatView closes
-    // the modal. A rejection re-enables Create and shows the error here.
+    // Stay open until the matching session_created arrives, then close; a
+    // rejection re-enables Create and shows the error here.
     createSession(currentPath);
   };
 

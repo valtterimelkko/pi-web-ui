@@ -218,6 +218,27 @@ describe('NewSessionModal — Claude backend selector', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('a successful create closes the modal once the store reports the matching requestId created', async () => {
+    const onCreateSession = vi.fn();
+    const onClose = vi.fn();
+    const view = render(<NewSessionModal isOpen onClose={onClose} onCreateSession={onCreateSession} />);
+
+    fireEvent.click(screen.getByText('Command Code'));
+    const selector = await screen.findByTestId('commandcode-model-select') as unknown as HTMLSelectElement;
+    fireEvent.change(selector, { target: { value: 'zai-org/glm-5.1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    const requestId = onCreateSession.mock.calls[0]?.[5] as string;
+    expect(requestId).toEqual(expect.any(String));
+    // Clicking Create alone must not close the modal — it waits for the outcome.
+    expect(onClose).not.toHaveBeenCalled();
+
+    sessionState.sessionCreation = { status: 'created', requestId, error: undefined };
+    view.rerender(<NewSessionModal isOpen onClose={onClose} onCreateSession={onCreateSession} />);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    sessionState.sessionCreation = { status: 'idle', requestId: undefined, error: undefined };
+  });
+
   it('a rejected create preserves the selections and shows the error', async () => {
     const onCreateSession = vi.fn();
     const onClose = vi.fn();

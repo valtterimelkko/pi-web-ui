@@ -80,8 +80,8 @@ export function Sidebar() {
     }
   };
 
-  const handleCreateSession = (cwd?: string, sdkType?: SdkType, model?: string, thinkingLevel?: string, effort?: CommandCodeEffort) => {
-    createNewSession(cwd, sdkType, model, thinkingLevel, effort);
+  const handleCreateSession = (cwd?: string, sdkType?: SdkType, model?: string, thinkingLevel?: string, effort?: CommandCodeEffort, requestId?: string) => {
+    createNewSession(cwd, sdkType, model, thinkingLevel, effort, requestId);
   };
 
   const transferStatus = useTransferStore(state => state.status);
