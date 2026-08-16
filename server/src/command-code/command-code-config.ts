@@ -73,7 +73,7 @@ export function defaultCommandCodeConfig(overrides: Partial<CommandCodeRuntimeCo
     stateDir,
     nativeHomeDir: overrides.nativeHomeDir ?? path.join(stateDir, 'native-home'),
     allowedCwdRoots: overrides.allowedCwdRoots ?? [path.dirname(stateDir)],
-    maxTurns: 8,
+    maxTurns: 100,
     maxPromptBytes: 100_000,
     maxWallTimeMs: 15 * 60_000,
     maxStdoutLineBytes: 512 * 1024,
