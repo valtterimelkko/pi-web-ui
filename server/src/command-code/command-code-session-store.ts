@@ -33,6 +33,8 @@ export interface CommandCodeInternalSessionRecord {
   diagnostics?: {
     suppressedDuplicateCount: number;
     unknownEventTypes: string[];
+    droppedLineCount?: number;
+    droppedLineSamples?: Array<{ lineNumber: number; sample: string }>;
     stderrTail?: string;
     protocolError?: string;
     nativeSessionId?: string;
@@ -287,6 +289,8 @@ function validateRecord(value: unknown): CommandCodeInternalSessionRecord {
   if (record.diagnostics) {
     if (!Number.isSafeInteger(record.diagnostics.suppressedDuplicateCount) || record.diagnostics.suppressedDuplicateCount < 0) throw new Error('Invalid Command Code diagnostics');
     if (!Array.isArray(record.diagnostics.unknownEventTypes) || record.diagnostics.unknownEventTypes.some((value) => typeof value !== 'string' || value.length > 200)) throw new Error('Invalid Command Code diagnostics');
+    if (record.diagnostics.droppedLineCount !== undefined && (!Number.isSafeInteger(record.diagnostics.droppedLineCount) || record.diagnostics.droppedLineCount < 0)) throw new Error('Invalid Command Code diagnostics');
+    if (record.diagnostics.droppedLineSamples !== undefined && (!Array.isArray(record.diagnostics.droppedLineSamples) || record.diagnostics.droppedLineSamples.length > 5 || record.diagnostics.droppedLineSamples.some((value) => !value || typeof value !== 'object' || !Number.isSafeInteger(value.lineNumber) || value.lineNumber < 1 || typeof value.sample !== 'string' || value.sample.length > 200))) throw new Error('Invalid Command Code diagnostics');
     if (record.diagnostics.nativeSessionId !== undefined && record.diagnostics.nativeSessionId !== record.nativeSessionId) throw new Error('Command Code diagnostic native session binding drift');
     if (record.diagnostics.stderrTail !== undefined && record.diagnostics.stderrTail.length > 64_000) throw new Error('Invalid Command Code diagnostics');
   }

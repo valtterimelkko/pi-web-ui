@@ -20,7 +20,10 @@ import {
 describe('Command Code model discovery', () => {
   it('does not pin readiness to a repository-owned CLI version', () => {
     expect(defaultCommandCodeConfig().enabled).toBe(false);
-    expect(defaultCommandCodeConfig().maxTurns).toBe(8);
+    // The wall-time cap is the binding guard for runaway loops; the cmdc
+    // default of 8 internal turns killed legitimate long prompts (observed
+    // 2026-08-16: stderr "Retry with --max-turns 16" on every long dispatch).
+    expect(defaultCommandCodeConfig().maxTurns).toBe(100);
   });
 
   it('excludes exactly the 19 premium models and nothing else', () => {
@@ -187,5 +190,49 @@ describe('Command Code NDJSON parser', () => {
     const parsed = parser.finish(0);
     expect(parsed.events.map((event) => event.event.text)).toEqual(['a', 'b']);
     expect(parsed.suppressedDuplicateCount).toBe(1);
+  });
+
+  it('drops stray non-JSON stdout lines instead of poisoning the run', () => {
+    // Observed 2026-08-16: a single unparseable stdout line (banner, notice,
+    // or truncated write) converted exit-0 runs into protocol_error receipts.
+    const parser = new CommandCodeNdjsonParser();
+    parser.push('{"type":"event","event":{"type":"message_update","text":"hi"}}\n');
+    parser.push('some plain notice line that is not JSON\n');
+    parser.push('{"type":"result","subtype":"success","sessionId":"native-1","finalText":"hi"}\n');
+    const parsed = parser.finish(0);
+    expect(parsed.terminal).toMatchObject({ subtype: 'success', sessionId: 'native-1' });
+    expect(parsed.events).toHaveLength(1);
+    expect(parsed.droppedLineCount).toBe(1);
+    expect(parsed.droppedLineSamples).toHaveLength(1);
+    expect(parsed.droppedLineSamples[0]).toMatchObject({ lineNumber: 2 });
+    expect(parsed.droppedLineSamples[0].sample).toContain('plain notice');
+  });
+
+  it('drops a truncated final line and keeps an already-terminal run parseable', () => {
+    const parser = new CommandCodeNdjsonParser();
+    parser.push('{"type":"result","subtype":"success","sessionId":"native-1"}\n');
+    parser.push('{"type":"even');
+    const parsed = parser.finish(0);
+    expect(parsed.terminal).toMatchObject({ subtype: 'success' });
+    expect(parsed.droppedLineCount).toBe(1);
+  });
+
+  it('drops bare non-object JSON lines but stays loud on structured unknown frames', () => {
+    const tolerant = new CommandCodeNdjsonParser();
+    tolerant.push('42\n{"type":"result","subtype":"success","sessionId":"n"}\n');
+    expect(tolerant.finish(0).droppedLineCount).toBe(1);
+
+    const structured = new CommandCodeNdjsonParser();
+    expect(() => structured.push('{"type":"banner","text":"x"}\n')).toThrow(CommandCodeProtocolError);
+  });
+
+  it('bounds dropped-line samples so a garbage fire cannot flood diagnostics', () => {
+    const parser = new CommandCodeNdjsonParser();
+    for (let index = 0; index < 12; index += 1) parser.push(`garbage line ${index}\n`);
+    parser.push('{"type":"result","subtype":"success","sessionId":"n"}\n');
+    const parsed = parser.finish(0);
+    expect(parsed.droppedLineCount).toBe(12);
+    expect(parsed.droppedLineSamples.length).toBeLessThanOrEqual(5);
+    expect(parsed.droppedLineSamples[0].sample.length).toBeLessThanOrEqual(200);
   });
 });

@@ -34,6 +34,28 @@ describe('Command Code private state', () => {
     expect(recovered[0]?.lastResult?.stopReason).toBe('server_restart_unknown');
   });
 
+  it('persists dropped-line diagnostics and rejects malformed samples', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-dropped-'));
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));
+    const store = new CommandCodeSessionStore(root);
+    await store.init();
+    await store.create({ sessionId: 'cc-drop', cwd, modelSelector: 'qwen/qwen3.8-max', eventJournalRef: 'cc-drop.jsonl' });
+    await store.update('cc-drop', {
+      state: 'idle',
+      diagnostics: {
+        suppressedDuplicateCount: 0,
+        unknownEventTypes: [],
+        droppedLineCount: 2,
+        droppedLineSamples: [{ lineNumber: 173, sample: 'not json at all' }],
+      },
+    });
+    const reloaded = new CommandCodeSessionStore(root);
+    await reloaded.init();
+    expect(reloaded.get('cc-drop')).resolves.toMatchObject({
+      diagnostics: { droppedLineCount: 2, droppedLineSamples: [{ lineNumber: 173, sample: 'not json at all' }] },
+    });
+  });
+
   it('loads legacy records that still carry deleted access-control fields', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-store-legacy-'));
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-cwd-'));

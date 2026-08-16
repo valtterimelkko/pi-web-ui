@@ -25,6 +25,10 @@ export interface ParsedCommandCodeOutput {
   terminal: CommandCodeResultFrame;
   unknownEventTypes: string[];
   suppressedDuplicateCount: number;
+  /** Stdout lines that were not parseable JSON and were skipped (see consumeLine). */
+  droppedLineCount: number;
+  /** Bounded samples of dropped lines for diagnostics (never the whole line). */
+  droppedLineSamples: Array<{ lineNumber: number; sample: string }>;
   bytes: number;
   lineCount: number;
 }
@@ -44,6 +48,11 @@ export class CommandCodeProtocolError extends Error {
   }
 }
 
+/** Cap on retained dropped-line samples; the count keeps growing past this. */
+const MAX_DROPPED_LINE_SAMPLES = 5;
+/** Per-sample character cap so a garbage fire cannot flood diagnostics. */
+const MAX_DROPPED_LINE_SAMPLE_CHARS = 200;
+
 /** Incremental, bounded parser for Command Code's public NDJSON print stream. */
 export class CommandCodeNdjsonParser {
   private readonly maxLineBytes: number;
@@ -57,6 +66,8 @@ export class CommandCodeNdjsonParser {
   private readonly events: ParsedCommandCodeEvent[] = [];
   private readonly unknownEventTypes: string[] = [];
   private suppressedDuplicateCount = 0;
+  private droppedLineCount = 0;
+  private readonly droppedLineSamples: Array<{ lineNumber: number; sample: string }> = [];
   private readonly cumulativeSnapshots = new Map<string, string>();
 
   constructor(options: CommandCodeParserOptions = {}) {
@@ -97,6 +108,8 @@ export class CommandCodeNdjsonParser {
       terminal: this.terminal,
       unknownEventTypes: [...this.unknownEventTypes],
       suppressedDuplicateCount: this.suppressedDuplicateCount,
+      droppedLineCount: this.droppedLineCount,
+      droppedLineSamples: [...this.droppedLineSamples],
       bytes: this.bytes,
       lineCount: this.lineCount,
     };
@@ -112,10 +125,12 @@ export class CommandCodeNdjsonParser {
     try {
       value = JSON.parse(line);
     } catch {
-      throw new CommandCodeProtocolError(`Malformed Command Code NDJSON line ${this.lineCount}`);
+      this.dropLine(line);
+      return;
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new CommandCodeProtocolError(`Command Code frame ${this.lineCount} is not an object`);
+      this.dropLine(line);
+      return;
     }
     const frame = value as Record<string, unknown>;
     if (this.terminal) throw new CommandCodeProtocolError('Command Code emitted data after its terminal result');
@@ -128,6 +143,22 @@ export class CommandCodeNdjsonParser {
       return;
     }
     throw new CommandCodeProtocolError(`Unknown Command Code top-level frame type: ${String(frame.type)}`);
+  }
+
+  /**
+   * A stray non-JSON (or non-object) stdout line — banner, notice, or a write
+   * truncated by a kill — must not poison an otherwise complete run. Drop it,
+   * count it, and keep a bounded sample so the next occurrence is
+   * self-diagnosing in session diagnostics instead of a bare line number.
+   */
+  private dropLine(line: string): void {
+    this.droppedLineCount += 1;
+    if (this.droppedLineSamples.length < MAX_DROPPED_LINE_SAMPLES) {
+      this.droppedLineSamples.push({
+        lineNumber: this.lineCount,
+        sample: line.slice(0, MAX_DROPPED_LINE_SAMPLE_CHARS),
+      });
+    }
   }
 
   private consumeEvent(frame: Record<string, unknown>, lineNumber: number): void {

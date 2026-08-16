@@ -454,6 +454,8 @@ export class CommandCodeService {
         diagnostics: {
           suppressedDuplicateCount: result.parsed?.suppressedDuplicateCount ?? 0,
           unknownEventTypes: result.parsed?.unknownEventTypes ?? [],
+          ...(result.parsed?.droppedLineCount ? { droppedLineCount: result.parsed.droppedLineCount } : {}),
+          ...(result.parsed?.droppedLineSamples?.length ? { droppedLineSamples: result.parsed.droppedLineSamples } : {}),
           ...(result.stderrTail ? { stderrTail: scrubDiagnostic(result.stderrTail) } : {}),
           ...(result.protocolError ? { protocolError: scrubDiagnostic(result.protocolError) } : {}),
           ...(adapted?.nativeSessionId ? { nativeSessionId: adapted.nativeSessionId } : {}),
