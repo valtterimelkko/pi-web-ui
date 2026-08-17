@@ -270,6 +270,8 @@ That is not mandatory, but it is the most practical shape if you want:
 
 The maintainer's own preferred shape is an always-on server behind a reverse proxy, and **Caddy** is a very good fit for that. Read [`../DEPLOYMENT.md`](../DEPLOYMENT.md).
 
+> **Internal API note:** `INTERNAL_API_BLOCKED_PI_PROVIDERS` defaults to `openai,openrouter` (blocks those Pi providers on the Internal API; browser use unaffected). See `docs/INTERNAL-API-CONTRACT.md`.
+
 ## 13. What to read next
 
 - [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md)

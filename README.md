@@ -147,11 +147,12 @@ Current docs:
 - [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md)
 
-Recent power-user additions worth knowing about:
+Recent power-user additions worth knowing about (current contract **`1.20.0`**, see `docs/INTERNAL-API-CONTRACT.md` as source; `header_up -Authorization` only in `forward_auth`):
 - **runtime health** and filtered, secret-scrubbed **self-service diagnostics** with a bounded process-local operational snapshot
 - durable **run receipts**, idempotent prompt dispatch, and explicit disconnect-safe detached answer-mode prompts
 - a read-only **screen-view transcript projection** (`view=screen`) for fetching what the user sees without browser automation
 - optional **Pi runtime OpenRouter model refresh** via `npm run pi:refresh-models`; see [`docs/PI-OPENROUTER-MODEL-AUTOMATION.md`](./docs/PI-OPENROUTER-MODEL-AUTOMATION.md)
+- **Files tab:** MarkdownEditor with GFM preview, `filesStore.ts` (200 KiB truncation, read-only when truncated)
 
 The API now publishes contract metadata through `/health` and `/capabilities` because trusted local consumers may use Pi Web UI as a runtime backend. One such consumer under separate design is Agent OS; Pi Web UI should remain the runtime gateway rather than absorbing Agent OS memory/work-object concerns.
 

@@ -4,7 +4,8 @@
 
 ## Sync rule
 
-- `AGENTS.md` and `CLAUDE.md` are intended to stay **byte-identical**.
+AGENTS.md and CLAUDE.md are byte-identical — same file for different harnesses. Edit AGENTS.md and copy to CLAUDE.md (or run the repo's sync script if one exists). Keep them in sync on every change.
+
 - Treat `AGENTS.md` as the maintainer source in normal workflow.
 - After editing this file, regenerate/check with:
   - `npm run docs:sync-agent-guides`
