@@ -4,6 +4,8 @@ import {
   shouldPauseGoalOnStop,
   deriveGoalTag,
   getGoalControlCommand,
+  canSteerWhileStreaming,
+  canSendStreamingText,
 } from '../../../src/lib/piExtensionControls';
 
 describe('Pi extension controls', () => {
@@ -37,6 +39,26 @@ describe('Pi extension controls', () => {
     expect(shouldPauseGoalOnStop('opencode', undefined)).toBe(false);
     // Claude: no goal engine support
     expect(shouldPauseGoalOnStop('claude', 'running')).toBe(false);
+  });
+});
+
+describe('Pi streaming steer composer', () => {
+  it('enables free-text composing while streaming only for Pi SDK sessions', () => {
+    expect(canSteerWhileStreaming(true, 'pi')).toBe(true);
+    expect(canSteerWhileStreaming(false, 'pi')).toBe(false);
+    expect(canSteerWhileStreaming(true, 'claude')).toBe(false);
+    expect(canSteerWhileStreaming(true, 'opencode')).toBe(false);
+    expect(canSteerWhileStreaming(true, 'antigravity')).toBe(false);
+    expect(canSteerWhileStreaming(true, 'commandcode')).toBe(false);
+    expect(canSteerWhileStreaming(true, null)).toBe(false);
+  });
+
+  it('allows sending streaming text only while a Pi session streams and no uploads are pending', () => {
+    expect(canSendStreamingText(true, 'pi', false)).toBe(true);
+    // attachments are not part of the steer/follow_up wire frames yet
+    expect(canSendStreamingText(true, 'pi', true)).toBe(false);
+    expect(canSendStreamingText(false, 'pi', false)).toBe(false);
+    expect(canSendStreamingText(true, 'opencode', false)).toBe(false);
   });
 });
 

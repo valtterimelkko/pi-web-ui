@@ -8,6 +8,34 @@ export function isPiSlashCommandAllowedWhileStreaming(
   return isStreaming && sdkType === 'pi' && draft.trimStart().startsWith('/');
 }
 
+/**
+ * Whether the composer accepts free text while the agent is streaming.
+ *
+ * Pi supports mid-run steering natively (Enter = steer, delivered after the
+ * current tool batch and before the next model call; follow-up = delivered
+ * when the run finishes), so on Pi sessions the composer stays enabled for
+ * any text. Other runtimes have no steer path on this transport yet.
+ */
+export function canSteerWhileStreaming(
+  isStreaming: boolean,
+  sdkType: RuntimeSdkType,
+): boolean {
+  return isStreaming && sdkType === 'pi';
+}
+
+/**
+ * Whether a streaming free-text message can actually be sent. Attachments are
+ * not part of the steer/follow_up wire frames, so uploads block the send until
+ * the run finishes (they can still be attached for the next prompt).
+ */
+export function canSendStreamingText(
+  isStreaming: boolean,
+  sdkType: RuntimeSdkType,
+  hasUploads: boolean,
+): boolean {
+  return canSteerWhileStreaming(isStreaming, sdkType) && !hasUploads;
+}
+
 export function shouldPauseGoalOnStop(
   sdkType: RuntimeSdkType,
   goalStatus: string | undefined,

@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect, memo } from 'react';
-import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles, Map, Wrench } from 'lucide-react';
+import { Paperclip, X, Settings2, ArrowUpRight, Loader2, Square, Sparkles, Map, Wrench, CornerUpRight, Clock } from 'lucide-react';
 import { DictationButton, type DictationButtonState } from './DictationButton';
 import { useChatStore, useSessionStore, useDraftStore } from '../../store';
 import { useUIStore } from '../../store/uiStore';
@@ -11,7 +11,18 @@ import { SlashPalette } from './SlashPalette';
 import { uploadFile } from '../../lib/api';
 import { buildPromptWithFiles, enforceFileCap } from '../../lib/fileAttachments';
 import { MAX_FILES_PER_MESSAGE } from '@pi-web-ui/shared';
-import { isPiSlashCommandAllowedWhileStreaming, shouldPauseGoalOnStop } from '../../lib/piExtensionControls';
+import {
+  isPiSlashCommandAllowedWhileStreaming,
+  shouldPauseGoalOnStop,
+  canSteerWhileStreaming,
+  canSendStreamingText,
+} from '../../lib/piExtensionControls';
+
+interface QueuedStreamingMessage {
+  id: string;
+  mode: 'steer' | 'followUp';
+  text: string;
+}
 
 interface MessageInputProps {
   disabled?: boolean;
@@ -40,6 +51,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   const updateUploadedFile = useChatStore((state) => state.updateUploadedFile);
 
   const isStreaming = useSessionStore((state) => state.isStreaming);
+  const transcript = useSessionStore((state) => state.messages);
   const isCompacting = useSessionStore((state) => state.isCompacting);
   const compactionReason = useSessionStore((state) => state.compactionReason);
   const currentModel = useSessionStore((state) => state.currentModel);
@@ -60,7 +72,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
     currentSessionId ? state.opencodeAgentModes[currentSessionId] ?? 'build' : 'build'
   );
   const setOpencodeAgentMode = useSessionStore((state) => state.setOpencodeAgentMode);
-  const { sendPrompt, abortGeneration } = useWebSocket();
+  const { sendPrompt, sendSteer, sendFollowUp, abortGeneration } = useWebSocket();
 
   // Draft store for per-session draft persistence
   const currentDraft = useDraftStore((state) => state.currentDraft);
@@ -126,6 +138,36 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   const [isFocused, setIsFocused] = useState(false);
   const [showCompactModal, setShowCompactModal] = useState(false);
   const [showSlashPalette, setShowSlashPalette] = useState(false);
+  // Delivery mode for messages sent while the agent is streaming (Pi only):
+  // 'steer' joins the current run before the next model call; 'followUp' is
+  // delivered when the run finishes. Alt+Enter always forces a follow-up.
+  const [deliveryMode, setDeliveryMode] = useState<'steer' | 'followUp'>('steer');
+  const [queuedStreaming, setQueuedStreaming] = useState<QueuedStreamingMessage[]>([]);
+
+  // Reset the delivery mode and local queue when switching sessions.
+  useEffect(() => {
+    setDeliveryMode('steer');
+    setQueuedStreaming([]);
+  }, [currentSessionId]);
+
+  // A queued message is delivered once the matching user message reaches the
+  // transcript (the server replays it into the session when the runtime
+  // accepts the steer/follow-up).
+  useEffect(() => {
+    if (queuedStreaming.length === 0) return;
+    const delivered = new Set(
+      transcript
+        .filter((m) => m.role === 'user' && typeof m.content === 'string')
+        .map((m) => (m.content as string).trim()),
+    );
+    setQueuedStreaming((q) => q.filter((item) => !delivered.has(item.text)));
+  }, [transcript, queuedStreaming.length]);
+
+  // If the run ends without the message appearing (e.g. aborted), drop the
+  // chips rather than implying they are still pending.
+  useEffect(() => {
+    if (!isStreaming) setQueuedStreaming([]);
+  }, [isStreaming]);
 
   // Format model name for display
   const displayModelName = currentModel
@@ -160,12 +202,16 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
     setShowSlashPalette(commandToken !== null && !/\s/.test(commandToken) && commandToken.length <= 20);
   };
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(async (forcedMode?: 'steer' | 'followUp') => {
     const message = currentDraft.trim();
     if (!message && uploadedFiles.length === 0) return;
     const allowStreamingSlash = isPiSlashCommandAllowedWhileStreaming(message, isStreaming, currentSessionSdkType);
-    if (disabled || (isStreaming && !allowStreamingSlash)) return;
-    if (!message && uploadedFiles.length === 0) return;
+    const streamCompose = canSteerWhileStreaming(isStreaming, currentSessionSdkType);
+    // Slash commands keep the existing prompt path (dispatched on delivery);
+    // free text on a streaming Pi session goes through the steer transport.
+    const streamingTextSend = streamCompose && !allowStreamingSlash && message.length > 0;
+    if (disabled || (isStreaming && !allowStreamingSlash && !streamingTextSend)) return;
+    if (streamingTextSend && !canSendStreamingText(isStreaming, currentSessionSdkType, uploadedFiles.some(f => f.serverPath && !f.uploading))) return;
 
     // Handle slash commands
     if (message === '/compact') {
@@ -188,6 +234,28 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
       return;
     }
 
+    if (streamingTextSend) {
+      const mode = forcedMode ?? deliveryMode;
+      const sent = mode === 'followUp' ? sendFollowUp(message) : sendSteer(message);
+      if (!sent) {
+        useUIStore.getState().addToast({
+          type: 'error',
+          message: 'Failed to send message. Check your connection and try again.',
+        });
+        return;
+      }
+      setQueuedStreaming((q) => [...q, {
+        id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        mode,
+        text: message,
+      }]);
+      if (currentSessionId) setDraft(currentSessionId, '');
+      setInputValue('');
+      setShowSlashPalette(false);
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      return;
+    }
+
     // Use sendDraft from draftStore for per-session draft handling
     const success = currentSessionId ? await sendDraft(currentSessionId) : false;
     
@@ -201,13 +269,16 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
         textareaRef.current.style.height = 'auto';
       }
     }
-  }, [currentDraft, uploadedFiles, disabled, isStreaming, currentSessionId, currentSessionSdkType, sendDraft, setInputValue, clearFiles, setDraft]);
+  }, [currentDraft, uploadedFiles, disabled, isStreaming, currentSessionId, currentSessionSdkType, deliveryMode, sendSteer, sendFollowUp, sendDraft, setInputValue, clearFiles, setDraft]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter') {
       if (!e.shiftKey) {
         e.preventDefault();
-        handleSend();
+        // Alt+Enter mirrors the CLI follow-up shortcut and forces 'After'
+        // delivery regardless of the toggle (desktop nicety; the toggle is
+        // the mobile-friendly affordance).
+        handleSend(e.altKey ? 'followUp' : undefined);
       }
     }
     if (e.key === 'Escape') {
@@ -299,8 +370,10 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   const hasUploads = uploadedFiles.some(f => f.serverPath && !f.uploading);
   const isAnyUploading = uploadedFiles.some(f => f.uploading);
   const atFileCap = selectedFiles.length >= MAX_FILES_PER_MESSAGE;
-  const canSendWhileStreaming = isPiSlashCommandAllowedWhileStreaming(currentDraft, isStreaming, currentSessionSdkType);
-  const canSend = (currentDraft.trim().length > 0 || hasUploads) && !disabled && (!isStreaming || canSendWhileStreaming) && !isAnyUploading;
+  const streamCompose = canSteerWhileStreaming(isStreaming, currentSessionSdkType);
+  const canSendWhileStreaming = isPiSlashCommandAllowedWhileStreaming(currentDraft, isStreaming, currentSessionSdkType)
+    || (streamCompose && currentDraft.trim().length > 0 && !hasUploads);
+  const canSend = (currentDraft.trim().length > 0 || hasUploads) && !disabled && (!isStreaming || canSendWhileStreaming) && !isAnyUploading && !(streamCompose && hasUploads);
   const pauseGoalOnStop = shouldPauseGoalOnStop(currentSessionSdkType, goalEngineStatus);
   // Context usage arrives as a raw ratio; 18.044086021505375% is not a reading.
   const displayContextPercent = Math.round(contextPercent);
@@ -389,6 +462,35 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
         </div>
       </div>
 
+      {/* Queued steer/follow-up chips: shown until the message is delivered
+          into the transcript (or the run ends without it). */}
+      {queuedStreaming.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-3 pb-1.5" data-testid="streaming-queue">
+          {queuedStreaming.map((item) => (
+            <span
+              key={item.id}
+              className="inline-flex max-w-full items-center gap-1 rounded-full border border-amber-400/40 bg-amber-50 px-2 py-0.5 text-xs text-amber-700"
+              title={item.mode === 'steer'
+                ? 'Steering — delivered before the next model call'
+                : 'Follow-up — delivered when this run finishes'}
+            >
+              {item.mode === 'steer'
+                ? <CornerUpRight className="h-3 w-3 shrink-0" aria-hidden />
+                : <Clock className="h-3 w-3 shrink-0" aria-hidden />}
+              <span className="truncate">{item.text}</span>
+              <button
+                onClick={() => setQueuedStreaming((q) => q.filter((i) => i.id !== item.id))}
+                className="ml-0.5 rounded-full p-0.5 hover:bg-amber-100"
+                type="button"
+                aria-label={`Dismiss queued ${item.mode} message`}
+              >
+                <X className="h-3 w-3" aria-hidden />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Main composer */}
       <div
         className={`relative rounded-xl border transition-all duration-200 ${
@@ -457,6 +559,51 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
           className="w-full bg-transparent px-4 py-3 text-gray-900 placeholder-gray-400 resize-none outline-none min-h-[72px] sm:min-h-[48px] max-h-[120px] sm:max-h-[200px] text-sm"
           style={{ lineHeight: '1.5', overscrollBehavior: 'contain' }}
         />
+
+        {/* Streaming delivery-mode strip (Pi only). Kept on its own row so
+            narrow/mobile viewports never cram it against Send/Stop. 'Steer'
+            joins the current run before the next model call; 'After' queues a
+            follow-up delivered when the run finishes. Mobile-friendly: two
+            labelled segmented buttons, no keyboard needed. */}
+        {streamCompose && (
+          <div className="flex items-center justify-between gap-2 px-3 pt-2">
+            <div
+              className="flex items-center overflow-hidden rounded-full border border-gray-300"
+              role="group"
+              aria-label="Delivery mode for streaming messages"
+            >
+              <button
+                onClick={() => setDeliveryMode('steer')}
+                className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                  deliveryMode === 'steer'
+                    ? 'bg-gray-900 text-white'
+                    : 'bg-white text-gray-500 hover:bg-gray-100'
+                }`}
+                type="button"
+                aria-pressed={deliveryMode === 'steer'}
+                title="Steer — delivered after the current step, before the next model call"
+              >
+                Steer
+              </button>
+              <button
+                onClick={() => setDeliveryMode('followUp')}
+                className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                  deliveryMode === 'followUp'
+                    ? 'bg-gray-900 text-white'
+                    : 'bg-white text-gray-500 hover:bg-gray-100'
+                }`}
+                type="button"
+                aria-pressed={deliveryMode === 'followUp'}
+                title="After — delivered when this run finishes"
+              >
+                After
+              </button>
+            </div>
+            <span className="text-[10px] text-gray-400 truncate">
+              {deliveryMode === 'steer' ? 'Joins the current run' : 'Runs after this one'}
+            </span>
+          </div>
+        )}
 
         {/* Toolbar */}
         <div className="flex items-center justify-between px-3 pb-2">
@@ -531,7 +678,8 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
             />
           )}
 
-          {/* Send/Stop button */}
+          {/* Send/Stop buttons: on streaming Pi sessions both coexist — Send
+              steers/queues, Stop still aborts immediately. */}
           {isStreaming && !canSendWhileStreaming ? (
             <button
               onClick={() => {
@@ -549,19 +697,36 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
               <Square className="w-4 h-4" />
             </button>
           ) : (
-            <button
-              onClick={handleSend}
-              disabled={!canSend}
-              className={`p-2 rounded-full transition-all ${
-                canSend
-                  ? 'bg-gray-900 text-white hover:bg-gray-800'
-                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-              }`}
-              type="button"
-              title="Send message"
-            >
-              <ArrowUpRight className="w-4 h-4" />
-            </button>
+            <>
+              {isStreaming && streamCompose && (
+                <button
+                  onClick={() => {
+                    if (pauseGoalOnStop && currentSessionSdkType === 'pi') {
+                      sendPrompt('/goal pause-now');
+                    }
+                    abortGeneration();
+                  }}
+                  className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition-all"
+                  type="button"
+                  title={pauseGoalOnStop ? 'Pause goal and stop generation' : 'Stop generation'}
+                >
+                  <Square className="w-4 h-4" />
+                </button>
+              )}
+              <button
+                onClick={() => handleSend()}
+                disabled={!canSend}
+                className={`p-2 rounded-full transition-all ${
+                  canSend
+                    ? 'bg-gray-900 text-white hover:bg-gray-800'
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                }`}
+                type="button"
+                title="Send message"
+              >
+                <ArrowUpRight className="w-4 h-4" />
+              </button>
+            </>
           )}
         </div>
 
