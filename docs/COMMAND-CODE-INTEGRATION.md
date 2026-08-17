@@ -12,7 +12,16 @@ containment machinery this runtime has shed.
 
 Every session:
 
-1. spawns `cmd -p --output-format json --model <id> --max-turns N --trust --skip-onboarding --no-auto-update --plan [--effort E] [--resume <native-id>]`;
+1. spawns `cmd -p --output-format json --model <id> --max-turns N --trust --skip-onboarding --no-auto-update --yolo [--effort E] [--resume <native-id>]`;
+   the `--yolo` flag (the CLI's alias for `--dangerously-skip-permissions`)
+   gives Command Code the same full-trust write/execute capability as the
+   other four runtimes: Pi runs its native tool surface in-process, Claude
+   profiles allow Bash/Edit/Write under `dontAsk`, OpenCode runs allow-all
+   with a catastrophe denylist, and Antigravity passes
+   `--dangerously-skip-permissions`. Compensating controls: absolute
+   server-owned executable path, `COMMAND_CODE_ALLOWED_CWD_ROOTS` CWD gate,
+   prompt-injection detection, bounded prompt/stdout/stderr/wall-time,
+   process-group cleanup, private per-session native home, and replay.
 2. writes the prompt to stdin and reads bounded NDJSON from stdout;
 3. is killed as a process group on abort, timeout, or shutdown;
 4. gets a private per-session native home under `COMMAND_CODE_NATIVE_HOME_DIR`,
@@ -112,6 +121,10 @@ COMMAND_CODE_MAX_TURNS=100
 COMMAND_CODE_MAX_WALL_TIME_MS=900000
 COMMAND_CODE_CONCURRENCY=1
 ```
+
+`COMMAND_CODE_MAX_TURNS` defaults to `100`, matching the CLI's own `-p`
+default, so long prompts are not cut off at the old default of 8; the
+15-minute wall clock (`COMMAND_CODE_MAX_WALL_TIME_MS`) remains the outer bound.
 
 `COMMAND_CODE_ALLOWED_CWD_ROOTS` is the CWD policy: sessions outside these
 canonical roots are refused. Browser and Internal API callers share the same

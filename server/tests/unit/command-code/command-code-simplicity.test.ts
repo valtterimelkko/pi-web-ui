@@ -12,7 +12,9 @@ import { AdmissionController } from '../../../src/internal-api/admission-control
 import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
 
-const CONTAINMENT_TOKENS = ['bwrap', 'slirp4netns', '--unshare-net', '--yolo'];
+// Deleted containment machinery that must never reappear. --yolo is the
+// deliberate full-trust policy (parity with the other runtimes), not containment.
+const CONTAINMENT_TOKENS = ['bwrap', 'slirp4netns', '--unshare-net'];
 
 /** Argv shape comparison ignores per-session resume ids and per-request effort values. */
 function argvShape(args: string[]): string[] {
@@ -87,11 +89,11 @@ describe('Command Code simplicity gates', () => {
     }
     expect(buildCommandCodeArgs({ executablePath: '/opt/bin/cmd', model: 'qwen/qwen3.8-max', maxTurns: 8 })).toEqual([
       '-p', '--output-format', 'json', '--model', 'qwen/qwen3.8-max',
-      '--max-turns', '8', '--trust', '--skip-onboarding', '--no-auto-update', '--plan',
+      '--max-turns', '8', '--trust', '--skip-onboarding', '--no-auto-update', '--yolo',
     ]);
     expect(buildCommandCodeArgs({ executablePath: '/opt/bin/cmd', model: 'qwen/qwen3.8-max', maxTurns: 8, effort: 'xhigh' })).toEqual([
       '-p', '--output-format', 'json', '--model', 'qwen/qwen3.8-max',
-      '--max-turns', '8', '--trust', '--skip-onboarding', '--no-auto-update', '--plan',
+      '--max-turns', '8', '--trust', '--skip-onboarding', '--no-auto-update', '--yolo',
       '--effort', 'xhigh',
     ]);
     expect(buildCommandCodeArgs({ executablePath: '/opt/bin/cmd', model: 'qwen/qwen3.8-max', maxTurns: 8, nativeSessionId: 'native-9' })).toContain('--resume');

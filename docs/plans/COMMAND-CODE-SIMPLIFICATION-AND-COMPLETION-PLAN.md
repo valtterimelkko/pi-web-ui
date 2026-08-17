@@ -151,6 +151,17 @@ marked needs-approval or blocked, and report what cleared.
 4. **One enable flag.** `COMMAND_CODE_ENABLED`. Not four.
 5. **One permission profile.** Server-owned, plan/read-only. Callers never choose
    argv, executable, env, native session id, profile or role.
+   **Superseded 2026-08-16 (operator-authorized):** the profile is now
+   server-owned *full-trust* — `--yolo`, the CLI's alias for
+   `--dangerously-skip-permissions* — giving Command Code parity with the other
+   four runtimes (Pi native tools, Claude dontAsk+allowlist incl. Edit/Write,
+   OpenCode allow-all, Antigravity skip-permissions). The one-constant policy
+   shape is unchanged: callers still never choose argv, executable, env,
+   native session id, profile or role. Rationale: headless `--plan` made every
+   session read-only (browser and Internal API alike), which the
+   Muse Spark evaluation proved was harness-forced abdication, not model
+   behaviour; compensating controls (cwd roots, bounds, injection scan,
+   process-group cleanup, private native home) are unchanged.
 6. **One catalogue, denylist-based, degrading open.** Eligible = *what the CLI
    advertises* minus a committed 19-model exclusion list. A model the CLI adds
    later just appears; an unknown model is simply not listed. **Nothing ever
@@ -330,8 +341,9 @@ kill, `isRunning`, `activeSessionIds`, `redactSensitive`, `boundedTail`.
 **Delete from `command-code-config.ts`** (target ≤ 90 lines, from 170):
 
 All four `CommandCodePermissionProfile` values and the `getCommandCodeProfile`
-switch — replace with one constant `COMMAND_CODE_ARGS = ['--trust',
-'--skip-onboarding', '--no-auto-update', '--plan']`. Delete
+switch — replace with one constant `COMMAND_CODE_ARGS` (originally shipped as
+`['--trust', '--skip-onboarding', '--no-auto-update', '--plan']`; since the
+2026-08-16 full-trust override the constant ends in `--yolo`). Delete
 `browserSandboxExecutablePath`, `browserEgressExecutablePath`,
 `browserDnsConfigPath`, `browserCaCertificatesPath`, `browserRuntimeRoots`,
 `browserAllowedModels`, `browserAllowedCwdRoots`, `browserAuthFile`,

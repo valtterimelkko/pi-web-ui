@@ -165,4 +165,33 @@ describe('Command Code Internal API lifecycle', () => {
     expect(await readdir(path.join(root, 'pins'))).toEqual([]);
     await routes.shutdown();
   });
+
+  it('serves Command Code sessions on GET /sessions/:id and /sessions/:id/info like every other runtime', async () => {
+    const { cwd, routes } = await buildHarness();
+
+    const createResponse = res();
+    await routes.handleCreateSession(req({ runtime: 'commandcode', cwd, model: 'qwen/qwen3.8-max' }), createResponse);
+    expect(createResponse.statusCode, createResponse.body).toBe(201);
+    const created = JSON.parse(createResponse.body);
+
+    const getResponse = res();
+    await routes.handleGetSession(req({}), getResponse, created.sessionId);
+    expect(getResponse.statusCode, getResponse.body).toBe(200);
+    expect(JSON.parse(getResponse.body)).toMatchObject({
+      sessionId: created.sessionId,
+      runtime: 'commandcode',
+      backendMode: 'subprocess',
+    });
+
+    const infoResponse = res();
+    await routes.handleGetSessionInfo(req({}), infoResponse, created.sessionId);
+    expect(infoResponse.statusCode, infoResponse.body).toBe(200);
+    expect(JSON.parse(infoResponse.body)).toMatchObject({
+      sessionId: created.sessionId,
+      runtime: 'commandcode',
+      messageCount: expect.any(Number),
+    });
+
+    await routes.shutdown();
+  });
 });

@@ -126,10 +126,10 @@ describe('Command Code command construction', () => {
     expect(args).toEqual([
       '-p', '--output-format', 'json', '--model', 'qwen/qwen3.8-max',
       '--max-turns', '3', '--trust', '--skip-onboarding', '--no-auto-update',
-      '--plan',
+      '--yolo',
     ]);
     expect(args).not.toContain('--continue');
-    expect(args).not.toContain('--yolo');
+    expect(args).not.toContain('--plan');
   });
 
   it('accepts every discovered model id without a permission profile branch', () => {

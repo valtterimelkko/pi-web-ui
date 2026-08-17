@@ -47,7 +47,7 @@ describe('Command Code process runner', () => {
     const argv = spawn.mock.calls[0]?.[1] ?? [];
     expect(argv).toEqual([
       '-p', '--output-format', 'json', '--model', 'qwen/qwen3.8-max',
-      '--max-turns', '1', '--trust', '--skip-onboarding', '--no-auto-update', '--plan',
+      '--max-turns', '1', '--trust', '--skip-onboarding', '--no-auto-update', '--yolo',
     ]);
     expect(argv).not.toContain('--continue');
     expect(child.stdin.writableEnded).toBe(true);

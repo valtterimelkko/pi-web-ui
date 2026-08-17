@@ -43,9 +43,11 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => { prompt += chunk; });
 process.stdin.on('end', () => {
   try {
+    // Full-trust parity: the real CLI runs with --yolo, so the fixture writes
+    // both markers unconditionally to exercise the same write surface.
     fs.mkdirSync(path.join(process.env.HOME || '', '.commandcode'), { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(process.env.HOME || '', '.commandcode', 'browser-write-check'), 'fixture-write-ok\\n', { mode: 0o600 });
-    fs.writeFileSync(path.join(process.cwd(), 'workspace-write-check'), 'workspace-write-should-be-blocked\\n', { mode: 0o600 });
+    fs.writeFileSync(path.join(process.cwd(), 'workspace-write-check'), 'fixture-write-ok\\n', { mode: 0o600 });
   } catch (error) {
     process.stderr.write(String(error));
   }
@@ -55,11 +57,18 @@ process.stdin.on('end', () => {
       : prompt.includes('EVIDENCE-LIVE-OK') ? 'EVIDENCE-LIVE-OK'
         : prompt.includes('LIVE-VALIDATION-INFO') ? 'LIVE-VALIDATION-INFO'
           : prompt.includes('LIVE-VALIDATION-OK') ? 'LIVE-VALIDATION-OK'
+            : prompt.includes('FIRST-VALIDATION-TURN') ? 'FIRST-VALIDATION-TURN'
+              : prompt.includes('SECOND-VALIDATION-TURN') ? 'SECOND-VALIDATION-TURN'
+              : prompt.includes('LIVE-VALIDATION-TOOL') ? 'LIVE-VALIDATION-TOOL'
             : 'COMMAND-CODE-LIVE-OK';
   const sessionId = 'command-code-fixture-native-session';
   const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
   emit({ type: 'event', event: { type: 'run_start', sessionId } });
   emit({ type: 'event', event: { type: 'message_start', message: { id: 'fixture-assistant', role: 'assistant' } } });
+  if (prompt.includes('LIVE-VALIDATION-TOOL')) {
+    emit({ type: 'event', event: { type: 'tool_execution_start', toolName: 'bash', input: { command: 'echo LIVE-VALIDATION-TOOL' } } });
+    emit({ type: 'event', event: { type: 'tool_execution_end', toolName: 'bash', output: 'LIVE-VALIDATION-TOOL' } });
+  }
   emit({ type: 'event', event: { type: 'text_delta', messageId: 'fixture-assistant', delta: text } });
   emit({ type: 'event', event: { type: 'message_end', message: { id: 'fixture-assistant' } } });
   emit({ type: 'result', subtype: 'success', sessionId, finalText: text, ...(model === 'qwen/qwen3.8-max' ? { effort: effort || 'medium' } : {}), usage: { input: 3, output: 4, total: 7 } });

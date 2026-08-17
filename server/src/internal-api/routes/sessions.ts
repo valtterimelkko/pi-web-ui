@@ -1332,11 +1332,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
-      const browserSession = await commandCodeService?.getSession(sessionId);
-      if (browserSession) {
-        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
-        return;
-      }
       const detail = await buildSessionDetail(sessionId);
       if (!detail) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
@@ -1355,11 +1350,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sessionId: string,
   ): Promise<void> {
     try {
-      const browserSession = await commandCodeService?.getSession(sessionId);
-      if (browserSession) {
-        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
-        return;
-      }
+      // Command Code sessions resolve through buildSessionDetail like every
+      // other runtime; the pre-WP1 browser-contained 404 hide was removed with
+      // the shadow/browser partition and must not come back.
       const detail = await buildSessionDetail(sessionId);
       if (!detail) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));

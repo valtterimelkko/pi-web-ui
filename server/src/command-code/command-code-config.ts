@@ -5,10 +5,12 @@ export const COMMAND_CODE_EXECUTION_INSTANCE_ID = 'commandcode-default' as const
 export type CommandCodeExecutionInstanceId = typeof COMMAND_CODE_EXECUTION_INSTANCE_ID;
 
 /**
- * The one permission profile: server-owned plan/read-only flags. Callers never
- * choose argv, executables, env or profiles — this constant is the whole policy.
+ * The one permission profile: server-owned full-trust flags, matching the
+ * trust level of the other four runtimes (OpenCode allow-all, Antigravity
+ * --dangerously-skip-permissions). Callers never choose argv, executables,
+ * env or profiles — this constant is the whole policy.
  */
-export const COMMAND_CODE_ARGS = ['--trust', '--skip-onboarding', '--no-auto-update', '--plan'] as const;
+export const COMMAND_CODE_ARGS = ['--trust', '--skip-onboarding', '--no-auto-update', '--yolo'] as const;
 
 export interface CommandCodeRuntimeConfig {
   enabled: boolean;
