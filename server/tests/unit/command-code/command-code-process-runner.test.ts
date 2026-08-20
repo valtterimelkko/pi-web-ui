@@ -113,4 +113,58 @@ describe('Command Code process runner', () => {
     kill.mockRestore();
     vi.useRealTimers();
   });
+
+  it('keeps an actively streaming child alive past the wall-time limit (inactivity semantics)', async () => {
+    // A long-running turn that keeps producing output must not be killed by a
+    // total-duration cap; the wall clock is an inactivity bound, resetting on
+    // every stdout chunk.
+    vi.useFakeTimers();
+    const child = fakeChild();
+    const spawn = vi.fn(() => child);
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const runner = new CommandCodeProcessRunner({ executablePath: '/opt/bin/cmd', spawn, maxWallTimeMs: 1_000 });
+    const promise = runner.run({
+      sessionId: 's-active', cwd: '/tmp', model: 'qwen/qwen3.8-max', maxTurns: 1,
+      prompt: 'stream for a long time',
+    });
+    await Promise.resolve();
+    const line = (delta: string) => JSON.stringify({ type: 'event', event: { type: 'text_delta', messageId: 'm', delta } }) + '\n';
+    // 5 seconds of wall time (5x the limit) with output every 200ms.
+    for (let elapsed = 0; elapsed <= 5_000; elapsed += 200) {
+      vi.advanceTimersByTime(200);
+      child.stdout.write(line('x'));
+      await Promise.resolve();
+    }
+    expect(kill).not.toHaveBeenCalled();
+    child.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', sessionId: 'native-1', finalText: 'done' }) + '\n');
+    child.emit('close', 0, null);
+    const result = await promise;
+    expect(result.terminationCause).toBeUndefined();
+    expect(result.parsed?.terminal.subtype).toBe('success');
+    kill.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('terminates a child that falls silent for the full wall-time limit', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild();
+    const spawn = vi.fn(() => child);
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const runner = new CommandCodeProcessRunner({ executablePath: '/opt/bin/cmd', spawn, maxWallTimeMs: 1_000 });
+    const promise = runner.run({
+      sessionId: 's-silent', cwd: '/tmp', model: 'qwen/qwen3.8-max', maxTurns: 1,
+      prompt: 'hang',
+    });
+    await Promise.resolve();
+    // One early chunk, then silence well past the limit.
+    child.stdout.write(JSON.stringify({ type: 'event', event: { type: 'text_delta', messageId: 'm', delta: 'x' } }) + '\n');
+    await Promise.resolve();
+    vi.advanceTimersByTime(2_000);
+    expect(kill).toHaveBeenCalledWith(-4242, 'SIGTERM');
+    child.emit('close', null, 'SIGTERM');
+    const result = await promise;
+    expect(result.terminationCause).toBe('timeout');
+    kill.mockRestore();
+    vi.useRealTimers();
+  });
 });

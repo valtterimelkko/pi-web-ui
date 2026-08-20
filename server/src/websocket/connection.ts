@@ -2262,17 +2262,39 @@ export class WebSocketConnectionManager {
       messages: [],
       fileTimestamp: Date.parse(record.updatedAt),
     } as unknown as ServerMessage);
-    const events = await this.commandCodeService.getReplayEvents(sessionId);
-    if (events.length === 0) return;
-    this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
-    for (const event of events) {
+    const replayStartedAt = Date.now();
+    try {
+      const events = await this.commandCodeService.getReplayEvents(sessionId);
+      if (events.length === 0) return;
+      const projection = this.commandCodeService.getLastReplayProjection();
+      this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
+      for (const event of events) {
+        this.sendMessage(clientId, {
+          type: 'session_event',
+          sessionId,
+          event: normEventToPiFormat(event),
+        } as unknown as ServerMessage);
+      }
+      this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
+      logger.info(
+        `[replayCommandCodeHistory] session=${sessionId} replayed ${events.length} events ` +
+        `(journal ${projection?.inputCount ?? events.length}, coalesced ${projection?.collapsed ?? 0} deltas) ` +
+        `to client ${clientId} in ${Date.now() - replayStartedAt}ms`,
+      );
+    } catch (error) {
+      // A journal read failure (for example corruption or a size cap) must
+      // surface as a visible error, never as a silently empty session view.
+      // history_end still terminates the replay window so the client leaves
+      // the loading state instead of hanging on it.
+      this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
+      this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
       this.sendMessage(clientId, {
-        type: 'session_event',
-        sessionId,
-        event: normEventToPiFormat(event),
+        type: 'error',
+        message: `Command Code history replay failed: ${error instanceof Error ? error.message : String(error)}`,
+        code: 'HISTORY_REPLAY_FAILED',
       } as unknown as ServerMessage);
+      logger.error(`[replayCommandCodeHistory] session=${sessionId} replay failed after ${Date.now() - replayStartedAt}ms:`, error);
     }
-    this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
   }
 
   private async replayAntigravityHistory(clientId: string, sessionId: string): Promise<void> {

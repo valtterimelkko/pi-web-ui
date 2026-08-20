@@ -1441,6 +1441,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           nativeTranscript: 'owned by Command Code; not read or copied by Pi Web UI',
         },
         commands: [],
+        journal: {
+          ...(await commandCodeService!.getJournalStats(record.sessionId)) ?? { exists: false, eventCount: 0, byteSize: 0, maxBytes: 0 },
+          lastProjection: (() => {
+            const projection = commandCodeService!.getLastReplayProjection();
+            return projection && projection.sessionId === record.sessionId
+              ? { at: projection.at, inputCount: projection.inputCount, outputCount: projection.outputCount, collapsed: projection.collapsed }
+              : undefined;
+          })(),
+        },
       },
       diagnostics: { processLocal: true, expanded: expansions.has('diagnostics'), records: expansions.has('diagnostics') ? diagnostics : diagnostics.slice(-3) },
       receiptSummary: { durable: true, count: receipts.length, ...(receipts[0] ? { latest: receipts[0] } : {}) },

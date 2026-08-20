@@ -135,6 +135,37 @@ pickable folders surfaces as a create-time `permission_denied` error.
 Sessions created under a root that is later removed from the list also
 disappear from the session list until the root is restored.
 
+`COMMAND_CODE_MAX_WALL_TIME_MS` is an **inactivity** cap, not a total-duration
+cap: the timer resets on every stdout chunk, so a turn that keeps streaming
+(even for hours) runs to completion, while a CLI that goes silent — hung,
+waiting on a dead network, or looping without output — is terminated after
+the configured bound. Pins protect sessions from cleanup; this timer protects
+the host from silent children. (Before 2026-08-20 the cap was read as a total
+duration, which killed legitimate long tasks mid-stream.)
+
+## Replay model and observability
+
+The normalized event journal (`<state-dir>/events/<session>.jsonl`) is the
+exact append-only evidence record: one `message_update` per native streaming
+delta. Reads are projected: `CommandCodeService.getReplayEvents` collapses
+consecutive per-token deltas of the same message and kind into whole messages
+(`coalesceCommandCodeReplayEvents`), so the browser, the Internal API
+transcript, screen view, and session transfer all replay O(messages) events
+instead of O(tokens) — a single real session journal reached 7,423 per-token
+events (1.4 MB) whose unprojected replay saturated the browser main thread.
+Journal reads join the per-session write queue, so replaying during a live
+turn can never observe a half-written line; a crash-truncated trailing line is
+skipped rather than failing the whole replay.
+
+Diagnostics:
+
+- every WS replay logs `[replayCommandCodeHistory] … replayed N events
+  (journal M, coalesced K deltas) … in Xms`;
+- `GET /api/v1/sessions/:id/evidence` reports `sources.journal`
+  (`exists`, `eventCount`, `byteSize`, `maxBytes`, `lastProjection`);
+- a failed replay surfaces to the browser as `HISTORY_REPLAY_FAILED` after a
+  closed `history_start`/`history_end` window instead of a silently empty view.
+
 ## Error codes
 
 `COMMANDCODE_CLI_MISSING`, `COMMANDCODE_AUTH_REQUIRED`,

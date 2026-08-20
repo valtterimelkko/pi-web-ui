@@ -119,6 +119,32 @@ describe('Command Code service', () => {
     expect(replay.some((event) => event.type === 'agent_end')).toBe(true);
   });
 
+  it('coalesces per-token deltas on replay and exposes projection and journal stats', async () => {
+    const { cwd, service } = await harness();
+    await service.init();
+    const created = await service.createSession({ cwd, model: 'qwen/qwen3.8-max' });
+    // Simulate the real journal shape: one message_update per streaming delta.
+    const manyDeltas: NormalizedEvent[] = [];
+    for (const [index, letter] of ['o', 'k', 'a', 'y'].entries()) {
+      manyDeltas.push({
+        type: 'message_update', sessionId: created.sessionId, timestamp: index,
+        data: { id: 'm1', assistantMessageEvent: { type: 'text_delta', delta: letter } },
+      });
+    }
+    for (const event of manyDeltas) await service.journal.append(created.sessionId, event);
+
+    const replay = await service.getReplayEvents(created.sessionId);
+    expect(replay).toHaveLength(1);
+    expect((replay[0].data as { assistantMessageEvent: { delta: string } }).assistantMessageEvent.delta).toBe('okay');
+
+    const projection = service.getLastReplayProjection();
+    expect(projection).toMatchObject({ sessionId: created.sessionId, inputCount: 4, outputCount: 1, collapsed: 3 });
+
+    const stats = await service.getJournalStats(created.sessionId);
+    expect(stats).toMatchObject({ exists: true, eventCount: 4 });
+    expect(stats?.byteSize).toBeGreaterThan(0);
+  });
+
   it('rejects concurrent prompts for one session and enforces the concurrency limit', async () => {
     const { cwd, runner, service } = await harness();
     await service.init();

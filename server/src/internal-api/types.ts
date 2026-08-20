@@ -425,6 +425,20 @@ export interface SessionEvidenceResponse {
     registryPath: string;
     runtime: Record<string, string>;
     commands: string[];
+    /** Command Code only: bounded journal size/event-count evidence. */
+    journal?: {
+      exists: boolean;
+      eventCount: number;
+      byteSize: number;
+      maxBytes: number;
+      /** Most recent read-side projection stats for this server process. */
+      lastProjection?: {
+        at: string;
+        inputCount: number;
+        outputCount: number;
+        collapsed: number;
+      };
+    };
   };
   diagnostics: {
     processLocal: true;

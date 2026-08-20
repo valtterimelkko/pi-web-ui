@@ -56,6 +56,9 @@ agent-os/
 /internal-api-token
 /internal-api.sock
 
+# Command Code CLI per-project runtime state (taste.md etc.) — never commit.
+.commandcode/
+
 # Python
 __pycache__/
 *.py[cod]

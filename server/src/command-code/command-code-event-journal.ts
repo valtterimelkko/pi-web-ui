@@ -1,12 +1,25 @@
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
+import type { CommandCodeReplayCoalesceStats } from './command-code-replay-projection.js';
 
 export class CommandCodeJournalError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'CommandCodeJournalError';
   }
+}
+
+export interface CommandCodeReplayProjectionSnapshot extends CommandCodeReplayCoalesceStats {
+  sessionId: string;
+  at: string;
+}
+
+export interface CommandCodeJournalStats {
+  eventCount: number;
+  byteSize: number;
+  maxBytes: number;
+  exists: boolean;
 }
 
 export class CommandCodeEventJournal {
@@ -41,7 +54,14 @@ export class CommandCodeEventJournal {
   }
 
   async read(sessionId: string): Promise<NormalizedEvent[]> {
-    const filename = this.filePath(validateSessionId(sessionId));
+    const safeSessionId = validateSessionId(sessionId);
+    // Join this session's append queue before reading: replaying while a turn
+    // is streaming must never observe a line the writer has not fully
+    // committed (a partial trailing line would otherwise fail the whole
+    // replay and surface to the user as an empty session view).
+    const pendingWrite = this.queues.get(safeSessionId);
+    if (pendingWrite) await pendingWrite;
+    const filename = this.filePath(safeSessionId);
     let content: string;
     try { content = await readFile(filename, 'utf8'); }
     catch (error) {
@@ -50,7 +70,16 @@ export class CommandCodeEventJournal {
     }
     if (Buffer.byteLength(content, 'utf8') > this.maxBytes) throw new CommandCodeJournalError('Command Code event journal exceeds byte limit');
     const result: NormalizedEvent[] = [];
-    for (const [index, line] of content.split(/\r?\n/).entries()) {
+    const lines = content.split(/\r?\n/);
+    // The appender always writes `line + '\n'` in one call and reads join the
+    // write queue, so a live writer can never be observed half-way. A trailing
+    // fragment without a terminating newline can therefore only come from a
+    // writer crash mid-append: drop it instead of failing the entire replay.
+    // A corrupt complete, newline-terminated line is real corruption and
+    // still fails loudly. (Both cases drop the final split element: the empty
+    // tail after a terminator, or the truncated fragment without one.)
+    const completeLines = lines.slice(0, -1);
+    for (const [index, line] of completeLines.entries()) {
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line) as NormalizedEvent;
@@ -68,6 +97,28 @@ export class CommandCodeEventJournal {
   async clear(sessionId: string): Promise<void> {
     const filename = this.filePath(validateSessionId(sessionId));
     await writeFile(filename, '', { encoding: 'utf8', mode: 0o600 });
+  }
+
+  /** Bounded read of journal size and event count for observability. */
+  async stats(sessionId: string): Promise<CommandCodeJournalStats> {
+    const safeSessionIdForStats = validateSessionId(sessionId);
+    const pendingStatsWrite = this.queues.get(safeSessionIdForStats);
+    if (pendingStatsWrite) await pendingStatsWrite;
+    const filename = this.filePath(safeSessionIdForStats);
+    try {
+      const [fileStat, content] = await Promise.all([stat(filename), readFile(filename, 'utf8')]);
+      return {
+        eventCount: content.split(/\r?\n/).filter((line) => line.trim().length > 0).length,
+        byteSize: fileStat.size,
+        maxBytes: this.maxBytes,
+        exists: true,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { eventCount: 0, byteSize: 0, maxBytes: this.maxBytes, exists: false };
+      }
+      throw error;
+    }
   }
 
   private filePath(sessionId: string): string {

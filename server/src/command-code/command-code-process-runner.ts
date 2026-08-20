@@ -124,6 +124,15 @@ export class CommandCodeProcessRunner {
       if (graceTimer) clearTimeout(graceTimer);
       if (wallTimer) clearTimeout(wallTimer);
     };
+    // The wall clock is an INACTIVITY bound, not a total-duration cap: it
+    // resets on every stdout chunk. A turn that keeps streaming can run for
+    // hours (matching the other runtimes' long-task semantics); a hung CLI
+    // that produces nothing for maxWallTimeMs still dies.
+    const armWallTimer = (): void => {
+      if (wallTimer) clearTimeout(wallTimer);
+      wallTimer = setTimeout(() => terminate('timeout'), this.maxWallTimeMs);
+      wallTimer.unref?.();
+    };
     const killGroup = (signalToSend: NodeJS.Signals): void => {
       if (typeof child.pid !== 'number') return;
       try {
@@ -169,6 +178,7 @@ export class CommandCodeProcessRunner {
 
     child.stdout?.setEncoding('utf8');
     child.stdout?.on('data', (chunk: string) => {
+      if (!settled) armWallTimer();
       if (settled || protocolError) return;
       try { parser.push(chunk); }
       catch (error) {
@@ -178,6 +188,7 @@ export class CommandCodeProcessRunner {
     });
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', (chunk: string) => {
+      if (!settled) armWallTimer();
       stderrTail = boundedTail(`${stderrTail}${redactSensitive(String(chunk))}`, this.maxStderrBytes);
     });
     child.once('error', (error) => {
@@ -204,8 +215,7 @@ export class CommandCodeProcessRunner {
       spawnError = redactSensitive(error instanceof Error ? error.message : String(error));
       terminate('abort');
     }
-    wallTimer = setTimeout(() => terminate('timeout'), this.maxWallTimeMs);
-    wallTimer.unref?.();
+    armWallTimer();
 
     return resultPromise;
   }

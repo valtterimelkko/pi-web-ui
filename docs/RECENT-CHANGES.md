@@ -4,6 +4,13 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Command Code replay, wall-time, and observability fixes (`2026-08-20`)**
+  - Replay projection: journal reads collapse per-token streaming deltas into whole messages for the browser, Internal API transcript/screen view, and session transfer (7,423-event real session → O(messages) replay; session open went from main-thread saturation to <1s desktop and mobile).
+  - `COMMAND_CODE_MAX_WALL_TIME_MS` is now an inactivity cap (timer resets on stdout), so actively streaming long tasks no longer die at 15 minutes.
+  - Journal reads join the write queue (no half-written line can fail a replay); a crash-truncated trailing line is skipped; WS replay failures surface as `HISTORY_REPLAY_FAILED` instead of an empty view.
+  - Observability: per-replay coalescing log line, `sources.journal` stats in session evidence.
+  - Canonical doc: [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md)
+
 - **Command Code becomes a full runtime path (`1.17.0`–`1.20.0`)**
   - Browser session creation with a combined model + effort selector fed by exact live discovery (`cmd --list-models`), and full Internal API session/prompt/receipt/transcript support.
   - One env gate (`COMMAND_CODE_ENABLED`, default off); the earlier containment, role-attestation, and separate browser-policy machinery was removed in `1.20.0`.

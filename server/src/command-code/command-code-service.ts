@@ -24,7 +24,12 @@ import {
   adaptCommandCodeOutput,
   createCommandCodeIncrementalAdapterState,
 } from './command-code-event-adapter.js';
-import { CommandCodeEventJournal } from './command-code-event-journal.js';
+import {
+  coalesceCommandCodeReplayEvents,
+  describeCommandCodeReplayCoalesce,
+  type CommandCodeReplayCoalesceStats,
+} from './command-code-replay-projection.js';
+import { CommandCodeEventJournal, type CommandCodeJournalStats, type CommandCodeReplayProjectionSnapshot } from './command-code-event-journal.js';
 import {
   CommandCodeProcessRunner,
   type CommandCodeProcessRunInput,
@@ -117,6 +122,7 @@ export class CommandCodeService {
   private readonly inFlightTurns = new Map<string, Promise<void>>();
   private readonly inFlightEffortMutations = new Map<string, Promise<void>>();
   private readonly apiObservers = new Map<string, Set<(event: NormalizedEvent) => void>>();
+  private lastReplayProjection?: CommandCodeReplayProjectionSnapshot;
 
   private readonly sessionRegistry?: SessionRegistryManager;
   private registryProjectionError?: string;
@@ -498,7 +504,32 @@ export class CommandCodeService {
     if (!this.isSessionRecordAccessible(record)) {
       throw new CommandCodeRuntimeError('Command Code session is no longer enabled by the active runtime policy', 'permission_denied');
     }
-    return this.journal.read(sessionId);
+    // Replay projection: collapse per-token streaming deltas into whole
+    // messages. The journal itself stays the exact append-only evidence
+    // record; only reads are projected. Without this, one real session's
+    // journal (7,423 per-token events) was pushed to the browser one delta at
+    // a time, which dominated session-open time and starved the UI.
+    const raw = await this.journal.read(sessionId);
+    const projected = coalesceCommandCodeReplayEvents(raw);
+    this.lastReplayProjection = {
+      sessionId,
+      at: new Date().toISOString(),
+      ...describeCommandCodeReplayCoalesce(raw, projected),
+    };
+    return projected;
+  }
+
+  /** Most recent replay projection stats for this server process (diagnostics). */
+  getLastReplayProjection(): CommandCodeReplayProjectionSnapshot | undefined {
+    return this.lastReplayProjection;
+  }
+
+  /** Bounded journal statistics for observability without a full read. */
+  async getJournalStats(sessionId: string): Promise<CommandCodeJournalStats | undefined> {
+    await this.init();
+    const record = await this.store.get(sessionId);
+    if (!this.isSessionRecordAccessible(record)) return undefined;
+    return this.journal.stats(sessionId);
   }
 
   async abort(sessionId: string): Promise<void> {
