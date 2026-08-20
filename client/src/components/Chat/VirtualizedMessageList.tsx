@@ -5,6 +5,7 @@ import type { LiveMessage } from '../../hooks/useSessionStream.js';
 import type { WorkerStatus } from '../../store';
 import { TRANSFER_READY_MESSAGE } from '../../store/sessionStore';
 import { MessageBubble } from './MessageBubble';
+import { useSessionStore } from '../../store';
 // Screen-view rule primitives are imported from the shared package so the
 // message list and the Internal API `view=screen` projection are defined by
 // ONE body of code (the agent sees exactly what the user sees). See
@@ -225,7 +226,9 @@ const MessageItem = memo(function MessageItem({
   );
 })
 
-export const VirtualizedMessageList = forwardRef<
+// Memoized so unrelated store ticks (e.g. the 1Hz session_status broadcast)
+// re-render ChatView without re-measuring every mounted message row.
+export const VirtualizedMessageList = memo(forwardRef<
   VirtualizedMessageListHandle,
   VirtualizedMessageListProps
 >(function VirtualizedMessageList(
@@ -340,33 +343,54 @@ export const VirtualizedMessageList = forwardRef<
   }, [visibleMessages]);
 
   // Virtuoso places the initial viewport from estimated item heights. Tall
-  // coalesced replay messages (Command Code turns concatenate thousands of
-  // tokens into single messages) make the estimate off by thousands of
-  // pixels, so the session opens stranded above a blank gap with the real
-  // end out of reach. Once per session switch — and whenever messages grow
-  // within a short window after the switch — keep re-anchoring to the last
-  // item so measured heights settle and the true end is shown. Bounded by an
-  // absolute deadline so a user who immediately scrolls up is never fought.
-  const settleStateRef = useRef<{ key: string; deadline: number } | null>(null);
+  // coalesced replay messages make the estimate off by thousands of pixels, so
+  // the session opens stranded above a blank gap. Settling is COMPLETION-
+    // DRIVEN and HARD-CAPPED: the re-anchor burst runs only AFTER the history
+  // window closes (or on data growth while settled), for at most ~15
+  // iterations. An unbounded per-frame scrollToIndex on tall unmeasured rows
+  // costs 200-330ms each and thrashed the main thread continuously — the
+  // exact slowness reported on laptops. A manual upward scroll cancels it.
+  const historyReplayActive = useSessionStore((state) => !!(sessionId && state.historyReplayActive[sessionId]));
+  const userInterruptedRef = useRef(false);
+  useEffect(() => {
+    userInterruptedRef.current = false;
+  }, [sessionKey]);
   useEffect(() => {
     if (listItems.length === 0) return;
-    const now = Date.now();
-    const state = settleStateRef.current;
-    if (state && state.key === sessionKey && now > state.deadline) return;
-    if (!state || state.key !== sessionKey) {
-      settleStateRef.current = { key: sessionKey, deadline: now + 1_500 };
-    }
+    // While the replay window is open, data is still arriving — hold off; the
+    // window-close transition below is the real trigger.
+    if (historyReplayActive) return;
     let cancelled = false;
+    let stableFrames = 0;
+    let iterations = 0;
+    let lastScrollHeight = -1;
+    const cancelOnUserScroll = (event: WheelEvent): void => {
+      if (event.deltaY < 0) userInterruptedRef.current = true;
+    };
+    window.addEventListener('wheel', cancelOnUserScroll, { passive: true });
     const settle = (): void => {
-      if (cancelled) return;
+      if (cancelled || userInterruptedRef.current) return;
+      iterations += 1;
+      if (iterations > 15) return; // hard cap: never thrash the main thread
       virtuosoRef.current?.scrollToIndex({ index: listItems.length - 1, align: 'end', behavior: 'auto' });
-      if (Date.now() < (settleStateRef.current?.deadline ?? 0)) {
-        requestAnimationFrame(settle);
+      const scroller = virtuosoRef.current && (virtuosoRef.current as unknown as { scrollerElement?: HTMLElement | null }).scrollerElement;
+      const scrollHeight = scroller?.scrollHeight ?? -1;
+      if (scrollHeight === lastScrollHeight) {
+        stableFrames += 1;
+        if (stableFrames >= 6) return; // stable; done until data changes
+      } else {
+        stableFrames = 0;
+        lastScrollHeight = scrollHeight;
       }
+      requestAnimationFrame(settle);
     };
     const raf = requestAnimationFrame(settle);
-    return () => { cancelled = true; cancelAnimationFrame(raf); };
-  }, [sessionKey, listItems.length]);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      window.removeEventListener('wheel', cancelOnUserScroll);
+    };
+  }, [sessionKey, listItems.length, historyReplayActive]);
 
   // Handle scroll position changes with identity guard
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
@@ -519,4 +543,4 @@ export const VirtualizedMessageList = forwardRef<
       )}
     </div>
   );
-});
+}));

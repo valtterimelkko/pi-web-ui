@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { createJSONStorage, persist } from 'zustand/middleware';
+import { persist, type PersistStorage } from 'zustand/middleware';
 import { useUIStore } from './uiStore';
 import {
   getPreferences,
@@ -36,22 +36,34 @@ const STORAGE_KEY = 'pi-web-ui-session';
 export const TRANSFER_READY_MESSAGE = 'Context transferred — ready for your next instruction';
 
 let throttleWriteTimer: ReturnType<typeof setTimeout> | null = null;
-let throttlePendingValue: string | null = null;
+/** Pending PERSISTED-STATE OBJECT (not yet stringified). Deferring the
+ * JSON.stringify into the throttled flush is the point: with ~800 cached
+ * sessions the persisted payload reached ~2.2MB and zustand's default JSON
+ * storage stringified it on EVERY set() — 200-330ms of blocking work per
+ * broadcast event, which saturated the main thread during large session
+ * replays (the 15s+ Command Code loads). */
+let throttlePendingValue: { state: unknown; version?: number } | null = null;
 let throttleCommittedValue: string | null = null;
+
+const persistStorageFlush = (name: string): void => {
+  throttleWriteTimer = null;
+  if (throttlePendingValue === null) return;
+  try {
+    const serialized = JSON.stringify(throttlePendingValue);
+    localStorage.setItem(name, serialized);
+    throttleCommittedValue = serialized;
+  } catch (error) {
+    recordStorageFailure('write', error);
+  }
+  throttlePendingValue = null;
+};
 
 // Flush on page hide so no state is lost
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden' && throttlePendingValue !== null && throttleWriteTimer !== null) {
       clearTimeout(throttleWriteTimer);
-      throttleWriteTimer = null;
-      try {
-        localStorage.setItem(STORAGE_KEY, throttlePendingValue);
-        throttleCommittedValue = throttlePendingValue;
-      } catch (error) {
-        recordStorageFailure('flush_on_hide', error);
-      }
-      throttlePendingValue = null;
+      persistStorageFlush(STORAGE_KEY);
     }
   });
 }
@@ -64,37 +76,30 @@ function recordStorageFailure(operation: string, error: unknown): void {
   });
 }
 
-const throttledStorage = {
-  getItem: (name: string): string | null => {
+/** zustand PersistStorage: receives the persisted OBJECT so stringification
+ * happens only inside the throttled flush, never per set(). */
+const throttledStorage: PersistStorage<unknown> = {
+  getItem: (name: string): { state: unknown; version?: number } | null => {
     try {
-      const value = localStorage.getItem(name);
-      throttleCommittedValue = value;
-      return value;
+      const raw = localStorage.getItem(name);
+      throttleCommittedValue = raw;
+      if (raw === null) return null;
+      return JSON.parse(raw) as { state: unknown; version?: number };
     } catch (error) {
       recordStorageFailure('read', error);
       return null;
     }
   },
-  setItem: (name: string, value: string): void => {
-    // Only write if value actually changed from either the pending or last
-    // committed snapshot. The committed check also prevents storage-event
-    // hydration from echoing the same value back to its source tab.
-    if (value === throttlePendingValue || value === throttleCommittedValue) return;
+  setItem: (name: string, value: { state: unknown; version?: number }): void => {
+    // No per-set stringify (not even for dedupe): the pending object replaces
+    // the previous one and the flush stringifies at most once per second.
+    // The flush window is a THROTTLE, not a debouncing reset: continuous
+    // broadcast traffic (a live session streaming 6+ events/s) would
+    // otherwise keep resetting the timer and starve the flush indefinitely.
     throttlePendingValue = value;
-
-    if (throttleWriteTimer !== null) {
-      clearTimeout(throttleWriteTimer);
+    if (throttleWriteTimer === null) {
+      throttleWriteTimer = setTimeout(() => persistStorageFlush(name), 1000);
     }
-    throttleWriteTimer = setTimeout(() => {
-      throttleWriteTimer = null;
-      try {
-        localStorage.setItem(name, value);
-        throttleCommittedValue = value;
-      } catch (error) {
-        recordStorageFailure('write', error);
-      }
-      throttlePendingValue = null;
-    }, 1000);
   },
   removeItem: (name: string): void => {
     if (throttleWriteTimer !== null) {
@@ -157,6 +162,186 @@ const REAUTH_FALLBACK_MESSAGE =
 // Raw Pi SDK events forwarded by multi-session-manager don't include message IDs,
 // so we track the ID assigned at message_start to match subsequent message_update events.
 const currentMessageIdBySession = new Map<string, string>();
+
+// ---- History-replay batching --------------------------------------------
+// One open buffer per session currently inside a [history_start, history_end]
+// window. Events are applied in batch (single render) instead of per event.
+const historyBuffers = new Map<string, Array<{ type: string; [key: string]: unknown }>>();
+const historyFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Apply the buffer in chunks of this many events so memory stays bounded. */
+const HISTORY_BUFFER_FLUSH_EVENTS = 1_000;
+/** Safety: a history window that never closes (dropped connection) flushes. */
+const HISTORY_WINDOW_SAFETY_MS = 15_000;
+/** Bounded acknowledgement for a session switch request. */
+const SESSION_SWITCH_ACK_TIMEOUT_MS = 20_000;
+let sessionSwitchAckTimer: ReturnType<typeof setTimeout> | null = null;
+
+function closeHistoryBuffer(sessionId: string, store: { getState: () => { historyReplayActive: Record<string, true> }; set: (partial: Record<string, unknown>) => void }): void {
+  historyBuffers.delete(sessionId);
+  const timer = historyFlushTimers.get(sessionId);
+  if (timer) { clearTimeout(timer); historyFlushTimers.delete(sessionId); }
+  const active = store.getState().historyReplayActive;
+  if (active[sessionId]) {
+    const next = { ...active };
+    delete next[sessionId];
+    store.set({ historyReplayActive: next });
+  }
+}
+
+/** Fold buffered history session_events into final Message objects.
+ * Mirrors the per-event handlers' accumulation semantics (message_start /
+ * message_update text+thinking deltas / tool start+end) but with ONE state
+ * write at the end instead of a set() per event — the per-event path made a
+ * 1,500-event Command Code replay clone the whole message array 1,500 times.
+ * Non-foldable event types are returned as leftovers for normal dispatch. */
+function foldHistoryEvents(
+  sessionId: string,
+  buffer: Array<{ type: string; [key: string]: unknown }>,
+  base: Message[],
+): { messages: Message[]; leftovers: Array<{ type: string; [key: string]: unknown }> } {
+  // Copy base messages (and their content entries) so a chunked continuation
+  // never mutates store-owned objects in place — downstream memoization
+  // compares by reference, so mutated-in-place entries would skip re-renders.
+  const messages: Message[] = base.map((m) => ({
+    ...m,
+    content: Array.isArray(m.content) ? m.content.map((part) => ({ ...part })) : m.content,
+  }));
+  const leftovers: Array<{ type: string; [key: string]: unknown }> = [];
+  let activeMessageId: string | undefined;
+  const findTarget = (id: string | undefined): Message | undefined => {
+    if (id) return messages.find((m) => m.id === id);
+    // Delta without an id targets the most recent assistant message (same
+    // fallback semantics as the live handler's tracked current id).
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') return messages[i];
+    }
+    return undefined;
+  };
+  for (const buffered of buffer) {
+    const event = (buffered as { event?: { type?: string; [key: string]: unknown } }).event;
+    if (!event || typeof event.type !== 'string') { leftovers.push(buffered); continue; }
+    switch (event.type) {
+      case 'message_start': {
+        const message = (event as { message?: { id?: string; role?: string; content?: Message['content'] } }).message ?? {};
+        const id = message.id || `msg_${Date.now()}_${messages.length}`;
+        activeMessageId = id;
+        messages.push({
+          id,
+          role: (message.role as Message['role']) ?? 'assistant',
+          content: (message.content as Message['content']) ?? [],
+          timestamp: Date.now(),
+        });
+        break;
+      }
+      case 'message_update': {
+        const message = (event as { message?: { id?: string } }).message;
+        const target = findTarget(message?.id || activeMessageId);
+        if (!target) break;
+        const assistantEvent = (event as { assistantMessageEvent?: { type?: string; delta?: string } }).assistantMessageEvent;
+        if (!assistantEvent || typeof assistantEvent.delta !== 'string') break;
+        const contentArray = Array.isArray(target.content)
+          ? target.content
+          : typeof target.content === 'string' && target.content
+            ? [{ type: 'text' as const, text: target.content }]
+            : [];
+        const lastEntry = contentArray[contentArray.length - 1];
+        if (assistantEvent.type === 'text_delta') {
+          if (lastEntry?.type === 'text') lastEntry.text = (lastEntry.text || '') + assistantEvent.delta;
+          else contentArray.push({ type: 'text', text: assistantEvent.delta });
+        } else if (assistantEvent.type === 'thinking_delta') {
+          if (lastEntry?.type === 'thinking') lastEntry.thinking = (lastEntry.thinking || '') + assistantEvent.delta;
+          else contentArray.push({ type: 'thinking', thinking: assistantEvent.delta });
+        } else break;
+        target.content = contentArray;
+        break;
+      }
+      case 'message_end': {
+        activeMessageId = undefined;
+        break;
+      }
+      case 'tool_execution_start': {
+        const { toolCallId, toolName, args } = event as { toolCallId?: string; toolName?: string; args?: unknown };
+        const id = toolCallId || `tool_${Date.now()}_${messages.length}`;
+        messages.push({
+          id,
+          role: 'tool',
+          content: '',
+          timestamp: Date.now(),
+          toolCall: { id, name: toolName || 'unknown', args },
+        });
+        break;
+      }
+      case 'tool_execution_end': {
+        const { toolCallId, result, isError } = event as { toolCallId?: string; result?: unknown; isError?: boolean };
+        const target = findTarget(toolCallId);
+        if (!target || target.role !== 'tool') break;
+        const content = extractToolResultText(result);
+        target.content = content;
+        target.toolResult = { output: content, isError: isError === true };
+        break;
+      }
+      default:
+        leftovers.push(buffered);
+    }
+  }
+  void sessionId;
+  return { messages, leftovers };
+}
+
+/** Apply buffered history events as ONE state write (single render). */
+function applyHistoryBuffer(sessionId: string, chunkLimit = Number.POSITIVE_INFINITY): void {
+  const buffer = historyBuffers.get(sessionId);
+  if (!buffer || buffer.length === 0) return;
+  const chunk = buffer.splice(0, Math.min(buffer.length, chunkLimit));
+  // Temporarily remove the buffer so leftover re-dispatch applies immediately
+  // instead of re-buffering.
+  historyBuffers.delete(sessionId);
+  const startedAt = performance.now();
+  const store = useSessionStore.getState();
+  const base = store.sessionData[sessionId]?.messages ?? [];
+  const { messages: folded, leftovers } = foldHistoryEvents(sessionId, chunk, base);
+  for (const leftover of leftovers) {
+    useSessionStore.getState().handleServerMessage(leftover);
+  }
+  const isCurrent = store.currentSessionId === sessionId;
+  useSessionStore.setState((state) => {
+    const existingData = state.sessionData[sessionId] || {
+      messages: folded,
+      status: 'idle' as const,
+      lastEventTimestamp: Date.now(),
+      contextPercent: 0,
+      currentStep: 0,
+      model: null,
+    };
+    const newCache = new Map(state.sessionCache);
+    newCache.set(sessionId, { messages: folded, lastAccess: Date.now() });
+    return {
+      sessionData: {
+        ...state.sessionData,
+        [sessionId]: { ...existingData, messages: folded, lastEventTimestamp: Date.now() },
+      },
+      sessionMessages: { ...state.sessionMessages, [sessionId]: folded },
+      sessionCache: newCache,
+      ...(isCurrent ? { messages: folded } : {}),
+    };
+  });
+  console.info(`[history-replay] session=${sessionId} folded ${chunk.length} buffered events (${leftovers.length} leftover) in ${Math.round(performance.now() - startedAt)}ms`);
+  if (buffer.length > 0) historyBuffers.set(sessionId, buffer);
+}
+
+function bufferHistoryEvent(sessionId: string, message: { type: string; [key: string]: unknown }): void {
+  const buffer = historyBuffers.get(sessionId) ?? [];
+  buffer.push(message);
+  historyBuffers.set(sessionId, buffer);
+  if (buffer.length >= HISTORY_BUFFER_FLUSH_EVENTS) {
+    // Memory safety: flush this chunk now rather than growing unbounded.
+    applyHistoryBuffer(sessionId, buffer.length);
+    // applyHistoryBuffer deletes the entry when it consumes everything; the
+    // window stays OPEN until history_end, so re-create the empty buffer to
+    // keep subsequent events batching (single render per chunk).
+    if (!historyBuffers.has(sessionId)) historyBuffers.set(sessionId, []);
+  }
+}
 
 /**
  * LRU cache entry for session messages
@@ -401,6 +586,8 @@ interface SessionState {
   // Loading state for session switching (rehydration)
   isSwitchingSession: boolean;
   switchingToSessionId: string | null;
+  /** Sessions currently inside a [history_start, history_end] replay window. */
+  historyReplayActive: Record<string, true>;
   error: string | null;
   extensionUIRequest: ExtensionUIRequest | null;
   extensionWidgets: Record<string, string[]>;
@@ -563,6 +750,7 @@ export const useSessionStore = create<SessionState>()(
       isLoading: false,
       isSwitchingSession: false,
       switchingToSessionId: null,
+      historyReplayActive: {},
       error: null,
       extensionUIRequest: null,
       extensionWidgets: {},
@@ -1291,10 +1479,33 @@ export const useSessionStore = create<SessionState>()(
         });
       },
       setLoading: (isLoading) => set({ isLoading }),
-      setSwitchingSession: (isSwitching, sessionId = null) => set({ 
-        isSwitchingSession: isSwitching, 
-        switchingToSessionId: isSwitching ? sessionId : null 
-      }),
+      setSwitchingSession: (isSwitching, sessionId = null) => {
+        if (sessionSwitchAckTimer) {
+          clearTimeout(sessionSwitchAckTimer);
+          sessionSwitchAckTimer = null;
+        }
+        if (isSwitching) {
+          // Bounded acknowledgement: if no session_switched ever arrives (send
+          // failure, dropped connection, server error), clear the sidebar
+          // loading state and surface a retryable error instead of sticking
+          // forever. The row becomes clickable again immediately.
+          sessionSwitchAckTimer = setTimeout(() => {
+            sessionSwitchAckTimer = null;
+            const stillWaiting = useSessionStore.getState().switchingToSessionId;
+            useSessionStore.setState({ isSwitchingSession: false, switchingToSessionId: null });
+            if (stillWaiting) {
+              useUIStore.getState().addToast({
+                type: 'error',
+                message: 'Session switch timed out — connection may have dropped. Tap the session again to retry.',
+              });
+            }
+          }, SESSION_SWITCH_ACK_TIMEOUT_MS);
+        }
+        set({
+          isSwitchingSession: isSwitching,
+          switchingToSessionId: isSwitching ? sessionId : null
+        });
+      },
       setError: (error) => set({ error }),
       markTransferReady: (sessionId) => {
         if (!sessionId.trim()) return;
@@ -1321,6 +1532,21 @@ export const useSessionStore = create<SessionState>()(
           return;
         }
         const msg = message as { type: string; [key: string]: unknown };
+
+        // ---- History-replay batching -------------------------------------
+        // session_event messages inside an open history window are buffered
+        // and applied in one pass at history_end. Per-event application made
+        // large Command Code replays (600+ events) re-render the whole list
+        // once per event, saturating the main thread for 15+ seconds on a
+        // laptop; batching collapses that to a single render per flush.
+        if (msg.type === 'session_event') {
+          const eventSessionId = (msg as { sessionId?: unknown }).sessionId;
+          if (typeof eventSessionId === 'string' && historyBuffers.has(eventSessionId)) {
+            bufferHistoryEvent(eventSessionId, msg);
+            return;
+          }
+        }
+
         recordBrowserDiagnostic({
           kind: 'message',
           messageType: msg.type,
@@ -2683,13 +2909,35 @@ export const useSessionStore = create<SessionState>()(
 
           case 'history_start': {
             const histStartMsg = msg as unknown as { sessionId: string };
+            // Flush any stale window from a previous switch before opening a
+            // new one, so orphaned buffers can never leak events into the
+            // wrong view.
+            for (const openSessionId of [...historyBuffers.keys()]) {
+              if (openSessionId !== histStartMsg.sessionId) applyHistoryBuffer(openSessionId);
+              closeHistoryBuffer(openSessionId, { getState: () => ({ historyReplayActive: get().historyReplayActive }), set: (partial) => set(partial as never) });
+            }
             // Clear existing messages for this session to prepare for replay
             get().clearSessionMessages(histStartMsg.sessionId);
+            // Open the batching window: session_events are buffered until
+            // history_end (single-render application) with a safety flush in
+            // case history_end never arrives.
+            historyBuffers.set(histStartMsg.sessionId, []);
+            const safetyTimer = setTimeout(() => {
+              applyHistoryBuffer(histStartMsg.sessionId);
+              closeHistoryBuffer(histStartMsg.sessionId, { getState: () => ({ historyReplayActive: get().historyReplayActive }), set: (partial) => set(partial as never) });
+            }, HISTORY_WINDOW_SAFETY_MS);
+            historyFlushTimers.set(histStartMsg.sessionId, safetyTimer);
+            set((state) => ({ historyReplayActive: { ...state.historyReplayActive, [histStartMsg.sessionId]: true as const } }));
             break;
           }
 
           case 'history_end': {
             const histEndMsg = msg as unknown as { sessionId: string };
+            // Apply everything buffered during the window in one pass (the
+            // batching fix), then close the window so live streaming resumes
+            // per-event as before.
+            applyHistoryBuffer(histEndMsg.sessionId);
+            closeHistoryBuffer(histEndMsg.sessionId, { getState: () => ({ historyReplayActive: get().historyReplayActive }), set: (partial) => set(partial as never) });
             // Replay complete — set session to idle
             get().setSessionStatus(histEndMsg.sessionId, 'idle');
             // Also clear the global isStreaming flag if this is the current session.
@@ -2868,9 +3116,18 @@ export const useSessionStore = create<SessionState>()(
     }),
     {
       name: STORAGE_KEY,
-      storage: createJSONStorage(() => throttledStorage),
+      storage: throttledStorage,
       partialize: (state) => ({
-        sessions: state.sessions,
+        // Persisted-session hygiene: cap the offline cache at the 200 most
+        // recently active sessions with a bounded firstMessage. The full list
+        // is re-fetched from the server on every load, so this is only a
+        // cold-start cache — but uncapped it grew to ~2.2MB (800+ sessions,
+        // 33KB firstMessages) whose per-set stringify saturated the main
+        // thread during large session replays.
+        sessions: [...state.sessions]
+          .sort((a, b) => Date.parse(b.lastActivity ?? '') - Date.parse(a.lastActivity ?? ''))
+          .slice(0, 200)
+          .map((session) => ({ ...session, firstMessage: (session.firstMessage ?? '').slice(0, 140) })),
         // sessionMeta is the v2 keyed source of truth; the three legacy fields
         // are derived from it but cached too so the offline read-cache is
         // immediately usable before the first GET resolves.

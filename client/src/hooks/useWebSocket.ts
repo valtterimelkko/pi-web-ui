@@ -40,6 +40,11 @@ export function useWebSocket() {
       onMessage: handleServerMessage,
       onStatusChange: (status: WebSocketStatus) => {
         console.log('WebSocket status:', status);
+        // A dropped connection can never deliver the session_switched the
+        // sidebar spinner is waiting for; clear it so the row stays usable.
+        if (status === 'disconnected') {
+          useSessionStore.getState().setSwitchingSession(false);
+        }
         // Fetch sessions when connected
         if (status === 'connected') {
           console.log('Fetching sessions...');

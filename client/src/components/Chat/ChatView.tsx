@@ -94,9 +94,16 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
   // Handle scroll position changes. Auto-scroll during streaming is owned
   // entirely by VirtualizedMessageList's followOutput; here we only drive the
   // manual "scroll to bottom" affordance.
-  const handleAtBottomChange = (atBottom: boolean) => {
-    setShowScrollButton(!atBottom && messages.length > 0);
-  };
+  const messagesLength = messages.length;
+  const handleAtBottomChange = useCallback((atBottom: boolean) => {
+    setShowScrollButton(!atBottom && messagesLength > 0);
+  }, [messagesLength]);
+
+  // Stable identity so the memoized VirtualizedMessageList is not re-rendered
+  // by unrelated store ticks (the 1Hz session_status updates re-render ChatView;
+  // an inline closure here would defeat the list's memo and re-measure every
+  // mounted row every second).
+  const handleOpenNewSessionModal = useCallback(() => setShowNewSessionModal(true), []);
 
   // Scroll to bottom button handler
   const handleScrollToBottom = () => {
@@ -130,7 +137,7 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
           sessionId={currentSessionId ?? undefined}
           onAtBottomChange={handleAtBottomChange}
           hasSession={!!currentSessionId}
-          onCreateSession={() => setShowNewSessionModal(true)}
+          onCreateSession={handleOpenNewSessionModal}
           workerStatus={workerStatus}
           transferReady={transferReady}
         />

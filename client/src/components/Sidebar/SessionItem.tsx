@@ -4,6 +4,7 @@ import type { Session } from '../../store/sessionStore';
 import { useSessionStore } from '../../store';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { useTransferStore } from '../../store/transferStore';
+import { useUIStore } from '../../store/uiStore';
 import { deleteSession } from '../../lib/api';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { WorkerStatusIndicator } from './WorkerStatusIndicator';
@@ -192,7 +193,17 @@ export const SessionItem = React.memo(function SessionItem({ session, isActive, 
     if (!isActive && !isEditing && !isLoading && !contextMenu.visible) {
       // Set switching state for UI feedback
       setSwitchingSession(true, session.id);
-      switchSession(session.path);
+      const sent = switchSession(session.path);
+      if (!sent) {
+        // The WebSocket could not accept the switch (dropped/connecting).
+        // Clear the loading state immediately so the row stays clickable and
+        // the user sees a retryable error instead of a stuck spinner.
+        setSwitchingSession(false);
+        useUIStore.getState().addToast({
+          type: 'error',
+          message: 'Not connected — reconnecting. Tap the session again in a moment.',
+        });
+      }
     }
   };
 
