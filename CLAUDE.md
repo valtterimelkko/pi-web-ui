@@ -45,7 +45,7 @@ safely that conductor can scale. For strategic work involving Internal API
 capacity, long-running sessions, dispatch, supervision, admission, retention,
 worker isolation or production rollout, read both sides before deciding:
 
-- this repo: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md), [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md), and the [resource scaling plan](./docs/plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md);
+- this repo: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md), [`docs/PROCESS-ISOLATION-DESIGN.md`](./docs/PROCESS-ISOLATION-DESIGN.md), and the [resource scaling plan](./docs/plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md) — **its Phases 8–9 are paused as of 2026-08-20; Phases 0–7 stay complete and in service. Read its "Programme pause" section before treating any of it as open work;**
 - Agent OS: `/root/agent-os/docs/CURRENT-STATE.md`, `/root/agent-os/docs/ARCHITECTURE-BOUNDARIES.md`, and its canonical roadmap/status docs linked there.
 
 Do not copy the sibling repo's current step/phase status here; follow those

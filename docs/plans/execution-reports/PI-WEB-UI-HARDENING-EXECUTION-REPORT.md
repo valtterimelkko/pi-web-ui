@@ -5,6 +5,8 @@
 **Operator decisions applied:** pre-auth through end of Phase 2; prod restarts OK at any stage; Task 2.4 Agent OS client patch in scope; TasksMax applied (measured); tmux cleanup only if it does not disturb `/root/tmux`; independent review by fresh agents (Claude subagents) + Luna/gpt-5.5 critical review at each phase's excellence gate.
 **Convention:** every claim carries an evidence label per plan §6.3 (`planned` / `implemented-not-validated` / `unit-validated` / `integration-validated` / `live-validated-disposable` / `deployed-production` / `observed-production`).
 
+> **Programme status, 2026-08-20 — Phases 8–9 paused by owner decision.** This report is the evidence record for what was executed and it is unchanged: every completion claim below stands. The plan's remaining phases are paused because the anticipated Agent OS conductor load did not arrive and Phase 8B's own maturity gate is not met. See "Programme pause" in the plan for the measured evidence, the accepted residual risk and the resumption trigger. **Nothing in this report was unwound or re-scoped.**
+
 ## Operator rationale retained for future decisions
 
 The programme began after real scaling pressure: increasing Agent OS/Internal

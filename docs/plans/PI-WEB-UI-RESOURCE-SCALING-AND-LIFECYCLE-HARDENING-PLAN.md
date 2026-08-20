@@ -1,6 +1,6 @@
 # Pi Web UI Agent OS-First Resource Scaling and Runtime Lifecycle Hardening
 
-**Status:** Phases 0–6 **COMPLETE**; Phase 7 Pi/Internal API shadow implementation **COMPLETE — PAUSE 7: CONTINUE SHADOW**; contained routing, production observation and Phases 8–9 remain planned
+**Status:** Phases 0–6 **COMPLETE**; Phase 7 Pi/Internal API shadow implementation **COMPLETE — PAUSE 7: CONTINUE SHADOW**; **Phases 8–9 PAUSED 2026-08-20 by owner decision — see "Programme pause" below.** Contained routing and production observation remain unauthorised
 **Supersedes:** the original plan at commit `b8d9109`
 **Revision basis:** production evidence gathered 3–5 August 2026
 **Execution report:** [`PI-WEB-UI-HARDENING-EXECUTION-REPORT.md`](./execution-reports/PI-WEB-UI-HARDENING-EXECUTION-REPORT.md)
@@ -8,6 +8,69 @@
 **Companion repository when explicitly named:** `/root/agent-os`
 **Production service:** `pi-web-ui.service` on port `3456`
 **Production operation rule:** use `npm run production:lock -- ...`; Caddy and unrelated services are out of scope and must not be restarted.
+
+> ## Programme pause — 2026-08-20
+>
+> **Phases 8 and 9 are paused by owner decision. This plan is not abandoned, not
+> failed, and not waiting for anyone to pick it up.** Everything already recorded
+> as complete stays complete and in service; nothing needs unwinding or
+> re-validating.
+>
+> **Why.** This plan is Agent OS-first by name and by premise: it was written in
+> anticipation of heavy conductor-to-child Internal API traffic. **That premise
+> changed on the Agent OS side.** Agent OS paused conductor development on
+> 2026-08-19 for a couple of months, and the work that replaced it is local CLI
+> work on its memory layer, not concurrent Pi sessions. The anticipated load is
+> not arriving in that window.
+>
+> **The plan already gates itself here.** Phase 8B begins "only when the owner
+> considers the conductor reliable enough for representative workflows", and
+> Phase 9 states that if 8B is not yet justified, full Phase 9 must remain
+> pending. **8B's entry condition is not met.** Recording the pause respects that
+> gate rather than overriding it.
+>
+> **What measured evidence says about the risk of stopping here** (host read-only
+> observation, 2026-08-20): service memory `220 MB` against a `12 GiB` limit;
+> peak since restart `638 MB`; `memory.events` `low/high/max/oom/oom_kill` **all
+> zero**; cumulative service memory-pressure stall time **zero**; tasks 11 of
+> `TasksMax=1024`; host ~19 GiB available with PSI zeros; no kernel OOM in 14
+> days. The service has never reached even its `high` watermark. This is
+> `observed-production` read-only evidence and nothing more: it does not certify
+> behaviour under load that has not been run.
+>
+> **What is complete and in service.** Phases 1–5 are the protective half and
+> they are live: OpenCode inactivation, truthful cgroup/host capacity with
+> conservative admission, PID and pressure guards, bounded `TasksMax`, lifecycle
+> ownership and fencing, clean shutdown, truthful readiness, the single execution
+> arbiter with priority reservations and bounded control lane, and Agent OS
+> backpressure/defer/P1 control. Phase 6 is a bounded hybrid whose pilot stays
+> **off** outside disposable validation; Phase 7 stays **shadow-only** with no
+> contained routing.
+>
+> **What is deliberately not being done.** Phases 8A, 8B and 9 buy **capacity**,
+> and capacity is not the constraint at ~2% of the provisioned memory limit.
+> Promoting concurrency that will not be used is work without payoff.
+>
+> **The accepted residual risk, stated plainly.** Phase 6's per-session cgroup
+> containment is implemented but not routed, so a single runaway session is not
+> contained to its own session and can climb toward the service limit. The blast
+> radius is a `pi-web-ui.service` restart rather than host exhaustion, bounded by
+> the 12 GiB cap on a 30 GiB host, `TasksMax=1024` against fork storms, and the
+> arbiter's admission ceiling. It has never fired. **This is an accepted risk,
+> not an unnoticed one.**
+>
+> **What resumes this plan.** Any of: conductor development restarting at Agent OS
+> with concurrent dispatch; a sustained rise in ordinary Web UI workload; or any
+> non-zero `memory.events` counter, observed pressure, or OOM on
+> `pi-web-ui.service`. **8A is the natural resumption point** — it is
+> maturity-independent, uses the frozen Phase 6 fixture, and should run **before**
+> new traffic arrives rather than during it.
+>
+> **Ownership boundary.** The changed premise is Agent OS's to report and is
+> recorded on that side. Whether Pi Web UI needs the remaining hardening for its
+> **own** workload — ordinary long-running browser sessions, growing transcripts,
+> real tool work — remains a Pi Web UI decision. Neither repository certifies the
+> other's readiness.
 
 > **Completion boundary:** Phases 1–6 have been fully executed, validated, and
 > recorded in the execution report. PAUSE 6 authorises only a bounded hybrid
@@ -38,7 +101,7 @@
 | 5 — Agent OS integration | **COMPLETE** | Companion-repo verify + gap-fill, contract parity, durable capacity deferral, backpressure, P1 control, and exactly-once disposable live proof are recorded. |
 | 6 — Worker-cgroup pilot | **COMPLETE — BOUNDED HYBRID** | Frozen fixture, contained-heavy boundary, adversarial validation, final review and cleanup passed. The pilot remains off outside disposable validation; the decision constrains any later expansion to one canonical API and automatic server-owned policy. |
 | 7 — shadow gate | **SHADOW IMPLEMENTED / PAUSE 7: CONTINUE SHADOW** | Pi/Internal API shadow classification is implemented and disposable-live validated; owner chose continued shadow evidence; no contained routing or production observation is authorised. |
-| 8–9 | **PLANNED / NOT STARTED** | Conditional expansion, capacity ramp/soak, representative Agent OS/browser proof and final production rollout remain future work. |
+| 8–9 | **PAUSED 2026-08-20** (was planned / not started) | Owner decision: the anticipated Agent OS conductor load is not arriving in this window and 8B's own maturity gate is not met. Nothing started, nothing unwound. Resumption trigger and accepted residual risk are in "Programme pause" above. |
 
 All phase-level completion claims above are backed by the linked execution report. A phase being complete does not waive its later production rollout or observation gate where the report explicitly leaves that gate for Phase 9.
 

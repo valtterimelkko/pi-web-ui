@@ -87,7 +87,7 @@ npm run validate:phase6-worker-cgroup
 
 The parent creates a fresh mode-0700 child directory with an exact nonce/fixture ownership marker and only `pi-web-ui-phase6-<nonce>*` transient units. Signal and normal cleanup stop the exact nonce-owned slice after worker-level reconciliation, verify no owned service remains and archive bounded evidence before removing temporary receipt/session directories. It never reuses or stops `pi-web-ui.service`, `tmux-web-ui.service`, `twui-*` scopes, Caddy, or another existing process.
 
-Canonical fixture settings and acceptance criteria remain in [`plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md`](./plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md). Changing a frozen scenario parameter requires owner approval and a new fixture version.
+Canonical fixture settings and acceptance criteria remain in [`plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md`](./plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md). Changing a frozen scenario parameter requires owner approval and a new fixture version. **The fixture contract stands unchanged, but the plan's Phases 8–9 are paused as of 2026-08-20**, so the ramp/soak that would consume this fixture is not current work; the pilot remains off outside disposable validation.
 
 ## PAUSE 6 bounded-hybrid direction
 

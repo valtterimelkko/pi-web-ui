@@ -331,7 +331,10 @@ truth at `/root/agent-os/docs/CURRENT-STATE.md` and
 `/root/agent-os/docs/ARCHITECTURE-BOUNDARIES.md`, then follow the canonical
 roadmap/status links from those files. On this side, use
 [`PROCESS-ISOLATION-DESIGN.md`](./PROCESS-ISOLATION-DESIGN.md) and the
-[resource scaling plan](./plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md).
+[resource scaling plan](./plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md),
+whose Phases 8–9 are **paused as of 2026-08-20** while Phases 0–7 remain complete
+and in service — see its "Programme pause" section for the accepted residual
+risk and the resumption trigger.
 Do not duplicate current Agent OS step status here: cross-repo readiness must be
 resolved from each repository at decision time, and neither repository may treat
 the other's plan or fixture as proof of current readiness.
