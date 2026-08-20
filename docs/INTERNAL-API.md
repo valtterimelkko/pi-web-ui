@@ -618,7 +618,7 @@ GET /api/v1/sessions/:sessionId/info
 `/info` is the preferred endpoint for live validation and local automation.
 Both endpoints now return enriched runtime metadata where available. For a profile-backed Claude session, session info/list `model` is the effective runtime model (for example `sonnet`) and `modelSelector` is the exact creation selector (`profile:<id>`); do not compare those as if they were the same identity category. The create response alone retains its historical selector echo in `model` for backwards compatibility.
 
-**Pi create responses are truthful about the applied model (2026-08-19, defect 9).** For `runtime: "pi"`, the create response's `model` is the model the session actually resolved to (`provider/model`), and `modelSelector` echoes the exact requested selector. A selector the runtime refuses or cannot apply (for example a bare model id without provider) fails the create with `MODEL_NOT_APPLIED` (HTTP 422) after cleaning up the half-created session — it never returns a session silently running a different model.
+**Pi create responses are truthful about the applied model (since contract 1.21.0, 2026-08-19).** For `runtime: "pi"`, the create response's `model` is the model the session actually resolved to (`provider/model`), and `modelSelector` echoes the exact requested selector. A selector the runtime refuses or cannot apply (for example a bare model id without provider) fails the create with `MODEL_NOT_APPLIED` (HTTP 422) after cleaning up the half-created session — it never returns a session silently running a different model.
 
 **Response (200):**
 ```json
@@ -2288,6 +2288,7 @@ Actionable errors may also include additive `hint` (next step) and `docs`
 | `RETENTION_STORE_UNAVAILABLE` | 503 | Required lease persistence/renewal/release was not durable |
 | `ADMISSION_CAPACITY_EXHAUSTED` | 429 | Prompt-time global/runtime/memory admission refused; respect `Retry-After` |
 | `PROVIDER_NOT_ALLOWED` | 403 | Pi provider is disabled for Internal API agent execution |
+| `MODEL_NOT_APPLIED` | 422 | Explicit Pi model selector was refused or not applied; the session was not created (1.21.0). Use the exact `provider/model` selector. |
 
 ## Configuration
 

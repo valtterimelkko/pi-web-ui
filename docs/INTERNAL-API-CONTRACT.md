@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.20.0",
+  "contractVersion": "1.21.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,10 @@ Current contract:
 
 ### Changelog
 
+- **1.21.0** (minor, truthful Pi create responses; additive error code) — Pi session creation becomes verifiable about route identity:
+  - the Pi create response's `model` is the model the session **actually resolved to** (`provider/model`); it never echoes a request that was not applied. `modelSelector` (additive, Pi creates) echoes the exact requested selector;
+  - a selector the runtime refuses or cannot apply (for example a bare model id without a provider component) fails the create with `422 MODEL_NOT_APPLIED` (new additive error code) after the half-created session, registry entry and socket files are cleaned up — the same fail-closed shape as the blocked-provider path;
+  - session-list/`firstMessage` no longer skips genuine user prompts that merely reference a skill path (the Part 3 envelope case): only canonical `<skill name=` injections are treated as skill content.
 - **1.20.0** (minor, breaking for Command Code role metadata) — Command Code session creation no longer requires `invocationRole` or a role attestation; both request fields are accepted and ignored (removal tracked in `session-validation.ts`). The `catalogue`, `browserRunnable` and `supportsEffort` fields are removed from the Command Code model projection, and the effort metadata on sessions/receipts collapses to `effort` / `effortLevels` / `defaultEffort`. Command Code is one direct subprocess for both browser and Internal API callers; a session is a session.
 - **1.19.0** (minor, additive normalized-output evidence) — adds:
   - `RunReceipt.outputEvidence` with bounded counts of normalized assistant messages, text-bearing events/characters, tool calls, and a `text` / `no-text` / `unknown` disposition;
@@ -261,6 +265,7 @@ re-introduced.
 | `TURN_STALLED` | 500 | Accepted run exceeded its idle/absolute watchdog | Runtime stopped emitting events or queued work could not be correlated |
 | `IDEMPOTENCY_KEY_CONFLICT` | 409 | Key reused for a different request | Same endpoint-scoped key has a different request fingerprint (prompt dispatch or explicit notification payload) |
 | `PROVIDER_NOT_ALLOWED` | 403 | Pi provider blocked on the Internal API | Operator policy prevents agent execution through a metered provider |
+| `MODEL_NOT_APPLIED` | 422 | The explicit Pi model selector was refused or not applied; the session was not created (1.21.0) | Use the exact `provider/model` selector from the models list |
 
 ### Additive error enrichment (`hint`, `docs`)
 

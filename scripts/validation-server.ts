@@ -173,7 +173,8 @@ async function main(): Promise<void> {
     console.error('');
     console.error(' Point a validator at it, e.g.:');
     console.error(`   npm run validate:long-horizon -- --socket ${socketPath} --token-path ${tokenPath} ...`);
-    console.error(' Stop with Ctrl-C.');
+    console.error(' Stop with Ctrl-C, or for full process-group teardown from another shell:');
+    console.error();
     console.error('────────────────────────────────────────────────────────');
 
     // Imported native dependencies must not see this wrapper's flags.

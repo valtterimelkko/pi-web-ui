@@ -11,6 +11,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
   - Observability: per-replay coalescing log line, `sources.journal` stats in session evidence.
   - Canonical doc: [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md)
 
+- **Truthful Pi create responses; disposable-server process-group teardown (`1.21.0`)**
+  - Pi create responses report the model the session actually resolved to, with `modelSelector` echoing the request; a refused/unapplied selector fails with `422 MODEL_NOT_APPLIED` after cleanup instead of silently returning a session on a different model.
+  - Session-list `firstMessage` no longer skips genuine user prompts that merely reference a skill path (the Agent OS envelope case); only canonical `<skill name=` injections are treated as skill content.
+  - The validation server records its process identity (`server-process.json`) and `scripts/validation-server-stop.mjs` terminates the recorded process group with verification (SIGTERM → bounded wait → SIGKILL, zombie-aware) — never command-line matching.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.21.0), [`INTERNAL-API.md`](./INTERNAL-API.md)
+
 - **Command Code becomes a full runtime path (`1.17.0`–`1.20.0`)**
   - Browser session creation with a combined model + effort selector fed by exact live discovery (`cmd --list-models`), and full Internal API session/prompt/receipt/transcript support.
   - One env gate (`COMMAND_CODE_ENABLED`, default off); the earlier containment, role-attestation, and separate browser-policy machinery was removed in `1.20.0`.
