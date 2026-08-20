@@ -25,10 +25,15 @@ Every session:
 2. writes the prompt to stdin and reads bounded NDJSON from stdout;
 3. is killed as a process group on abort, timeout, or shutdown;
 4. gets a private per-session native home under `COMMAND_CODE_NATIVE_HOME_DIR`,
-   with the operator's `~/.commandcode/auth.json` copied in read-only and the
+   with the operator's `~/.commandcode/auth.json` copied in read-only, the
    operator's user-scope mods (`~/.commandcode/mods/`, regular files only,
    symlinks skipped) mirrored in so installed mods apply to web-UI sessions
-   too (`prepareNativeHomeMods` in `command-code-service.ts`);
+   too (`prepareNativeHomeMods` in `command-code-service.ts`), the operator's
+   skills symlinks (`~/.agents/skills` and `~/.commandcode/skills`, when they
+   are symlinks into a shared skills source) replicated 1:1 so HOME-scoped
+   skill discovery finds the shared skills (`prepareNativeHomeSkills`), and
+   the operator's user-scope `~/.commandcode/AGENTS.md` user memory mirrored in
+   read-only (`prepareNativeHomeUserMemory`);
 5. journals normalized events for replay; stderr, credentials, and native
    transcript paths stay private.
 

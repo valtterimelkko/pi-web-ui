@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readlink, readFile, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -267,6 +267,36 @@ describe('Command Code service', () => {
       expect(await readFile(path.join(sessionMods, 'test-mod.ts'), 'utf8')).toBe('// test mod\n');
       // The symlink is skipped outright, not copied through.
       expect(await lstat(path.join(sessionMods, 'escape.ts')).catch(() => undefined)).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('replicates the operator\'s skills symlinks and user AGENTS.md into the session native home', async () => {
+    const fakeHome = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-home-'));
+    const skillsSource = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-skills-'));
+    await mkdir(path.join(fakeHome, '.commandcode'), { recursive: true });
+    await mkdir(path.join(fakeHome, '.agents'), { recursive: true });
+    // The operator topology: both harness skill locations are symlinks into
+    // one canonical shared skills source.
+    await symlink(skillsSource, path.join(fakeHome, '.agents', 'skills'));
+    await symlink(skillsSource, path.join(fakeHome, '.commandcode', 'skills'));
+    await writeFile(path.join(fakeHome, '.commandcode', 'AGENTS.md'), '# global instructions\n');
+    vi.stubEnv('HOME', fakeHome);
+    try {
+      const { root, cwd, service } = await harnessOwningRunner();
+      await service.init();
+      const created = await service.createSession({ cwd, model: 'qwen/qwen3.8-max' });
+      const sessionHome = path.join(root, 'native-home', created.sessionId);
+      // Both skill locations are replicated as symlinks to the same source,
+      // so the harness's HOME-scoped discovery finds the shared skills.
+      expect(await readlink(path.join(sessionHome, '.agents', 'skills'))).toBe(skillsSource);
+      expect(await readlink(path.join(sessionHome, '.commandcode', 'skills'))).toBe(skillsSource);
+      // The user-scope AGENTS.md is mirrored as a read-only regular file.
+      const agentsStat = await lstat(path.join(sessionHome, '.commandcode', 'AGENTS.md'));
+      expect(agentsStat.isFile()).toBe(true);
+      expect(agentsStat.mode & 0o777).toBe(0o400);
+      expect(await readFile(path.join(sessionHome, '.commandcode', 'AGENTS.md'), 'utf8')).toBe('# global instructions\n');
     } finally {
       vi.unstubAllEnvs();
     }

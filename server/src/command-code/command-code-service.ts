@@ -1,4 +1,4 @@
-import { access, chmod, copyFile, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
+import { access, chmod, copyFile, lstat, mkdir, open, readdir, readFile, readlink, realpath, rename, rm, stat, symlink } from 'node:fs/promises';
 import { constants as fsConstants, type Dirent } from 'node:fs';
 import path from 'node:path';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
@@ -797,6 +797,8 @@ export class CommandCodeService {
     await ensurePrivateDirectory(sessionHome, 'Command Code session home');
     await ensurePrivateDirectory(commandCodeHome, 'Command Code private auth directory');
     await this.prepareNativeHomeMods(commandCodeHome);
+    await this.prepareNativeHomeSkills(sessionHome);
+    await this.prepareNativeHomeUserMemory(commandCodeHome);
     const source = path.join(process.env.HOME || '/root', '.commandcode', 'auth.json');
     const target = path.join(commandCodeHome, 'auth.json');
 
@@ -856,6 +858,64 @@ export class CommandCodeService {
       } catch {
         // A single unreadable mod must not block the others or the session.
       }
+    }
+  }
+
+  /**
+   * Replicate the operator's skills symlinks into the session-private native
+   * home. The harness discovers skills from HOME-scoped locations
+   * (~/.agents/skills and ~/.commandcode/skills), and each web-UI session runs
+   * with its own HOME, so the operator's shared-skills symlinks are otherwise
+   * invisible to spawned sessions. Only explicit symlinks are replicated —
+   * each is recreated pointing at the same resolved source, mirroring the
+   * operator's own topology 1:1. Best-effort: this must never break session
+   * creation.
+   */
+  private async prepareNativeHomeSkills(sessionHome: string): Promise<void> {
+    const operatorHome = process.env.HOME || '/root';
+    for (const relative of ['.agents/skills', '.commandcode/skills']) {
+      try {
+        const source = path.join(operatorHome, relative);
+        if (!(await lstat(source)).isSymbolicLink()) continue;
+        const target = path.resolve(path.dirname(source), await readlink(source));
+        const destination = path.join(sessionHome, relative);
+        await mkdir(path.dirname(destination), { recursive: true });
+        await rm(destination, { force: true }).catch(() => undefined);
+        await symlink(target, destination);
+      } catch {
+        // A missing or unreadable skills location must never block a session.
+      }
+    }
+  }
+
+  /**
+   * Mirror the operator's user-scope AGENTS.md (harness user memory, itself
+   * kept in sync by the operator's host automation) into the session-private
+   * native home as a read-only file, mirroring the auth.json pattern. Regular
+   * files only: a symlinked or missing source is skipped. Best-effort: this
+   * must never break session creation.
+   */
+  private async prepareNativeHomeUserMemory(commandCodeHome: string): Promise<void> {
+    const source = path.join(process.env.HOME || '/root', '.commandcode', 'AGENTS.md');
+    const target = path.join(commandCodeHome, 'AGENTS.md');
+    const temporary = `${target}.${process.pid}.${cryptoRandomId()}.tmp`;
+    let sourceHandle: Awaited<ReturnType<typeof open>> | undefined;
+    let temporaryHandle: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      sourceHandle = await open(source, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+      if (!(await sourceHandle.stat()).isFile()) return;
+      temporaryHandle = await open(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o400);
+      await temporaryHandle.writeFile(await sourceHandle.readFile());
+      await temporaryHandle.chmod(0o400);
+      await temporaryHandle.close();
+      temporaryHandle = undefined;
+      await rename(temporary, target);
+    } catch {
+      // No user memory, or an unreadable one, must never block a session.
+    } finally {
+      await sourceHandle?.close().catch(() => undefined);
+      await temporaryHandle?.close().catch(() => undefined);
+      await rm(temporary, { force: true }).catch(() => undefined);
     }
   }
 
