@@ -865,6 +865,9 @@ describe('createSessionRoutes orchestration endpoints', () => {
     it('reports blocked and allowed Pi models independently in batch creation', async () => {
       const routes = makeRoutes();
       const res = createMockRes();
+      // A successful setModel is reflected in the session's resolved model —
+      // the create response now reports the resolved model (defect 9).
+      multiSessionManager.getAgentSession().model = { provider: 'openai-codex', id: 'gpt-5.5' };
 
       await routes.handleBatchCreate(
         createJsonReq('POST', '/api/v1/sessions/batch', {
@@ -879,7 +882,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       expect(res.statusCode).toBe(200);
       expect(JSON.parse(res.body).created).toMatchObject([
         { index: 0, success: false, error: { code: 'PROVIDER_NOT_ALLOWED' } },
-        { index: 1, success: true, model: 'openai-codex/gpt-5.5' },
+        { index: 1, success: true, model: 'openai-codex/gpt-5.5', modelSelector: 'openai-codex/gpt-5.5' },
       ]);
       expect(multiSessionManager.createAndSubscribe).toHaveBeenCalledTimes(1);
     });

@@ -67,4 +67,40 @@ describe('SessionWatcher canonical metadata', () => {
     expect(info.cwd).toBe('/tmp/canonical-workspace');
     expect(info.firstMessage).toBe('hello');
   });
+
+  it('firstMessage stays the original prompt when the prompt merely references a SKILL.md path (Agent OS envelopes)', async () => {
+    // Defect 11 (Part 3 iteration run): three turns in one child session left the
+    // registry firstMessage pointing at correction 1 instead of the dispatch
+    // envelope. Cause: the skill-content heuristic skipped any user message
+    // containing the substring 'SKILL.md', and every Agent OS envelope embeds
+    // the skill body verbatim with its canonical path (pivot 6.2 mandatory
+    // delivery). The envelope is a genuine user prompt, not a /skill injection.
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-envelope-'));
+    const sessionPath = path.join(tempDir, 'envelope_three_turns.jsonl');
+    const envelope = '# Agent OS child operating instructions (mandatory delivery — pivot §6.2)\n\nagent-os-child: /root/.skills-global/skills-global/agent-os-child/SKILL.md (sha256 4f0c…)\n\n<the full mandatory skill body follows>\n\n## Agent OS Confirmed Dispatch Envelope\ngoal: format durations as H:MM:SS…';
+    await writeFile(sessionPath, [
+      JSON.stringify({ type: 'session', id: 'envelope-session', cwd: '/tmp/worktree', timestamp: 1 }),
+      JSON.stringify({ type: 'message', id: 'm1', timestamp: 2, message: { role: 'user', content: [{ type: 'text', text: envelope }] } }),
+      JSON.stringify({ type: 'message', id: 'm2', timestamp: 3, message: { role: 'assistant', content: [{ type: 'text', text: 'done, committed' }] } }),
+      JSON.stringify({ type: 'message', id: 'm3', timestamp: 4, message: { role: 'user', content: [{ type: 'text', text: 'Continue with the same child. The formatter must now return H:MM:SS for durations of one hour or longer.' }] } }),
+    ].join('\n'));
+
+    const info = await new SessionWatcher(tempDir).readSessionInfo(sessionPath);
+
+    expect(info.firstMessage).toMatch(/Agent OS child operating instructions/);
+  });
+
+  it('still skips genuine <skill name=...> injected bodies for firstMessage', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-skillinject-'));
+    const sessionPath = path.join(tempDir, 'skill_injection.jsonl');
+    await writeFile(sessionPath, [
+      JSON.stringify({ type: 'session', id: 'skill-session', cwd: '/tmp/x', timestamp: 1 }),
+      JSON.stringify({ type: 'message', id: 'm1', timestamp: 2, message: { role: 'user', content: [{ type: 'text', text: '<skill name="web-search">\n…full skill body…\n</skill>' }] } }),
+      JSON.stringify({ type: 'message', id: 'm2', timestamp: 3, message: { role: 'user', content: [{ type: 'text', text: 'find the docs for X' }] } }),
+    ].join('\n'));
+
+    const info = await new SessionWatcher(tempDir).readSessionInfo(sessionPath);
+
+    expect(info.firstMessage).toBe('find the docs for X');
+  });
 });

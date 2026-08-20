@@ -87,6 +87,28 @@ async function main(): Promise<void> {
   if (!explicitDir) {
     process.once('exit', () => rmSync(validationDir, { recursive: true, force: true }));
   }
+  // Defect 12 (Part 3): record the process identity so teardown can terminate
+  // the WHOLE process group of a known pid. Terminating only the npm parent
+  // orphaned the server's subprocesses in their process group on a supervised
+  // host; broad command-line matching is explicitly not acceptable. The stopper
+  // (scripts/validation-server-stop.mjs) reads this record.
+  const processRecord = {
+    pid: process.pid,
+    pgid: (() => {
+      try {
+        // Linux: pgrp is field 5 of /proc/self/stat (after the comm field in parens).
+        const stat = readFileSync('/proc/self/stat', 'utf8');
+        const afterComm = stat.slice(stat.lastIndexOf(')') + 2);
+        const fields = afterComm.split(' ');
+        const pgrp = Number(fields[2]);
+        if (Number.isInteger(pgrp) && pgrp > 1) return pgrp;
+      } catch { /* fall through */ }
+      return process.pid;
+    })(),
+    startedAt: new Date().toISOString(),
+  };
+  writeFileSync(path.join(validationDir, 'server-process.json'), `${JSON.stringify(processRecord, null, 2)}\n`, { mode: 0o600 });
+  process.once('exit', () => { try { rmSync(path.join(validationDir, 'server-process.json'), { force: true }); } catch { /* best effort */ } });
 
   try {
     const portReservation = await reserveValidationPorts([

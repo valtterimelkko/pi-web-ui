@@ -38,6 +38,10 @@ export const ErrorCode = {
   UNSUPPORTED_OPERATION: 'UNSUPPORTED_OPERATION',
   NOT_IMPLEMENTED: 'NOT_IMPLEMENTED',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
+  // Defect 9 (Part 3, 2026-08-19): an explicit model selector that the runtime
+  // refused or could not apply. Additive code: the create now fails loudly and
+  // cleans up instead of silently returning a session on a different model.
+  MODEL_NOT_APPLIED: 'MODEL_NOT_APPLIED',
   WATCH_NOT_FOUND: 'WATCH_NOT_FOUND',
   TRANSFER_DISPATCH_FAILED: 'TRANSFER_DISPATCH_FAILED',
   EMPTY_TRANSCRIPT: 'EMPTY_TRANSCRIPT',
@@ -96,6 +100,13 @@ export interface ErrorCodeInfo {
 }
 
 export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
+  [ErrorCode.MODEL_NOT_APPLIED]: {
+    httpStatus: 422,
+    description: 'The explicit model selector was refused or not applied by the runtime; the session was not created.',
+    cause: 'The runtime rejected the selector (for example a bare model id without provider) or could not resolve it to exactly one concrete model.',
+    hint: 'Use the exact \'provider/model\' selector from the models list (for example \'openai-codex/gpt-5.6-sol\'); discovery clients already receive exact selectors.',
+    docs: 'docs/INTERNAL-API.md#sessions',
+  },
   [ErrorCode.UNAUTHORIZED]: {
     httpStatus: 401,
     description: 'Missing or invalid Internal API bearer token.',

@@ -162,7 +162,23 @@ export async function createOneSession(params: {
         status: 'idle',
       });
       if (entry.model) {
-        await deps.piService.setModel(status.sessionId, entry.model).catch(() => { /* non-fatal */ });
+        // Defect 9 (Part 3): a rejected setModel used to be swallowed, leaving
+        // the session on its default model while the create response echoed the
+        // requested selector (bare 'gpt-5.6-sol' → response said Sol, session
+        // stayed Luna). Fail loudly and clean up the half-created session,
+        // exactly like the blocked-provider path below.
+        try {
+          await deps.piService.setModel(status.sessionId, entry.model);
+        } catch (error) {
+          deps.multiSessionManager.unsubscribeClient(deps.internalClientId, status.sessionPath);
+          deps.multiSessionManager.disposeLoadedSession(status.sessionPath);
+          await unlink(status.sessionPath).catch(() => undefined);
+          await deps.sessionRegistry.delete(status.sessionId);
+          throw new RuntimeOpError(
+            ErrorCode.MODEL_NOT_APPLIED,
+            `Requested Pi model '${entry.model}' was not applied: ${error instanceof Error ? error.message : String(error)}. Use the exact 'provider/model' selector from the models list.`,
+          );
+        }
       }
       const effectiveModel = deps.multiSessionManager.getAgentSession(status.sessionPath)?.model;
       try {
@@ -187,11 +203,15 @@ export async function createOneSession(params: {
         }
         agentSession.setThinkingLevel(entry.thinkingLevel);
       }
+      // Defect 9: report the model the session actually resolved to — never
+      // echo the request. modelSelector carries what was asked for.
+      const resolvedForResponse = deps.multiSessionManager.getAgentSession(status.sessionPath)?.model;
       return {
         sessionId: status.sessionId,
         sessionPath: status.sessionPath,
         runtime: 'pi',
-        model: entry.model,
+        model: resolvedForResponse ? `${resolvedForResponse.provider}/${resolvedForResponse.id}` : entry.model,
+        ...(entry.model !== undefined ? { modelSelector: entry.model } : {}),
         cwd,
       };
     }

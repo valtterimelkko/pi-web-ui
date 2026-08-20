@@ -261,11 +261,16 @@ export class SessionWatcher extends EventEmitter {
     let canonicalId = this.extractSessionId(filePath);
     let canonicalCwd = this.extractCwd(filePath);
 
-    // Helper to check if content contains skill content
+    // Helper to check if content is an injected skill body. Defect 11 (Part 3):
+    // matching the bare substring 'SKILL.md' skipped genuine user prompts that
+    // merely reference a skill path — every Agent OS dispatch envelope embeds
+    // the skill body verbatim with its canonical path (pivot 6.2), so the
+    // registry's firstMessage drifted to a later correction turn. Only the
+    // canonical injection markers count (same markers the event-forwarder and
+    // multi-session-manager use for skill extraction).
     const isSkillContent = (text: string): boolean => {
       return text.includes('<skill name="') ||
-             text.includes('</skill>') ||
-             text.includes('SKILL.md');
+             text.includes('</skill>');
     };
 
     for (const line of lines) {
