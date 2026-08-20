@@ -581,4 +581,39 @@ describe('sessionStore', () => {
     });
   });
 
+  describe('Command Code message id reuse across live turns', () => {
+    it('keeps each turn separate instead of merging later deltas into the first copy', () => {
+      const state = useSessionStore.getState();
+      useSessionStore.setState({ currentSessionId: 'cc-live', currentSessionSdkType: 'commandcode' });
+      const start = (id: string) => state.handleServerMessage({
+        type: 'session_event', sessionId: 'cc-live',
+        event: { type: 'message_start', message: { id, role: 'assistant' } },
+      } as never);
+      const delta = (id: string, text: string) => state.handleServerMessage({
+        type: 'session_event', sessionId: 'cc-live',
+        event: { type: 'message_update', message: { id }, assistantMessageEvent: { type: 'text_delta', delta: text } },
+      } as never);
+      const end = (id: string) => state.handleServerMessage({
+        type: 'session_event', sessionId: 'cc-live',
+        event: { type: 'message_end', message: { id } },
+      } as never);
+
+      start('commandcode-message-1');
+      delta('commandcode-message-1', 'turn-one text');
+      end('commandcode-message-1');
+      // Second agent turn REUSES the same synthetic id.
+      start('commandcode-message-1');
+      delta('commandcode-message-1', 'turn-two text');
+      end('commandcode-message-1');
+
+      const messages = useSessionStore.getState().sessionMessages['cc-live'];
+      expect(messages).toHaveLength(2);
+      expect(messages[0].id).not.toBe(messages[1].id);
+      expect(JSON.stringify(messages[0].content)).toContain('turn-one text');
+      expect(JSON.stringify(messages[0].content)).not.toContain('turn-two text');
+      expect(JSON.stringify(messages[1].content)).toContain('turn-two text');
+      expect(JSON.stringify(messages[1].content)).not.toContain('turn-one text');
+    });
+  });
+
 });

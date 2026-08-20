@@ -33,6 +33,7 @@ describe('history replay batching', () => {
       isLoading: false,
       error: null,
       sessionData: {},
+      sessionCache: new Map(),
       historyReplayActive: {},
       isSwitchingSession: false,
       switchingToSessionId: null,
@@ -145,6 +146,15 @@ describe('session switch robustness', () => {
       isSwitchingSession: false,
       switchingToSessionId: null,
       error: null,
+      sessionMessages: {},
+      sessionData: {},
+      sessionCache: new Map(),
+      historyReplayActive: {},
+      currentSessionId: 'cc-1',
+      currentSessionSdkType: 'commandcode',
+      messages: [],
+      isStreaming: false,
+      isLoading: false,
     });
     useUIStore.setState({ toasts: [] });
   });
@@ -174,5 +184,44 @@ describe('session switch robustness', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('keeps each agent turn separate when Command Code reuses message ids across turns', () => {
+    // Command Code restarts its synthetic message numbering (commandcode-message-1..N)
+    // on every agent turn. The fold must NOT merge later turns' deltas into the
+    // first occurrence of a reused id (that produced a wall of empty
+    // "Processed" bubbles for every duplicate), and must not lose the text of
+    // later turns either: each turn's copy keeps its own content.
+    const state = useSessionStore.getState();
+    state.handleServerMessage({ type: 'session_switched', sessionId: 'cc-1', sessionPath: 'cc-1', sdkType: 'commandcode', messages: [] } as never);
+    state.handleServerMessage({ type: 'history_start', sessionId: 'cc-1' } as never);
+    const turn = (text: string) => [
+      { type: 'session_event', sessionId: 'cc-1', event: { type: 'message_start', message: { id: 'commandcode-message-1', role: 'assistant' } } },
+      { type: 'session_event', sessionId: 'cc-1', event: { type: 'message_update', message: { id: 'commandcode-message-1' }, assistantMessageEvent: { type: 'text_delta', delta: text } } },
+      { type: 'session_event', sessionId: 'cc-1', event: { type: 'message_end', message: { id: 'commandcode-message-1' } } },
+    ];
+    for (const e of [...turn('turn-one text'), ...turn('turn-two text')]) {
+      state.handleServerMessage(e as never);
+    }
+    state.handleServerMessage({ type: 'history_end', sessionId: 'cc-1' } as never);
+    const messages = useSessionStore.getState().sessionMessages['cc-1'];
+    expect(messages).toHaveLength(2);
+    expect(messages[0].id).not.toBe(messages[1].id); // de-duplicated storage ids
+    expect(JSON.stringify(messages[0].content)).toContain('turn-one text');
+    expect(JSON.stringify(messages[0].content)).not.toContain('turn-two text');
+    expect(JSON.stringify(messages[1].content)).toContain('turn-two text');
+    expect(JSON.stringify(messages[1].content)).not.toContain('turn-one text');
+  });
+
+  it('renders user bubbles with their content from the replay wire', () => {
+    const state = useSessionStore.getState();
+    state.handleServerMessage({ type: 'session_switched', sessionId: 'cc-1', sessionPath: 'cc-1', sdkType: 'commandcode', messages: [] } as never);
+    state.handleServerMessage({ type: 'history_start', sessionId: 'cc-1' } as never);
+    state.handleServerMessage({ type: 'session_event', sessionId: 'cc-1', event: { type: 'message_start', message: { id: 'u1', role: 'user', content: 'how many skills do you have?' } } } as never);
+    state.handleServerMessage({ type: 'history_end', sessionId: 'cc-1' } as never);
+    const messages = useSessionStore.getState().sessionMessages['cc-1'];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe('user');
+    expect(String(messages[0].content)).toContain('how many skills do you have?');
   });
 });

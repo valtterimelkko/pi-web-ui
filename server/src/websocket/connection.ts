@@ -62,11 +62,21 @@ const DEFAULT_ASK_USER_DISCONNECT_GRACE_MS = 120_000;
  * Convert a NormalizedEvent (from ClaudeEventNormalizer) to the Pi-compatible
  * event format expected by the frontend sessionStore.
  */
-function normEventToPiFormat(event: NormalizedEvent): Record<string, unknown> {
+export function normEventToPiFormat(event: NormalizedEvent): Record<string, unknown> {
   const data = event.data as Record<string, unknown>;
   switch (event.type) {
     case 'message_start':
-      return { type: 'message_start', message: { id: data.id, role: data.role } };
+      // Pass user content through: without it, replayed Command Code user
+      // bubbles rendered empty (live sessions only showed them thanks to the
+      // composer's local echo).
+      return {
+        type: 'message_start',
+        message: {
+          id: data.id,
+          role: data.role,
+          ...(typeof data.content === 'string' ? { content: data.content } : {}),
+        },
+      };
     case 'message_update':
       return { type: 'message_update', message: { id: data.id }, assistantMessageEvent: data.assistantMessageEvent };
     case 'message_end':

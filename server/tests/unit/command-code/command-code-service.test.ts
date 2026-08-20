@@ -119,6 +119,46 @@ describe('Command Code service', () => {
     expect(replay.some((event) => event.type === 'agent_end')).toBe(true);
   });
 
+  it('never reuses synthetic message ids across turns of one session', async () => {
+    // Command Code synthetic ids (commandcode-message-N) used to restart at 1
+    // every prompt, so a second turn re-emitted ids already present in the
+    // journal. Replay and the live client both keyed messages by id, which
+    // merged later turns' text into the first turn's bubbles and left the
+    // duplicates empty. The adapter counter must be scoped to the session.
+    const { cwd, service } = await harness({
+      runner: new (class extends Runner {
+        async run(input: CommandCodeProcessRunInput): Promise<CommandCodeProcessRunResult> {
+          this.inputs.push(input);
+          return {
+            exitCode: 0, signal: null, stderrTail: '',
+            parsed: {
+              events: [
+                { event: { type: 'message_start', role: 'assistant' }, lineNumber: 1 },
+                { event: { type: 'message_update', text: 'ok' }, lineNumber: 2 },
+              ],
+              // A resumed native conversation keeps ONE native session id.
+              terminal: { type: 'result', subtype: 'success', sessionId: 'native-1', finalText: 'ok', usage: { input: 2, output: 3, total: 5 } },
+              unknownEventTypes: [], suppressedDuplicateCount: 0, bytes: 2, lineCount: 3,
+            },
+          };
+        }
+      })(),
+    });
+    await service.init();
+    const created = await service.createSession({ cwd, model: 'qwen/qwen3.8-max' });
+    await service.sendPrompt(created.sessionId, 'one', () => undefined, () => undefined);
+    await service.sendPrompt(created.sessionId, 'two', () => undefined, () => undefined);
+    const record = await service.getSession(created.sessionId);
+    expect(record?.state).toBe('idle'); // both turns succeeded
+    const replay = await service.getReplayEvents(created.sessionId);
+    const startIds = replay
+      .filter((e) => e.type === 'message_start')
+      .map((e) => (e.data as { id?: string }).id ?? '')
+      .filter((id) => id.startsWith('commandcode-message-'));
+    expect(startIds.length).toBeGreaterThanOrEqual(2); // assistant bubbles from both turns
+    expect(new Set(startIds).size).toBe(startIds.length);
+  });
+
   it('coalesces per-token deltas on replay and exposes projection and journal stats', async () => {
     const { cwd, service } = await harness();
     await service.init();

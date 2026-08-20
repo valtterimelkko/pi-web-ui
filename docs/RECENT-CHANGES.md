@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Command Code multi-turn message identity + client load-path fixes (`2026-08-20`)**
+  - Synthetic message ids (`commandcode-message-N`) restarted at 1 on every agent turn, so a second turn re-emitted ids already in the journal; replay and the live client keyed messages by id and merged later turns' text into the first turn's bubbles, leaving later turns as empty "Processed" rows. Synthetic ids are now turn-unique (`commandcode-message-<turn>-<n>`), and the client additionally tolerates reused ids in existing journals (later copies are suffixed and routed correctly on both replay fold and live paths).
+  - Replayed user bubbles now carry their content over the wire (`normEventToPiFormat` message_start passthrough); previously they rendered empty outside live echo.
+  - Client load-path hardening: persisted zustand slice capped (200 recent sessions, 140-char firstMessages; the server re-fetches the full list) and stringified at most once per throttle window — an uncapped 2.2MB payload was being stringified per store write, which CPU profiling showed as ~84% of main-thread time during loads; history replay folds events into messages with a single state write; the initial scroll settle is completion-driven and hard-capped; the virtualized list is memoized against unrelated store ticks; session switching reports send failures and times out cleanly instead of showing a stuck spinner.
+  - Canonical doc: [`COMMAND-CODE-INTEGRATION.md`](./COMMAND-CODE-INTEGRATION.md)
+
 - **Command Code replay, wall-time, and observability fixes (`2026-08-20`)**
   - Replay projection: journal reads collapse per-token streaming deltas into whole messages for the browser, Internal API transcript/screen view, and session transfer (7,423-event real session → O(messages) replay; session open went from main-thread saturation to <1s desktop and mobile).
   - `COMMAND_CODE_MAX_WALL_TIME_MS` is now an inactivity cap (timer resets on stdout), so actively streaming long tasks no longer die at 15 minutes.

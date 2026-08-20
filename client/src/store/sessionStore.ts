@@ -162,6 +162,23 @@ const REAUTH_FALLBACK_MESSAGE =
 // Raw Pi SDK events forwarded by multi-session-manager don't include message IDs,
 // so we track the ID assigned at message_start to match subsequent message_update events.
 const currentMessageIdBySession = new Map<string, string>();
+// Command Code restarts its synthetic message numbering every agent turn, so
+// the same wire id legitimately recurs. The stored copy gets a suffixed id
+// (#2, #3…) on collision, and deltas carrying the reused wire id are routed
+// to the stored id of the turn currently streaming (never first-match merged
+// into an earlier turn's copy, which left later turns as empty "Processed"
+// bubbles while their text polluted the first turn).
+const currentWireMessageIdBySession = new Map<string, string>();
+const currentStoredMessageIdBySession = new Map<string, string>();
+
+/** Allocate a collision-free storage id for a new message in a session. */
+function allocateStoredMessageId(sessionId: string, wireId: string): string {
+  const existing = useSessionStore.getState().sessionData[sessionId]?.messages;
+  if (!existing || !existing.some((m) => m.id === wireId)) return wireId;
+  let n = 2;
+  while (existing.some((m) => m.id === `${wireId}#${n}`)) n++;
+  return `${wireId}#${n}`;
+}
 
 // ---- History-replay batching --------------------------------------------
 // One open buffer per session currently inside a [history_start, history_end]
@@ -208,8 +225,29 @@ function foldHistoryEvents(
   }));
   const leftovers: Array<{ type: string; [key: string]: unknown }> = [];
   let activeMessageId: string | undefined;
+  // Command Code restarts its synthetic message numbering every agent turn, so
+  // the same wire id (commandcode-message-1..N) legitimately appears once per
+  // turn. Deltas must route to the LATEST copy of a reused id (the turn being
+  // replayed), never merge into the first occurrence — first-match routing
+  // produced a wall of empty "Processed" bubbles. Colliding storage ids are
+  // suffixed (#2, #3…) so each turn renders as its own message.
+  const usedIds = new Set(messages.map((m) => m.id));
+  const latestByWireId = new Map<string, string>();
+  /** Allocate the storage id for a NEW message_start with this wire id
+   * (suffixed on collision with any earlier copy in this session). */
+  const storageIdForStart = (wireId: string): string => {
+    if (!usedIds.has(wireId)) return wireId;
+    let n = 2;
+    while (usedIds.has(`${wireId}#${n}`)) n++;
+    return `${wireId}#${n}`;
+  };
+  /** Pure lookup: never allocates. Falls back to the wire id itself. */
+  const lookupId = (wireId: string): string => latestByWireId.get(wireId) ?? wireId;
   const findTarget = (id: string | undefined): Message | undefined => {
-    if (id) return messages.find((m) => m.id === id);
+    if (id) {
+      const mapped = lookupId(id);
+      return messages.find((m) => m.id === mapped) ?? messages.find((m) => m.id === id);
+    }
     // Delta without an id targets the most recent assistant message (same
     // fallback semantics as the live handler's tracked current id).
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -223,12 +261,18 @@ function foldHistoryEvents(
     switch (event.type) {
       case 'message_start': {
         const message = (event as { message?: { id?: string; role?: string; content?: Message['content'] } }).message ?? {};
-        const id = message.id || `msg_${Date.now()}_${messages.length}`;
-        activeMessageId = id;
+        const wireId = message.id || `msg_${Date.now()}_${messages.length}`;
+        const id = storageIdForStart(wireId);
+        usedIds.add(id);
+        latestByWireId.set(wireId, id);
+        activeMessageId = wireId;
         messages.push({
           id,
           role: (message.role as Message['role']) ?? 'assistant',
-          content: (message.content as Message['content']) ?? [],
+          // User bubbles can arrive with a plain string content from the wire;
+          // keep it verbatim (Message.content allows it and user rendering
+          // expects a string).
+          content: message.content ?? (message.role === 'user' ? '' : []),
           timestamp: Date.now(),
         });
         break;
@@ -2472,6 +2516,8 @@ export const useSessionStore = create<SessionState>()(
               case 'agent_end':
                 get().setSessionStatus(sessionId, 'idle');
                 currentMessageIdBySession.delete(sessionId);
+                currentWireMessageIdBySession.delete(sessionId);
+                currentStoredMessageIdBySession.delete(sessionId);
                 if (get().currentSessionId === sessionId) {
                   const newMessages = get().messages.map((m) => {
                     if (m.role === 'tool' && m.toolCall && !m.toolResult) {
@@ -2485,10 +2531,14 @@ export const useSessionStore = create<SessionState>()(
                 
               case 'message_start': {
                 const messageData = (event.message as { id: string; role: string; content: unknown }) || {};
+                const wireId = messageData.id || `msg_${Date.now()}`;
+                const storedId = allocateStoredMessageId(sessionId, wireId);
+                currentWireMessageIdBySession.set(sessionId, wireId);
+                currentStoredMessageIdBySession.set(sessionId, storedId);
                 const newMessage: Message = {
-                  id: messageData.id || `msg_${Date.now()}`,
+                  id: storedId,
                   role: messageData.role as 'user' | 'assistant' | 'tool',
-                  content: (messageData.content as Message['content']) ?? [],
+                  content: (messageData.content as Message['content']) ?? (messageData.role === 'user' ? '' : []),
                   timestamp: Date.now(),
                 };
                 // Track the current message ID for this session so message_update
@@ -2512,7 +2562,12 @@ export const useSessionStore = create<SessionState>()(
                 // Use the tracked current message ID as fallback when raw SDK
                 // events arrive without IDs (multi-session-manager bypasses
                 // the EventForwarder's ID injection).
-                const messageId = msgData?.id || currentMessageIdBySession.get(sessionId);
+                let messageId = msgData?.id || currentMessageIdBySession.get(sessionId);
+                // A wire id that Command Code reuses across turns routes to
+                // the stored (possibly suffixed) id of the turn in flight.
+                if (messageId && messageId === currentWireMessageIdBySession.get(sessionId)) {
+                  messageId = currentStoredMessageIdBySession.get(sessionId) ?? messageId;
+                }
                 
                 if (messageId && assistantMessageEvent) {
                   const sessionData = get().sessionData[sessionId];

@@ -381,7 +381,11 @@ export class CommandCodeService {
 
     let completionError: Error | undefined;
     let emittedTerminal = false;
-    const streamState = createCommandCodeIncrementalAdapterState();
+    // Turn-unique prefix for synthetic message ids: a fresh per-turn counter
+    // alone would re-emit commandcode-message-1..N for every turn, colliding
+    // with earlier journal entries; clients keyed by id then merged turns.
+    const syntheticMessagePrefix = `commandcode-message-${runId ?? cryptoRandomId()}-`;
+    const streamState = createCommandCodeIncrementalAdapterState(syntheticMessagePrefix);
     const streamedEvents: NormalizedEvent[] = [];
     let streamQueue = Promise.resolve();
     const observedAt = Date.now();
@@ -435,6 +439,7 @@ export class CommandCodeService {
             suppressedDuplicateCount: result.parsed.suppressedDuplicateCount,
             bytes: result.parsed.bytes,
             lineCount: result.parsed.lineCount,
+            syntheticMessagePrefix,
           })
         : undefined;
       if (adapted?.nativeSessionId) {

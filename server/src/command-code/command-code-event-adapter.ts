@@ -25,6 +25,16 @@ export interface CommandCodeAdaptInput {
   bytes: number;
   lineCount: number;
   observedAt?: number;
+  /**
+   * Per-turn prefix for synthetic message ids (for example
+   * `commandcode-message-<runId>-`). Synthetic numbering used to restart at
+   * `commandcode-message-1` on every turn, so a second turn re-emitted ids
+   * already present in the journal and replay/live clients merged the turns
+   * by id. The service supplies a turn-unique prefix so ids are unique across
+   * turns and across server restarts; streamed and terminal batch passes of
+   * the same turn share the prefix so duplicate-suppression still matches.
+   */
+  syntheticMessagePrefix?: string;
 }
 
 export interface CommandCodeAdaptedOutput {
@@ -45,10 +55,12 @@ export interface CommandCodeIncrementalAdapterState {
   syntheticMessageNumber: number;
   sawAgentEnd: boolean;
   finalText: string;
+  /** Turn-unique synthetic id prefix; see CommandCodeAdaptInput. */
+  syntheticMessagePrefix?: string;
 }
 
-export function createCommandCodeIncrementalAdapterState(): CommandCodeIncrementalAdapterState {
-  return { syntheticMessageNumber: 0, sawAgentEnd: false, finalText: '' };
+export function createCommandCodeIncrementalAdapterState(syntheticMessagePrefix?: string): CommandCodeIncrementalAdapterState {
+  return { syntheticMessageNumber: 0, sawAgentEnd: false, finalText: '', ...(syntheticMessagePrefix ? { syntheticMessagePrefix } : {}) };
 }
 
 /** Normalize one event frame without waiting for the terminal result. */
@@ -64,7 +76,7 @@ export function adaptCommandCodeEvent(input: {
     ? event.timestamp
     : input.observedAt ?? Date.now();
   const nativeMessageId = eventMessageId(event);
-  if (type === 'message_start') input.state.activeMessageId = nativeMessageId ?? `commandcode-message-${++input.state.syntheticMessageNumber}`;
+  if (type === 'message_start') input.state.activeMessageId = nativeMessageId ?? `${input.state.syntheticMessagePrefix ?? 'commandcode-message-'}${++input.state.syntheticMessageNumber}`;
   const normalized = normalizeEvent(input.sessionId, event, timestamp, input.state.activeMessageId);
   if (type === 'message_end') input.state.activeMessageId = undefined;
   if (!normalized) return undefined;
@@ -85,6 +97,7 @@ export function adaptCommandCodeOutput(input: CommandCodeAdaptInput): CommandCod
   let sawAgentEnd = false;
   let activeMessageId: string | undefined;
   let syntheticMessageNumber = 0;
+  const syntheticMessagePrefix = input.syntheticMessagePrefix ?? 'commandcode-message-';
   const tokenUsage = normalizeCommandCodeTerminalTokenUsage(input.terminal.usage);
 
   for (const parsed of input.events) {
@@ -95,7 +108,7 @@ export function adaptCommandCodeOutput(input: CommandCodeAdaptInput): CommandCod
       : timestampFallback;
     const nativeMessageId = eventMessageId(event);
     if (type === 'message_start') {
-      activeMessageId = nativeMessageId ?? `commandcode-message-${++syntheticMessageNumber}`;
+      activeMessageId = nativeMessageId ?? `${syntheticMessagePrefix}${++syntheticMessageNumber}`;
     }
     let normalized = normalizeEvent(input.sessionId, event, timestamp, activeMessageId);
     if (type === 'message_end') activeMessageId = undefined;
