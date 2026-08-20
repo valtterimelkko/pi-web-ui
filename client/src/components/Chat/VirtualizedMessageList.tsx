@@ -339,6 +339,35 @@ export const VirtualizedMessageList = forwardRef<
     return -1;
   }, [visibleMessages]);
 
+  // Virtuoso places the initial viewport from estimated item heights. Tall
+  // coalesced replay messages (Command Code turns concatenate thousands of
+  // tokens into single messages) make the estimate off by thousands of
+  // pixels, so the session opens stranded above a blank gap with the real
+  // end out of reach. Once per session switch — and whenever messages grow
+  // within a short window after the switch — keep re-anchoring to the last
+  // item so measured heights settle and the true end is shown. Bounded by an
+  // absolute deadline so a user who immediately scrolls up is never fought.
+  const settleStateRef = useRef<{ key: string; deadline: number } | null>(null);
+  useEffect(() => {
+    if (listItems.length === 0) return;
+    const now = Date.now();
+    const state = settleStateRef.current;
+    if (state && state.key === sessionKey && now > state.deadline) return;
+    if (!state || state.key !== sessionKey) {
+      settleStateRef.current = { key: sessionKey, deadline: now + 1_500 };
+    }
+    let cancelled = false;
+    const settle = (): void => {
+      if (cancelled) return;
+      virtuosoRef.current?.scrollToIndex({ index: listItems.length - 1, align: 'end', behavior: 'auto' });
+      if (Date.now() < (settleStateRef.current?.deadline ?? 0)) {
+        requestAnimationFrame(settle);
+      }
+    };
+    const raf = requestAnimationFrame(settle);
+    return () => { cancelled = true; cancelAnimationFrame(raf); };
+  }, [sessionKey, listItems.length]);
+
   // Handle scroll position changes with identity guard
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
     if (scrollIdentityRef.current !== identity) return;
@@ -414,8 +443,11 @@ export const VirtualizedMessageList = forwardRef<
           // unmeasured items don't trigger large scroll corrections — the main
           // cause of scroll "jumping" when scrolling up through long sessions.
           defaultItemHeight={240}
-          // Render more items outside viewport for smoother scrolling
-          increaseViewportBy={{ top: 400, bottom: 400 }}
+          // Render more items outside viewport for smoother scrolling. The
+          // generous bottom margin pre-measures tall coalesced replay messages
+          // ahead of the viewport so scrolling toward the end of a long
+          // session does not reveal unmeasured blank space.
+          increaseViewportBy={{ top: 400, bottom: 1200 }}
           overscan={200}
           minOverscanItemCount={3}
           atBottomStateChange={handleAtBottomChange}

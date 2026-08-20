@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { VirtualizedMessageList } from '../../../../src/components/Chat/VirtualizedMessageList';
 import type { LiveMessage } from '../../../../src/hooks/useSessionStream';
 import React from 'react';
@@ -8,22 +8,27 @@ import React from 'react';
 const captured = vi.hoisted(() => ({
   followOutput: undefined as undefined | ((atBottom: boolean) => 'auto' | 'smooth' | false),
   defaultItemHeight: undefined as undefined | number,
+  scrollToIndex: undefined as undefined | ReturnType<typeof vi.fn>,
 }));
 
 // Mock react-virtuoso
-vi.mock('react-virtuoso', () => ({
-  Virtuoso: ({ data, itemContent, atBottomStateChange, followOutput, defaultItemHeight }: {
+vi.mock('react-virtuoso', async () => {
+  const R = await import('react');
+  return {
+  Virtuoso: R.forwardRef(function MockVirtuoso({ data, itemContent, atBottomStateChange, followOutput, defaultItemHeight }: {
     data: Array<any>;
     itemContent: (index: number, item: any) => React.ReactNode;
     atBottomStateChange?: (atBottom: boolean) => void;
     followOutput?: (atBottom: boolean) => 'auto' | 'smooth' | false;
     defaultItemHeight?: number;
-  }) => {
+  }, ref: R.ForwardedRef<unknown>) {
     captured.followOutput = followOutput;
     captured.defaultItemHeight = defaultItemHeight;
+    captured.scrollToIndex ??= vi.fn();
+    R.useImperativeHandle(ref, () => ({ scrollToIndex: captured.scrollToIndex }), []);
 
     // Call atBottomStateChange on mount
-    React.useEffect(() => {
+    R.useEffect(() => {
       atBottomStateChange?.(true);
     }, [atBottomStateChange]);
 
@@ -42,8 +47,9 @@ vi.mock('react-virtuoso', () => ({
         ))}
       </div>
     );
-  },
-}));
+  }),
+  };
+});
 
 // Mock MessageBubble to avoid complex rendering
 vi.mock('../../../../src/components/Chat/MessageBubble', () => ({
@@ -413,5 +419,33 @@ describe('VirtualizedMessageList', () => {
     // Identity guard should have changed, preventing stale callbacks
     // The component should still work correctly
     expect(screen.getByTestId('message-bubble-new-1')).toBeInTheDocument();
+  });
+});
+
+describe('VirtualizedMessageList initial bottom settling', () => {
+  it('re-anchors to the true bottom after a session loads (tall replay messages)', async () => {
+    // Coalesced Command Code replay delivers a few very tall messages; the
+    // virtualizer's estimate-based initial placement can stop short of the
+    // real end, leaving a blank gap. The list must imperatively settle on the
+    // last item once measurements arrive.
+    const tall: LiveMessage[] = [
+      { id: 'm1', role: 'user', content: [{ type: 'text', text: 'inspect the shed' }], timestamp: 1, isComplete: true },
+      { id: 'm2', role: 'assistant', content: [{ type: 'text', text: 'A'.repeat(20_000) }], timestamp: 2, isComplete: true },
+      { id: 'm3', role: 'assistant', content: [{ type: 'text', text: 'B'.repeat(20_000) }], timestamp: 3, isComplete: true },
+    ] as LiveMessage[];
+    render(<VirtualizedMessageList messages={tall} isStreaming={false} sessionId="commandcode-test" />);
+    await waitFor(
+      () => expect(captured.scrollToIndex).toHaveBeenCalledWith(
+        expect.objectContaining({ index: 2, align: 'end', behavior: 'auto' })
+      ),
+      { timeout: 2000 }
+    );
+  });
+
+  it('does not settle when there are no messages', async () => {
+    captured.scrollToIndex?.mockClear();
+    render(<VirtualizedMessageList messages={[]} isStreaming={false} sessionId="empty" />);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(captured.scrollToIndex).not.toHaveBeenCalled();
   });
 });

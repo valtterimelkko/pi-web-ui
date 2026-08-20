@@ -15,6 +15,7 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
   const sessionData = useSessionStore((state) => state.sessionData);
   const isClaudeSession = currentSessionSdkType === 'claude';
   const isOpencodeSession = currentSessionSdkType === 'opencode';
+  const isCommandCodeSession = currentSessionSdkType === 'commandcode';
   const quotaInfo = currentSessionId ? sessionData[currentSessionId]?.quotaInfo : null;
   const { getSessionInfo } = useWebSocket();
   const [isLoading, setIsLoading] = useState(false);
@@ -62,6 +63,9 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
 
   const formatNumber = (num: number) => num.toLocaleString();
   const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
+  // Runtimes without usage data (legacy Command Code records) must render
+  // zeros instead of crashing on undefined tokens/cost.
+  const tokens = sessionInfo?.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 
   const formatTimeAgo = (timestampMs: number): string => {
     const diff = Date.now() - timestampMs;
@@ -157,6 +161,19 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                 </p>
               </div>
 
+              {/* Native Session ID (Command Code: the CLI's own session id) */}
+              {sessionInfo.nativeSessionId && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                    <Box className="w-4 h-4" />
+                    <span>Native Session ID</span>
+                  </div>
+                  <p className="text-xs text-gray-700 bg-gray-50 p-2 rounded break-all font-mono">
+                    {sessionInfo.nativeSessionId}
+                  </p>
+                </div>
+              )}
+
               {/* Session Type */}
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-gray-500 text-sm">
@@ -179,6 +196,14 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                       </span>
                       <span className="text-sm text-gray-900">OpenCode Direct</span>
                       <span className="text-xs text-gray-400">(OpenCode + Z.AI GLM)</span>
+                    </div>
+                  ) : isCommandCodeSession ? (
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-500/15 text-slate-700 border border-slate-500/20">
+                        CMD
+                      </span>
+                      <span className="text-sm text-gray-900">Command Code</span>
+                      <span className="text-xs text-gray-400">(cmdc CLI)</span>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
@@ -261,41 +286,43 @@ export function SessionInfoModal({ isOpen, onClose }: SessionInfoModalProps) {
                 <div className="pl-6 grid grid-cols-2 gap-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-gray-500">Input:</span>
-                    <span className="text-gray-700">{formatNumber(sessionInfo.tokens.input)}</span>
+                    <span className="text-gray-700">{formatNumber(tokens.input)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">Output:</span>
-                    <span className="text-gray-700">{formatNumber(sessionInfo.tokens.output)}</span>
+                    <span className="text-gray-700">{formatNumber(tokens.output)}</span>
                   </div>
-                  {sessionInfo.tokens.cacheRead > 0 && (
+                  {tokens.cacheRead > 0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-500">Cache Read:</span>
-                      <span className="text-gray-700">{formatNumber(sessionInfo.tokens.cacheRead)}</span>
+                      <span className="text-gray-700">{formatNumber(tokens.cacheRead)}</span>
                     </div>
                   )}
-                  {sessionInfo.tokens.cacheWrite > 0 && (
+                  {tokens.cacheWrite > 0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-500">Cache Write:</span>
-                      <span className="text-gray-700">{formatNumber(sessionInfo.tokens.cacheWrite)}</span>
+                      <span className="text-gray-700">{formatNumber(tokens.cacheWrite)}</span>
                     </div>
                   )}
                   <div className="flex justify-between col-span-2 pt-1 border-t border-gray-200">
                     <span className="text-gray-500 font-medium">Total:</span>
-                    <span className="text-gray-900 font-medium">{formatNumber(sessionInfo.tokens.total)}</span>
+                    <span className="text-gray-900 font-medium">{formatNumber(tokens.total)}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Cost */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-gray-500 text-sm">
-                  <Coins className="w-4 h-4" />
-                  <span>Estimated Cost</span>
+              {/* Cost (runtimes without cost data omit this section) */}
+              {sessionInfo.cost !== undefined && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                    <Coins className="w-4 h-4" />
+                    <span>Estimated Cost</span>
+                  </div>
+                  <p className="text-sm text-gray-900 pl-6">
+                    {formatCost(sessionInfo.cost)}
+                  </p>
                 </div>
-                <p className="text-sm text-gray-900 pl-6">
-                  {formatCost(sessionInfo.cost)}
-                </p>
-              </div>
+              )}
 
               {/* Message Count */}
               <div className="space-y-2">

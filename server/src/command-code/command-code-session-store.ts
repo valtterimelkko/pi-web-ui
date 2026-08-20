@@ -5,6 +5,16 @@ import { assertCommandCodeEffort, type CommandCodeEffort, type CommandCodeRuntim
 
 export type CommandCodeSessionState = 'created' | 'running' | 'idle' | 'failed' | 'aborted' | 'deleted';
 
+/** Cumulative per-session token usage persisted at turn completion. */
+export interface CommandCodeSessionTokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Cumulative input + output. */
+  total: number;
+}
+
 export interface CommandCodeInternalSessionRecord {
   schemaVersion: 1;
   sessionId: string;
@@ -30,6 +40,14 @@ export interface CommandCodeInternalSessionRecord {
   firstMessage: string;
   lastMessage?: string;
   lastFinalText?: string;
+  /** Cumulative assistant responses completed (one per finished turn). */
+  assistantMessages?: number;
+  /** Cumulative tool executions started across turns. */
+  toolCalls?: number;
+  /** Cumulative validated token usage across turns. */
+  tokenUsage?: CommandCodeSessionTokenUsage;
+  /** Usage of the most recent finished turn, when a terminal result arrived. */
+  lastRunTokenUsage?: CommandCodeSessionTokenUsage;
   diagnostics?: {
     suppressedDuplicateCount: number;
     unknownEventTypes: string[];
@@ -54,7 +72,8 @@ export interface CreateCommandCodeSessionInput {
 
 export interface CommandCodeSessionPatch extends Partial<Pick<CommandCodeInternalSessionRecord,
   'nativeSessionId' | 'activeRunId' | 'state' | 'lastResult' | 'messageCount' | 'firstMessage' |
-  'lastMessage' | 'lastFinalText' | 'diagnostics'>> {
+  'lastMessage' | 'lastFinalText' | 'diagnostics' | 'assistantMessages' | 'toolCalls' |
+  'tokenUsage' | 'lastRunTokenUsage'>> {
   cwd?: string;
   modelSelector?: CommandCodeRuntimeModel;
   effort?: CommandCodeEffort;
@@ -301,6 +320,17 @@ function validateRecord(value: unknown): CommandCodeInternalSessionRecord {
     try { assertCommandCodeEffort(model, record.defaultEffort); } catch { throw new Error('Invalid Command Code default effort'); }
   }
   if (!record.state || !['created', 'running', 'idle', 'failed', 'aborted', 'deleted'].includes(record.state)) throw new Error('Invalid Command Code session state');
+  for (const countField of ['assistantMessages', 'toolCalls'] as const) {
+    const value = record[countField];
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0 || value > 1_000_000)) throw new Error('Invalid Command Code session counters');
+  }
+  for (const usageField of ['tokenUsage', 'lastRunTokenUsage'] as const) {
+    const usage = record[usageField];
+    if (usage === undefined) continue;
+    const counts = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total];
+    if (counts.some((count) => !Number.isSafeInteger(count) || count < 0)) throw new Error('Invalid Command Code session usage');
+    if (usage.total !== usage.input + usage.output) throw new Error('Invalid Command Code session usage total');
+  }
   return record as CommandCodeInternalSessionRecord;
 }
 

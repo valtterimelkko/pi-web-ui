@@ -84,6 +84,30 @@ describe('Command Code event adapter', () => {
     expect(malformed.events.find((event) => event.type === COMMAND_CODE_AGENT_END)?.data).not.toHaveProperty('tokenUsage');
   });
 
+  it('accepts the real CLI numeric-string usage shape and extracts cache tokens', () => {
+    // The real cmdc CLI emits usage values as numeric strings
+    // (inputTokens: "11"), not JSON numbers.
+    const result = adaptCommandCodeOutput({
+      sessionId: 'internal-1',
+      nativeSessionId: 'native-1',
+      events: [],
+      terminal: { type: 'result', subtype: 'success', sessionId: 'native-1', finalText: '', usage: { inputTokens: '11', outputTokens: '7', cacheReadTokens: '5', cacheWriteTokens: '2' } },
+      unknownEventTypes: [],
+      suppressedDuplicateCount: 0,
+      bytes: 1,
+      lineCount: 1,
+    });
+    expect(result.tokenUsage).toEqual({
+      scope: 'run',
+      source: 'commandcode-terminal-result-v1',
+      input: 11,
+      output: 7,
+      cacheRead: 5,
+      cacheWrite: 2,
+      total: 18,
+    });
+  });
+
   it('records terminal effort on the authoritative agent_end', () => {
     const result = adaptCommandCodeOutput({
       sessionId: 'internal-1',

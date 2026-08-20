@@ -2506,25 +2506,18 @@ export class WebSocketConnectionManager {
 
     // Command Code session info
     if (this.commandCodeSessionIds.has(sessionPath)) {
-      const record = await this.commandCodeService.getSession(sessionPath);
-      if (!record) {
+      const stats = await this.commandCodeService.getSessionStats(sessionPath);
+      if (!stats) {
         this.sendMessage(clientId, { type: 'error', message: 'Command Code session not found', code: 'SESSION_NOT_FOUND' });
         return;
       }
-      const effortSpec = this.commandCodeService.getModels().find((model) => model.id === record.modelSelector);
+      const effortSpec = this.commandCodeService.getModels().find((model) => model.id === stats.model);
       this.sendMessage(clientId, {
         type: 'session_info',
         stats: {
-          sessionId: record.sessionId,
-          cwd: record.cwd,
-          userMessages: record.messageCount,
-          totalMessages: record.messageCount,
-          messageCount: record.messageCount,
-          model: record.modelSelector,
-          effort: record.effort,
+          ...stats,
           effortLevels: effortSpec?.effortLevels,
-          defaultEffort: record.defaultEffort,
-          lastActivityAt: Date.parse(record.updatedAt),
+          ...(effortSpec?.defaultEffort !== undefined ? { defaultEffort: stats.defaultEffort ?? effortSpec.defaultEffort } : {}),
         },
       } as unknown as ServerMessage);
       return;

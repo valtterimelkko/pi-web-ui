@@ -131,17 +131,28 @@ function validateSessionId(value: string): string {
   return value;
 }
 
+/** Keys whose STRING values are redacted (token-ish names included). */
+const SENSITIVE_STRING_KEY = /(?:token|secret|password|api[_-]?key|auth(?:entication)?)/i;
+/** Keys whose whole OBJECT value is replaced: credential blobs, never data. */
+const SENSITIVE_OBJECT_KEY = /(?:secret|password|api[_-]?key|auth(?:entication)?|credential)/i;
+/** A pure decimal string is a count, never a secret. */
+function isNumericString(value: string): boolean {
+  return /^\d+$/.test(value);
+}
+
 function redactValue(value: unknown, depth = 0, keyHint = ''): unknown {
   if (depth > 8) return '[truncated]';
   if (typeof value === 'string') {
-    if (/(?:token|secret|password|api[_-]?key|auth(?:entication)?)/i.test(keyHint)) return '[REDACTED]';
+    if (SENSITIVE_STRING_KEY.test(keyHint) && !isNumericString(value)) return '[REDACTED]';
     return redactSensitiveText(value.length > 20_000 ? `${value.slice(0, 20_000)}…` : value);
   }
   if (Array.isArray(value)) return value.slice(0, 100).map((item) => redactValue(item, depth + 1, keyHint));
   if (!value || typeof value !== 'object') return value;
+  if (depth > 0 && SENSITIVE_OBJECT_KEY.test(keyHint)) return '[REDACTED]';
   const result: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 100)) {
-    if (/(?:token|secret|password|api[_-]?key|auth(?:entication)?)/i.test(key)) result[key] = '[REDACTED]';
+    if (SENSITIVE_STRING_KEY.test(key) && typeof item === 'string' && !isNumericString(item)) result[key] = '[REDACTED]';
+    else if (SENSITIVE_OBJECT_KEY.test(key) && item && typeof item === 'object') result[key] = '[REDACTED]';
     else result[key] = redactValue(item, depth + 1, key);
   }
   return result;

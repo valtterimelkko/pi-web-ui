@@ -138,4 +138,32 @@ describe('Command Code event journal', () => {
     expect(JSON.stringify(events)).not.toContain('secret-token');
     expect((await new CommandCodeEventJournal(root).read('cc-1'))).toHaveLength(2);
   });
+
+  it('preserves numeric usage evidence while still redacting real secrets', async () => {
+    // The real CLI emits token usage as numeric strings under token-ish keys
+    // (inputTokens: "11") and the authoritative projection lives under a
+    // tokenUsage object key. Blanket key-based redaction destroyed all usage
+    // evidence in journals (everything read [REDACTED]); numbers and numeric
+    // strings are never secrets and must survive.
+    const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-journal-usage-'));
+    const journal = new CommandCodeEventJournal(root, { maxBytes: 20_000 });
+    await journal.append('cc-usage', {
+      type: 'agent_end',
+      sessionId: 'cc-usage',
+      timestamp: 3,
+      data: {
+        usage: { inputTokens: '11', outputTokens: '7', cacheReadTokens: '5', cacheWriteTokens: '2', accessToken: 'sk-live-9f2c' },
+        tokenUsage: { scope: 'run', source: 'commandcode-terminal-result-v1', input: 11, output: 7, total: 18 },
+        note: 'auth token: abc123secret',
+      },
+    });
+    const [event] = await journal.read('cc-usage');
+    const data = event.data as Record<string, Record<string, unknown> & { accessToken: unknown }>;
+    expect(data.usage.inputTokens).toBe('11');
+    expect(data.usage.outputTokens).toBe('7');
+    expect(data.usage.accessToken).toBe('[REDACTED]');
+    expect((data.tokenUsage as Record<string, unknown>).total).toBe(18);
+    expect(JSON.stringify(event)).not.toContain('sk-live-9f2c');
+    expect(JSON.stringify(event)).not.toContain('abc123secret');
+  });
 });

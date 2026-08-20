@@ -350,6 +350,8 @@ interface ExtensionUIRequest {
 export interface SessionStats {
   sessionFile: string | undefined;
   sessionId: string;
+  /** Runtime-native session id (Command Code), for native-side log lookup. */
+  nativeSessionId?: string;
   cwd?: string;
   userMessages: number;
   assistantMessages: number;
@@ -2037,16 +2039,17 @@ export const useSessionStore = create<SessionState>()(
               } : {}),
             });
             
-            // Record usage for dashboard (fire-and-forget)
-            if (stats && stats.tokens.total > 0) {
+            // Record usage for dashboard (fire-and-forget). Runtime replies
+            // without usage (Command Code legacy records) must not crash here.
+            if (stats && (stats.tokens?.total ?? 0) > 0) {
               import('../lib/api').then(({ recordUsage }) => {
                 recordUsage({
                   sessionId: stats.sessionId,
                   sessionPath: stats.sessionFile || '',
                   cwd: stats.cwd || '',
                   model: stats.model || '',
-                  tokens: stats.tokens,
-                  cost: stats.cost,
+                  tokens: stats.tokens!,
+                  cost: stats.cost ?? 0,
                   messageCount: stats.totalMessages,
                 });
               }).catch(() => {

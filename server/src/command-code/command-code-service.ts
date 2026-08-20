@@ -40,7 +40,26 @@ import {
   CommandCodeSessionStore,
   canonicalCwd,
   type CommandCodeInternalSessionRecord,
+  type CommandCodeSessionTokenUsage,
 } from './command-code-session-store.js';
+
+/** Session statistics shaped for the browser session-info view. */
+export interface CommandCodeSessionStats {
+  sessionFile: string;
+  sessionId: string;
+  nativeSessionId?: string;
+  cwd: string;
+  userMessages: number;
+  assistantMessages: number;
+  toolCalls: number;
+  toolResults: number;
+  totalMessages: number;
+  tokens: CommandCodeSessionTokenUsage;
+  model: string;
+  effort?: string;
+  defaultEffort?: string;
+  lastActivityAt: number;
+}
 
 export type CommandCodeAvailability =
   | 'disabled'
@@ -452,11 +471,18 @@ export class CommandCodeService {
       completionError = classifyResult(result, adapted?.terminal);
       if (this.abortRequested.has(sessionId)) completionError = new CommandCodeRuntimeError('Command Code run was aborted', 'interrupted');
       const terminal = adapted?.terminal;
+      const usageDelta = adapted?.tokenUsage;
+      const cumulativeUsage = accumulateTokenUsage(record.tokenUsage, usageDelta);
+      const runToolCalls = countToolCalls(adapted?.events ?? streamedEvents);
       const completedRecord = await this.store.update(sessionId, {
         state: result.terminationCause === 'abort' || this.abortRequested.has(sessionId) ? 'aborted' : completionError ? 'failed' : 'idle',
         activeRunId: undefined,
         ...(terminal ? { lastResult: { subtype: terminal.subtype, ...(terminal.stopReason ? { stopReason: terminal.stopReason } : {}), ...(typeof result.exitCode === 'number' ? { exitCode: result.exitCode } : {}) } } : {}),
         ...(adapted ? { lastFinalText: scrubDiagnostic(adapted.finalText) } : {}),
+        assistantMessages: (record.assistantMessages ?? 0) + 1,
+        toolCalls: (record.toolCalls ?? 0) + runToolCalls,
+        ...(cumulativeUsage ? { tokenUsage: cumulativeUsage } : {}),
+        ...(usageDelta ? { lastRunTokenUsage: { input: usageDelta.input, output: usageDelta.output, cacheRead: usageDelta.cacheRead ?? 0, cacheWrite: usageDelta.cacheWrite ?? 0, total: usageDelta.total } } : {}),
         diagnostics: {
           suppressedDuplicateCount: result.parsed?.suppressedDuplicateCount ?? 0,
           unknownEventTypes: result.parsed?.unknownEventTypes ?? [],
@@ -530,6 +556,47 @@ export class CommandCodeService {
     const record = await this.store.get(sessionId);
     if (!this.isSessionRecordAccessible(record)) return undefined;
     return this.journal.stats(sessionId);
+  }
+
+  /** Complete session statistics for the browser session-info view. */
+  async getSessionStats(sessionId: string): Promise<CommandCodeSessionStats | undefined> {
+    await this.init();
+    const record = await this.store.get(sessionId);
+    if (!this.isSessionRecordAccessible(record)) return undefined;
+    const usage = record.tokenUsage;
+    // Records created before counters were persisted (and any record whose
+    // count fields are absent) get their counts derived from the journal so
+    // legacy sessions show real message/tool totals. Token usage cannot be
+    // recovered: older journals redacted usage evidence at write time.
+    let assistantMessages = record.assistantMessages;
+    let toolCalls = record.toolCalls;
+    if (assistantMessages === undefined || toolCalls === undefined) {
+      const events = await this.journal.read(sessionId).catch(() => []);
+      let assistants = 0;
+      let tools = 0;
+      for (const event of events) {
+        if (event.type === 'message_start' && (event.data as { role?: string } | undefined)?.role === 'assistant') assistants += 1;
+        if (event.type === 'tool_execution_start') tools += 1;
+      }
+      if (assistantMessages === undefined) assistantMessages = assistants;
+      if (toolCalls === undefined) toolCalls = tools;
+    }
+    return {
+      sessionFile: path.join(this.config.stateDir, record.eventJournalRef),
+      sessionId: record.sessionId,
+      ...(record.nativeSessionId ? { nativeSessionId: record.nativeSessionId } : {}),
+      cwd: record.cwd,
+      userMessages: record.messageCount,
+      assistantMessages,
+      toolCalls,
+      toolResults: toolCalls,
+      totalMessages: record.messageCount + assistantMessages,
+      tokens: usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      model: record.modelSelector,
+      ...(record.effort ? { effort: record.effort } : {}),
+      ...(record.defaultEffort ? { defaultEffort: record.defaultEffort } : {}),
+      lastActivityAt: Date.parse(record.updatedAt),
+    };
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -825,6 +892,31 @@ function commandCodeDisplayName(model: CommandCodeRuntimeModel): string {
 
 function normalizedEventKey(event: NormalizedEvent): string {
   return JSON.stringify({ type: event.type, data: event.data });
+}
+
+/** Add one validated run usage to the session's cumulative usage. */
+function accumulateTokenUsage(
+  current: CommandCodeSessionTokenUsage | undefined,
+  delta: { input: number; output: number; total: number; cacheRead?: number; cacheWrite?: number } | undefined,
+): CommandCodeSessionTokenUsage | undefined {
+  if (!delta) return current;
+  const base = current ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  const input = base.input + delta.input;
+  const output = base.output + delta.output;
+  if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output)) return current;
+  return {
+    input,
+    output,
+    cacheRead: base.cacheRead + (delta.cacheRead ?? 0),
+    cacheWrite: base.cacheWrite + (delta.cacheWrite ?? 0),
+    total: input + output,
+  };
+}
+
+function countToolCalls(events: NormalizedEvent[]): number {
+  let count = 0;
+  for (const event of events) if (event.type === 'tool_execution_start') count += 1;
+  return count;
 }
 
 function classifyResult(result: CommandCodeProcessRunResult, terminal?: { subtype: 'success' | 'error' | 'max_turns' }): Error | undefined {

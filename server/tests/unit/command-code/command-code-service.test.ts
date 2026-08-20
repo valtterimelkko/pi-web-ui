@@ -26,10 +26,10 @@ class Runner {
   isRunning() { return false; }
 }
 
-async function harness(options: { models?: string[]; enabled?: boolean } = {}) {
+async function harness(options: { models?: string[]; enabled?: boolean; runner?: Runner } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-'));
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'command-code-service-cwd-'));
-  const runner = new Runner();
+  const runner = options.runner ?? new Runner();
   const service = new CommandCodeService({
     config: {
       enabled: options.enabled ?? true,
@@ -143,6 +143,68 @@ describe('Command Code service', () => {
     const stats = await service.getJournalStats(created.sessionId);
     expect(stats).toMatchObject({ exists: true, eventCount: 4 });
     expect(stats?.byteSize).toBeGreaterThan(0);
+  });
+
+  it('accumulates usage and counts on the record and serves complete session stats', async () => {
+    // Mirror the real CLI: numeric-string usage with cache tokens, plus tools.
+    class ToolRunner extends Runner {
+      async run(input: CommandCodeProcessRunInput): Promise<CommandCodeProcessRunResult> {
+        const result = await super.run(input);
+        result.parsed!.events.push(
+          { event: { type: 'tool_start', toolCallId: 't1', toolName: 'bash', args: { command: 'ls' } }, lineNumber: 2 },
+          { event: { type: 'tool_result', toolCallId: 't1', result: 'ok' }, lineNumber: 3 },
+        );
+        result.parsed!.terminal.usage = { inputTokens: '11', outputTokens: '7', cacheReadTokens: '5', cacheWriteTokens: '2' };
+        return result;
+      }
+    }
+    const { cwd, service } = await harness({ runner: new ToolRunner() });
+    await service.init();
+    const created = await service.createSession({ cwd, model: 'qwen/qwen3.8-max' });
+    await service.sendPrompt(created.sessionId, 'say ok', () => undefined);
+
+    const record = await service.getSession(created.sessionId);
+    expect(record?.tokenUsage).toEqual({ input: 11, output: 7, cacheRead: 5, cacheWrite: 2, total: 18 });
+    expect(record?.assistantMessages).toBe(1);
+    expect(record?.toolCalls).toBe(1);
+
+    const stats = await service.getSessionStats(created.sessionId);
+    expect(stats).toMatchObject({
+      sessionId: created.sessionId,
+      nativeSessionId: 'native-1',
+      cwd,
+      model: 'qwen/qwen3.8-max',
+      userMessages: 1,
+      assistantMessages: 1,
+      toolCalls: 1,
+      totalMessages: 2,
+      tokens: { input: 11, output: 7, cacheRead: 5, cacheWrite: 2, total: 18 },
+    });
+    expect(stats.sessionFile).toContain(`events/${created.sessionId}.jsonl`);
+  });
+
+  it('serves zeroed token stats for legacy records that predate usage accumulation', async () => {
+    const { cwd, service } = await harness();
+    await service.init();
+    const created = await service.createSession({ cwd, model: 'qwen/qwen3.8-max' });
+    const stats = await service.getSessionStats(created.sessionId);
+    expect(stats.tokens).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+    expect(stats.userMessages).toBe(0);
+  });
+
+  it('derives legacy assistant and tool counts from the journal when absent from the record', async () => {
+    const { cwd, service } = await harness();
+    await service.init();
+    const created = await service.createSession({ cwd, model: 'qwen/qwen3.8-max' });
+    // Simulate a legacy record: journal has content, record has no counters.
+    await service.journal.append(created.sessionId, { type: 'message_start', sessionId: created.sessionId, timestamp: 1, data: { id: 'a1', role: 'assistant' } });
+    await service.journal.append(created.sessionId, { type: 'message_update', sessionId: created.sessionId, timestamp: 2, data: { id: 'a1', assistantMessageEvent: { type: 'text_delta', delta: 'hi' } } });
+    await service.journal.append(created.sessionId, { type: 'tool_execution_start', sessionId: created.sessionId, timestamp: 3, data: { toolCallId: 't1', toolName: 'bash', args: {} } });
+    await service.journal.append(created.sessionId, { type: 'message_start', sessionId: created.sessionId, timestamp: 4, data: { id: 'a2', role: 'assistant' } });
+    const stats = await service.getSessionStats(created.sessionId);
+    expect(stats.assistantMessages).toBe(2);
+    expect(stats.toolCalls).toBe(1);
+    expect(stats.totalMessages).toBe(2); // messageCount 0 user + 2 assistant
   });
 
   it('rejects concurrent prompts for one session and enforces the concurrency limit', async () => {

@@ -11,6 +11,8 @@ export interface CommandCodeTerminalTokenUsage {
   input: number;
   output: number;
   total: number;
+  cacheRead?: number;
+  cacheWrite?: number;
 }
 
 export interface CommandCodeAdaptInput {
@@ -328,22 +330,36 @@ export function normalizeCommandCodeTerminalTokenUsage(value: unknown): CommandC
   if (!Number.isSafeInteger(total)) return undefined;
   const reportedTotal = readConsistentCount(usage, ['total', 'total_tokens', 'totalTokens']);
   if (reportedTotal !== undefined && reportedTotal !== total) return undefined;
+  const cacheRead = readConsistentCount(usage, ['cacheRead', 'cacheReadTokens', 'cache_read_tokens']);
+  const cacheWrite = readConsistentCount(usage, ['cacheWrite', 'cacheWriteTokens', 'cache_write_tokens']);
   return {
     scope: 'run',
     source: COMMAND_CODE_TOKEN_USAGE_SOURCE,
     input,
     output,
     total,
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
   };
 }
 
 function readConsistentCount(record: Record<string, unknown>, keys: string[]): number | undefined {
   const present = keys.filter((key) => Object.prototype.hasOwnProperty.call(record, key));
   if (present.length === 0) return undefined;
-  const values = present.map((key) => record[key]);
-  if (values.some((value) => !Number.isSafeInteger(value) || (value as number) < 0)) return undefined;
+  const values = present.map((key) => coerceCount(record[key]));
+  if (values.some((value) => value === undefined)) return undefined;
   const first = values[0] as number;
   return values.every((value) => value === first) ? first : undefined;
+}
+
+/** Accept real CLI usage counts emitted as JSON numbers or decimal strings. */
+function coerceCount(value: unknown): number | undefined {
+  if (Number.isSafeInteger(value) && (value as number) >= 0) return value as number;
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function nativeEffort(value: unknown): CommandCodeEffort | undefined {

@@ -558,4 +558,27 @@ describe('sessionStore', () => {
     });
   });
 
+  describe('session_info for Command Code', () => {
+    it('accepts stats without tokens or cost instead of throwing', () => {
+      const state = useSessionStore.getState();
+      // The Command Code session_info reply historically omitted tokens and
+      // cost; the handler must not read .tokens.total before validating.
+      expect(() => state.handleServerMessage({
+        type: 'session_info',
+        stats: {
+          sessionId: 'commandcode-abc',
+          sessionFile: '/root/.pi-web-ui/command-code/events/commandcode-abc.jsonl',
+          cwd: '/tmp/work',
+          userMessages: 1,
+          assistantMessages: 1,
+          toolCalls: 0,
+          toolResults: 0,
+          totalMessages: 2,
+          model: 'qwen/qwen3.8-max',
+        },
+      } as unknown as Parameters<typeof state.handleServerMessage>[0])).not.toThrow();
+      expect(useSessionStore.getState().sessionInfo?.sessionId).toBe('commandcode-abc');
+    });
+  });
+
 });
