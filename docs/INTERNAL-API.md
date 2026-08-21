@@ -2094,6 +2094,11 @@ kept in the ledger.
 - `404 SESSION_NOT_FOUND` — session does not exist (POST), or the
   `onFire.targetSessionId` does not exist
 
+> **Watch subjects exclude Command Code.** The watch route does not accept
+> Command Code sessions as the *observed* session (a pre-existing limitation,
+> independent of `onFire`): use pi, claude, opencode, or antigravity as the
+> child. Command Code sessions **can** be `onFire` wake targets (parents).
+
 ---
 
 ### Source-owned session retention (persistent, time-bounded)
