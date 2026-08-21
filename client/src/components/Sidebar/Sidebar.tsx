@@ -29,6 +29,9 @@ export function Sidebar() {
   const [archiveExpanded, setArchiveExpanded] = useState(false);
   const [showUsageDashboard, setShowUsageDashboard] = useState(false);
   const [archivingAll, setArchivingAll] = useState(false);
+  // Default the active list to recent sessions (2026-08-21 hygiene fix): an
+  // unbounded list of hundreds of rows made manual archiving feel necessary.
+  const [showAllActive, setShowAllActive] = useState(false);
   const archiveAllSessions = useSessionStore(s => s.archiveAllSessions);
 
   // Helper to get display name for a session
@@ -40,7 +43,14 @@ export function Sidebar() {
   const activeSessions = sessions.filter(s => !archivedSessionPaths.includes(s.path));
   const archivedSessions = sessions.filter(s => archivedSessionPaths.includes(s.path));
 
-  const filteredSessions = activeSessions.filter((session) => {
+  const RECENT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+  const recentActiveSessions = activeSessions.filter((s) => {
+    if (!s.lastActivity) return true; // unknown age stays visible
+    return Date.now() - new Date(s.lastActivity).getTime() <= RECENT_WINDOW_MS;
+  });
+  const hiddenRecentCount = activeSessions.length - recentActiveSessions.length;
+
+  const filteredSessions = (filter || showAllActive ? activeSessions : recentActiveSessions).filter((session) => {
     const displayName = getDisplayName(session);
     const matchesText = !filter ||
       displayName.toLowerCase().includes(filter.toLowerCase()) ||
@@ -193,8 +203,24 @@ export function Sidebar() {
         />
 
         {/* Session count */}
-        <div className="px-4 py-1.5 text-[11px] text-gray-400">
-          {filteredSessions.length} of {activeSessions.length} sessions
+        <div className="px-4 py-1.5 text-[11px] text-gray-400 flex items-center justify-between">
+          <span>{filteredSessions.length} of {activeSessions.length} sessions</span>
+          {!filter && hiddenRecentCount > 0 && (
+            <button
+              onClick={() => setShowAllActive((v) => !v)}
+              className="text-[11px] text-blue-500 hover:text-blue-600 hover:underline"
+            >
+              {showAllActive ? 'Show recent only' : `Show all (${hiddenRecentCount} older)`}
+            </button>
+          )}
+          {filter && hiddenRecentCount > 0 && !showAllActive && (
+            <button
+              onClick={() => setShowAllActive(true)}
+              className="text-[11px] text-blue-500 hover:text-blue-600 hover:underline"
+            >
+              Search all ({hiddenRecentCount} older hidden)
+            </button>
+          )}
         </div>
 
         {/* Session list */}

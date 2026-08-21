@@ -37,6 +37,8 @@ describe('validation server env-file loading', () => {
     expect(isolation.PI_WEB_UI_VALIDATION_DEFAULT_CWD).toBe('/tmp/pi-validation/workspace');
     expect(isolation.SESSION_DIR).toBe('/tmp/pi-validation/pi-sessions');
     expect(isolation.PI_SESSIONS_DIR).toBe('/tmp/pi-validation/pi-sessions');
+    // Prefs must be isolated from the production web-ui-prefs.json.
+    expect(isolation.WEB_UI_PREFS_PATH).toBe('/tmp/pi-validation/web-ui-prefs.json');
     expect(isolation.OPENCODE_WORKING_DIR).toBe('/tmp/pi-validation/opencode-workspace');
     expect(isolation.PI_WEB_UI_VALIDATION_DEFAULT_CWD).toBe('/tmp/pi-validation/workspace');
     expect(isolation.CLAUDE_SESSION_DIR).toBe('/tmp/pi-validation/claude-sessions');

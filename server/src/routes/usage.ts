@@ -1,6 +1,5 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
-import { apiLimiter } from '../security/rate-limit.js';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -38,7 +37,6 @@ interface UsageData {
 
 // All usage routes require authentication
 router.use(cookieAuthMiddleware);
-router.use(apiLimiter);
 
 /**
  * Load usage data from file

@@ -16,7 +16,6 @@ import { parsePlanFile, validatePlan } from '../pi/parallel/plan-parser.js';
 import { z } from 'zod';
 import * as fs from 'node:fs/promises';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
-import { apiLimiter } from '../security/rate-limit.js';
 import { createLogger } from '../logging/logger.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -28,7 +27,6 @@ const router = Router();
 
 // The whole browser worktree surface is privileged: require auth + rate limit.
 router.use(cookieAuthMiddleware);
-router.use(apiLimiter);
 
 // In-memory store for worktree managers (one per repo)
 const worktreeManagers = new Map<string, WorktreeManager>();

@@ -23,6 +23,8 @@ export type SessionRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'unk
 export interface SessionMeta {
   /** Present only when the session is archived. */
   archived?: true;
+  /** Epoch-ms when the record entered the archived state (retention dwell gate). */
+  archivedAt?: number;
   /** Present only when the session is pinned. */
   pinned?: true;
   /** Present only when a custom display name is set. */

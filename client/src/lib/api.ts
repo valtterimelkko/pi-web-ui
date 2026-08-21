@@ -27,7 +27,7 @@ export interface WebUIPreferences {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public retryAfterMs?: number) {
     super(message);
   }
 }
@@ -213,12 +213,12 @@ export async function patchPreferences(updates: Partial<WebUIPreferences>): Prom
  * agnostic and free of the last-write-wins races that plagued the whole-array
  * PATCH.
  */
-export async function archiveSessionPref(sessionPath: string, updatedAt: number): Promise<WebUIPreferences> {
+export async function archiveSessionPref(sessionPath: string, updatedAt: number): Promise<PreferenceDeltaAck> {
   return postPreferenceDelta('/api/preferences/archive', { sessionPath, updatedAt }, true);
 }
 
 /** Unarchive a single session (delta write). See archiveSessionPref. */
-export async function unarchiveSessionPref(sessionPath: string, updatedAt: number): Promise<WebUIPreferences> {
+export async function unarchiveSessionPref(sessionPath: string, updatedAt: number): Promise<PreferenceDeltaAck> {
   return postPreferenceDelta('/api/preferences/unarchive', { sessionPath, updatedAt }, true);
 }
 
@@ -228,7 +228,7 @@ export async function unarchiveSessionPref(sessionPath: string, updatedAt: numbe
  * the 64 KiB keepalive limit does not apply and the (potentially large) list of
  * paths is sent without issue.
  */
-export async function archiveAllSessionsPref(sessionPaths: string[], updatedAt: number): Promise<WebUIPreferences> {
+export async function archiveAllSessionsPref(sessionPaths: string[], updatedAt: number): Promise<PreferenceDeltaAck> {
   return postPreferenceDelta('/api/preferences/archive-all', { sessionPaths, updatedAt }, false);
 }
 
@@ -240,12 +240,12 @@ export async function archiveAllSessionsPref(sessionPaths: string[], updatedAt: 
  * `updatedAt` (epoch-ms) is sent so the server's last-writer-wins can reject a
  * genuinely stale write from a briefly-offline device.
  */
-export async function pinSessionPref(sessionPath: string, updatedAt: number): Promise<WebUIPreferences> {
+export async function pinSessionPref(sessionPath: string, updatedAt: number): Promise<PreferenceDeltaAck> {
   return postPreferenceDelta('/api/preferences/pin', { sessionPath, updatedAt }, true);
 }
 
 /** Unpin a single session (delta write). See pinSessionPref. */
-export async function unpinSessionPref(sessionPath: string, updatedAt: number): Promise<WebUIPreferences> {
+export async function unpinSessionPref(sessionPath: string, updatedAt: number): Promise<PreferenceDeltaAck> {
   return postPreferenceDelta('/api/preferences/unpin', { sessionPath, updatedAt }, true);
 }
 
@@ -255,20 +255,26 @@ export async function unpinSessionPref(sessionPath: string, updatedAt: number): 
  * this is the fix for the keepalive landmine that silently dropped renames once
  * the map grew past 64 KiB.
  */
-export async function setDisplayNamePref(sessionPath: string, name: string, updatedAt: number): Promise<WebUIPreferences> {
+export async function setDisplayNamePref(sessionPath: string, name: string, updatedAt: number): Promise<PreferenceDeltaAck> {
   return postPreferenceDelta('/api/preferences/display-name', { sessionPath, name, updatedAt }, true);
 }
 
 /** Clear one session's display name (delta write; name: null deletes the key). */
-export async function clearDisplayNamePref(sessionPath: string, updatedAt: number): Promise<WebUIPreferences> {
+export async function clearDisplayNamePref(sessionPath: string, updatedAt: number): Promise<PreferenceDeltaAck> {
   return postPreferenceDelta('/api/preferences/display-name', { sessionPath, name: null, updatedAt }, true);
+}
+
+/** Small ack returned by the preference delta endpoints (2026-08-21 fix: they
+ *  used to ship the entire ~200KB prefs object back for a one-path write). */
+export interface PreferenceDeltaAck {
+  ok: true;
 }
 
 async function postPreferenceDelta(
   endpoint: string,
   body: Record<string, unknown>,
   keepalive: boolean,
-): Promise<WebUIPreferences> {
+): Promise<PreferenceDeltaAck> {
   const response = await fetch(`${API_URL}${endpoint}`, {
     method: 'POST',
     credentials: 'include',
@@ -279,10 +285,15 @@ async function postPreferenceDelta(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new ApiError(response.status, error.error || `HTTP ${response.status}`);
+    // Surface Retry-After (seconds per HTTP spec) so the retry policy in the
+    // store can back off by the server's hint instead of a fixed ladder.
+    const retryAfter = Number(response.headers.get('retry-after'));
+    const retryAfterMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined;
+    throw new ApiError(response.status, error.error || `HTTP ${response.status}`, retryAfterMs);
   }
 
-  return response.json() as Promise<WebUIPreferences>;
+  await response.json().catch(() => ({}));
+  return { ok: true };
 }
 
 /**

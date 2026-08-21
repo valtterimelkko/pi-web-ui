@@ -1,6 +1,5 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
-import { apiLimiter } from '../security/rate-limit.js';
 import { getPiService } from '../pi/index.js';
 import { createLogger } from '../logging/logger.js';
 
@@ -10,7 +9,6 @@ const logger = createLogger('Extensions');
 const router = Router();
 
 router.use(cookieAuthMiddleware);
-router.use(apiLimiter);
 
 // GET /api/extensions - List loaded extensions with their commands
 router.get('/', async (req: Request, res: Response) => {

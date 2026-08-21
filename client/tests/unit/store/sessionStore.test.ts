@@ -1013,6 +1013,13 @@ describe('sessionStore', () => {
 // ── initPreferences merge behaviour ──────────────────────────────────────────
 
 vi.mock('../../../src/lib/api', () => ({
+  // Real-ish ApiError: the store's retry policy does `instanceof ApiError` to
+  // classify HTTP statuses; without it the classification itself would throw.
+  ApiError: class ApiError extends Error {
+    constructor(public status: number, message: string, public retryAfterMs?: number) {
+      super(message);
+    }
+  },
   getPreferences: vi.fn(),
   patchPreferences: vi.fn().mockResolvedValue({}),
   archiveSessionPref: vi.fn().mockResolvedValue({}),
@@ -1241,7 +1248,9 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
       ] as never,
       sessionMeta: { 'pi:1': { pinned: true, legacyKey: '/sessions/a.jsonl' } },
     });
-    archiveAllSessionsPref.mockResolvedValue({
+    archiveAllSessionsPref.mockResolvedValue({ ok: true });
+    // Delta endpoints ack small; the store adopts server state via a fresh read.
+    getPreferences.mockResolvedValue({
       version: 2 as const,
       sessions: {
         'pi:1': { archived: true, legacyKey: '/sessions/a.jsonl' },

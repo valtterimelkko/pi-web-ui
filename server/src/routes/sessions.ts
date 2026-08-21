@@ -1,7 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { getPiService } from '../pi/index.js';
-import { apiLimiter } from '../security/rate-limit.js';
 import { WorkerPool } from '../workers/worker-pool.js';
 import type { WorkerPoolStats, WorkerInfo } from '@pi-web-ui/shared';
 import fs from 'fs/promises';
@@ -31,7 +30,6 @@ export function getWorkerPool(): WorkerPool {
 
 // All session routes require authentication
 router.use(cookieAuthMiddleware);
-router.use(apiLimiter);
 
 // GET /api/sessions - List all sessions
 router.get('/', async (req: Request, res: Response) => {

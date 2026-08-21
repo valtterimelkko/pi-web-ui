@@ -49,6 +49,11 @@ export function buildValidationIsolationEnv(
     SESSION_REGISTRY_PATH: join(input.validationDir, 'session-registry.json'),
     SESSION_DIR: piSessionsDir,
     PI_SESSIONS_DIR: piSessionsDir,
+    // Browser preference metadata (archive/pin/display-name) must never land in
+    // the production web-ui-prefs.json from a disposable server (2026-08-21
+    // discovery: PI_AGENT_DIR stays shared for extension loading, so the prefs
+    // path needs its own isolation override).
+    WEB_UI_PREFS_PATH: join(input.validationDir, 'web-ui-prefs.json'),
     CLAUDE_SESSION_DIR: join(input.validationDir, 'claude-sessions'),
     CLAUDE_CONFIG_DIR: join(input.validationDir, 'claude-config'),
     CLAUDE_CHANNEL_ENABLED: 'false',

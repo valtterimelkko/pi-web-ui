@@ -43,6 +43,35 @@ export function parseNonnegativeInteger(raw: string | undefined, fallback: numbe
   return Number(raw);
 }
 
+/**
+ * Rate-limit cap. Accepts both documented names: RATE_LIMIT_MAX (legacy,
+ * undocumented in env files) and RATE_LIMIT_MAX_REQUESTS (what every env file
+ * actually set — historically never read, so the cap silently stayed at the
+ * default). RATE_LIMIT_MAX wins when both are present.
+ */
+export function resolveRateLimitMax(env: NodeJS.ProcessEnv = process.env): number {
+  return parsePositiveInteger(env.RATE_LIMIT_MAX ?? env.RATE_LIMIT_MAX_REQUESTS, 100, 'RATE_LIMIT');
+}
+
+/** Auto-archive sessions idle longer than this many days (0 disables). */
+export function resolveAutoArchiveDays(env: NodeJS.ProcessEnv = process.env): number {
+  return parseNonnegativeInteger(env.SESSION_AUTO_ARCHIVE_DAYS, 30, 'SESSION_AUTO_ARCHIVE_DAYS');
+}
+
+/**
+ * Cleanup dry-run gate. Defaults to true so the first production pass reports
+ * what it WOULD archive and delete without acting; flip explicitly via
+ * SESSION_CLEANUP_DRY_RUN=false once counts look sane.
+ */
+export function resolveCleanupDryRun(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.SESSION_CLEANUP_DRY_RUN !== 'false';
+}
+
+/** Minimum days a session must dwell archived before retention delete is eligible. */
+export function resolveRetentionMinDwellDays(env: NodeJS.ProcessEnv = process.env): number {
+  return parsePositiveInteger(env.SESSION_RETENTION_MIN_DWELL_DAYS, 7, 'SESSION_RETENTION_MIN_DWELL_DAYS');
+}
+
 export function parseAbsolutePath(raw: string | undefined, fallback: string, name: string): string {
   const value = raw === undefined || raw.trim() === '' ? fallback : raw.trim();
   if (!path.isAbsolute(value)) throw new Error(`${name} must be an absolute path.`);
@@ -144,7 +173,11 @@ export interface ServerConfig {
   authPassword: string;
   rateLimitWindowMs: number;
   rateLimitMax: number;
+  sessionAutoArchiveDays: number;
+  sessionCleanupDryRun: boolean;
+  sessionRetentionMinDwellDays: number;
   piAgentDir: string;
+  webUiPrefsPath: string;
   sessionDir: string | undefined;
   claudeSessionDir: string;
   sessionRegistryPath: string;
@@ -278,8 +311,14 @@ export const config: ServerConfig = {
     ? getRequiredEnvVar('AUTH_PASSWORD')
     : (process.env.AUTH_PASSWORD || 'dev-password'),
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10), // 15 minutes
-  rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
+  rateLimitMax: resolveRateLimitMax(process.env),
+  sessionAutoArchiveDays: resolveAutoArchiveDays(process.env),
+  sessionCleanupDryRun: resolveCleanupDryRun(process.env),
+  sessionRetentionMinDwellDays: resolveRetentionMinDwellDays(process.env),
   piAgentDir: process.env.PI_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent'),
+  /** Browser preference metadata file. Overridable so disposable validation
+   *  servers never touch the production prefs (see validation-server-env). */
+  webUiPrefsPath: process.env.WEB_UI_PREFS_PATH || path.join(process.env.PI_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent'), 'web-ui-prefs.json'),
   sessionDir: process.env.SESSION_DIR || undefined,
   claudeSessionDir: process.env.CLAUDE_SESSION_DIR || path.join(os.homedir(), '.pi-web-ui', 'claude-sessions'),
   sessionRegistryPath: process.env.SESSION_REGISTRY_PATH || path.join(os.homedir(), '.pi-web-ui', 'session-registry.json'),

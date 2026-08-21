@@ -5,7 +5,6 @@ import { getOpenCodeService } from '../opencode/index.js';
 import { getAntigravityService } from '../antigravity/index.js';
 import { getClaudeProfiles } from '../claude/index.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
-import { apiLimiter } from '../security/rate-limit.js';
 import { createLogger } from '../logging/logger.js';
 import { getCommandCodeService } from '../command-code/command-code-instance.js';
 
@@ -15,7 +14,6 @@ const logger = createLogger('Models');
 const router = Router();
 
 router.use(cookieAuthMiddleware);
-router.use(apiLimiter);
 
 // GET /api/models - List available models
 router.get('/', async (req: Request, res: Response) => {

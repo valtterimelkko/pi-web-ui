@@ -10,6 +10,7 @@ import {
   unpinSessionPref,
   setDisplayNamePref,
   clearDisplayNamePref,
+  ApiError,
 } from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
 import type { CommandCodeEffort, CommandCodeModelInfo, SubagentToolSummary } from '@pi-web-ui/shared';
@@ -128,6 +129,8 @@ const throttledStorage: PersistStorage<unknown> = {
  * through this one helper — the unified write/sync rule.
  */
 const DELTA_RETRY_DELAYS_MS = [500, 1500, 4000];
+/** HTTP statuses in the 4xx range that ARE worth retrying. */
+const RETRYABLE_4XX = new Set([408, 429]);
 async function syncPreferenceDelta(
   attempt: () => Promise<unknown>,
   onFinalFailure: () => void,
@@ -137,12 +140,30 @@ async function syncPreferenceDelta(
       await attempt();
       return;
     } catch (e) {
+      const status = e instanceof ApiError ? e.status : undefined;
+      // A deterministic 4xx will never succeed by retrying — retrying it just
+      // amplifies load inside an already-rejecting window (the 2026-08-21
+      // rate-limit incident). Revert immediately.
+      if (status !== undefined && status >= 400 && status < 500 && !RETRYABLE_4XX.has(status)) {
+        console.warn(`Preference delta write failed with HTTP ${status}; not retrying a deterministic client error; reverting optimistic change:`, e);
+        onFinalFailure();
+        return;
+      }
       if (attemptNum >= DELTA_RETRY_DELAYS_MS.length) {
         console.warn('Preference delta write failed after retries; reverting optimistic change:', e);
         onFinalFailure();
         return;
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, DELTA_RETRY_DELAYS_MS[attemptNum]));
+      // Honour Retry-After when the server sent one; otherwise use the ladder.
+      const ladderDelay = DELTA_RETRY_DELAYS_MS[attemptNum];
+      const retryAfterMs = e instanceof ApiError ? e.retryAfterMs : undefined;
+      const delayMs = retryAfterMs !== undefined && retryAfterMs > ladderDelay
+        ? retryAfterMs
+        : ladderDelay;
+      if (status === 429) {
+        console.warn(`Preference delta write rate limited; backing off ${Math.round(delayMs / 100) / 10}s before retry`);
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
     }
   }
 }
@@ -1228,8 +1249,10 @@ export const useSessionStore = create<SessionState>()(
           return { sessionMeta: meta, ...deriveLegacyFromMeta(meta) };
         });
         try {
-          const prefs = await archiveAllSessionsPref(paths, now);
-          // Server is authoritative — adopt its merged v2 map (with derived legacy).
+          await archiveAllSessionsPref(paths, now);
+          // Server is authoritative — adopt its merged v2 map via a fresh read
+          // (delta endpoints now ack small instead of returning the full object).
+          const prefs = await getPreferences();
           const serverMeta = (prefs.sessions as Record<string, SessionMeta> | undefined);
           if (serverMeta) {
             set((state) => ({ sessionMeta: { ...serverMeta }, ...deriveLegacyFromMeta(serverMeta) }));

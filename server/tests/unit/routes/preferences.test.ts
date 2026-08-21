@@ -11,7 +11,7 @@ import fs from 'fs/promises';
  *  resolves to <dir>/web-ui-prefs.json). Auth + rate-limit are bypassed. */
 async function buildRealApp(dir: string): Promise<express.Application> {
   vi.resetModules();
-  vi.doMock('../../../src/config.js', () => ({ config: { piAgentDir: dir } }));
+  vi.doMock('../../../src/config.js', () => ({ config: { piAgentDir: dir, webUiPrefsPath: path.join(dir, 'web-ui-prefs.json') } }));
   vi.doMock('../../../src/middleware/auth.js', () => ({
     cookieAuthMiddleware: (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
   }));
@@ -103,22 +103,30 @@ describe('Preferences v2 — delta endpoints', () => {
   it('archive/unarchive a Pi path persist on the v2 pi:<uuid> record', async () => {
     let res = await request(app).post('/api/preferences/archive').send({ sessionPath: PI });
     expect(res.status).toBe(200);
-    expect(res.body.sessions[PI_KEY]).toMatchObject({ archived: true, legacyKey: PI });
-    expect(res.body.archivedSessionPaths).toEqual([PI]);
+    // Delta endpoints return a small ack (2026-08-21 fix: they used to ship the
+    // entire ~200KB prefs object back for a one-path write).
+    expect(res.body).toEqual({ ok: true });
+    let get = await request(app).get('/api/preferences');
+    expect(get.body.sessions[PI_KEY]).toMatchObject({ archived: true, legacyKey: PI });
+    expect(get.body.archivedSessionPaths).toEqual([PI]);
     const onDisk = JSON.parse(await fs.readFile(file, 'utf-8'));
     expect(onDisk.sessions[PI_KEY].archived).toBe(true);
 
     res = await request(app).post('/api/preferences/unarchive').send({ sessionPath: PI });
-    expect(res.body.sessions[PI_KEY].archived).toBeUndefined();
-    expect(res.body.archivedSessionPaths).toEqual([]);
+    expect(res.body).toEqual({ ok: true });
+    get = await request(app).get('/api/preferences');
+    expect(get.body.sessions[PI_KEY].archived).toBeUndefined();
+    expect(get.body.archivedSessionPaths).toEqual([]);
   });
 
   it('archive is idempotent and auto-unpins', async () => {
     await request(app).post('/api/preferences/pin').send({ sessionPath: PI });
     await request(app).post('/api/preferences/archive').send({ sessionPath: PI });
     const res = await request(app).post('/api/preferences/archive').send({ sessionPath: PI });
-    expect(res.body.sessions[PI_KEY].archived).toBe(true);
-    expect(res.body.sessions[PI_KEY].pinned).toBeUndefined(); // auto-unpin invariant
+    expect(res.body).toEqual({ ok: true });
+    const get = await request(app).get('/api/preferences');
+    expect(get.body.sessions[PI_KEY].archived).toBe(true);
+    expect(get.body.sessions[PI_KEY].pinned).toBeUndefined(); // auto-unpin invariant
   });
 
   it('archive-all unions + dedups + auto-unpins, persisting a large batch', async () => {
@@ -133,7 +141,9 @@ describe('Preferences v2 — delta endpoints', () => {
     });
     const res = await request(app).post('/api/preferences/archive-all').send({ sessionPaths: many });
     expect(res.status).toBe(200);
-    const archivedKeys = Object.keys(res.body.sessions).filter((k) => res.body.sessions[k]?.archived);
+    expect(res.body).toEqual({ ok: true });
+    const get = await request(app).get('/api/preferences');
+    const archivedKeys = Object.keys(get.body.sessions).filter((k) => get.body.sessions[k]?.archived);
     // 900 new + 1 pre-seeded = 901 archived records.
     expect(archivedKeys.length).toBe(901);
     const onDisk = JSON.parse(await fs.readFile(file, 'utf-8'));
@@ -142,9 +152,12 @@ describe('Preferences v2 — delta endpoints', () => {
 
   it('pin/unpin a bare id persist on <runtime>:<id> (unknown when not in registry)', async () => {
     let res = await request(app).post('/api/preferences/pin').send({ sessionPath: 'bare-id-1' });
-    expect(res.body.sessions['unknown:bare-id-1']).toMatchObject({ pinned: true, legacyKey: 'bare-id-1' });
+    expect(res.body).toEqual({ ok: true });
+    let get = await request(app).get('/api/preferences');
+    expect(get.body.sessions['unknown:bare-id-1']).toMatchObject({ pinned: true, legacyKey: 'bare-id-1' });
     res = await request(app).post('/api/preferences/unpin').send({ sessionPath: 'bare-id-1' });
-    expect(res.body.sessions['unknown:bare-id-1'].pinned).toBeUndefined();
+    get = await request(app).get('/api/preferences');
+    expect(get.body.sessions['unknown:bare-id-1'].pinned).toBeUndefined();
   });
 
   it('display-name set/clear persist on the record (single-key, preserves others)', async () => {
@@ -152,10 +165,13 @@ describe('Preferences v2 — delta endpoints', () => {
       version: 2, sessions: { 'pi:aaaaaaaa-0000-0000-0000-000000000001': { displayName: 'Other', updatedAt: 1, legacyKey: '/other.jsonl' } },
     }), 'utf-8');
     let res = await request(app).post('/api/preferences/display-name').send({ sessionPath: PI, name: 'Refactor' });
-    expect(res.body.sessions[PI_KEY].displayName).toBe('Refactor');
-    expect(res.body.sessions['pi:aaaaaaaa-0000-0000-0000-000000000001'].displayName).toBe('Other'); // preserved
+    expect(res.body).toEqual({ ok: true });
+    let get = await request(app).get('/api/preferences');
+    expect(get.body.sessions[PI_KEY].displayName).toBe('Refactor');
+    expect(get.body.sessions['pi:aaaaaaaa-0000-0000-0000-000000000001'].displayName).toBe('Other'); // preserved
     res = await request(app).post('/api/preferences/display-name').send({ sessionPath: PI, name: null });
-    expect(res.body.sessions[PI_KEY].displayName).toBeUndefined();
+    get = await request(app).get('/api/preferences');
+    expect(get.body.sessions[PI_KEY].displayName).toBeUndefined();
   });
 
   it('rejects malformed delta bodies with 400', async () => {
@@ -174,33 +190,34 @@ describe('Preferences v2 — key-based deltas + LWW', () => {
 
   it('accepts a key directly (no registry round-trip)', async () => {
     const res = await request(app).post('/api/preferences/pin').send({ key: 'claude:abc-123' });
-    expect(res.body.sessions['claude:abc-123']).toMatchObject({ pinned: true });
+    expect(res.body).toEqual({ ok: true });
+    const get = await request(app).get('/api/preferences');
+    expect(get.body.sessions['claude:abc-123']).toMatchObject({ pinned: true });
   });
 
   it('LWW: a newer updatedAt write wins; an older one is rejected (no stale resurrection)', async () => {
     // Device B writes a display name at updatedAt=200.
-    const r1 = await request(app).post('/api/preferences/display-name')
+    await request(app).post('/api/preferences/display-name')
       .send({ key: 'claude:s1', name: 'Fresh from B', updatedAt: 200 });
-    expect(r1.body.sessions['claude:s1'].displayName).toBe('Fresh from B');
-    expect(r1.body.sessions['claude:s1'].updatedAt).toBe(200);
     // Device A (stale, briefly offline) tries to overwrite with updatedAt=100 → rejected.
-    const r2 = await request(app).post('/api/preferences/display-name')
+    await request(app).post('/api/preferences/display-name')
       .send({ key: 'claude:s1', name: 'Stale from A', updatedAt: 100 });
-    expect(r2.body.sessions['claude:s1'].displayName).toBe('Fresh from B'); // unchanged
-    expect(r2.body.sessions['claude:s1'].updatedAt).toBe(200);
     // An equal-or-newer write (updatedAt=250) is accepted.
-    const r3 = await request(app).post('/api/preferences/display-name')
+    await request(app).post('/api/preferences/display-name')
       .send({ key: 'claude:s1', name: 'Newer from A', updatedAt: 250 });
-    expect(r3.body.sessions['claude:s1'].displayName).toBe('Newer from A');
+    const get = await request(app).get('/api/preferences');
+    expect(get.body.sessions['claude:s1'].displayName).toBe('Newer from A');
+    expect(get.body.sessions['claude:s1'].updatedAt).toBe(250);
   });
 
   it('LWW: a stale clear (unarchive/unpin/clear-name) is rejected too', async () => {
     // Seed pinned at updatedAt=300.
     await request(app).post('/api/preferences/pin').send({ key: 'claude:s2', updatedAt: 300 });
     // Stale unpin at updatedAt=100 → rejected (still pinned).
-    const r = await request(app).post('/api/preferences/unpin').send({ key: 'claude:s2', updatedAt: 100 });
-    expect(r.body.sessions['claude:s2'].pinned).toBe(true);
-    expect(r.body.sessions['claude:s2'].updatedAt).toBe(300);
+    await request(app).post('/api/preferences/unpin').send({ key: 'claude:s2', updatedAt: 100 });
+    const get = await request(app).get('/api/preferences');
+    expect(get.body.sessions['claude:s2'].pinned).toBe(true);
+    expect(get.body.sessions['claude:s2'].updatedAt).toBe(300);
   });
 });
 

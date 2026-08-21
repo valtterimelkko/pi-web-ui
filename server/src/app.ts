@@ -1,8 +1,9 @@
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
-import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
+import { apiLimiter } from './security/rate-limit.js';
+import { createLogger } from './logging/logger.js';
 import { compressionMiddleware } from './middleware/compression.js';
 import authRoutes from './routes/auth.js';
 import sessionsRoutes from './routes/sessions.js';
@@ -38,6 +39,8 @@ export interface NotificationsWebMount {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+const logger = createLogger('App');
+
 export interface AppWithWs {
   app: express.Application;
   getWebSocketStats: () => { connectedClients: number } | null;
@@ -62,12 +65,21 @@ export function createApp(notifications?: NotificationsWebMount): express.Applic
   app.use(express.json());
   app.use(express.raw({ type: 'application/octet-stream', limit: '50mb' }));
 
-  // Rate limiting
-  app.use(rateLimit({
-    windowMs: config.rateLimitWindowMs,
-    max: config.rateLimitMax,
-    message: { error: 'Too many requests, please try again later.' },
-  }));
+  // Rate limiting — scoped to /api only. Static assets and the SPA fallback
+  // must never consume the API budget (2026-08-21 incident: the old global
+  // limiter sat before express.static and counted every asset request). The
+  // limiter itself (apiLimiter) sets standard RateLimit-* headers so clients
+  // can honour Retry-After, and keys per authenticated user (falling back to
+  // IP) — the single budget for all /api traffic; per-route apiLimiter uses
+  // were removed to avoid double-limiting with different keys.
+  app.use('/api', (req, res, next) => {
+    if (req.path.startsWith('/health')) return next(); // health checks are unthrottled
+    return apiLimiter(req, res, next);
+  });
+  logger.info(
+    `[RateLimit] /api budget: ${config.rateLimitMax} requests per ${config.rateLimitWindowMs}ms` +
+    `${config.sessionCleanupDryRun ? ' (cleanup dry-run: ON)' : ''}`,
+  );
 
   // Response compression
   app.use(compressionMiddleware);

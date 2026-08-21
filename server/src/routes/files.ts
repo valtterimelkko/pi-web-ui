@@ -1,6 +1,5 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
-import { apiLimiter } from '../security/rate-limit.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { createWriteStream, mkdirSync } from 'fs';
@@ -25,7 +24,6 @@ try {
 const router = Router();
 
 router.use(cookieAuthMiddleware);
-router.use(apiLimiter);
 
 // Allowed directories for file browsing
 function getAllowedDirectories(): string[] {

@@ -41,6 +41,10 @@ vi.mock('../../src/config.js', () => ({
     claudeSessionDir: '/tmp/test-claude-sessions',
     antigravitySessionDir: '/tmp/test-antigravity-sessions',
     sessionRegistryPath: '/tmp/test-session-registry.json',
+    webUiPrefsPath: '/tmp/test-web-ui-prefs.json',
+    sessionAutoArchiveDays: 30,
+    sessionCleanupDryRun: false,
+    sessionRetentionMinDwellDays: 7,
   },
 }));
 
@@ -109,6 +113,11 @@ describe('SessionCleanupService', () => {
     return new SessionCleanupService({
       pinInactivityMs: opts?.pinInactivityMs ?? 24 * 60 * 60 * 1000,
       archiveRetentionMs: opts?.archiveRetentionMs ?? 90 * 24 * 60 * 60 * 1000,
+      // Pre-funnel tests: stage-1 auto-archive disabled so its writes never
+      // interfere with assertions written before the funnel existed.
+      autoArchiveMs: 0,
+      dryRun: false,
+      retentionMinDwellMs: 7 * 24 * 60 * 60 * 1000,
       cleanupIntervalMs: 999999999,
       piSessionDir: path.join(tmpDir, 'pi-sessions'),
       claudeSessionDir: path.join(tmpDir, 'claude-sessions'),
@@ -831,5 +840,149 @@ describe('SessionCleanupService', () => {
       const prefs = await readPrefs();
       expect(prefs.archivedSessionPaths).toEqual([]);
     });
+  });
+});
+
+/**
+ * Auto-archive funnel (2026-08-21 rate-limit/hygiene incident follow-up).
+ *
+ * Two-stage design agreed with the operator:
+ *   stage 1 (reversible): auto-archive sessions idle > autoArchiveMs
+ *   stage 2 (destructive): existing 90-day retention delete, now gated by a
+ *   minimum dwell time in the archived state so freshly auto-archived sessions
+ *   get a grace period before becoming deletable.
+ * Dry-run is the default production mode until counts are reviewed.
+ */
+describe('auto-archive funnel', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const iso = (daysAgo: number) => new Date(Date.now() - daysAgo * DAY).toISOString();
+  let tmpDir: string;
+  let prefsPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cleanup-funnel-'));
+    prefsPath = path.join(tmpDir, 'prefs.json');
+    mockRegistryEntries.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  async function readPrefs(): Promise<Record<string, any>> {
+    try {
+      const raw = JSON.parse(await fs.readFile(prefsPath, 'utf-8'));
+      return { ...raw, ...deriveLegacyArrays(raw) };
+    } catch {
+      return {};
+    }
+  }
+
+  function makeFunnelService(opts: { autoArchiveMs?: number; dryRun?: boolean; retentionMinDwellMs?: number; archiveRetentionMs?: number; pinInactivityMs?: number } = {}) {
+    return new SessionCleanupService({
+      pinInactivityMs: opts.pinInactivityMs ?? 24 * 60 * 60 * 1000,
+      cleanupIntervalMs: 999999999,
+      piSessionDir: path.join(tmpDir, 'pi-sessions'),
+      claudeSessionDir: path.join(tmpDir, 'claude-sessions'),
+      antigravitySessionDir: path.join(tmpDir, 'antigravity-sessions'),
+      autoArchiveMs: opts.autoArchiveMs ?? 30 * DAY,
+      dryRun: opts.dryRun ?? false,
+      retentionMinDwellMs: opts.retentionMinDwellMs ?? 7 * DAY,
+      archiveRetentionMs: opts.archiveRetentionMs ?? 90 * DAY,
+    });
+  }
+
+  async function writeV2Prefs(sessions: Record<string, any>): Promise<void> {
+    await fs.writeFile(prefsPath, JSON.stringify({ version: 2, sessions }), 'utf-8');
+  }
+
+  it('auto-archives idle unpinned sessions past the threshold (stage 1)', async () => {
+    mockRegistryEntries.set('stale-a', { id: 'stale-a', sdkType: 'claude', path: '/claude/stale-a', lastActivity: iso(40), status: 'idle' });
+    await writeV2Prefs({});
+
+    const result = await makeFunnelService().runCleanup(prefsPath);
+
+    expect(result.autoArchived).toContain('/claude/stale-a');
+    expect(result.deleted).not.toContain('/claude/stale-a'); // 40d < 90d retention
+    const prefs = await readPrefs();
+    const rec = Object.values(prefs.sessions as Record<string, any>).find((r) => r.legacyKey === '/claude/stale-a');
+    expect(rec?.archived).toBe(true);
+    expect(typeof rec?.archivedAt).toBe('number');
+  });
+
+  it('does not auto-archive recent sessions or pinned ones', async () => {
+    mockRegistryEntries.set('recent-b', { id: 'recent-b', sdkType: 'claude', path: '/claude/recent-b', lastActivity: iso(1), status: 'idle' });
+    mockRegistryEntries.set('old-pinned', { id: 'old-pinned', sdkType: 'claude', path: '/claude/old-pinned', lastActivity: iso(200), status: 'idle' });
+    // pinInactivityMs huge: the auto-unpin pass runs before auto-archive, so
+    // without this the stale pin would be released and the session archived
+    // in the same pass — correct funnel behaviour, but not what this test
+    // asserts (that currently-pinned sessions are skipped).
+    await writeV2Prefs({ 'claude:/claude/old-pinned': { pinned: true, legacyKey: '/claude/old-pinned', updatedAt: Date.now() } });
+
+    const result = await makeFunnelService({ pinInactivityMs: 100 * 365 * DAY }).runCleanup(prefsPath);
+
+    expect(result.autoArchived).toEqual([]);
+    const prefs = await readPrefs();
+    const recs = prefs.sessions as Record<string, any>;
+    expect(Object.values(recs).filter((r) => r.archived)).toHaveLength(0);
+    expect(recs['claude:/claude/old-pinned']?.pinned).toBe(true);
+  });
+
+  it('dry-run reports would-archive AND would-delete counts but mutates nothing', async () => {
+    mockRegistryEntries.set('idle-40d', { id: 'idle-40d', sdkType: 'claude', path: '/claude/idle-40d', lastActivity: iso(40), status: 'idle' });
+    mockRegistryEntries.set('ancient', { id: 'ancient', sdkType: 'claude', path: '/claude/ancient', lastActivity: iso(200), status: 'idle' });
+    await writeV2Prefs({
+      // Already archived long ago and past dwell → deletion candidate.
+      'claude:/claude/ancient': { archived: true, archivedAt: Date.now() - 10 * DAY, legacyKey: '/claude/ancient', updatedAt: Date.now() - 10 * DAY },
+    });
+    const before = await fs.readFile(prefsPath, 'utf-8');
+
+    const result = await makeFunnelService({ dryRun: true }).runCleanup(prefsPath);
+
+    expect(result.wouldArchive).toContain('/claude/idle-40d');
+    expect(result.wouldDelete).toContain('/claude/ancient');
+    expect(result.autoArchived).toEqual([]);
+    expect(result.deleted).toEqual([]);
+    expect(await fs.readFile(prefsPath, 'utf-8')).toBe(before); // byte-identical
+  });
+
+  it('retention delete honours minimum dwell time in archived state (grace period)', async () => {
+    mockRegistryEntries.set('dwelled', { id: 'dwelled', sdkType: 'claude', path: '/claude/dwelled', lastActivity: iso(120), status: 'idle' });
+    mockRegistryEntries.set('fresharch', { id: 'fresharch', sdkType: 'claude', path: '/claude/fresharch', lastActivity: iso(120), status: 'idle' });
+    mockRegistryEntries.set('legacyrec', { id: 'legacyrec', sdkType: 'claude', path: '/claude/legacyrec', lastActivity: iso(120), status: 'idle' });
+    await writeV2Prefs({
+      // Archived 8 days ago, past 7-day dwell + 90-day retention → deletable.
+      'claude:/claude/dwelled': { archived: true, archivedAt: Date.now() - 8 * DAY, legacyKey: '/claude/dwelled', updatedAt: Date.now() - 8 * DAY },
+      // Archived 2 days ago: old rules would delete it immediately; dwell gate must protect it.
+      'claude:/claude/fresharch': { archived: true, archivedAt: Date.now() - 2 * DAY, legacyKey: '/claude/fresharch', updatedAt: Date.now() - 2 * DAY },
+      // Legacy record with no archivedAt: fall back to updatedAt for dwell.
+      'claude:/claude/legacyrec': { archived: true, legacyKey: '/claude/legacyrec', updatedAt: Date.now() - 8 * DAY },
+    });
+
+    const result = await makeFunnelService({ dryRun: false }).runCleanup(prefsPath);
+
+    expect(result.deleted).toContain('/claude/dwelled');
+    expect(result.deleted).toContain('/claude/legacyrec');
+    expect(result.deleted).not.toContain('/claude/fresharch'); // grace period
+  });
+
+  it("auto-archiving does not make a session deletable on the same pass (operator's no-grace-period concern)", async () => {
+    mockRegistryEntries.set('ancient-idle', { id: 'ancient-idle', sdkType: 'claude', path: '/claude/ancient-idle', lastActivity: iso(150), status: 'idle' });
+    await writeV2Prefs({});
+
+    const result = await makeFunnelService({ dryRun: false }).runCleanup(prefsPath);
+
+    expect(result.autoArchived).toContain('/claude/ancient-idle');
+    expect(result.deleted).not.toContain('/claude/ancient-idle'); // dwell starts now
+  });
+
+  it('autoArchiveMs=0 disables stage 1 entirely', async () => {
+    mockRegistryEntries.set('stale-z', { id: 'stale-z', sdkType: 'claude', path: '/claude/stale-z', lastActivity: iso(400), status: 'idle' });
+    await writeV2Prefs({});
+
+    const result = await makeFunnelService({ autoArchiveMs: 0 }).runCleanup(prefsPath);
+
+    expect(result.autoArchived).toEqual([]);
   });
 });

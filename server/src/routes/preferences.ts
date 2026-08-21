@@ -1,6 +1,5 @@
 import { Router, type Request, type Response } from 'express';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
-import { apiLimiter } from '../security/rate-limit.js';
 import { config } from '../config.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -25,9 +24,8 @@ const logger = createLogger('Preferences');
 const router = Router();
 
 router.use(cookieAuthMiddleware);
-router.use(apiLimiter);
 
-export const PREFS_FILE = path.join(config.piAgentDir, 'web-ui-prefs.json');
+export const PREFS_FILE = config.webUiPrefsPath;
 
 // ── Schemas ─────────────────────────────────────────────────────────────────
 // Disk accepts both v2 (sessions map) and legacy v1 (parallel arrays). On read,
@@ -36,6 +34,8 @@ export const PREFS_FILE = path.join(config.piAgentDir, 'web-ui-prefs.json');
 
 const SessionMetaSchema = z.object({
   archived: z.literal(true).optional(),
+  /** Epoch-ms when the record entered the archived state (funnel dwell gate). */
+  archivedAt: z.number().optional(),
   pinned: z.literal(true).optional(),
   displayName: z.string().optional(),
   updatedAt: z.number().optional(),
@@ -112,7 +112,7 @@ const prefsMutex = new PreferencesMutex();
 /** Build a SYNCHRONOUS runtime resolver from the (async) registry, so the pure
  *  migration/key functions can stay sync & deterministic. Maps id/path and the
  *  per-runtime sub-ids of every registry entry to its sdkType. */
-async function buildRegistryResolver(): Promise<RuntimeResolver> {
+export async function buildRegistryResolver(): Promise<RuntimeResolver> {
   let entries: Array<{ id?: string; path?: string; sdkType?: string; claudeSessionId?: string; opencodeSessionId?: string }> = [];
   try {
     entries = await getSessionRegistry().listAll();
@@ -231,6 +231,10 @@ function setField(
 ): void {
   const stored = sessions[key];
   const incoming: SessionMeta = { ...patch, updatedAt: now, legacyKey };
+  // Entering the archived state stamps archivedAt (dwell gate for retention
+  // deletion). Re-archiving an already-archived record keeps the original
+  // stamp so LWW merges cannot reset the grace clock.
+  if (patch.archived && stored?.archivedAt === undefined) incoming.archivedAt = now;
   const { record } = applyLWW(stored, incoming);
   sessions[key] = record;
 }
@@ -250,6 +254,7 @@ function clearField(
   if (stored.updatedAt !== undefined && now < stored.updatedAt) return; // stale → reject (LWW)
   const next: SessionMeta = { ...stored };
   delete next[field];
+  if (field === 'archived') delete next.archivedAt; // leaving archive clears dwell clock
   next.updatedAt = now;
   next.legacyKey = legacyKey;
   sessions[key] = next;
@@ -454,7 +459,8 @@ router.patch('/', async (req: Request, res: Response) => {
 router.post('/archive', async (req: Request, res: Response) => {
   try {
     const { sessionPath, updatedAt } = SessionPathSchema.parse(req.body);
-    res.json(withLegacy(await addArchivedPath(sessionPath, undefined, updatedAt)));
+    await addArchivedPath(sessionPath, undefined, updatedAt);
+    res.json({ ok: true });
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid archive request', details: error.errors }); return; }
     logger.error('Error archiving session:', error);
@@ -465,7 +471,8 @@ router.post('/archive', async (req: Request, res: Response) => {
 router.post('/unarchive', async (req: Request, res: Response) => {
   try {
     const { sessionPath, updatedAt } = SessionPathSchema.parse(req.body);
-    res.json(withLegacy(await removeArchivedPath(sessionPath, undefined, updatedAt)));
+    await removeArchivedPath(sessionPath, undefined, updatedAt);
+    res.json({ ok: true });
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid unarchive request', details: error.errors }); return; }
     logger.error('Error unarchiving session:', error);
@@ -476,7 +483,8 @@ router.post('/unarchive', async (req: Request, res: Response) => {
 router.post('/archive-all', async (req: Request, res: Response) => {
   try {
     const { sessionPaths, updatedAt } = ArchiveAllSchema.parse(req.body);
-    res.json(withLegacy(await addArchivedPaths(sessionPaths, undefined, updatedAt)));
+    await addArchivedPaths(sessionPaths, undefined, updatedAt);
+    res.json({ ok: true });
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid archive-all request', details: error.errors }); return; }
     logger.error('Error archiving all sessions:', error);
@@ -488,11 +496,13 @@ router.post('/pin', async (req: Request, res: Response) => {
   try {
     if (req.body && typeof req.body === 'object' && 'key' in req.body) {
       const { key, updatedAt } = SessionKeySchema.parse(req.body);
-      res.json(withLegacy(await addPinnedKey(key, undefined, updatedAt)));
+      await addPinnedKey(key, undefined, updatedAt);
+      res.json({ ok: true });
       return;
     }
     const { sessionPath, updatedAt } = SessionPathSchema.parse(req.body);
-    res.json(withLegacy(await addPinnedPath(sessionPath, undefined, updatedAt)));
+    await addPinnedPath(sessionPath, undefined, updatedAt);
+    res.json({ ok: true });
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid pin request', details: error.errors }); return; }
     logger.error('Error pinning session:', error);
@@ -504,11 +514,13 @@ router.post('/unpin', async (req: Request, res: Response) => {
   try {
     if (req.body && typeof req.body === 'object' && 'key' in req.body) {
       const { key, updatedAt } = SessionKeySchema.parse(req.body);
-      res.json(withLegacy(await removePinnedKey(key, undefined, updatedAt)));
+      await removePinnedKey(key, undefined, updatedAt);
+      res.json({ ok: true });
       return;
     }
     const { sessionPath, updatedAt } = SessionPathSchema.parse(req.body);
-    res.json(withLegacy(await removePinnedPath(sessionPath, undefined, updatedAt)));
+    await removePinnedPath(sessionPath, undefined, updatedAt);
+    res.json({ ok: true });
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid unpin request', details: error.errors }); return; }
     logger.error('Error unpinning session:', error);
@@ -520,11 +532,13 @@ router.post('/display-name', async (req: Request, res: Response) => {
   try {
     if (req.body && typeof req.body === 'object' && 'key' in req.body) {
       const { key, name, updatedAt } = DisplayNameKeySchema.parse(req.body);
-      res.json(withLegacy(await setDisplayNameKey(key, name ?? null, undefined, updatedAt)));
+      await setDisplayNameKey(key, name ?? null, undefined, updatedAt);
+      res.json({ ok: true });
       return;
     }
     const { sessionPath, name, updatedAt } = DisplayNameSchema.parse(req.body);
-    res.json(withLegacy(await setDisplayName(sessionPath, name ?? null, undefined, updatedAt)));
+    await setDisplayName(sessionPath, name ?? null, undefined, updatedAt);
+    res.json({ ok: true });
   } catch (error) {
     if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid display-name request', details: error.errors }); return; }
     logger.error('Error setting display name:', error);

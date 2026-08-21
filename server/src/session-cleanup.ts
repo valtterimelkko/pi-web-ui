@@ -1,8 +1,9 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { getSessionRegistry } from './session-registry.js';
-import { withPrefsLock, PREFS_FILE } from './routes/preferences.js';
+import { withPrefsLock, PREFS_FILE, buildRegistryResolver } from './routes/preferences.js';
 import type { Preferences } from './routes/preferences.js';
+import { toV2Key, type SessionMeta } from './routes/session-meta.js';
 import type { MultiSessionManager } from './pi/multi-session-manager.js';
 import type { ClaudeService } from './claude/index.js';
 import type { OpenCodeService } from './opencode/index.js';
@@ -16,11 +17,20 @@ const logger = createLogger('SessionCleanup');
 export const DEFAULT_PIN_INACTIVITY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_ARCHIVE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 export const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+export const DEFAULT_AUTO_ARCHIVE_MS = 30 * 24 * 60 * 60 * 1000;
+/** Grace period between archiving and retention-delete eligibility. */
+export const DEFAULT_RETENTION_MIN_DWELL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface SessionCleanupConfig {
   pinInactivityMs: number;
   archiveRetentionMs: number;
   cleanupIntervalMs: number;
+  /** Stage 1: auto-archive sessions idle longer than this (0 disables). */
+  autoArchiveMs: number;
+  /** Report what would happen without acting. Default true until reviewed. */
+  dryRun: boolean;
+  /** Minimum time a session must dwell archived before deletion is eligible. */
+  retentionMinDwellMs: number;
   piSessionDir: string;
   claudeSessionDir: string;
   antigravitySessionDir: string;
@@ -30,6 +40,10 @@ export interface SessionCleanupResult {
   unpinned: string[];
   deleted: string[];
   errors: Array<{ sessionId: string; error: string }>;
+  autoArchived: string[];
+  wouldUnpin: string[];
+  wouldArchive: string[];
+  wouldDelete: string[];
 }
 
 export class SessionCleanupService {
@@ -47,6 +61,9 @@ export class SessionCleanupService {
       pinInactivityMs: cleanupConfig?.pinInactivityMs ?? DEFAULT_PIN_INACTIVITY_MS,
       archiveRetentionMs: cleanupConfig?.archiveRetentionMs ?? DEFAULT_ARCHIVE_RETENTION_MS,
       cleanupIntervalMs: cleanupConfig?.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS,
+      autoArchiveMs: cleanupConfig?.autoArchiveMs ?? config.sessionAutoArchiveDays * 24 * 60 * 60 * 1000,
+      dryRun: cleanupConfig?.dryRun ?? config.sessionCleanupDryRun,
+      retentionMinDwellMs: cleanupConfig?.retentionMinDwellMs ?? config.sessionRetentionMinDwellDays * 24 * 60 * 60 * 1000,
       piSessionDir: cleanupConfig?.piSessionDir ?? config.sessionDir ?? path.join(config.piAgentDir, 'sessions'),
       claudeSessionDir: cleanupConfig?.claudeSessionDir ?? config.claudeSessionDir,
       antigravitySessionDir: cleanupConfig?.antigravitySessionDir ?? config.antigravitySessionDir,
@@ -87,7 +104,8 @@ export class SessionCleanupService {
   }
 
   async runCleanup(prefsPath?: string): Promise<SessionCleanupResult> {
-    const result: SessionCleanupResult = { unpinned: [], deleted: [], errors: [] };
+    const result: SessionCleanupResult = { unpinned: [], deleted: [], errors: [], autoArchived: [], wouldUnpin: [], wouldArchive: [], wouldDelete: [] };
+    const dryRun = this.config.dryRun;
 
     try {
       await this.autoUnpinInactivePinnedSessions(result, prefsPath);
@@ -96,18 +114,127 @@ export class SessionCleanupService {
     }
 
     try {
+      await this.autoArchiveInactiveSessions(result, prefsPath);
+    } catch (err) {
+      logger.error('[SessionCleanup] Error during auto-archive pass:', err instanceof Error ? err.message : String(err));
+    }
+
+    try {
       await this.autoDeleteArchivedSessions(result, prefsPath);
     } catch (err) {
       logger.error('[SessionCleanup] Error during auto-delete pass:', err instanceof Error ? err.message : String(err));
     }
 
-    if (result.unpinned.length > 0 || result.deleted.length > 0 || result.errors.length > 0) {
+    if (dryRun) {
+      const sample = (arr: string[]) => (arr.length > 0 ? `; e.g. ${arr.slice(0, 3).join(', ')}` : '');
       logger.info(
-        `[SessionCleanup] Cleanup complete: ${result.unpinned.length} unpinned, ${result.deleted.length} deleted, ${result.errors.length} error(s)`,
+        `[SessionCleanup] DRY-RUN pass (no changes written): would unpin ${result.wouldUnpin.length}, ` +
+        `would archive ${result.wouldArchive.length}, would delete ${result.wouldDelete.length}` +
+        `${sample(result.wouldArchive)}${sample(result.wouldDelete)}`,
+      );
+    } else if (result.unpinned.length > 0 || result.deleted.length > 0 || result.autoArchived.length > 0 || result.errors.length > 0) {
+      logger.info(
+        `[SessionCleanup] Cleanup complete: ${result.unpinned.length} unpinned, ${result.autoArchived.length} auto-archived, ` +
+        `${result.deleted.length} deleted, ${result.errors.length} error(s)`,
       );
     }
 
     return result;
+  }
+
+  /** Resolve last activity for a session path: in-memory first, then registry. */
+  private async resolveLastActivity(sessionPath: string): Promise<number | undefined> {
+    const inMemory = this.getInMemoryLastActivity(sessionPath);
+    if (inMemory !== undefined) return inMemory;
+
+    const registry = getSessionRegistry();
+    const entry = await registry.get(sessionPath)
+      ?? await registry.getByPath(sessionPath)
+      ?? await registry.getByClaudeSessionId(sessionPath)
+      ?? await registry.getByOpencodeSessionId(sessionPath);
+    if (entry?.lastActivity) return new Date(entry.lastActivity).getTime();
+    return undefined;
+  }
+
+  /**
+   * Stage 1 of the hygiene funnel: archive sessions with no activity beyond
+   * the threshold. Reversible — it only removes them from the default view.
+   * Pinned sessions are never auto-archived (auto-unpin handles stale pins,
+   * and the next pass picks them up). Each newly archived record is stamped
+   * with `archivedAt` so stage-2 retention deletion can enforce its minimum
+   * dwell time.
+   *
+   * Candidate universe is the union of registry entries (the authoritative
+   * session inventory) and existing prefs records (orphaned/legacy identities),
+   * so sessions that never gained a metadata record are still funnelled.
+   */
+  private async autoArchiveInactiveSessions(
+    result: SessionCleanupResult,
+    prefsPath?: string,
+  ): Promise<void> {
+    if (this.config.autoArchiveMs <= 0) return;
+    const filePath = prefsPath ?? PREFS_FILE;
+    const now = Date.now();
+    const registry = getSessionRegistry();
+    const resolver = await buildRegistryResolver();
+
+    let entries: Array<{ id?: string; path?: string; lastActivity?: string | Date }> = [];
+    try {
+      entries = await registry.listAll();
+    } catch {
+      entries = [];
+    }
+
+    const toArchive = await withPrefsLock(async (read, write) => {
+      const prefs = await read();
+      const aged: string[] = [];
+      const stamp = (key: string, rec: SessionMeta | undefined, sessionPath: string): void => {
+        prefs.sessions[key] = {
+          ...(rec ?? {}),
+          archived: true,
+          archivedAt: rec?.archivedAt ?? now,
+          updatedAt: now,
+          legacyKey: rec?.legacyKey ?? sessionPath,
+        };
+        aged.push(sessionPath);
+      };
+
+      // Universe A: every known registry session.
+      for (const e of entries) {
+        const sessionPath = e.path ?? e.id;
+        if (!sessionPath) continue;
+        if (!e.lastActivity) continue;
+        const last = new Date(e.lastActivity).getTime();
+        if (Number.isNaN(last) || now - last <= this.config.autoArchiveMs) continue;
+        const { key } = toV2Key(sessionPath, resolver);
+        const rec = prefs.sessions[key];
+        if (rec?.archived || rec?.pinned) continue;
+        stamp(key, rec, sessionPath);
+      }
+
+      // Universe B: prefs records for identities no registry entry covered.
+      for (const [key, rec] of Object.entries(prefs.sessions)) {
+        if (rec.archived || rec.pinned) continue;
+        const sessionPath = rec.legacyKey ?? key;
+        if (aged.includes(sessionPath)) continue;
+        const lastActivity = await this.resolveLastActivity(sessionPath);
+        if (lastActivity === undefined) continue;
+        if (now - lastActivity <= this.config.autoArchiveMs) continue;
+        stamp(key, rec, sessionPath);
+      }
+
+      if (aged.length > 0 && !this.config.dryRun) await write(prefs);
+      return aged;
+    }, filePath);
+
+    if (this.config.dryRun) {
+      result.wouldArchive.push(...toArchive);
+    } else {
+      for (const sessionPath of toArchive) {
+        result.autoArchived.push(sessionPath);
+        logger.info(`[SessionCleanup] Auto-archived session idle > ${Math.round(this.config.autoArchiveMs / 86400000)}d: ${sessionPath}`);
+      }
+    }
   }
 
   private async autoUnpinInactivePinnedSessions(
@@ -119,29 +246,12 @@ export class SessionCleanupService {
       const pinnedEntries = Object.entries(prefs.sessions).filter(([, rec]) => rec.pinned);
       if (pinnedEntries.length === 0) return [] as Array<{ key: string; path: string }>;
 
-      const registry = getSessionRegistry();
       const now = Date.now();
       const expired: Array<{ key: string; path: string }> = [];
 
       for (const [key, rec] of pinnedEntries) {
         const sessionPath = rec.legacyKey ?? key;
-        let lastActivity: number | undefined;
-
-        const inMemory = this.getInMemoryLastActivity(sessionPath);
-        if (inMemory !== undefined) {
-          lastActivity = inMemory;
-        }
-
-        if (lastActivity === undefined) {
-          const entry = await registry.get(sessionPath)
-            ?? await registry.getByPath(sessionPath)
-            ?? await registry.getByClaudeSessionId(sessionPath)
-            ?? await registry.getByOpencodeSessionId(sessionPath);
-          if (entry?.lastActivity) {
-            lastActivity = new Date(entry.lastActivity).getTime();
-          }
-        }
-
+        const lastActivity = await this.resolveLastActivity(sessionPath);
         if (lastActivity === undefined) continue;
 
         if (now - lastActivity > this.config.pinInactivityMs) {
@@ -159,14 +269,17 @@ export class SessionCleanupService {
           rec.updatedAt = now;
         }
       }
-      await write(prefs);
+      if (!this.config.dryRun) await write(prefs);
       return expired;
     }, prefsPath ?? PREFS_FILE);
 
-    for (const { path } of toUnpin) {
+    for (const { path } of this.config.dryRun ? [] : toUnpin) {
       this.unpinInRuntimes(path);
       result.unpinned.push(path);
       logger.info(`[SessionCleanup] Auto-unpinned session after inactivity: ${path}`);
+    }
+    if (this.config.dryRun) {
+      result.wouldUnpin.push(...toUnpin.map(({ path }) => path));
     }
   }
 
@@ -208,6 +321,14 @@ export class SessionCleanupService {
       if (archivedEntries.length === 0) return;
 
       for (const [key, rec] of archivedEntries) {
+        // Minimum dwell time in the archived state before deletion is eligible.
+        // Records stamped by the auto-archive funnel always carry archivedAt, so
+        // freshly auto-archived sessions get a full grace period. Legacy records
+        // without archivedAt predate the funnel and are grandfathered as eligible.
+        if (rec.archivedAt !== undefined && now - rec.archivedAt < this.config.retentionMinDwellMs) {
+          continue;
+        }
+
         const sessionPath = rec.legacyKey ?? key;
         let entry = await registry.get(sessionPath)
           ?? await registry.getByPath(sessionPath)
@@ -238,6 +359,11 @@ export class SessionCleanupService {
     }, filePath);
 
     if (toDelete.length === 0) return;
+
+    if (this.config.dryRun) {
+      result.wouldDelete.push(...toDelete.map(({ path }) => path));
+      return;
+    }
 
     for (const { key, path } of toDelete) {
       try {
