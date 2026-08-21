@@ -452,6 +452,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   /** Track Pi/OpenCode sessions we have already attached a long-lived observer to. */
   const piObservedSessions = new Set<string>();
   const opencodeObservedSessions = new Set<string>();
+  const commandCodeObservedSessions = new Set<string>();
   /**
    * The exact long-lived broker-feeding callback attached for a session, keyed
    * by the broker key (Pi: sessionPath; OpenCode: sessionId). Retained so
@@ -514,6 +515,31 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         opencodeService.removeApiObserver?.(sessionId, observer);
         opencodeObserverById.delete(sessionId);
         opencodeObservedSessions.delete(sessionId);
+      });
+    } catch {
+      /* session may not be loaded yet; retry on next prompt/watch */
+    }
+  }
+
+  /**
+   * Attach a long-lived observer to a Command Code session so events from ANY
+   * turn source (Internal API dispatch, browser, follow-ups) flow into the
+   * broker and durable watches. CommandCodeService publishes every journaled
+   * event to its apiObservers, so this is the single attach point needed.
+   */
+  function attachCommandCodeObserverIfNeeded(sessionId: string): void {
+    if (!commandCodeService || commandCodeObservedSessions.has(sessionId)) return;
+    const observer = (event: unknown) => {
+      try { broker.publish(sessionId, event as NormalizedEvent); } catch { /* non-fatal */ }
+    };
+    try {
+      commandCodeService.addApiObserver(sessionId, observer);
+      commandCodeObservedSessions.add(sessionId);
+      // Own the observer teardown in the disposal registry (broker key = id)
+      // so handleDeleteSession/shutdown detach it.
+      disposal.register(sessionId, 'commandcode-broker-observer', () => {
+        commandCodeService.removeApiObserver?.(sessionId, observer);
+        commandCodeObservedSessions.delete(sessionId);
       });
     } catch {
       /* session may not be loaded yet; retry on next prompt/watch */
@@ -4797,8 +4823,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    const entry = await getNonCommandCodeRegistryEntry(sessionId);
-    if (!entry) {
+    // Resolve the subject across runtimes: Command Code sessions are watch
+    // subjects too (contract 1.23.0) — they live outside the session registry,
+    // so resolve them via their service before falling back to the registry.
+    const commandCodeSubject = await commandCodeService?.findSession(sessionId);
+    const entry = commandCodeSubject ? undefined : await getNonCommandCodeRegistryEntry(sessionId);
+    if (!entry && !commandCodeSubject) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
       return;
     }
@@ -4830,20 +4860,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
     }
 
-    // For Pi/OpenCode, ensure the persistent observer is attached so events
-    // flow into the broker (and therefore the watch) even before any prompt/SSE
-    // consumer. OpenCode needs this for plugin-driven auto-continuation turns.
-    if (entry.sdkType === 'pi') {
-      attachPiObserverIfNeeded(entry.path);
-    } else if (entry.sdkType === 'opencode') {
+    // For Pi/OpenCode/Command Code, ensure the persistent observer is attached
+    // so events flow into the broker (and therefore the watch) even before any
+    // prompt/SSE consumer. OpenCode also needs this for plugin-driven turns.
+    if (commandCodeSubject) {
+      attachCommandCodeObserverIfNeeded(commandCodeSubject.sessionId);
+    } else if (entry!.sdkType === 'pi') {
+      attachPiObserverIfNeeded(entry!.path);
+    } else if (entry!.sdkType === 'opencode') {
       attachOpenCodeObserverIfNeeded(sessionId);
     }
 
     try {
       const watch = await watchManager.register({
-        sessionId,
-        sessionPath: entry.path,
-        runtime: entry.sdkType as SessionRuntime,
+        sessionId: commandCodeSubject ? commandCodeSubject.sessionId : sessionId,
+        sessionPath: entry ? entry.path : commandCodeSubject!.sessionId,
+        runtime: (commandCodeSubject ? 'commandcode' : entry!.sdkType) as SessionRuntime,
         request: body,
       });
       sendJson(res, 201, watch);

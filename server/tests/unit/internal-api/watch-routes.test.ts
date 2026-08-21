@@ -234,3 +234,111 @@ describe('watch routes — onFire wake action validation', () => {
     }
   });
 });
+
+describe('watch routes — Command Code subjects (contract 1.23.0)', () => {
+  let dir: string;
+  let registry: { get: ReturnType<typeof vi.fn> };
+  let ccObservers: Array<(e: unknown) => void>;
+  let multiSessionManager: Record<string, ReturnType<typeof vi.fn>>;
+  let commandCodeService: Record<string, ReturnType<typeof vi.fn> | unknown>;
+  let routes: ReturnType<typeof createSessionRoutes>;
+
+  const ccRecord = { sessionId: 'cc-1', state: 'idle' };
+  const parentEntry = { id: 'parent-1', path: 'parent-1', sdkType: 'pi', cwd: '/tmp', firstMessage: '', messageCount: 0, status: 'idle', createdAt: '', lastActivity: '' };
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-watch-cc-'));
+    ccObservers = [];
+    registry = { get: vi.fn(async (id: string) => (id === 'parent-1' ? parentEntry : undefined)) };
+    multiSessionManager = {
+      addApiObserver: vi.fn(),
+      removeApiObserver: vi.fn(),
+      pinSession: vi.fn(() => true),
+      unpinSession: vi.fn(() => true),
+    };
+    commandCodeService = {
+      findSession: vi.fn(async (id: string) => (id === 'cc-1' ? ccRecord : undefined)),
+      getSession: vi.fn(async (id: string) => (id === 'cc-1' ? ccRecord : undefined)),
+      isRunning: vi.fn(() => false),
+      pinSession: vi.fn(() => true),
+      unpinSession: vi.fn(() => true),
+      addApiObserver: vi.fn((_id: string, o: (e: unknown) => void) => ccObservers.push(o)),
+      removeApiObserver: vi.fn(),
+    };
+    routes = createSessionRoutes({
+      claudeService: {} as never,
+      opencodeService: {} as never,
+      antigravityService: {} as never,
+      multiSessionManager: multiSessionManager as never,
+      sessionRegistry: registry as never,
+      piService: {} as never,
+      internalClientId: 'test',
+      watchDir: dir,
+      commandCodeService: commandCodeService as never,
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  function emit(event: unknown) {
+    for (const o of ccObservers) o(event);
+  }
+
+  it('registers a watch on a Command Code subject: runtime, pin claim, broker observer', async () => {
+    const res = createMockRes();
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/cc-1/watch', { conditions: [{ type: 'event_type', eventType: 'agent_end' }] }),
+      res, 'cc-1',
+    );
+    expect(res.statusCode).toBe(201);
+    const created = JSON.parse(res.body);
+    expect(created.runtime).toBe('commandcode');
+    expect(created.pinned).toBe(true);
+    expect(commandCodeService.pinSession).toHaveBeenCalledWith('cc-1', 'watch:watch-cc-1');
+    expect(commandCodeService.addApiObserver).toHaveBeenCalledWith('cc-1', expect.any(Function));
+  });
+
+  it('records firings from Command Code turns flowing through the broker observer', async () => {
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/cc-1/watch', { conditions: [{ type: 'event_type', eventType: 'agent_end' }] }),
+      createMockRes(), 'cc-1',
+    );
+    emit(ev('tool_execution_start', { toolName: 'Bash' }));
+    emit(ev('agent_end'));
+    const get = createMockRes();
+    await routes.handleGetWatch(createJsonReq('GET', '/api/v1/sessions/cc-1/watch'), get, 'cc-1', new URLSearchParams());
+    const watch = JSON.parse(get.body);
+    expect(watch.firingCount).toBe(1);
+    expect(watch.snapshot.sawAgentEnd).toBe(true);
+  });
+
+  it('wakes a pi parent from a Command Code child via onFire', async () => {
+    const res = createMockRes();
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/cc-1/watch', {
+        conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+        onFire: { type: 'prompt', targetSessionId: 'parent-1', message: 'cmdc child finished' },
+      }),
+      res, 'cc-1',
+    );
+    expect(res.statusCode).toBe(201);
+    const created = JSON.parse(res.body);
+    expect(created.onFire.targetSessionId).toBe('parent-1');
+    // Target pin goes through the pi branch (multiSessionManager), not commandCodeService.
+    expect(multiSessionManager.pinSession).toHaveBeenCalledWith('parent-1', 'watch-target:watch-cc-1');
+  });
+
+  it('deleting a Command Code watch releases its claims', async () => {
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/cc-1/watch', { conditions: [{ type: 'event_type', eventType: 'agent_end' }] }),
+      createMockRes(), 'cc-1',
+    );
+    const del = createMockRes();
+    await routes.handleDeleteWatch(createJsonReq('DELETE', '/api/v1/sessions/cc-1/watch'), del, 'cc-1');
+    expect(del.statusCode).toBe(200);
+    expect(commandCodeService.unpinSession).toHaveBeenCalledWith('cc-1', 'watch:watch-cc-1');
+  });
+});
