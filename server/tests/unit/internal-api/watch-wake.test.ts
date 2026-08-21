@@ -295,6 +295,41 @@ describe('WatchManager — onFire wake dispatch (watch the child, wake the paren
     expect(manager.get('child-12')!.wakeAttempts).toHaveLength(0);
   });
 
+  it('loads a LEGACY pre-1.22 ledger (no onFire/wakeAttempts/targetPinned fields) safely', async () => {
+    // Exact shape found in production ~/.pi-web-ui/watches/ (2026-08-21):
+    // records written by 1.21.0 have none of the 1.22.0 fields.
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'legacy-1.json'),
+      JSON.stringify({
+        watchId: 'watch-legacy-1',
+        sessionId: 'legacy-1',
+        sessionPath: 'legacy-1',
+        runtime: 'pi',
+        status: 'active',
+        pinned: true,
+        createdAt: '2026-07-29T00:00:00.000Z',
+        updatedAt: '2026-07-29T00:00:00.000Z',
+        conditions: [{ id: 'agent-end', type: 'event_type', spec: { type: 'event_type', eventType: 'agent_end', id: 'agent-end' }, fired: true, fireCount: 1 }],
+        firings: [{ conditionId: 'agent-end', firedAt: 1785348762093, eventType: 'agent_end', evidence: 'event agent_end' }],
+        snapshot: { status: 'idle', eventCount: 5, toolCallCount: 0, sawAgentEnd: true },
+      }),
+    );
+    // Fresh manager over the same store = the production restart.
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin, dispatchWake });
+    await manager.init();
+    const reloaded = manager.get('legacy-1')!;
+    expect(reloaded.status).toBe('detached');           // active -> detached on reload (documented)
+    expect(reloaded.onFire).toBeUndefined();            // legacy record is a pure observer
+    expect(reloaded.wakeAttempts).toEqual([]);           // defensive default, not undefined
+    expect(reloaded.firingCount).toBe(1);                // ledger preserved
+    // A live event on a detached watch must not dispatch a wake either.
+    broker.publish('legacy-1', ev('agent_end'));
+    await flush();
+    expect(dispatchWake).not.toHaveBeenCalled();
+  });
+
   it('releases the target claim when a watch is replaced without onFire', async () => {
     await manager.register({
       sessionId: 'child-13',
