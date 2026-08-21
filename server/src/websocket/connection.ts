@@ -261,6 +261,11 @@ export class WebSocketConnectionManager {
   private claudeService: ClaudeService;
   /** Session IDs (UUIDs) that are Claude sessions */
   private claudeSessionIds: Set<string> = new Set();
+  /** Queued Command Code follow-ups per session, drained when a run ends. */
+  private commandCodeFollowUps: Map<string, string[]> = new Map();
+  /** Command Code sessions whose in-flight abort was steer-initiated: the
+   * aborted run's completion error is expected, not worth an error toast. */
+  private commandCodeSteerHandoffs: Set<string> = new Set();
   /** Claude session subscribers: tracks which clients are viewing which Claude sessions */
   private claudeSubs = new ClaudeSessionSubscribers();
   /**
@@ -1097,6 +1102,7 @@ export class WebSocketConnectionManager {
           return;
         }
         await this.handleCommandCodePrompt(clientId, sessionPath, message.message);
+        await this.drainCommandCodeFollowUps(clientId, sessionPath);
         return;
       }
 
@@ -1171,7 +1177,9 @@ export class WebSocketConnectionManager {
         (error) => {
           const subscribers = this.getCommandCodeSubscribers(sessionId);
           const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
-          if (error) {
+          // A steer hand-off aborts the previous run on purpose; surfacing its
+          // "run was aborted" completion as an error toast is noise.
+          if (error && !this.commandCodeSteerHandoffs.has(sessionId)) {
             for (const subId of targets) this.sendMessage(subId, { type: 'error', message: error.message, code: (error as Error & { code?: string }).code ?? 'COMMANDCODE_ERROR' });
           }
         },
@@ -1190,19 +1198,16 @@ export class WebSocketConnectionManager {
     prompt: string,
     _images?: ImageContent[]
   ): Promise<void> {
-    // If the session already has a running process, wait for it to finish
+    // If the session already has a running process, steering exists now:
+    // fail fast so the client can route through steer/follow_up instead of
+    // silently waiting for the turn to finish (parity with the Pi guard).
     if (this.claudeService.isRunning(sessionId)) {
-      logger.info(`[handleClaudePrompt] Session ${sessionId} busy, waiting for current turn to finish...`);
-      const maxWait = 30000; // 30 seconds max wait
-      const pollInterval = 500;
-      const start = Date.now();
-      while (this.claudeService.isRunning(sessionId) && Date.now() - start < maxWait) {
-        await new Promise(resolve => setTimeout(resolve, pollInterval));
-      }
-      if (this.claudeService.isRunning(sessionId)) {
-        this.sendMessage(clientId, { type: 'error', message: 'Session still busy after waiting', code: 'SESSION_BUSY' });
-        return;
-      }
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'Session is busy processing. Wait for the current turn to finish or send with steer/followUp.',
+        code: 'SESSION_BUSY',
+      });
+      return;
     }
 
     try {
@@ -1529,8 +1534,25 @@ export class WebSocketConnectionManager {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
+
+    // Claude (SDK backend): the message joins the running turn at the next
+    // tool boundary (streaming-input priority 'next').
+    if (this.claudeSessionIds.has(sessionPath)) {
+      const steered = this.claudeService.steer(sessionPath, message.message);
+      if (!steered) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: 'Session is not running a steerable turn. Send the message as a normal prompt instead.',
+          code: 'STEER_NOT_RUNNING',
+        });
+      }
+      return;
+    }
+
+    // Command Code has no mid-run input channel: steer interrupts the
+    // current run and delivers the text as the immediate next prompt.
     if (this.commandCodeSessionIds.has(sessionPath)) {
-      this.sendMessage(clientId, { type: 'error', message: 'Command Code does not support steer while a turn is running', code: 'STEER_UNSUPPORTED' });
+      await this.handleCommandCodeSteer(clientId, sessionPath, message.message);
       return;
     }
 
@@ -1552,8 +1574,24 @@ export class WebSocketConnectionManager {
       this.sendMessage(clientId, { type: 'error', message: 'No active session', code: 'SESSION_NOT_FOUND' });
       return;
     }
+
+    // Claude (SDK backend): queue inside the live query (priority 'later');
+    // the turn runs as soon as the current one finishes.
+    if (this.claudeSessionIds.has(sessionPath)) {
+      const queued = this.claudeService.followUp(sessionPath, message.message);
+      if (!queued) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: 'Session is not running a turn to follow. Send the message as a normal prompt instead.',
+          code: 'STEER_NOT_RUNNING',
+        });
+      }
+      return;
+    }
+
+    // Command Code: server-side queue drained when the current run ends.
     if (this.commandCodeSessionIds.has(sessionPath)) {
-      await this.handleCommandCodePrompt(clientId, sessionPath, message.message);
+      await this.handleCommandCodeFollowUp(clientId, sessionPath, message.message);
       return;
     }
 
@@ -1566,11 +1604,58 @@ export class WebSocketConnectionManager {
     await agentSession.followUp(message.message);
   }
 
+  /**
+   * Command Code steer: interrupt the running turn, then deliver the steering
+   * text as the immediate next prompt on the same native session. Steers sent
+   * while idle are ordinary prompts. Additional steers that arrive while a
+   * steer hand-off is already in flight are queued as follow-ups (FIFO).
+   */
+  private async handleCommandCodeSteer(clientId: string, sessionId: string, text: string): Promise<void> {
+    if (!this.commandCodeService.isRunning(sessionId)) {
+      await this.handleCommandCodePrompt(clientId, sessionId, text);
+      await this.drainCommandCodeFollowUps(clientId, sessionId);
+      return;
+    }
+    this.commandCodeSteerHandoffs.add(sessionId);
+    await this.commandCodeService.abort(sessionId);
+    await this.commandCodeService.waitForTurnEnd(sessionId);
+    this.commandCodeSteerHandoffs.delete(sessionId);
+    await this.handleCommandCodePrompt(clientId, sessionId, text);
+    await this.drainCommandCodeFollowUps(clientId, sessionId);
+  }
+
+  /** Command Code follow-up: queue while a run is live, send immediately otherwise. */
+  private async handleCommandCodeFollowUp(clientId: string, sessionId: string, text: string): Promise<void> {
+    if (!this.commandCodeService.isRunning(sessionId)) {
+      await this.handleCommandCodePrompt(clientId, sessionId, text);
+      await this.drainCommandCodeFollowUps(clientId, sessionId);
+      return;
+    }
+    const queue = this.commandCodeFollowUps.get(sessionId) ?? [];
+    queue.push(text);
+    this.commandCodeFollowUps.set(sessionId, queue);
+  }
+
+  /** Send queued Command Code follow-ups in order; stops if a new run starts. */
+  private async drainCommandCodeFollowUps(clientId: string, sessionId: string): Promise<void> {
+    for (;;) {
+      const queue = this.commandCodeFollowUps.get(sessionId);
+      if (!queue || queue.length === 0) {
+        this.commandCodeFollowUps.delete(sessionId);
+        return;
+      }
+      if (this.commandCodeService.isRunning(sessionId)) return;
+      const next = queue.shift()!;
+      await this.handleCommandCodePrompt(clientId, sessionId, next);
+    }
+  }
+
   private async handleAbort(clientId: string): Promise<void> {
     const sessionPath = this.getCurrentSessionPath(clientId);
     if (!sessionPath) return;
 
     if (this.commandCodeSessionIds.has(sessionPath)) {
+      this.commandCodeFollowUps.delete(sessionPath);
       await this.commandCodeService.abort(sessionPath);
       return;
     }

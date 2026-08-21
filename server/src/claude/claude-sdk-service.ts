@@ -19,7 +19,8 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
-import { query, type Options, type PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Options, type PermissionResult, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { SteerablePromptStream } from './claude-steer-stream.js';
 import { ClaudeSessionStore } from './claude-session-store.js';
 import { ClaudeSdkEventAdapter } from './claude-sdk-event-adapter.js';
 import {
@@ -120,6 +121,22 @@ interface PendingAskUserQuestion {
 const DEFAULT_ASK_USER_QUESTION_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
+ * How long the steerable prompt stream stays open after a turn result before
+ * stdin is closed. Queued turn messages already delivered to the CLI keep
+ * running regardless (verified against CLI 2.1.235); the grace only exists so
+ * a steer/follow-up arriving right after a result can still join the same
+ * query instead of paying for a fresh subprocess. Env-overridable for tests.
+ */
+const DEFAULT_STEER_END_GRACE_MS = 1500;
+
+/** Live steerable prompt stream for a running turn (streaming-input mode). */
+interface ActiveSteerHandle {
+  stream: SteerablePromptStream<SDKUserMessage>;
+  /** Persist + emit a synthetic user-message pair for a pushed steer text. */
+  emitUserMessage: (text: string) => Promise<void>;
+}
+
+/**
  * How long a resolved AskUserQuestion's requestId is remembered as "recently
  * resolved", so a late browser/Internal-API answer arriving after the dialog
  * closed can be recognized and surfaced to the user instead of silently dropped.
@@ -146,6 +163,8 @@ export class ClaudeSdkService {
   private resolvedAskUserQuestionToolCallIds = new Set<string>();
   /** Secondary index: toolCallId / toolUseId → requestId for alias lookups. */
   private askUserQuestionToolCallIdIndex = new Map<string, string>();
+  /** Live steerable streams for running turns, by sessionId. */
+  private activeSteers = new Map<string, ActiveSteerHandle>();
 
   constructor(cfg: ClaudeSdkServiceConfig) {
     this.sessionStore = new ClaudeSessionStore(cfg.claudeSessionDir);
@@ -301,6 +320,7 @@ export class ClaudeSdkService {
     // are surfaced immediately. See `claude-transient-errors.ts`.
     const retryCfg = getTransientRetryConfig();
     let attempt = 0;
+    let activeHandle: ActiveSteerHandle | undefined;
 
     try {
       for (;;) {
@@ -315,6 +335,35 @@ export class ClaudeSdkService {
           sessionId, onEvent,
         });
 
+        // Streaming-input mode: the prompt is a pushable async iterable that
+        // stays open for the whole run, which is what enables mid-turn
+        // steering (steer = priority 'next', follow-up = priority 'later').
+        // Every mid-turn push MUST carry an explicit priority — the CLI
+        // silently drops unprioritised mid-turn user messages.
+        const steerStream = new SteerablePromptStream<SDKUserMessage>();
+        const emitUserMessage = async (text: string): Promise<void> => {
+          const messageId = `claude-steer-${randomUUID()}`;
+          const capped = text.slice(0, 20_000);
+          await this.sessionStore.appendEntry(sessionId, {
+            type: 'user',
+            content: capped,
+            timestamp: Date.now(),
+          }).catch((err) => logger.warn('[ClaudeSdkService] Failed to persist steer entry:', err));
+          for (const event of [
+            { type: 'message_start', sessionId, timestamp: Date.now(), data: { id: messageId, role: 'user', content: capped } },
+            { type: 'message_end', sessionId, timestamp: Date.now(), data: { id: messageId } },
+          ] as NormalizedEvent[]) {
+            try { await this.persistEvent(sessionId, event); } catch { /* non-fatal */ }
+            try { onEvent(event); } catch { /* non-fatal */ }
+          }
+        };
+        const handle: ActiveSteerHandle = { stream: steerStream, emitUserMessage };
+        // A transient retry abandons the previous stream; only the newest
+        // handle stays steerable.
+        this.activeSteers.set(sessionId, handle);
+        activeHandle = handle;
+        steerStream.push(this.buildStreamUserMessage(prompt));
+
         let capturedClaudeSessionId: string | undefined;
         let sawContent = false;
         let resultSeen = false;
@@ -324,9 +373,18 @@ export class ClaudeSdkService {
         let attemptError: Error | undefined;
 
         try {
-          const q = query({ prompt, options: sdkOptions });
+          const q = query({ prompt: steerStream.stream, options: sdkOptions });
           for await (const sdkMessage of q) {
             const events = this.adapter.adapt(sdkMessage as never, sessionId);
+
+            // After a turn result, close stdin once nothing is pending so the
+            // CLI exits and the query loop finishes. Already-queued turn
+            // messages still run after EOF (verified on CLI 2.1.235), and any
+            // later push cancels the scheduled end while the grace runs.
+            if ((sdkMessage as { type?: string }).type === 'result'
+              && !steerStream.hasPending() && !steerStream.isEnded()) {
+              steerStream.scheduleEnd(this.getSteerEndGraceMs());
+            }
 
             // Capture the confirmed session ID from any message that carries one
             if (!capturedClaudeSessionId) {
@@ -465,6 +523,12 @@ export class ClaudeSdkService {
       // `turn_end`) prevents a leak that would otherwise wait out the full
       // ask-user timeout, and tells any open browser dialog to retire.
       this.cancelPendingAskUserQuestionsForSession(sessionId, 'turn_end');
+      if (activeHandle) {
+        activeHandle.stream.end();
+        if (this.activeSteers.get(sessionId) === activeHandle) {
+          this.activeSteers.delete(sessionId);
+        }
+      }
       if (state) {
         state.isRunning = false;
         state.abortController = undefined;
@@ -488,11 +552,70 @@ export class ClaudeSdkService {
     }
   }
 
+  // ── Mid-run steering (streaming-input mode) ──────────────────────────────
+
+  /**
+   * Steer a running turn: the message joins the CURRENT run, delivered at the
+   * next tool boundary (SDK user-message priority 'next'). Verified wire
+   * semantics on CLI 2.1.235: if the turn has no tool boundary left, the CLI
+   * degrades gracefully to running the message as its own follow-up turn —
+   * it is never dropped. Returns false when the session has no live
+   * steerable run (idle, or a non-SDK backend).
+   */
+  steer(sessionId: string, text: string): boolean {
+    return this.pushSteerMessage(sessionId, text, 'next');
+  }
+
+  /**
+   * Queue a follow-up on a running turn: the current run completes first,
+   * then the message runs as its own turn (priority 'later'). Queued turns
+   * still execute even if stdin closes right after the current result.
+   */
+  followUp(sessionId: string, text: string): boolean {
+    return this.pushSteerMessage(sessionId, text, 'later');
+  }
+
+  private pushSteerMessage(sessionId: string, text: string, priority: 'now' | 'next' | 'later'): boolean {
+    const handle = this.activeSteers.get(sessionId);
+    const state = this.sessions.get(sessionId);
+    if (!handle || !state?.isRunning) return false;
+    const pushed = handle.stream.push(this.buildStreamUserMessage(text, priority));
+    if (!pushed) return false;
+    void handle.emitUserMessage(text);
+    return true;
+  }
+
+  /** Build a streaming-input user message. Every mid-turn push MUST set an
+   *  explicit priority (the CLI drops unprioritised mid-turn messages). */
+  private buildStreamUserMessage(text: string, priority?: 'now' | 'next' | 'later'): SDKUserMessage {
+    return {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text }] },
+      parent_tool_use_id: null,
+      origin: { kind: 'human' },
+      ...(priority ? { priority } : {}),
+    } as SDKUserMessage;
+  }
+
+  /** Read the env-overridable post-result grace before stdin closes. */
+  private getSteerEndGraceMs(): number {
+    const raw = process.env.CLAUDE_STEER_END_GRACE_MS;
+    if (raw) {
+      const parsed = Number.parseInt(raw, 10);
+      if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+    }
+    return DEFAULT_STEER_END_GRACE_MS;
+  }
+
   dispose(): void {
     for (const [sessionId, state] of this.sessions) {
       state.abortController?.abort();
       this.cancelPendingAskUserQuestionsForSession(sessionId, 'aborted');
     }
+    for (const handle of this.activeSteers.values()) {
+      handle.stream.end();
+    }
+    this.activeSteers.clear();
     this.resolvedAskUserQuestions.clear();
     this.resolvedAskUserQuestionToolCallIds.clear();
     this.askUserQuestionToolCallIdIndex.clear();

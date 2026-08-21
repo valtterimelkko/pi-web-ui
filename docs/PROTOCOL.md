@@ -78,6 +78,17 @@ The app uses JSON messages with a `type` field rather than strict JSON-RPC frami
 { type: 'compact', customInstructions?: string }
 ```
 
+Steer/follow-up runtime support: **Pi** — native mid-run steering (steer joins
+the run before the next model call; follow-up runs when the run finishes).
+**Claude (SDK backend)** — steer is delivered at the next tool boundary
+(streaming-input user-message priority `next`); follow-up queues with priority
+`later` and runs as its own turn. **Command Code** — no mid-run input channel
+exists in `cmdc -p`, so steer interrupts the running turn and delivers the text
+as the immediate next prompt on the same native session; follow-up queues
+server-side and is drained when the run ends. Both new paths emit a synthetic
+user `message_start` so the message reaches the transcript and queued-chip UI.
+Channel-backed and cli-direct Claude sessions do not steer.
+
 ### Session configuration
 
 ```typescript

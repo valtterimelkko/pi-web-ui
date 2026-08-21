@@ -46,15 +46,17 @@ describe('Pi streaming steer composer', () => {
   it('enables free-text composing while streaming only for Pi SDK sessions', () => {
     expect(canSteerWhileStreaming(true, 'pi')).toBe(true);
     expect(canSteerWhileStreaming(false, 'pi')).toBe(false);
-    expect(canSteerWhileStreaming(true, 'claude')).toBe(false);
+    expect(canSteerWhileStreaming(true, 'claude')).toBe(true);
     expect(canSteerWhileStreaming(true, 'opencode')).toBe(false);
     expect(canSteerWhileStreaming(true, 'antigravity')).toBe(false);
-    expect(canSteerWhileStreaming(true, 'commandcode')).toBe(false);
+    expect(canSteerWhileStreaming(true, 'commandcode')).toBe(true);
     expect(canSteerWhileStreaming(true, null)).toBe(false);
   });
 
-  it('allows sending streaming text only while a Pi session streams and no uploads are pending', () => {
+  it('allows sending streaming text only on runtimes with a steer path and no uploads', () => {
     expect(canSendStreamingText(true, 'pi', false)).toBe(true);
+    expect(canSendStreamingText(true, 'claude', false)).toBe(true);
+    expect(canSendStreamingText(true, 'commandcode', false)).toBe(true);
     // attachments are not part of the steer/follow_up wire frames yet
     expect(canSendStreamingText(true, 'pi', true)).toBe(false);
     expect(canSendStreamingText(false, 'pi', false)).toBe(false);

@@ -2019,7 +2019,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const verbosity: Verbosity = body.verbosity || parseVerbosityHeader(req.headers['x-verbosity'] as string | undefined) || 'answers';
     const mode = body.mode ?? 'prompt';
     if (mode === 'steer') {
-      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Command Code does not support steer mode'));
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Command Code steer is not exposed through the Internal API (use the WebSocket steer path)'));
       return;
     }
     if (body.detach && (verbosity === 'full' || verbosity === 'tasks')) {

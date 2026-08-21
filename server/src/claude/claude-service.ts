@@ -383,6 +383,26 @@ export class ClaudeService {
    * Run a prompt against an existing Claude session.
    * Streams normalised events to `onEvent` and calls `onComplete` when done.
    */
+  // ── Mid-run steering (SDK backend only) ──────────────────────────────────
+
+  /**
+   * Steer a running SDK-backed turn (message joins the current run at the
+   * next tool boundary). Returns false when the session is not steerable:
+   * idle session, non-SDK backend, or a channel session.
+   */
+  steer(sessionId: string, text: string): boolean {
+    if (this.hasChannelSession(sessionId)) return false;
+    if (!this.sdkService) return false;
+    return this.sdkService.steer(sessionId, text);
+  }
+
+  /** Queue a follow-up on a running SDK-backed turn (runs after it ends). */
+  followUp(sessionId: string, text: string): boolean {
+    if (this.hasChannelSession(sessionId)) return false;
+    if (!this.sdkService) return false;
+    return this.sdkService.followUp(sessionId, text);
+  }
+
   async sendPrompt(
     sessionId: string,
     prompt: string,

@@ -11,16 +11,24 @@ export function isPiSlashCommandAllowedWhileStreaming(
 /**
  * Whether the composer accepts free text while the agent is streaming.
  *
- * Pi supports mid-run steering natively (Enter = steer, delivered after the
- * current tool batch and before the next model call; follow-up = delivered
- * when the run finishes), so on Pi sessions the composer stays enabled for
- * any text. Other runtimes have no steer path on this transport yet.
+ * Three runtimes have a steer path on this transport:
+ * - Pi: native mid-run steering (Enter = steer, delivered after the current
+ *   tool batch and before the next model call).
+ * - Claude (SDK backend): streaming-input mode delivers the steer at the next
+ *   tool boundary (CLI user-message priority 'next'); follow-up queues with
+ *   priority 'later'.
+ * - Command Code: no mid-run input channel — steer interrupts the run and
+ *   delivers the text as the next prompt; follow-up queues server-side.
+ * Other runtimes have no steer path yet, so their composers stay read-only
+ * while streaming.
  */
+const STEERABLE_SDK_TYPES = new Set<RuntimeSdkType>(['pi', 'claude', 'commandcode']);
+
 export function canSteerWhileStreaming(
   isStreaming: boolean,
   sdkType: RuntimeSdkType,
 ): boolean {
-  return isStreaming && sdkType === 'pi';
+  return isStreaming && STEERABLE_SDK_TYPES.has(sdkType);
 }
 
 /**

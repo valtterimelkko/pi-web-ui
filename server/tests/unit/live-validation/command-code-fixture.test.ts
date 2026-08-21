@@ -54,6 +54,37 @@ describe('Command Code validation fixture', () => {
     }
   });
 
+  it('streams a slow-run prefix and only completes after a delay, so a steer can interrupt it', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'command-code-fixture-slow-test-'));
+    try {
+      const executable = await createCommandCodeValidationFixture(dir);
+      const child = spawn(executable, ['-p', '--output-format', 'json', '--model', 'qwen/qwen3.8-max'], {
+        cwd: dir,
+        env: { ...process.env, HOME: dir },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true,
+      });
+      let stdout = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stdin.end('COMMAND-CODE-SLOW-RUN');
+      // First the streamed prefix arrives quickly...
+      const prefixDeadline = Date.now() + 3000;
+      while (!stdout.includes('SLOW-RUN-STARTED') && Date.now() < prefixDeadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(stdout).toContain('SLOW-RUN-STARTED');
+      expect(stdout).not.toContain('SLOW-RUN-COMPLETED');
+      // ...then an abort (SIGKILL to the process group, like the runner) must
+      // prevent the delayed completion from ever being written.
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* already gone */ }
+      await new Promise((r) => setTimeout(r, 250));
+      expect(stdout).not.toContain('SLOW-RUN-COMPLETED');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 10000);
+
   it('returns the browser-path sentinel when the browser scenario asks for it', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'command-code-fixture-test-'));
     try {

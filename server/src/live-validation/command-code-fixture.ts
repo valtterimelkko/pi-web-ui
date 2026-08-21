@@ -65,6 +65,18 @@ process.stdin.on('end', () => {
   const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
   emit({ type: 'event', event: { type: 'run_start', sessionId } });
   emit({ type: 'event', event: { type: 'message_start', message: { id: 'fixture-assistant', role: 'assistant' } } });
+  if (prompt.includes('COMMAND-CODE-SLOW-RUN')) {
+    // Slow run for steering validation: stream a prefix, then only complete
+    // after a delay. An abort (process-group kill) must prevent the delayed
+    // completion, which is exactly what the steer hand-off exercises.
+    emit({ type: 'event', event: { type: 'text_delta', messageId: 'fixture-assistant', delta: 'SLOW-RUN-STARTED' } });
+    setTimeout(() => {
+      emit({ type: 'event', event: { type: 'text_delta', messageId: 'fixture-assistant', delta: ' SLOW-RUN-COMPLETED' } });
+      emit({ type: 'event', event: { type: 'message_end', message: { id: 'fixture-assistant' } } });
+      emit({ type: 'result', subtype: 'success', sessionId, finalText: 'SLOW-RUN-COMPLETED', usage: { input: 3, output: 4, total: 7 } });
+    }, 8000);
+    return;
+  }
   if (prompt.includes('LIVE-VALIDATION-TOOL')) {
     emit({ type: 'event', event: { type: 'tool_execution_start', toolName: 'bash', input: { command: 'echo LIVE-VALIDATION-TOOL' } } });
     emit({ type: 'event', event: { type: 'tool_execution_end', toolName: 'bash', output: 'LIVE-VALIDATION-TOOL' } });

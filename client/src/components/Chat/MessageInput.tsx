@@ -138,9 +138,10 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
   const [isFocused, setIsFocused] = useState(false);
   const [showCompactModal, setShowCompactModal] = useState(false);
   const [showSlashPalette, setShowSlashPalette] = useState(false);
-  // Delivery mode for messages sent while the agent is streaming (Pi only):
-  // 'steer' joins the current run before the next model call; 'followUp' is
-  // delivered when the run finishes. Alt+Enter always forces a follow-up.
+  // Delivery mode for messages sent while the agent is streaming (steer-
+  // capable runtimes: pi, claude, commandcode): 'steer' delivers into/alongside
+  // the current run (semantics per runtime); 'followUp' is delivered when the
+  // run finishes. Alt+Enter always forces a follow-up.
   const [deliveryMode, setDeliveryMode] = useState<'steer' | 'followUp'>('steer');
   const [queuedStreaming, setQueuedStreaming] = useState<QueuedStreamingMessage[]>([]);
 
@@ -375,6 +376,31 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
     || (streamCompose && currentDraft.trim().length > 0 && !hasUploads);
   const canSend = (currentDraft.trim().length > 0 || hasUploads) && !disabled && (!isStreaming || canSendWhileStreaming) && !isAnyUploading && !(streamCompose && hasUploads);
   const pauseGoalOnStop = shouldPauseGoalOnStop(currentSessionSdkType, goalEngineStatus);
+  // Honest per-runtime steer semantics for the delivery-mode strip. Pi joins
+  // the live run; Claude injects at the next tool boundary; Command Code has
+  // no mid-run channel, so 'Steer' interrupts and redirects immediately.
+  const steerLabels = (() => {
+    switch (currentSessionSdkType) {
+      case 'claude':
+        return {
+          steerLabel: 'Steer',
+          steerTitle: 'Steer — delivered at the next tool boundary, joining the current run',
+          steerSubtitle: 'Joins at next step',
+        };
+      case 'commandcode':
+        return {
+          steerLabel: 'Steer now',
+          steerTitle: 'Steer now — interrupts the current run and delivers this message immediately',
+          steerSubtitle: 'Interrupts & redirects',
+        };
+      default:
+        return {
+          steerLabel: 'Steer',
+          steerTitle: 'Steer — delivered after the current step, before the next model call',
+          steerSubtitle: 'Joins the current run',
+        };
+    }
+  })();
   // Context usage arrives as a raw ratio; 18.044086021505375% is not a reading.
   const displayContextPercent = Math.round(contextPercent);
 
@@ -471,7 +497,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
               key={item.id}
               className="inline-flex max-w-full items-center gap-1 rounded-full border border-amber-400/40 bg-amber-50 px-2 py-0.5 text-xs text-amber-700"
               title={item.mode === 'steer'
-                ? 'Steering — delivered before the next model call'
+                ? steerLabels.steerTitle
                 : 'Follow-up — delivered when this run finishes'}
             >
               {item.mode === 'steer'
@@ -560,11 +586,11 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
           style={{ lineHeight: '1.5', overscrollBehavior: 'contain' }}
         />
 
-        {/* Streaming delivery-mode strip (Pi only). Kept on its own row so
-            narrow/mobile viewports never cram it against Send/Stop. 'Steer'
-            joins the current run before the next model call; 'After' queues a
-            follow-up delivered when the run finishes. Mobile-friendly: two
-            labelled segmented buttons, no keyboard needed. */}
+        {/* Streaming delivery-mode strip (steer-capable runtimes). Kept on
+            its own row so narrow/mobile viewports never cram it against
+            Send/Stop. Semantics differ per runtime; labels stay honest about
+            what 'Steer' does. Mobile-friendly: two labelled segmented
+            buttons, no keyboard needed. */}
         {streamCompose && (
           <div className="flex items-center justify-between gap-2 px-3 pt-2">
             <div
@@ -581,9 +607,9 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
                 }`}
                 type="button"
                 aria-pressed={deliveryMode === 'steer'}
-                title="Steer — delivered after the current step, before the next model call"
+                title={steerLabels.steerTitle}
               >
-                Steer
+                {steerLabels.steerLabel}
               </button>
               <button
                 onClick={() => setDeliveryMode('followUp')}
@@ -600,7 +626,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
               </button>
             </div>
             <span className="text-[10px] text-gray-400 truncate">
-              {deliveryMode === 'steer' ? 'Joins the current run' : 'Runs after this one'}
+              {deliveryMode === 'steer' ? steerLabels.steerSubtitle : 'Runs after this one'}
             </span>
           </div>
         )}

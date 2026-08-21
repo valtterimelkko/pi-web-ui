@@ -54,10 +54,36 @@ describe('MessageInput streaming steer UX (Pi sessions)', () => {
     expect(screen.getByRole('button', { name: /^after$/i })).toBeTruthy();
   });
 
-  it('does not show the toggle for non-Pi streaming sessions', () => {
+  it('does not show the toggle for non-steerable streaming sessions', () => {
     setStore({ isStreaming: true, currentSessionSdkType: 'opencode' });
     render(<MessageInput />);
-    expect(screen.queryByRole('button', { name: /^steer$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^steer/i })).toBeNull();
+  });
+
+  it('shows the toggle for streaming Claude sessions with boundary semantics', () => {
+    setStore({ isStreaming: true, currentSessionSdkType: 'claude' });
+    render(<MessageInput />);
+    const steerBtn = screen.getByRole('button', { name: /^steer$/i });
+    expect(steerBtn.getAttribute('title')).toMatch(/next tool boundary/i);
+    expect(screen.getByText('Joins at next step')).toBeTruthy();
+  });
+
+  it('shows interrupt semantics for streaming Command Code sessions', () => {
+    setStore({ isStreaming: true, currentSessionSdkType: 'commandcode' });
+    render(<MessageInput />);
+    const steerBtn = screen.getByRole('button', { name: /^steer now$/i });
+    expect(steerBtn.getAttribute('title')).toMatch(/interrupts the current run/i);
+    expect(screen.getByText('Interrupts & redirects')).toBeTruthy();
+  });
+
+  it('sends free text via sendSteer on a streaming Claude session', () => {
+    setStore({ isStreaming: true, currentSessionSdkType: 'claude' });
+    render(<MessageInput />);
+    const textarea = screen.getByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'pivot to schemas' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(sendSteerMock).toHaveBeenCalledWith('pivot to schemas');
+    expect(sendPromptMock).not.toHaveBeenCalled();
   });
 
   it('sends free text via sendSteer while streaming and queues a chip', () => {
@@ -125,7 +151,7 @@ describe('MessageInput streaming steer UX (Pi sessions)', () => {
   });
 
   it('keeps Stop-only for streaming sessions that cannot steer', () => {
-    setStore({ isStreaming: true, currentSessionSdkType: 'claude' });
+    setStore({ isStreaming: true, currentSessionSdkType: 'opencode' });
     render(<MessageInput />);
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'cannot steer' } });
 

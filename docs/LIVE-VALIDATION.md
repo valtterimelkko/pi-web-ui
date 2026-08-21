@@ -332,6 +332,30 @@ cleanup; never retain raw credentials or an entire session directory by default.
 A skipped result is capability evidence, not a failure. A failed disposable
 result should be investigated before any production validation is considered.
 
+### Steering validation (`scripts/live-validate-steer.mjs`)
+
+Mid-run steering is a browser-WebSocket behaviour (the Internal API `steer`
+mode stays Pi-only), so it has a dedicated Option-3 driver:
+[`../scripts/live-validate-steer.mjs`](../scripts/live-validate-steer.mjs).
+Boot a disposable server (`--command-code-fixture --command-code-browser-fixture`
+for the Command Code fixture path; a Claude SDK profile with
+`--env-file`/`--env-key` for the real SDK backend, selecting it with
+`--model profile:<id>`), then:
+
+```bash
+node scripts/live-validate-steer.mjs --url http://localhost:<port> \
+  --runtime commandcode --cwd <validation-dir>/wswork
+node scripts/live-validate-steer.mjs --url http://localhost:<port> \
+  --runtime claude --cwd <validation-dir>/claudework --model profile:<id>
+```
+
+It proves, per runtime: a steer sent mid-run reaches the transcript as a user
+message and redirects the agent (Command Code via interrupt + next-prompt
+hand-off, with the aborted run's completion suppressed), and a follow-up sent
+mid-run runs as its own turn strictly after the current run finishes. The
+Command Code fixture recognises the `COMMAND-CODE-SLOW-RUN` marker to produce a
+slow, interruptible turn.
+
 ## Claude profile validation runner
 
 For validating Claude **provider profiles** (SDK backend, direct CLI backend, GLM/Z.ai provider routing, skills, concurrency), use the dedicated profile runner rather than `validate:live`:

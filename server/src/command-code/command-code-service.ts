@@ -610,6 +610,15 @@ export class CommandCodeService {
     await this.runner.abort(sessionId);
   }
 
+  /**
+   * Resolves when the session's in-flight turn (if any) has fully settled —
+   * used by the steer hand-off so the interrupting prompt cannot collide with
+   * the aborting run's journal/registry writes.
+   */
+  waitForTurnEnd(sessionId: string): Promise<void> | undefined {
+    return this.inFlightTurns.get(sessionId);
+  }
+
   async deleteSession(sessionId: string): Promise<boolean> {
     this.deletedSessions.add(sessionId);
     this.abortRequested.add(sessionId);
