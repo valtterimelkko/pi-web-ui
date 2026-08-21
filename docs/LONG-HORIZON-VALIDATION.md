@@ -51,7 +51,7 @@ The waiting is a **scheduler** concern, and a scheduler belongs in the validator
 ## Watch API
 
 All endpoints are additive under `/api/v1` (watch support was introduced in
-contract `1.1.0`; the current published contract is `1.16.0`). There is one watch
+contract `1.1.0`; the `onFire` wake action was added in `1.22.0`). There is one watch
 per session.
 
 ### Register a watch
@@ -68,11 +68,27 @@ POST /api/v1/sessions/:sessionId/watch
     { "type": "tool", "toolName": "Bash", "phase": "end", "argIncludes": "PASS" }
   ],
   "pin": true,
-  "label": "goal-survives-compaction"
+  "label": "goal-survives-compaction",
+  "onFire": {
+    "type": "prompt",
+    "targetSessionId": "<parent-session-id>",
+    "message": "Child {{sessionId}} fired {{conditionId}} — inspect and continue."
+  }
 }
 ```
 
 Registering owns a `watch:<watchId>` residency claim by default so idle/timeout eviction cannot kill the subject while the validator sleeps. Replacing or deleting the watch releases exactly that watch claim; it cannot release human Web UI or Internal API lease claims. Returns the full watch object (`201`). A bad regex or empty `conditions` array returns `400`.
+
+**Opt-in onFire wake (contract 1.22.0).** The optional `onFire` action turns the
+first policy-permitted firing into a detached, receipted prompt to a *different*
+session — the runtime-agnostic parent-wake. Canonical long-horizon orchestration
+shape: the parent dispatches the child, registers this watch on the child with
+`targetSessionId` = itself, and goes idle. When the child's condition fires
+(typically `agent_end`), the parent is woken with the composed message — no
+operator "any news?" pings, no token-burning self-polling. The target is pinned
+with a `watch-target:` claim by default; every attempt is audited in
+`wakeAttempts`; busy non-Pi targets fail honestly with `SESSION_BUSY`. Full field
+reference in [`INTERNAL-API.md`](./INTERNAL-API.md) (Watch).
 
 > **Retention is also available without a watch.** If you need recoverability or
 > residency but not durable condition detection, request source-owned
@@ -103,7 +119,7 @@ GET /api/v1/sessions/:sessionId/watch
 GET /api/v1/sessions/:sessionId/watch?sinceIndex=4
 ```
 
-Returns the watch with its `conditions` (each with `fired`/`fireCount`/timestamps), the append-only `firings` ledger, a `firingCount`, `pendingConditionIds`, `allFired`, and a lightweight event-derived `snapshot` (status, `eventCount`, `toolCallCount`, `sawAgentEnd`, last event). `?sinceIndex=N` returns only firings after the caller's last poll; `firingCount` stays the absolute total so the caller can compute its next `sinceIndex`.
+Returns the watch with its `conditions` (each with `fired`/`fireCount`/timestamps), the append-only `firings` ledger, a `firingCount`, `pendingConditionIds`, `allFired`, a lightweight event-derived `snapshot` (status, `eventCount`, `toolCallCount`, `sawAgentEnd`, last event) — and, when `onFire` is registered, the echoed action plus the `wakeAttempts[]` audit trail (`dispatched` with `runId`, `failed` with `errorCode`, or `suppressed` with `reason`). `?sinceIndex=N` returns only firings after the caller's last poll; `firingCount` stays the absolute total so the caller can compute its next `sinceIndex`.
 
 `status` is `active` (live subscription attached), `detached` (reloaded from disk after a restart — past firings readable, new ones not recorded until re-registered), or `closed`.
 

@@ -69,6 +69,7 @@ These are the main limitations to keep in mind when designing orchestrators:
   permission systems may still require live `/events` observation.
 - **Claude channel `/events` caveat** — see below.
 - **Watch restart semantics** — a watch ledger preserves already-recorded firings, but a watch reloaded after server restart is `detached`; re-register it to resume live observation. A watch owns a distinct runtime claim, and deleting the watch releases only that claim.
+- **Watch onFire wake (contract 1.22.0)** — a watch can wake a *different* session when a condition fires: `onFire: { type: 'prompt', targetSessionId, message }` on `POST /sessions/:id/watch`. The canonical pattern for a parent orchestrating a long-horizon child is **watch the child, wake the parent**: the parent goes idle (no token burn), the watch observes the child server-side, and the child's `agent_end` (or any condition) dispatches a detached, receipted prompt to the parent. The target may be any managed runtime; `follow_up` queues on a busy Pi parent, busy Claude/Command Code parents fail honestly with `SESSION_BUSY`. Every attempt is audited in `wakeAttempts` (dispatched/failed/suppressed). Self-targeting is rejected — a watch on an idle session can never fire, and on a streaming one it would self-continue. See `docs/INTERNAL-API.md` (Watch) for the full field reference.
 
 ## Recommended orchestration flow
 

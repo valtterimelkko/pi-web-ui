@@ -147,3 +147,90 @@ describe('watch routes — POST/GET/DELETE /sessions/:id/watch', () => {
     expect(JSON.parse(res.body).code).toBe('SESSION_NOT_FOUND');
   });
 });
+
+describe('watch routes — onFire wake action validation', () => {
+  let dir: string;
+  let registry: { get: ReturnType<typeof vi.fn> };
+  let multiSessionManager: Record<string, ReturnType<typeof vi.fn>>;
+  let routes: ReturnType<typeof createSessionRoutes>;
+
+  const piEntry = { id: 'pi-1', path: 'pi-1', sdkType: 'pi', cwd: '/tmp', firstMessage: '', messageCount: 0, status: 'idle', createdAt: '', lastActivity: '' };
+  const parentEntry = { ...piEntry, id: 'parent-1', path: 'parent-1' };
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-watch-wake-routes-'));
+    registry = { get: vi.fn(async (id: string) => (id === 'pi-1' ? piEntry : id === 'parent-1' ? parentEntry : undefined)) };
+    multiSessionManager = {
+      addApiObserver: vi.fn(),
+      removeApiObserver: vi.fn(),
+      pinSession: vi.fn(() => true),
+      unpinSession: vi.fn(() => true),
+    };
+    routes = createSessionRoutes({
+      claudeService: {} as never,
+      opencodeService: {} as never,
+      antigravityService: {} as never,
+      multiSessionManager: multiSessionManager as never,
+      sessionRegistry: registry as never,
+      piService: {} as never,
+      internalClientId: 'test',
+      watchDir: dir,
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  const onFire = { type: 'prompt', targetSessionId: 'parent-1', message: 'child finished — inspect and continue' };
+
+  it('accepts a valid onFire action, echoes it, and pins the target', async () => {
+    const res = createMockRes();
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/pi-1/watch', { conditions: [{ type: 'event_type', eventType: 'agent_end' }], onFire }),
+      res, 'pi-1',
+    );
+    expect(res.statusCode).toBe(201);
+    const created = JSON.parse(res.body);
+    expect(created.onFire).toMatchObject({ type: 'prompt', targetSessionId: 'parent-1' });
+    expect(created.wakeAttempts).toEqual([]);
+    expect(multiSessionManager.pinSession).toHaveBeenCalledWith('parent-1', 'watch-target:watch-pi-1');
+  });
+
+  it('rejects a wake targeting the watched session itself with 400', async () => {
+    const res = createMockRes();
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/pi-1/watch', { conditions: [{ type: 'event_type', eventType: 'agent_end' }], onFire: { ...onFire, targetSessionId: 'pi-1' } }),
+      res, 'pi-1',
+    );
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).code).toBe('INVALID_REQUEST');
+  });
+
+  it('404s when the wake target session does not exist', async () => {
+    const res = createMockRes();
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/pi-1/watch', { conditions: [{ type: 'event_type', eventType: 'agent_end' }], onFire: { ...onFire, targetSessionId: 'ghost-parent' } }),
+      res, 'pi-1',
+    );
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body).code).toBe('SESSION_NOT_FOUND');
+  });
+
+  it('rejects a malformed onFire action with 400', async () => {
+    for (const bad of [
+      { type: 'webhook', targetSessionId: 'parent-1', message: 'm' },
+      { type: 'prompt', targetSessionId: 'parent-1', message: '' },
+      { type: 'prompt', targetSessionId: '', message: 'm' },
+      'not-an-object',
+    ]) {
+      const res = createMockRes();
+      await routes.handleRegisterWatch(
+        createJsonReq('POST', '/api/v1/sessions/pi-1/watch', { conditions: [{ type: 'event_type', eventType: 'agent_end' }], onFire: bad }),
+        res, 'pi-1',
+      );
+      expect(res.statusCode).toBe(400);
+    }
+  });
+});

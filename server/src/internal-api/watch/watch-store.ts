@@ -16,6 +16,8 @@ import type {
   SessionRuntime,
   WatchConditionState,
   WatchFiring,
+  WatchOnFireAction,
+  WatchWakeAttempt,
   WatchSnapshot,
   WatchStatus,
 } from '../types.js';
@@ -29,9 +31,15 @@ export interface PersistedWatch {
   label?: string;
   status: WatchStatus;
   pinned: boolean;
+  /** Whether this watch currently owns a `watch-target:` claim on the wake target. */
+  targetPinned: boolean;
   createdAt: string;
   updatedAt: string;
   conditions: WatchConditionState[];
+  /** Echoed opt-in wake action (observation stays pure without it). */
+  onFire?: WatchOnFireAction;
+  /** Durable audit of every wake attempt. */
+  wakeAttempts: WatchWakeAttempt[];
   firings: WatchFiring[];
   snapshot: WatchSnapshot;
 }

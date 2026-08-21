@@ -60,7 +60,7 @@ import type {
 } from '../types.js';
 import { isThinkingLevel } from '../types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
-import { WatchManager, WatchValidationError } from '../watch/watch-manager.js';
+import { WatchManager, WatchValidationError, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
 import { PinExpiryManager, type ApplyPinResult } from '../pin-expiry-manager.js';
 import {
   IdempotencyKeyValidationError,
@@ -555,13 +555,162 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
    * Long-horizon watch manager. Subscribes to the same broker the prompt and
    * `/events` paths feed, so a watch records condition firings to a durable
    * ledger regardless of whether any client is connected.
+   *
+   * The opt-in onFire wake action dispatches through this injected adapter so
+   * every wake takes the same receipted, admission-controlled, injection-
+   * checked path a normal Internal API prompt takes — the watch layer only
+   * decides *when*, never *how*.
    */
   const watchManager = new WatchManager({
     broker,
     storeDir: deps.watchDir,
     pinSession: pinSessionById,
     unpinSession: unpinSessionById,
+    dispatchWake: dispatchWatchWake,
   });
+
+  /**
+   * Execute one watch wake as a detached, receipted prompt on the target
+   * session. Mirrors the dispatch decisions of POST /sessions/:id/prompt
+   * (busy checks, follow_up idle promotion, admission) but always detaches:
+   * the watch handler must never block the event loop on a model turn.
+   */
+  async function dispatchWatchWake(input: WatchWakeDispatchInput): Promise<WatchWakeDispatchResult> {
+    const { targetSessionId, message, mode, idempotencyKey } = input;
+
+    // Same operator safety gate as the human/browser prompt path: a wake
+    // message is composed from child-controlled text when includeEvidence is
+    // set, so it must pass prompt-injection detection before reaching a model.
+    const injectionCheck = detectPromptInjection(message);
+    if (injectionCheck.detected) {
+      return { status: 'failed', errorCode: ErrorCode.PROMPT_INJECTION, detail: 'Wake message failed prompt-injection detection' };
+    }
+
+    const commandCodeEntry = await commandCodeService?.findSession(targetSessionId);
+    if (commandCodeEntry) {
+      // Command Code: busy targets refuse (no queueing on the API path); idle
+      // targets dispatch a plain detached prompt.
+      const busy = commandCodeService!.isRunning(targetSessionId)
+        || (await commandCodeService!.getSession(targetSessionId))?.state === 'running';
+      if (busy) return { status: 'failed', errorCode: ErrorCode.SESSION_BUSY };
+      return dispatchWatchWakeReceipted({
+        targetSessionId,
+        runtime: 'commandcode',
+        record: commandCodeEntry,
+        message,
+        mode,
+        dispatchMode: 'prompt',
+        idempotencyKey,
+      });
+    }
+
+    const entry = await getNonCommandCodeRegistryEntry(targetSessionId);
+    if (!entry) return { status: 'failed', errorCode: ErrorCode.SESSION_NOT_FOUND };
+
+    const runtime = entry.sdkType as SessionRuntime;
+    const busy = isSessionBusy(entry);
+    // follow_up: queued on a busy Pi target, idle-promoted to a plain prompt
+    // when idle. Busy non-Pi targets cannot be queued or steered — refuse
+    // honestly (steer is structurally rejected at registration, not here).
+    let dispatchMode: PromptMode;
+    if (!busy) dispatchMode = 'prompt';
+    else if (mode === 'follow_up' && runtime === 'pi') dispatchMode = 'follow_up';
+    else return { status: 'failed', errorCode: ErrorCode.SESSION_BUSY };
+    return dispatchWatchWakeReceipted({
+      targetSessionId,
+      runtime,
+      entry,
+      message,
+      mode,
+      dispatchMode,
+      idempotencyKey,
+    });
+  }
+
+  /** Shared receipted dispatch for both wake branches. */
+  async function dispatchWatchWakeReceipted(run: {
+    targetSessionId: string;
+    runtime: SessionRuntime;
+    entry?: RegistryEntry;
+    record?: CommandCodeInternalSessionRecord;
+    message: string;
+    mode: 'prompt' | 'follow_up';
+    dispatchMode: PromptMode;
+    idempotencyKey: string;
+  }): Promise<WatchWakeDispatchResult> {
+    const { targetSessionId, runtime, message, mode, dispatchMode, idempotencyKey } = run;
+    const beginInput = {
+      sessionId: targetSessionId,
+      runtime,
+      executionInstanceId: run.entry
+        ? resolveExecutionInstanceId(run.entry)
+        : run.record
+          ? resolveExecutionInstanceId({ sdkType: 'commandcode' })
+          : resolveExecutionInstanceId({ sdkType: runtime }),
+      model: run.entry ? currentRunModel(run.entry) : run.record?.modelSelector,
+      modelSelector: run.entry ? (run.entry.model ?? undefined) : run.record?.modelSelector,
+      effort: run.record?.effort,
+      defaultEffort: run.record?.defaultEffort,
+      message,
+      mode,
+      dispatchMode,
+      verbosity: 'answers' as const,
+      detach: true,
+      requireActiveTurn: false,
+      idempotencyKey,
+    } as const;
+    let reservation;
+    try {
+      reservation = await runReceipts.beginRun(beginInput);
+    } catch (error) {
+      return { status: 'failed', errorCode: ErrorCode.INVALID_REQUEST, detail: error instanceof Error ? error.message : String(error) };
+    }
+    if (reservation.kind !== 'created') {
+      // Same key + same payload replaying is fine (at-least-once dispatch); a
+      // conflict means the key was burned on different content.
+      if (reservation.kind === 'duplicate') return { status: 'dispatched', runId: reservation.receipt.runId };
+      return { status: 'failed', errorCode: ErrorCode.IDEMPOTENCY_KEY_CONFLICT };
+    }
+    const runId = reservation.receipt.runId;
+    let lease: { release: () => void } | undefined;
+    try {
+      lease = await admission.acquire(runtime, 'P2');
+    } catch (error) {
+      await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
+      return {
+        status: 'failed',
+        errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED,
+        detail: error instanceof Error ? error.message : 'admission capacity exhausted',
+      };
+    }
+    let released = false;
+    const wrappedLease = {
+      release: () => {
+        if (released) return;
+        released = true;
+        lease!.release();
+      },
+    };
+    runReceipts.attachLease(runId, wrappedLease);
+    try {
+      await runReceipts.markStarted(runId);
+    } catch (error) {
+      wrappedLease.release();
+      await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
+      return { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR };
+    }
+    // Always detached: the watch must never wait on the model turn. The turn
+    // outcome lands in the run receipt (pollable) and the session transcript.
+    void (async () => {
+      try {
+        await executePromptWithReceipt(runId, targetSessionId, runtime, message, dispatchMode, () => undefined, () => undefined, wrappedLease);
+      } catch (error) {
+        logger.errorObject(`[InternalAPI] Watch wake ${idempotencyKey} failed for session ${targetSessionId} run=${runId}`, error);
+      }
+    })();
+    logger.info(`[InternalAPI] Watch wake dispatched: runtime=${runtime} target=${targetSessionId} dispatchMode=${dispatchMode} runId=${runId}`);
+    return { status: 'dispatched', runId };
+  }
 
   /**
    * API-pin expiry manager. Owns the time-bounded pin lifecycle for sessions
@@ -4652,6 +4801,33 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (!entry) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
       return;
+    }
+
+    // Wake-target validation lives here (not the manager) because existence
+    // is a registry question, and the watch layer must stay registry-free.
+    if (body.onFire !== undefined) {
+      if (typeof body.onFire !== 'object' || body.onFire === null || typeof (body.onFire as { targetSessionId?: unknown }).targetSessionId !== 'string') {
+        sendJson(res, 400, { error: 'onFire must be an object with a targetSessionId', code: ErrorCode.INVALID_REQUEST });
+        return;
+      }
+      const target = (body.onFire as { targetSessionId: string }).targetSessionId.trim();
+      if (!target) {
+        sendJson(res, 400, { error: 'onFire.targetSessionId must be a non-empty session id', code: ErrorCode.INVALID_REQUEST });
+        return;
+      }
+      if (target === sessionId) {
+        sendJson(res, 400, {
+          error: 'onFire.targetSessionId cannot target the watched session itself: an idle session produces no events for a watch to act on, and a streaming one would self-continue. Watch the child, wake the parent.',
+          code: ErrorCode.INVALID_REQUEST,
+        });
+        return;
+      }
+      const commandCodeTarget = await commandCodeService?.findSession(target);
+      const targetEntry = commandCodeTarget ? true : await getNonCommandCodeRegistryEntry(target);
+      if (!targetEntry) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, `Wake target session not found: ${target}`));
+        return;
+      }
     }
 
     // For Pi/OpenCode, ensure the persistent observer is attached so events

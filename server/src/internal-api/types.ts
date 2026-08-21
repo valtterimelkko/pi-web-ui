@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.21.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.22.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -1223,6 +1223,54 @@ export interface WatchSnapshot {
 
 export type WatchStatus = 'active' | 'detached' | 'closed';
 
+/**
+ * Opt-in action executed when a watch condition fires. This is the
+ * runtime-agnostic "wake": the watch stays an observer, and the action
+ * dispatches a prompt to a *different* session (typically an idle parent
+ * orchestrating the watched child). The analogue of the Pi subagent
+ * extension's `sendUserMessage(..., { deliverAs: 'followUp', triggerTurn: true })`,
+ * but cross-session and cross-runtime.
+ */
+export interface WatchOnFireAction {
+  /** Only `prompt` is supported today. */
+  type: 'prompt';
+  /** Session to wake. Must differ from the watched session. */
+  targetSessionId: string;
+  /**
+   * Message template for the wake prompt. Placeholders: `{{conditionId}}`,
+   * `{{eventType}}`, `{{sessionId}}` (watched session), `{{firedAt}}`, and
+   * `{{evidence}}` (only interpolated when `includeEvidence` is true).
+   */
+  message: string;
+  /** Dispatch mode. `follow_up` (default) queues on a busy Pi target and prompts when idle; `prompt` refuses when busy. */
+  mode?: 'prompt' | 'follow_up';
+  /** Max wake dispatch attempts over the watch's life (default 1, 1-10). Counts attempts, not successes. */
+  maxWakeups?: number;
+  /** Minimum seconds between wake dispatch attempts (default 60, 0-3600). */
+  cooldownSeconds?: number;
+  /** Pin the target so idle eviction cannot kill it before the wake (default true, claim `watch-target:<watchId>`). */
+  pinTarget?: boolean;
+  /** Interpolate `{{evidence}}` from the firing into the message (default false; evidence is child-controlled text). */
+  includeEvidence?: boolean;
+}
+
+export type WatchWakeAttemptStatus = 'pending' | 'dispatched' | 'failed' | 'suppressed';
+
+/** Durable audit record of one wake attempt, stored in the watch ledger. */
+export interface WatchWakeAttempt {
+  attemptedAt: number;
+  targetSessionId: string;
+  status: WatchWakeAttemptStatus;
+  /** Condition whose firing triggered this attempt. */
+  conditionId?: string;
+  /** Run receipt id when the dispatch was accepted. */
+  runId?: string;
+  /** Error code when `failed` (e.g. `SESSION_BUSY`, `WAKE_DISPATCH_UNAVAILABLE`). */
+  errorCode?: string;
+  /** Suppression reason: `max_wakeups_reached` or `cooldown`. */
+  reason?: string;
+}
+
 export interface RegisterWatchRequest {
   /** Conditions to evaluate. Must be non-empty. */
   conditions: WatchConditionSpec[];
@@ -1233,6 +1281,11 @@ export interface RegisterWatchRequest {
   pin?: boolean;
   /** Optional human-readable label for the watch. */
   label?: string;
+  /**
+   * Optional wake action executed when a condition fires. Opt-in: without
+   * this the watch remains a pure observer.
+   */
+  onFire?: WatchOnFireAction;
 }
 
 export interface WatchResponse {
@@ -1260,6 +1313,10 @@ export interface WatchResponse {
   pendingConditionIds: string[];
   /** True once every condition has fired at least once. */
   allFired: boolean;
+  /** Echoed wake action when one was registered. */
+  onFire?: WatchOnFireAction;
+  /** Durable audit of every wake attempt (dispatched, failed, suppressed). */
+  wakeAttempts: WatchWakeAttempt[];
   snapshot: WatchSnapshot;
 }
 

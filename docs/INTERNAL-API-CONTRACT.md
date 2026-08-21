@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.21.0",
+  "contractVersion": "1.22.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -29,6 +29,13 @@ Current contract:
 
 ### Changelog
 
+- **1.22.0** (minor, additive watch onFire wake) — a watch can now wake a *different* session when a condition fires. This is the runtime-agnostic parent-wake: the watch stays an observer, and an opt-in action dispatches a prompt to the target (typically the idle parent orchestrating the watched child). Adds to `POST /sessions/:id/watch`:
+  - optional `onFire: { type: "prompt", targetSessionId, message, mode?, maxWakeups?, cooldownSeconds?, pinTarget?, includeEvidence? }` — `type` must be `prompt`, the target must exist and must differ from the watched session (self-target is a `400`; a missing target is a `404 SESSION_NOT_FOUND`);
+  - the wake dispatch is always detached and takes the same receipted, admission-controlled, prompt-injection-checked path as `POST /sessions/:id/prompt` (`follow_up` queues on a busy Pi target and idle-promotes; busy non-Pi targets fail with `SESSION_BUSY`; steer is not available here);
+  - the target is pinned with a source-owned `watch-target:<watchId>` claim by default (`pinTarget: false` opts out) so idle eviction cannot kill the parent before the wake;
+  - the poll response gains `onFire` (echo) and `wakeAttempts[]` — a durable audit of every attempt (`dispatched` + `runId`, `failed` + `errorCode`, or `suppressed` + `reason` `max_wakeups_reached`/`cooldown`), capped at 50 recorded entries;
+  - `message` supports bounded placeholders `{{conditionId}}`, `{{eventType}}`, `{{sessionId}}`, `{{firedAt}}`, and `{{evidence}}` only with `includeEvidence: true` (evidence is child-controlled text and is excluded by default);
+  - watches registered without `onFire` are byte-for-byte pure observers as before.
 - **1.21.0** (minor, truthful Pi create responses; additive error code) — Pi session creation becomes verifiable about route identity:
   - the Pi create response's `model` is the model the session **actually resolved to** (`provider/model`); it never echoes a request that was not applied. `modelSelector` (additive, Pi creates) echoes the exact requested selector;
   - a selector the runtime refuses or cannot apply (for example a bare model id without a provider component) fails the create with `422 MODEL_NOT_APPLIED` (new additive error code) after the half-created session, registry entry and socket files are cleaned up — the same fail-closed shape as the blocked-provider path;

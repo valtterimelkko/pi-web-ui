@@ -1994,7 +1994,15 @@ DELETE /api/v1/sessions/:sessionId/watch     # tear down
     { "type": "tool", "toolName": "Bash", "phase": "end", "argIncludes": "PASS" }
   ],
   "pin": true,
-  "label": "goal-survives-compaction"
+  "label": "goal-survives-compaction",
+  "onFire": {
+    "type": "prompt",
+    "targetSessionId": "<parent-session-id>",
+    "message": "Child {{sessionId}} fired {{conditionId}} ({{eventType}}) — inspect and continue.",
+    "mode": "follow_up",
+    "maxWakeups": 1,
+    "cooldownSeconds": 60
+  }
 }
 ```
 
@@ -2004,6 +2012,41 @@ Condition types (all generic): `event_type` (`eventType` + optional `dataMatch`)
 `once` (default `true`). Registering owns a source-owned `watch:<watchId>`
 residency claim by default so idle eviction cannot kill the subject mid-watch;
 it does not consume or release a human Web UI pin slot.
+
+**Opt-in wake (`onFire`, contract 1.22.0).** Without `onFire` a watch is a pure
+observer. With it, the first (policy-permitted) condition firing dispatches a
+*detached, receipted prompt* to `targetSessionId` — the runtime-agnostic
+parent-wake: watch the child, wake the parent. This mirrors the Pi subagent
+extension's `sendUserMessage(..., { deliverAs: 'followUp', triggerTurn: true })`
+across sessions and runtimes: the target can be any managed runtime (Pi, Claude,
+OpenCode, Antigravity, Command Code), regardless of the child's runtime.
+
+- `targetSessionId` must exist and must differ from the watched session — a
+  self-target is a `400` (an idle session produces no events to act on; a
+  streaming one would self-continue), a missing target is a `404`.
+- The dispatch takes the same path as `POST /sessions/:id/prompt`: run
+  receipts, admission control (`P2`), and prompt-injection detection on the
+  composed message. It is always detached — the watch never blocks on the
+  model turn; poll the returned `runId` via the run-receipt route.
+- `mode: "follow_up"` (default) queues on a busy Pi target and idle-promotes to
+  a plain prompt; `mode: "prompt"` refuses a busy target. Busy non-Pi targets
+  fail with `SESSION_BUSY` either way (Claude/Command Code cannot be
+  interrupted mid-turn); the failure is honestly recorded in `wakeAttempts`.
+- `maxWakeups` (default 1, 1–10) bounds dispatch *attempts* over the watch's
+  life; `cooldownSeconds` (default 60, 0–3600) enforces a minimum gap between
+  dispatch attempts. A `once: false` streaming text condition cannot machine-gun
+  the target: later firings are recorded as `suppressed` with the reason.
+- The target is pinned with a source-owned `watch-target:<watchId>` claim by
+  default (`pinTarget: false` opts out) and released when the watch is deleted
+  or replaced — Pi rehydrates idle sessions on demand, but e.g. OpenCode evicts
+  unpinned idle sessions, and the whole point is that the parent survives until
+  the wake.
+- `message` placeholders: `{{conditionId}}`, `{{eventType}}`, `{{sessionId}}`,
+  `{{firedAt}}` (ISO). `{{evidence}}` is interpolated **only** with
+  `includeEvidence: true` — evidence is child-controlled text (guarded by
+  prompt-injection detection, but excluded by default).
+- After a server restart the watch reloads `detached` as before; re-register to
+  resume observation and wake capability. Recorded `wakeAttempts` survive.
 
 **Poll response (200):**
 ```json
@@ -2025,12 +2068,31 @@ it does not consume or release a human Web UI pin slot.
 `GET ...?sinceIndex=N` returns only firings after the caller's last poll;
 `firingCount` stays the absolute total. `status` is `active`, `detached`
 (reloaded from disk after a restart — past firings readable, new ones need a
-re-register), or `closed`.
+re-register), or `closed`. When `onFire` is registered, the response also
+echoes it and carries `wakeAttempts[]`:
+
+```json
+{
+  "onFire": { "type": "prompt", "targetSessionId": "...", "mode": "follow_up", "maxWakeups": 1, "cooldownSeconds": 60, "pinTarget": true, "includeEvidence": false },
+  "wakeAttempts": [
+    { "attemptedAt": 1747744010000, "targetSessionId": "...", "status": "dispatched", "conditionId": "sentinel", "runId": "..." }
+  ]
+}
+```
+
+`wakeAttempts[].status` is `dispatched` (with `runId`), `failed` (with
+`errorCode`, e.g. `SESSION_BUSY`, `PROMPT_INJECTION`,
+`ADMISSION_CAPACITY_EXHAUSTED`, `SESSION_NOT_FOUND`), or `suppressed` (with
+`reason` `max_wakeups_reached` or `cooldown`). At most the last 50 attempts are
+kept in the ledger.
 
 **Errors:**
-- `400` — empty `conditions`, or an invalid regex `pattern`
+- `400` — empty `conditions`, an invalid regex `pattern`, a malformed
+  `onFire` action, or an `onFire.targetSessionId` that targets the watched
+  session itself
 - `404 WATCH_NOT_FOUND` — no watch registered (GET/DELETE)
-- `404 SESSION_NOT_FOUND` — session does not exist (POST)
+- `404 SESSION_NOT_FOUND` — session does not exist (POST), or the
+  `onFire.targetSessionId` does not exist
 
 ---
 
