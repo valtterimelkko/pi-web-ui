@@ -1,5 +1,7 @@
 # `GET /sessions/:id/events` is unbounded, and nothing tells a client so
 
+> **RESOLVED 2026-08-23** — commit `4c4c599` (contract 1.24.0). Added `?mode=snapshot` (bounded request/response read of the replay buffer) and `?timeout=<ms>` (bounded stream closing with `complete {reason:"timeout"}`, clamp `[0,300000]`); docs now mark the bare endpoint as an unbounded SSE stream in every monitoring table and evidence ladder. Live validation also exposed and fixed a second pre-existing defect: Pi sessions received **zero** events on `/events` because publishers key the broker under the registry path while this handler subscribed under the id. Everything below is retained as historical evidence.
+
 _Authored 2026-08-23 from a real failure in an external consumer. Class: **plan/history** — design and implementation evidence, not current behaviour. Current behaviour is in `docs/INTERNAL-API.md` and the route schema._
 
 ## Bottom line
