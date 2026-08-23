@@ -47,7 +47,7 @@ full Tier-1 orchestration loop:
 2. **Provision** — `POST /sessions`, `POST /sessions/batch`
 3. **Prepare** — `POST /sessions/:id/control`
 4. **Dispatch** — `POST /sessions/:id/prompt`, `POST /sessions/batch/prompt` (optional `idempotencyKey`, always returns a `runId`)
-5. **Monitor** — `GET /sessions/:id/events`, `GET /sessions/:id/wait`, `GET /runs/:runId`
+5. **Monitor** — `GET /sessions/:id/events?mode=snapshot` (bounded read), `GET /sessions/:id/events` (**unbounded SSE — streaming clients only**), `GET /sessions/:id/wait`, `GET /runs/:runId`
 6. **Extract** — `GET /sessions/:id/transcript`, `GET /sessions/:id/history`
 7. **Transfer** — `POST /sessions/:id/transfer`
 8. **Aggregate** — `POST /sessions/usage`
@@ -207,8 +207,16 @@ capacity preflight
 server-side after disconnect. A `tasks` or `full` prompt is a live SSE
 supervision stream, not a durable job; disconnecting that stream cancels the run
 and aborts the runtime. `GET /sessions/:id/events` is useful supervision and
-can replay a bounded recent buffer, but `/wait` + receipts + transcript are the
+can replay a bounded recent buffer (`?mode=snapshot`, or the automatic late-
+subscriber replay), but `/wait` + receipts + transcript are the
 completion evidence for a durable flow.
+
+> **`GET /sessions/:id/events` is an unbounded SSE stream.** Without a `timeout`
+> parameter it ends only when the client disconnects, and its 15-second
+> heartbeat defeats idle timeouts. Never call it from a CLI, script, or agent
+> tool call that waits for the response body — use `?mode=snapshot` for a
+> bounded read, `?timeout=<ms>` (clamped to 300000) for a bounded stream, or
+> `/wait` + `/transcript` instead.
 
 ### Confirming an interactive answer
 
@@ -228,7 +236,8 @@ field before step 2, and do not claim the turn succeeded before step 4.
 ### 5. Monitor child progress
 
 ### Best default for live progress
-- `GET /api/v1/sessions/:id/events`
+- `GET /api/v1/sessions/:id/events?mode=snapshot` — bounded request/response read of recent events; always terminates
+- `GET /api/v1/sessions/:id/events` — live normalized event streaming similar to what the web UI sees. **Unbounded SSE: ends only on client disconnect, and its heartbeat prevents idle timeouts. For streaming clients only** — never call it from a shell command or tool call that waits for the body. Add `?timeout=<ms>` (max 300000) to make the server close the stream with a terminal `complete {reason:"timeout"}` event.
 
 Use this when you want normalized event streaming similar to what the web UI
 sees. It is supervision, not a durable queue; retain the `runId` and use the
@@ -334,7 +343,8 @@ never the production instance by default.
 | Create one child | `/sessions` |
 | Create many children | `/sessions/batch` |
 | Get only final answers | `/sessions/:id/prompt` with `answers`, or `/sessions/batch/prompt` |
-| Watch live progress | `/sessions/:id/events` |
+| Watch a bounded snapshot of recent activity | `/sessions/:id/events?mode=snapshot` |
+| Watch live progress (streaming clients only) | `/sessions/:id/events` — **unbounded SSE stream; never returns for plain HTTP callers** |
 | Wait for completion safely | `/sessions/:id/wait` |
 | Start troubleshooting from any session id | `/sessions/:id/evidence` |
 | Read child output in one common format | `/sessions/:id/transcript?scope=visible_full` |
@@ -385,7 +395,10 @@ A practical orchestration pattern is:
 3. POST /sessions/batch                  # create child sessions
 4. POST /sessions/:id/control            # optional prepare step
 5. POST /sessions/:id/prompt             # dispatch work
-6. GET /sessions/:id/events              # monitor live where appropriate
+6. GET /sessions/:id/events?mode=snapshot  # bounded read of recent activity
+                                           # (bare /events is an UNBOUNDED SSE
+                                           # stream — streaming clients only;
+                                           # add ?timeout=<ms> for a bounded stream)
 7. GET /sessions/:id/wait                # safe completion check
 8. GET /sessions/:id/transcript          # collect result
 9. POST /sessions/:id/transfer           # hand useful context onward

@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.23.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.24.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -333,6 +333,16 @@ export interface WaitResponse {
   sessionId: string;
   status: 'idle' | 'running' | 'error' | 'timeout';
   waitedMs: number;
+}
+
+/** Bounded request/response read of the session event replay buffer (contract 1.24.0).
+ * Returned by `GET /sessions/:id/events?mode=snapshot` — unlike the default mode
+ * this always terminates, so non-streaming clients can call it safely. */
+export interface SessionEventsSnapshotResponse {
+  sessionId: string;
+  mode: 'snapshot';
+  count: number;
+  events: NormalizedEvent[];
 }
 
 export interface TranscriptResponse {

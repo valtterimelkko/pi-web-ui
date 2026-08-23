@@ -21,13 +21,17 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.22.0",
+  "contractVersion": "1.24.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.24.0** (minor, additive bounded reads on `/sessions/:id/events`) — the default `GET /sessions/:id/events` behaviour is unchanged (unbounded SSE subscription that ends only on client disconnect; correct for browser `EventSource` consumers). Two additive opt-ins exist for clients that cannot consume an infinite stream:
+  - `?mode=snapshot` — a plain request/response read: returns `{ sessionId, mode:"snapshot", count, events }` from the broker's replay buffer (oldest first) and closes. Always terminates; safe to call from a CLI, script, or agent tool call.
+  - `?timeout=<ms>` — a bounded SSE stream: identical framing and headers to the default mode, but the server closes the stream after the bound with a terminal `complete` event carrying `reason:"timeout"`. The bound is clamped to `[0, 300000]`, exactly like `/wait`. No `timeout` parameter keeps the historical unbounded behaviour byte-for-byte.
 
 - **1.23.0** (minor, additive Command Code watch subjects) — Command Code sessions can now be the *observed* session of a watch (`POST/GET/DELETE /sessions/:id/watch` with a `commandcode-*` id), completing the watch-wake matrix: any of pi/claude/opencode/antigravity/**commandcode** can be the child, any managed runtime can be the `onFire` wake target. Command Code turns reach the watch from every source (Internal API dispatch, browser, follow-ups) via a service-level observer attached at registration; the subject is pinned with the source-owned `watch:<watchId>` claim via the Command Code service, released on delete/replace. Previously these registrations returned `404 SESSION_NOT_FOUND`.
 - **1.22.0** (minor, additive watch onFire wake) — a watch can now wake a *different* session when a condition fires. This is the runtime-agnostic parent-wake: the watch stays an observer, and an opt-in action dispatches a prompt to the target (typically the idle parent orchestrating the watched child). Adds to `POST /sessions/:id/watch`:

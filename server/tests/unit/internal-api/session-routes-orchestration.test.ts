@@ -361,6 +361,142 @@ describe('createSessionRoutes orchestration endpoints', () => {
       await eventsDone;
     });
 
+    it('mode=snapshot resolves Pi events published under the session path key (regression)', async () => {
+      // Pi publishes broker events under entry.path (the long-lived observer),
+      // not the registry id. Both snapshot and the stream must read that key.
+      const { entry } = await writePiSessionFile('pi-snap', [
+        { type: 'user', content: 'hello', timestamp: 1000 },
+      ]);
+      registry.get.mockResolvedValue(entry);
+      const routes = makeRoutes();
+
+      const promptReq = createJsonReq('POST', '/api/v1/sessions/pi-snap/prompt', {
+        message: 'hi', verbosity: 'answers',
+      });
+      await routes.handleSendPrompt(promptReq, createMockRes(), 'pi-snap');
+
+      const req = createJsonReq('GET', '/api/v1/sessions/pi-snap/events?mode=snapshot');
+      const res = createMockRes();
+      await routes.handleSessionEvents(req, res, 'pi-snap', new URLSearchParams('mode=snapshot'));
+
+      expect(res.isClosed).toBe(true);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      const types = body.events.map((e: NormalizedEvent) => e.type);
+      expect(types).toContain('agent_start');
+      expect(types).toContain('agent_end');
+    });
+
+    it('default stream receives Pi events published under the session path key (regression)', async () => {
+      const { entry } = await writePiSessionFile('pi-stream', [
+        { type: 'user', content: 'hello', timestamp: 1000 },
+      ]);
+      registry.get.mockResolvedValue(entry);
+      const routes = makeRoutes();
+
+      const eventsReq = new PassThrough() as IncomingMessage;
+      (eventsReq as any).method = 'GET';
+      (eventsReq as any).url = '/api/v1/sessions/pi-stream/events';
+      (eventsReq as any).headers = {};
+      const eventsRes = createMockRes();
+      const eventsDone = routes.handleSessionEvents(eventsReq, eventsRes, 'pi-stream');
+      await new Promise((r) => setImmediate(r));
+
+      const promptReq = createJsonReq('POST', '/api/v1/sessions/pi-stream/prompt', {
+        message: 'hi', verbosity: 'answers',
+      });
+      await routes.handleSendPrompt(promptReq, createMockRes(), 'pi-stream');
+
+      const sseEvents = parseSSEChunks(eventsRes.chunks);
+      const types = sseEvents.map((e) => e.event);
+      expect(types).toContain('agent_start');
+      expect(types).toContain('agent_end');
+
+      (eventsRes as any)._closeCb?.();
+      await eventsDone;
+    });
+
+    it('mode=snapshot returns buffered events as bounded JSON and closes the connection', async () => {
+      registry.get.mockResolvedValue(claudeEntry('snap1'));
+      const routes = makeRoutes();
+
+      // Run a prompt first (events get buffered in the broker)
+      const promptReq = createJsonReq('POST', '/api/v1/sessions/snap1/prompt', {
+        message: 'hi', verbosity: 'answers',
+      });
+      await routes.handleSendPrompt(promptReq, createMockRes(), 'snap1');
+
+      // A plain HTTP client asking for a snapshot must get a JSON response
+      // that ENDS — never an open SSE stream.
+      const req = createJsonReq('GET', '/api/v1/sessions/snap1/events?mode=snapshot');
+      const res = createMockRes();
+      await routes.handleSessionEvents(req, res, 'snap1', new URLSearchParams('mode=snapshot'));
+
+      expect(res.isClosed).toBe(true);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.sessionId).toBe('snap1');
+      expect(body.mode).toBe('snapshot');
+      expect(Array.isArray(body.events)).toBe(true);
+      expect(body.count).toBe(body.events.length);
+      const types = body.events.map((e: NormalizedEvent) => e.type);
+      expect(types).toContain('agent_start');
+      expect(types).toContain('agent_end');
+      // Oldest first.
+      expect(types.indexOf('agent_start')).toBeLessThan(types.indexOf('agent_end'));
+    });
+
+    it('mode=snapshot with an empty buffer returns an empty events array', async () => {
+      registry.get.mockResolvedValue(claudeEntry('snap2'));
+      const routes = makeRoutes();
+
+      const req = createJsonReq('GET', '/api/v1/sessions/snap2/events?mode=snapshot');
+      const res = createMockRes();
+      await routes.handleSessionEvents(req, res, 'snap2', new URLSearchParams('mode=snapshot'));
+
+      expect(res.isClosed).toBe(true);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.count).toBe(0);
+      expect(body.events).toEqual([]);
+    });
+
+    it('timeout=<ms> closes the stream cleanly with a terminal timeout event', async () => {
+      registry.get.mockResolvedValue(claudeEntry('b1'));
+      const routes = makeRoutes();
+
+      const req = new PassThrough() as IncomingMessage;
+      (req as any).method = 'GET';
+      (req as any).url = '/api/v1/sessions/b1/events?timeout=50';
+      (req as any).headers = {};
+      const res = createMockRes();
+      await routes.handleSessionEvents(req, res, 'b1', new URLSearchParams('timeout=50'));
+
+      // The handler must RESOLVE (not hang) and close the stream.
+      expect(res.isClosed).toBe(true);
+      const sseEvents = parseSSEChunks(res.chunks);
+      const completeEvent = sseEvents.find((e) => e.event === 'complete');
+      expect(completeEvent).toBeDefined();
+      expect(completeEvent.data.reason).toBe('timeout');
+    });
+
+    it('timeout=0 closes immediately like /wait does for timeout=0', async () => {
+      registry.get.mockResolvedValue(claudeEntry('b2'));
+      const routes = makeRoutes();
+
+      const req = new PassThrough() as IncomingMessage;
+      (req as any).method = 'GET';
+      (req as any).url = '/api/v1/sessions/b2/events?timeout=0';
+      (req as any).headers = {};
+      const res = createMockRes();
+      await routes.handleSessionEvents(req, res, 'b2', new URLSearchParams('timeout=0'));
+
+      expect(res.isClosed).toBe(true);
+      const sseEvents = parseSSEChunks(res.chunks);
+      const completeEvent = sseEvents.find((e) => e.event === 'complete');
+      expect(completeEvent?.data.reason).toBe('timeout');
+    });
+
     it('replays buffered events to late subscribers', async () => {
       registry.get.mockResolvedValue(claudeEntry('c2'));
       const routes = makeRoutes();

@@ -1516,7 +1516,8 @@ any existing endpoint.
 | Create one child | `POST /sessions` | Use for explicit one-off session creation |
 | Create many children | `POST /sessions/batch` | Parallel provisioning helper |
 | Dispatch a prompt and only care about the final answer | `POST /sessions/:id/prompt` with `verbosity=answers` | Simplest request/response path |
-| Watch progress live | `GET /sessions/:id/events` | Best for Pi / OpenCode / Antigravity, and for single-session Claude monitoring |
+| Watch progress live | `GET /sessions/:id/events` | **Unbounded SSE stream — ends only on client disconnect.** Streaming clients (browser `EventSource`) only; never a plain HTTP GET that waits for the body |
+| Read recent activity in one bounded request | `GET /sessions/:id/events?mode=snapshot` | Request/response JSON of the broker's replay buffer; always terminates — the safe choice for scripts and agent tool calls |
 | Wait for a child to finish safely | `GET /sessions/:id/wait` | Recommended fallback for Claude fan-out cases |
 | Read child output in a runtime-agnostic form | `GET /sessions/:id/transcript` | Best default for orchestrators |
 | Read what the user sees by default | `GET /sessions/:id/transcript?view=screen` | Fastest read-only UI-faithful view |

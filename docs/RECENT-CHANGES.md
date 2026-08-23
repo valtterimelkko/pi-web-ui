@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Bounded reads on `/sessions/:id/events` (`1.24.0`, `2026-08-23`)**
+  - The default `GET /api/v1/sessions/:id/events` behaviour is unchanged: an unbounded SSE subscription that ends only on client disconnect (correct for browser `EventSource`). An external consumer that called it as a plain HTTP GET hung for 9,000+ seconds because the 15s heartbeat defeats every idle timeout — the contract around the endpoint was the defect, not the endpoint.
+  - Additive opt-ins: `?mode=snapshot` returns `{ sessionId, mode:"snapshot", count, events }` from the broker's replay buffer as a normal JSON response and closes (always terminates); `?timeout=<ms>` bounds the stream and closes it server-side with a terminal `complete {reason:"timeout"}` event (clamped to `[0, 300000]`, same as `/wait`). No parameters = byte-for-byte historical behaviour.
+  - Docs now mark the endpoint unbounded everywhere it appears in monitoring tables/evidence ladders ([`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md), [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)) and point non-streaming callers at `?mode=snapshot`, `/wait`, or `/transcript`.
+  - Canonical doc: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.24.0)
+
 - **Command Code multi-turn message identity + client load-path fixes (`2026-08-20`)**
   - Synthetic message ids (`commandcode-message-N`) restarted at 1 on every agent turn, so a second turn re-emitted ids already in the journal; replay and the live client keyed messages by id and merged later turns' text into the first turn's bubbles, leaving later turns as empty "Processed" rows. Synthetic ids are now turn-unique (`commandcode-message-<turn>-<n>`), and the client additionally tolerates reused ids in existing journals (later copies are suffixed and routed correctly on both replay fold and live paths).
   - Replayed user bubbles now carry their content over the wire (`normEventToPiFormat` message_start passthrough); previously they rendered empty outside live echo.

@@ -699,7 +699,7 @@ export class InternalApiServer {
 
         if (action === 'events') {
           if (req.method === 'GET') {
-            await deps.sessionRoutes.handleSessionEvents(req, res, sessionId);
+            await deps.sessionRoutes.handleSessionEvents(req, res, sessionId, parsed.query);
           } else {
             sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
           }

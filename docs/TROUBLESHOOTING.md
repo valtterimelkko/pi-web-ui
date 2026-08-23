@@ -246,7 +246,7 @@ curl -s --unix-socket ~/.pi-web-ui/internal-api.sock \
 2. `GET /api/v1/diagnostics` — fast sanity check before deeper digging
 3. `POST /api/v1/sessions` or `/sessions/batch` — create child sessions
 4. `POST /api/v1/sessions/:id/prompt` — dispatch work
-5. `GET /api/v1/sessions/:id/events` — monitor progress when the runtime supports stable SSE monitoring
+5. `GET /api/v1/sessions/:id/events?mode=snapshot` — bounded read of recent events (**always terminates**; the bare `/events` endpoint is an unbounded SSE stream whose heartbeat defeats idle timeouts — never call it from a shell command or tool call that waits for the body, add `?timeout=<ms>` if you need a bounded stream)
 6. `GET /api/v1/sessions/:id/wait` — wait for completion without polling loops in your own code
 7. `GET /api/v1/sessions/:id/transcript` — extract child results in a runtime-agnostic form
 8. `GET /api/v1/sessions/:id/transcript?view=screen` — fetch the UI-faithful view when you need operator-visible state

@@ -52,6 +52,7 @@ import type {
   AggregateUsageResponse,
   PendingApprovalsResponse,
   WaitResponse,
+  SessionEventsSnapshotResponse,
   TranscriptResponse,
   ScreenViewResponse,
   RegisterWatchRequest,
@@ -3714,6 +3715,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     req: IncomingMessage,
     res: ServerResponse,
     sessionId: string,
+    query: URLSearchParams = new URLSearchParams(),
   ): Promise<void> {
     const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     const entry = commandCodeEntry ? undefined : await getNonCommandCodeRegistryEntry(sessionId);
@@ -3722,13 +3724,52 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
+    // Broker key resolution (contract 1.24.0): every publisher keys Pi events
+    // under the registry entry's path (the long-lived observer attached by
+    // attachPiObserverIfNeeded publishes with sessionPath), while Claude,
+    // OpenCode, Antigravity and Command Code publish under their session id.
+    // Subscribing/reading under the same key the publishers use is what makes
+    // both the stream and snapshot mode actually see Pi events.
+    const brokerSessionId = commandCodeEntry?.sessionId
+      ?? (entry?.sdkType === 'pi' && entry.path ? entry.path : sessionId);
+
+    // Bounded snapshot mode (contract 1.24.0): a plain request/response read of
+    // the broker's replay buffer. The default mode below is an unbounded SSE
+    // subscription that only ends when the client disconnects — correct for a
+    // browser EventSource, but indistinguishable from a hang for any client
+    // that waits for the body (CLI, script, agent tool call). Clients that
+    // want "what has happened so far" without holding a stream use this.
+    if (query.get('mode') === 'snapshot') {
+      // For Pi sessions, make sure the long-lived broker observer is attached
+      // before reading, mirroring the default stream path.
+      if (entry?.sdkType === 'pi') {
+        attachPiObserverIfNeeded(entry.path);
+      }
+      const events = broker.getRecentEvents(brokerSessionId);
+      sendJson(res, 200, {
+        sessionId: brokerSessionId,
+        mode: 'snapshot',
+        count: events.length,
+        events,
+      } satisfies SessionEventsSnapshotResponse);
+      return;
+    }
+
+    // Optional bounded stream (contract 1.24.0): `?timeout=<ms>` closes the
+    // stream server-side after the bound with a terminal event naming the
+    // reason. Clamped exactly like /wait. A request with no timeout keeps the
+    // historical unbounded behaviour byte-for-byte.
+    let boundedTimeoutMs: number | undefined;
+    if (query.has('timeout')) {
+      boundedTimeoutMs = Math.min(Math.max(parseInt(query.get('timeout') || '60000', 10), 0), 300000);
+    }
+
     // For Pi sessions, eagerly attach the long-lived broker observer so
     // events emitted by any future prompt reach this subscriber.
     if (entry?.sdkType === 'pi') {
       attachPiObserverIfNeeded(entry.path);
     }
 
-    const brokerSessionId = commandCodeEntry?.sessionId ?? sessionId;
     const sse = createSSEStream(res);
 
     const unsub = broker.subscribe(brokerSessionId, (event) => {
@@ -3751,11 +3792,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // Awaiting the close promise guarantees the response object survives
     // for the lifetime of the subscription.
     await new Promise<void>((resolve) => {
+      let settled = false;
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = () => {
+        if (settled) return;
+        settled = true;
+        if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
         unsub();
         unregisterDispose(); // normal client disconnect removes the handle (no stale handle)
         resolve();
       };
+      if (boundedTimeoutMs !== undefined) {
+        timeoutTimer = setTimeout(() => {
+          try {
+            sse.complete({ reason: 'timeout' });
+          } catch { /* already closed */ }
+          cleanup();
+        }, boundedTimeoutMs);
+        if (timeoutTimer.unref) timeoutTimer.unref();
+      }
       sse.res.on('close', cleanup);
       sse.res.on('error', cleanup);
       req.on('aborted', cleanup);
