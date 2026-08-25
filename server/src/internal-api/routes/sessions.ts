@@ -845,6 +845,37 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     };
   }
 
+  /**
+   * Round-2 §1 (contract 1.26.0): restore bare model ids that worked before
+   * 1.25.0 without weakening honesty. A bare id that matches exactly one
+   * advertised, unblocked Pi model resolves to its qualified selector; an
+   * ambiguous one is rejected with every candidate listed so the caller can
+   * disambiguate; unknown ids pass through to setModel for its canonical error.
+   */
+  async function resolvePiModelSelector(requested: string): Promise<{ selector: string } | { error: string }> {
+    if (requested.includes('/')) return { selector: requested };
+    let models: Array<{ id: string; provider: string }> = [];
+    try {
+      // Structural subset of the SDK Model type: bare-id matching needs only
+      // the advertised provider/id pair.
+      const available = (await piService.getAvailableModels?.()) as unknown;
+      models = Array.isArray(available) ? (available as Array<{ id: string; provider: string }>) : [];
+    } catch {
+      // Catalogue unreadable — fall through and let setModel produce its error.
+      return { selector: requested };
+    }
+    const blocked = new Set(blockedPiProviders.map((p) => p.toLowerCase()));
+    const candidates = models.filter(
+      (m) => m.id === requested && m.provider && !blocked.has(m.provider.toLowerCase()),
+    );
+    if (candidates.length === 0) return { selector: requested };
+    if (candidates.length === 1) return { selector: `${candidates[0].provider}/${candidates[0].id}` };
+    const qualified = candidates.map((m) => `${m.provider}/${m.id}`).join(', ');
+    return {
+      error: `Bare model id '${requested}' is ambiguous: it matches ${candidates.length} advertised models (${qualified}). Use the exact 'provider/model' selector from GET /api/v1/models.`,
+    };
+  }
+
   async function cleanupRejectedCreatedSession(sessionId: string): Promise<void> {
     if (await commandCodeService?.getSession(sessionId)) {
       await commandCodeService?.deleteSession(sessionId);
@@ -1245,11 +1276,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             status: 'idle',
           });
           let resolvedPiModel: string | undefined;
+          // The exact selector applied via setModel — bare ids resolve before
+          // this point, so fallback detection compares like-for-like.
+          let appliedPiSelector: string | undefined;
           try {
             if (body.model) {
               // §1 honesty: an explicit model that cannot be applied must fail
               // loudly here — never silently inherit the previous/default binding.
-              await piService.setModel(status.sessionId, body.model);
+              // Round-2 §1 (contract 1.26.0): bare ids resolve against the live
+              // catalogue first; ambiguous ids are refused with candidates.
+              const resolvedRequest = await resolvePiModelSelector(body.model);
+              if ('error' in resolvedRequest) {
+                await cleanupRejectedCreatedSession(status.sessionId);
+                sendJson(res, 422, enrichedErrorBody(ErrorCode.MODEL_NOT_APPLIED, resolvedRequest.error));
+                return;
+              }
+              appliedPiSelector = resolvedRequest.selector;
+              await piService.setModel(status.sessionId, resolvedRequest.selector);
             }
             const effectiveModel = multiSessionManager.getAgentSession(status.sessionPath)?.model;
             assertResolvedPiModelAllowed(
@@ -1297,7 +1340,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               modelBinding: {
                 ...(body.model ? { requested: body.model } : {}),
                 resolved: resolvedPiModel,
-                fallbackApplied: !body.model || resolvedPiModel !== body.model,
+                fallbackApplied: !body.model || !appliedPiSelector || resolvedPiModel !== appliedPiSelector,
               },
             } : {}),
             cwd,
@@ -5092,6 +5135,145 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sendJson(res, 200, { success: true, watchId: `watch-${sessionId}` });
   }
 
+  /** Opaque resumable cursor: base64url JSON map of {sessionId: lastIndex}. */
+  function encodeWatchCursor(map: Record<string, number>): string {
+    return Buffer.from(JSON.stringify(map), 'utf8').toString('base64url');
+  }
+
+  function decodeWatchCursor(cursor: string): Record<string, number> {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('cursor must be a cursor object previously returned by this endpoint');
+    }
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value;
+    }
+    return out;
+  }
+
+  /**
+   * Round-2 §3 (contract 1.26.0): long-poll wait over one or many watches.
+   *
+   * GET /api/v1/watches/wait?ids=w1,w2[&timeout=<ms>][&cursor=<opaque>]
+   *
+   * Blocks until at least one named watch records a firing the caller has not
+   * seen (per the resume `cursor`), then returns only the new firings plus a
+   * nextCursor; 204 on timeout. Condition evaluation stays entirely server-side
+   * — delivery to whatever called this is that caller's own business. Mirrors
+   * the /sessions/:id/wait long-poll contract, extended from session status to
+   * watch conditions and from one subject to several.
+   */
+  async function handleWatchesWait(
+    req: IncomingMessage,
+    res: ServerResponse,
+    query: URLSearchParams,
+  ): Promise<void> {
+    await watchManager.init();
+
+    const idsRaw = query.get('ids') ?? '';
+    const ids = [...new Set(idsRaw.split(',').map((id) => id.trim()).filter(Boolean))];
+    if (ids.length === 0) {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'ids query parameter is required and must name at least one watch (watch-<sessionId> or bare sessionId)'));
+      return;
+    }
+
+    let timeoutMs = 60_000;
+    if (query.has('timeout')) {
+      const parsedTimeout = parseInt(query.get('timeout') || '', 10);
+      if (!Number.isFinite(parsedTimeout) || parsedTimeout < 0) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'timeout must be a non-negative integer of milliseconds'));
+        return;
+      }
+      timeoutMs = Math.min(parsedTimeout, 300_000);
+    }
+
+    // Parameter validation precedes existence checks so a malformed cursor is
+    // reported as such regardless of whether the named watches happen to exist.
+    let cursorMap: Record<string, number> = {};
+    if (query.has('cursor')) {
+      try {
+        cursorMap = decodeWatchCursor(query.get('cursor') || '');
+      } catch {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'cursor must be an opaque cursor previously returned by this endpoint'));
+        return;
+      }
+    }
+
+    // Resolve ids up-front. Ids are all-or-nothing so a typo cannot silently
+    // narrow a fan-in wait to a subset of children.
+    const sessionIds: string[] = [];
+    for (const id of ids) {
+      const sessionId = id.startsWith('watch-') ? id.slice('watch-'.length) : id;
+      if (!watchManager.get(sessionId)) {
+        sendJson(res, 404, enrichedErrorBody(ErrorCode.WATCH_NOT_FOUND, `No watch found for: ${id}`));
+        return;
+      }
+      sessionIds.push(sessionId);
+    }
+
+    const start = Date.now();
+    let settled = false;
+    const stopPolling = (): void => { settled = true; };
+    req.on('aborted', stopPolling);
+    req.on('error', stopPolling);
+    res.on?.('close', stopPolling);
+
+    /** Collect firings beyond each watch's cursor index; null when nothing new. */
+    const collectNewFirings = (): Array<{ watchId: string; sessionId: string; runtime: string; firings: unknown[]; firingCount: number }> | null => {
+      const results: Array<{ watchId: string; sessionId: string; runtime: string; firings: unknown[]; firingCount: number }> = [];
+      for (const sessionId of sessionIds) {
+        const watch = watchManager.get(sessionId);
+        if (!watch) continue; // deleted mid-wait: contributes nothing new
+        const sinceIndex = Math.min(cursorMap[sessionId] ?? 0, watch.firings.length);
+        if (watch.firings.length > sinceIndex) {
+          results.push({
+            watchId: watch.watchId,
+            sessionId: watch.sessionId,
+            runtime: watch.runtime,
+            firings: watch.firings.slice(sinceIndex),
+            firingCount: watch.firings.length,
+          });
+        }
+      }
+      return results.length > 0 ? results : null;
+    };
+
+    const respondWithFirings = (results: NonNullable<ReturnType<typeof collectNewFirings>>): void => {
+      const nextCursorMap: Record<string, number> = {};
+      for (const result of results) nextCursorMap[result.sessionId] = result.firingCount;
+      sendJson(res, 200, {
+        fired: true,
+        waitedMs: Date.now() - start,
+        watches: results,
+        nextCursor: encodeWatchCursor(nextCursorMap),
+      });
+    };
+
+    // At-least-once-resumable: with no cursor, anything already in the ledger
+    // is returned immediately rather than skipped.
+    const immediate = collectNewFirings();
+    if (immediate) {
+      respondWithFirings(immediate);
+      return;
+    }
+
+    while (!settled) {
+      const elapsed = Date.now() - start;
+      if (elapsed >= timeoutMs) {
+        try { res.writeHead(204); } catch { /* client already gone */ }
+        try { res.end(); } catch { /* already closed */ }
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(500, timeoutMs - elapsed)));
+      const fresh = settled ? null : collectNewFirings();
+      if (!settled && fresh) {
+        respondWithFirings(fresh);
+        return;
+      }
+    }
+  }
+
   async function handleCapacity(_req: IncomingMessage, res: ServerResponse): Promise<void> {
     await runReceipts.init();
     sendJson(res, 200, {
@@ -5163,6 +5345,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     handleRegisterWatch,
     handleGetWatch,
     handleDeleteWatch,
+    handleWatchesWait,
     handleCapacity,
   };
 }

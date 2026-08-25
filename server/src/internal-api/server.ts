@@ -831,6 +831,20 @@ export class InternalApiServer {
         return;
       }
 
+      case 'watches': {
+        // Round-2 §3 (contract 1.26.0): long-poll wait across one or many watches.
+        if (id === 'wait' && !subId) {
+          if (req.method === 'GET') {
+            await deps.sessionRoutes.handleWatchesWait(req, res, parsed.query);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+          return;
+        }
+        sendJson(res, 404, { error: 'Unknown watches endpoint', code: ErrorCode.NOT_FOUND });
+        return;
+      }
+
       case 'health': {
         await deps.healthRoutes.handleHealth(req, res);
         return;

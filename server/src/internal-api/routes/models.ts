@@ -70,6 +70,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             .filter((model) => !blockedPiProviders.has(model.provider.toLowerCase()))
             .map((m) => ({
               id: m.id,
+              selector: `${m.provider}/${m.id}`,
               displayName: m.name || m.id,
               provider: m.provider,
               contextWindow: m.contextWindow,
@@ -88,6 +89,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
           result.claude = [
             {
               id: 'sonnet',
+              selector: 'sonnet',
               displayName: 'Claude Sonnet 4',
               provider: 'anthropic',
               reasoning: true,
@@ -95,6 +97,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             },
             {
               id: 'opus',
+              selector: 'opus',
               displayName: 'Claude Opus 4',
               provider: 'anthropic',
               reasoning: true,
@@ -102,6 +105,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             },
             {
               id: 'haiku',
+              selector: 'haiku',
               displayName: 'Claude Haiku 3.5',
               provider: 'anthropic',
               reasoning: true,
@@ -116,6 +120,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             const provider = profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic';
             const profileModel: ModelInfo = {
               id: `profile:${profile.id}`,
+              selector: `profile:${profile.id}`,
               displayName: profile.label,
               provider,
               reasoning: true,
@@ -135,6 +140,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             const ocModels = await opencodeService.getAvailableModels();
             result.opencode = ocModels.map((m) => ({
               id: m.id,
+              selector: `${m.provider}/${m.id}`,
               displayName: m.name || m.id,
               provider: m.provider,
               contextWindow: m.contextWindow,
@@ -149,7 +155,9 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
       // Command Code models are advertised whenever the runtime is enabled.
       if (commandCodeService && (!runtimeFilter || runtimeFilter === 'commandcode')) {
         await commandCodeService.init?.();
-        result.commandcode = commandCodeService.isEnabled() ? commandCodeService.getModels() : [];
+        result.commandcode = commandCodeService.isEnabled()
+          ? commandCodeService.getModels().map((m) => ({ ...m, selector: m.id }))
+          : [];
       }
 
       // Antigravity models
@@ -159,6 +167,7 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
             const agModels = await antigravityService.getAvailableModels();
             result.antigravity = agModels.map((m) => ({
               id: m.id,
+              selector: m.id,
               displayName: m.name || m.id,
               provider: m.provider,
             }));

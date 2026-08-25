@@ -361,7 +361,7 @@ GET /api/v1/models?runtime=claude
 GET /api/v1/models?runtime=antigravity
 ```
 
-Models are always queried live — new models appear immediately. Each model may include `thinkingLevels`, the runtime-resolved levels accepted by that concrete model. Do not infer model-specific `max` support from the coarse `reasoning` flag.
+Models are always queried live — new models appear immediately. Each entry carries a `selector` field (since contract 1.26.0) whose value is exactly what `POST /sessions` accepts for that runtime — copy it rather than constructing `provider/id` strings yourself (`provider/id` for pi and opencode; the alias or `profile:<id>` form for claude; the native id for commandcode and antigravity). Each model may include `thinkingLevels`, the runtime-resolved levels accepted by that concrete model. Do not infer model-specific `max` support from the coarse `reasoning` flag.
 
 Pi model levels come from the Pi SDK catalogue. Claude's base `sonnet` and `opus` aliases and provider profiles that support the Claude/Z.AI effort ceiling advertise `max`; `haiku` keeps the legacy ceiling. A client should use the selected model's `thinkingLevels` before requesting `max`.
 
@@ -378,10 +378,10 @@ When Command Code is enabled, its entries are what the CLI advertises minus a co
 {
   "models": {
     "pi": [
-      { "id": "claude-sonnet-4-20250514", "displayName": "Claude Sonnet 4", "provider": "anthropic", "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh"] }
+      { "id": "claude-sonnet-4-20250514", "selector": "anthropic/claude-sonnet-4-20250514", "displayName": "Claude Sonnet 4", "provider": "anthropic", "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh"] }
     ],
     "claude": [
-      { "id": "sonnet", "displayName": "Sonnet", "provider": "anthropic", "reasoning": true, "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+      { "id": "sonnet", "selector": "sonnet", "displayName": "Sonnet", "provider": "anthropic", "reasoning": true, "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
       { "id": "opus", "displayName": "Opus", "provider": "anthropic", "reasoning": true, "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
       { "id": "haiku", "displayName": "Haiku", "provider": "anthropic", "reasoning": true, "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh"] },
       {
@@ -618,7 +618,7 @@ GET /api/v1/sessions/:sessionId/info
 `/info` is the preferred endpoint for live validation and local automation.
 Both endpoints now return enriched runtime metadata where available. For a profile-backed Claude session, session info/list `model` is the effective runtime model (for example `sonnet`) and `modelSelector` is the exact creation selector (`profile:<id>`); do not compare those as if they were the same identity category. The create response alone retains its historical selector echo in `model` for backwards compatibility.
 
-**Pi create responses are truthful about the applied model (since contract 1.21.0, 2026-08-19).** For `runtime: "pi"`, the create response's `model` is the model the session actually resolved to (`provider/model`), and `modelSelector` echoes the exact requested selector. A selector the runtime refuses or cannot apply (for example a bare model id without provider) fails the create with `MODEL_NOT_APPLIED` (HTTP 422) after cleaning up the half-created session — it never returns a session silently running a different model.
+**Pi create responses are truthful about the applied model (since contract 1.21.0, 2026-08-19; bare-id resolution since contract 1.26.0, 2026-08-25).** For `runtime: "pi"`, the create response's `model` is the model the session actually resolved to (`provider/model`), and `modelSelector` echoes the exact requested selector. Since 1.26.0 a bare id that matches exactly one advertised, unblocked model is resolved to its qualified selector and binds (with `fallbackApplied: false`); a bare id matching several advertised models fails with `422 MODEL_NOT_APPLIED` listing every candidate. Any other selector the runtime refuses or cannot apply fails with `MODEL_NOT_APPLIED` after cleaning up the half-created session — it never returns a session silently running a different model. Prefer copying the `selector` field from `/models` entries rather than constructing selectors.
 
 **Response (200):**
 ```json
@@ -1984,7 +1984,22 @@ long task is finished. See
 POST   /api/v1/sessions/:sessionId/watch     # register; owns one source-owned watch residency claim
 GET    /api/v1/sessions/:sessionId/watch     # poll: fired conditions + ledger + snapshot
 DELETE /api/v1/sessions/:sessionId/watch     # tear down
+GET    /api/v1/watches/wait                  # long-poll across one or many watches (contract 1.26.0)
 ```
+
+**Long-poll wait (`GET /watches/wait`, contract 1.26.0).** Blocks until at least one named watch records a firing the caller has not seen, then answers in one request — no polling loop:
+
+```
+GET /api/v1/watches/wait?ids=watch-<childA>,watch-<childB>[&timeout=<ms>][&cursor=<opaque>]
+```
+
+| Param | Meaning |
+|---|---|
+| `ids` | Required, comma-separated. Accepts `watch-<sessionId>` or bare session ids. Resolved all-or-nothing: any unknown id → `404 WATCH_NOT_FOUND` naming it. |
+| `timeout` | Max milliseconds to block; clamped `[0, 300000]`, default 60000; junk → `400`. `204` (no body) on timeout. |
+| `cursor` | Opaque `nextCursor` from a previous response. Without it, already-recorded firings are returned immediately; with it, only firings after the cursor are returned. |
+
+Success (`200`) returns `{ fired: true, waitedMs, watches: [{ watchId, sessionId, runtime, firings[], firingCount }], nextCursor }` where each watch's `firings` contains only the new ones and `nextCursor` resumes past them. This makes delivery **at-least-once resumable**: a caller that dies or loses its connection reconnects with the last cursor and receives what it missed. Condition evaluation stays entirely server-side — pure observer watches (no `onFire`) work here exactly like polled ones; what the caller does when the request returns is the caller's own business.
 
 **Register body:**
 ```json

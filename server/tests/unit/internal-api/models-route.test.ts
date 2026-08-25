@@ -406,3 +406,75 @@ describe('createModelsRoutes — handleRefreshModels (runtime=pi)', () => {
     expect(JSON.parse(res.body).code).toBe('INTERNAL_ERROR');
   });
 });
+
+describe('createModelsRoutes — selector field (contract 1.26.0, round-2 defect 2)', () => {
+  it('exposes a copyable selector on every Pi entry equal to what POST /sessions accepts', async () => {
+    const routes = createModelsRoutes({
+      piService: {
+        getAvailableModels: vi.fn().mockResolvedValue([
+          { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', provider: 'openai-codex' },
+        ]),
+      } as any,
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(createMockReq(undefined, 'GET', '/api/v1/models?runtime=pi'), res);
+
+    expect(res.statusCode).toBe(200);
+    const entry = JSON.parse(res.body).models.pi[0];
+    expect(entry.selector).toBe('openai-codex/gpt-5.6-sol');
+  });
+
+  it('exposes selectors across every runtime section', async () => {
+    const routes = createModelsRoutes({
+      piService: {
+        getAvailableModels: vi.fn().mockResolvedValue([
+          { id: 'glm-5.3', name: 'GLM-5.3', provider: 'zai' },
+        ]),
+      } as any,
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getProfiles: vi.fn(() => [
+          { id: 'glm53-claude-sdk-native-profile', label: 'GLM 5.3 SDK', model: 'glm-5.3', backend: 'sdk-subscription', baseUrl: 'https://z.ai/api' },
+        ]),
+      } as any,
+      opencodeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        isEnabled: vi.fn(() => true),
+        getAvailableModels: vi.fn().mockResolvedValue([
+          { id: 'kimi-k2.5', name: 'Kimi K2.5', provider: 'moonshotai' },
+        ]),
+      } as any,
+      antigravityService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getAvailableModels: vi.fn().mockResolvedValue([
+          { id: 'Gemini 3.5 Flash (Medium)', name: 'Gemini 3.5 Flash (Medium)', provider: 'antigravity' },
+        ]),
+      } as any,
+      commandCodeService: {
+        init: vi.fn(),
+        isEnabled: vi.fn(() => true),
+        isAvailable: vi.fn(() => true),
+        getModels: vi.fn().mockReturnValue([
+          { id: 'deepseek/deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'command-code', reasoning: true, effortLevels: ['high'] },
+        ]),
+      } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(createMockReq(undefined, 'GET', '/api/v1/models'), res);
+
+    expect(res.statusCode).toBe(200);
+    const models = JSON.parse(res.body).models;
+    expect(models.pi[0].selector).toBe('zai/glm-5.3');
+    expect(models.claude.find((m: any) => m.id === 'sonnet').selector).toBe('sonnet');
+    const profileEntry = models.claude.find((m: any) => m.id.startsWith('profile:'));
+    expect(profileEntry.selector).toBe('profile:glm53-claude-sdk-native-profile');
+    expect(models.opencode[0].selector).toBe('moonshotai/kimi-k2.5');
+    expect(models.antigravity[0].selector).toBe('Gemini 3.5 Flash (Medium)');
+    expect(models.commandcode[0].selector).toBe('deepseek/deepseek-v4-pro');
+  });
+});

@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.25.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.26.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -971,6 +971,8 @@ export type PromptDispatchResponse = PromptResponse | DuplicatePromptResponse | 
 
 export interface ModelInfo {
   id: string;
+  /** Exactly what POST /sessions accepts for this entry — copy, never construct. */
+  selector?: string;
   displayName?: string;
   provider?: string;
   contextWindow?: number;
@@ -1370,4 +1372,24 @@ export interface WatchResponse {
 export interface DeleteWatchResponse {
   success: boolean;
   watchId?: string;
+}
+
+/** One watch's new firings inside a /watches/wait response. */
+export interface WatchWaitEntry {
+  watchId: string;
+  sessionId: string;
+  runtime: SessionRuntime;
+  /** Firings recorded after the caller's cursor index (new ones only). */
+  firings: WatchFiring[];
+  /** Absolute ledger total — the value to resume from via nextCursor. */
+  firingCount: number;
+}
+
+/** Round-2 §3 (contract 1.26.0): long-poll result for GET /api/v1/watches/wait. */
+export interface WatchesWaitResponse {
+  fired: true;
+  waitedMs: number;
+  watches: WatchWaitEntry[];
+  /** Opaque resumable cursor; pass back as ?cursor= to receive only new firings. */
+  nextCursor: string;
 }

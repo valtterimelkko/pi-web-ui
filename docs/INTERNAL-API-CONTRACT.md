@@ -21,13 +21,19 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.25.0",
+  "contractVersion": "1.26.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.26.0** (minor, additive round-2 consumer fixes) — fixes the round-2 defects reported 2026-08-25 (after 1.25.0). Everything is additive; existing consumers keep working unchanged — including bare model ids, which were a silent regression in 1.25.0 and are restored here:
+  - **Bare model id resolution** — `POST /sessions` with a Pi `model` that is a bare id (no `/`) again binds when it matches exactly one advertised, unblocked model: the qualified selector is applied and `resolvedModel`/`modelBinding.resolved` report the qualified form with `fallbackApplied: false`. A bare id matching several advertised models returns `422 MODEL_NOT_APPLIED` listing every `provider/id` candidate; unknown ids keep failing loudly exactly as in 1.25.0. Blocked providers are excluded from resolution. (1.25.0 rejected all bare ids as format errors despite its "additive" changelog claim.)
+  - **Copyable `selector` on every `/models` entry** — each entry of `GET /api/v1/models` now carries a `selector` field whose value is exactly what `POST /sessions` accepts for that runtime (`provider/id` for pi and opencode; the alias or `profile:<id>` form for claude; the native id for commandcode and antigravity). Discovery clients copy rather than construct selectors.
+  - **Long-poll watch wait** — `GET /api/v1/watches/wait?ids=w1,w2[&timeout=<ms>][&cursor=<opaque>]` blocks until at least one named watch records a firing the caller has not seen, then returns `{ fired: true, waitedMs, watches: [{ watchId, sessionId, runtime, firings[], firingCount }], nextCursor }`; `204` on timeout (bound clamped to `[0, 300000]`, default 60000, junk → `400`). Ids accept `watch-<sessionId>` or bare session ids and are resolved all-or-nothing (`404 WATCH_NOT_FOUND` names any missing one). The opaque `nextCursor` is a resumable cursor: pass it back as `?cursor=` to receive only new firings — at-least-once delivery across reconnects; without a cursor, already-recorded firings are returned immediately. Condition evaluation stays entirely server-side (pure observer watches work); this only removes the polling loop between the consumer and that evaluation. Client disconnects stop the wait cleanly.
+  - The 1.25.0 note that an observed `agent_end` alone does not confirm completion remains authoritative and unchanged (round-2 defect 4 asked to keep it; it is kept).
 
 - **1.25.0** (minor, additive orchestration-honesty surface) — fixes the consumer-reported defects of 2026-08-25. Everything is additive; existing consumers keep working unchanged.
   - **Model binding honesty** — `POST /sessions` no longer silently inherits when an explicit `model` cannot be applied: unresolvable/refused selectors now return `422 MODEL_NOT_APPLIED` and the half-created session is cleaned up. On success the response carries `resolvedModel` (what the session is actually bound to) plus a `modelBinding { requested?, resolved, fallbackApplied }` report; a default/fallback binding is labelled instead of echoed as if requested. Applies to Pi (previously swallowed via non-fatal catch), OpenCode, and Claude paths. The Pi provider policy check still runs on the *resolved* model.
