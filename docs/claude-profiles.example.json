@@ -1,8 +1,8 @@
 {
-  "defaultProfileId": "glm52-claude-sdk-native-profile",
+  "defaultProfileId": "glm53-claude-sdk-native-profile",
   "profiles": [
     {
-      "id": "glm52-claude-sdk-native-profile",
+      "id": "glm53-claude-sdk-native-profile",
       "label": "GLM 5.3 — Claude SDK",
       "backend": "sdk-subscription",
       "launcherType": "native-env",
@@ -75,7 +75,7 @@
       "enabled": true
     },
     {
-      "id": "glm52-claude-cli-direct",
+      "id": "glm53-claude-cli-direct",
       "label": "GLM 5.3 — Claude CLI direct fallback",
       "backend": "cli-direct",
       "launcherType": "native-env",

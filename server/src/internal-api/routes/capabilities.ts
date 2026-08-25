@@ -172,6 +172,9 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
         backend: p.backend,
         launcherType: p.launcherType,
         model: p.model,
+        // Contract 1.25.0: the documented selection predicate reads `claudeModel`.
+        // Emit it alongside `model` so both discovery surfaces agree.
+        claudeModel: p.model,
         provider: p.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic',
         enabled: p.enabled,
       }));

@@ -47,7 +47,7 @@ CLAUDE_BACKEND_DEFAULT=direct
 {
   "profiles": [
     { "id": "claude-sonnet-sdk", "label": "Claude Sonnet — SDK", ... },
-    { "id": "glm52-claude-sdk",  "label": "GLM 5.3 — Claude SDK", ... }
+    { "id": "glm53-claude-sdk",  "label": "GLM 5.3 — Claude SDK", ... }
   ],
   "defaultProfileId": "claude-sonnet-sdk"
 }
@@ -106,7 +106,7 @@ The `modelAliases` entry overrides Claude's internal sonnet alias to resolve to 
 
 ```json
 {
-  "id": "glm52-claude-sdk",
+  "id": "glm53-claude-sdk",
   "label": "GLM 5.3 — Claude SDK",
   "backend": "sdk-subscription",
   "launcherType": "native-env",
@@ -166,7 +166,7 @@ Uses `claude -p` subprocess dispatch with profile-resolved env instead of the SD
 
 ```json
 {
-  "id": "glm52-claude-cli-direct",
+  "id": "glm53-claude-cli-direct",
   "label": "GLM 5.3 — CLI Direct",
   "backend": "cli-direct",
   "launcherType": "native-env",
@@ -244,8 +244,8 @@ The IDs below are **illustrative examples**, not fixed built-ins. Your actual ID
 | Claude | SDK | sonnet/opus/haiku | `claude-sonnet-sdk-subscription`, `claude-opus-sdk-subscription`, `claude-haiku-sdk-subscription` |
 | Claude | CLI direct | sonnet/opus/haiku | `claude-{sonnet,opus,haiku}-cli-direct` |
 | Claude | Channel | sonnet/opus/haiku | `claude-{sonnet,opus,haiku}-channel` |
-| GLM | SDK | (single) | `glm52-claude-sdk-native-profile` |
-| GLM | CLI direct | (single) | `glm52-claude-cli-direct` |
+| GLM | SDK | (single) | `glm53-claude-sdk-native-profile` |
+| GLM | CLI direct | (single) | `glm53-claude-cli-direct` |
 
 Channel profiles require `CLAUDE_CHANNEL_ENABLED=true`.
 
@@ -270,9 +270,9 @@ npm run validate:server -- --env-file .env.production \
 npm run validate:claude-profiles -- \
   --socket "$VAL_DIR/internal-api.sock" \
   --token-path "$VAL_DIR/internal-api-token" \
-  --glm-profile "glm52-claude-sdk" \
+  --glm-profile "glm53-claude-sdk" \
   --native-profile "claude-sonnet-sdk" \
-  --direct-profile "glm52-claude-cli-direct"
+  --direct-profile "glm53-claude-cli-direct"
 ```
 
 `--env-file` is important when the normal service receives
@@ -303,7 +303,7 @@ Run a subset by name:
 ```bash
 npm run validate:claude-profiles -- \
   --socket <sock> --token-path <token> \
-  --glm-profile glm52-claude-sdk \
+  --glm-profile glm53-claude-sdk \
   --only sdk-model-identity,tool-visibility
 ```
 
@@ -312,7 +312,7 @@ Test simultaneous Claude + GLM sessions with zero cross-contamination:
 ```bash
 npx tsx scripts/concurrency-test.ts \
   --socket <sock> --token-path <token> \
-  --profiles claude-sonnet-sdk,glm52-claude-sdk
+  --profiles claude-sonnet-sdk,glm53-claude-sdk
 ```
 
 ## Failure modes and diagnosis

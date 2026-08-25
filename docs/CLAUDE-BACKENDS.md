@@ -196,7 +196,7 @@ Claude backend.
 **GLM/Z.ai profile example** (uses GLM Coding Plan subscription token):
 ```json
 {
-  "id": "glm52-claude-sdk",
+  "id": "glm53-claude-sdk",
   "label": "GLM 5.3 — Claude SDK",
   "backend": "sdk-subscription",
   "launcherType": "native-env",
@@ -381,9 +381,9 @@ npm run validate:server -- --env-file .env.production \
 npm run validate:claude-profiles -- \
   --socket "$VAL_DIR/internal-api.sock" \
   --token-path "$VAL_DIR/internal-api-token" \
-  --glm-profile "glm52-claude-sdk" \
+  --glm-profile "glm53-claude-sdk" \
   --native-profile "claude-sonnet-sdk" \
-  --direct-profile "glm52-claude-cli-direct"
+  --direct-profile "glm53-claude-cli-direct"
 ```
 
 This validates:

@@ -385,7 +385,7 @@ When Command Code is enabled, its entries are what the CLI advertises minus a co
       { "id": "opus", "displayName": "Opus", "provider": "anthropic", "reasoning": true, "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
       { "id": "haiku", "displayName": "Haiku", "provider": "anthropic", "reasoning": true, "thinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh"] },
       {
-        "id": "profile:glm52-claude-sdk",
+        "id": "profile:glm53-claude-sdk",
         "displayName": "GLM 5.3 — Claude SDK",
         "provider": "zai",
         "backend": "sdk-subscription",
@@ -496,7 +496,7 @@ POST /api/v1/sessions
 {
   "runtime": "claude",
   "cwd": "/home/user/myproject",
-  "model": "profile:glm52-claude-sdk",
+  "model": "profile:glm53-claude-sdk",
   "retention": {
     "mode": "resident",
     "ttlSeconds": 7200,
@@ -510,7 +510,7 @@ POST /api/v1/sessions
 |---|---|---|---|---|
 | `runtime` | string | **Yes** | — | `pi`, `claude`, `opencode`, `antigravity`, or feature-gated `commandcode` |
 | `cwd` | string | No | `process.cwd()` | Working directory |
-| `model` | string | No | runtime default | Model ID (from `/models`). For Claude, may be a base alias such as `sonnet` or a specific profile entry such as `profile:glm52-claude-sdk`; Command Code requires one exact discovered id: `qwen/qwen3.8-max` or `meta/muse-spark-1.2-contributor`. |
+| `model` | string | No | runtime default | Model ID (from `/models`). For Claude, may be a base alias such as `sonnet` or a specific profile entry such as `profile:glm53-claude-sdk`; Command Code requires one exact discovered id: `qwen/qwen3.8-max` or `meta/muse-spark-1.2-contributor`. |
 | `thinkingLevel` | string | No | runtime default | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use the selected model's `thinkingLevels` from `/models` as the capability source. Not used by Command Code native effort. |
 | `effort` | `low`, `medium`, `high`, `xhigh`, or `max` | Command Code only | model default | Native Command Code effort. Use only the selected model's `effortLevels` from `/models`; a model without a selector rejects any value. Unsupported values fail closed. |
 | `retention` | object | No | — | Required source-owned lease. `durable` preserves recoverability without forcing runtime residency; `resident` additionally keeps the runtime loaded. Requires `ownerId`; optional `ttlSeconds` (default 24h, max 7d) and `label`. Creation rolls back if the guarantee fails. |
@@ -526,9 +526,9 @@ POST /api/v1/sessions
   "sessionId": "a1b2c3d4-...",
   "sessionPath": "a1b2c3d4-...",
   "runtime": "claude",
-  "model": "profile:glm52-claude-sdk",
-  "modelSelector": "profile:glm52-claude-sdk",
-  "executionInstanceId": "glm52-claude-sdk",
+  "model": "profile:glm53-claude-sdk",
+  "modelSelector": "profile:glm53-claude-sdk",
+  "executionInstanceId": "glm53-claude-sdk",
   "cwd": "/home/user/myproject",
   "createdAt": "2026-04-28T12:00:00.000Z",
   "pinned": true,
@@ -567,10 +567,10 @@ GET /api/v1/sessions
       "sessionId": "a1b2c3d4-...",
       "sessionPath": "a1b2c3d4-...",
       "runtime": "claude",
-      "executionInstanceId": "glm52-claude-sdk",
+      "executionInstanceId": "glm53-claude-sdk",
       "cwd": "/home/user/myproject",
       "model": "sonnet",
-      "modelSelector": "profile:glm52-claude-sdk",
+      "modelSelector": "profile:glm53-claude-sdk",
       "status": "idle",
       "messageCount": 14,
       "firstMessage": "Write a function that...",
@@ -626,14 +626,14 @@ Both endpoints now return enriched runtime metadata where available. For a profi
   "sessionId": "a1b2c3d4-...",
   "sessionPath": "a1b2c3d4-...",
   "runtime": "claude",
-  "executionInstanceId": "glm52-claude-sdk",
+  "executionInstanceId": "glm53-claude-sdk",
   "backendMode": "sdk",
   "nativeSessionId": "claude-native-id",
   "sessionFile": "/root/.pi-web-ui/claude-sessions/a1b2c3d4-....jsonl",
   "cwd": "/home/user/myproject",
   "model": "sonnet",
-  "modelSelector": "profile:glm52-claude-sdk",
-  "claudeProfileId": "glm52-claude-sdk",
+  "modelSelector": "profile:glm53-claude-sdk",
+  "claudeProfileId": "glm53-claude-sdk",
   "claudeProfileBackend": "sdk-subscription",
   "claudeProviderId": "zai",
   "status": "idle",
@@ -854,8 +854,8 @@ The lookup returns the persisted receipt directly:
   "runId": "7d7b1d9d-1a32-4c7a-9bd0-000000000001",
   "sessionId": "a1b2c3d4-…",
   "runtime": "claude",
-  "executionInstanceId": "glm52-claude-sdk",
-  "model": "profile:glm52-claude-sdk",
+  "executionInstanceId": "glm53-claude-sdk",
+  "model": "profile:glm53-claude-sdk",
   "status": "completed",
   "acceptedAt": "2026-07-15T12:00:00.000Z",
   "startedAt": "2026-07-15T12:00:00.100Z",

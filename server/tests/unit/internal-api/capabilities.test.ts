@@ -65,7 +65,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.24.0',
+        contractVersion: '1.25.0',
       },
       features: {
         retentionLeases: true,
@@ -179,6 +179,29 @@ describe('createCapabilitiesRoutes', () => {
         'qwen/qwen3.8-max': { supportsEffort: true, effortLevels: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
       },
     });
+  });
+
+  it('exposes claudeModel on every claudeProfiles entry so the documented selection predicate is satisfiable (contract 1.25.0)', async () => {
+    const routes = createCapabilitiesRoutes({
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getBackendMode: vi.fn().mockResolvedValue('sdk'),
+        getProfiles: vi.fn().mockReturnValue([
+          { id: 'glm53-claude-sdk-native-profile', label: 'GLM 5.3 \u2014 Claude SDK', backend: 'sdk-subscription', launcherType: 'native-env', model: 'sonnet', enabled: true, baseUrl: 'https://api.z.ai/api/anthropic' },
+          { id: 'claude-sonnet-sdk-subscription', label: 'Claude Sonnet \u2014 SDK subscription', backend: 'sdk-subscription', launcherType: 'native-env', model: 'sonnet', enabled: true },
+        ]),
+      } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+    const body = JSON.parse(res.body);
+    expect(body.claudeProfiles).toHaveLength(2);
+    for (const profile of body.claudeProfiles) {
+      expect(profile.claudeModel).toBe('sonnet');
+      expect(profile.model).toBe('sonnet');
+    }
   });
 
   it('publishes the full Command Code model projection alongside effort evidence', async () => {

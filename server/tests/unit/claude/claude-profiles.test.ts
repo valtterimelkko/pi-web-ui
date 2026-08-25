@@ -169,6 +169,55 @@ describe('ClaudeProfileManager', () => {
     expect(mgr.getDefaultProfileId()).toBe('glm52-claude-sdk');
   });
 
+  it('resolves the glm52→glm53 renamed ids in both directions (owner-approved 1.25.0 rename)', () => {
+    // Config stored under NEW id; a consumer still asking for the LEGACY id resolves.
+    writeFileSync(
+      profilesPath,
+      JSON.stringify({
+        profiles: [{ ...glmNativeEnvProfile(), id: 'glm53-claude-sdk-native-profile', label: 'GLM 5.3 — Claude SDK' }],
+        defaultProfileId: 'glm53-claude-sdk-native-profile',
+      }),
+    );
+    const mgr = new ClaudeProfileManager({ profilesPath });
+    mgr.load();
+    expect(mgr.getProfile('glm52-claude-sdk-native-profile')?.id).toBe('glm53-claude-sdk-native-profile');
+    expect(mgr.requireProfile('glm52-claude-sdk-native-profile').id).toBe('glm53-claude-sdk-native-profile');
+    // And vice versa: config still stored under the LEGACY id (pre-migration)
+    // also serves requests using the modern name.
+    writeFileSync(
+      profilesPath,
+      JSON.stringify({
+        profiles: [glmNativeEnvProfile()],
+        defaultProfileId: 'glm52-claude-sdk',
+      }),
+    );
+    const mgr2 = new ClaudeProfileManager({ profilesPath });
+    mgr2.load();
+    expect(mgr2.getProfile('glm53-claude-sdk')?.id).toBe('glm52-claude-sdk');
+    expect(mgr2.requireProfile('glm53-claude-sdk').id).toBe('glm52-claude-sdk');
+    // Production-shaped ids: glm52-claude-sdk-native-profile ↔ glm53-…-native-profile
+    writeFileSync(
+      profilesPath,
+      JSON.stringify({
+        profiles: [{ ...glmNativeEnvProfile(), id: 'glm53-claude-sdk-native-profile' }],
+        defaultProfileId: 'glm53-claude-sdk-native-profile',
+      }),
+    );
+    const mgr3 = new ClaudeProfileManager({ profilesPath });
+    mgr3.load();
+    expect(mgr3.requireProfile('glm52-claude-sdk-native-profile').id).toBe('glm53-claude-sdk-native-profile');
+  });
+
+  it('does not alias unrelated unknown ids (still PROFILE_NOT_FOUND)', () => {
+    writeFileSync(
+      profilesPath,
+      JSON.stringify({ profiles: [glmNativeEnvProfile()], defaultProfileId: 'glm52-claude-sdk' }),
+    );
+    const mgr = new ClaudeProfileManager({ profilesPath });
+    mgr.load();
+    expect(() => mgr.requireProfile('totally-unknown')).toThrow(/Profile not found/);
+  });
+
   it('returns empty when file does not exist', () => {
     const mgr = new ClaudeProfileManager({ profilesPath: join(tmpDir, 'nope.json') });
     mgr.load();

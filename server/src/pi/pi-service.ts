@@ -6,6 +6,7 @@ import {
   type AgentSession,
   type AgentSessionEvent,
 } from '@earendil-works/pi-coding-agent';
+import type { Api, Model } from '@earendil-works/pi-ai';
 import { config } from '../config.js';
 import type { SessionInfo } from '@pi-web-ui/shared';
 import { createWebUIContext, createCommandContextActions, type WebUIContext } from './extension-ui-adapter.js';
@@ -543,7 +544,7 @@ export class PiService {
     await fs.unlink(sessionPath);
   }
 
-  async getAvailableModels() {
+  async getAvailableModels(): Promise<readonly Model<Api>[]> {
     await this.initialize();
     const models = await this.getModelRuntime().getAvailable();
 

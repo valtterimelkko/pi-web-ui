@@ -21,13 +21,21 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.24.0",
+  "contractVersion": "1.25.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.25.0** (minor, additive orchestration-honesty surface) — fixes the consumer-reported defects of 2026-08-25. Everything is additive; existing consumers keep working unchanged.
+  - **Model binding honesty** — `POST /sessions` no longer silently inherits when an explicit `model` cannot be applied: unresolvable/refused selectors now return `422 MODEL_NOT_APPLIED` and the half-created session is cleaned up. On success the response carries `resolvedModel` (what the session is actually bound to) plus a `modelBinding { requested?, resolved, fallbackApplied }` report; a default/fallback binding is labelled instead of echoed as if requested. Applies to Pi (previously swallowed via non-fatal catch), OpenCode, and Claude paths. The Pi provider policy check still runs on the *resolved* model.
+  - **Authoritative retention in `/info`** — `GET /sessions/:id/info` now includes a top-level `retention { protected, leases[{ leaseId, mode, expiresAt }], latestExpiryAt? }`, so the endpoint a consumer uses for confirmation agrees with the create response.
+  - **Session liveness** — `/info` and the session list now derive live status from runtime state (`busy: true` while an in-flight turn exists) instead of stale registry status.
+  - **Run work-state honesty** — run receipts expose top-level `cessation` and a derived `workState`. A terminal `completed` status whose runtime cessation was never confirmed reports `workState: "turn_ended_unconfirmed"`; `completed` is reserved for confirmed cessation (`documented_handler_return` or resource quiescence). Note: an observed `agent_end` alone does **not** confirm work completion — a detached child can yield its turn awaiting a wake while its nested work continues, and the two are indistinguishable from the turn boundary. Consumers needing certainty should require confirmed cessation or verify output independently. Mirrors are omitted inside bounded evidence bundles where `liveness.cessation` remains available.
+  - **Transcript `limit`** — `GET /sessions/:id/transcript?limit=<n>` honours a caller window (integer 1–500, junk/oversized → `400 INVALID_REQUEST`) instead of always capping `visible_recent` at 20; the applied limit is echoed in the response.
+  - **Claude profile field alignment** — `/capabilities.claudeProfiles` entries now carry `claudeModel` alongside `model`, matching `/models` profile entries and the documented selection predicate.
 
 - **1.24.0** (minor, additive bounded reads on `/sessions/:id/events`) — the default `GET /sessions/:id/events` behaviour is unchanged (unbounded SSE subscription that ends only on client disconnect; correct for browser `EventSource` consumers). Two additive opt-ins exist for clients that cannot consume an infinite stream:
   - `?mode=snapshot` — a plain request/response read: returns `{ sessionId, mode:"snapshot", count, events }` from the broker's replay buffer (oldest first) and closes. Always terminates; safe to call from a CLI, script, or agent tool call.

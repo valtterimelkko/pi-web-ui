@@ -875,6 +875,41 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  /** Bounded-bundle projection: drop §5 top-level mirrors, keep raw evidence. */
+  function compactReceiptForEvidenceBundle(receipt: RunReceipt): RunReceipt {
+    const { cessation: _cessation, workState: _workState, ...rest } = receipt;
+    return rest;
+  }
+
+  /** §2: one authoritative answer to "is this session protected, and until when?" */
+  function retentionProtection(sessionId: string): NonNullable<SessionDetail['retention']> {
+    const now = Date.now();
+    const leases = (pinExpiry?.listLeases(sessionId) ?? [])
+      .filter((lease) => lease.pinnedUntil > now)
+      .map((lease) => ({
+        leaseId: lease.leaseId,
+        mode: (lease.mode ?? 'resident') as 'durable' | 'resident',
+        expiresAt: new Date(lease.pinnedUntil).toISOString(),
+      }));
+    const latestExpiryAt = leases.map((l) => l.expiresAt).sort().at(-1);
+    return {
+      protected: leases.length > 0,
+      leases,
+      ...(latestExpiryAt ? { latestExpiryAt } : {}),
+    };
+  }
+
+  /** §2/§6: live status + busy flag + authoritative retention on every session detail. */
+  function finalizeSessionDetail(detail: SessionDetail, entry: RegistryEntry): SessionDetail {
+    const liveStatus = evidenceStatus(entry);
+    if (liveStatus === 'running' || detail.status === undefined || detail.status === 'idle') {
+      detail.status = liveStatus === 'running' ? 'running' : (detail.status ?? liveStatus);
+    }
+    detail.busy = liveStatus === 'running';
+    detail.retention = retentionProtection(entry.id);
+    return detail;
+  }
+
   function evidenceRetention(sessionId: string): SessionEvidenceResponse['retention'] {
     const now = Date.now();
     const leases = (pinExpiry?.listLeases(sessionId) ?? []).filter((lease) => lease.pinnedUntil > now);
@@ -1129,6 +1164,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sessionPath: sessionId,
             runtime: 'claude',
             model: profileId !== undefined ? `profile:${profileId}` : (body.model || 'sonnet'),
+            resolvedModel: profileId !== undefined ? `profile:${profileId}` : (body.model || 'sonnet'),
+            modelBinding: {
+              ...(body.model ? { requested: body.model } : {}),
+              resolved: profileId !== undefined ? `profile:${profileId}` : (body.model || 'sonnet'),
+              fallbackApplied: !body.model,
+            },
             ...(profileId !== undefined ? { modelSelector: `profile:${profileId}`, executionInstanceId: profileId } : {}),
             cwd,
             createdAt: new Date().toISOString(),
@@ -1147,7 +1188,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           }
           const { sessionId } = await opencodeService.createSession(cwd);
           if (body.model) {
-            await opencodeService.setModel?.(sessionId, body.model).catch(() => { /* non-fatal */ });
+            // §1 honesty: a refused/unresolvable model must fail loudly, never
+            // leave the session on an unrequested default.
+            try {
+              await opencodeService.setModel?.(sessionId, body.model);
+            } catch (error) {
+              await cleanupRejectedCreatedSession(sessionId);
+              sendJson(res, 422, enrichedErrorBody(
+                ErrorCode.MODEL_NOT_APPLIED,
+                `Requested model '${body.model}' was not applied to the created session${error instanceof Error ? `: ${error.message}` : ''}`,
+              ));
+              return;
+            }
           }
           if (body.thinkingLevel) {
             await opencodeService.setThinkingLevel(sessionId, body.thinkingLevel);
@@ -1192,15 +1244,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             messageCount: 0,
             status: 'idle',
           });
-          if (body.model) {
-            await piService.setModel(status.sessionId, body.model).catch(() => { /* non-fatal */ });
-          }
-          const effectiveModel = multiSessionManager.getAgentSession(status.sessionPath)?.model;
+          let resolvedPiModel: string | undefined;
           try {
+            if (body.model) {
+              // §1 honesty: an explicit model that cannot be applied must fail
+              // loudly here — never silently inherit the previous/default binding.
+              await piService.setModel(status.sessionId, body.model);
+            }
+            const effectiveModel = multiSessionManager.getAgentSession(status.sessionPath)?.model;
             assertResolvedPiModelAllowed(
               effectiveModel ? `${effectiveModel.provider}/${effectiveModel.id}` : body.model,
               blockedPiProviders,
             );
+            resolvedPiModel = effectiveModel ? `${effectiveModel.provider}/${effectiveModel.id}` : undefined;
           } catch (error) {
             if (error instanceof PiProviderNotAllowedError) {
               multiSessionManager.disposeLoadedSession(status.sessionPath);
@@ -1209,7 +1265,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               sendPiProviderPolicyError(res, error);
               return;
             }
-            throw error;
+            await cleanupRejectedCreatedSession(status.sessionId);
+            sendJson(res, 422, enrichedErrorBody(
+              ErrorCode.MODEL_NOT_APPLIED,
+              `Requested model '${body.model}' was not applied to the created session${error instanceof Error ? `: ${error.message}` : ''}`,
+            ));
+            return;
+          }
+          if (body.model && !resolvedPiModel) {
+            await cleanupRejectedCreatedSession(status.sessionId);
+            sendJson(res, 422, enrichedErrorBody(
+              ErrorCode.MODEL_NOT_APPLIED,
+              `Requested model '${body.model}' could not be confirmed as bound; refusing to fall back silently`,
+            ));
+            return;
           }
           if (body.thinkingLevel) {
             const agentSession = multiSessionManager.getAgentSession(status.sessionPath);
@@ -1222,7 +1291,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sessionId: status.sessionId,
             sessionPath: status.sessionPath,
             runtime: 'pi',
-            model: body.model,
+            model: resolvedPiModel ?? body.model,
+            ...(resolvedPiModel ? { resolvedModel: resolvedPiModel } : {}),
+            ...(resolvedPiModel ? {
+              modelBinding: {
+                ...(body.model ? { requested: body.model } : {}),
+                resolved: resolvedPiModel,
+                fallbackApplied: !body.model || resolvedPiModel !== body.model,
+              },
+            } : {}),
             cwd,
             createdAt: new Date().toISOString(),
           };
@@ -1332,20 +1409,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   ): Promise<void> {
     try {
       const all = (await sessionRegistry.listAll()).filter((entry) => entry.sdkType !== 'commandcode');
-      const sessions: SessionInfo[] = all.map((entry) => ({
-        sessionId: entry.id,
-        sessionPath: entry.path,
-        runtime: entry.sdkType as SessionRuntime,
-        executionInstanceId: resolveExecutionInstanceId(entry),
-        cwd: entry.cwd,
-        model: entry.model,
-        modelSelector: modelSelectorForEntry(entry),
-        status: entry.status,
-        messageCount: entry.messageCount,
-        firstMessage: entry.firstMessage,
-        createdAt: entry.createdAt,
-        lastActivity: entry.lastActivity,
-      }));
+      const sessions: SessionInfo[] = all.map((entry) => {
+        // §6: surface live liveness, not stale registry status.
+        const liveStatus = evidenceStatus(entry);
+        return {
+          sessionId: entry.id,
+          sessionPath: entry.path,
+          runtime: entry.sdkType as SessionRuntime,
+          executionInstanceId: resolveExecutionInstanceId(entry),
+          cwd: entry.cwd,
+          model: entry.model,
+          modelSelector: modelSelectorForEntry(entry),
+          status: liveStatus,
+          busy: liveStatus === 'running',
+          messageCount: entry.messageCount,
+          firstMessage: entry.firstMessage,
+          createdAt: entry.createdAt,
+          lastActivity: entry.lastActivity,
+        };
+      });
       if (commandCodeService && commandCodeService.isEnabled()) {
         const commandCodeSessions = await commandCodeService.listSessions();
         sessions.push(...commandCodeSessions.map(commandCodeSessionInfo));
@@ -1417,7 +1499,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         used: context?.tokens,
         percent: context?.percent,
       };
-      return detail;
+      return finalizeSessionDetail(detail, entry);
     }
 
     if (entry.sdkType === 'opencode') {
@@ -1446,7 +1528,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         used: context?.tokens,
         percent: context?.percent,
       };
-      return detail;
+      return finalizeSessionDetail(detail, entry);
     }
 
     if (entry.sdkType === 'antigravity') {
@@ -1466,7 +1548,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           totalMessages: stats.totalMessages,
         };
       }
-      return detail;
+      return finalizeSessionDetail(detail, entry);
     }
 
     const agentSession = multiSessionManager.getAgentSession(entry.path);
@@ -1499,7 +1581,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         percent: context?.percent ?? undefined,
       };
     }
-    return detail;
+    return finalizeSessionDetail(detail, entry);
   }
 
   async function handleGetSession(
@@ -1738,7 +1820,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         receiptSummary: {
           durable: true,
           count: receipts.length,
-          ...(receipts[0] ? { latest: receipts[0] } : {}),
+          // Bounded bundle: keep the raw status + nested liveness evidence, but
+          // omit the §5 top-level mirrors, which are redundant derivations.
+          ...(receipts[0] ? { latest: compactReceiptForEvidenceBundle(receipts[0]) } : {}),
         },
         retention: evidenceRetention(entry.id),
         residency: evidenceResidency(entry),
@@ -4172,7 +4256,28 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         | 'visible_recent'
         | 'visible_full';
 
-      const loaded = await loadSessionTranscript(entry, scope);
+      // §8: honour a caller-supplied limit instead of always capping
+      // visible_recent at 20. Junk or oversized limits are loud 400s.
+      const TRANSCRIPT_MAX_LIMIT = 500;
+      let limit: number | undefined;
+      const limitParam = query.get('limit');
+      if (limitParam !== null) {
+        const parsed = Number(limitParam);
+        if (!Number.isInteger(parsed) || parsed < 1 || parsed > TRANSCRIPT_MAX_LIMIT) {
+          sendJson(res, 400, enrichedErrorBody(
+            ErrorCode.INVALID_REQUEST,
+            `limit must be an integer between 1 and ${TRANSCRIPT_MAX_LIMIT}`,
+          ));
+          return;
+        }
+        limit = parsed;
+      }
+      // A custom window wider than the recent cap needs the full extraction.
+      const effectiveScope = limit !== undefined && limit > 20 && scope === 'visible_recent'
+        ? 'visible_full'
+        : scope;
+
+      const loaded = await loadSessionTranscript(entry, effectiveScope);
       const transcriptResult = loaded.transcript;
       const transcriptError = loaded.error;
       if (transcriptError && transcriptResult.itemCount === 0) {
@@ -4180,16 +4285,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
-      const t = transcriptResult;
+      let t = transcriptResult;
+      if (limit !== undefined && t.items.length > limit) {
+        t = { ...t, items: t.items.slice(-limit), itemCount: limit, truncated: true };
+      }
       sendJson(res, 200, {
         sessionId: entry.id,
         runtime: entry.sdkType as SessionRuntime,
         scope: t.scope,
         itemCount: t.itemCount,
         truncated: t.truncated,
+        ...(limit !== undefined ? { limit } : {}),
         items: t.items,
         source: t.source,
-      } satisfies TranscriptResponse);
+      } satisfies TranscriptResponse & { limit?: number });
     } catch (err) {
       logger.errorObject('Failed to build transcript', err);
       sendJson(res, 500, { error: 'Failed to build transcript', code: ErrorCode.INTERNAL_ERROR });

@@ -373,9 +373,9 @@ npm run validate:server -- --env-file .env.production \
 npm run validate:claude-profiles -- \
   --socket "$VAL_DIR/internal-api.sock" \
   --token-path "$VAL_DIR/internal-api-token" \
-  --glm-profile "glm52-claude-sdk" \
+  --glm-profile "glm53-claude-sdk" \
   --native-profile "claude-sonnet-sdk" \
-  --direct-profile "glm52-claude-cli-direct"
+  --direct-profile "glm53-claude-cli-direct"
 ```
 
 Flags:
@@ -399,7 +399,7 @@ For concurrency testing (simultaneous sessions, zero cross-contamination):
 ```bash
 npx tsx scripts/concurrency-test.ts \
   --socket <sock> --token-path <token> \
-  --profiles claude-sonnet-sdk,glm52-claude-sdk
+  --profiles claude-sonnet-sdk,glm53-claude-sdk
 ```
 
 See [`CLAUDE-PROVIDER-PROFILES.md`](./CLAUDE-PROVIDER-PROFILES.md) for profile setup and the full field reference.

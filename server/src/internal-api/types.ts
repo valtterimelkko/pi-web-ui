@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.24.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.25.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -351,6 +351,8 @@ export interface TranscriptResponse {
   scope: 'visible_recent' | 'visible_full';
   itemCount: number;
   truncated: boolean;
+  /** Echoed caller window when `?limit=` was applied (additive since 1.25.0). */
+  limit?: number;
   items: Array<{
     kind: 'user' | 'assistant' | 'tool';
     text: string;
@@ -562,6 +564,10 @@ export interface CreateSessionResponse {
   model?: string;
   /** Canonical creation selector when it differs from the runtime model (for example profile:<id>). */
   modelSelector?: string;
+  /** Model the session is actually bound to right now — never assume the echo. Additive since 1.25.0. */
+  resolvedModel?: string;
+  /** Honest binding report: `fallbackApplied` is true whenever no model was requested or the requested one could not be honoured. Additive since 1.25.0. */
+  modelBinding?: { requested?: string; resolved: string; fallbackApplied: boolean };
   effort?: CommandCodeEffort;
   defaultEffort?: CommandCodeEffort;
   /** Configured runtime instance resolved for the created session. */
@@ -589,9 +595,15 @@ export interface SessionInfo {
   model?: string;
   /** Canonical creation selector, additive for exact profile-backed routes. */
   modelSelector?: string;
+  /** Model actually bound at creation, when it may differ from the requested echo. Additive since 1.25.0. */
+  resolvedModel?: string;
+  /** Honest binding report for session creation. Additive since 1.25.0. */
+  modelBinding?: { requested?: string; resolved: string; fallbackApplied: boolean };
   effort?: CommandCodeEffort;
   defaultEffort?: CommandCodeEffort;
   status: 'idle' | 'running' | 'error';
+  /** Live per-session liveness: true while the runtime has an in-flight turn, regardless of registry staleness. Additive since 1.25.0. */
+  busy?: boolean;
   messageCount: number;
   firstMessage: string;
   createdAt: string;
@@ -603,6 +615,12 @@ export interface SessionInfo {
 
 export interface SessionDetail extends SessionInfo {
   backendMode?: RuntimeBackendMode;
+  /** Authoritative answer to "is this session retention-protected, and until when?". Additive since 1.25.0. */
+  retention?: {
+    protected: boolean;
+    leases: Array<{ leaseId: string; mode: 'durable' | 'resident'; expiresAt: string }>;
+    latestExpiryAt?: string;
+  };
   /** Latest run-scoped usage observed from a terminal result, when available. */
   tokenUsage?: RunTokenUsage;
   nativeSessionId?: string;
@@ -745,6 +763,9 @@ export type RunReceiptStatus =
   | 'failed'
   | 'cancelled'
   | 'interrupted';
+
+/** Headline work-state: distinguishes "the turn ended" from "the dispatched work finished". Additive since 1.25.0. */
+export type RunWorkState = 'running' | 'completed' | 'turn_ended_unconfirmed' | 'failed' | 'cancelled' | 'interrupted';
 
 export type RunStallReason = 'idle' | 'absolute';
 export type RunCessationState = 'confirmed' | 'unconfirmed' | 'unknown';
@@ -911,6 +932,10 @@ export interface RunReceipt {
   startedAt?: string;
   agentEndAt?: string;
   terminalAt?: string;
+  /** Top-level mirror of `liveness.cessation` so consumers need not dig two levels down. Additive since 1.25.0. */
+  cessation?: { state: RunCessationState; basis: string; observedAt: string };
+  /** Honest headline state: `completed` only when cessation is confirmed; a stop signal without confirmed cessation reports `turn_ended_unconfirmed`. Additive since 1.25.0. */
+  workState?: RunWorkState;
   /** Stable wire error code for failed or restart-interrupted runs. */
   errorCode?: string;
   interruptionReason?: 'server_restart';
@@ -1072,6 +1097,18 @@ export interface CapabilitiesResponse {
     /** Internal-API-only runtime; older clients may ignore the additive key. */
     commandcode: RuntimeCapabilities;
   };
+  /** Claude provider profiles, non-secret fields only. `claudeModel` added in 1.25.0 so the documented profile-selection predicate is satisfiable from this surface too. */
+  claudeProfiles?: Array<{
+    id: string;
+    label: string;
+    backend?: 'sdk-subscription' | 'cli-direct' | 'channel';
+    launcherType?: string;
+    /** Underlying model alias (sonnet/opus/haiku); same value as `claudeModel`. */
+    model?: string;
+    claudeModel?: string;
+    provider?: string;
+    enabled?: boolean;
+  }>;
 }
 
 export interface RuntimeHealthEntry {

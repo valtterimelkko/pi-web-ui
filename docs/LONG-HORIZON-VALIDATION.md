@@ -167,7 +167,7 @@ Subject / behaviour:
 |---|---|---|
 | `--subject <runtime>` | `pi` | create a fresh subject of this runtime |
 | `--session <id>` | — | attach to an existing subject instead |
-| `--model <id>` | runtime default | model to use when creating a fresh subject. For Claude this may be a base alias such as `sonnet` or a profile-backed entry such as `profile:glm52-claude-sdk`. |
+| `--model <id>` | runtime default | model to use when creating a fresh subject. For Claude this may be a base alias such as `sonnet` or a profile-backed entry such as `profile:glm53-claude-sdk`. |
 | `--seed "<prompt>"` | — | initial prompt to drive the subject (dispatched without blocking) |
 | `--stop all\|any` | `all` | succeed when all (or any) target condition fires |
 | `--interval <seconds>` | `30` | poll cadence |
@@ -216,7 +216,7 @@ npm run validate:long-horizon -- \
   --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" \
   --subject claude \
-  --model profile:glm52-claude-sdk \
+  --model profile:glm53-claude-sdk \
   --seed "Work until you can truthfully say LONG_HORIZON_OK." \
   --watch-text LONG_HORIZON_OK \
   --keep-watch \

@@ -8,6 +8,7 @@ import type {
   RunActivityObservation,
   RunReceipt,
   RunReceiptStatus,
+  RunWorkState,
   RunStallReason,
   RunTokenUsage,
   RunOutputEvidence,
@@ -753,6 +754,24 @@ function isTerminal(status: RunReceiptStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'interrupted';
 }
 
+/**
+ * §5 honesty (contract 1.25.0): the headline status must distinguish "this turn
+ * ended" from "this work finished". A `completed` stop signal with cessation
+ * never confirmed (e.g. a child that yielded its turn awaiting a wake) reports
+ * `turn_ended_unconfirmed`, never a plain `completed`.
+ */
+export function deriveRunWorkState(
+  status: RunReceiptStatus,
+  cessation?: { state: string; basis: string; observedAt: string },
+): RunWorkState {
+  if (status === 'failed') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'interrupted') return 'interrupted';
+  if (!isTerminal(status)) return 'running';
+  if (status === 'completed' && cessation?.state === 'confirmed') return 'completed';
+  return 'turn_ended_unconfirmed';
+}
+
 const FORCE_PERSIST_ACTIVITY_TYPES = new Set([
   'extension_ui_request',
   'permission_request',
@@ -892,6 +911,11 @@ function toPublicReceipt(record: PersistedRunReceipt): RunReceipt {
   const publicReceipt = { ...record };
   delete publicReceipt.idempotencyKeyDigest;
   delete publicReceipt.requestFingerprint;
+  // §5 hoisting (1.25.0): mirror cessation top-level and expose the honest
+  // headline work-state alongside the raw terminal status.
+  const cessation = publicReceipt.liveness?.cessation;
+  if (cessation) publicReceipt.cessation = { ...cessation };
+  publicReceipt.workState = deriveRunWorkState(publicReceipt.status, cessation);
   return publicReceipt;
 }
 

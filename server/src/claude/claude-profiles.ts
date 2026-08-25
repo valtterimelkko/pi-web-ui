@@ -149,6 +149,18 @@ export class ClaudeProfileManager {
   private _loaded = false;
   private readonly profilesPath: string;
 
+  /**
+   * Owner-approved id migration (contract 1.25.0 era): GLM profile ids were
+   * renamed from `glm52-*` to `glm53-*` because the underlying model is
+   * GLM-5.3. Both directions resolve so config files and stored session
+   * references migrate independently without breaking lookups.
+   */
+  private static readonly LEGACY_ID_ALIASES: ReadonlyArray<readonly [string, string]> = [
+    ['glm52-claude-sdk-native-profile', 'glm53-claude-sdk-native-profile'],
+    ['glm52-claude-cli-direct', 'glm53-claude-cli-direct'],
+    ['glm52-claude-sdk', 'glm53-claude-sdk'],
+  ];
+
   constructor(opts: { profilesPath: string }) {
     this.profilesPath = opts.profilesPath;
   }
@@ -194,15 +206,25 @@ export class ClaudeProfileManager {
     if (!this._loaded) this.load();
   }
 
+  /** Resolve a possibly-renamed profile id to whichever form exists on disk. */
+  private resolveAlias(id: string): string {
+    if (this.profiles.has(id)) return id;
+    for (const [legacyId, modernId] of ClaudeProfileManager.LEGACY_ID_ALIASES) {
+      if (id === legacyId && this.profiles.has(modernId)) return modernId;
+      if (id === modernId && this.profiles.has(legacyId)) return legacyId;
+    }
+    return id;
+  }
+
   getProfile(id: string): ClaudeProfile | undefined {
     this.ensureLoaded();
-    return this.profiles.get(id);
+    return this.profiles.get(this.resolveAlias(id));
   }
 
   /** Get an enabled profile or throw. */
   requireProfile(id: string): ClaudeProfile {
     this.ensureLoaded();
-    const profile = this.profiles.get(id);
+    const profile = this.profiles.get(this.resolveAlias(id));
     if (!profile) {
       throw new ClaudeProfileError(
         `Profile not found: ${id}`,
