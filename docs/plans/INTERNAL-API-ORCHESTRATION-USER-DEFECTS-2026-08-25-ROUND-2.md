@@ -2,7 +2,9 @@
 
 _From a consuming agent's seat, 2026-08-25, after contract **1.25.0**. Round 1 is [`INTERNAL-API-ORCHESTRATION-USER-DEFECTS-2026-08-25.md`](./INTERNAL-API-ORCHESTRATION-USER-DEFECTS-2026-08-25.md); this round both confirms what 1.25.0 fixed and reports what the fix introduced._
 
-The consuming workload was a real one: a **3½-hour MEM-4 memory-consolidation run** in `/root/agent-os`, one durable Pi child on `openai-codex/gpt-5.6-sol`, which itself dispatched four GLM harness workers. The parent was a **bare Claude Code CLI** — a harness the server cannot prompt — which is why the watch-side items below matter.
+The consuming workload was a real one: a **3½-hour MEM-4 memory-consolidation run** in `/root/agent-os`, one durable Pi child on `openai-codex/gpt-5.6-sol`, which itself dispatched four GLM harness workers.
+
+**Everything in this round is fixable server-side.** Nothing here asks for a change to any CLI harness, and nothing here asks the server to deliver a wake into a process it cannot prompt — that limitation is real, accepted, and deliberately out of scope. Item 3 is a long-poll endpoint that a consumer holds a connection on; the server never reaches into the consumer.
 
 ---
 
@@ -69,13 +71,17 @@ Then the error hint becomes true, discovery clients copy rather than construct, 
 
 ---
 
-## 3. A watch cannot be waited on — only polled
+## 3. A watch can only be polled, never waited on
 
-**Severity: medium. This is a feature request, not a regression**, and it is the only part of the round-1 wake story still open.
+**Severity: medium. A feature request, not a regression** — and explicitly **not** a request to wake anything.
 
-**Context, including a correction to my own round-1 framing.** I previously treated "a bare Claude CLI has no wake path" as meaning the watch system was unavailable to such a parent. That was wrong, and the docs are right: `onFire` **delivery** cannot reach a bare CLI, but that parent can still `POST /sessions/:id/watch` with no `onFire` (a pure observer) and read it via `GET /sessions/:id/watch`, getting the server's own condition evaluation and durable ledger. Not doing so cost me three incorrect hand-rolled stuck-detectors before I got one right. The gap below is real, but narrower than round 1 implied.
+**Scope, stated up front so this is not confused with the wake question.** Round 1 raised "dispatch and walk away does not hold for every supported harness". That item is **closed and withdrawn**: some consumers cannot be prompted by the server, that cannot be fixed from the server side, and it should not be attempted. This item is unrelated to it.
 
-**How the gap was observed.** Watching one child for 93 minutes required a 60-second poll loop — roughly 93 cycles against `/info` and `/runs/:runId`. The child finished at **13:35**; my detector reached that conclusion at **13:53**. An 18-minute lag, and only by *inferring an absence* (session quiet, every dispatched worker terminal) rather than observing an event.
+What is asked for here is a **long-poll endpoint the consumer calls and holds open**. Delivery stays entirely on the consumer's side; the server answers a request when a condition fires, exactly as `GET /sessions/:id/wait?status=idle&timeout=` already does for session status. No harness changes, no injection, no wake targets.
+
+**A correction to round 1 while I am here.** I previously implied the watch system was unusable to a consumer that cannot be an `onFire` target. That was wrong, and the docs are right: such a consumer can still `POST /sessions/:id/watch` with no `onFire` (a pure observer) and read it via `GET /sessions/:id/watch`, getting the server's own condition evaluation and durable ledger. Not realising that cost me three incorrect hand-rolled stuck-detectors. **The observer watch is the right answer and it already exists** — the only gap left is that reading it means polling.
+
+**How the gap was observed.** Watching one child for 93 minutes meant a 60-second poll loop — roughly 93 cycles against `/info` and `/runs/:runId`. The child finished at **13:35**; the loop concluded so at **13:53**. An 18-minute lag, reached by *inferring an absence* rather than observing an event. Any consumer that polls — a shell script, a cron job, CI, a daemon — pays the same cost.
 
 **What would fix it.**
 
@@ -85,7 +91,7 @@ GET /api/v1/watches/wait?ids=<w1,w2,…>&since=<cursor>&timeout=<ms>
 
 Long-poll: block until one of the named watches fires, return the fired event(s) plus a new cursor, `204` on timeout.
 
-Why this shape rather than another delivery mode: **a bare CLI's wake primitive is "a subprocess exits."** A blocking HTTP call that returns *is* an exit. So this hands the server's full condition vocabulary to any consumer that can spawn a subprocess — Claude Code, a shell script, cron, CI — without the server needing to reach into any of them. It decouples **condition evaluation** (server-side, already built and correct) from **wake delivery** (client-side, harness-specific), which are currently welded together.
+Why this shape: it decouples **condition evaluation** — server-side, already built, already correct — from whatever the consumer does when the call returns, which is the consumer's own business and none of the server's. A caller that can hold an HTTP request open gets the full condition vocabulary without the server knowing or caring what it is. That is the same contract `GET /sessions/:id/wait` already honours; this extends it from session status to watch conditions.
 
 Three properties, in value order:
 
