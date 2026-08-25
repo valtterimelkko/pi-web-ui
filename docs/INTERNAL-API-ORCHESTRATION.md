@@ -118,7 +118,7 @@ This lets you decide:
 - which models are currently available without restarting the server
 - for Claude specifically, whether you want a base alias (`sonnet`) or an explicit profile-backed model (`profile:<id>`) tied to a chosen backend/provider
 
-When `GET /api/v1/models` returns Claude entries such as `profile:glm52-claude-sdk`, treat those as the safest way to request an exact Claude provider/backend route. They may also include `backend` and `claudeModel` metadata so you can deliberately choose SDK vs direct vs channel-backed paths.
+When `GET /api/v1/models` returns Claude entries such as `profile:glm53-claude-sdk`, treat those as the safest way to request an exact Claude provider/backend route. They may also include `backend` and `claudeModel` metadata so you can deliberately choose SDK vs direct vs channel-backed paths.
 
 ### 2. Create child sessions
 
