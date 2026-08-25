@@ -10,7 +10,7 @@ import {
 
 /**
  * Regression tests for the 2026-08-21 rate-limit incident (see
- * PIWEBUIRATELIMITANDSESSIONHYGIENEFIXES.md):
+ * docs/plans/PI-WEB-UI-RATE-LIMIT-AND-SESSION-HYGIENE-FIXES.md):
  *
  * - The global limiter used to sit BEFORE express.static and the SPA fallback,
  *   charging every asset request against the same budget as API calls. It must

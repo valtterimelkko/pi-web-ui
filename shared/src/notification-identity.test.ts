@@ -1,7 +1,7 @@
 /**
  * Tests for the canonical notification opt-in identity helper.
  *
- * The Pi dual-id desync (docs/NOTIFICATION-OPTIN-IDENTITY-FIX-PLAN.md) is fixed
+ * The Pi dual-id desync (docs/plans/NOTIFICATION-OPTIN-IDENTITY-FIX-PLAN.md) is fixed
  * by keying every notification opt-in on the same stable bare-UUID that the v2
  * session-metadata layer uses. These tests pin the extraction + canonicalization
  * against real prod-derived values (basename / bare-uuid / `.jsonl` path).
@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { piSessionIdFromPath, canonicalOptInId } from './notification-identity.js';
 
-// Real prod-derived values (see docs/NOTIFICATION-OPTIN-IDENTITY-FIX-PLAN.md §2).
+// Real prod-derived values (see docs/plans/NOTIFICATION-OPTIN-IDENTITY-FIX-PLAN.md §2).
 const UUID = '019f23d5-624d-7ca3-b34c-53b6732c2b44';
 const BASENAME = `2026-07-02T17-16-54-733Z_${UUID}`;
 const PATH = `/root/.pi/agent/sessions/--root-pi-web-ui--/${BASENAME}.jsonl`;

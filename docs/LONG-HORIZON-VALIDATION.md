@@ -54,6 +54,12 @@ All endpoints are additive under `/api/v1` (watch support was introduced in
 contract `1.1.0`; the `onFire` wake action was added in `1.22.0`). There is one watch
 per session.
 
+> **Watch subjects include Command Code (contract `1.23.0`).** A `commandcode-*`
+> session is a valid observed subject: its turns reach the watch from every
+> source (Internal API dispatch, browser, follow-ups), and Command Code sessions
+> are equally valid `onFire` wake targets. See the
+> [Watch section of `INTERNAL-API.md`](./INTERNAL-API.md#watch-long-horizon-validation).
+
 ### Register a watch
 
 ```

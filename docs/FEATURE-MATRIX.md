@@ -7,6 +7,7 @@ Use this matrix to distinguish behavior owned by this repository from behavior s
 | Browser login and shell | Yes | No | No | Core server/client behavior |
 | Unified session sidebar | Yes | Yes | No | Runtime adapters provide underlying sessions |
 | Streaming chat | Yes | Yes | No | Antigravity is batch-oriented with synthetic liveness rather than native token streaming |
+| Mid-run steer / follow-up | Yes | Yes | No | Pi native (steer joins before the next model call; follow-up runs when the run finishes); Claude SDK delivers steer at the next tool boundary and queues follow-up as its own turn; Command Code steer interrupts the turn and re-delivers as the next prompt, follow-up queued server-side. Channel-backed and cli-direct Claude sessions do **not** steer. See [`PROTOCOL.md`](./PROTOCOL.md) |
 | Transcript replay | Yes | Yes | No | Storage ownership differs by runtime |
 | Session pin/archive/display name | Yes | No | No | Stored through core metadata/preferences paths |
 | Model selection | Yes | Yes | No | Available models and thinking levels come from runtime capability data |

@@ -1,6 +1,6 @@
 # Pi Web UI Docs
 
-> **What's new?** See [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) for a rolling summary of doc-relevant changes. Recent highlights include Internal API `1.14.0` durable payload-free liveness and bounded recovery evidence; `1.13.0` truthful dispatch, approval, watchdog, and Pi identity semantics; and `1.12.0` source-owned retention/admission.
+> **What's new?** See [`RECENT-CHANGES.md`](./RECENT-CHANGES.md) for a rolling summary of doc-relevant changes, and the [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) changelog for the authoritative contract version history.
 
 This folder supports **four distinct reading paths**. Choose by task instead of reading the documentation linearly.
 
@@ -39,6 +39,7 @@ Then use the resolved internal id with `GET /api/v1/sessions/<id>/evidence`. Fol
 ### Day-to-day features
 
 - [`FILES-TAB.md`](./FILES-TAB.md) — file browsing, Markdown editing, truncation and save safety
+- [`DRIVE-MODE.md`](./DRIVE-MODE.md) — distraction-reduced, voice-first overlay for quick session creation/continuation
 - [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) — automatic per-session Telegram notifications
 - [`SELF-NOTIFICATIONS.md`](./SELF-NOTIFICATIONS.md) — explicit terminal-agent/script notifications
 - [`DURABILITY-MATRIX.md`](./DURABILITY-MATRIX.md) — what survives browser refresh and server restart
@@ -89,6 +90,8 @@ If you are changing code, debugging a runtime, or operating this repo as a live 
 - [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md)
 - [`PROTOCOL.md`](./PROTOCOL.md)
 - [`OBSERVABILITY.md`](./OBSERVABILITY.md)
+- [`SESSION-METADATA.md`](./SESSION-METADATA.md) — unified v2 archived/pinned/display-name metadata model
+- [`HEADROOM-TYPE-CONTEXT-LAYER.md`](./HEADROOM-TYPE-CONTEXT-LAYER.md) — context-compression design note (researched, not yet implemented)
 - [`SHARP-EDGES.md`](./SHARP-EDGES.md)
 - [`DOCS-GOVERNANCE.md`](./DOCS-GOVERNANCE.md) — source-of-truth hierarchy and documentation-impact checklist
 

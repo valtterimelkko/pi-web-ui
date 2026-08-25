@@ -7,7 +7,7 @@
  * `enrichSubagentEvent` helper (called by `EventForwarder.mapEventToMessage` for
  * the single-client path AND by `MultiSessionManager.handleAgentEvent` for the
  * multi-session browser path). Asserts the resulting `resultSummary` matches
- * docs/SUBAGENT-CARD-ENRICHMENT-PLAN.md §2c EXACTLY (model strings, tool counts,
+ * docs/plans/SUBAGENT-CARD-ENRICHMENT-PLAN.md §2c EXACTLY (model strings, tool counts,
  * turns, tokens, cost) and that the heavy inner `messages` transcript is stripped
  * (bloat guard).
  *

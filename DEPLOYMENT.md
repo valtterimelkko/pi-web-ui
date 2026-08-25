@@ -57,7 +57,7 @@ Nginx is also perfectly viable, and an example is included below.
 
 ## Production Checklist
 
-- [ ] Use Node.js 22.19+ (Pi SDK 0.80.10 requirement)
+- [ ] Use Node.js 22.19+ (Pi SDK 0.84.x requirement)
 - [ ] Set strong `JWT_SECRET` and `CSRF_SECRET`
 - [ ] Set a real `AUTH_PASSWORD` / hash
 - [ ] Set `ALLOWED_ORIGINS` correctly
@@ -87,6 +87,18 @@ Nginx is also perfectly viable, and an example is included below.
 | `CSRF_SECRET` | strong random secret |
 | `AUTH_PASSWORD` | password or bcrypt hash |
 | `ALLOWED_ORIGINS` | frontend origins allowed to connect |
+
+### Rate limiting and session hygiene
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `RATE_LIMIT_WINDOW_MS` | `60000` | rate-limit window; applies to `/api` only (static assets and the SPA are never counted) |
+| `RATE_LIMIT_MAX_REQUESTS` | `100` | max `/api` requests per window |
+| `SESSION_AUTO_ARCHIVE_DAYS` | `30` | auto-archive sessions with no activity for this many days (reversible; `0` disables) |
+| `SESSION_RETENTION_MIN_DWELL_DAYS` | `7` | minimum dwell in the archived state before the 90-day retention delete is eligible |
+| `SESSION_CLEANUP_DRY_RUN` | `true` | dry-run: cleanup only logs what it would unpin/archive/delete; set `false` to act |
+
+Background and incident evidence: [`docs/plans/PI-WEB-UI-RATE-LIMIT-AND-SESSION-HYGIENE-FIXES.md`](./docs/plans/PI-WEB-UI-RATE-LIMIT-AND-SESSION-HYGIENE-FIXES.md) (resolved 2026-08-21, `f092fc2`).
 
 ### Internal API and local orchestration
 
@@ -550,7 +562,7 @@ curl --silent --unix-socket "$SOCKET" \
   | jq '{status, contract: .contract.contractVersion, runtimes}'
 ```
 
-The expected Internal API contract version is `1.19.0`; `1.14.0` added bounded payload-free liveness/watchdog/cessation and recovery evidence, `1.15.0` made operator-disabled runtimes explicit, `1.16.0` added the Internal API-only Pi-provider execution policy, `1.18.0` added run-scoped Command Code usage evidence, and `1.19.0` adds bounded normalized-output evidence. In production, keep `INTERNAL_API_BLOCKED_PI_PROVIDERS=openai,openrouter` unless Internal API automation is intentionally authorised to use those providers; this does not affect browser model use, dictation/Drive Mode dictation, or TTS.
+The expected Internal API contract version is published by `GET /api/v1/health` and recorded with its full changelog in [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md) — that file is the version authority; do not maintain a second version summary here. In production, keep `INTERNAL_API_BLOCKED_PI_PROVIDERS=openai,openrouter` unless Internal API automation is intentionally authorised to use those providers; this does not affect browser model use, dictation/Drive Mode dictation, or TTS.
 A public readiness check can be run in addition after the Internal API is ready:
 
 ```bash

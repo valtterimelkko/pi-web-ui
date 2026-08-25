@@ -1,10 +1,10 @@
 # Notification Layer — MVP Execution Plan
 
-> Historical implementation plan. The canonical current-state docs are [`NOTIFICATIONS.md`](./NOTIFICATIONS.md), [`INTERNAL-API.md`](./INTERNAL-API.md), and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md).
+> Historical implementation plan. The canonical current-state docs are [`NOTIFICATIONS.md`](../NOTIFICATIONS.md), [`INTERNAL-API.md`](../INTERNAL-API.md), and [`INTERNAL-API-CONTRACT.md`](../INTERNAL-API-CONTRACT.md).
 >
 > **Status:** Implemented and archived. This plan records the original TDD
 > decisions and execution history; it is **not** an instruction to start a new
-> implementation. Read [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) for current
+> implementation. Read [`NOTIFICATIONS.md`](../NOTIFICATIONS.md) for current
 > behaviour, configuration, and operations.
 > **Author of plan:** Planning agent (Opus 4.8), 2026-06-29.
 > **Execution note:** the original plan's pre-implementation gap analysis is
@@ -20,7 +20,7 @@
 > explicitly provision a disposable Pi agent directory. **Retry note:** the
 > shipped manager uses a fixed five-second retry timer; any
 > "backoff" wording in the historical plan is not an exponential-backoff
-> promise. Use [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) for current semantics.
+> promise. Use [`NOTIFICATIONS.md`](../NOTIFICATIONS.md) for current semantics.
 
 ---
 
@@ -261,7 +261,7 @@ interface NotificationChannel {
 }
 ```
 
-**Outbox semantics (historical design wording):** enqueue on build; a dispatcher drains pending records; on success mark `sent`; on failure increment `attempts`, record `lastError`, retry up to a configurable cap, then mark `failed` (and keep it in the log for ops). The shipped manager uses a fixed five-second retry timer, not exponential backoff; see [`NOTIFICATIONS.md`](./NOTIFICATIONS.md). The outbox **survives restart** — on boot, re-load pending records and resume draining. Bound the delivery log (cap N most recent, like the watch ledger caps firings).
+**Outbox semantics (historical design wording):** enqueue on build; a dispatcher drains pending records; on success mark `sent`; on failure increment `attempts`, record `lastError`, retry up to a configurable cap, then mark `failed` (and keep it in the log for ops). The shipped manager uses a fixed five-second retry timer, not exponential backoff; see [`NOTIFICATIONS.md`](../NOTIFICATIONS.md). The outbox **survives restart** — on boot, re-load pending records and resume draining. Bound the delivery log (cap N most recent, like the watch ledger caps firings).
 
 **De-dupe / debounce:** coalesce multiple `agent_end`s for the same session within `NOTIFICATIONS_DEBOUNCE_MS` into one notification (default e.g. 1500 ms). Each notification carries a stable id so a retry never double-sends.
 
@@ -352,8 +352,8 @@ Add to `config.ts` (mirror existing `process.env.X || default` style) and docume
 > implementation acceptance plan. They are not a current runbook or permission
 > to target production. Current disposable validation intentionally covers Pi,
 > Claude, and OpenCode; Antigravity requires an explicitly authorised workflow
-> because its conversation data cannot be isolated. Use [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
-> and [`NOTIFICATIONS.md`](./NOTIFICATIONS.md) for current commands and delivery
+> because its conversation data cannot be isolated. Use [`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md)
+> and [`NOTIFICATIONS.md`](../NOTIFICATIONS.md) for current commands and delivery
 > semantics.
 
 ### 8.1 Static gates (historical gate definition)

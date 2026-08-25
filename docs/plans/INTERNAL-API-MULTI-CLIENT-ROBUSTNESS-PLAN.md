@@ -1,6 +1,6 @@
 # Internal API Multi-Client Robustness Plan
 
-**Status:** Implemented and validated; production deployment pending authorization
+**Status:** Implemented and validated (shipped as contract `1.8.0` in `a3ba3a9`, 2026-07-16). The earlier "production deployment pending authorization" line is stale: the contract is now `1.26.0` and every later version builds on this machinery. Production deployment status is **unverified against the live service from repository evidence alone — owner to confirm** (flagged 2026-08-25 during the docs refresh). Treat the implementation itself as closed, not as pending work.
 **Risk:** High (local control-plane startup, durable notification state, deployment tooling)
 **Approach:** Test-first, incremental, single-process/single-operator architecture
 

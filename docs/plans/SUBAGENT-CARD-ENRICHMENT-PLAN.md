@@ -6,8 +6,8 @@
 > shipped: reopened Pi sessions restore only compact `subagent` /
 > `evaluated_subagent` cards using `SubagentToolSummary`; inner transcripts,
 > commands, and final reports are not replayed. For current behaviour, inspect
-> [`EVENT-PIPELINE.md`](./EVENT-PIPELINE.md) and
-> [`CODEBASE-MAP.md`](./CODEBASE-MAP.md). The executor checklist below is
+> [`EVENT-PIPELINE.md`](../EVENT-PIPELINE.md) and
+> [`CODEBASE-MAP.md`](../CODEBASE-MAP.md). The executor checklist below is
 > historical evidence, not a request to repeat the implementation.
 
 ---

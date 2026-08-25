@@ -1,14 +1,14 @@
 # Plan: Fix notification opt-in desync (Pi dual-id) via canonical `pi:<uuid>` identity
 
 > **Status:** implemented and archived. The current contract is in
-> [`NOTIFICATIONS.md`](./NOTIFICATIONS.md). This file records the original TDD
+> [`NOTIFICATIONS.md`](../NOTIFICATIONS.md). This file records the original TDD
 > plan and evidence; do not restart the implementation from this checklist.
 > **Owner runtime of the original bug:** Pi (Claude / OpenCode / Antigravity were
 > unaffected). The shipped implementation normalizes Pi notification opt-ins to
 > the stable bare UUID derived from the session path without changing
 > `session.id` or the rename/pin/archive model.
 > **Current validation boundary:** the old validation checklist below is
-> historical. Use [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) for current
+> historical. Use [`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md) for current
 > commands; disposable `--runtime all` covers Pi, Claude, and OpenCode, while
 > Antigravity requires explicit authorisation and may touch real `~/.gemini`
 > state. Production validation is never implied by this archived plan.
@@ -280,7 +280,7 @@ and **no double-notifications**. Nothing about the visual/interaction design cha
 ## 7. Historical validation evidence (archived; not a current runbook)
 
 The original plan required the checks below, but this file is now archived. Use
-[`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) for current commands and safety rules;
+[`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md) for current commands and safety rules;
 disposable `--runtime all` covers Pi, Claude, and OpenCode, while Antigravity
 requires explicit authorisation because its conversation store cannot be isolated.
 Do not copy historical no-argument or production-targeting commands from this
@@ -316,7 +316,7 @@ plan mentions it.
 > This subsection records the original operator-specific acceptance procedure.
 > It is **not current permission** to touch production. Do not run it from this
 > archived plan: obtain explicit, present authorisation and follow the current
-> production exception in [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) instead.
+> production exception in [`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md) instead.
 > Past claims about operator permission, topology, credentials, or deployment
 > must be re-verified before any action.
 
@@ -349,7 +349,7 @@ or execute the commands below.
 4. `npm run build`
 5. `npm test` (root — client + server + shared workspaces) + the targeted notification tests.
 6. Historical live-validation evidence in §7 was part of the original
-   acceptance; current checks must follow [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+   acceptance; current checks must follow [`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md)
    and must not target production without present explicit authorisation.
 7. `git status --short`, `git diff --stat`, `git diff --cached --stat`; verify **no** secrets,
    tokens, cookies, session dumps, or local machine files are staged (the repo is public).

@@ -218,6 +218,18 @@ At `LOG_LEVEL=debug`, every Internal API request emits one line —
 the prompt correlation, so you can confirm a call arrived and tie it to the
 turn. No request bodies or headers are logged.
 
+## Session cleanup funnel
+
+The hygiene funnel (`server/src/session-cleanup.ts`, component `SessionCleanup`)
+logs a startup line with its effective intervals, then one summary per pass. In
+the default dry-run mode (`SESSION_CLEANUP_DRY_RUN=true`) the summary is
+`[SessionCleanup] DRY-RUN pass (no changes written): would unpin N, would archive N, would delete N`
+with a small sample of affected paths; once armed it becomes
+`[SessionCleanup] Cleanup complete: N unpinned, N auto-archived, …`, with one
+`Auto-archived session idle > Nd: <path>` info line per auto-archived session.
+Config: `SESSION_AUTO_ARCHIVE_DAYS`, `SESSION_RETENTION_MIN_DWELL_DAYS`,
+`SESSION_CLEANUP_DRY_RUN` (see [`DEPLOYMENT.md`](../DEPLOYMENT.md)).
+
 ## Fatal errors
 
 `server/src/index.ts` registers `uncaughtException` / `unhandledRejection`

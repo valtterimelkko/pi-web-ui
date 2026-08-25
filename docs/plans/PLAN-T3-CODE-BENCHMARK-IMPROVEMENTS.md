@@ -1,11 +1,11 @@
 # Plan: Run Receipts and Instance Identity (T3 Code Benchmark, Trimmed)
 
-_Status: implemented and archived plan; the run-receipt/instance-identity slice shipped in `0dfd29e` / `624e035` and is documented in [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md)_.
+_Status: implemented and archived plan; the run-receipt/instance-identity slice shipped in `0dfd29e` / `624e035` and is documented in [`INTERNAL-API-CONTRACT.md`](../INTERNAL-API-CONTRACT.md)_.
 _Date: 2026-07-14 (revision 2; retained as planning/evidence history)_
 
 > Do not treat the future-tense requirements below as an outstanding task list.
-> For current endpoint semantics, use [`INTERNAL-API.md`](./INTERNAL-API.md) and
-> [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md).
+> For current endpoint semantics, use [`INTERNAL-API.md`](../INTERNAL-API.md) and
+> [`INTERNAL-API-ORCHESTRATION.md`](../INTERNAL-API-ORCHESTRATION.md).
 
 ## Purpose and intent
 

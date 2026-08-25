@@ -1,5 +1,18 @@
 # Pi Web UI — rate-limit and session-hygiene fix list
 
+> **RESOLVED 2026-08-21** — all items implemented in commit `f092fc2` (server
+> changes dormant until the next production restart; client bundle already in
+> `client/dist`, live on hard reload). Decisions applied: cap stays 100/60s;
+> auto-archive 30d feeding the 90-day retention delete with a **7-day minimum
+> dwell** in archived state before deletion is eligible (freshly auto-archived
+> sessions get a grace period; legacy hand-archived records are grandfathered);
+> dry-run is the DEFAULT (`SESSION_CLEANUP_DRY_RUN=true`) logging would-unpin /
+> would-archive / would-delete counts until flipped; sidebar defaults to recent
+> 30d + unarchived with Show-all. Bonus isolation fix: disposable validation
+> servers no longer share the production prefs file (`WEB_UI_PREFS_PATH`).
+> Remaining known quirk (read-only, pre-existing): disposable servers still
+> LIST real pi sessions because the scan reads the shared `PI_AGENT_DIR`.
+
 _Prepared 2026-08-21 from a read-only investigation. No files in `/root/pi-web-ui` were modified._
 
 **Trigger:** the owner archived 6–7 sessions from the browser, each taking several seconds, and then hit

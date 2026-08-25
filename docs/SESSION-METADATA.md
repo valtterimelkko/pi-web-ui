@@ -5,7 +5,7 @@
 
 This document covers the unified **v2** model. For the write/sync channel see
 [`CODEBASE-MAP.md`](./CODEBASE-MAP.md); for the original incident context see
-[`SESSION-METADATA-UNIFICATION-PLAN.md`](./SESSION-METADATA-UNIFICATION-PLAN.md).
+[`SESSION-METADATA-UNIFICATION-PLAN.md`](./plans/SESSION-METADATA-UNIFICATION-PLAN.md).
 
 ---
 

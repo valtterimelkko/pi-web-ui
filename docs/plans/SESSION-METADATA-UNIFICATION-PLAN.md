@@ -1,11 +1,11 @@
 # Session Metadata Unification — TDD Execution Plan
 
 > **Status:** implemented and archived in `22afbfe` and `3da7855`.
-> Current behaviour is documented in [`SESSION-METADATA.md`](./SESSION-METADATA.md)
-> and [`ARCHITECTURE.md`](./ARCHITECTURE.md). The future-tense checklist below
+> Current behaviour is documented in [`SESSION-METADATA.md`](../SESSION-METADATA.md)
+> and [`ARCHITECTURE.md`](../ARCHITECTURE.md). The future-tense checklist below
 > records the original TDD decisions and evidence; it is not an outstanding
 > implementation request.
-> **Current validation boundary:** use [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+> **Current validation boundary:** use [`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md)
 > for current commands and safety rules; any historical production-validation
 > wording below is not standing authorisation.
 >
@@ -369,7 +369,7 @@ transactions; migrate JSON → SQLite once with a backup.
 
 > The procedure below records the original operator-specific acceptance evidence.
 > It is **not current permission** to inspect, rebuild, restart, or otherwise
-> target production. Do not copy it as a runbook. Use [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
+> target production. Do not copy it as a runbook. Use [`LIVE-VALIDATION.md`](../LIVE-VALIDATION.md)
 > for current safety rules, and obtain present explicit authorisation before any
 > production validation. Historical topology, credentials, and restoration
 > instructions must be re-verified rather than assumed.

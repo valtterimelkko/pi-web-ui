@@ -12,7 +12,7 @@
  * layer standardized on (`pi:<uuid>`). This module is the single source of truth
  * for that derivation, shared by client + server so both entry points agree.
  *
- * See docs/NOTIFICATION-OPTIN-IDENTITY-FIX-PLAN.md and docs/SESSION-METADATA.md.
+ * See docs/plans/NOTIFICATION-OPTIN-IDENTITY-FIX-PLAN.md and docs/SESSION-METADATA.md.
  */
 
 /** Runtimes that carry notification opt-ins. */

@@ -4,11 +4,50 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Round-2 consumer defects fixed (`1.26.0`, `2026-08-25`)**
+  - Bare Pi model ids bind again: a bare id matching exactly one advertised, unblocked model resolves to its qualified `provider/id` selector (`fallbackApplied: false`); a bare id matching several models fails with `422 MODEL_NOT_APPLIED` listing every candidate. This restores pre-`1.25.0` behaviour that `1.25.0` had silently regressed.
+  - Every `GET /api/v1/models` entry now carries a copyable `selector` field whose value is exactly what `POST /sessions` accepts for that runtime — discovery clients copy rather than construct selectors.
+  - New long-poll `GET /api/v1/watches/wait?ids=…[&timeout=][&cursor=]` blocks until a named watch records an unseen firing, with an opaque resumable `nextCursor` for at-least-once delivery across reconnects; condition evaluation stays server-side, so pure observer watches work unchanged.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.26.0), [`INTERNAL-API.md`](./INTERNAL-API.md); defect report: [`plans/INTERNAL-API-ORCHESTRATION-USER-DEFECTS-2026-08-25-ROUND-2.md`](./plans/INTERNAL-API-ORCHESTRATION-USER-DEFECTS-2026-08-25-ROUND-2.md)
+
+- **Orchestration-honesty defect batch (`1.25.0`, `2026-08-25`)**
+  - Model binding honesty: an explicit `model` that cannot be applied now fails creation with `422 MODEL_NOT_APPLIED` (half-created session cleaned up) instead of silently inheriting a default; success responses carry `resolvedModel` plus a `modelBinding { requested?, resolved, fallbackApplied }` report across Pi, OpenCode, and Claude.
+  - `GET /sessions/:id/info` answers authoritatively with a top-level `retention { protected, leases[], latestExpiryAt? }` block, and `/info`/session-list liveness derives from runtime state (`busy`) instead of stale registry status.
+  - Run receipts hoist `cessation` top-level and add a derived `workState`; `completed` now requires confirmed cessation, otherwise `turn_ended_unconfirmed`. An observed `agent_end` alone still does not confirm completion.
+  - Transcript reads honour `?limit=` (1–500); `/capabilities.claudeProfiles` entries carry `claudeModel` alongside `model`.
+  - Canonical doc: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.25.0); defect reports: [`plans/INTERNAL-API-ORCHESTRATION-USER-DEFECTS-2026-08-25.md`](./plans/INTERNAL-API-ORCHESTRATION-USER-DEFECTS-2026-08-25.md) and [`plans/INTERNAL-API-ORCHESTRATION-USER-DEFECTS-2026-08-25-ROUND-2.md`](./plans/INTERNAL-API-ORCHESTRATION-USER-DEFECTS-2026-08-25-ROUND-2.md)
+
 - **Bounded reads on `/sessions/:id/events` (`1.24.0`, `2026-08-23`)**
   - The default `GET /api/v1/sessions/:id/events` behaviour is unchanged: an unbounded SSE subscription that ends only on client disconnect (correct for browser `EventSource`). An external consumer that called it as a plain HTTP GET hung for 9,000+ seconds because the 15s heartbeat defeats every idle timeout — the contract around the endpoint was the defect, not the endpoint.
   - Additive opt-ins: `?mode=snapshot` returns `{ sessionId, mode:"snapshot", count, events }` from the broker's replay buffer as a normal JSON response and closes (always terminates); `?timeout=<ms>` bounds the stream and closes it server-side with a terminal `complete {reason:"timeout"}` event (clamped to `[0, 300000]`, same as `/wait`). No parameters = byte-for-byte historical behaviour.
   - Docs now mark the endpoint unbounded everywhere it appears in monitoring tables/evidence ladders ([`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md), [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)) and point non-streaming callers at `?mode=snapshot`, `/wait`, or `/transcript`.
   - Canonical doc: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.24.0)
+
+- **Command Code sessions as watch subjects (`1.23.0`, `2026-08-21`)**
+  - A `commandcode-*` session can now be the *observed* session of a durable watch (`POST/GET/DELETE /sessions/:id/watch`), completing the watch-wake matrix: any of the five runtimes can be the watched child, and any managed runtime can be the `onFire` wake target.
+  - Command Code turns reach the watch from every source (Internal API dispatch, browser, follow-ups) via a service-level observer; the subject is pinned with a source-owned `watch:<watchId>` claim. Previously these registrations returned `404 SESSION_NOT_FOUND`.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.23.0), [`INTERNAL-API.md`](./INTERNAL-API.md), [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md)
+
+- **Opt-in `onFire` cross-session wake (`1.22.0`, `2026-08-21`)**
+  - A watch can now wake a *different* session when a condition fires: the runtime-agnostic parent-wake. Watch the child, wake the parent — no operator polling loop.
+  - `onFire: { type: "prompt", targetSessionId, message, mode?, maxWakeups?, cooldownSeconds?, pinTarget?, includeEvidence? }` dispatches a detached, receipted, admission-controlled prompt to the target; the target is pinned with a source-owned `watch-target:<watchId>` claim by default, and every attempt is audited in `wakeAttempts[]` (`dispatched` / `failed` / `suppressed`).
+  - Watches registered without `onFire` remain byte-for-byte pure observers.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.22.0), [`INTERNAL-API.md`](./INTERNAL-API.md), [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md)
+
+- **Mid-run steering and follow-up across runtimes (`2026-08-17`/`2026-08-21`)**
+  - Server `6495262`: steer/follow-up now work on the Claude SDK and Command Code paths over the existing WebSocket shapes — Claude SDK delivers steer at the next tool boundary (streaming-input priority `next`) and queues follow-up as `later`; Command Code has no mid-run input channel, so steer interrupts the running turn and delivers the text as the immediate next prompt on the same native session, with follow-up queued server-side.
+  - Client `223182c`: steer/follow-up composer for streaming Pi sessions.
+  - Channel-backed and cli-direct Claude sessions do **not** steer. Per-runtime semantics: [`PROTOCOL.md`](./PROTOCOL.md); wire research: [`STEERING-RUNTIME-RESEARCH.md`](./STEERING-RUNTIME-RESEARCH.md); validation runbook: [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md) §Steering
+
+- **Rate-limit and session-hygiene fixes (`f092fc2`, `2026-08-21`)**
+  - The rate limiter now applies to `/api` only (static assets and the SPA no longer consume the API budget), the documented `RATE_LIMIT_MAX_REQUESTS` env cap is actually honoured (both names accepted), 429s carry standard rate-limit headers, and the client backs off on 429 instead of retrying like a network error.
+  - Preference-delta endpoints return small acknowledgements instead of the entire ~200 KB preferences object, removing the multi-second archive round-trip.
+  - Session cleanup is now a two-stage funnel: auto-archive sessions idle beyond `SESSION_AUTO_ARCHIVE_DAYS` (default 30, reversible) feeding the existing 90-day retention delete with a 7-day minimum dwell in the archived state. `SESSION_CLEANUP_DRY_RUN=true` is the default — passes log would-unpin / would-archive / would-delete counts until flipped.
+  - Resolution record: [`plans/PI-WEB-UI-RATE-LIMIT-AND-SESSION-HYGIENE-FIXES.md`](./plans/PI-WEB-UI-RATE-LIMIT-AND-SESSION-HYGIENE-FIXES.md); config: [`.env.example`](../.env.example), [`DEPLOYMENT.md`](../DEPLOYMENT.md)
+
+- **Embedded Pi SDK family upgraded to `0.84.2` (`58e09d3`, `2026-08-20`)**
+  - `@earendil-works/pi-coding-agent`, `pi-ai`, and `pi-agent-core` moved from `0.80.10` to `0.84.2` exact pins across the root/server/shared workspaces (the root/server packages were later bumped to `0.84.3` in `829493e`). The `0.84.0` `message_update` delta-only breaking change affects JSON/RPC serialization, not the SDK subscribe layer Pi Web UI consumes — verified before the upgrade.
+  - Stale nested `node_modules/@earendil` copies at `0.80.10` that shadowed the hoisted tree were removed; typecheck, full test suites, and the pi-enhancement extension suite re-run green against the upgraded tree.
 
 - **Command Code multi-turn message identity + client load-path fixes (`2026-08-20`)**
   - Synthetic message ids (`commandcode-message-N`) restarted at 1 on every agent turn, so a second turn re-emitted ids already in the journal; replay and the live client keyed messages by id and merged later turns' text into the first turn's bubbles, leaving later turns as empty "Processed" rows. Synthetic ids are now turn-unique (`commandcode-message-<turn>-<n>`), and the client additionally tolerates reused ids in existing journals (later copies are suffixed and routed correctly on both replay fold and live paths).

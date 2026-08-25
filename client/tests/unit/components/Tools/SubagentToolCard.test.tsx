@@ -297,7 +297,7 @@ describe('SubagentToolCard', () => {
   });
 
   // ── Enriched summary path (Pi SDK `subagent` / `evaluated_subagent`) ──
-  // docs/SUBAGENT-CARD-ENRICHMENT-PLAN.md Phase 3.2–3.5. Real shapes derived
+  // docs/plans/SUBAGENT-CARD-ENRICHMENT-PLAN.md Phase 3.2–3.5. Real shapes derived
   // from the ground-truth session §2c (codescout / evaluated reviewer).
   describe('enriched summary (Pi SDK)', () => {
     const codescoutSummary: SubagentToolSummary = {

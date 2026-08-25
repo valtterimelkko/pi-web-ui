@@ -6,7 +6,7 @@
  * per-tool counts, turns, tokens, cost) — the only thing that crosses the wire.
  *
  * Correctness targets are the real numbers from the ground-truth session
- * (docs/SUBAGENT-CARD-ENRICHMENT-PLAN.md §2c), exercised against committed
+ * (docs/plans/SUBAGENT-CARD-ENRICHMENT-PLAN.md §2c), exercised against committed
  * fixtures extracted from that session (inner-message text trimmed — the
  * summarizer never reads text, only block types / usage / model).
  */

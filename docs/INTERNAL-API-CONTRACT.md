@@ -323,7 +323,7 @@ Agent OS should treat Pi Web UI as a runtime gateway, not as its own source of t
 
 Pi Web UI should expose stable enough session, event, transcript, transfer, and usage primitives for that local consumer without importing Agent OS concepts into the Pi Web UI data model.
 
-> **1.20.0 note for Agent OS callers:** Command Code creation no longer requires `invocationRole` or `commandCodeAttestation` — both are accepted and ignored, so existing callers keep working while the fields are retired on the Agent OS side. The Agent OS mirror of this contract is maintained in the Agent OS repository and is intentionally not edited from here.
+> **1.20.0 note for Agent OS callers:** Command Code creation no longer requires `invocationRole` or `commandCodeAttestation` — both are accepted and ignored, so existing callers keep working while the fields are retired on the Agent OS side. The Agent OS mirror of this contract is maintained in the Agent OS repository at `/root/agent-os/docs/PI-WEB-UI-INTERNAL-API-CONTRACT.md` and is intentionally not edited from here.
 
 Practical contract boundary:
 

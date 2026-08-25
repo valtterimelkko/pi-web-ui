@@ -443,7 +443,7 @@ describe('EventForwarder', () => {
     });
   });
 
-  // ── Subagent card enrichment (docs/SUBAGENT-CARD-ENRICHMENT-PLAN.md Phase 2) ──
+  // ── Subagent card enrichment (docs/plans/SUBAGENT-CARD-ENRICHMENT-PLAN.md Phase 2) ──
   // The live Pi forward point must attach a compact `resultSummary` for
   // subagent / evaluated_subagent tools ONLY, and strip the heavy inner
   // `details.results[].messages` transcript so it never crosses the wire.

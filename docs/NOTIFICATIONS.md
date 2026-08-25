@@ -8,7 +8,7 @@ feature gate is enabled (Pi, Claude, OpenCode, Antigravity, and Command Code)
 and is architected to extend cleanly to richer
 notifications later without a rewrite.
 
-> See [`NOTIFICATION-LAYER-MVP-PLAN.md`](./NOTIFICATION-LAYER-MVP-PLAN.md) for
+> See [`NOTIFICATION-LAYER-MVP-PLAN.md`](./plans/NOTIFICATION-LAYER-MVP-PLAN.md) for
 > the design rationale and locked decisions.
 
 ---

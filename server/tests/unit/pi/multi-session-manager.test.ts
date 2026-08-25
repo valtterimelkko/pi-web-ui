@@ -2039,7 +2039,7 @@ describe('MultiSessionManager', () => {
   });
 
   // ── Subagent card enrichment (browser vs internal-API observer) ──
-  // docs/SUBAGENT-CARD-ENRICHMENT-PLAN.md: the browser-bound session_event must
+  // docs/plans/SUBAGENT-CARD-ENRICHMENT-PLAN.md: the browser-bound session_event must
   // carry the compact resultSummary + stripped inner messages, while internal
   // API observers (notifications/watch) keep receiving the raw event unchanged.
   describe('handleAgentEvent — subagent enrichment', () => {
