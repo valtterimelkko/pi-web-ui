@@ -64,6 +64,8 @@ import { isThinkingLevel } from '../types.js';
 import { composePiGoalCommand, type SessionGoalControlRequest } from '../goal/goal-actions.js';
 import { readProjectPiGoalState } from '../goal/pi-goal.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
+import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
+import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
 import { WatchManager, WatchValidationError, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
@@ -335,6 +337,8 @@ export interface SessionRoutesDeps {
   piSessionDir?: string;
   /** Directory for Claude session JSONL files. Defaults to config. */
   claudeSessionDir?: string;
+  /** Claude transcript projects root (goal reader). Defaults to CLAUDE_CONFIG_DIR/projects or ~/.claude/projects. */
+  claudeProjectsDir?: string;
   /** Directory for Antigravity session JSONL/log files. Defaults to config. */
   antigravitySessionDir?: string;
   /** Shared process-local execution admission authority. */
@@ -363,6 +367,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   const commandCodeService = deps.commandCodeService;
 
   const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
+  const claudeProjectsDir = deps.claudeProjectsDir ?? resolveClaudeProjectsRoot();
   const antigravitySessionDir = deps.antigravitySessionDir ?? config.antigravitySessionDir;
   const blockedPiProviders = deps.blockedPiProviders ?? config.internalApiBlockedPiProviders;
   const runReceipts = deps.runReceiptManager ?? new RunReceiptManager({
@@ -786,6 +791,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   async function shutdown(): Promise<void> {
     await ready.catch(() => { /* startup surfaces the original initialization error */ });
     pinExpiry?.stop();
+    claudeGoalNudger?.stop();
     await runReceipts.shutdown();
     disposal.disposeAll();
   }
@@ -3435,17 +3441,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     return res;
   }
 
-  /** Minimal JSON request carrying `{message, verbosity:'answers'}` for internal prompt-pipeline reuse. */
-  function synthesizePromptRequest(message: string): IncomingMessage {
+  /** Minimal JSON request carrying `{message, verbosity, detach}` for internal prompt-pipeline reuse. */
+  function synthesizePromptRequest(message: string, options: { detach?: boolean } = {}): IncomingMessage {
     const req = new PassThrough() as unknown as IncomingMessage;
     (req as { method?: string }).method = 'POST';
     (req as { url?: string }).url = '/api/v1/sessions/goal-internal/prompt';
     (req as { headers?: Record<string, string> }).headers = { 'content-type': 'application/json' };
     process.nextTick(() => {
-      (req as unknown as PassThrough).emit('data', Buffer.from(JSON.stringify({ message, verbosity: 'answers' })));
+      (req as unknown as PassThrough).emit('data', Buffer.from(JSON.stringify({ message, verbosity: 'answers', ...(options.detach ? { detach: true } : {}) })));
       (req as unknown as PassThrough).emit('end');
     });
     return req;
+  }
+
+  /** Dispatch a message through the real prompt pipeline detached (fire-and-forget, receipted). */
+  async function dispatchDetachedInternal(sessionId: string, message: string): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+    const innerRes = createCaptureResponse();
+    await handleSendPrompt(synthesizePromptRequest(message, { detach: true }), innerRes, sessionId);
+    let body: Record<string, unknown> = {};
+    try { body = JSON.parse(innerRes.body) as Record<string, unknown>; } catch { /* non-JSON */ }
+    return { statusCode: innerRes.statusCode, body };
   }
 
   /** Honest unsupported projection for runtimes without a goal path yet/out of scope. */
@@ -3455,9 +3470,57 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
   async function readGoalProjection(entry: RegistryEntry): Promise<SessionGoalProjection> {
     if (entry.sdkType === 'pi') return readProjectPiGoalState(entry.path);
-    // Claude gains its transcript reader in Phase 2; Command Code its mod-state
-    // channel in Phase 3. OpenCode/Antigravity are out of scope (plan D1).
+    if (entry.sdkType === 'claude') return readClaudeGoalProjection(entry);
+    // Command Code gains its mod-state channel in Phase 3. OpenCode/Antigravity
+    // are out of scope (plan D1).
     return unsupportedGoalProjection();
+  }
+
+  /** Per-session auto-continue/pause ledger (Claude). Lives under the claude session dir. */
+  const claudeGoalStore = new ClaudeGoalControlStore(path.join(claudeSessionDir, 'goal-control'));
+
+  /** Auto-continue nudger (D3 wide). Started with the routes, stopped in shutdown(). */
+  const claudeGoalNudger = createClaudeGoalNudger({
+    config: loadClaudeGoalAutoContinueConfig(),
+    listSupportedSessions: async () =>
+      (await sessionRegistry.listAll())
+        .filter((e) => e.sdkType === 'claude' && e.claudeProfileBackend !== 'channel' && e.claudeSessionId)
+        .map((e) => ({ sessionId: e.id })),
+    isRunning: (id) => claudeService.isRunning(id),
+    readGoal: async (id) => {
+      const entry = await getNonCommandCodeRegistryEntry(id);
+      if (!entry || entry.sdkType !== 'claude') return null;
+      return readClaudeGoalProjection(entry);
+    },
+    getStore: () => claudeGoalStore,
+    dispatchDetached: async (id, message) => {
+      await dispatchDetachedInternal(id, message);
+    },
+    publish: (id, event) => {
+      try {
+        broker.publish(id, { type: event.type, timestamp: event.timestamp, data: event.data } as NormalizedEvent);
+      } catch { /* non-fatal */ }
+    },
+  });
+  claudeGoalNudger.start();
+
+  async function readClaudeGoalProjection(entry: RegistryEntry): Promise<SessionGoalProjection> {
+    logger.info(`[Goal] reading claude transcript sessionId=${entry.id} claudeSessionId=${entry.claudeSessionId ?? 'none'} projectsRoot=${claudeProjectsDir} backend=${entry.claudeProfileBackend ?? 'default'}`);
+    // Native /goal works on every backend that runs the local CLI (direct and
+    // SDK subscription share the transcript layout). Only the remote channel
+    // process cannot do goals.
+    if (entry.claudeProfileBackend === 'channel' || !entry.claudeSessionId) {
+      return { supported: false, status: 'unknown' };
+    }
+    const transcriptPath = resolveClaudeTranscriptPath(entry.cwd, entry.claudeSessionId, claudeProjectsDir);
+    const statuses = await readClaudeGoalStatuses(transcriptPath);
+    const control = await claudeGoalStore.get(entry.id);
+    logger.info(`[Goal] claude statuses=${statuses.length} path=${transcriptPath} control=${JSON.stringify(control ?? {})} lastTs=${statuses.at(-1)?.timestampMs ?? 'none'}`);
+    return projectClaudeGoal(statuses, {
+      autoContinue: control?.autoContinue,
+      clearedAt: control?.clearedAt,
+      nudges: control?.nudges,
+    });
   }
 
   async function handleGetSessionGoal(
@@ -3479,17 +3542,78 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     sendJson(res, 200, { sessionId, runtime: entry.sdkType, ...projection });
   }
 
+  async function handleSessionGoalControlClaude(
+    res: ServerResponse,
+    sessionId: string,
+    entry: RegistryEntry,
+    raw: SessionGoalControlRequest,
+  ): Promise<void> {
+    if (entry.claudeProfileBackend === 'channel' || !entry.claudeSessionId) {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, `Claude backend '${entry.claudeProfileBackend ?? 'default'}' does not support goals`));
+      return;
+    }
+    const action = raw.action;
+    const respond = async (extra: Record<string, unknown> = {}): Promise<void> => {
+      const projection = await readClaudeGoalProjection(entry);
+      sendJson(res, 200, { sessionId, runtime: 'claude', action, accepted: true, ...extra, goal: projection });
+    };
+
+    const publishGoalState = async (): Promise<void> => {
+      const projection = await readClaudeGoalProjection(entry);
+      try {
+        broker.publish(sessionId, { type: 'goal_state', timestamp: Date.now(), data: projection } as NormalizedEvent);
+      } catch { /* non-fatal */ }
+    };
+
+    if (action === 'pause') {
+      // Server-side semantics: disarm the auto-continue nudger. The upstream CLI
+      // has no pause; an in-flight turn still settles, but nothing re-arms it.
+      await claudeGoalStore.patch(sessionId, { autoContinue: false });
+      await publishGoalState();
+      await respond({ note: 'auto-continue disarmed (server-side pause; Claude has no native pause)' });
+      return;
+    }
+    if (action === 'resume') {
+      await claudeGoalStore.patch(sessionId, { autoContinue: true, exhaustedAt: undefined });
+      await dispatchDetachedInternal(sessionId, CLAUDE_GOAL_CONTINUATION_PROMPT);
+      await publishGoalState();
+      await respond({ note: 'auto-continue re-armed; continuation prompt dispatched' });
+      return;
+    }
+    const composed = composeClaudeGoalCommand(raw ?? {});
+    if (!composed.ok) {
+      sendJson(res, 400, enrichedErrorBody(composed.error.code as ErrorCode, composed.error.message));
+      return;
+    }
+    if (composed.action === 'start') {
+      await claudeGoalStore.patch(sessionId, { autoContinue: true, nudges: 0, lastNudgeAt: undefined, exhaustedAt: undefined, clearedAt: undefined });
+    }
+    if (composed.action === 'clear') {
+      // The CLI leaves no tombstone attachment on /goal clear — mark the
+      // moment so stale unmet attachments are not read as a live goal.
+      await claudeGoalStore.patch(sessionId, { clearedAt: Date.now(), nudges: 0, exhaustedAt: undefined });
+    }
+    // Detached dispatch: the CLI goal loop holds query() open until the goal
+    // settles, so a start/clear MUST NOT block the HTTP response.
+    const dispatched = await dispatchDetachedInternal(sessionId, composed.command);
+    if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) {
+      sendJson(res, dispatched.statusCode || 500, dispatched.body);
+      return;
+    }
+    await respond({
+      receipt: typeof dispatched.body.runId === 'string'
+        ? { runId: dispatched.body.runId, status: dispatched.body.status ?? null, dispatchMode: dispatched.body.dispatchMode ?? null }
+        : null,
+      note: 'goal prompt dispatched detached; the CLI loop blocks until the goal settles — poll GET /goal or watch goal_end',
+    });
+  }
+
   async function handleSessionGoalControl(
     req: IncomingMessage,
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
     const raw = await readJsonBody<SessionGoalControlRequest>(req);
-    const composed = composePiGoalCommand(raw ?? {});
-    if (!composed.ok) {
-      sendJson(res, 400, enrichedErrorBody(composed.error.code as ErrorCode, composed.error.message));
-      return;
-    }
 
     const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     if (commandCodeEntry) {
@@ -3500,6 +3624,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const entry = await getNonCommandCodeRegistryEntry(sessionId);
     if (!entry) {
       sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+      return;
+    }
+
+    if (entry.sdkType === 'claude') {
+      await handleSessionGoalControlClaude(res, sessionId, entry, raw ?? {});
+      return;
+    }
+
+    const composed = composePiGoalCommand(raw ?? {});
+    if (!composed.ok) {
+      sendJson(res, 400, enrichedErrorBody(composed.error.code as ErrorCode, composed.error.message));
       return;
     }
     if (entry.sdkType !== 'pi') {

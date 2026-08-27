@@ -95,9 +95,10 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsHeartbeat: claudeBackendMode === 'channel',
           supportsInteractiveQuestions: claudeBackendMode === 'sdk',
           supportsStructuredQuestionResponse: claudeBackendMode === 'sdk',
-          // Contract 1.27.0: native `/goal` works through the SDK path only.
-          supportsGoal: claudeBackendMode === 'sdk',
-          goalControls: claudeBackendMode === 'sdk' ? ['start', 'pause', 'resume', 'clear'] : [],
+          // Contract 1.27.0: native `/goal` works wherever the local CLI runs
+          // (direct and SDK subscription); only the channel backend cannot.
+          supportsGoal: claudeBackendMode !== 'channel',
+          goalControls: claudeBackendMode !== 'channel' ? ['start', 'pause', 'resume', 'clear'] : [],
         },
         opencode: {
           available: opencodeEnabled && opencodeAvailable,

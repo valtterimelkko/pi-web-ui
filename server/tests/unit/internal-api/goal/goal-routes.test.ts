@@ -145,6 +145,8 @@ describe('goal function (contract 1.27.0)', () => {
       internalClientId: 'test-client',
       watchDir: path.join(dir, 'watches'),
       pinDir: path.join(dir, 'pins'),
+      claudeSessionDir: path.join(dir, 'claude-sessions'),
+      claudeProjectsDir: path.join(dir, '.claude', 'projects'),
       pinExpiryIntervalMs: 60_000,
       runReceiptManager: manager,
     });
@@ -266,6 +268,98 @@ describe('goal function (contract 1.27.0)', () => {
       const ghost = mockRes();
       await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/ghost/goal', { action: 'clear' }), ghost, 'ghost');
       expect(ghost.statusCode).toBe(404);
+    });
+  });
+
+  // ── Phase 2: Claude SDK goal read/control ──────────────────────────────
+
+  describe('phase 2 — claude goal read/control', () => {
+    const CLAUDE_SID = 'claude-session-1';
+    const CLAUDE_CWD = '/work';
+    let transcriptDir: string;
+
+    beforeEach(async () => {
+      transcriptDir = path.join(dir, '.claude', 'projects', '-work');
+      await fs.mkdir(transcriptDir, { recursive: true });
+      registry.get.mockImplementation(async (id: string) =>
+        id === CLAUDE_SID
+          ? entry({ id: CLAUDE_SID, sdkType: 'claude', cwd: CLAUDE_CWD, claudeSessionId: 'cs-uuid-1', claudeProfileBackend: 'sdk-subscription' })
+          : entry({ id, path: id }),
+      );
+      multiSessionManager.getSessionStatus.mockReturnValue({ status: 'idle' });
+      claudeService.isRunning.mockReturnValue(false);
+    });
+
+    function writeTranscript(lines: object[]): Promise<void> {
+      return fs.writeFile(path.join(transcriptDir, 'cs-uuid-1.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    }
+    const gs = (fields: object) => ({ type: 'attachment', timestamp: Date.now(), attachment: { type: 'goal_status', ...fields } });
+
+    it('projects an achieved goal from the transcript', async () => {
+      await writeTranscript([gs({ met: false, sentinel: true, condition: 'ship it' }), gs({ met: true, condition: 'ship it', reason: 'done' })]);
+      const res = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/api/v1/sessions/x/goal'), res, CLAUDE_SID);
+      const body = JSON.parse(res.body);
+      expect(body).toMatchObject({ runtime: 'claude', supported: true, status: 'achieved', objective: 'ship it', lastReason: 'done' });
+    });
+
+    it('reports unmet goals as running by default; paused(user) after pause disarms auto-continue', async () => {
+      await writeTranscript([gs({ met: false, sentinel: true, condition: 'g' })]);
+      let res = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/api/v1/sessions/x/goal'), res, CLAUDE_SID);
+      expect(JSON.parse(res.body).status).toBe('running');
+
+      await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'pause' }), mockRes(), CLAUDE_SID);
+      res = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/api/v1/sessions/x/goal'), res, CLAUDE_SID);
+      expect(JSON.parse(res.body)).toMatchObject({ status: 'paused', pausedReason: 'user', autoContinue: false });
+    });
+
+    it('resume re-arms and dispatches the continuation prompt detached; pause never dispatches', async () => {
+      claudeService.sendPrompt.mockImplementation((_id: string, _m: string, onEvent: (e: any) => void, onComplete: (e?: Error) => void) => {
+        process.nextTick(() => onComplete());
+      });
+      const resumeRes = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'resume' }), resumeRes, CLAUDE_SID);
+      expect(resumeRes.statusCode).toBe(200);
+      expect(claudeService.sendPrompt).toHaveBeenCalledWith(CLAUDE_SID, expect.stringContaining('Continue working'), expect.anything(), expect.anything());
+
+      claudeService.sendPrompt.mockClear();
+      const pauseRes = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'pause' }), pauseRes, CLAUDE_SID);
+      expect(pauseRes.statusCode).toBe(200);
+      expect(claudeService.sendPrompt).not.toHaveBeenCalled();
+    });
+
+    it('start dispatches /goal <condition> detached and returns the receipt handle', async () => {
+      let releaseSend!: () => void;
+      claudeService.sendPrompt.mockImplementation((_id: string, _m: string, _oe: unknown, onComplete: (e?: Error) => void) => {
+        // Detached pipeline: do not complete — receipt stays running in background.
+        void onComplete;
+        releaseSend = () => onComplete();
+      });
+      const res = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'start', objective: 'make it so' }), res, CLAUDE_SID);
+      expect(res.statusCode).toBe(200);
+      expect(claudeService.sendPrompt).toHaveBeenCalledWith(CLAUDE_SID, '/goal make it so', expect.anything(), expect.anything());
+      const body = JSON.parse(res.body);
+      expect(body.accepted).toBe(true);
+      expect(body.receipt.runId).toBeTypeOf('string');
+      expect(body.note).toContain('detached');
+      releaseSend?.();
+    });
+
+    it('accepts goal control for cli-direct backends (local CLI has native /goal) and refuses channel', async () => {
+      registry.get.mockResolvedValue(entry({ id: CLAUDE_SID, sdkType: 'claude', cwd: CLAUDE_CWD, claudeSessionId: 'cs-uuid-1', claudeProfileBackend: 'cli-direct' }));
+      const res = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'start', objective: 'x' }), res, CLAUDE_SID);
+      expect(res.statusCode).toBe(200);
+
+      registry.get.mockResolvedValue(entry({ id: CLAUDE_SID, sdkType: 'claude', cwd: CLAUDE_CWD, claudeSessionId: 'cs-uuid-1', claudeProfileBackend: 'channel' }));
+      const channelRes = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'start', objective: 'x' }), channelRes, CLAUDE_SID);
+      expect(channelRes.statusCode).toBe(400);
+      expect(JSON.parse(channelRes.body).code).toBe('UNSUPPORTED_OPERATION');
     });
   });
 
