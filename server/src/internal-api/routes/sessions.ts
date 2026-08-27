@@ -1463,6 +1463,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         Object.assign(base, pinResponseFields(result));
       }
 
+      // Contract 1.27.0 goal function: create-with-goal. A goal arming failure
+      // never fails the create — it is reported honestly in the response.
+      if (body.goal) {
+        const goalResult = await armGoalAfterCreate(base.sessionId, base.runtime, body.goal);
+        (base as unknown as Record<string, unknown>).goal = goalResult;
+      }
+
       sendJson(res, 201, base satisfies CreateSessionResponse);
       onSessionCreated?.(base.sessionId, base.sessionPath, base.runtime);
     } catch (err) {
@@ -1683,6 +1690,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
       }
+      // Contract 1.27.0: goal summary so polling parents see goal state in the
+      // same call as liveness. Never fatal.
+      try {
+        const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+        const goal = commandCodeEntry
+          ? await readCommandCodeGoalProjection(commandCodeEntry)
+          : await (async () => {
+              const entry = await getNonCommandCodeRegistryEntry(sessionId);
+              return entry ? await readGoalProjection(entry) : null;
+            })();
+        if (goal) (detail as unknown as Record<string, unknown>).goal = goal;
+      } catch { /* non-fatal */ }
       sendJson(res, 200, detail);
     } catch (err) {
       logger.errorObject('Failed to get session', err);
@@ -1704,6 +1723,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
         return;
       }
+      // Contract 1.27.0: goal summary so polling parents see goal state in the
+      // same call as liveness. Never fatal.
+      try {
+        const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+        const goal = commandCodeEntry
+          ? await readCommandCodeGoalProjection(commandCodeEntry)
+          : await (async () => {
+              const entry = await getNonCommandCodeRegistryEntry(sessionId);
+              return entry ? await readGoalProjection(entry) : null;
+            })();
+        if (goal) (detail as unknown as Record<string, unknown>).goal = goal;
+      } catch { /* non-fatal */ }
       sendJson(res, 200, detail);
     } catch (err) {
       logger.errorObject('Failed to get session info', err);
@@ -3533,6 +3564,45 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       try {
         onBrowserMessage(message);
       } catch { /* non-fatal */ }
+    }
+  }
+
+  /** Create-with-goal arming (contract 1.27.0). Never throws; reports honestly. */
+  async function armGoalAfterCreate(
+    sessionId: string,
+    runtime: SessionRuntime,
+    goal: NonNullable<CreateSessionRequest['goal']>,
+  ): Promise<{ armed: boolean; note?: string; error?: string }> {
+    try {
+      if (runtime === 'pi') {
+        const composed = composePiGoalCommand({ action: 'start', objective: goal.objective, maxTurns: goal.maxTurns, verifyCommand: goal.verifyCommand, minReviews: goal.minReviews, budgetTokens: goal.budgetTokens, budgetUsd: goal.budgetUsd });
+        if (!composed.ok) return { armed: false, error: composed.error.message };
+        const dispatched = await dispatchDetachedInternal(sessionId, composed.command);
+        if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) return { armed: false, error: 'goal dispatch failed' };
+        return { armed: true, note: 'goal dispatched detached; the goal loop owns subsequent turns' };
+      }
+      if (runtime === 'claude') {
+        await claudeGoalStore.patch(sessionId, { autoContinue: goal.autoContinue !== false, nudges: 0, exhaustedAt: undefined, clearedAt: undefined });
+        const dispatched = await dispatchDetachedInternal(sessionId, `/goal ${goal.objective}`);
+        if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) return { armed: false, error: 'goal dispatch failed' };
+        return { armed: true, note: 'goal dispatched detached; poll GET /goal or watch goal_end' };
+      }
+      if (runtime === 'commandcode') {
+        const record = await commandCodeService?.findSession(sessionId);
+        if (!record || !commandCodeService?.isGoalReady?.()) return { armed: false, error: 'goal-runner mod unavailable' };
+        await commandCodeService.goalStore.arm(sessionId, {
+          objective: goal.objective,
+          maxTurns: goal.maxTurns ?? 100,
+          verifier: goal.verifyCommand ? 'command' : 'model',
+          verifyCommand: goal.verifyCommand ?? '',
+          modelVerifier: goal.modelVerifier ?? 'meta/muse-spark-1.2-contributor',
+          autoContinue: goal.autoContinue !== false,
+        });
+        return { armed: true, note: 'goal armed; applies at the first prompt' };
+      }
+      return { armed: false, error: `goal is not supported for runtime '${runtime}'` };
+    } catch (error) {
+      return { armed: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 

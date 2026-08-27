@@ -56,6 +56,25 @@ const pinFields = {
   pinTtlSeconds: ttlSecondsSchema.optional(),
   retention: retentionSchema.optional(),
 };
+// Contract 1.27.0 goal function: create-with-goal. Atomic create+start per
+// runtime semantics (pi/claude dispatch detached; commandcode arms for its
+// first prompt). OpenCode/antigravity reject — out of the goal surface.
+export const goalSpecSchema = z.object({
+  objective: z.string().min(1).max(4000),
+  maxTurns: z.number().int().min(1).max(100).optional(),
+  verifyCommand: z.string().min(1).max(2000).optional(),
+  minReviews: z.number().int().min(0).optional(),
+  budgetTokens: z.number().int().min(1).optional(),
+  budgetUsd: z.number().min(0).optional(),
+  modelVerifier: z.string().min(1).max(200).optional(),
+  autoContinue: z.boolean().optional(),
+}).strict();
+const goalField = { goal: goalSpecSchema.optional() };
+const goalRuntimeRefine = (body: { runtime: string; goal?: unknown }, ctx: z.RefinementCtx): void => {
+  if (body.goal !== undefined && (body.runtime === 'opencode' || body.runtime === 'antigravity')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['goal'], message: `goal is not supported for runtime '${body.runtime}'` });
+  }
+};
 
 export const createSessionBodySchema = z.object({
   runtime: sessionRuntimeSchema,
@@ -70,10 +89,12 @@ export const createSessionBodySchema = z.object({
   invocationRole: invocationRoleSchema.optional(),
   commandCodeAttestation: commandCodeAttestationSchema.optional(),
   ...pinFields,
+  ...goalField,
 }).strict().superRefine((body, ctx) => {
   if (body.pin && body.retention) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['retention'], message: 'Use either legacy pin or retention, not both' });
   }
+  goalRuntimeRefine(body, ctx);
   if (body.profileId !== undefined && body.runtime !== 'claude') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -99,6 +120,7 @@ const batchCreateEntrySchema = z.object({
   invocationRole: invocationRoleSchema.optional(),
   commandCodeAttestation: commandCodeAttestationSchema.optional(),
   ...pinFields,
+  ...goalField,
 }).strict().superRefine((body, ctx) => {
   if (body.runtime === 'claude' && body.model?.startsWith('profile:') && !body.model.slice('profile:'.length).trim()) {
     ctx.addIssue({
@@ -107,6 +129,7 @@ const batchCreateEntrySchema = z.object({
       message: 'Claude profile model selector requires a non-empty profile id',
     });
   }
+  goalRuntimeRefine(body, ctx);
 });
 
 export const sessionControlBodySchema = z.object({

@@ -114,7 +114,12 @@ describe('goal function (contract 1.27.0)', () => {
     };
     opencodeService = { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn(() => false), isEnabled: vi.fn(() => false) };
     antigravityService = { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn(() => false) };
-    piService = {};
+    piService = {
+      getAvailableModels: vi.fn().mockResolvedValue([
+        { id: 'glm-5.3', name: 'GLM-5.3', provider: 'zai', contextWindow: 200000 },
+      ]),
+      setModel: vi.fn().mockResolvedValue(undefined),
+    };
     multiSessionManager = {
       getAgentSession: vi.fn(() => agentSession),
       getSessionStatus: vi.fn(() => ({ status: 'idle' })),
@@ -128,6 +133,8 @@ describe('goal function (contract 1.27.0)', () => {
       pinSession: vi.fn(() => true),
       unpinSession: vi.fn(() => true),
       getAllSessionStatuses: vi.fn(() => []),
+      createAndSubscribe: vi.fn(async () => ({ sessionId: 'pi-new', sessionPath: '/tmp/sessions/pi-new.jsonl' })),
+      isSessionPinned: vi.fn(() => false),
     };
     manager = new RunReceiptManager({
       store: new RunReceiptStore(dir, {}),
@@ -475,6 +482,40 @@ describe('goal function (contract 1.27.0)', () => {
       await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'start' }), res, CC_SID);
       expect(res.statusCode).toBe(400);
       expect(JSON.parse(res.body).code).toBe('INVALID_REQUEST');
+    });
+  });
+
+  // ── Phase 5: create-with-goal + goal_end watch ─────────────────────────────
+
+  describe('phase 5 — create-with-goal + watch', () => {
+    it('POST /sessions with goal arms and dispatches the goal atomically (pi)', async () => {
+      const prevHome = process.env.HOME;
+      process.env.HOME = dir;
+      try {
+        const req = jsonReq('POST', '/api/v1/sessions', {
+          runtime: 'pi', model: 'zai/glm-5.3', cwd: dir,
+          goal: { objective: 'create the artifact', maxTurns: 5 },
+        });
+        const res = mockRes();
+        await routes.handleCreateSession(req, res);
+        expect(res.statusCode).toBe(201);
+        const body = JSON.parse(res.body);
+        expect(body.goal).toMatchObject({ armed: true });
+        // Detached dispatch: the prompt lands shortly after the response.
+        await vi.waitFor(() => expect(agentSession.prompt).toHaveBeenCalledWith('/goal "create the artifact" --max-turns 5'), { timeout: 2000 });
+      } finally {
+        process.env.HOME = prevHome;
+      }
+    });
+
+    it('registers a goal_end watch (event_type condition accepts the synthetic event)', async () => {
+      const res = mockRes();
+      await routes.handleRegisterWatch(jsonReq('POST', '/api/v1/sessions/session-1/watch', {
+        conditions: [{ type: 'event_type', eventType: 'goal_end' }],
+      }), res, 'session-1');
+      expect(res.statusCode).toBeLessThan(300);
+      const body = JSON.parse(res.body);
+      expect(body.status).toBe('active');
     });
   });
 

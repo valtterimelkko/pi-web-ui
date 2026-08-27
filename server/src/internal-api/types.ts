@@ -151,6 +151,17 @@ export interface CreateSessionRequest {
   retention?: RetentionLeaseRequest;
   /** Claude-specific: select a provider profile by ID. */
   profileId?: string;
+  /** Contract 1.27.0 goal function: arm a goal atomically with creation. */
+  goal?: {
+    objective: string;
+    maxTurns?: number;
+    verifyCommand?: string;
+    minReviews?: number;
+    budgetTokens?: number;
+    budgetUsd?: number;
+    modelVerifier?: string;
+    autoContinue?: boolean;
+  };
   // TODO(remove once Agent OS drops the fields): accepted and ignored legacy role field.
   invocationRole?: 'conductor-root' | 'implementation-child';
   // TODO(remove once Agent OS drops the fields): accepted and ignored legacy attestation field.
