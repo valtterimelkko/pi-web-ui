@@ -168,6 +168,7 @@
 - `routes/diagnostics.ts` / `routes/health.ts` / `routes/capabilities.ts` / `routes/models.ts` — self-service diagnostics, additive runtime health, capability discovery, and live model metadata.
 - `run-receipts/` — durable accepted/started/terminal run identity, idempotency, restart interruption recovery, and bounded retention.
 - `watch/` — durable condition watches and restart-aware ledgers for long-horizon validation.
+- `goal/` — cross-runtime goal function (contract 1.27.0): canonical projection types, Pi disk-state reader, Claude transcript reader + bounded auto-continue nudger, Command Code projection, `/goal` command composers, broker event bridge, and browser-bridge message synthesis.
 - `diagnostics-buffer.ts` / `event-broker.ts` / `event-filter.ts` — bounded scrubbed logs, normalized event fan-out, and verbosity projections.
 - `pin-expiry-manager.ts` — durable source-owned retention leases (`durable` recovery vs `resident` runtime claim), independent of human Web UI and watch claims.
 - `admission-controller.ts` — process-local active-turn and projected-memory admission behind `/capacity` and prompt-time `429` refusal.

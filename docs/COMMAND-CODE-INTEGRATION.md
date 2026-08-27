@@ -112,6 +112,30 @@ Because the catalogue fails open, the runtime never depends on the timer; the
 timer only keeps selector metadata and exclusions current.
 
 
+## Goal function (contract 1.27.0)
+
+Command Code has no headless goal of its own (upstream `/goal` is TUI-only).
+The Internal API goal function arms a server-provisioned **goal-runner mod**
+via the ONE server-owned, feature-gated argv exception to the fixed policy:
+when a session's goal record is active, the launcher appends `--mod
+<stateDir>/mods/goal-runner.ts` plus `--mod-option goal.*` values derived
+from the server-side goal store. Callers never choose these values; argv
+stays byte-identical when no goal is armed.
+
+- Mod source (canonical): [`cmd-enhancement/goal-runner/`](https://github.com/valtterimelkko/cmd-enhancement)
+  — copied at service init into `<COMMAND_CODE_STATE_DIR>/mods/`; if the
+  source is absent the feature degrades to unavailable and
+  `capabilities.runtimes.commandcode.goalControls` stays `[]`.
+- Runtime read channel: the mod's state file at
+  `<nativeHomeDir>/<sessionId>/.commandcode/goal-state.json` (server-owned
+  directory tree; model text is never trusted for goal state).
+- Control channel: `<nativeHomeDir>/<sessionId>/.commandcode/goal-control.json`
+  carries `{action: 'pause'|'resume'|'clear', at}` — the mod early-stops on
+  pause/clear, giving server-side semantics upstream lacks.
+- Programmatic surface: `GET/POST /api/v1/sessions/:id/goal`, `goal` on
+  create, `goal_state`/`goal_end` events. See
+  [`INTERNAL-API.md`](./INTERNAL-API.md) § Goal Function.
+
 ## Configuration
 
 Eight variables, one gate:

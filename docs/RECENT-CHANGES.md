@@ -4,6 +4,14 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Cross-runtime goal function (`1.27.0`, `2026-08-27`)**
+  - The goal function — a durable objective the harness keeps working toward across runs, surviving compaction — is now programmatically usable on the Internal API for Pi, Claude (every local-CLI backend: default, sdk-subscription, cli-direct), and Command Code (goal-runner mod, provisioned server-owned).
+  - Pi slash commands pass through on a busy session (`POST /prompt` no longer 409s for `/…` messages), so `/goal pause-now` works mid-run exactly like the browser path; pass-through receipts own no turn and complete at the command boundary with `documented_handler_return`.
+  - New endpoints: `GET /sessions/:id/goal` (canonical projection + verbatim `runtimeState`), `POST /sessions/:id/goal` (`start|pause|resume|clear`, honest per-runtime semantics), goal fields on create (`POST /sessions`, `/sessions/batch`) and `/info`.
+  - Goal transitions publish normalized `goal_state` / `goal_end` events to the broker (watchable, on `/events`, and bridged to the browser goal surface for every runtime).
+  - Claude adds a bounded server-side auto-continue loop (`CLAUDE_GOAL_AUTO_CONTINUE_*`), budget exhaustion → `goal_end {failed, budget}`; Command Code ships the `goal-runner` mod (verify-command AND model verifier) in [cmd-enhancement](https://github.com/valtterimelkko/cmd-enhancement).
+  - Canonical docs: [`INTERNAL-API.md`](./INTERNAL-API.md) (§ Goal Function), [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.27.0), [`GOAL-EXTENSION-UI.md`](./GOAL-EXTENSION-UI.md); plan: [`plans/CROSS-RUNTIME-GOAL-FUNCTION-PLAN.md`](./plans/CROSS-RUNTIME-GOAL-FUNCTION-PLAN.md)
+
 - **Round-2 consumer defects fixed (`1.26.0`, `2026-08-25`)**
   - Bare Pi model ids bind again: a bare id matching exactly one advertised, unblocked model resolves to its qualified `provider/id` selector (`fallbackApplied: false`); a bare id matching several models fails with `422 MODEL_NOT_APPLIED` listing every candidate. This restores pre-`1.25.0` behaviour that `1.25.0` had silently regressed.
   - Every `GET /api/v1/models` entry now carries a copyable `selector` field whose value is exactly what `POST /sessions` accepts for that runtime — discovery clients copy rather than construct selectors.

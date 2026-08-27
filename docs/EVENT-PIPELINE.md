@@ -41,6 +41,22 @@ interface NormalizedEvent {
 
 `connection.ts` then converts `NormalizedEvent` → Pi-compatible frontend format via `normEventToPiFormat()`.
 
+### Goal events (`goal_state` / `goal_end`, contract 1.27.0)
+
+The goal function publishes two normalized event types through the Internal
+API broker (see [`INTERNAL-API.md`](./INTERNAL-API.md) § Goal Function):
+
+- `goal_state` — `data` is the canonical goal projection after every change;
+- `goal_end` — same projection, emitted once per transition into
+  `achieved`/`failed`/`cleared` — the watchable terminal event.
+
+Origins per runtime: Pi — the goal-engine extension UI messages bridged at
+`attachPiObserverIfNeeded` (disk state is the truth); Claude — the
+auto-continue nudger and post-turn sweep reading transcript `goal_status`
+attachments; Command Code — the `agent_end` hook reading the goal-runner mod
+state file. All publishers also fan the projection out to the browser goal
+surface in the extension-UI grammar (`browser-bridge.ts`).
+
 ## Runtime-Specific Origins
 
 ### Pi Coding Agent

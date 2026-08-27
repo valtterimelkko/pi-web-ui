@@ -31,6 +31,26 @@ A bare `widget_cleared` means the extension hid its widget (`/goal status`); the
 goal only ends when `extension_status` is cleared. Treating the two as the same
 signal archives a live goal, so keep them distinct.
 
+## Cross-runtime goal surface (contract 1.27.0)
+
+The same browser surface now renders goals for Claude (local-CLI backends) and
+Command Code, not just Pi/OpenCode. The server synthesizes the identical
+extension-UI message grammar from each runtime's canonical goal projection
+(`server/src/internal-api/goal/browser-bridge.ts`) — the client parsing,
+panel, history, and archive behaviour stay shared and runtime-neutral.
+Programmatic control lives on the Internal API
+([`INTERNAL-API.md`](./INTERNAL-API.md) § Goal Function): `GET/POST
+/sessions/:id/goal`, `goal_state`/`goal_end` events, create-with-goal, and the
+`goal` field on `/info`. The browser goal buttons route through the WebSocket
+`goal_control` message, which now fans out per runtime (Pi slash command,
+OpenCode server bridge, Claude/Command Code Internal API handler).
+
+The ownership boundary above is unchanged: for Pi the extension still owns
+goal semantics and the web UI remains presentation-only. Claude and Command
+Code have no companion extension — their goal channels are server-owned
+(Claude: native `/goal` transcript attachments; Command Code: the
+server-provisioned goal-runner mod and its state file).
+
 **Known limits of the browser-side history.** It is stored per browser
 (localStorage), so it is not shared between devices, and it can only record a
 goal whose end that browser witnessed — a goal that starts *and* finishes while

@@ -2235,6 +2235,119 @@ be aborted first.
 
 ---
 
+## Goal Function (contract 1.27.0)
+
+A **goal** is a durable objective the harness keeps working toward across
+runs. Unlike an ordinary prompt — whose steering text can rot through
+compaction — the goal text survives compaction on every supported runtime
+(Pi re-injects it, Claude restores it from transcript attachments, the
+Command Code goal-runner mod re-appends it every round). Goals are the
+strongest primitive for long-horizon children: fewer parent check-ins, and
+a watchable terminal event instead of per-run `agent_end` churn.
+
+### Runtimes and honest semantics
+
+| Runtime | Start | Pause | Resume | Clear | Notes |
+|---|---|---|---|---|---|
+| pi | `/goal "objective" …` | `/goal pause-now` (works **mid-run** — slash commands pass through on busy sessions) | `/goal resume` | `/goal clear` | Completion optional verification via `verifyCommand` |
+| claude | `/goal <condition>` (CLI loop blocks until the goal settles) | **server-side**: disarms auto-continue | **server-side**: re-arms + continuation prompt | `/goal clear` | Local-CLI backends only (default, sdk-subscription, cli-direct); channel unsupported. Verifier verdicts live in transcript `goal_status` attachments |
+| commandcode | goal-runner mod arms at the next run | **server-side**: control file; the mod early-stops | **server-side**: re-arm + continuation run | **server-side**: control file + record | `verifier=command` (deterministic) or `model` (sub-model judge) or `both`. Mod state file = truth channel |
+| opencode / antigravity | out of scope (OpenCode keeps its own server bridge via the goal-engine plugin) | | | | `supported:false` |
+
+Canonical status vocabulary: `idle` (no goal) · `running` · `wrapping_up` ·
+`paused` (with `pausedReason`) · `achieved` · `cleared` · `failed` ·
+`unknown`. Terminal transitions (`achieved`/`failed`/`cleared`) additionally
+emit a `goal_end` event — the one worth watching.
+
+### GET /api/v1/sessions/:id/goal
+
+Runtime-neutral projection. Unsupported runtimes answer `supported:false` —
+never a guess.
+
+```json
+{
+  "sessionId": "…", "runtime": "pi",
+  "supported": true,
+  "status": "running",
+  "objective": "Process 160 species datasets",
+  "runs": 3, "maxRuns": 20,
+  "verification": { "status": "passed", "command": "test -f done", "message": null },
+  "lastReason": null,
+  "spend": { "inputTokens": 37673, "usd": 0.0047 },
+  "budget": { "tokens": 5000000, "usd": null },
+  "startedAt": 1787837689128, "completedAt": null,
+  "pausedReason": null,
+  "autoContinue": true,
+  "runtimeState": { }
+}
+```
+
+`runtimeState` is the verbatim native state (Pi goal JSON, the last Claude
+`goal_status` attachments, or the Command Code goal-runner mod state) for
+consumers that want more than the projection.
+
+### POST /api/v1/sessions/:id/goal
+
+```json
+{ "action": "start", "objective": "…", "maxTurns": 20, "verifyCommand": "test -f done", "minReviews": 1, "budgetTokens": 500000, "budgetUsd": 4.5 }
+```
+
+`action` is `start | pause | resume | clear`; `start` requires a non-empty,
+single-line `objective` (≤4000 chars). Every action dispatches through the
+standard prompt pipeline (prompt-injection checked, receipted, admitted) and
+responds:
+
+```json
+{ "sessionId": "…", "runtime": "pi", "action": "start", "accepted": true,
+  "receipt": { "runId": "…", "status": "completed", "dispatchMode": "prompt" },
+  "goal": { } }
+```
+
+Read the response's `receipt` correctly: on Pi a `start` receipt completes at
+the **command boundary** while the goal loop owns subsequent `agent_end`
+events; on Claude the goal prompt is dispatched **detached** and the CLI loop
+holds `query()` open until the goal settles. Either way: poll `GET /goal` or
+watch `goal_end` — never treat the start receipt as "goal done".
+
+### Goal events + watches
+
+Every goal state transition publishes normalized events to the broker:
+
+- `goal_state` — the full projection after each change;
+- `goal_end` — once per transition into `achieved`/`failed`/`cleared`.
+
+Both appear on `/events` (stream and `?mode=snapshot`), are bridged to the
+browser goal surface, and are watchable:
+
+```bash
+# Parent wake on goal completion (long-horizon orchestration pattern)
+curl --unix-socket $SOCK -X POST /api/v1/sessions/$CHILD/watch \
+  -H "Authorization: Bearer $TOK" -H 'content-type: application/json' \
+  -d '{"conditions":[{"type":"event_type","eventType":"goal_end"}],
+       "onFire":{"type":"prompt","targetSessionId":"'$PARENT'","message":"child goal ended"}}'
+```
+
+Claude auto-continue (server-side loop that re-prompts an unmet, idle goal)
+is bounded and env-tunable: `CLAUDE_GOAL_AUTO_CONTINUE=false` disables it;
+`CLAUDE_GOAL_AUTO_CONTINUE_MAX_NUDGES` (default 20),
+`..._BASE_BACKOFF_MS` (30s), `..._MAX_BACKOFF_MS` (10m), `..._SWEEP_MS`
+(30s) tune it. Budget exhaustion marks the goal `failed` with
+`pausedReason: "budget"` and emits `goal_end`.
+
+### Create-with-goal
+
+`POST /sessions` and `POST /sessions/batch` accept an optional `goal` object
+(`objective` required; `maxTurns`, `verifyCommand`, `minReviews`,
+`budgetTokens`, `budgetUsd`, `modelVerifier`, `autoContinue` optional). Pi
+and Claude dispatch detached immediately; Command Code arms the goal for its
+first prompt. OpenCode/antigravity reject with `400`. Arming failure never
+fails the create — the response reports `goal: {armed: false, error}`.
+
+`GET /sessions/:id/info` carries the same `goal` projection, so a parent
+polling `/info` sees goal status without a second call.
+
+---
+
 ## End-to-End Example
 
 ### Python: Simple voice-chat style usage
