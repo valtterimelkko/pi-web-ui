@@ -114,6 +114,61 @@ describe('createModelsRoutes — handleListModels', () => {
     });
   });
 
+  it('publishes zai/glm-5.3-flash with only its catalogued low/high/max levels', async () => {
+    // Metadata shape mirrors the SDK dynamic model store entry exactly:
+    // `null` in the map means "not supported" and must not surface as a
+    // selectable level, and missing map keys (off/minimal/xhigh) likewise.
+    const routes = createModelsRoutes({
+      piService: {
+        getAvailableModels: vi.fn().mockResolvedValue([
+          {
+            id: 'glm-5.3-flash',
+            name: 'GLM-5.3-Flash',
+            provider: 'zai',
+            reasoning: true,
+            input: ['text', 'image'],
+            contextWindow: 1000000,
+            maxTokens: 131072,
+            thinkingLevelMap: {
+              off: null,
+              minimal: null,
+              low: 'low',
+              medium: null,
+              high: 'high',
+              xhigh: null,
+              max: 'max',
+            },
+            compat: {
+              supportsStore: false,
+              supportsDeveloperRole: false,
+              supportsReasoningEffort: true,
+              maxTokensField: 'max_tokens',
+              thinkingFormat: 'zai',
+              zaiToolStream: true,
+            },
+          },
+        ]),
+      } as any,
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
+    });
+    const res = createMockRes();
+
+    await routes.handleListModels(
+      createMockReq(undefined, 'GET', '/api/v1/models?runtime=pi'),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).models.pi[0]).toMatchObject({
+      id: 'glm-5.3-flash',
+      selector: 'zai/glm-5.3-flash',
+      reasoning: true,
+      thinkingLevels: ['low', 'high', 'max'],
+    });
+  });
+
   it('advertises the full discovered Command Code catalogue with runnable status', async () => {
     const routes = createModelsRoutes({
       piService: { getAvailableModels: vi.fn().mockResolvedValue([]) } as any,
