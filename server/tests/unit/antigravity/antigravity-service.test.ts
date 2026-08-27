@@ -205,8 +205,61 @@ describe('normalizeAgyModel', () => {
     expect(normalizeAgyModel('Gemini 3.5 Flash (High)')).toBe('Gemini 3.5 Flash (High)');
   });
 
+  it('cuts at the tab when given a raw `agy models` line (id<TAB>label)', () => {
+    // agy 1.1.21 `models` output joins id and label with a tab. Only the label
+    // resolves at the --model boundary (live-validated 2026-08-27): the raw
+    // line first silently downgrades, then print mode exits 1.
+    expect(normalizeAgyModel('gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)')).toBe('Gemini 3.7 Flash (Medium)');
+    expect(normalizeAgyModel('claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)')).toBe('Claude Sonnet 4.6 (Thinking)');
+  });
+
+  it('prefers the tab label over a provider prefix when both are present', () => {
+    expect(normalizeAgyModel('antigravity/gemini-x\tGemini X')).toBe('Gemini X');
+  });
+
   it('handles an empty string', () => {
     expect(normalizeAgyModel('')).toBe('');
+  });
+
+  describe('getAvailableModels', () => {
+    function freshService(): AntigravityService {
+      return new AntigravityService({ registryPath: join(tmpdir(), `ag-models-${Date.now()}-${Math.random().toString(36).slice(2)}.json`) });
+    }
+
+    it('exposes bare labels as ids when agy models prints tab-joined id<TAB>label lines (selector round-trip)', async () => {
+      const modelSvc = freshService();
+      ctrl.behavior = 'success';
+      ctrl.stdout = [
+        'gemini-3.7-flash-high\tGemini 3.7 Flash (High)',
+        'gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)',
+        'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+        '',
+      ].join('\n');
+
+      const models = await modelSvc.getAvailableModels();
+
+      // The Internal API copies `id` into the /models selector verbatim, and
+      // the contract says callers copy the selector into POST /sessions — so
+      // the id must be exactly what agy's --model resolves: the bare label.
+      expect(models.map((m) => m.id)).toEqual([
+        'Gemini 3.7 Flash (High)',
+        'Gemini 3.7 Flash (Medium)',
+        'Claude Sonnet 4.6 (Thinking)',
+      ]);
+      expect(models.every((m) => !m.id.includes('\t'))).toBe(true);
+      expect(models.every((m) => m.name === m.id)).toBe(true);
+      expect(models.every((m) => m.provider === 'antigravity')).toBe(true);
+    });
+
+    it('passes label-only lines through unchanged (older agy output compatibility)', async () => {
+      const modelSvc = freshService();
+      ctrl.behavior = 'success';
+      ctrl.stdout = ['Gemini 3.5 Flash (Medium)', 'Gemini 3.1 Pro (High)', ''].join('\n');
+
+      const models = await modelSvc.getAvailableModels();
+
+      expect(models.map((m) => m.id)).toEqual(['Gemini 3.5 Flash (Medium)', 'Gemini 3.1 Pro (High)']);
+    });
   });
 });
 
@@ -549,6 +602,21 @@ describe('AntigravityService — durable turn lifecycle', () => {
     await prompt(sessionId, 'hi');
     const entry = await svc.getSession(sessionId);
     expect(entry?.model).toBe('antigravity/Gemini 3.5 Flash (High)');
+  });
+
+  it('passes the bare label as the --model arg when the stored id is a raw tab-joined agy models line', async () => {
+    // Sessions created before the listing fix (or by any caller copying the
+    // old tab-form selector) store the raw line; turns on those sessions must
+    // still send only the label to agy.
+    const rawLine = 'gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)';
+    const { sessionId } = await svc.createSession(tmp, rawLine);
+    await prompt(sessionId, 'hi');
+
+    const modelIdx = ctrl.args.indexOf('--model');
+    expect(modelIdx).toBeGreaterThanOrEqual(0);
+    expect(ctrl.args[modelIdx + 1]).toBe('Gemini 3.7 Flash (Medium)');
+    // The raw tab-joined line must never reach agy.
+    expect(ctrl.args).not.toContain(rawLine);
   });
 
   it('getSessionStats counts finalized turns only — a running turn is not counted (§5.3)', async () => {

@@ -38,13 +38,20 @@ const DEFAULT_CONTEXT_WINDOW = 1_048_576; // Flash is the default model
 /**
  * Normalize a model id for the agy `--model` boundary.
  *
- * agy expects a bare label like "Gemini 3.5 Flash (High)". Some callers/model
- * pickers attach a provider prefix (e.g. "antigravity/…"); passing that makes
- * agy silently fall back to its default model (the user picks High, gets
- * Medium). Strip a single leading `provider/` segment so the chosen label runs
- * as chosen. The stored registry id is left untouched — normalize only here.
+ * agy expects a bare label like "Gemini 3.5 Flash (High)". Two shapes must not
+ * reach it: a provider prefix (e.g. "antigravity/…" from some callers/model
+ * pickers) and a raw `agy models` output line, where agy 1.1.21 joins the
+ * internal id and the display label with a tab (e.g.
+ * "gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)"). Either shape makes
+ * agy silently fall back to its default model, then print mode hard-fail with
+ * "invalid model selection" (live-validated 2026-08-27). Prefer the tab label
+ * when present (it is exactly what agy resolves), then strip a single leading
+ * `provider/` segment. The stored registry id is left untouched — normalize
+ * only here.
  */
 export function normalizeAgyModel(model: string): string {
+  const tab = model.lastIndexOf('\t');
+  if (tab >= 0) return model.slice(tab + 1).trim();
   const slash = model.indexOf('/');
   return slash >= 0 ? model.slice(slash + 1) : model;
 }
@@ -1042,7 +1049,16 @@ export class AntigravityService {
           .split('\n')
           .map((line) => line.trim())
           .filter((line) => line.length > 0)
-          .map((name) => ({ id: name, name, provider: 'antigravity' }));
+          .map((line) => {
+            // agy 1.1.21 prints "<internal-id>\t<Label>" per line. The label
+            // is what agy's --model resolves (the id is not); expose it as the
+            // id so the /models selector round-trips through POST /sessions.
+            // Label-only output (older agy) passes through unchanged.
+            const tab = line.lastIndexOf('\t');
+            const label = tab >= 0 ? line.slice(tab + 1).trim() : line;
+            const name = label.length > 0 ? label : line;
+            return { id: name, name, provider: 'antigravity' as const };
+          });
       } catch {
         models = [
           { id: 'Gemini 3.5 Flash (Medium)', name: 'Gemini 3.5 Flash (Medium)', provider: 'antigravity' },
