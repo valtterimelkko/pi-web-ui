@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.26.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.27.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -1074,6 +1074,10 @@ export interface RuntimeCapabilities {
   supportsInteractiveQuestions?: boolean;
   /** Whether the runtime can accept structured answers/annotations to interactive questions. */
   supportsStructuredQuestionResponse?: boolean;
+  /** Whether the runtime exposes the goal function through the Internal API (contract 1.27.0). */
+  supportsGoal?: boolean;
+  /** Goal control actions available for this runtime; empty when `supportsGoal` is false. */
+  goalControls?: string[];
 }
 
 export interface CapabilitiesResponse {
@@ -1169,6 +1173,10 @@ export const SSE_EVENT_TYPES = {
   TASK_STATUS: 'task_status',
   ERROR: 'error',
   COMPLETE: 'complete',
+  /** Contract 1.27.0: canonical goal projection snapshot (goal function). */
+  GOAL_STATE: 'goal_state',
+  /** Contract 1.27.0: terminal goal transition (achieved|failed|cleared) — the watchable goal event. */
+  GOAL_END: 'goal_end',
 } as const;
 
 export interface SSETaskStatusEvent {

@@ -21,13 +21,19 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.26.0",
+  "contractVersion": "1.27.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.27.0** (minor, additive cross-runtime goal function) — makes the goal function (a durable objective the harness keeps working toward across turns, surviving compaction) programmatically usable through the Internal API for Pi, Claude (SDK backend) and Command Code. Everything is additive; existing consumers keep working unchanged. Full details in `docs/INTERNAL-API.md` (§ Goal endpoints):
+  - **Pi slash commands on a busy session** — `POST /sessions/:id/prompt` with a message starting with `/` no longer returns `409 SESSION_BUSY` while a Pi session is streaming: extension commands resolve before the SDK's streaming guard (mirroring the WebSocket path), which is what makes `/goal pause-now` and the other goal controls usable mid-run. The run receipt completes at the command boundary with cessation basis `documented_handler_return`; non-slash prompts and non-Pi runtimes keep the historical busy refusal.
+  - **Goal state + control** — `GET /api/v1/sessions/:id/goal` returns a runtime-neutral projection (`supported`, canonical `status`, objective, runs, verification, spend/budget, timestamps, verbatim `runtimeState`); `POST /api/v1/sessions/:id/goal` accepts `{action: start|pause|resume|clear, objective?, maxTurns?, verifyCommand?, minReviews?, budgetTokens?, budgetUsd?}` and dispatches per-runtime semantics honestly (Pi slash command; Claude `/goal` prompt via the prompt pipeline; Command Code goal-runner mod arming).
+  - **Goal events** — goal state transitions are published to the event broker as normalized `goal_state` events, with a synthetic `goal_end` event when a goal reaches a terminal status (`achieved`/`failed`/`cleared`). Both are watchable via the existing watch conditions.
+  - **Capabilities** — `runtimes.{pi,claude,commandcode}` gain `supportsGoal` plus a `goalControls[]` list of supported control actions, so discovery clients can branch truthfully per runtime.
 
 - **1.26.0** (minor, additive round-2 consumer fixes) — fixes the round-2 defects reported 2026-08-25 (after 1.25.0). Everything is additive; existing consumers keep working unchanged — including bare model ids, which were a silent regression in 1.25.0 and are restored here:
   - **Bare model id resolution** — `POST /sessions` with a Pi `model` that is a bare id (no `/`) again binds when it matches exactly one advertised, unblocked model: the qualified selector is applied and `resolvedModel`/`modelBinding.resolved` report the qualified form with `fallbackApplied: false`. A bare id matching several advertised models returns `422 MODEL_NOT_APPLIED` listing every `provider/id` candidate; unknown ids keep failing loudly exactly as in 1.25.0. Blocked providers are excluded from resolution. (1.25.0 rejected all bare ids as format errors despite its "additive" changelog claim.)

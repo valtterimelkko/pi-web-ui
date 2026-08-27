@@ -45,6 +45,8 @@ export const EVENT_TYPE_REGISTRY: readonly EventTypeInfo[] = [
   { type: 'permission_request', description: 'A tool permission/approval request (Claude channel / OpenCode).', category: 'control', verbosity: FULL },
   { type: 'ask_user_question_request', description: 'A Claude SDK AskUserQuestion dialog request awaiting a structured answer (answers/annotations or cancel).', category: 'control', verbosity: FULL },
   { type: 'ask_user_question_closed', description: 'A Claude SDK AskUserQuestion dialog closed for a non-answer reason (timeout/aborted/turn_end/disconnected). The reason is in data.reason.', category: 'control', verbosity: FULL },
+  { type: SSE_EVENT_TYPES.GOAL_STATE, description: 'Goal function state snapshot (canonical projection, contract 1.27.0).', category: 'control', verbosity: BOTH },
+  { type: SSE_EVENT_TYPES.GOAL_END, description: 'Goal reached a terminal status (achieved|failed|cleared) — the watchable goal event.', category: 'control', verbosity: BOTH },
 ];
 
 /** All registered event type names (drift-guard set). */

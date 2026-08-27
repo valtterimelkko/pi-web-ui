@@ -209,6 +209,28 @@ export class MultiSessionManager {
     else snapshot.set(snapshotKey, message);
     if (snapshot.size === 0) this.extensionUiSnapshots.delete(sessionPath);
     else this.extensionUiSnapshots.set(sessionPath, snapshot);
+
+    // Contract 1.27.0: notify goal-function observers so the Internal API can
+    // project extension UI changes (goal-engine widget/status lines) into the
+    // event broker. Observer errors are swallowed — the WebSocket snapshot is
+    // the primary consumer path and must never be disrupted.
+    for (const observer of this.extensionUiObservers.get(sessionPath) ?? []) {
+      try { observer(message); } catch { /* non-fatal */ }
+    }
+  }
+
+  private readonly extensionUiObservers = new Map<string, Set<(message: unknown) => void>>();
+
+  /** Observe raw extension-UI messages (extension_status / widget_content / widget_cleared) for a session. */
+  addExtensionUiObserver(sessionPath: string, observer: (message: unknown) => void): void {
+    let set = this.extensionUiObservers.get(sessionPath);
+    if (!set) { set = new Set(); this.extensionUiObservers.set(sessionPath, set); }
+    set.add(observer);
+  }
+
+  removeExtensionUiObserver(sessionPath: string, observer: (message: unknown) => void): void {
+    this.extensionUiObservers.get(sessionPath)?.delete(observer);
+    if (this.extensionUiObservers.get(sessionPath)?.size === 0) this.extensionUiObservers.delete(sessionPath);
   }
 
   private replayExtensionUiSnapshot(clientId: string, sessionPath: string): void {

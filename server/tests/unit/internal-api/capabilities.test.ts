@@ -65,7 +65,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.26.0',
+        contractVersion: '1.27.0',
       },
       features: {
         retentionLeases: true,
@@ -87,6 +87,8 @@ describe('createCapabilitiesRoutes', () => {
           supportsSteer: true,
           supportsSteerWhileBusy: true,
           supportsThinkingLevel: true,
+          supportsGoal: true,
+          goalControls: ['start', 'pause', 'resume', 'clear'],
         },
         claude: {
           available: true,

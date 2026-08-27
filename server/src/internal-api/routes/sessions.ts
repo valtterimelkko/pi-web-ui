@@ -6,6 +6,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'http';
+import { PassThrough, Writable } from 'stream';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { projectDefaultViewFromEvents, renderScreenViewMarkdown } from '@pi-web-ui/shared';
 import { detectPromptInjection } from '../../security/prompt-injection.js';
@@ -60,6 +61,10 @@ import type {
   Phase7PiShadowReasonCode,
 } from '../types.js';
 import { isThinkingLevel } from '../types.js';
+import { composePiGoalCommand, type SessionGoalControlRequest } from '../goal/goal-actions.js';
+import { readProjectPiGoalState } from '../goal/pi-goal.js';
+import { createPiGoalEventBridge } from '../goal/goal-events.js';
+import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
 import { WatchManager, WatchValidationError, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
 import { PinExpiryManager, type ApplyPinResult } from '../pin-expiry-manager.js';
@@ -481,10 +486,28 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       multiSessionManager.addApiObserver(sessionPath, observer);
       piObservedSessions.add(sessionPath);
       piObserverByPath.set(sessionPath, observer);
+
+      // Contract 1.27.0 (goal function): bridge goal-engine extension UI
+      // messages into broker `goal_state` / `goal_end` events, using the
+      // on-disk goal state as truth. The bridge lives and dies with this
+      // session's broker observer (same disposal key).
+      const goalBridge = createPiGoalEventBridge({
+        readProjection: () => readProjectPiGoalState(sessionPath),
+        publish: (event) => {
+          broker.publish(sessionPath, {
+            type: event.type,
+            timestamp: event.timestamp,
+            data: event.data,
+          } as NormalizedEvent);
+        },
+      });
+      multiSessionManager.addExtensionUiObserver?.(sessionPath, goalBridge);
+
       // Own the observer teardown in the disposal registry (broker key = path)
       // so handleDeleteSession/shutdown detach it, not just the manual path.
       disposal.register(sessionPath, 'pi-broker-observer', () => {
         multiSessionManager.removeApiObserver?.(sessionPath, observer);
+        multiSessionManager.removeExtensionUiObserver?.(sessionPath, goalBridge);
         piObserverByPath.delete(sessionPath);
         piObservedSessions.delete(sessionPath);
       });
@@ -2298,6 +2321,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     mode: PromptMode,
     busy: boolean,
     requireActiveTurn: boolean,
+    options: { allowSlashPassThrough?: boolean } = {},
   ): { dispatchMode: PromptMode; error?: never } | {
     dispatchMode?: never;
     error: typeof ErrorCode.SESSION_BUSY | typeof ErrorCode.SESSION_NOT_STREAMING;
@@ -2310,7 +2334,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       if (requireActiveTurn) return { error: ErrorCode.SESSION_NOT_STREAMING };
       return { dispatchMode: 'prompt' };
     }
-    return busy ? { error: ErrorCode.SESSION_BUSY } : { dispatchMode: 'prompt' };
+    // Contract 1.27.0 (goal function): a Pi extension command resolves inside
+    // AgentSession.prompt() BEFORE the streaming guard, so a slash message may
+    // pass through on a busy session (mirrors the WebSocket path). Only ever
+    // set for runtime==='pi' by the caller.
+    if (busy) return options.allowSlashPassThrough ? { dispatchMode: 'prompt' } : { error: ErrorCode.SESSION_BUSY };
+    return { dispatchMode: 'prompt' };
   }
 
   async function handleCommandCodePrompt(
@@ -2543,9 +2572,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
+      // Contract 1.27.0 (goal function): Pi extension commands pass through on a
+      // busy session — AgentSession.prompt() resolves commands before its
+      // streaming guard, exactly like the browser WebSocket path. This is what
+      // makes `/goal pause-now` usable mid-run from the Internal API.
+      // Detached dispatch keeps the historical refusal (a detached slash command
+      // on a busy session has no defined command-boundary semantics yet).
+      const piSlashPassThrough = runtime === 'pi'
+        && mode === 'prompt'
+        && body.detach !== true
+        && /^\s*\//.test(body.message.trimStart())
+        && isSessionBusy(entry);
+
       let dispatchMode: PromptMode;
       try {
-        const decision = chooseDispatchMode(runtime, mode, isSessionBusy(entry), body.requireActiveTurn === true);
+        const decision = chooseDispatchMode(runtime, mode, isSessionBusy(entry), body.requireActiveTurn === true, { allowSlashPassThrough: piSlashPassThrough });
         if (decision.error) {
           if (decision.error === ErrorCode.SESSION_BUSY) {
             res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
@@ -2585,8 +2626,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       // Claim a new-turn slot synchronously before the first reservation await.
       // This is the route's monotonic per-session turn token.
-      let directClaim = dispatchMode === 'prompt' ? claimDirectDispatch(sessionId) : undefined;
-      if (dispatchMode === 'prompt' && !directClaim) {
+      let directClaim = dispatchMode === 'prompt' && !piSlashPassThrough ? claimDirectDispatch(sessionId) : undefined;
+      if (dispatchMode === 'prompt' && !directClaim && !piSlashPassThrough) {
         res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
         sendJson(res, 409, enrichedErrorBody(ErrorCode.SESSION_BUSY, 'Session is currently busy'));
         return;
@@ -2670,7 +2711,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 500, { error: 'Failed to verify session state', code: ErrorCode.INTERNAL_ERROR, runId });
         return;
       }
-      if (dispatchMode === 'prompt' && runtimeBusyAfterReservation) {
+      if (dispatchMode === 'prompt' && runtimeBusyAfterReservation && !piSlashPassThrough) {
         directClaim?.release();
         await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY });
         res.setHeader('Retry-After', String(admission.snapshot().retryAfterSeconds));
@@ -2701,7 +2742,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
       let leaseReleased = false;
       const admissionLease = {
-        turnToken: directClaim?.token,
+        // Slash pass-through owns no turn: -1 never matches a claimed token, so
+        // the in-flight run's agent_end cannot complete this receipt early; the
+        // documented_handler_return branch terminates it at the command boundary.
+        turnToken: directClaim?.token ?? (piSlashPassThrough ? -1 : undefined),
         release: () => {
           if (leaseReleased) return;
           leaseReleased = true;
@@ -3362,6 +3406,132 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
     }
     return null;
+  }
+
+  // ─── Goal function (contract 1.27.0) ────────────────────────────────────────
+
+  /**
+   * Internal capture response used to reuse the full prompt pipeline from the
+   * goal control route: the pipeline writes a complete JSON API response into
+   * this object, which the caller then interprets and (on success) augments
+   * with a fresh goal projection.
+   */
+  function createCaptureResponse(): ServerResponse & { statusCode: number; body: string } {
+    const chunks: Buffer[] = [];
+    const res = new Writable({
+      write(chunk: Buffer, _enc: unknown, cb: (e?: Error | null) => void) { chunks.push(chunk); cb(); },
+    }) as unknown as ServerResponse & { statusCode: number; body: string };
+    let ended = false;
+    res.statusCode = 200;
+    res.setHeader = (() => res) as never;
+    res.writeHead = ((_code: number) => { res.statusCode = _code; return res; }) as never;
+    res.end = ((_data?: string | Buffer) => {
+      if (_data !== undefined) chunks.push(Buffer.isBuffer(_data) ? _data : Buffer.from(_data));
+      if (!ended) { ended = true; res.body = Buffer.concat(chunks).toString(); }
+      return res;
+    }) as never;
+    res.on = (() => res) as never;
+    res.getHeader = () => undefined;
+    return res;
+  }
+
+  /** Minimal JSON request carrying `{message, verbosity:'answers'}` for internal prompt-pipeline reuse. */
+  function synthesizePromptRequest(message: string): IncomingMessage {
+    const req = new PassThrough() as unknown as IncomingMessage;
+    (req as { method?: string }).method = 'POST';
+    (req as { url?: string }).url = '/api/v1/sessions/goal-internal/prompt';
+    (req as { headers?: Record<string, string> }).headers = { 'content-type': 'application/json' };
+    process.nextTick(() => {
+      (req as unknown as PassThrough).emit('data', Buffer.from(JSON.stringify({ message, verbosity: 'answers' })));
+      (req as unknown as PassThrough).emit('end');
+    });
+    return req;
+  }
+
+  /** Honest unsupported projection for runtimes without a goal path yet/out of scope. */
+  function unsupportedGoalProjection(): SessionGoalProjection {
+    return { supported: false, status: 'unknown' };
+  }
+
+  async function readGoalProjection(entry: RegistryEntry): Promise<SessionGoalProjection> {
+    if (entry.sdkType === 'pi') return readProjectPiGoalState(entry.path);
+    // Claude gains its transcript reader in Phase 2; Command Code its mod-state
+    // channel in Phase 3. OpenCode/Antigravity are out of scope (plan D1).
+    return unsupportedGoalProjection();
+  }
+
+  async function handleGetSessionGoal(
+    _req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+    if (commandCodeEntry) {
+      sendJson(res, 200, { sessionId, runtime: 'commandcode', ...unsupportedGoalProjection() });
+      return;
+    }
+    const entry = await getNonCommandCodeRegistryEntry(sessionId);
+    if (!entry) {
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+      return;
+    }
+    const projection = await readGoalProjection(entry);
+    sendJson(res, 200, { sessionId, runtime: entry.sdkType, ...projection });
+  }
+
+  async function handleSessionGoalControl(
+    req: IncomingMessage,
+    res: ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    const raw = await readJsonBody<SessionGoalControlRequest>(req);
+    const composed = composePiGoalCommand(raw ?? {});
+    if (!composed.ok) {
+      sendJson(res, 400, enrichedErrorBody(composed.error.code as ErrorCode, composed.error.message));
+      return;
+    }
+
+    const commandCodeEntry = await commandCodeService?.findSession(sessionId);
+    if (commandCodeEntry) {
+      // Phase 3 wires the goal-runner mod store; until then answer honestly.
+      sendJson(res, 501, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Command Code goal control is not wired yet'));
+      return;
+    }
+    const entry = await getNonCommandCodeRegistryEntry(sessionId);
+    if (!entry) {
+      sendJson(res, 404, enrichedErrorBody(ErrorCode.SESSION_NOT_FOUND, 'Session not found'));
+      return;
+    }
+    if (entry.sdkType !== 'pi') {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, `Runtime '${entry.sdkType}' does not support slash-command goal control`));
+      return;
+    }
+
+    // Reuse the entire prompt pipeline (injection check, receipts, admission,
+    // busy pass-through) by dispatching the composed slash command internally.
+    const innerRes = createCaptureResponse();
+    await handleSendPrompt(synthesizePromptRequest(composed.command), innerRes, sessionId);
+
+    let inner: Record<string, unknown> = {};
+    try { inner = JSON.parse(innerRes.body) as Record<string, unknown>; } catch { /* non-JSON body forwarded below */ }
+
+    if (innerRes.statusCode !== 200 && innerRes.statusCode !== 202) {
+      // Forward pipeline refusals verbatim — they are already contracted shapes.
+      sendJson(res, innerRes.statusCode || 500, inner);          
+      return;
+    }
+
+    const projection = await readProjectPiGoalState(entry.path);
+    sendJson(res, 200, {
+      sessionId,
+      runtime: 'pi',
+      action: composed.action,
+      accepted: true,
+      receipt: typeof inner.runId === 'string'
+        ? { runId: inner.runId, status: inner.status ?? null, dispatchMode: inner.dispatchMode ?? null }
+        : null,
+      goal: projection,
+    });
   }
 
   async function handleRespondApproval(
@@ -5329,6 +5499,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     handleGetSessionHistory: wrapControl(handleGetSessionHistory),
     handleDeleteSession: wrapControl(handleDeleteSession),
     handleSendPrompt,
+    handleGetSessionGoal,
+    handleSessionGoalControl: wrapControl(handleSessionGoalControl),
     handleAbort: wrapControl(handleAbort),
     handleSessionControl: wrapControl(handleSessionControl),
     handleRespondApproval: wrapControl(handleRespondApproval),

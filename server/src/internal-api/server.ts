@@ -768,6 +768,18 @@ export class InternalApiServer {
           return;
         }
 
+        if (action === 'goal') {
+          if (req.method === 'GET') {
+            // Read endpoints skip the bounded control lane (pure observer).
+            await deps.sessionRoutes.handleGetSessionGoal(req, res, sessionId);
+          } else if (req.method === 'POST') {
+            await deps.sessionRoutes.handleSessionGoalControl(req, res, sessionId);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+          return;
+        }
+
         if (action === 'approvals') {
           // /api/v1/sessions/:id/approvals/pending
           if (subId === 'pending' && !subAction) {

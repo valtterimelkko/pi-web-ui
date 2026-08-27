@@ -75,6 +75,9 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsHeartbeat: false,
           supportsInteractiveQuestions: false,
           supportsStructuredQuestionResponse: false,
+          // Contract 1.27.0: goal function over the Internal API.
+          supportsGoal: true,
+          goalControls: ['start', 'pause', 'resume', 'clear'],
         },
         claude: {
           available: claudeAvailable,
@@ -92,6 +95,9 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsHeartbeat: claudeBackendMode === 'channel',
           supportsInteractiveQuestions: claudeBackendMode === 'sdk',
           supportsStructuredQuestionResponse: claudeBackendMode === 'sdk',
+          // Contract 1.27.0: native `/goal` works through the SDK path only.
+          supportsGoal: claudeBackendMode === 'sdk',
+          goalControls: claudeBackendMode === 'sdk' ? ['start', 'pause', 'resume', 'clear'] : [],
         },
         opencode: {
           available: opencodeEnabled && opencodeAvailable,
@@ -140,6 +146,10 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsModelSwitch: false,
           supportsThinkingLevel: false,
           supportsEffort: commandCodeSupportsEffort,
+          // Contract 1.27.0: goals arrive via the server-owned goal-runner mod;
+          // capability follows actual enablement/availability, not the gate alone.
+          supportsGoal: commandCodeEnabled && commandCodeAvailable,
+          goalControls: commandCodeEnabled && commandCodeAvailable ? ['start', 'pause', 'resume', 'clear'] : [],
           modelCatalogue: commandCodeModels.map((model) => ({
             id: model.id,
           })),
