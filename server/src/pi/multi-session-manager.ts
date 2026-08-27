@@ -587,7 +587,12 @@ export class MultiSessionManager {
 
     let resolvedWebUIContext: WebUIContext | undefined;
     const pendingExtensionMessages: unknown[] = [];
-    const extensionWebUIContext: WebUIContext | undefined = webUIContext
+    // Contract 1.27.0 (goal function): even headless sessions (Internal API
+    // creates, no browser attached) get a sink so extension UI messages still
+    // reach recordExtensionUiMessage — that snapshot is how the Internal API
+    // projects goal state without inventing semantics.
+    const baseWebUiContext: WebUIContext = webUIContext ?? { clientId, sendToClient: () => {} };
+    const extensionWebUIContext: WebUIContext | undefined = baseWebUiContext
       ? {
           ...webUIContext,
           clientId,
@@ -602,7 +607,7 @@ export class MultiSessionManager {
             if (sessionPath && this.sessions.has(sessionPath)) {
               this.broadcastToSubscribers(sessionPath, sessionScopedMessage);
             } else {
-              webUIContext.sendToClient(sessionScopedMessage);
+              baseWebUiContext.sendToClient(sessionScopedMessage);
             }
           },
         }
@@ -728,9 +733,11 @@ export class MultiSessionManager {
       
       // Create/recreate the session
       const pendingExtensionMessages: unknown[] = [];
-      const extensionWebUIContext: WebUIContext | undefined = webUIContext
+      // Same headless-sink fallback as createAndSubscribe (contract 1.27.0).
+      const baseWebUiContext: WebUIContext = webUIContext ?? { clientId, sendToClient: () => {} };
+      const extensionWebUIContext: WebUIContext | undefined = baseWebUiContext
         ? {
-            ...webUIContext,
+            ...baseWebUiContext,
             clientId,
             sessionPath,
             sendToClient: (message: unknown) => {
@@ -744,7 +751,7 @@ export class MultiSessionManager {
               if (this.sessions.has(sessionPath)) {
                 this.broadcastToSubscribers(sessionPath, sessionScopedMessage);
               } else {
-                webUIContext.sendToClient(sessionScopedMessage);
+                baseWebUiContext.sendToClient(sessionScopedMessage);
               }
             },
           }

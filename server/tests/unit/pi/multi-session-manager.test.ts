@@ -409,6 +409,32 @@ describe('MultiSessionManager', () => {
       });
     });
 
+    it('records extension UI messages even for headless sessions (no webUIContext — Internal API creates)', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'goal-session',
+        sessionFile: '/path/to/goal-session.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      // NOTE: no webUIContext passed — this is the Internal API create path.
+      await manager.createAndSubscribe('internal-client-x', '/work');
+
+      const createArgs = mockPiService.createSession.mock.calls.at(-1)?.[0];
+      const sendToClient = createArgs?.webUIContext?.sendToClient as ((message: unknown) => void) | undefined;
+      expect(sendToClient).toBeTypeOf('function');
+
+      sendToClient?.({ type: 'widget_content', key: 'goal-engine-status', content: ['🎯 Goal Status', 'Status: ▶ Running'] });
+
+      // A later subscriber receives the replay → proves the snapshot recorded it.
+      await manager.subscribeClient('client-2', '/path/to/goal-session.jsonl');
+      expect(mockBroadcast).toHaveBeenCalledWith('client-2', expect.objectContaining({
+        type: 'widget_content',
+        key: 'goal-engine-status',
+        sessionId: 'goal-session',
+      }));
+    });
+
     it('should replay the latest extension status and widget to a later subscriber', async () => {
       const mockSession = createMockAgentSession({
         sessionId: 'goal-session',
