@@ -247,6 +247,12 @@ export async function sendRuntimeAvailabilityStatus(
 }
 
 export class WebSocketConnectionManager {
+  /**
+   * Contract 1.27.0 goal function: browser goal control for runtimes without a
+   * native client-side path (Claude, Command Code). Wired from index.ts to the
+   * Internal API goal-control handler; null = those controls answer honestly.
+   */
+  goalControlApi?: (sessionId: string, body: { action: string; objective?: string }) => Promise<{ statusCode: number; body: Record<string, unknown> }>;
   private wss: WebSocketServer;
   private clients: Map<string, WebSocketClient> = new Map();
   private piService: PiService;
@@ -1721,10 +1727,41 @@ export class WebSocketConnectionManager {
     const sessionPath = sessionId || this.getCurrentSessionPath(clientId);
     if (!sessionPath) return;
 
+    // Contract 1.27.0: Claude and Command Code route to the Internal API
+    // goal-control handler (same code path the Unix-socket API exposes).
+    const entry = await getSessionRegistry().get(sessionPath);
+    if (entry?.sdkType === 'claude' || entry?.sdkType === 'commandcode') {
+      if (!this.goalControlApi) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: `Goal control for ${entry.sdkType} is not available on this host`,
+          code: 'UNSUPPORTED_OPERATION',
+        });
+        return;
+      }
+      try {
+        const result = await this.goalControlApi(sessionPath, { action });
+        if (result.statusCode >= 400) {
+          this.sendMessage(clientId, {
+            type: 'error',
+            message: typeof result.body.error === 'string' ? result.body.error : 'Goal control failed',
+            code: typeof result.body.code === 'string' ? result.body.code : 'GOAL_CONTROL_FAILED',
+          });
+        }
+      } catch (error) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: `Goal control failed: ${error instanceof Error ? error.message : String(error)}`,
+          code: 'GOAL_CONTROL_FAILED',
+        });
+      }
+      return;
+    }
+
     // Goal control is OpenCode-only (Pi handles its own goal slash commands).
     if (!this.opencodeSessionIds.has(sessionPath)) {
-      const entry = await getSessionRegistry().get(sessionPath);
-      if (entry?.sdkType !== 'opencode') return;
+      const priorEntry = await getSessionRegistry().get(sessionPath);
+      if (priorEntry?.sdkType !== 'opencode') return;
     }
 
     // Fail-closed before any goal mutation: a disabled OpenCode must not have

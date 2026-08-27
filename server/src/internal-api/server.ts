@@ -153,6 +153,8 @@ export class InternalApiServer {
   private notificationManager: NotificationManager | null = null;
   private socketOwner: UnixSocketOwner | null = null;
   private sessionRoutesShutdown: (() => Promise<void>) | null = null;
+  private onBrowserMessage?: (message: Record<string, unknown>) => void;
+  private goalControlHandler: ((sessionId: string, body: Record<string, unknown>) => Promise<{ statusCode: number; body: Record<string, unknown> }>) | null = null;
   private stopPromise: Promise<void> | null = null;
   private readonly connections = new Set<Socket>();
 
@@ -168,7 +170,10 @@ export class InternalApiServer {
     sessionRegistry: SessionRegistryManager;
     piService: PiService;
     commandCodeService?: CommandCodeService;
+    /** Contract 1.27.0: browser bridge for goal events (WebSocket fan-out). */
+    onBrowserMessage?: (message: Record<string, unknown>) => void;
   }) {
+    this.onBrowserMessage = deps.onBrowserMessage;
     this.config = deps.config;
     this.apiKey = deps.config.apiKey || '';
     this.claudeService = deps.claudeService;
@@ -299,8 +304,39 @@ export class InternalApiServer {
       admissionController,
       blockedPiProviders: config.internalApiBlockedPiProviders,
       commandCodeService: this.commandCodeService,
+      onBrowserMessage: this.onBrowserMessage,
     });
     this.sessionRoutesShutdown = sessionRoutes.shutdown;
+    this.goalControlHandler = async (sessionId, body) => {
+      // Re-enter the HTTP handler through a synthetic exchange so the browser
+      // control path uses the exact same logic as the Internal API route.
+      const { PassThrough, Writable } = await import('node:stream');
+      const req = new PassThrough() as unknown as IncomingMessage;
+      req.method = 'POST';
+      req.url = `/api/v1/sessions/${sessionId}/goal`;
+      req.headers = { 'content-type': 'application/json' };
+      req.emit('data', Buffer.from(JSON.stringify(body)));
+      req.emit('end');
+      const chunks: Buffer[] = [];
+      const res = new Writable({
+        write(chunk: Buffer, _enc, cb) { chunks.push(chunk); cb(); },
+      }) as unknown as ServerResponse & { statusCode: number };
+      res.statusCode = 200;
+      res.setHeader = () => res;
+      res.writeHead = (function (code: number) { res.statusCode = code; return res; }) as never;
+      let payload = '';
+      res.end = (function (data?: string | Buffer) {
+        if (data) chunks.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+        payload = Buffer.concat(chunks).toString();
+        return res;
+      }) as never;
+      res.on = (() => res) as never;
+      res.getHeader = () => undefined;
+      await sessionRoutes.handleSessionGoalControl(req as IncomingMessage, res, sessionId);
+      let parsed: Record<string, unknown> = {};
+      try { parsed = JSON.parse(payload) as Record<string, unknown>; } catch { /* non-JSON */ }
+      return { statusCode: res.statusCode, body: parsed };
+    };
     await sessionRoutes.ready;
     this.multiSessionManager.setSessionMaterializedHandler((sessionId) => sessionRoutes.reapplyRetentionForSession(sessionId));
 
@@ -519,6 +555,14 @@ export class InternalApiServer {
   /** The notification manager (built in start()), or null. Exposed so the cookie-auth browser route can reach it. */
   getNotificationManager(): NotificationManager | null {
     return this.notificationManager;
+  }
+
+  /**
+   * Contract 1.27.0 goal function: browser goal-control entry point. Returns
+   * null until the internal API server has started (routes not built yet).
+   */
+  getGoalControlHandler(): ((sessionId: string, body: Record<string, unknown>) => Promise<{ statusCode: number; body: Record<string, unknown> }>) | null {
+    return this.goalControlHandler;
   }
 
   async stop(): Promise<void> {

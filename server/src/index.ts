@@ -142,6 +142,14 @@ async function initialize(): Promise<void> {
     if (config.internalApiEnabled) {
       try {
         const { InternalApiServer } = await import('./internal-api/index.js');
+        // Contract 1.27.0: browser goal-control for claude/commandcode rides
+        // the Internal API goal-control handler once the server is started.
+        queueMicrotask(() => {
+          const handler = internalApiServer?.getGoalControlHandler() ?? null;
+          if (wsManager && handler) {
+            wsManager.goalControlApi = (sessionId, body) => handler(sessionId, body);
+          }
+        });
         notificationsRegistry = sharedRegistry;
         internalApiServer = new InternalApiServer({
           config: {
@@ -191,6 +199,11 @@ async function initialize(): Promise<void> {
           sessionRegistry: notificationsRegistry,
           piService: getPiService(),
           commandCodeService,
+          // Contract 1.27.0 goal function: goal events bridge to the browser
+          // as extension-UI-grammar messages the client goal surface parses.
+          onBrowserMessage: (message: Record<string, unknown>) => {
+            wsManager?.broadcast(message);
+          },
         });
         await internalApiServer.start();
         logger.info(`[InternalAPI] Started on Unix socket: ${config.internalApiSocketPath}`);

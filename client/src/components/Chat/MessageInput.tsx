@@ -72,7 +72,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
     currentSessionId ? state.opencodeAgentModes[currentSessionId] ?? 'build' : 'build'
   );
   const setOpencodeAgentMode = useSessionStore((state) => state.setOpencodeAgentMode);
-  const { sendPrompt, sendSteer, sendFollowUp, abortGeneration } = useWebSocket();
+  const { sendPrompt, sendSteer, sendFollowUp, abortGeneration, goalControl } = useWebSocket();
 
   // Draft store for per-session draft persistence
   const currentDraft = useDraftStore((state) => state.currentDraft);
@@ -376,6 +376,16 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
     || (streamCompose && currentDraft.trim().length > 0 && !hasUploads);
   const canSend = (currentDraft.trim().length > 0 || hasUploads) && !disabled && (!isStreaming || canSendWhileStreaming) && !isAnyUploading && !(streamCompose && hasUploads);
   const pauseGoalOnStop = shouldPauseGoalOnStop(currentSessionSdkType, goalEngineStatus);
+  // Contract 1.27.0: claude/commandcode goals disarm server-side on stop (the
+  // auto-continue loop / goal-runner would otherwise re-launch an aborted goal).
+  const pauseGoalBeforeStop = useCallback(() => {
+    if (!pauseGoalOnStop || !currentSessionId) return;
+    if (currentSessionSdkType === 'pi') {
+      sendPrompt('/goal pause-now');
+    } else if (currentSessionSdkType === 'claude' || currentSessionSdkType === 'commandcode') {
+      goalControl(currentSessionId, 'pause');
+    }
+  }, [pauseGoalOnStop, currentSessionSdkType, currentSessionId, goalControl, sendPrompt]);
   // Honest per-runtime steer semantics for the delivery-mode strip. Pi joins
   // the live run; Claude injects at the next tool boundary; Command Code has
   // no mid-run channel, so 'Steer' interrupts and redirects immediately.
@@ -709,11 +719,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
           {isStreaming && !canSendWhileStreaming ? (
             <button
               onClick={() => {
-                // Pi: send /goal pause-now slash command before abort so the extension
-                // cleanly pauses. OpenCode: server pauses goal state on abort automatically.
-                if (pauseGoalOnStop && currentSessionSdkType === 'pi') {
-                  sendPrompt('/goal pause-now');
-                }
+                pauseGoalBeforeStop();
                 abortGeneration();
               }}
               className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition-all"
@@ -727,9 +733,7 @@ export const MessageInput = memo(function MessageInput({ disabled, onOpenSetting
               {isStreaming && streamCompose && (
                 <button
                   onClick={() => {
-                    if (pauseGoalOnStop && currentSessionSdkType === 'pi') {
-                      sendPrompt('/goal pause-now');
-                    }
+                    pauseGoalBeforeStop();
                     abortGeneration();
                   }}
                   className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition-all"

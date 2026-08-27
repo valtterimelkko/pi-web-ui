@@ -93,6 +93,7 @@ describe('goal function (contract 1.27.0)', () => {
   let piService: any;
   let manager: RunReceiptManager;
   let routes: ReturnType<typeof createSessionRoutes>;
+  let browserMessages: Array<Record<string, unknown>>;
   let observers: Array<(event: any) => void>;
   let agentSession: ReturnType<typeof createAgentSessionMock>;
 
@@ -135,6 +136,7 @@ describe('goal function (contract 1.27.0)', () => {
       turnMaxMs: 300_000,
     });
     await manager.init();
+    browserMessages = [];
     routes = createSessionRoutes({
       claudeService,
       opencodeService,
@@ -149,6 +151,7 @@ describe('goal function (contract 1.27.0)', () => {
       claudeProjectsDir: path.join(dir, '.claude', 'projects'),
       pinExpiryIntervalMs: 60_000,
       runReceiptManager: manager,
+      onBrowserMessage: (message) => browserMessages.push(message),
     });
   });
 
@@ -329,6 +332,12 @@ describe('goal function (contract 1.27.0)', () => {
       await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'pause' }), pauseRes, CLAUDE_SID);
       expect(pauseRes.statusCode).toBe(200);
       expect(claudeService.sendPrompt).not.toHaveBeenCalled();
+      // Contract 1.27.0 (phase 4): the pause projection bridges to the browser
+      // as extension-UI-grammar messages the client goal surface parses.
+      const bridge = browserMessages.filter((m) => m.type === 'extension_status');
+      expect(bridge.length).toBeGreaterThan(0);
+      expect((bridge.at(-1) as any).status.key).toBe('goal-engine');
+      expect((bridge.at(-1) as any).sessionId).toBe(CLAUDE_SID);
     });
 
     it('start dispatches /goal <condition> detached and returns the receipt handle', async () => {

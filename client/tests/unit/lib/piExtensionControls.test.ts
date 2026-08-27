@@ -37,8 +37,15 @@ describe('Pi extension controls', () => {
     expect(shouldPauseGoalOnStop('opencode', 'wrapping-up')).toBe(true);
     expect(shouldPauseGoalOnStop('opencode', 'paused')).toBe(false);
     expect(shouldPauseGoalOnStop('opencode', undefined)).toBe(false);
-    // Claude: no goal engine support
-    expect(shouldPauseGoalOnStop('claude', 'running')).toBe(false);
+    // Contract 1.27.0: Claude + Command Code goals are server-disarmed on stop
+    // (Claude auto-continue would otherwise re-launch an aborted goal; the
+    // Command Code goal-runner mod honors the server pause control file).
+    expect(shouldPauseGoalOnStop('claude', 'running')).toBe(true);
+    expect(shouldPauseGoalOnStop('claude', 'wrapping-up')).toBe(true);
+    expect(shouldPauseGoalOnStop('claude', 'paused')).toBe(false);
+    expect(shouldPauseGoalOnStop('commandcode', 'running')).toBe(true);
+    expect(shouldPauseGoalOnStop('commandcode', 'paused')).toBe(false);
+    expect(shouldPauseGoalOnStop('commandcode', undefined)).toBe(false);
   });
 });
 

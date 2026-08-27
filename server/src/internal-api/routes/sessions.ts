@@ -67,6 +67,7 @@ import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
+import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
 import { WatchManager, WatchValidationError, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
@@ -352,6 +353,12 @@ export interface SessionRoutesDeps {
   blockedPiProviders?: readonly string[];
   /** Feature-gated server-local Command Code runtime. */
   commandCodeService?: CommandCodeService;
+  /**
+   * Contract 1.27.0 goal function: browser bridge. Goal events on the broker
+   * are also surfaced to WebSocket clients as extension-UI-grammar messages so
+   * the runtime-neutral goal surface renders for every runtime.
+   */
+  onBrowserMessage?: (message: Record<string, unknown>) => void;
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps) {
@@ -364,6 +371,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     piService,
     internalClientId,
     onSessionCreated,
+    onBrowserMessage,
   } = deps;
   const commandCodeService = deps.commandCodeService;
 
@@ -3507,10 +3515,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     publish: (id, event) => {
       try {
         broker.publish(id, { type: event.type, timestamp: event.timestamp, data: event.data } as NormalizedEvent);
+        if (event.type === 'goal_state' && onBrowserMessage) {
+          emitGoalBrowserBridge(id, event.data as SessionGoalProjection);
+        }
       } catch { /* non-fatal */ }
     },
   });
   claudeGoalNudger.start();
+
+  /**
+   * Bridge a canonical goal projection to the browser: synthesizes the
+   * extension-UI-grammar messages the client goal surface already parses.
+   */
+  function emitGoalBrowserBridge(sessionId: string, projection: SessionGoalProjection): void {
+    if (!onBrowserMessage) return;
+    for (const message of buildGoalBrowserMessages(sessionId, projection)) {
+      try {
+        onBrowserMessage(message);
+      } catch { /* non-fatal */ }
+    }
+  }
 
   /** Last published Command Code goal projection signature per session (change detection). */
   const commandCodeGoalSignatures = new Map<string, string>();
@@ -3526,6 +3550,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       commandCodeGoalSignatures.set(sessionId, signature);
       const timestamp = Date.now();
       broker.publish(sessionId, { type: 'goal_state', timestamp, data: projection } as NormalizedEvent);
+      emitGoalBrowserBridge(sessionId, projection);
       if ((projection.status === 'achieved' || projection.status === 'failed' || projection.status === 'cleared')
         && commandCodeGoalSignatures.get(`${sessionId}:terminal`) !== projection.status) {
         commandCodeGoalSignatures.set(`${sessionId}:terminal`, projection.status);
@@ -3604,6 +3629,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       const projection = await readClaudeGoalProjection(entry);
       try {
         broker.publish(sessionId, { type: 'goal_state', timestamp: Date.now(), data: projection } as NormalizedEvent);
+        emitGoalBrowserBridge(sessionId, projection);
       } catch { /* non-fatal */ }
     };
 
@@ -3667,6 +3693,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
     const respond = async (extra: Record<string, unknown> = {}): Promise<void> => {
       const projection = await readCommandCodeGoalProjection(entry);
+      emitGoalBrowserBridge(sessionId, projection);
       sendJson(res, 200, { sessionId, runtime: 'commandcode', action, accepted: true, ...extra, goal: projection });
     };
 

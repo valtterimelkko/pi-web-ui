@@ -54,7 +54,10 @@ export function shouldPauseGoalOnStop(
   if (!isActive) return false;
   // Pi: user triggers /goal pause-now slash command before abort.
   // OpenCode: server pauses goal state automatically on abort (no extra client action needed).
-  return sdkType === 'pi' || sdkType === 'opencode';
+  // Claude + Command Code (contract 1.27.0): a stop disarms the server-side
+  // auto-continue loop / signals the goal-runner control file, so an aborted
+  // goal stays stopped instead of the server re-launching it.
+  return sdkType === 'pi' || sdkType === 'opencode' || sdkType === 'claude' || sdkType === 'commandcode';
 }
 
 export type GoalControlAction = 'pause' | 'resume' | 'clear';
