@@ -66,6 +66,7 @@ import { readProjectPiGoalState } from '../goal/pi-goal.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
+import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
 import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
 import { WatchManager, WatchValidationError, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
@@ -559,7 +560,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   function attachCommandCodeObserverIfNeeded(sessionId: string): void {
     if (!commandCodeService || commandCodeObservedSessions.has(sessionId)) return;
     const observer = (event: unknown) => {
-      try { broker.publish(sessionId, event as NormalizedEvent); } catch { /* non-fatal */ }
+      try {
+        broker.publish(sessionId, event as NormalizedEvent);
+        // Contract 1.27.0 (goal function): after each Command Code turn ends,
+        // re-read the goal-runner state file and publish goal_state/goal_end
+        // when the projection changed (the mod's state file is the truth).
+        const normalized = event as NormalizedEvent;
+        if (normalized?.type === 'agent_end') void publishCommandCodeGoalStateIfChanged(sessionId);
+      } catch { /* non-fatal */ }
     };
     try {
       commandCodeService.addApiObserver(sessionId, observer);
@@ -3504,6 +3512,30 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   });
   claudeGoalNudger.start();
 
+  /** Last published Command Code goal projection signature per session (change detection). */
+  const commandCodeGoalSignatures = new Map<string, string>();
+
+  async function publishCommandCodeGoalStateIfChanged(sessionId: string): Promise<void> {
+    try {
+      if (!commandCodeService) return;
+      const entry = await commandCodeService.findSession(sessionId);
+      if (!entry) return;
+      const projection = await readCommandCodeGoalProjection(entry);
+      const signature = JSON.stringify([projection.status, projection.objective, projection.completedAt, projection.pausedReason, projection.lastReason]);
+      if (commandCodeGoalSignatures.get(sessionId) === signature) return;
+      commandCodeGoalSignatures.set(sessionId, signature);
+      const timestamp = Date.now();
+      broker.publish(sessionId, { type: 'goal_state', timestamp, data: projection } as NormalizedEvent);
+      if ((projection.status === 'achieved' || projection.status === 'failed' || projection.status === 'cleared')
+        && commandCodeGoalSignatures.get(`${sessionId}:terminal`) !== projection.status) {
+        commandCodeGoalSignatures.set(`${sessionId}:terminal`, projection.status);
+        broker.publish(sessionId, { type: 'goal_end', timestamp, data: projection } as NormalizedEvent);
+      } else if (!(projection.status === 'achieved' || projection.status === 'failed' || projection.status === 'cleared')) {
+        commandCodeGoalSignatures.delete(`${sessionId}:terminal`);
+      }
+    } catch { /* non-fatal */ }
+  }
+
   async function readClaudeGoalProjection(entry: RegistryEntry): Promise<SessionGoalProjection> {
     logger.info(`[Goal] reading claude transcript sessionId=${entry.id} claudeSessionId=${entry.claudeSessionId ?? 'none'} projectsRoot=${claudeProjectsDir} backend=${entry.claudeProfileBackend ?? 'default'}`);
     // Native /goal works on every backend that runs the local CLI (direct and
@@ -3530,7 +3562,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   ): Promise<void> {
     const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     if (commandCodeEntry) {
-      sendJson(res, 200, { sessionId, runtime: 'commandcode', ...unsupportedGoalProjection() });
+      const projection = await readCommandCodeGoalProjection(commandCodeEntry);
+      sendJson(res, 200, { sessionId, runtime: 'commandcode', ...projection });
       return;
     }
     const entry = await getNonCommandCodeRegistryEntry(sessionId);
@@ -3540,6 +3573,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
     const projection = await readGoalProjection(entry);
     sendJson(res, 200, { sessionId, runtime: entry.sdkType, ...projection });
+  }
+
+  async function readCommandCodeGoalProjection(entry: CommandCodeInternalSessionRecord): Promise<SessionGoalProjection> {
+    const modAvailable = commandCodeService?.isGoalReady?.() ?? false;
+    const [record, modState] = await Promise.all([
+      commandCodeService?.goalStore.get(entry.sessionId) ?? null,
+      commandCodeService?.readGoalModState(entry.sessionId) ?? null,
+    ]);
+    return projectCommandCodeGoal(record as Parameters<typeof projectCommandCodeGoal>[0], modState, modAvailable);
   }
 
   async function handleSessionGoalControlClaude(
@@ -3608,6 +3650,86 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     });
   }
 
+  async function handleSessionGoalControlCommandCode(
+    res: ServerResponse,
+    entry: CommandCodeInternalSessionRecord,
+    raw: SessionGoalControlRequest,
+  ): Promise<void> {
+    const sessionId = entry.sessionId;
+    if (!commandCodeService?.isGoalReady?.()) {
+      sendJson(res, 501, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Command Code goal-runner mod is not provisioned on this host'));
+      return;
+    }
+    const action = raw?.action;
+    if (action !== 'start' && action !== 'pause' && action !== 'resume' && action !== 'clear') {
+      sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'action must be one of start|pause|resume|clear'));
+      return;
+    }
+    const respond = async (extra: Record<string, unknown> = {}): Promise<void> => {
+      const projection = await readCommandCodeGoalProjection(entry);
+      sendJson(res, 200, { sessionId, runtime: 'commandcode', action, accepted: true, ...extra, goal: projection });
+    };
+
+    if (action === 'start') {
+      const objective = typeof raw.objective === 'string' ? raw.objective.trim() : '';
+      if (!objective) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, "action 'start' requires a non-empty objective"));
+        return;
+      }
+      if (objective.length > 4000 || /[\n\r]/.test(objective)) {
+        sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'objective must be a single line of at most 4000 characters'));
+        return;
+      }
+      const verifier = raw.verifyCommand ? 'command' : 'model';
+      await commandCodeService.goalStore.arm(sessionId, {
+        objective,
+        maxTurns: typeof raw.maxTurns === 'number' && raw.maxTurns > 0 ? Math.min(Math.floor(raw.maxTurns), 100) : 100,
+        verifier,
+        verifyCommand: raw.verifyCommand,
+        modelVerifier: verifier === 'model' ? 'meta/muse-spark-1.2-contributor' : '',
+        autoContinue: true,
+      });
+      attachCommandCodeObserverIfNeeded(sessionId);
+      const busy = commandCodeService.isRunning(sessionId);
+      if (!busy) {
+        const dispatched = await dispatchDetachedInternal(sessionId, `Work toward your active goal: ${objective}`);
+        if (dispatched.statusCode !== 200 && dispatched.statusCode !== 202) {
+          sendJson(res, dispatched.statusCode || 500, dispatched.body);
+          return;
+        }
+      }
+      await respond({
+        note: busy
+          ? 'goal armed; it will apply at the next prompt (Command Code runs are per-prompt processes)'
+          : 'goal armed and run dispatched; the goal-runner mod verifies completion and continues while unverified',
+      });
+      return;
+    }
+    if (action === 'pause') {
+      await commandCodeService.goalStore.patch(sessionId, { status: 'paused', pausedReason: 'user', autoContinue: false });
+      await commandCodeService.writeGoalControl(sessionId, 'pause');
+      await respond({ note: 'pause signalled to the goal-runner mod and recorded server-side' });
+      return;
+    }
+    if (action === 'resume') {
+      await commandCodeService.goalStore.patch(sessionId, { status: 'running', pausedReason: undefined, autoContinue: true });
+      await commandCodeService.writeGoalControl(sessionId, 'resume');
+      attachCommandCodeObserverIfNeeded(sessionId);
+      if (!commandCodeService.isRunning(sessionId)) {
+        const record = await commandCodeService.goalStore.get(sessionId);
+        if (record?.objective) {
+          await dispatchDetachedInternal(sessionId, `Work toward your active goal: ${record.objective}`);
+        }
+      }
+      await respond({ note: 'goal re-armed; continuation run dispatched' });
+      return;
+    }
+    // clear
+    await commandCodeService.goalStore.patch(sessionId, { status: 'cleared', clearedAt: Date.now(), autoContinue: false });
+    await commandCodeService.writeGoalControl(sessionId, 'clear');
+    await respond({ note: 'goal cleared' });
+  }
+
   async function handleSessionGoalControl(
     req: IncomingMessage,
     res: ServerResponse,
@@ -3617,8 +3739,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     const commandCodeEntry = await commandCodeService?.findSession(sessionId);
     if (commandCodeEntry) {
-      // Phase 3 wires the goal-runner mod store; until then answer honestly.
-      sendJson(res, 501, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Command Code goal control is not wired yet'));
+      await handleSessionGoalControlCommandCode(res, commandCodeEntry, raw ?? {});
       return;
     }
     const entry = await getNonCommandCodeRegistryEntry(sessionId);

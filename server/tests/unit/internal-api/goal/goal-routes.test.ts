@@ -363,6 +363,112 @@ describe('goal function (contract 1.27.0)', () => {
     });
   });
 
+  // ── Phase 3: Command Code goal read/control ───────────────────────────────
+
+  describe('phase 3 — commandcode goal read/control', () => {
+    const CC_SID = 'cmdc-session-1';
+    let commandCodeService: any;
+    let ccRecords: Map<string, Record<string, unknown>>;
+
+    beforeEach(() => {
+      ccRecords = new Map();
+      const store = {
+        get: vi.fn(async (id: string) => ccRecords.get(id) ?? null),
+        arm: vi.fn(async (id: string, input: Record<string, unknown>) => {
+          const rec = { status: 'running', ...input, autoContinue: input.autoContinue ?? true, startedAt: 1, updatedAt: 2 };
+          ccRecords.set(id, rec);
+          return rec;
+        }),
+        patch: vi.fn(async (id: string, patch: Record<string, unknown>) => {
+          const rec = { ...(ccRecords.get(id) ?? {}), ...patch };
+          ccRecords.set(id, rec);
+          return rec;
+        }),
+      };
+      commandCodeService = {
+        findSession: vi.fn(async (id: string) => (id === CC_SID ? { sessionId: CC_SID, executionInstanceId: 'commandcode-default', modelSelector: 'meta/muse-spark-1.2-contributor', cwd: '/w', state: 'idle', messageCount: 0 } : null)),
+        isGoalReady: vi.fn(() => true),
+        goalStore: store,
+        readGoalModState: vi.fn(async () => null),
+        writeGoalControl: vi.fn(async () => true),
+        isRunning: vi.fn(() => false),
+        getSession: vi.fn(async () => ({ state: 'idle' })),
+        sendPrompt: vi.fn(),
+      };
+      routes = createSessionRoutes({
+        claudeService,
+        opencodeService,
+        antigravityService,
+        multiSessionManager,
+        sessionRegistry: registry,
+        piService,
+        internalClientId: 'test-client',
+        watchDir: path.join(dir, 'watches'),
+        pinDir: path.join(dir, 'pins'),
+        claudeSessionDir: path.join(dir, 'claude-sessions'),
+        claudeProjectsDir: path.join(dir, '.claude', 'projects'),
+        pinExpiryIntervalMs: 60_000,
+        runReceiptManager: manager,
+        commandCodeService,
+      });
+    });
+
+    it('GET reports idle when no goal is armed and supported when the mod is provisioned', async () => {
+      const res = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/g'), res, CC_SID);
+      const body = JSON.parse(res.body);
+      expect(body).toMatchObject({ sessionId: CC_SID, runtime: 'commandcode', supported: true, status: 'idle' });
+    });
+
+    it('GET projects a completed mod state as achieved', async () => {
+      commandCodeService.goalStore.get.mockResolvedValue({ objective: 'make x', status: 'running', maxTurns: 10, autoContinue: true });
+      commandCodeService.readGoalModState.mockResolvedValue({ status: 'completed', turns: 3, completedAt: 123, verifications: [{ kind: 'self', ok: true, detail: 'done' }] });
+      const res = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/g'), res, CC_SID);
+      const body = JSON.parse(res.body);
+      expect(body).toMatchObject({ status: 'achieved', runs: 3 });
+    });
+
+    it('GET reports unsupported honestly when the goal mod is not provisioned', async () => {
+      commandCodeService.isGoalReady.mockReturnValue(false);
+      const res = mockRes();
+      await routes.handleGetSessionGoal(jsonReq('GET', '/g'), res, CC_SID);
+      expect(JSON.parse(res.body)).toMatchObject({ supported: false, status: 'unknown' });
+    });
+
+    it('start arms the goal and dispatches a detached run', async () => {
+      const res = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'start', objective: 'make the thing', maxTurns: 20 }), res, CC_SID);
+      expect(res.statusCode).toBe(200);
+      expect(commandCodeService.goalStore.arm).toHaveBeenCalledWith(CC_SID, expect.objectContaining({ objective: 'make the thing', maxTurns: 20 }));
+      expect(commandCodeService.sendPrompt).toHaveBeenCalled();
+      const body = JSON.parse(res.body);
+      expect(body.accepted).toBe(true);
+    });
+
+    it('pause writes the control signal and never dispatches; clear marks cleared', async () => {
+      const pauseRes = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'pause' }), pauseRes, CC_SID);
+      expect(pauseRes.statusCode).toBe(200);
+      expect(commandCodeService.writeGoalControl).toHaveBeenCalledWith(CC_SID, 'pause');
+      expect(commandCodeService.sendPrompt).not.toHaveBeenCalled();
+      expect(JSON.parse(pauseRes.body).goal.status).toBe('paused');
+
+      commandCodeService.goalStore.get.mockResolvedValue({ objective: 'g', status: 'cleared', clearedAt: 1, autoContinue: false });
+      const clearRes = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'clear' }), clearRes, CC_SID);
+      expect(commandCodeService.writeGoalControl).toHaveBeenCalledWith(CC_SID, 'clear');
+      expect(JSON.parse(clearRes.body).goal.status).toBe('cleared');
+    });
+
+    it('rejects invalid bodies with 400', async () => {
+      const res = mockRes();
+      await routes.handleSessionGoalControl(jsonReq('POST', '/g', { action: 'start' }), res, CC_SID);
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).code).toBe('INVALID_REQUEST');
+    });
+  });
+
   // ── Phase 1a: Pi slash commands on a busy session ─────────────────────────
 
   describe('phase 1a — slash-command busy exemption (POST /prompt)', () => {

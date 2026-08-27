@@ -20,6 +20,8 @@ export interface CommandCodeProcessRunInput {
   prompt: string;
   nativeSessionId?: string;
   effort?: CommandCodeEffort;
+  /** Contract 1.27.0: server-derived goal-runner arming (never caller-supplied). */
+  goalArming?: { modPath: string; options: Array<[string, string]> };
   /** Receives accepted NDJSON event frames before the child exits. */
   onEvent?: (event: ParsedCommandCodeEvent) => void;
 }
@@ -92,6 +94,7 @@ export class CommandCodeProcessRunner {
       maxTurns: input.maxTurns,
       nativeSessionId: input.nativeSessionId,
       effort: input.effort,
+      goal: input.goalArming,
     });
     // One direct child process with ordinary host networking, exactly like the
     // other runtimes: validated absolute executable, private native home,

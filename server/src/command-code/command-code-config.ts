@@ -35,6 +35,15 @@ export interface CommandCodeArgOptions {
   maxTurns: number;
   nativeSessionId?: string;
   effort?: CommandCodeEffort;
+  /**
+   * Contract 1.27.0 goal function: the ONE server-owned, feature-gated argv
+   * exception to the fixed policy. Callers never choose these values — the
+   * service derives them from its own goal store and server-owned mod path.
+   */
+  goal?: {
+    modPath: string;
+    options: Array<[string, string]>;
+  };
 }
 
 export function buildCommandCodeArgs(options: CommandCodeArgOptions): string[] {
@@ -57,6 +66,12 @@ export function buildCommandCodeArgs(options: CommandCodeArgOptions): string[] {
   ];
   if (options.effort) args.push('--effort', options.effort);
   if (options.nativeSessionId) args.push('--resume', options.nativeSessionId);
+  if (options.goal) {
+    args.push('--mod', options.goal.modPath);
+    for (const [name, value] of options.goal.options) {
+      args.push('--mod-option', `${name}=${value}`);
+    }
+  }
   return args;
 }
 

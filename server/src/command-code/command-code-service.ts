@@ -1,4 +1,7 @@
-import { access, chmod, copyFile, lstat, mkdir, open, readdir, readFile, readlink, realpath, rename, rm, stat, symlink } from 'node:fs/promises';
+import { access, chmod, copyFile, lstat, mkdir, open, readdir, readFile, readlink, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createLogger } from '../logging/logger.js';
+
+const logger = createLogger('CommandCodeService');
 import { constants as fsConstants, type Dirent } from 'node:fs';
 import path from 'node:path';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
@@ -42,6 +45,7 @@ import {
   type CommandCodeInternalSessionRecord,
   type CommandCodeSessionTokenUsage,
 } from './command-code-session-store.js';
+import { CommandCodeGoalStore, type CommandCodeGoalRecord } from './command-code-goal-store.js';
 
 /** Session statistics shaped for the browser session-info view. */
 export interface CommandCodeSessionStats {
@@ -145,6 +149,10 @@ export class CommandCodeService {
 
   private readonly sessionRegistry?: SessionRegistryManager;
   private registryProjectionError?: string;
+  /** Contract 1.27.0 goal function: per-session goal records + provisioning. */
+  readonly goalStore: CommandCodeGoalStore;
+  readonly goalModPath: string;
+  private goalModAvailable = false;
 
   constructor(options: {
     config: CommandCodeServiceConfig;
@@ -160,6 +168,8 @@ export class CommandCodeService {
       allowedCwdRoots: options.config.allowedCwdRoots ?? [path.dirname(mergedConfig.stateDir)],
     };
     this.store = new CommandCodeSessionStore(this.config.stateDir);
+    this.goalStore = new CommandCodeGoalStore(path.join(this.config.stateDir, 'goal-control'));
+    this.goalModPath = path.join(this.config.stateDir, 'mods', 'goal-runner.ts');
     this.journal = new CommandCodeEventJournal(this.config.stateDir, {
       maxBytes: this.config.maxStdoutBytes,
     });
@@ -195,6 +205,7 @@ export class CommandCodeService {
 
   private async initialize(): Promise<void> {
     await this.store.init();
+    await this.provisionGoalMod();
     for (const invalidSessionId of this.store.listInvalidSessionIds()) {
       await rm(path.join(this.config.nativeHomeDir, invalidSessionId), { recursive: true, force: true }).catch(() => undefined);
     }
@@ -426,6 +437,7 @@ export class CommandCodeService {
         prompt,
         nativeSessionId: record.nativeSessionId,
         effort: record.effort,
+        goalArming: await this.resolveGoalArming(sessionId),
         onEvent: queueStreamEvent,
       });
       await streamQueue;
@@ -797,6 +809,83 @@ export class CommandCodeService {
       // Registry projection is discoverability evidence, not the private
       // session source of truth; a persistence hiccup must not abort a turn.
     }
+  }
+
+  /**
+   * Contract 1.27.0: ensure the server-owned goal-runner mod exists under
+   * <stateDir>/mods/. Sourced from the cmd-enhancement checkout when present
+   * (canonical producer repo); otherwise the feature degrades to unavailable
+   * and capabilities report goalControls: [].
+   */
+  private async provisionGoalMod(): Promise<void> {
+    const sourceCandidates = [
+      process.env.COMMAND_CODE_GOAL_MOD_SOURCE_DIR,
+      '/root/cmd-enhancement/goal-runner',
+    ].filter((v): v is string => Boolean(v));
+    try {
+      await access(this.goalModPath);
+      this.goalModAvailable = true;
+      return;
+    } catch { /* not provisioned yet */ }
+    for (const sourceDir of sourceCandidates) {
+      try {
+        await mkdir(path.dirname(this.goalModPath), { recursive: true });
+        // The mod + its sibling policy module (relative import).
+        await copyFile(path.join(sourceDir, 'goal-runner.ts'), this.goalModPath);
+        await copyFile(path.join(sourceDir, 'goal-runner-policy.ts'), path.join(path.dirname(this.goalModPath), 'goal-runner-policy.ts'));
+        this.goalModAvailable = true;
+        return;
+      } catch { /* try next candidate */ }
+    }
+    this.goalModAvailable = false;
+  }
+
+  /** Whether the goal-runner mod is provisioned and goal control is usable. */
+  isGoalReady(): boolean {
+    return this.goalModAvailable;
+  }
+
+  /** Runtime read channel: the mod's state file inside the session native home. */
+  async readGoalModState(sessionId: string): Promise<Record<string, unknown> | null> {
+    const sessionHome = path.join(this.config.nativeHomeDir, sessionId);
+    try {
+      const parsed = JSON.parse(await readFile(path.join(sessionHome, '.commandcode', 'goal-state.json'), 'utf8'));
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Server → mod control channel write (pause/clear). */
+  async writeGoalControl(sessionId: string, action: 'pause' | 'resume' | 'clear'): Promise<boolean> {
+    const sessionHome = path.join(this.config.nativeHomeDir, sessionId);
+    const controlFile = path.join(sessionHome, '.commandcode', 'goal-control.json');
+    try {
+      await mkdir(path.dirname(controlFile), { recursive: true });
+      await writeFile(controlFile, JSON.stringify({ action, at: Date.now() }), 'utf8');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Derive goal-runner arming for the next spawn from the goal store. */
+  private async resolveGoalArming(sessionId: string): Promise<{ modPath: string; options: Array<[string, string]> } | undefined> {
+    if (!this.goalModAvailable) return undefined;
+    const record: CommandCodeGoalRecord | null = await this.goalStore.get(sessionId);
+    if (!record || record.status !== 'running' || !record.objective) return undefined;
+    logger.info(`[Goal] arming goal-runner mod for ${sessionId} verifier=${record.verifier} maxTurns=${record.maxTurns}`);
+    const sessionHome = path.join(this.config.nativeHomeDir, sessionId);
+    const options: Array<[string, string]> = [
+      ['goal.objective', record.objective],
+      ['goal.maxTurns', String(record.maxTurns ?? this.config.maxTurns)],
+      ['goal.verifier', record.verifier],
+      ['goal.stateFile', path.join(sessionHome, '.commandcode', 'goal-state.json')],
+      ['goal.controlFile', path.join(sessionHome, '.commandcode', 'goal-control.json')],
+    ];
+    if (record.verifyCommand) options.push(['goal.verifyCommand', record.verifyCommand]);
+    if (record.modelVerifier) options.push(['goal.modelVerifier', record.modelVerifier]);
+    return { modPath: this.goalModPath, options };
   }
 
   private async prepareNativeHomeRoot(): Promise<void> {

@@ -148,9 +148,11 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsThinkingLevel: false,
           supportsEffort: commandCodeSupportsEffort,
           // Contract 1.27.0: goals arrive via the server-owned goal-runner mod;
-          // capability follows actual enablement/availability, not the gate alone.
-          supportsGoal: commandCodeEnabled && commandCodeAvailable,
-          goalControls: commandCodeEnabled && commandCodeAvailable ? ['start', 'pause', 'resume', 'clear'] : [],
+          // capability follows actual provisioning/availability, not the gate alone.
+          supportsGoal: commandCodeEnabled && commandCodeAvailable && Boolean(commandCodeService?.isGoalReady?.()),
+          goalControls: commandCodeEnabled && commandCodeAvailable && Boolean(commandCodeService?.isGoalReady?.())
+            ? ['start', 'pause', 'resume', 'clear']
+            : [],
           modelCatalogue: commandCodeModels.map((model) => ({
             id: model.id,
           })),
