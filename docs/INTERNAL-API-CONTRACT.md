@@ -21,13 +21,18 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.27.0",
+  "contractVersion": "1.28.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.28.0** (minor, additive goal-suggestion visibility) — the canonical goal projection gains a `suggested` status, surfacing the pi goal-engine extension's new agent-initiated suggestion flow (extension: `goal` tool actions `suggest`/`start` with an explicit owner-approval gate; an approving owner reply mentioning the goal starts it automatically). Everything is additive; existing consumers keep working unchanged:
+  - `GET /api/v1/sessions/:id/goal` (and `goal_state` broker events) now report `status: "suggested"` with the suggested `objective` when the Pi extension records a `pendingSuggestion` on an otherwise idle goal — an agent has proposed a goal and is waiting for explicit owner approval. `suggested` is **not** terminal (no `goal_end` fires); transitions from it behave like any fresh goal start or clear.
+  - No new routes, request fields, or error codes; `runtimeState` continues to carry the verbatim native state (including `pendingSuggestion`).
+  - Extension-side companion change: the completion-status parser now tolerates a trailing progress annotation after the status marker (e.g. `**Status: GOAL_ACHIEVED** — Progress: 5/5`), fixing goals that never stopped when the agent appended progress on the marker line. This is extension behaviour, not an API change, and is live-validated per repo practice.
 
 - **1.27.0** (minor, additive cross-runtime goal function) — makes the goal function (a durable objective the harness keeps working toward across turns, surviving compaction) programmatically usable through the Internal API for Pi, Claude (SDK backend) and Command Code. Everything is additive; existing consumers keep working unchanged. Full details in `docs/INTERNAL-API.md` (§ Goal endpoints):
   - **Pi slash commands on a busy session** — `POST /sessions/:id/prompt` with a message starting with `/` no longer returns `409 SESSION_BUSY` while a Pi session is streaming: extension commands resolve before the SDK's streaming guard (mirroring the WebSocket path), which is what makes `/goal pause-now` and the other goal controls usable mid-run. The run receipt completes at the command boundary with cessation basis `documented_handler_return`; non-slash prompts and non-Pi runtimes keep the historical busy refusal.

@@ -2255,7 +2255,10 @@ a watchable terminal event instead of per-run `agent_end` churn.
 | opencode / antigravity | out of scope (OpenCode keeps its own server bridge via the goal-engine plugin) | | | | `supported:false` |
 
 Canonical status vocabulary: `idle` (no goal) · `running` · `wrapping_up` ·
-`paused` (with `pausedReason`) · `achieved` · `cleared` · `failed` ·
+`paused` (with `pausedReason`) · `suggested` (contract 1.28.0 — an agent has
+proposed a goal via the Pi extension's suggestion flow and is awaiting
+explicit owner approval; the suggested `objective` is reported, nothing is
+running, and no `goal_end` fires) · `achieved` · `cleared` · `failed` ·
 `unknown`. Terminal transitions (`achieved`/`failed`/`cleared`) additionally
 emit a `goal_end` event — the one worth watching.
 

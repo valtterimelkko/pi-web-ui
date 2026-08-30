@@ -16,6 +16,6 @@ describe('Command Code Internal API boundary', () => {
     expect(runtime).toBe('commandcode');
     expect(models.commandcode).toEqual([]);
     expect(capabilities.commandcode).toBeDefined();
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.27.0');
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.28.0');
   });
 });

@@ -198,3 +198,72 @@ describe('projectPiGoalState — canonical status mapping', () => {
     expect(p.supported).toBe(true);
   });
 });
+
+describe('projectPiGoalState — agent-suggested goal (contract 1.28.0)', () => {
+  it('idle plus pendingSuggestion maps to "suggested" with the suggested objective', () => {
+    const projection = projectPiGoalState({
+      ...BASE_STATE,
+      status: 'idle',
+      objective: '',
+      pendingSuggestion: {
+        objective: 'Refactor the payments module end to end',
+        rationale: 'multi-stage, long-horizon work',
+        suggestedAt: 1_788_000_000_000,
+      },
+    } as never);
+    expect(projection.supported).toBe(true);
+    expect(projection.status).toBe('suggested');
+    expect(projection.objective).toBe('Refactor the payments module end to end');
+    expect(projection.pausedReason).toBeNull();
+    // never terminal: a suggestion is not an ended goal
+    expect([ 'achieved', 'cleared', 'failed' ]).not.toContain(projection.status);
+  });
+
+  it('suggested without rationale still projects; junk suggestion fields degrade honestly', () => {
+    const projection = projectPiGoalState({
+      ...BASE_STATE,
+      status: 'idle',
+      objective: '',
+      pendingSuggestion: { objective: 'Big task', suggestedAt: 5 },
+    } as never);
+    expect(projection.status).toBe('suggested');
+    expect(projection.objective).toBe('Big task');
+  });
+
+  it('pendingSuggestion without an objective is not "suggested" — falls back to idle', () => {
+    const projection = projectPiGoalState({
+      ...BASE_STATE,
+      status: 'idle',
+      objective: '',
+      pendingSuggestion: { rationale: 'half-written', suggestedAt: 5 },
+    } as never);
+    expect(projection.status).toBe('idle');
+  });
+
+  it('an active goal wins over a leftover suggestion; achieved stays achieved', () => {
+    const suggestion = { objective: 'Stale suggestion', rationale: null, suggestedAt: 1 };
+    const running = projectPiGoalState({
+      ...BASE_STATE,
+      status: 'running',
+      objective: 'Active objective',
+      pendingSuggestion: suggestion,
+    } as never);
+    expect(running.status).toBe('running');
+    expect(running.objective).toBe('Active objective');
+
+    const achieved = projectPiGoalState({
+      ...BASE_STATE,
+      status: 'idle',
+      objective: 'Done objective',
+      completedAt: 123,
+      pendingSuggestion: suggestion,
+    } as never);
+    expect(achieved.status).toBe('achieved');
+    expect(achieved.objective).toBe('Done objective');
+  });
+
+  it('a tombstone (cleared) state with no suggestion stays "idle"', () => {
+    const projection = projectPiGoalState({ ...BASE_STATE, status: 'idle' } as never);
+    expect(projection.status).toBe('idle');
+  });
+});

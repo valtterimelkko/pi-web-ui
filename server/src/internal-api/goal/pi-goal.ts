@@ -34,6 +34,8 @@ export interface PiGoalStateLike {
   lastVerificationMessage?: string | null;
   maxTurns?: number | null;
   pendingQuestion?: string | null;
+  /** Agent-suggested goal awaiting explicit owner approval (contract 1.28.0). */
+  pendingSuggestion?: { objective?: string; rationale?: string | null; suggestedAt?: number } | null;
   lastRunReason?: string | null;
   lastErrorMessage?: string | null;
   spentInputTokens?: number;
@@ -94,7 +96,7 @@ function mapVerificationStatus(value: unknown): GoalVerificationStatus {
   }
 }
 
-function canonicalPiStatus(gs: PiGoalStateLike): { status: CanonicalGoalStatus; pausedReason?: string } {
+function canonicalPiStatus(gs: PiGoalStateLike): { status: CanonicalGoalStatus; pausedReason?: string; suggestedObjective?: string } {
   const hasErrorPause = Boolean(gs.lastErrorMessage);
   switch (gs.status) {
     case 'running':
@@ -105,10 +107,17 @@ function canonicalPiStatus(gs: PiGoalStateLike): { status: CanonicalGoalStatus; 
       if (gs.pendingQuestion) return { status: 'paused', pausedReason: 'question' };
       if (hasErrorPause) return { status: 'failed', pausedReason: 'error' };
       return { status: 'paused' };
-    case 'idle':
+    case 'idle': {
       if (gs.completedAt != null) return { status: 'achieved' };
+      // An agent-suggested goal awaiting owner approval (contract 1.28.0):
+      // report it as its own non-terminal state with the suggested objective.
+      const suggestedObjective = gs.pendingSuggestion?.objective;
+      if (typeof suggestedObjective === 'string' && suggestedObjective.length > 0) {
+        return { status: 'suggested', suggestedObjective };
+      }
       if (!gs.objective) return { status: 'idle' };
       return { status: 'unknown' };
+    }
     default:
       return { status: 'unknown' };
   }
@@ -129,11 +138,11 @@ export function projectPiGoalState(raw: PiGoalStateLike | null | typeof INVALID_
     return { supported: true, status: 'idle', runtimeState: undefined };
   }
   const gs = raw;
-  const { status, pausedReason } = canonicalPiStatus(gs);
+  const { status, pausedReason, suggestedObjective } = canonicalPiStatus(gs);
   const projection: SessionGoalProjection = {
     supported: true,
     status,
-    objective: typeof gs.objective === 'string' ? gs.objective : undefined,
+    objective: suggestedObjective ?? (typeof gs.objective === 'string' ? gs.objective : undefined),
     runs: typeof gs.turnCount === 'number' ? gs.turnCount : undefined,
     maxRuns: gs.maxTurns ?? null,
     verification: {

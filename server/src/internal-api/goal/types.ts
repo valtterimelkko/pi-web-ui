@@ -16,6 +16,7 @@ export type CanonicalGoalStatus =
   | 'cleared'
   | 'failed'
   | 'idle'
+  | 'suggested'
   | 'unknown';
 
 export type GoalVerificationStatus = 'passed' | 'failed' | 'self_reported' | 'not_run';
