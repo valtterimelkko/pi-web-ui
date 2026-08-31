@@ -696,7 +696,7 @@ You can also set verbosity via header: `X-Verbosity: tasks`.
 |---|---|---|---|
 | `prompt` | Start a new turn | `409 SESSION_BUSY` if busy; else run | `409 SESSION_BUSY` if running; else run |
 | `follow_up` | Deliver after the current turn | busy → queue via `followUp()`, receipt status `queued`; idle → **promote** to a new turn, `dispatchMode:"prompt"` | no queue exists → running → `409 SESSION_BUSY` with `Retry-After`; idle → new turn |
-| `steer` | Interrupt the active turn | requires an active turn → idle gives `409 SESSION_NOT_STREAMING` | `UNSUPPORTED_OPERATION` (unchanged) |
+| `steer` | Interrupt the active turn | requires an active turn → idle gives `409 SESSION_NOT_STREAMING` | Claude SDK backend: joins the active turn at the next tool boundary (idle → `409 SESSION_NOT_STREAMING`; non-SDK backends and OpenCode/Antigravity → `UNSUPPORTED_OPERATION`). Contract 1.29.0. |
 
 `requireActiveTurn: true` turns the `follow_up` idle-promotion into `409 SESSION_NOT_STREAMING` on every runtime. Capability-gate runtime differences with `followUpSemantics`, `supportsSteerWhileBusy`, `supportsInteractiveQuestions`, and `supportsStructuredQuestionResponse` from `/capabilities`.
 
@@ -1020,8 +1020,8 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
       "backendMode": "sdk",
       "supportsFollowUp": true,
       "followUpSemantics": "new_turn",
-      "supportsSteer": false,
-      "supportsSteerWhileBusy": false,
+      "supportsSteer": true,
+      "supportsSteerWhileBusy": true,
       "supportsInteractiveQuestions": true,
       "supportsStructuredQuestionResponse": true,
       "supportsModelSwitch": true,

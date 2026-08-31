@@ -144,7 +144,7 @@ steer injected after tool call #1, CLI 2.1.235, 2026-08-20):
 | CMD turn-settlement promise for the hand-off | `server/src/command-code/command-code-service.ts` (`waitForTurnEnd`, backed by `inFlightTurns`) |
 | Composer gating + per-runtime labels | `client/src/lib/piExtensionControls.ts` (`canSteerWhileStreaming`: pi/claude/commandcode) and `client/src/components/Chat/MessageInput.tsx` (Steer/After strip; Claude "Joins at next step", CMD "Steer now — interrupts & redirects") |
 | Busy prompt fast-fail | `handleClaudePrompt` now returns `SESSION_BUSY` immediately (the old 30s busy-wait poll was removed) |
-| Intentionally NOT changed | Internal API `steer` mode stays **pi-only** (`server/src/internal-api/routes/sessions.ts` rejects others); `priority:'now'` exists on the wire but is not exposed in the UI |
+| Intentionally NOT changed | `priority:'now'` exists on the wire but is not exposed in the UI |
 
 ### Wire contract summary (browser WebSocket)
 
@@ -191,8 +191,13 @@ Recipe gotchas (all bit during validation — see
 
 - Expose `priority:'now'` ("send immediately / interrupt & send") as a UI mode —
   the wire semantics are already verified.
-- Extend Internal API `steer`/`follow_up` modes beyond pi if orchestration
-  clients need mid-run steering.
+- ~~Extend Internal API `steer`/`follow_up` modes beyond pi if orchestration
+  clients need mid-run steering.~~ DONE (2026-08-31, contract 1.29.0): Internal
+  API `mode: "steer"` now supports Claude SDK-backend sessions — joins the
+  active turn at the next tool boundary, receipted like every other prompt
+  mode; see `docs/INTERNAL-API-CONTRACT.md` changelog. `follow_up` for Claude
+  remains a busy `SESSION_BUSY` (no server-side queue), matching the WS path's
+  client-queued behaviour.
 - Re-verify the priority matrix if the pinned SDK (`0.3.185`) or system CLI
   moves materially; capabilities in the init message (`interrupt_receipt_v1`,
   `msg_lifecycle_v1`) are the feature-detection hook.

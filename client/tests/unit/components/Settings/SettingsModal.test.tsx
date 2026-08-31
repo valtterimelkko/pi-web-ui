@@ -121,6 +121,64 @@ describe('SettingsModal', () => {
       expect(screen.getByText('Extra High')).toBeInTheDocument();
     });
 
+    it('exposes Max when the session reports a resolved model id (session_init overwrite)', async () => {
+      // The SDK session_init event overwrites currentModel with the resolved
+      // Claude model id (e.g. 'claude-sonnet-5'), losing the 'profile:'/
+      // bare-alias selector the session was created with. The max gate must
+      // still recognise sonnet/opus from the resolved id.
+      sessionState = {
+        currentSessionSdkType: 'claude',
+        currentModel: 'claude-sonnet-5',
+        currentThinkingLevel: 'xhigh',
+        error: null,
+      };
+      render(<SettingsModal isOpen onClose={vi.fn()} />);
+
+      await screen.findByTestId('claude-model-locked');
+      expect(screen.getByText('Max')).toBeInTheDocument();
+    });
+
+    it('exposes Max for a resolved Opus model id', async () => {
+      sessionState = {
+        currentSessionSdkType: 'claude',
+        currentModel: 'claude-opus-5',
+        currentThinkingLevel: 'high',
+        error: null,
+      };
+      render(<SettingsModal isOpen onClose={vi.fn()} />);
+
+      await screen.findByTestId('claude-model-locked');
+      expect(screen.getByText('Max')).toBeInTheDocument();
+    });
+
+    it('prefers server-advertised thinkingLevels from the claude models response', async () => {
+      // Server truth wins even when heuristics would disagree (e.g. a future
+      // model whose levels change).
+      apiGetMock.mockImplementation(async (url: string) => {
+        if (url.includes('sdkType=claude')) {
+          return {
+            models: [
+              { id: 'profile:future-model', displayName: 'Future', provider: 'anthropic', backend: 'sdk-subscription', claudeModel: 'sonnet', thinkingLevels: ['off', 'low', 'high'] },
+            ],
+          };
+        }
+        return { models: [] };
+      });
+      sessionState = {
+        currentSessionSdkType: 'claude',
+        currentModel: 'profile:future-model',
+        currentThinkingLevel: 'high',
+        error: null,
+      };
+      render(<SettingsModal isOpen onClose={vi.fn()} />);
+
+      await screen.findByTestId('claude-model-locked');
+      expect(screen.getByText('High')).toBeInTheDocument();
+      expect(screen.queryByText('Max')).not.toBeInTheDocument();
+      expect(screen.queryByText('Extra High')).not.toBeInTheDocument();
+      expect(screen.queryByText('Minimal')).not.toBeInTheDocument();
+    });
+
     it('shows the Claude Direct badge', async () => {
       render(<SettingsModal isOpen onClose={vi.fn()} />);
       await screen.findByTestId('claude-model-locked');

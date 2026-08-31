@@ -5,12 +5,8 @@ import { api } from '../../lib/api';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { useSessionStore } from '../../store';
 import { ModelSelector, type Model } from './ModelSelector';
-import { ALL_THINKING_LEVELS, ThinkingLevelSelector, type ThinkingLevel } from './ThinkingLevelSelector';
-
-const LEGACY_THINKING_LEVELS: readonly ThinkingLevel[] = [
-  'off', 'minimal', 'low', 'medium', 'high', 'xhigh',
-];
-const CLAUDE_MAX_THINKING_ALIASES = new Set(['sonnet', 'opus']);
+import { ThinkingLevelSelector, type ThinkingLevel } from './ThinkingLevelSelector';
+import { claudeAvailableThinkingLevels, LEGACY_THINKING_LEVELS } from '../../lib/claudeThinkingLevels';
 
 // A Claude provider-profile model entry, as returned by GET /api/models?sdkType=claude.
 interface ClaudeProfileEntry {
@@ -19,6 +15,7 @@ interface ClaudeProfileEntry {
   provider: string;
   backend?: string;
   claudeModel?: string;
+  thinkingLevels?: ThinkingLevel[];
 }
 
 // Backend labels mirror the NewSessionModal structured selector.
@@ -164,18 +161,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   }, [errorMessage, isOpen]);
 
   const availableThinkingLevels = useMemo<readonly ThinkingLevel[]>(() => {
-    // Claude Code's current SDK and direct CLI both accept `--effort max`, but
-    // the selected model still matters. Claude profiles deliberately avoid a
-    // runtime probe; native Sonnet/Opus and Z.ai profiles are known to support
-    // max, while Haiku stays on the legacy ceiling.
+    // Claude: server-owned capability truth when the models response carries
+    // `thinkingLevels`, falling back to the shared alias heuristic. Matching
+    // must tolerate resolved model ids (`claude-sonnet-5`) because the SDK
+    // session_init event overwrites the session's model string.
     if (isClaudeSession) {
-      const selectedSessionModel = storeCurrentModel ?? '';
-      const profile = claudeProfiles.find((entry) => entry.id === selectedSessionModel);
-      const model = profile?.claudeModel ?? (selectedSessionModel.startsWith('profile:') ? undefined : selectedSessionModel);
-      if (profile?.provider === 'zai' || (model && CLAUDE_MAX_THINKING_ALIASES.has(model))) {
-        return ALL_THINKING_LEVELS;
-      }
-      return LEGACY_THINKING_LEVELS;
+      return claudeAvailableThinkingLevels(storeCurrentModel, claudeProfiles);
     }
     if (isOpenCodeSession || isAntigravitySession || isCommandCodeSession) return LEGACY_THINKING_LEVELS;
 

@@ -1904,4 +1904,112 @@ describe('createSessionRoutes orchestration endpoints', () => {
       }
     });
   });
+
+  // ─── Claude steer via Internal API (contract 1.29.0) ────────────────────
+
+  describe('POST /sessions/:id/prompt mode=steer for Claude', () => {
+    function steerFixture(returnValue = true) {
+      registry.get.mockResolvedValue(claudeEntry('claude-busy'));
+      claudeService.isRunning.mockReturnValue(true);
+      const observers: Array<(e: NormalizedEvent) => void> = [];
+      claudeService.addApiObserver = vi.fn((_sid: string, obs: (e: NormalizedEvent) => void) => { observers.push(obs); });
+      claudeService.removeApiObserver = vi.fn((_sid: string, obs: (e: NormalizedEvent) => void) => {
+        const index = observers.indexOf(obs);
+        if (index >= 0) observers.splice(index, 1);
+      });
+      claudeService.steer = vi.fn(() => {
+        // The steer joins the running turn; the joined run emits its reply and
+        // then agent_end shortly after (timer, not microtask — a microtask
+        // would mask the fallback-completion race where the steer receipt
+        // terminalises before the joined run ends).
+        setTimeout(() => {
+          for (const observer of [...observers]) {
+            observer({ type: 'message_update', sessionId: 'claude-busy', timestamp: Date.now(), data: { assistantMessageEvent: { type: 'text_delta', delta: 'STEER-JOINED-REPLY' } } } as NormalizedEvent);
+            observer({ type: 'agent_end', sessionId: 'claude-busy', timestamp: Date.now(), data: {} } as NormalizedEvent);
+          }
+        }, 20);
+        return returnValue;
+      });
+      return observers;
+    }
+
+    it('delivers a steer to a busy Claude session and completes the receipt when the joined run ends', async () => {
+      steerFixture();
+      const receipts = new RunReceiptManager({ store: new RunReceiptStore() });
+      const routes = makeRoutes(receipts);
+      const res = createMockRes();
+
+      await routes.handleSendPrompt(
+        createJsonReq('POST', '/api/v1/sessions/claude-busy/prompt', { message: 'STEER-TEXT', verbosity: 'answers', mode: 'steer' }),
+        res,
+        'claude-busy',
+      );
+
+      expect(claudeService.steer).toHaveBeenCalledWith('claude-busy', 'STEER-TEXT');
+      expect(claudeService.sendPrompt).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.mode).toBe('steer');
+      expect(body.runId).toBeTruthy();
+      // The steer response carries the joined run's continuation text (the
+      // events forwarded until the joined turn's agent_end), not an empty
+      // instant reply.
+      expect(body.content).toContain('STEER-JOINED-REPLY');
+      const receipt = await receipts.get(body.runId);
+      expect(receipt?.status).toBe('completed');
+    });
+
+    it('rejects steer on an idle Claude session with SESSION_NOT_STREAMING and no receipt', async () => {
+      registry.get.mockResolvedValue(claudeEntry('claude-idle'));
+      claudeService.isRunning.mockReturnValue(false);
+      claudeService.steer = vi.fn(() => true);
+      const receipts = new RunReceiptManager({ store: new RunReceiptStore() });
+      const routes = makeRoutes(receipts);
+      const res = createMockRes();
+
+      await routes.handleSendPrompt(
+        createJsonReq('POST', '/api/v1/sessions/claude-idle/prompt', { message: 'too late', verbosity: 'answers', mode: 'steer' }),
+        res,
+        'claude-idle',
+      );
+
+      expect(res.statusCode).toBe(409);
+      expect(JSON.parse(res.body).code).toBe('SESSION_NOT_STREAMING');
+      expect(claudeService.steer).not.toHaveBeenCalled();
+    });
+
+    it('fails the run when the session stopped being steerable before delivery', async () => {
+      steerFixture(false);
+      const receipts = new RunReceiptManager({ store: new RunReceiptStore() });
+      const routes = makeRoutes(receipts);
+      const res = createMockRes();
+
+      await routes.handleSendPrompt(
+        createJsonReq('POST', '/api/v1/sessions/claude-busy/prompt', { message: 'race lost', verbosity: 'answers', mode: 'steer' }),
+        res,
+        'claude-busy',
+      );
+
+      expect(res.statusCode).toBe(500);
+      expect(JSON.parse(res.body).code).toBe('RUNTIME_ERROR');
+      const receipt = await receipts.get((JSON.parse(res.body) as { runId?: string }).runId ?? '');
+      expect(receipt?.status).toBe('failed');
+    });
+
+    it('still rejects steer for non-steerable runtimes with UNSUPPORTED_OPERATION', async () => {
+      registry.get.mockResolvedValue(opencodeEntry('oc-busy'));
+      opencodeService.isRunning.mockReturnValue(true);
+      const routes = makeRoutes();
+      const res = createMockRes();
+
+      await routes.handleSendPrompt(
+        createJsonReq('POST', '/api/v1/sessions/oc-busy/prompt', { message: 'nope', verbosity: 'answers', mode: 'steer' }),
+        res,
+        'oc-busy',
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).code).toBe('UNSUPPORTED_OPERATION');
+    });
+  });
 });

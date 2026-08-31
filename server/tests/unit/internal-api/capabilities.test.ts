@@ -65,7 +65,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.28.0',
+        contractVersion: '1.29.0',
       },
       features: {
         retentionLeases: true,
@@ -299,11 +299,47 @@ describe('createCapabilitiesRoutes', () => {
       supportsApprovals: false,
       supportsReplayHistory: true,
     });
+    // Contract 1.29.0: mid-run steer exists only on the SDK backend.
+    expect(body.runtimes.claude.supportsSteer).toBe(false);
+    expect(body.runtimes.claude.supportsSteerWhileBusy).toBe(false);
     expect(body.runtimes.opencode).toMatchObject({
       available: true,
       supportsFollowUp: true,
       supportsModelSwitch: true,
     });
+  });
+
+  it('advertises Claude mid-run steer only on the SDK backend (contract 1.29.0)', async () => {
+    const sdkRoutes = createCapabilitiesRoutes({
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getBackendMode: vi.fn().mockResolvedValue('sdk'),
+        getProfiles: vi.fn().mockReturnValue([]),
+      } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(true), isEnabled: vi.fn().mockReturnValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(true) } as any,
+    });
+    const sdkRes = createMockRes();
+    await sdkRoutes.handleGetCapabilities(createMockReq(), sdkRes);
+    const sdkClaude = JSON.parse(sdkRes.body).runtimes.claude;
+    expect(sdkClaude.backendMode).toBe('sdk');
+    expect(sdkClaude.supportsSteer).toBe(true);
+    expect(sdkClaude.supportsSteerWhileBusy).toBe(true);
+
+    const channelRoutes = createCapabilitiesRoutes({
+      claudeService: {
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getBackendMode: vi.fn().mockResolvedValue('channel'),
+        getProfiles: vi.fn().mockReturnValue([]),
+      } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(true), isEnabled: vi.fn().mockReturnValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(true) } as any,
+    });
+    const channelRes = createMockRes();
+    await channelRoutes.handleGetCapabilities(createMockReq(), channelRes);
+    const channelClaude = JSON.parse(channelRes.body).runtimes.claude;
+    expect(channelClaude.supportsSteer).toBe(false);
+    expect(channelClaude.supportsSteerWhileBusy).toBe(false);
   });
 
   // Phase 1.1 — disabled runtime must be advertised as enabled:false AND

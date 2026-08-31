@@ -242,7 +242,7 @@ describe('createSessionRoutes live-validation extensions', () => {
     });
   });
 
-  it('rejects steer mode for Claude sessions', async () => {
+  it('rejects steer mode for an idle Claude session with SESSION_NOT_STREAMING (contract 1.29.0)', async () => {
     registry.get.mockResolvedValueOnce({
       id: 'claude-session',
       path: 'claude-session',
@@ -273,6 +273,44 @@ describe('createSessionRoutes live-validation extensions', () => {
     const res = createMockRes();
 
     await routes.handleSendPrompt(req, res, 'claude-session');
+
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({
+      code: 'SESSION_NOT_STREAMING',
+    });
+  });
+
+  it('still rejects steer mode for OpenCode sessions with UNSUPPORTED_OPERATION (contract 1.29.0)', async () => {
+    registry.get.mockResolvedValueOnce({
+      id: 'oc-session',
+      path: 'oc-session',
+      sdkType: 'opencode',
+      cwd: '/root/pi-web-ui',
+      model: 'glm-4.5',
+      firstMessage: '',
+      messageCount: 0,
+      status: 'busy',
+      createdAt: '2026-05-20T00:00:00.000Z',
+      lastActivity: '2026-05-20T00:10:00.000Z',
+    });
+
+    const routes = createSessionRoutes({
+      claudeService,
+      opencodeService,
+      multiSessionManager,
+      sessionRegistry: registry,
+      piService,
+      internalClientId: 'internal-test',
+    });
+
+    const req = createJsonReq('POST', '/api/v1/sessions/oc-session/prompt', {
+      message: 'steer this',
+      mode: 'steer',
+      verbosity: 'answers',
+    });
+    const res = createMockRes();
+
+    await routes.handleSendPrompt(req, res, 'oc-session');
 
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body)).toMatchObject({

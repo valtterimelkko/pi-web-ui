@@ -4,6 +4,7 @@ import { getPiService } from '../pi/index.js';
 import { getOpenCodeService } from '../opencode/index.js';
 import { getAntigravityService } from '../antigravity/index.js';
 import { getClaudeProfiles } from '../claude/index.js';
+import { claudeThinkingLevels } from '../claude/claude-profiles.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { createLogger } from '../logging/logger.js';
 import { getCommandCodeService } from '../command-code/command-code-instance.js';
@@ -54,17 +55,20 @@ router.get('/', async (req: Request, res: Response) => {
 
     if (sdkType === 'claude') {
       // Base alias models, always available for the Claude runtime.
+      // `thinkingLevels` is the server-owned capability truth the client
+      // renders directly (model-aware; `max` where the model supports it).
       type ClaudeModelEntry = {
         id: string;
         displayName: string;
         provider: string;
         backend?: string;
         claudeModel?: string;
+        thinkingLevels: string[];
       };
       const models: ClaudeModelEntry[] = [
-        { id: 'sonnet', displayName: 'Claude Sonnet', provider: 'anthropic' },
-        { id: 'opus', displayName: 'Claude Opus', provider: 'anthropic' },
-        { id: 'haiku', displayName: 'Claude Haiku', provider: 'anthropic' },
+        { id: 'sonnet', displayName: 'Claude Sonnet', provider: 'anthropic', thinkingLevels: claudeThinkingLevels('sonnet', 'anthropic') },
+        { id: 'opus', displayName: 'Claude Opus', provider: 'anthropic', thinkingLevels: claudeThinkingLevels('opus', 'anthropic') },
+        { id: 'haiku', displayName: 'Claude Haiku', provider: 'anthropic', thinkingLevels: claudeThinkingLevels('haiku', 'anthropic') },
       ];
 
       // When provider profiles are enabled, surface each enabled profile as a
@@ -72,12 +76,14 @@ router.get('/', async (req: Request, res: Response) => {
       // `claudeModel` fields let the browser group them into the structured
       // provider → backend → model selector.
       for (const profile of getClaudeProfiles()) {
+        const provider = profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic';
         models.push({
           id: `profile:${profile.id}`,
           displayName: profile.label,
-          provider: profile.baseUrl?.includes('z.ai') ? 'zai' : 'anthropic',
+          provider,
           backend: profile.backend,
           claudeModel: profile.model,
+          thinkingLevels: claudeThinkingLevels(profile.model, provider),
         });
       }
 

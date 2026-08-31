@@ -21,13 +21,20 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.28.0",
+  "contractVersion": "1.29.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.29.0** (minor, additive Claude steer) — `POST /sessions/:id/prompt` with `mode: "steer"` is now accepted for Claude sessions whose backend is the SDK (`claudeBackendMode: "sdk"`, i.e. profile-backed `sdk-subscription` sessions). The steer joins the currently running turn at the next tool boundary (Claude Code streaming-input priority `next`), exactly like the browser WebSocket steer path, and takes the same receipted, admission-controlled, prompt-injection-checked dispatch path as every other prompt mode. Semantics per runtime:
+  - Busy Claude SDK session → steer is delivered into the active turn; the run receipt completes when the joined turn emits its next `agent_end`.
+  - Idle Claude session → `409 SESSION_NOT_STREAMING` (unchanged gate).
+  - Claude session that stopped being steerable between the busy check and delivery → the run fails with `RUNTIME_ERROR` (mirrors the Pi race behaviour).
+  - Other runtimes (OpenCode, Antigravity) and non-SDK Claude backends (channel, direct CLI) keep the historical `400 UNSUPPORTED_OPERATION`.
+  - Capability discovery: `runtimes.claude.supportsSteer` / `supportsSteerWhileBusy` are now `true` only when `backendMode` is `"sdk"`.
 
 - **1.28.0** (minor, additive goal-suggestion visibility) — the canonical goal projection gains a `suggested` status, surfacing the pi goal-engine extension's new agent-initiated suggestion flow (extension: `goal` tool actions `suggest`/`start` with an explicit owner-approval gate; an approving owner reply mentioning the goal starts it automatically). Everything is additive; existing consumers keep working unchanged:
   - `GET /api/v1/sessions/:id/goal` (and `goal_state` broker events) now report `status: "suggested"` with the suggested `objective` when the Pi extension records a `pendingSuggestion` on an otherwise idle goal — an agent has proposed a goal and is waiting for explicit owner approval. `suggested` is **not** terminal (no `goal_end` fires); transitions from it behave like any fresh goal start or clear.
@@ -287,7 +294,7 @@ re-introduced.
 | `PROMPT_INJECTION` | 400 | Prompt blocked by safety filter | Injection-like text detected pre-runtime |
 | `ASK_ALREADY_CLOSED` | 409 | `AskUserQuestion` dialog already closed | Answer arrived after timeout/abort/turn-end/disconnect resolution |
 | `APPROVAL_REQUEST_NOT_FOUND` | 404 | No live approval matches the supplied alias | Unknown/wrong-session `requestId` or `toolCallId` |
-| `UNSUPPORTED_OPERATION` | 400 | Op not supported for this runtime/config | e.g. `steer` outside Pi |
+| `UNSUPPORTED_OPERATION` | 400 | Op not supported for this runtime/config | e.g. `steer` on OpenCode/Antigravity or a non-SDK Claude backend |
 | `NOT_IMPLEMENTED` | 501 | Endpoint exists but runtime path unimplemented | e.g. replay history for unsupported runtime |
 | `INTERNAL_ERROR` | 500 | Unexpected internal error | Unhandled exception in a route |
 | `RETENTION_CLAIM_NOT_FOUND` | 404 | Retention lease absent | Wrong, expired, released, or different-session lease id |

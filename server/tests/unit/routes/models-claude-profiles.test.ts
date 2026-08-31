@@ -62,6 +62,25 @@ describe('GET /api/models?sdkType=claude', () => {
     expect(native.claudeModel).toBe('opus');
   });
 
+  it('advertises model-aware thinking levels including max for sonnet/opus', async () => {
+    getClaudeProfilesMock.mockReturnValue([
+      { id: 'claude-sonnet-sdk', label: 'Claude Sonnet — SDK', baseUrl: undefined, backend: 'sdk-subscription', model: 'sonnet' },
+      { id: 'claude-haiku-sdk', label: 'Claude Haiku — SDK', baseUrl: undefined, backend: 'sdk-subscription', model: 'haiku' },
+    ]);
+
+    const res = await request(app).get('/api/models?sdkType=claude').expect(200);
+    const byId = new Map(res.body.models.map((m: { id: string }) => [m.id, m]));
+
+    // Base aliases: sonnet/opus support max, haiku stays on the legacy ceiling.
+    expect(byId.get('sonnet').thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+    expect(byId.get('opus').thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+    expect(byId.get('haiku').thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+
+    // Profile entries mirror the same model-aware levels.
+    expect(byId.get('profile:claude-sonnet-sdk').thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+    expect(byId.get('profile:claude-haiku-sdk').thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+  });
+
   it('returns only base aliases when no profiles are enabled', async () => {
     getClaudeProfilesMock.mockReturnValue([]);
 

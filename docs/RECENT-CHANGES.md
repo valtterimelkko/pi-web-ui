@@ -4,6 +4,11 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Claude mid-run steer on the Internal API + model-aware max thinking (`1.29.0`, `2026-08-31`)**
+  - `POST /sessions/:id/prompt` with `mode: "steer"` now works for Claude SDK-backend sessions (`claudeBackendMode: "sdk"`): the steer joins the active turn at the next tool boundary via the SDK streaming-input channel, takes the full receipted/admission-checked dispatch path, and the receipt completes when the joined turn ends. Idle Claude → `409 SESSION_NOT_STREAMING`; non-SDK backends and OpenCode/Antigravity keep `400 UNSUPPORTED_OPERATION`. `runtimes.claude.supportsSteer`/`supportsSteerWhileBusy` advertise `true` only on the SDK backend.
+  - Claude thinking levels: the browser `GET /api/models?sdkType=claude` response now carries model-aware `thinkingLevels` (same helper as the Internal API), and the Settings modal exposes **Max** for Sonnet/Opus even when the session reports a resolved model id (`claude-sonnet-5`) instead of the `profile:`/bare-alias selector. Live-verified against the Claude Agent SDK: `effort: max` is served verbatim for Sonnet and Opus (Stop-hook effort echo); Haiku has no effort support.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.29.0), [`INTERNAL-API.md`](./INTERNAL-API.md) (prompt mode table), [`STEERING-RUNTIME-RESEARCH.md`](./STEERING-RUNTIME-RESEARCH.md).
+
 - **Cross-runtime goal function (`1.27.0`, `2026-08-27`)**
   - The goal function — a durable objective the harness keeps working toward across runs, surviving compaction — is now programmatically usable on the Internal API for Pi, Claude (every local-CLI backend: default, sdk-subscription, cli-direct), and Command Code (goal-runner mod, provisioned server-owned).
   - Pi slash commands pass through on a busy session (`POST /prompt` no longer 409s for `/…` messages), so `/goal pause-now` works mid-run exactly like the browser path; pass-through receipts own no turn and complete at the command boundary with `documented_handler_return`.

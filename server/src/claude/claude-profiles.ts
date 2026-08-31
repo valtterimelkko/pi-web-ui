@@ -551,6 +551,27 @@ export function mapThinkingLevelToEffort(level?: string | null): ClaudeEffortLev
   }
 }
 
+// ─── Thinking-level advertisement ───────────────────────────────────────────
+
+/**
+ * Thinking levels advertised per Claude model on every model surface (browser
+ * `/api/models` and Internal API `/api/v1/models`). `max` is a real Claude Code
+ * effort level (SDK `options.effort`, live-verified served verbatim for Sonnet
+ * and Opus), while Haiku has no effort support at all and stays on the legacy
+ * ceiling. Matching is substring-based on purpose: session surfaces often carry
+ * resolved model ids (e.g. `claude-sonnet-5`), not the bare alias.
+ */
+export const CLAUDE_LEGACY_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export const CLAUDE_MAX_THINKING_LEVELS = [...CLAUDE_LEGACY_THINKING_LEVELS, 'max'] as const;
+
+export function claudeThinkingLevels(model?: string, provider?: string): string[] {
+  const normalizedModel = model?.toLowerCase() ?? '';
+  const maxSupported = provider === 'zai'
+    || normalizedModel.includes('sonnet')
+    || normalizedModel.includes('opus');
+  return maxSupported ? [...CLAUDE_MAX_THINKING_LEVELS] : [...CLAUDE_LEGACY_THINKING_LEVELS];
+}
+
 // ─── Default profile file path ───────────────────────────────────────────────
 
 export function defaultProfilesPath(): string {

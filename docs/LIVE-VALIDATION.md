@@ -334,8 +334,9 @@ result should be investigated before any production validation is considered.
 
 ### Steering validation (`scripts/live-validate-steer.mjs`)
 
-Mid-run steering is a browser-WebSocket behaviour (the Internal API `steer`
-mode stays Pi-only), so it has a dedicated Option-3 driver:
+Mid-run steering is also a browser-WebSocket behaviour, so it has a dedicated
+Option-3 driver (the Internal API `steer` mode covers Pi and Claude-SDK since
+contract 1.29.0 but not Command Code):
 [`../scripts/live-validate-steer.mjs`](../scripts/live-validate-steer.mjs).
 Boot a disposable server (`--command-code-fixture --command-code-browser-fixture`
 for the Command Code fixture path; a Claude SDK profile with

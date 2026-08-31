@@ -85,8 +85,11 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           backendMode: claudeBackendMode,
           supportsFollowUp: true,
           followUpSemantics: 'new_turn',
-          supportsSteer: false,
-          supportsSteerWhileBusy: false,
+          // Contract 1.29.0: mid-run steer exists on the SDK backend's
+          // streaming-input channel; channel and direct-CLI backends cannot
+          // accept steers.
+          supportsSteer: claudeBackendMode === 'sdk',
+          supportsSteerWhileBusy: claudeBackendMode === 'sdk',
           supportsModelSwitch: true,
           supportsThinkingLevel: true,
           supportsPinning: true,

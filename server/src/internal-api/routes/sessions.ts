@@ -2551,7 +2551,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
 
-    if (mode === 'steer' && entry.sdkType !== 'pi') {
+    // Contract 1.29.0: steer is available for Pi and Claude (SDK backend).
+    // Other runtimes keep the contracted UNSUPPORTED_OPERATION rejection.
+    const steerCapable = entry.sdkType === 'pi' || entry.sdkType === 'claude';
+    if (mode === 'steer' && !steerCapable) {
       sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, `Prompt mode '${mode}' is not supported for ${entry.sdkType}`));
       return;
     }
@@ -4234,6 +4237,51 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
 
       case 'claude': {
+        // Contract 1.29.0: a steer joins the CURRENT running turn via the SDK
+        // streaming-input channel. The receipt completes when the joined run
+        // emits its next agent_end (mirrors the Pi endObserver pattern); if
+        // the run stopped being steerable before delivery, the dispatch fails
+        // and the receipt records the failure.
+        if (mode === 'steer') {
+          const observers: Array<(event: NormalizedEvent) => void> = [];
+          const detachObservers = (): void => {
+            for (const observer of observers) claudeService.removeApiObserver(sessionId, observer);
+            observers.length = 0;
+          };
+          let resolveTurnBoundary!: () => void;
+          const turnBoundary = new Promise<void>((resolve) => { resolveTurnBoundary = resolve; });
+          // Forward the joined run's remaining events to this steer's caller,
+          // mirroring the Pi steer path.
+          const eventObserver = (event: NormalizedEvent): void => {
+            try { broadcast(event); } catch { /* non-fatal */ }
+          };
+          const endObserver = (event: NormalizedEvent): void => {
+            if (event.type !== 'agent_end') return;
+            detachObservers();
+            onComplete();
+            resolveTurnBoundary();
+          };
+          observers.push(eventObserver, endObserver);
+          for (const observer of observers) claudeService.addApiObserver(sessionId, observer);
+          let steered = false;
+          try {
+            steered = claudeService.steer(sessionId, message);
+          } catch (err) {
+            detachObservers();
+            throw err;
+          }
+          if (!steered) {
+            detachObservers();
+            throw new Error(`Claude session is not running a steerable turn: ${sessionId}`);
+          }
+          // The receipt must not complete until the JOINED run ends: stay in
+          // this case until the endObserver observes the turn's agent_end
+          // (mirrors the Pi turnBoundary). Returning early would trip the
+          // executePromptWithReceipt fallback and terminalise the receipt
+          // while the steered turn is still running.
+          await turnBoundary;
+          return;
+        }
         return new Promise<void>((resolve) => {
           const wrappedComplete = (error?: Error) => {
             onComplete(error);

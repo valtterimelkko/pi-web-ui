@@ -15,21 +15,11 @@ import type { CommandCodeService } from '../../command-code/command-code-service
 import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
 import { readBoundedJsonBody } from '../request-body.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
+import { claudeThinkingLevels } from '../../claude/claude-profiles.js';
 import { createLogger } from '../../logging/logger.js';
 import { config } from '../../config.js';
 
 const logger = createLogger('InternalAPI');
-
-const CLAUDE_LEGACY_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
-const CLAUDE_MAX_THINKING_LEVELS = [...CLAUDE_LEGACY_THINKING_LEVELS, 'max'];
-
-function claudeThinkingLevels(model?: string, provider?: string): string[] {
-  const normalizedModel = model?.toLowerCase() ?? '';
-  const maxSupported = provider === 'zai'
-    || normalizedModel.includes('sonnet')
-    || normalizedModel.includes('opus');
-  return maxSupported ? [...CLAUDE_MAX_THINKING_LEVELS] : [...CLAUDE_LEGACY_THINKING_LEVELS];
-}
 
 export interface ModelsRoutesDeps {
   piService: PiService;
