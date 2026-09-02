@@ -73,6 +73,13 @@ export const MAX_FILE_SIZE = 1024 * 1024; // 1MB
  */
 export const MAX_FILES_PER_MESSAGE = 5;
 
+/**
+ * Maximum human Web UI residency pins per runtime. Internal API retention
+ * leases and watch claims are source-owned and intentionally do not consume
+ * these slots.
+ */
+export const MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME = 5;
+
 // Timeouts
 
 export const TIMEOUTS = {

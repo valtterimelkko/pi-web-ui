@@ -32,17 +32,16 @@ describe('ClaudeService direct pinning', () => {
     expect(service.isSessionPinned(sessionId)).toBe(true);
   });
 
-  it('enforces the direct Claude pin limit only among existing Claude sessions', async () => {
+  it('enforces the Claude facade pin limit at five existing sessions', async () => {
     const { service, dir } = await makeService();
     dirs.push(dir);
 
-    const s1 = await service.createSession('/tmp/a', 'sonnet');
-    const s2 = await service.createSession('/tmp/b', 'sonnet');
-    const s3 = await service.createSession('/tmp/c', 'sonnet');
+    const sessions = await Promise.all(
+      Array.from({ length: 6 }, (_, index) => service.createSession(`/tmp/${index + 1}`, 'sonnet')),
+    );
 
-    expect(service.pinSession(s1.sessionId)).toBe(true);
-    expect(service.pinSession(s2.sessionId)).toBe(true);
-    expect(service.pinSession(s3.sessionId)).toBe(false);
+    for (const session of sessions.slice(0, 5)) expect(service.pinSession(session.sessionId)).toBe(true);
+    expect(service.pinSession(sessions[5].sessionId)).toBe(false);
   });
 
   it('keeps an Internal API claim when the Web UI releases its own claim', async () => {
@@ -58,17 +57,16 @@ describe('ClaudeService direct pinning', () => {
     expect(service.isSessionPinned(sessionId)).toBe(false);
   });
 
-  it('does not count Internal API claims against the Web UI pin limit', async () => {
+  it('does not count Internal API claims against the five-session Web UI pin limit', async () => {
     const { service, dir } = await makeService();
     dirs.push(dir);
-    const s1 = await service.createSession('/tmp/a', 'sonnet');
-    const s2 = await service.createSession('/tmp/b', 'sonnet');
-    const s3 = await service.createSession('/tmp/c', 'sonnet');
+    const sessions = await Promise.all(
+      Array.from({ length: 6 }, (_, index) => service.createSession(`/tmp/${index + 1}`, 'sonnet')),
+    );
 
-    expect(service.pinSession(s1.sessionId)).toBe(true);
-    expect(service.pinSession(s2.sessionId)).toBe(true);
-    expect(service.pinSession(s3.sessionId, 'internal-api:lease-3')).toBe(true);
-    expect(service.pinSession(s3.sessionId)).toBe(false);
+    for (const session of sessions.slice(0, 5)) expect(service.pinSession(session.sessionId)).toBe(true);
+    expect(service.pinSession(sessions[5].sessionId, 'internal-api:lease-6')).toBe(true);
+    expect(service.pinSession(sessions[5].sessionId)).toBe(false);
   });
 
   it('pins direct fallback sessions when channel mode is configured but unhealthy', async () => {

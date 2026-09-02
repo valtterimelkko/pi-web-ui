@@ -138,7 +138,7 @@ For long work, request atomic create-time `retention` rather than create then pi
 
 Choose `durable` when recoverability is enough, or `resident` when the loaded
 runtime object must survive idle cleanup. API leases never consume the human
-Web UI's two pin slots.
+Web UI's five-per-runtime human pin slots.
 
 If the child is a Claude session and you care about the exact backend/provider, choose it at creation time:
 - `model: "profile:<id>"` — easiest if you discovered the profile through `/models`
@@ -324,7 +324,7 @@ request source-owned retention when creating it:
 
 Use `durable` when restart-safe recovery is enough and `resident` when the
 runtime object must remain loaded. Leases default to 24h, cap at 7d, renew by
-exact lease id, and do not consume the Web UI's two human pin slots. A watch owns
+exact lease id, and do not consume the Web UI's five-per-runtime human pin slots. A watch owns
 its own claim; replacing or deleting it releases only that watch claim. Retention
 is not execution admission, so preflight `/capacity` and handle final prompt
 `429` responses.

@@ -116,34 +116,34 @@ describe('sessionStore', () => {
     expect(useSessionStore.getState().currentSessionId).toBe('session-1');
   });
 
-  it('should allow two pinned sessions per runtime instead of globally', () => {
+  it('should allow five pinned sessions per runtime instead of globally', () => {
     const state = useSessionStore.getState();
     state.setSessions([
-      { id: 'pi-1', path: 'pi-1', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'pi' },
-      { id: 'pi-2', path: 'pi-2', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'pi' },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `pi-${index + 1}`, path: `pi-${index + 1}`, firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'pi' as const,
+      })),
       { id: 'claude-1', path: 'claude-1', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
     ]);
 
-    state.pinSession('pi-1');
-    state.pinSession('pi-2');
+    for (let index = 1; index <= 5; index++) state.pinSession(`pi-${index}`);
     state.pinSession('claude-1');
 
-    expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['pi-1', 'pi-2', 'claude-1']);
+    expect(useSessionStore.getState().pinnedSessionPaths).toEqual([
+      'pi-1', 'pi-2', 'pi-3', 'pi-4', 'pi-5', 'claude-1',
+    ]);
   });
 
-  it('should still cap pinned sessions at two within the same runtime', () => {
+  it('should cap pinned sessions at five within the same runtime', () => {
     const state = useSessionStore.getState();
-    state.setSessions([
-      { id: 'claude-1', path: 'claude-1', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
-      { id: 'claude-2', path: 'claude-2', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
-      { id: 'claude-3', path: 'claude-3', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
+    state.setSessions(Array.from({ length: 6 }, (_, index) => ({
+      id: `claude-${index + 1}`, path: `claude-${index + 1}`, firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' as const,
+    })));
+
+    for (let index = 1; index <= 6; index++) state.pinSession(`claude-${index}`);
+
+    expect(useSessionStore.getState().pinnedSessionPaths).toEqual([
+      'claude-1', 'claude-2', 'claude-3', 'claude-4', 'claude-5',
     ]);
-
-    state.pinSession('claude-1');
-    state.pinSession('claude-2');
-    state.pinSession('claude-3');
-
-    expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['claude-1', 'claude-2']);
   });
 
   it('should clear messages', () => {
@@ -1282,23 +1282,19 @@ describe('initPreferences — archive reconciliation (server-authoritative)', ()
     expect(patchPreferences).not.toHaveBeenCalled();
   });
 
-  it('pinSession still enforces the 2/runtime cap before writing the delta', async () => {
+  it('pinSession enforces the 5/runtime cap before writing the delta', async () => {
     useSessionStore.setState({
-      sessions: [
-        { id: 'c1', path: 'c1', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
-        { id: 'c2', path: 'c2', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
-        { id: 'c3', path: 'c3', firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' },
-      ] as never,
+      sessions: Array.from({ length: 6 }, (_, index) => ({
+        id: `c${index + 1}`, path: `c${index + 1}`, firstMessage: '', messageCount: 0, cwd: '/', sdkType: 'claude' as const,
+      })) as never,
       pinnedSessionPaths: [],
     });
 
-    useSessionStore.getState().pinSession('c1');
-    useSessionStore.getState().pinSession('c2');
-    useSessionStore.getState().pinSession('c3'); // blocked — 3rd claude pin
+    for (let index = 1; index <= 6; index++) useSessionStore.getState().pinSession(`c${index}`);
 
-    expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['c1', 'c2']);
-    expect(pinSessionPref).toHaveBeenCalledTimes(2);
-    expect(pinSessionPref).not.toHaveBeenCalledWith('c3');
+    expect(useSessionStore.getState().pinnedSessionPaths).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+    expect(pinSessionPref).toHaveBeenCalledTimes(5);
+    expect(pinSessionPref).not.toHaveBeenCalledWith('c6', expect.any(Number));
     expect(patchPreferences).not.toHaveBeenCalled();
   });
 

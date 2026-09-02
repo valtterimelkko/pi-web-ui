@@ -462,19 +462,17 @@ describe('AntigravityService — durable turn lifecycle', () => {
     );
   }
 
-  it('keeps source-owned claims independent of the Web UI pin limit', async () => {
-    const s1 = await svc.createSession('/tmp/a');
-    const s2 = await svc.createSession('/tmp/b');
-    const s3 = await svc.createSession('/tmp/c');
+  it('keeps source-owned claims independent of the five-session Web UI pin limit', async () => {
+    const sessions = [];
+    for (let index = 0; index < 6; index++) sessions.push(await svc.createSession(`/tmp/${index + 1}`));
 
-    expect(await svc.pinSession(s1.sessionId)).toBe(true);
-    expect(await svc.pinSession(s2.sessionId)).toBe(true);
-    expect(await svc.pinSession(s3.sessionId, 'internal-api:lease-3')).toBe(true);
-    expect(await svc.pinSession(s3.sessionId)).toBe(false);
-    expect(svc.unpinSession(s3.sessionId)).toBe(true);
-    expect(svc.isSessionPinned(s3.sessionId)).toBe(true);
-    expect(svc.unpinSession(s3.sessionId, 'internal-api:lease-3')).toBe(true);
-    expect(svc.isSessionPinned(s3.sessionId)).toBe(false);
+    for (const session of sessions.slice(0, 5)) expect(await svc.pinSession(session.sessionId)).toBe(true);
+    expect(await svc.pinSession(sessions[5].sessionId, 'internal-api:lease-6')).toBe(true);
+    expect(await svc.pinSession(sessions[5].sessionId)).toBe(false);
+    expect(svc.unpinSession(sessions[5].sessionId)).toBe(true);
+    expect(svc.isSessionPinned(sessions[5].sessionId)).toBe(true);
+    expect(svc.unpinSession(sessions[5].sessionId, 'internal-api:lease-6')).toBe(true);
+    expect(svc.isSessionPinned(sessions[5].sessionId)).toBe(false);
   });
 
   it('aborts the exact in-flight subprocess before allowing a replacement turn', async () => {

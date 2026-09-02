@@ -13,6 +13,7 @@ import {
   ApiError,
 } from '../lib/api';
 import type { ContentPart } from '../hooks/useSessionStream.js';
+import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 import type { CommandCodeEffort, CommandCodeModelInfo, SubagentToolSummary } from '@pi-web-ui/shared';
 
 import { useTransferStore } from './transferStore';
@@ -1291,12 +1292,12 @@ export const useSessionStore = create<SessionState>()(
             return runtime !== undefined && runtime === targetRuntime;
           }).length;
 
-          if (targetRuntime !== undefined && sameRuntimePinnedCount >= 2) return state;
-          if (targetRuntime === undefined && state.pinnedSessionPaths.length >= 2) return state; // Backward-compatible fallback
+          if (targetRuntime !== undefined && sameRuntimePinnedCount >= MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME) return state;
+          if (targetRuntime === undefined && state.pinnedSessionPaths.length >= MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME) return state; // Backward-compatible fallback
           added = true;
           return commitMeta(state, key, (p) => ({ ...(p ?? {}), pinned: true, updatedAt: now, legacyKey: sessionPath }));
         });
-        // Durable per-key delta. The WS runtime hop and the 2/runtime cap above
+        // Durable per-key delta. The WS runtime hop and per-runtime cap above
         // are unchanged; only the durable prefs write moved to the unified delta
         // channel. Reverts the pin if the write can't land.
         if (added) {

@@ -493,26 +493,24 @@ describe('ClaudeChannelService', () => {
       expect(service.isSessionPinned(sid)).toBe(false);
     });
 
-    it('keeps source-owned claims independent of the Web UI limit', () => {
-      for (let i = 0; i < 3; i++) service['sessionsWithHistory'].add(`claim-${i}`);
-      expect(service.pinSession('claim-0')).toBe(true);
-      expect(service.pinSession('claim-1')).toBe(true);
-      expect(service.pinSession('claim-2', 'internal-api:lease-2')).toBe(true);
-      expect(service.pinSession('claim-2')).toBe(false);
-      expect(service.unpinSession('claim-2')).toBe(true);
-      expect(service.isSessionPinned('claim-2')).toBe(true);
-      expect(service.unpinSession('claim-2', 'internal-api:lease-2')).toBe(true);
-      expect(service.isSessionPinned('claim-2')).toBe(false);
+    it('keeps source-owned claims independent of the five-session Web UI limit', () => {
+      for (let i = 0; i < 6; i++) service['sessionsWithHistory'].add(`claim-${i}`);
+      for (let i = 0; i < 5; i++) expect(service.pinSession(`claim-${i}`)).toBe(true);
+      expect(service.pinSession('claim-5', 'internal-api:lease-5')).toBe(true);
+      expect(service.pinSession('claim-5')).toBe(false);
+      expect(service.unpinSession('claim-5')).toBe(true);
+      expect(service.isSessionPinned('claim-5')).toBe(true);
+      expect(service.unpinSession('claim-5', 'internal-api:lease-5')).toBe(true);
+      expect(service.isSessionPinned('claim-5')).toBe(false);
     });
 
-    it('should enforce max pinned limit', () => {
-      for (let i = 0; i < 3; i++) {
+    it('should enforce the five-session max pinned limit', () => {
+      for (let i = 0; i < 6; i++) {
         service['sessionsWithHistory'].add(`pin-${i}`);
         service.pinSession(`pin-${i}`);
       }
-      expect(service.isSessionPinned('pin-0')).toBe(true);
-      expect(service.isSessionPinned('pin-1')).toBe(true);
-      expect(service.isSessionPinned('pin-2')).toBe(false);
+      for (let i = 0; i < 5; i++) expect(service.isSessionPinned(`pin-${i}`)).toBe(true);
+      expect(service.isSessionPinned('pin-5')).toBe(false);
     });
 
     it('should not pin unknown sessions', () => {

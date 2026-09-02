@@ -4,6 +4,7 @@ import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { OpenCodeProcessManager } from './opencode-process-manager.js';
 import { OpenCodeClient } from './opencode-client.js';
@@ -209,7 +210,7 @@ const DEFAULT_LIFECYCLE: OpenCodeLifecycleConfig = {
   maxSessions: 4,
   idleTimeoutMs: 30 * 60 * 1000,
   staleStreamingMs: 15 * 60 * 1000,
-  maxPinnedSessions: 2,
+  maxPinnedSessions: MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME,
   cleanupIntervalMs: 60 * 1000,
   serverMaxUptimeMs: 24 * 60 * 60 * 1000,
 };

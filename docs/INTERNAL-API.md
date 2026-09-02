@@ -542,7 +542,7 @@ POST /api/v1/sessions
 }
 ```
 
-The historical maximum of two applies only to human Web UI claims. Internal API
+The maximum of five per runtime applies only to human Web UI claims. Internal API
 and watch claims are independently owned and time-bounded. A required resident
 lease failure returns a structured error and removes the unused session; it does
 not return a half-created unretained success.
@@ -1395,7 +1395,7 @@ boundary. Releasing an API lease never clears a human Web UI or watch claim.
 Legacy `pin` grants a **time-bounded** API residency claim (default 24h,
 hard max 7d), returns `pinnedUntil`, and extends its deadline when repeated.
 `unpin` releases the single legacy compatibility lease for that session but does not
-touch other sources. The two-session limit belongs only to human Web UI claims.
+touch other sources. The five-session-per-runtime limit belongs only to human Web UI claims.
 See [source-owned session retention](#source-owned-session-retention-persistent-time-bounded).
 
 `set_thinking_level` accepts `off | minimal | low | medium | high | xhigh | max`.
@@ -2149,8 +2149,8 @@ restart. `ownerId` is a cooperative correctness guard for trusted local clients,
 not security isolation. A `resident` lease may be lazily reapplied when a Pi
 session is rehydrated; `durable` never forces eager startup residency.
 
-The **two-session maximum applies only to human Web UI pins**. API and watch
-claims do not consume those slots. Watch registration owns a separate
+The **five-session-per-runtime maximum applies only to human Web UI pins**. API
+and watch claims do not consume those slots. Watch registration owns a separate
 `watch:<watchId>` claim and DELETE watch releases that exact claim. Legacy
 `pin`/`unpin` remain supported as Internal API-owned compatibility leases.
 

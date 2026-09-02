@@ -7,6 +7,7 @@
 import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { ClaudeProcessPool, resolveClaudeSessionPath } from './claude-process-pool.js';
 import { ClaudeSessionStore } from './claude-session-store.js';
@@ -61,7 +62,7 @@ export class ClaudeService {
   private apiObservers: Map<string, Set<(event: NormalizedEvent) => void>> = new Map();
   /** Independent residency claims per session; `web-ui` is the human pin. */
   private pinClaims = new Map<string, Set<string>>();
-  private static readonly MAX_PINNED_SESSIONS = 2;
+  private static readonly MAX_PINNED_SESSIONS = MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME;
   private channelService: ClaudeChannelService | null = null;
   private sdkService: ClaudeSdkService | null = null;
   private profileManager: ClaudeProfileManager | null = null;

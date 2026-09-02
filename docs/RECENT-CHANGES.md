@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Five human Web UI pins per runtime (`2026-09-02`)**
+  - The browser/UI residency allowance is now five sessions per runtime; a sixth human claim is rejected. Command Code now enforces the same server-side limit instead of accepting unlimited human pins.
+  - Source-owned Internal API retention and watch claims remain independent and do not consume these slots. The legacy Command Code Internal API control-pin path now uses its own expiring `internal-api:` claim as the other runtimes already did.
+  - RED/GREEN unit coverage and disposable browser-WebSocket validation cover Pi, Claude SDK, and Command Code; execution concurrency and the Pi four-session soft cache are unchanged. Production was not used for validation.
+  - Canonical docs: [`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md), [`NOTIFICATIONS.md`](./NOTIFICATIONS.md), and the [resource-scaling plan's owner-authorised exception](./plans/PI-WEB-UI-RESOURCE-SCALING-AND-LIFECYCLE-HARDENING-PLAN.md#35-no-automatic-concurrency-increase).
+
 - **Claude mid-run steer on the Internal API + model-aware max thinking (`1.29.0`, `2026-08-31`)**
   - `POST /sessions/:id/prompt` with `mode: "steer"` now works for Claude SDK-backend sessions (`claudeBackendMode: "sdk"`): the steer joins the active turn at the next tool boundary via the SDK streaming-input channel, takes the full receipted/admission-checked dispatch path, and the receipt completes when the joined turn ends. Idle Claude → `409 SESSION_NOT_STREAMING`; non-SDK backends and OpenCode/Antigravity keep `400 UNSUPPORTED_OPERATION`. `runtimes.claude.supportsSteer`/`supportsSteerWhileBusy` advertise `true` only on the SDK backend.
   - Claude thinking levels: the browser `GET /api/models?sdkType=claude` response now carries model-aware `thinkingLevels` (same helper as the Internal API), and the Settings modal exposes **Max** for Sonnet/Opus even when the session reports a resolved model id (`claude-sonnet-5`) instead of the `profile:`/bare-alias selector. Live-verified against the Claude Agent SDK: `effort: max` is served verbatim for Sonnet and Opus (Stop-hook effort echo); Haiku has no effort support.
@@ -111,7 +117,7 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
   - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
 
 - **Source-owned retention and execution admission (`1.12.0`)**
-  - Web UI, Internal API, and watch retention claims are independently owned; API leases do not consume the two human pin slots.
+  - Web UI, Internal API, and watch retention claims are independently owned; API leases do not consume the human pin slots (now five per runtime).
   - Atomic create-time `durable`/`resident` leases renew/release by lease id and expire as crash safety.
   - `/api/v1/capacity` reports turn admission, interactive reserve, and measured memory headroom; Agent OS stores and releases exact lease ids after quiescence.
   - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)

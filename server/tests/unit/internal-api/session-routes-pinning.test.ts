@@ -59,6 +59,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
   let claudeService: any;
   let opencodeService: any;
   let antigravityService: any;
+  let commandCodeService: any;
   let multiSessionManager: any;
   let piService: any;
 
@@ -102,6 +103,19 @@ describe('createSessionRoutes — API pinning + detach', () => {
     };
     opencodeService = { isAvailable: vi.fn().mockResolvedValue(true) };
     antigravityService = { isAvailable: vi.fn().mockResolvedValue(true) };
+    const commandCodeSession = (sessionId: string) => sessionId === 'commandcode-1' ? {
+      sessionId,
+      cwd: '/root/proj',
+      modelSelector: 'deepseek/deepseek-v4-pro',
+      state: 'idle',
+    } : undefined;
+    commandCodeService = {
+      getSession: vi.fn(async (sessionId: string) => commandCodeSession(sessionId)),
+      findSession: vi.fn(async (sessionId: string) => commandCodeSession(sessionId)),
+      pinSession: vi.fn(() => true),
+      unpinSession: vi.fn(() => true),
+      isSessionPinned: vi.fn(() => true),
+    };
     multiSessionManager = {};
     piService = { setModel: vi.fn().mockResolvedValue(undefined) };
   });
@@ -115,6 +129,7 @@ describe('createSessionRoutes — API pinning + detach', () => {
       claudeService,
       opencodeService,
       antigravityService,
+      commandCodeService,
       multiSessionManager,
       sessionRegistry: registry,
       piService,
@@ -227,6 +242,24 @@ describe('createSessionRoutes — API pinning + detach', () => {
     expect(res.statusCode).toBe(200);
     expect(json(res)).toMatchObject({ success: true, action: 'pin', pinned: true });
     expect(json(res).pinnedUntil).toEqual(expect.any(String));
+  });
+
+  it('Command Code control pin uses an independent Internal API claim', async () => {
+    const routes = makeRoutes();
+    const res = createMockRes();
+    await routes.handleSessionControl(createJsonReq('POST', '/x', {
+      action: 'pin',
+      pinTtlSeconds: 3600,
+    }), res, 'commandcode-1');
+
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toMatchObject({ success: true, action: 'pin', pinned: true });
+    expect(json(res).pinnedUntil).toEqual(expect.any(String));
+    expect(commandCodeService.pinSession).toHaveBeenCalledWith(
+      'commandcode-1',
+      expect.stringMatching(/^internal-api:/),
+    );
+    expect(commandCodeService.pinSession).not.toHaveBeenCalledWith('commandcode-1');
   });
 
   it('control acquire_retention adds an independently owned lease to an existing session', async () => {

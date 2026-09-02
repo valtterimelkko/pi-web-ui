@@ -3191,13 +3191,31 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
       if (body.action === 'pin') {
-        const pinned = commandCodeService!.pinSession(commandCodeEntry.sessionId);
-        sendJson(res, 200, { success: pinned, action: 'pin', pinned } satisfies SessionControlResponse);
+        if (pinExpiry) {
+          const result = await pinExpiry.applyPin(commandCodeEntry.sessionId, {
+            ttlSeconds: body.pinTtlSeconds,
+            sessionPath: commandCodeEntry.sessionId,
+            runtime: 'commandcode',
+            label: 'internal-api:control',
+          });
+          sendJson(res, 200, { success: result.pinned, action: 'pin', ...pinResponseFields(result) } satisfies SessionControlResponse);
+        } else {
+          const pinned = commandCodeService!.pinSession(commandCodeEntry.sessionId);
+          sendJson(res, 200, { success: pinned, action: 'pin', pinned } satisfies SessionControlResponse);
+        }
         return;
       }
       if (body.action === 'unpin') {
-        commandCodeService!.unpinSession(commandCodeEntry.sessionId);
-        sendJson(res, 200, { success: true, action: 'unpin', pinned: false } satisfies SessionControlResponse);
+        if (pinExpiry) {
+          await pinExpiry.releaseLegacyLease(commandCodeEntry.sessionId);
+        } else {
+          commandCodeService!.unpinSession(commandCodeEntry.sessionId, 'internal-api:legacy-untracked');
+        }
+        sendJson(res, 200, {
+          success: true,
+          action: 'unpin',
+          pinned: commandCodeService!.isSessionPinned(commandCodeEntry.sessionId),
+        } satisfies SessionControlResponse);
         return;
       }
       sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'This session control operation is not supported for Command Code'));

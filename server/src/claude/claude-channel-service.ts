@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
+import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { ClaudeChannelProcessManager } from './claude-channel-process-manager.js';
 import { ClaudeChannelWsClient } from './claude-channel-ws-client.js';
@@ -47,7 +48,7 @@ interface LatePromptListener {
 }
 
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
-const MAX_PINNED_SESSIONS = 2;
+const MAX_PINNED_SESSIONS = MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME;
 const PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
 const LATE_PROMPT_LISTENER_TTL_MS = 30 * 60 * 1000;
 const IDLE_DETECTION_GRACE_MS = 3_000;

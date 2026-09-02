@@ -191,7 +191,7 @@ Prerequisites:
 | `OPENCODE_MAX_SESSIONS` | `4` | max active OpenCode sessions tracked by lifecycle logic |
 | `OPENCODE_IDLE_TIMEOUT_MS` | `1800000` | idle timeout |
 | `OPENCODE_STALE_STREAMING_MS` | `900000` | stale-stream reset window |
-| `OPENCODE_MAX_PINNED_SESSIONS` | `2` | max pinned OpenCode sessions |
+| `OPENCODE_MAX_PINNED_SESSIONS` | `5` | max human Web UI pinned OpenCode sessions |
 | `OPENCODE_CLEANUP_INTERVAL_MS` | `60000` | cleanup loop interval |
 | `OPENCODE_MODEL_PROVIDERS` | `zai-coding-plan,kilo,opencode` | provider ids whose models appear in the picker, or `all`/`*` for every authenticated provider. Pi Web UI never reads provider keys — they stay in OpenCode's auth storage |
 | `OPENCODE_MODEL_SNAPSHOT_PATH` | `~/.pi-web-ui/opencode-model-snapshot.json` | host-side audit snapshot for the weekly model-refresh job (ids only) |
@@ -226,7 +226,7 @@ If you enable notifications, make sure `NOTIFICATIONS_PUBLIC_BASE_URL` resolves 
 | `ANTIGRAVITY_STALL_TIMEOUT_MS` | `300000` | kill a silent `agy -p` turn if the per-turn log file mtime stops advancing (default 5 min) |
 | `ANTIGRAVITY_MAX_ATTEMPTS` | `2` | total attempts for a stalled or timed-out `agy -p` turn |
 | `ANTIGRAVITY_MAX_SESSIONS` | `4` | max in-memory Antigravity sessions tracked |
-| `ANTIGRAVITY_MAX_PINNED_SESSIONS` | `2` | max pinned Antigravity sessions |
+| `ANTIGRAVITY_MAX_PINNED_SESSIONS` | `5` | max human Web UI pinned Antigravity sessions |
 | `ANTIGRAVITY_CLEANUP_INTERVAL_MS` | `60000` | cleanup loop interval |
 
 ### Command Code

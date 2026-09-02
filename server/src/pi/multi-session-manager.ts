@@ -2,6 +2,7 @@ import type { PiService } from './pi-service.js';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { createLogger } from '../logging/logger.js';
 import { enrichSubagentEvent } from './event-forwarder.js';
+import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
 const logger = createLogger('MultiSessionManager');
 
@@ -73,7 +74,7 @@ export interface MultiSessionManagerOptions {
   maxSessions?: number;
   /** Enable memory monitoring and logging (default: true) */
   enableMemoryMonitoring?: boolean;
-  /** Maximum number of sessions that can be pinned (default: 2) */
+  /** Maximum number of sessions that can be pinned by the human Web UI (default: 5) */
   maxPinnedSessions?: number;
   /** How long before a streaming session with no events is considered stale (default: 900000ms = 15 minutes) */
   staleStreamingThresholdMs?: number;
@@ -160,7 +161,7 @@ export class MultiSessionManager {
     this.idleSessionTimeoutMs = options.idleSessionTimeoutMs ?? 1800000; // 30 minutes
     this.maxSessions = options.maxSessions ?? 10;
     this.enableMemoryMonitoring = options.enableMemoryMonitoring ?? true;
-    this.maxPinnedSessions = options.maxPinnedSessions ?? 2;
+    this.maxPinnedSessions = options.maxPinnedSessions ?? MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME;
     this.staleStreamingThresholdMs = options.staleStreamingThresholdMs ?? 15 * 60 * 1000;
     
     // Start cleanup timer
@@ -1362,7 +1363,7 @@ export class MultiSessionManager {
     if (!activeSession) return false;
     if (activeSession.pinClaims.has(claimId)) return true;
 
-    // The historical two-session policy belongs only to human Web UI pins.
+    // The bounded per-runtime policy belongs only to human Web UI pins.
     // API/watch claims are independently time-bounded by their own owners.
     if (claimId === 'web-ui') {
       const currentHumanPinned = Array.from(this.sessions.values())

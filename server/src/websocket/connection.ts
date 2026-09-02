@@ -36,6 +36,7 @@ import { AntigravitySessionSubscribers } from '../antigravity/antigravity-sessio
 import { CommandCodeService } from '../command-code/command-code-service.js';
 import { setCommandCodeService } from '../command-code/command-code-instance.js';
 import { getSessionRegistry } from '../session-registry.js';
+import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
 import { withCorrelation, newRequestId } from '../logging/correlation.js';
@@ -348,8 +349,8 @@ export class WebSocketConnectionManager {
         cleanupIntervalMs: 60 * 1000,
         // Maximum sessions to keep in memory (4 keeps ~2 GB heap under --max-old-space-size=2048)
         maxSessions: 4,
-        // Maximum pinned sessions allowed (protected from cleanup)
-        maxPinnedSessions: 2,
+        // Maximum human Web UI pins allowed per runtime (protected from cleanup)
+        maxPinnedSessions: MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME,
         // Enable memory monitoring
         enableMemoryMonitoring: true,
       }
@@ -3346,7 +3347,7 @@ export class WebSocketConnectionManager {
       const success = this.commandCodeService.pinSession(message.sessionPath);
       this.sendMessage(clientId, success
         ? { type: 'session_pinned', sessionPath: message.sessionPath, pinned: true }
-        : { type: 'session_pin_error', sessionPath: message.sessionPath, error: 'Session not found' });
+        : { type: 'session_pin_error', sessionPath: message.sessionPath, error: 'Maximum pinned sessions limit reached' });
       return;
     }
 

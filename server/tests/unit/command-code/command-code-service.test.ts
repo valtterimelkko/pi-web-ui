@@ -88,6 +88,21 @@ describe('Command Code service', () => {
     expect(service.getHealth().status).toBe('exact_model_unavailable');
   });
 
+  it('allows five human pins, rejects a sixth, and keeps Internal API claims independent', async () => {
+    const { cwd, service } = await harness();
+    await service.init();
+    const sessions = [];
+    for (let index = 0; index < 6; index++) {
+      sessions.push(await service.createSession({ cwd, model: 'qwen/qwen3.8-max' }));
+    }
+
+    for (const session of sessions.slice(0, 5)) expect(service.pinSession(session.sessionId)).toBe(true);
+    expect(service.pinSession(sessions[5].sessionId)).toBe(false);
+    expect(service.pinSession(sessions[5].sessionId, 'internal-api:lease-6')).toBe(true);
+    expect(service.unpinSession(sessions[5].sessionId)).toBe(true);
+    expect(service.isSessionPinned(sessions[5].sessionId)).toBe(true);
+  });
+
   it('rejects a model that is not advertised and a cwd outside the allowed roots', async () => {
     const { cwd, service } = await harness();
     await service.init();

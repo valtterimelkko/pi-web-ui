@@ -391,6 +391,19 @@ cost.
 ### 3.5 No automatic concurrency increase
 
 The 12 GiB ceiling does not authorize more turns or resident sessions.
+
+> **Owner-authorised human-pin exception — 2026-09-02.** The operator explicitly
+> authorised raising the human Web UI pin allowance from two to five per runtime.
+> This is a bounded interactive-residency policy change, not an inference from the
+> larger memory ceiling and not authority to raise active-turn admission,
+> execution concurrency, or the Pi four-session soft cache. RED/GREEN tests cover
+> five accepted human claims, sixth-claim refusal, and independent source-owned
+> Internal API/watch claims. Disposable browser-WebSocket validation reproduced
+> that boundary for Pi, Claude SDK, and Command Code with 296,464,384 bytes RSS,
+> zero high/OOM events, no PID pressure, and no host pressure. Production was not
+> restarted or used for validation; production rollout still requires its own
+> explicit gate.
+
 Initial production guardrails remain:
 
 ```dotenv

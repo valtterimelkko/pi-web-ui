@@ -60,7 +60,6 @@ describe('OpenCodeService — Session Lifecycle', () => {
         maxSessions: 3,
         idleTimeoutMs: 5000,
         staleStreamingMs: 2000,
-        maxPinnedSessions: 2,
         cleanupIntervalMs: 60000,
         serverMaxUptimeMs: 1000,
       },
@@ -86,14 +85,12 @@ describe('OpenCodeService — Session Lifecycle', () => {
       expect(await service.pinSession('unknown')).toBe(false);
     });
 
-    it('enforces max pinned sessions limit', async () => {
-      const s1 = await createTestSession(service);
-      const s2 = await createTestSession(service);
-      const s3 = await createTestSession(service);
+    it('enforces the five-session human pin limit', async () => {
+      const sessions = [];
+      for (let index = 0; index < 6; index++) sessions.push(await createTestSession(service));
 
-      expect(await service.pinSession(s1)).toBe(true);
-      expect(await service.pinSession(s2)).toBe(true);
-      expect(await service.pinSession(s3)).toBe(false);
+      for (const sessionId of sessions.slice(0, 5)) expect(await service.pinSession(sessionId)).toBe(true);
+      expect(await service.pinSession(sessions[5])).toBe(false);
     });
 
     it('keeps an Internal API claim when the Web UI releases its own claim', async () => {
@@ -106,14 +103,12 @@ describe('OpenCodeService — Session Lifecycle', () => {
       expect(service.isSessionPinned(sessionId)).toBe(false);
     });
 
-    it('does not count Internal API claims against the Web UI pin limit', async () => {
-      const s1 = await createTestSession(service);
-      const s2 = await createTestSession(service);
-      const s3 = await createTestSession(service);
-      expect(await service.pinSession(s1)).toBe(true);
-      expect(await service.pinSession(s2)).toBe(true);
-      expect(await service.pinSession(s3, 'internal-api:lease-3')).toBe(true);
-      expect(await service.pinSession(s3)).toBe(false);
+    it('does not count Internal API claims against the five-session Web UI pin limit', async () => {
+      const sessions = [];
+      for (let index = 0; index < 6; index++) sessions.push(await createTestSession(service));
+      for (const sessionId of sessions.slice(0, 5)) expect(await service.pinSession(sessionId)).toBe(true);
+      expect(await service.pinSession(sessions[5], 'internal-api:lease-6')).toBe(true);
+      expect(await service.pinSession(sessions[5])).toBe(false);
     });
 
     it('returns true when pinning an already-pinned session', async () => {
@@ -136,16 +131,14 @@ describe('OpenCodeService — Session Lifecycle', () => {
     });
 
     it('allows re-pinning after unpinning when at limit', async () => {
-      const s1 = await createTestSession(service);
-      const s2 = await createTestSession(service);
-      const s3 = await createTestSession(service);
+      const sessions = [];
+      for (let index = 0; index < 6; index++) sessions.push(await createTestSession(service));
 
-      await service.pinSession(s1);
-      await service.pinSession(s2);
-      expect(await service.pinSession(s3)).toBe(false);
+      for (const sessionId of sessions.slice(0, 5)) await service.pinSession(sessionId);
+      expect(await service.pinSession(sessions[5])).toBe(false);
 
-      service.unpinSession(s1);
-      expect(await service.pinSession(s3)).toBe(true);
+      service.unpinSession(sessions[0]);
+      expect(await service.pinSession(sessions[5])).toBe(true);
     });
   });
 

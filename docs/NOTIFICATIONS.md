@@ -30,7 +30,7 @@ notifications later without a rewrite.
   first-message auto-name stays readable.
 - **Opt-in, decoupled from pinning:** notifications fire only for sessions the
   operator opted in. Opt-in is a persisted per-session flag, independent of the
-  2-session pin limit.
+  five-session-per-runtime human Web UI pin limit.
 - **Canonical Pi opt-in identity (bare UUID):** Pi sessions carry two ids — the
   file basename (`<timestamp>_<uuid>`, the live sidebar `session.id` while
   streaming) and the bare UUID (`<uuid>`, the `type:"session"` header id, which is

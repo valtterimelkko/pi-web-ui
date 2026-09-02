@@ -101,7 +101,7 @@ reference in [`INTERNAL-API.md`](./INTERNAL-API.md) (Watch).
 > `retention:{mode:"durable"|"resident",ownerId,...}` atomically on
 > `POST /sessions`. Persist the returned lease id and renew/release that exact
 > lease. Leases default to 24h, cap at 7d, survive restart, and do not consume
-> the Web UI's two human pin slots. See
+> the Web UI's five-per-runtime human pin slots. See
 > [Source-owned session retention](./INTERNAL-API.md#source-owned-session-retention-persistent-time-bounded).
 
 ### Condition types (generic / function-agnostic)

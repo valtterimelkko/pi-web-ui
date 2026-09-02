@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { parseBlockedPiProviders } from './internal-api/pi-provider-policy.js';
 import os from 'os';
+import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
 dotenv.config();
 
@@ -331,7 +332,7 @@ export const config: ServerConfig = {
   opencodeMaxSessions: parseInt(process.env.OPENCODE_MAX_SESSIONS || '4', 10),
   opencodeIdleTimeoutMs: parseInt(process.env.OPENCODE_IDLE_TIMEOUT_MS || '1800000', 10),
   opencodeStaleStreamingMs: parseInt(process.env.OPENCODE_STALE_STREAMING_MS || '900000', 10),
-  opencodeMaxPinnedSessions: parseInt(process.env.OPENCODE_MAX_PINNED_SESSIONS || '2', 10),
+  opencodeMaxPinnedSessions: parseInt(process.env.OPENCODE_MAX_PINNED_SESSIONS || String(MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME), 10),
   opencodeCleanupIntervalMs: parseInt(process.env.OPENCODE_CLEANUP_INTERVAL_MS || '60000', 10),
   opencodeDebugRawEvents: process.env.OPENCODE_DEBUG_RAW_EVENTS === 'true',
   opencodeTrustedPermissions: process.env.OPENCODE_TRUSTED_PERMISSIONS === 'true',
@@ -414,7 +415,7 @@ export const config: ServerConfig = {
   antigravityPromptTimeoutMs: parseInt(process.env.ANTIGRAVITY_PROMPT_TIMEOUT_MS || '600000', 10),
   antigravityIdleTimeoutMs: parseInt(process.env.ANTIGRAVITY_IDLE_TIMEOUT_MS || '1800000', 10),
   antigravityMaxSessions: parseInt(process.env.ANTIGRAVITY_MAX_SESSIONS || '4', 10),
-  antigravityMaxPinnedSessions: parseInt(process.env.ANTIGRAVITY_MAX_PINNED_SESSIONS || '2', 10),
+  antigravityMaxPinnedSessions: parseInt(process.env.ANTIGRAVITY_MAX_PINNED_SESSIONS || String(MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME), 10),
   antigravityCleanupIntervalMs: parseInt(process.env.ANTIGRAVITY_CLEANUP_INTERVAL_MS || '60000', 10),
   // Liveness heartbeat cadence during an in-flight Antigravity turn. agy is a
   // batch subprocess (no native streaming), so the server emits a synthetic

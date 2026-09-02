@@ -121,7 +121,7 @@ All config lives in `server/src/config.ts`:
 | `antigravityPromptTimeoutMs` | `600000` (10m) | `ANTIGRAVITY_PROMPT_TIMEOUT_MS` |
 | `antigravityIdleTimeoutMs` | `1800000` (30m) | `ANTIGRAVITY_IDLE_TIMEOUT_MS` |
 | `antigravityMaxSessions` | `4` | `ANTIGRAVITY_MAX_SESSIONS` |
-| `antigravityMaxPinnedSessions` | `2` | `ANTIGRAVITY_MAX_PINNED_SESSIONS` |
+| `antigravityMaxPinnedSessions` | `5` | `ANTIGRAVITY_MAX_PINNED_SESSIONS` |
 | `antigravityCleanupIntervalMs` | `60000` (1m) | `ANTIGRAVITY_CLEANUP_INTERVAL_MS` |
 | `antigravityHeartbeatIntervalMs` | `5000` (5s) | `ANTIGRAVITY_HEARTBEAT_INTERVAL_MS` |
 | `antigravityStallTimeoutMs` | `300000` (5m) | `ANTIGRAVITY_STALL_TIMEOUT_MS` |

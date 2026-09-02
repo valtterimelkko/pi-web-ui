@@ -4,6 +4,7 @@ import { createLogger } from '../logging/logger.js';
 const logger = createLogger('CommandCodeService');
 import { constants as fsConstants, type Dirent } from 'node:fs';
 import path from 'node:path';
+import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import {
   COMMAND_CODE_EXECUTION_INSTANCE_ID,
@@ -763,6 +764,11 @@ export class CommandCodeService {
   }
   pinSession(sessionId: string, claimId = 'web-ui'): boolean {
     const claims = this.pinClaims.get(sessionId) ?? new Set<string>();
+    if (claims.has(claimId)) return true;
+    if (claimId === 'web-ui') {
+      const humanPinned = [...this.pinClaims.values()].filter((set) => set.has('web-ui')).length;
+      if (humanPinned >= MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME) return false;
+    }
     claims.add(claimId);
     this.pinClaims.set(sessionId, claims);
     return true;
