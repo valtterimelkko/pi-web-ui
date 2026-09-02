@@ -1,3 +1,5 @@
+> **Where does this sit?** `FIRST-RUN.md` is the **one blessed shortest path** (Linux + one runtime) to first success. For the full adopter menu (hosting options, prerequisites in detail, per-runtime env tables) read [`GETTING-STARTED.md`](./GETTING-STARTED.md) — prerequisites are **canonical in `GETTING-STARTED.md`**; this page links there rather than reproducing them.
+
 # First run: Linux + one runtime
 
 This is the shortest supported path from a fresh clone to a working Pi Web UI session. It intentionally configures **one runtime first**. Add other runtimes only after the basic UI works.

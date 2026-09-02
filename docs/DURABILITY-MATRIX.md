@@ -41,4 +41,6 @@ This page summarizes where state lives and what evidence survives refresh or res
 - Re-register long-horizon observation after restart even when prior evidence remains visible.
 - Back up operator-owned state before deployment upgrades or storage migrations.
 
+> **Operator note — pin budget (2026-09-02, `d617d4b`):** five human pins per runtime (`maxPinnedSessions` vs `INTERNAL_API_PIN_DIR` leases); 6th human claim rejected. Internal API leases (`retention:{mode,ownerId}`, `watch:<id>`, `watch-target:<id>`) and the expiring `internal-api:` claim are independent.
+
 See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`OBSERVABILITY.md`](./OBSERVABILITY.md), [`NOTIFICATIONS.md`](./NOTIFICATIONS.md), and [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).

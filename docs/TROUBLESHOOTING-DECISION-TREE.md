@@ -45,6 +45,7 @@ GET /api/v1/sessions/:id/evidence
 | Terminal self-notification fails | socket/token and status route | recent delivery log | Internal API or Telegram channel |
 | Extension UI/tree action does nothing | extension capability and active session | protocol events | companion extension lifecycle |
 | Files editor refuses save | truncation and dirty-state banner | file size/path validation | Files tab safety boundary |
+| Sixth pin rejected / `SESSION_PIN_LIMIT` / `RETENTION_RESIDENT_CAPACITY_EXHAUSTED` | `GET /sessions/:id/evidence` → `retention.leases[]` vs human pins (per runtime, 5-cap) | `TROUBLESHOOTING.md` pin symptom + `OBSERVABILITY.md` capacity/evidence | retention/watch vs human pin budget (2026-09-02) |
 
 ## Evidence ladder
 

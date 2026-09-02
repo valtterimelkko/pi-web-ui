@@ -43,4 +43,6 @@ When documenting a feature, state all three explicitly:
 2. **transport** — browser REST/WebSocket, Internal API, runtime SDK/CLI, or extension protocol;
 3. **persistence owner** — Pi Web UI, runtime, companion, or process-local only.
 
+> **Operator note — human pin budget (2026-09-02, `d617d4b`):** the browser/UI allows **five human pins per runtime**; a 6th human claim is rejected. Source-owned Internal API retention leases (`INTERNAL_API_PIN_DIR` / `maxPinnedSessions` vs lease ledger) and watch claims (`watch:<id>` / `watch-target:<id>`) are **independent** and do not consume human slots. Command Code now enforces the same cap; the legacy `internal-api:` control pin is now an expiring `internal-api:` claim.
+
 This prevents a visible UI feature from being mistaken for a fully core-owned implementation.

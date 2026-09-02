@@ -6,6 +6,11 @@ resync + production restart) remains owner-gated. Live-validated per phase on
 disposable servers; claims marked [LV] were verified against the repos and
 binaries on 2026-08-27._
 
+> **Status:** completed (phases 0–6 executed) — Phase 7 owner-gated
+> **Canonical:** `docs/INTERNAL-API.md` § Goal Function, `docs/INTERNAL-API-CONTRACT.md` changelog 1.27.0, `docs/GOAL-EXTENSION-UI.md`
+> **ImplementedBy:** `2924596`→`cee19f7` (pi-web-ui), `dda585b` (cmd-enhancement), `3e3e031` (skills-global)
+> **LastVerified:** 2026-08-27 (disposable live validation) — contract `1.27.0` in service; `suggested` 1.28.0 follow-up in `docs/RECENT-CHANGES.md`
+
 ---
 
 ## 0. Owner decisions already made (do not re-ask)

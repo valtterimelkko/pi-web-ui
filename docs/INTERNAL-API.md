@@ -39,10 +39,12 @@ Important caveat: **that orchestration vision is real, but still work in progres
 
 If you want the broader story behind that direction, read [`VISION.md`](./VISION.md).
 
+> **Reading guide:** This file is the canonical **reference** for the Internal API. Tutorial and orchestration examples live in [`INTERNAL-API-QUICKSTART.md`](./INTERNAL-API-QUICKSTART.md), [`INTERNAL-API-RECIPES.md`](./INTERNAL-API-RECIPES.md), and [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) — follow those for task-oriented flows and link back here for exact fields, statuses, and error codes. This file is intentionally kept as reference-only; it remains >2000 lines and a future slimming pass will move any remaining tutorial duplication behind links (see `DOCS-GOVERNANCE.md` "one file one class").
+
 ## What is Pi Web UI?
 
-Pi Web UI is a custom-built browser interface around **four AI
-coding-agent runtime paths**. It provides persistent chat sessions with real-time
+Pi Web UI is a custom-built browser interface around **five AI
+coding-agent runtime paths** (Pi, Claude, OpenCode, Antigravity, and Command Code). It provides persistent chat sessions with real-time
 streaming, tool-execution rendering, session history, and runtime management —
 all behind a single unified sidebar.
 
@@ -2360,12 +2362,11 @@ a watchable terminal event instead of per-run `agent_end` churn.
 | opencode / antigravity | out of scope (OpenCode keeps its own server bridge via the goal-engine plugin) | | | | `supported:false` |
 
 Canonical status vocabulary: `idle` (no goal) · `running` · `wrapping_up` ·
-`paused` (with `pausedReason`) · `suggested` (contract 1.28.0 — an agent has
+`paused` (with `pausedReason`) · `suggested` (contract 1.28.0 — `8d18f41` 2026-08-30 — an agent has
 proposed a goal via the Pi extension's suggestion flow and is awaiting
-explicit owner approval; the suggested `objective` is reported, nothing is
-running, and no `goal_end` fires) · `achieved` · `cleared` · `failed` ·
+explicit owner approval; `GET /goal` and `goal_state` report `{ status:"suggested", objective:"<proposed>" }`, `runtimeState.pendingSuggestion` is carried verbatim, nothing is running, and no `goal_end` fires) · `achieved` · `cleared` · `failed` ·
 `unknown`. Terminal transitions (`achieved`/`failed`/`cleared`) additionally
-emit a `goal_end` event — the one worth watching.
+emit a `goal_end` event — the one worth watching. Copy of the contract description (`INTERNAL-API-CONTRACT.md:39-42`): "`GET /api/v1/sessions/:id/goal` (and `goal_state` broker events) now report `status: \"suggested\"` with the suggested `objective` when the Pi extension records a `pendingSuggestion` on an otherwise idle goal — an agent has proposed a goal and is waiting for explicit owner approval. `suggested` is **not** terminal (no `goal_end` fires); transitions from it behave like any fresh goal start or clear." The extension's completion-status parser now also tolerates a trailing `Progress:` annotation after the status marker (e.g. `**Status: GOAL_ACHIEVED** — Progress: 5/5`), fixing goals that never stopped when the agent appended progress on the marker line.
 
 ### GET /api/v1/sessions/:id/goal
 

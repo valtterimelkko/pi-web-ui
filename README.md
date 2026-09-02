@@ -147,7 +147,7 @@ Current docs:
 - [`docs/INTERNAL-API-CONTRACT.md`](./docs/INTERNAL-API-CONTRACT.md)
 - [`docs/INTERNAL-API-ORCHESTRATION.md`](./docs/INTERNAL-API-ORCHESTRATION.md)
 
-Recent power-user additions worth knowing about (current contract **`1.20.0`**, see `docs/INTERNAL-API-CONTRACT.md` as source; `header_up -Authorization` only in `forward_auth`):
+Recent power-user additions worth knowing about (current contract **`1.29.0`** — see `docs/INTERNAL-API-CONTRACT.md` as source of truth; `header_up -Authorization` only in `forward_auth`):
 - **runtime health** and filtered, secret-scrubbed **self-service diagnostics** with a bounded process-local operational snapshot
 - durable **run receipts**, idempotent prompt dispatch, and explicit disconnect-safe detached answer-mode prompts
 - a read-only **screen-view transcript projection** (`view=screen`) for fetching what the user sees without browser automation

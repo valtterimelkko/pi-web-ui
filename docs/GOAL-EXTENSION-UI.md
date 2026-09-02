@@ -31,6 +31,19 @@ A bare `widget_cleared` means the extension hid its widget (`/goal status`); the
 goal only ends when `extension_status` is cleared. Treating the two as the same
 signal archives a live goal, so keep them distinct.
 
+## Suggested goal status (contract 1.28.0, 2026-08-30 — `8d18f41`)
+
+`status: "suggested"` is the canonical non-terminal goal state introduced in contract `1.28.0`. It surfaces the Pi goal-engine extension's agent-initiated suggestion flow (`goal` tool actions `suggest`/`start` with an explicit owner-approval gate):
+
+- an agent proposes a goal; the server records `runtimeState.pendingSuggestion` on an otherwise idle Pi session and projects `GET /goal` as `{ status:"suggested", objective:"<proposed>" }` with **no** `goal_end` event;
+- the suggested `objective` is projected verbatim and `runtimeState.pendingSuggestion` is carried verbatim for consumers that need more than the projection;
+- `suggested` is **not** terminal — transitions from it behave like any fresh goal start or clear (an approving owner reply mentioning the goal auto-starts it);
+- the extension's completion-status parser now tolerates a trailing `Progress:` annotation after the status marker (e.g. `**Status: GOAL_ACHIEVED** — Progress: 5/5`), fixing goals that never stopped when the agent appended progress on the marker line — extension behaviour, not an API change.
+
+Copy of the contract description (`INTERNAL-API-CONTRACT.md:39-42`): "`GET /api/v1/sessions/:id/goal` (and `goal_state` broker events) now report `status: \"suggested\"` with the suggested `objective` when the Pi extension records a `pendingSuggestion` on an otherwise idle goal — an agent has proposed a goal and is waiting for explicit owner approval. `suggested` is **not** terminal (no `goal_end` fires); transitions from it behave like any fresh goal start or clear."
+
+See [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.28.0) and [`INTERNAL-API.md`](./INTERNAL-API.md) § Goal Function.
+
 ## Cross-runtime goal surface (contract 1.27.0)
 
 The same browser surface now renders goals for Claude (local-CLI backends) and

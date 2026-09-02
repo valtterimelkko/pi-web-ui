@@ -309,6 +309,22 @@ See also:
 - [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md)
 - [`LIVE-VALIDATION.md`](./LIVE-VALIDATION.md)
 
+## Symptom: sixth pin rejected / retention capacity exhausted
+
+If `POST /sessions` (human/UI), `POST /sessions/:id/control` (`pin`/`acquire_retention`), or evidence shows `SESSION_PIN_LIMIT` / `RETENTION_RESIDENT_CAPACITY_EXHAUSTED` on the **6th human pin** for a runtime:
+
+1. Check per-runtime human pins vs source-owned leases in one call:
+   ```bash
+   curl -s --unix-socket ~/.pi-web-ui/internal-api.sock -H "Authorization: Bearer $(cat ~/.pi-web-ui/internal-api-token)" \
+     "http://localhost/api/v1/sessions/<id>/evidence" | jq '.retention, .leases, .residency'
+   # Evidence: retention.leases[] (owner, expiry), residency, plus human pin counts under maxPinnedSessions.
+   ```
+2. `GET /api/v1/sessions/:id/evidence` → `retention.leases[]` + `retention.latestExpiryAt` vs the five human slots — Internal API leases (`retention:{mode,ownerId}`), `watch:<id>`, and `watch-target:<id>` are **independent** and do not consume human pins. The legacy `internal-api:` control pin is now an expiring `internal-api:` claim (`2026-09-02`, `d617d4b`).
+3. Per-runtime diagnosis: human pins are counted in `GET /api/v1/sessions` / UI sidebar counts; Command Code now enforces the same five-cap as the other runtimes.
+4. Fix: release or wait for expiry of the oldest human pin, or use a source-owned `retention:{mode:"durable"|"resident", ownerId}` / watch claim for automation (released by exact `leaseId`). See [`INTERNAL-API.md`](./INTERNAL-API.md) (retention), [`RUNTIME-OVERVIEW.md`](./RUNTIME-OVERVIEW.md) (persistence table), and [`OBSERVABILITY.md`](./OBSERVABILITY.md) (capacity/evidence).
+
+> **Cross-repo note:** the AgentOS board is a consumer of `GET /api/v1/sessions` (no Pi change required). Observed D19 quirks (board-side trust of `busy`/`lastActivity`, TTL feed) are board-side behaviour, not a contract break.
+
 ## Notification layer
 
 ### Useful checks

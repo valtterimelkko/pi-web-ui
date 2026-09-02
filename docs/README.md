@@ -105,6 +105,10 @@ LLM coding agents should also read [`../AGENTS.md`](../AGENTS.md) or its byte-id
 4. [`OBSERVABILITY.md`](./OBSERVABILITY.md)
 5. [`INTERNAL-API.md`](./INTERNAL-API.md) — if the issue touches runtime routing, orchestration, diagnostics, or transcript readback
 
+## Maintainer cross-repo note
+
+The AgentOS board/dashboard is the primary external consumer of `GET /api/v1/sessions`. For the AgentOS side, see `agent-os/docs/implementation/REPO-GUIDE.md` and `agent-os/BOARD-DESIGN-v0.1.md` (board as Agent OS subsystem). This keeps the Pi Web UI / AgentOS boundary explicit without duplicating the AgentOS install guide here.
+
 ## Historical plans and reports
 
 Plans and validation reports preserve implementation rationale and evidence, but they are not automatically current contracts. Prefer canonical subsystem docs and emitted API capabilities. When adding or revisiting a plan, follow the status and canonical-link rules in [`DOCS-GOVERNANCE.md`](./DOCS-GOVERNANCE.md).

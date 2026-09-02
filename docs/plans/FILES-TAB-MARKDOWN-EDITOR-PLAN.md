@@ -1,3 +1,8 @@
+> **Status:** completed — shipped in Files tab
+> **Canonical:** `docs/FILES-TAB.md`, `docs/RECENT-CHANGES.md`, `docs/CODEBASE-MAP.md`
+> **ImplementedBy:** Files-tab Markdown editor implementation (see `RECENT-CHANGES.md`)
+> **LastVerified:** 2026-08 (shipped; archived plan)
+
 # Execution Plan — Markdown Editor in the Files Tab
 
 > **Status:** implemented and archived. The editor shipped in the Files tab; the

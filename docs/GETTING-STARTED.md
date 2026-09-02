@@ -1,3 +1,5 @@
+> **Where does this sit?** `GETTING-STARTED.md` is the **full adopter menu** (hosting options, full prerequisites, per-runtime env tables, and where to go next). For the single shortest path to first success, start with [`FIRST-RUN.md`](./FIRST-RUN.md) — then return here. Prerequisites are **canonical here**, not in `FIRST-RUN.md`.
+
 # Getting Started
 
 This guide is for people who want their **first working Pi Web UI session**, not a full production deployment on day one.

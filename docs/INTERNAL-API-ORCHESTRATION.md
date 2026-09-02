@@ -328,7 +328,7 @@ runtime object must remain loaded. Leases default to 24h, cap at 7d, renew by
 exact lease id, and do not consume the Web UI's five-per-runtime human pin slots. A watch owns
 its own claim; replacing or deleting it releases only that watch claim. Retention
 is not execution admission, so preflight `/capacity` and handle final prompt
-`429` responses.
+`429` responses. For `suggested` goals, watch `goal_state` where `status=suggested` (non-terminal, `pendingSuggestion` awaiting owner approval) rather than `goal_end` (which fires only for terminal `achieved`/`failed`/`cleared`).
 
 `detach:true` returns `202` immediately and the turn keeps running server-side
 even after you disconnect — so you can fire the task and close the connection.

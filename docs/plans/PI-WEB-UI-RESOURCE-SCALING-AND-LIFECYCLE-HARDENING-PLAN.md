@@ -1,3 +1,8 @@
+> **Status:** completed (phases 0–6) — Phase 7 shadow implemented / PAUSE 7 continue-shadow; Phases 8–9 paused 2026-08-20 (owner decision)
+> **Canonical:** `docs/INTERNAL-API.md` + `docs/INTERNAL-API-CONTRACT.md` + `docs/DURABILITY-MATRIX.md`
+> **ImplementedBy:** phases 0–6 (see execution report); Phase 7 shadow `phase7-pi-shadow/v1`
+> **LastVerified:** 2026-08-20 (programme pause; phases 8–9 entry condition not met)
+
 # Pi Web UI Agent OS-First Resource Scaling and Runtime Lifecycle Hardening
 
 **Status:** Phases 0–6 **COMPLETE**; Phase 7 Pi/Internal API shadow implementation **COMPLETE — PAUSE 7: CONTINUE SHADOW**; **Phases 8–9 PAUSED 2026-08-20 by owner decision — see "Programme pause" below.** Contained routing and production observation remain unauthorised
