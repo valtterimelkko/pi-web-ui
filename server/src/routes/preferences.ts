@@ -111,11 +111,16 @@ const prefsMutex = new PreferencesMutex();
 
 /** Build a SYNCHRONOUS runtime resolver from the (async) registry, so the pure
  *  migration/key functions can stay sync & deterministic. Maps id/path and the
- *  per-runtime sub-ids of every registry entry to its sdkType. */
-export async function buildRegistryResolver(): Promise<RuntimeResolver> {
+ *  per-runtime sub-ids of every registry entry to its sdkType. An explicit
+ *  registry manager can be injected (used by the Internal API list route so
+ *  filters and tests observe the same registry the route was built with);
+ *  defaults to the process-wide singleton. */
+export async function buildRegistryResolver(
+  registryManager?: { listAll(): Promise<Array<{ id?: string; path?: string; sdkType?: string; claudeSessionId?: string; opencodeSessionId?: string }>> },
+): Promise<RuntimeResolver> {
   let entries: Array<{ id?: string; path?: string; sdkType?: string; claudeSessionId?: string; opencodeSessionId?: string }> = [];
   try {
-    entries = await getSessionRegistry().listAll();
+    entries = await (registryManager ?? getSessionRegistry()).listAll();
   } catch {
     entries = [];
   }

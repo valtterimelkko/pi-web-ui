@@ -122,8 +122,10 @@
 - `session-transfer/opencode-source-adapter.ts` — Extracts visible transcript from OpenCode replay.
 
 ### Registry / Persistence
-- `session-registry.ts` — Unified cross-runtime session index (`~/.pi-web-ui/session-registry.json`). Atomic tmp+rename writes.
-- `session-cleanup.ts` — Scheduled cleanup of archived/pinned sessions.
+- `session-registry.ts` — Unified cross-runtime session index (`~/.pi-web-ui/session-registry.json`). Atomic tmp+rename writes. Entries may carry `origin` (`browser` | `internal-api` | `native-discovered`) — the provenance surfaced as `source` by the Internal API list.
+- `session-cleanup.ts` — Scheduled cleanup of archived/pinned sessions (hourly funnel: auto-unpin 24h, auto-archive 30d idle, retention-delete 90d+7d dwell).
+- `pi/session-watcher.ts` — chokidar watcher on `~/.pi/agent/sessions`: auto-discovers ALL native pi CLI sessions (any cwd, any launcher) into the registry; tags unseen files `origin: native-discovered`.
+- `internal-api/native-sessions.ts` — bounded read-only scanners behind `GET /api/v1/sessions/native` for the direct-CLI stores the registry never sees (claude projects, cmdc CLI + native home, opencode storage, agy conversations).
 
 ### Internal API run receipts (`server/src/internal-api/run-receipts/`)
 - `run-receipt-store.ts` — atomic, disk-backed run ledger with restart interruption recovery and bounded retention.

@@ -7,7 +7,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'http';
 import { PassThrough, Writable } from 'stream';
-import type { NormalizedEvent } from '@pi-web-ui/shared';
+import type { NormalizedEvent, SdkType } from '@pi-web-ui/shared';
 import { projectDefaultViewFromEvents, renderScreenViewMarkdown } from '@pi-web-ui/shared';
 import { detectPromptInjection } from '../../security/prompt-injection.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
@@ -56,6 +56,8 @@ import type {
   SessionEventsSnapshotResponse,
   TranscriptResponse,
   ScreenViewResponse,
+  NativeSessionItem,
+  NativeSessionsResponse,
   RegisterWatchRequest,
   Phase7PiShadowProfile,
   Phase7PiShadowReasonCode,
@@ -113,6 +115,13 @@ import os from 'os';
 import { config } from '../../config.js';
 import { createLogger, type LogRecord } from '../../logging/logger.js';
 import { getRecentLogs } from '../diagnostics-buffer.js';
+import { readPreferences, buildRegistryResolver, PREFS_FILE } from '../../routes/preferences.js';
+import { toV2Key } from '../../routes/session-meta.js';
+import {
+  NATIVE_RUNTIMES,
+  scanNativeSessions,
+  type NativeRuntime,
+} from '../native-sessions.js';
 import { AdmissionCapacityError, AdmissionController } from '../admission-controller.js';
 import { BoundedControlLane, ControlLaneFullError } from '../control-lane.js';
 import { SessionDisposalRegistry } from '../session-disposal.js';
@@ -343,6 +352,16 @@ export interface SessionRoutesDeps {
   claudeProjectsDir?: string;
   /** Directory for Antigravity session JSONL/log files. Defaults to config. */
   antigravitySessionDir?: string;
+  /** Web UI preferences file (archived flags for the list response). Defaults to config.webUiPrefsPath. */
+  preferencesPath?: string;
+  /** Native Command Code CLI home (~/.commandcode). Defaults to config. */
+  commandCodeCliHomeDir?: string;
+  /** Server-spawned Command Code native home. Defaults to config. */
+  commandCodeNativeHomeDir?: string;
+  /** OpenCode storage root (native direct-CLI sessions). Defaults to config. */
+  opencodeStorageDir?: string;
+  /** Antigravity native conversation databases directory. Defaults to config. */
+  antigravityConversationsDir?: string;
   /** Shared process-local execution admission authority. */
   admissionController?: AdmissionController;
   /** Optional bounded control lane for P0/P1 handlers (defaults to a bounded instance). */
@@ -378,6 +397,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
   const claudeProjectsDir = deps.claudeProjectsDir ?? resolveClaudeProjectsRoot();
   const antigravitySessionDir = deps.antigravitySessionDir ?? config.antigravitySessionDir;
+  const preferencesPath = deps.preferencesPath ?? PREFS_FILE;
+  const nativeRoots = {
+    claudeProjectsDir,
+    commandCodeCliHomeDir: deps.commandCodeCliHomeDir ?? config.commandCodeCliHomeDir,
+    commandCodeNativeHomeDir: deps.commandCodeNativeHomeDir ?? config.commandCodeNativeHomeDir,
+    opencodeStorageDir: deps.opencodeStorageDir ?? config.opencodeStorageDir,
+    antigravityConversationsDir: deps.antigravityConversationsDir ?? config.antigravityNativeConversationsDir,
+  };
   const blockedPiProviders = deps.blockedPiProviders ?? config.internalApiBlockedPiProviders;
   const runReceipts = deps.runReceiptManager ?? new RunReceiptManager({
     store: new RunReceiptStore(deps.runReceiptDir),
@@ -1408,6 +1435,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
+      // Contract 1.30.0 origin provenance: mark Internal-API-created sessions
+      // so the list response can report source 'internal-api'. Best-effort —
+      // a tagging failure must never fail the creation itself.
+      try {
+        await sessionRegistry.upsert({
+          id: base.sessionId,
+          sdkType: base.runtime as SdkType,
+          cwd: base.cwd,
+          origin: 'internal-api',
+        });
+      } catch (originError) {
+        logger.warn('Failed to tag session origin:', originError);
+      }
+
       // Required source-owned retention is atomic from the caller's perspective:
       // if the guarantee cannot be persisted/applied, remove the unused session.
       if (body.retention) {
@@ -1498,11 +1539,79 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  /** Shared parameter parsing for the additive `since` filter (ISO 8601 or
+   *  epoch-ms). Returns null on junk so callers can 400 with a precise message. */
+  function parseSinceParam(raw: string): number | null {
+    if (/^\d+$/.test(raw)) {
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    }
+    const parsed = Date.parse(raw);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+
+  /** Archived flags from the web UI preferences file, keyed by the same
+   *  stable v2 identity the browser derives (pi:<uuid> / <runtime>:<path>).
+   *  A missing or unreadable prefs file simply means nothing is archived. */
+  async function loadArchivedKeyIndex(): Promise<Map<string, boolean>> {
+    const index = new Map<string, boolean>();
+    try {
+      const prefs = await readPreferences(preferencesPath);
+      for (const [key, rec] of Object.entries(prefs.sessions)) {
+        index.set(key, rec.archived === true);
+      }
+    } catch {
+      // no prefs file → nothing archived
+    }
+    return index;
+  }
+
   async function handleListSessions(
-    _req: IncomingMessage,
+    req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
     try {
+      // Contract 1.30.0 additive list ergonomics: server-side filters so
+      // consumers no longer need to download and filter the full registry.
+      const query = new URL(req.url ?? '/api/v1/sessions', 'http://localhost').searchParams;
+      let runtimeFilter: Set<string> | undefined;
+      const runtimeParam = query.get('runtime');
+      if (runtimeParam !== null) {
+        const parts = runtimeParam.split(',').map((s) => s.trim()).filter(Boolean);
+        const validRuntimes = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode'];
+        if (parts.length === 0 || parts.some((p) => !validRuntimes.includes(p))) {
+          sendJson(res, 400, { error: `Unsupported runtime filter: ${runtimeParam}. Valid runtimes: ${validRuntimes.join(', ')}`, code: ErrorCode.INVALID_REQUEST });
+          return;
+        }
+        runtimeFilter = new Set(parts);
+      }
+      let limit: number | undefined;
+      const limitParam = query.get('limit');
+      if (limitParam !== null) {
+        if (!/^\d+$/.test(limitParam) || Number(limitParam) < 1 || Number(limitParam) > 1000) {
+          sendJson(res, 400, { error: 'limit must be an integer between 1 and 1000', code: ErrorCode.INVALID_REQUEST });
+          return;
+        }
+        limit = Number(limitParam);
+      }
+      let since: number | undefined;
+      const sinceParam = query.get('since');
+      if (sinceParam !== null) {
+        const parsed = parseSinceParam(sinceParam);
+        if (parsed === null) {
+          sendJson(res, 400, { error: 'since must be an ISO 8601 timestamp or epoch milliseconds', code: ErrorCode.INVALID_REQUEST });
+          return;
+        }
+        since = parsed;
+      }
+      const cwdFilter = query.get('cwd');
+
+      const [archivedIndex, resolver] = await Promise.all([
+        loadArchivedKeyIndex(),
+        buildRegistryResolver(sessionRegistry),
+      ]);
+      const archivedFor = (sessionPath: string): boolean => archivedIndex.get(toV2Key(sessionPath, resolver).key) ?? false;
+
       const all = (await sessionRegistry.listAll()).filter((entry) => entry.sdkType !== 'commandcode');
       const sessions: SessionInfo[] = all.map((entry) => {
         // §6: surface live liveness, not stale registry status.
@@ -1521,17 +1630,117 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           firstMessage: entry.firstMessage,
           createdAt: entry.createdAt,
           lastActivity: entry.lastActivity,
+          archived: archivedFor(entry.path || entry.id),
+          source: entry.origin ?? 'unknown',
         };
       });
       if (commandCodeService && commandCodeService.isEnabled()) {
         const commandCodeSessions = await commandCodeService.listSessions();
-        sessions.push(...commandCodeSessions.map(commandCodeSessionInfo));
+        sessions.push(...commandCodeSessions.map((record: CommandCodeInternalSessionRecord) => {
+          const info = commandCodeSessionInfo(record);
+          return {
+            ...info,
+            archived: archivedFor(info.sessionPath),
+            source: 'unknown' as const,
+          };
+        }));
       }
 
-      sendJson(res, 200, { sessions } satisfies ListSessionsResponse);
+      // Deterministic newest-first ordering, then apply the additive filters.
+      sessions.sort((a, b) => Date.parse(b.lastActivity) - Date.parse(a.lastActivity));
+      let result = sessions;
+      if (runtimeFilter) result = result.filter((s) => runtimeFilter.has(s.runtime));
+      if (since !== undefined) {
+        result = result.filter((s) => {
+          const t = Date.parse(s.lastActivity);
+          return Number.isFinite(t) && t >= (since as number);
+        });
+      }
+      if (cwdFilter !== null) result = result.filter((s) => s.cwd === cwdFilter);
+      if (limit !== undefined) result = result.slice(0, limit);
+
+      sendJson(res, 200, { sessions: result } satisfies ListSessionsResponse);
     } catch (err) {
       logger.errorObject('Failed to list sessions', err);
       sendJson(res, 500, { error: 'Failed to list sessions', code: ErrorCode.INTERNAL_ERROR });
+    }
+  }
+
+  /** Contract 1.30.0 (A3): bounded, read-only discovery scan of the NATIVE
+   *  direct-CLI session stores (claude / commandcode / opencode / antigravity).
+   *  The registry is never mutated; results are only annotated with what the
+   *  registry already knows. Pi is refused with an explanatory 400 because
+   *  native pi sessions are auto-discovered into the registry by the
+   *  SessionWatcher and therefore already covered by GET /sessions. */
+  async function handleListNativeSessions(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    try {
+      const query = new URL(req.url ?? '/api/v1/sessions/native', 'http://localhost').searchParams;
+      let runtimes: NativeRuntime[];
+      const runtimeParam = query.get('runtime');
+      if (runtimeParam === null || runtimeParam.trim() === '') {
+        runtimes = [...NATIVE_RUNTIMES];
+      } else {
+        const parts = runtimeParam.split(',').map((s) => s.trim()).filter(Boolean);
+        for (const part of parts) {
+          if (part === 'pi') {
+            sendJson(res, 400, {
+              error: 'Native pi sessions are auto-discovered into the session registry by the SessionWatcher and are already returned by GET /sessions; the native scan covers claude, commandcode, opencode, antigravity',
+              code: ErrorCode.INVALID_REQUEST,
+            });
+            return;
+          }
+          if (!(NATIVE_RUNTIMES as readonly string[]).includes(part)) {
+            sendJson(res, 400, { error: `Unsupported native runtime: ${part}. Valid runtimes: ${NATIVE_RUNTIMES.join(', ')}`, code: ErrorCode.INVALID_REQUEST });
+            return;
+          }
+        }
+        runtimes = parts as NativeRuntime[];
+      }
+      let limit = 20;
+      const limitParam = query.get('limit');
+      if (limitParam !== null) {
+        if (!/^\d+$/.test(limitParam) || Number(limitParam) < 1 || Number(limitParam) > 200) {
+          sendJson(res, 400, { error: 'limit must be an integer between 1 and 200', code: ErrorCode.INVALID_REQUEST });
+          return;
+        }
+        limit = Number(limitParam);
+      }
+      let since: Date | undefined;
+      const sinceParam = query.get('since');
+      if (sinceParam !== null) {
+        const parsed = parseSinceParam(sinceParam);
+        if (parsed === null) {
+          sendJson(res, 400, { error: 'since must be an ISO 8601 timestamp or epoch milliseconds', code: ErrorCode.INVALID_REQUEST });
+          return;
+        }
+        since = new Date(parsed);
+      }
+
+      const known = {
+        claudeSessionIds: new Map<string, string>(),
+        commandCodeNativeSessionIds: new Map<string, string>(),
+        opencodeSessionIds: new Map<string, string>(),
+        antigravityConversationIds: new Map<string, string>(),
+      };
+      for (const entry of await sessionRegistry.listAll()) {
+        if (entry.claudeSessionId) known.claudeSessionIds.set(entry.claudeSessionId, entry.id);
+        if (entry.commandCodeNativeSessionId) known.commandCodeNativeSessionIds.set(entry.commandCodeNativeSessionId, entry.id);
+        if (entry.opencodeSessionId) known.opencodeSessionIds.set(entry.opencodeSessionId, entry.id);
+        if (entry.antigravityConversationId) known.antigravityConversationIds.set(entry.antigravityConversationId, entry.id);
+      }
+
+      const result = await scanNativeSessions({ runtimes, limit, since, roots: nativeRoots, known });
+      sendJson(res, 200, {
+        sessions: result.items,
+        truncated: result.truncated,
+        scannedRoots: result.scannedRoots,
+      } satisfies NativeSessionsResponse);
+    } catch (err) {
+      logger.errorObject('Failed to scan native sessions', err);
+      sendJson(res, 500, { error: 'Failed to scan native sessions', code: ErrorCode.INTERNAL_ERROR });
     }
   }
 
@@ -5145,6 +5354,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             commandCodeService,
           },
         });
+        // Contract 1.30.0 origin provenance: best-effort tag mirroring the
+        // single-session create path.
+        try {
+          await sessionRegistry.upsert({
+            id: created.sessionId,
+            sdkType: created.runtime as SdkType,
+            cwd: created.cwd,
+            origin: 'internal-api',
+          });
+        } catch (originError) {
+          logger.warn('Failed to tag batch session origin:', originError);
+        }
         onSessionCreated?.(created.sessionId, created.sessionPath, created.runtime);
         const result: BatchCreateResultItem = {
           index,
@@ -5911,6 +6132,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     reapplyRetentionForSession: (sessionId: string) => pinExpiry?.reapplyForSession(sessionId) ?? Promise.resolve(),
     handleCreateSession,
     handleListSessions,
+    handleListNativeSessions,
     handleGetSession,
     handleGetSessionInfo,
     handleGetSessionEvidence: wrapControl(handleGetSessionEvidence),

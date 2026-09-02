@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.29.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.30.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -622,6 +622,44 @@ export interface SessionInfo {
   pinned?: boolean;
   /** ISO timestamp of an API pin's absolute expiry, when set. */
   pinnedUntil?: string;
+  /** True when the web UI has archived this session (web UI preferences).
+   *  Additive since 1.30.0. */
+  archived?: boolean;
+  /** Where this session came from, when known: the browser UI, the Internal
+   *  API, native on-disk discovery (pi CLI sessions found by the
+   *  SessionWatcher), or 'unknown' for entries created before origin
+   *  tracking. Additive since 1.30.0. */
+  source?: 'browser' | 'internal-api' | 'native-discovered' | 'unknown';
+}
+
+/** One natively-discovered (direct-CLI) session returned by the bounded
+ *  read-only `GET /sessions/native` scan. Additive since 1.30.0. */
+export interface NativeSessionItem {
+  runtime: Exclude<SessionRuntime, 'pi'>;
+  /** Absolute path of the native session artefact on disk. */
+  nativePath: string;
+  /** File mtime as ISO timestamp — the best proxy for last activity. */
+  mtime: string;
+  /** File size in bytes. */
+  size: number;
+  /** Working directory decoded from the native store layout, when derivable. */
+  cwd?: string;
+  /** True when this native session is already known to the pi-web-ui registry. */
+  knownInRegistry: boolean;
+  /** Registry session id when knownInRegistry is true. */
+  registrySessionId?: string;
+  /** Best-effort bounded first-message/title preview extracted from the
+   *  native artefact. Absent when the format carries no readable preview
+   *  (e.g. antigravity conversation databases). */
+  preview?: string;
+}
+
+export interface NativeSessionsResponse {
+  sessions: NativeSessionItem[];
+  /** True when more native candidates existed than the limit allowed. */
+  truncated: boolean;
+  /** Per-root scan accounting for observability. */
+  scannedRoots: Array<{ runtime: string; root: string; considered: number }>;
 }
 
 export interface SessionDetail extends SessionInfo {

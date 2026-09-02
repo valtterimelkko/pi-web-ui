@@ -556,8 +556,36 @@ not return a half-created unretained success.
 ### List Sessions
 
 ```
-GET /api/v1/sessions
+GET /api/v1/sessions[?runtime=&limit=&since=&cwd=]
 ```
+
+Returns the **full persistent session registry** — including long-dead sessions,
+not just live ones. Liveness comes from the `busy` flag or a recent
+`lastActivity`, never from mere presence in the list.
+
+**Additive query filters (since contract 1.30.0):**
+
+| Param | Meaning |
+|---|---|
+| `runtime` | Comma-separated subset of `pi,claude,opencode,antigravity,commandcode` (e.g. `?runtime=pi,claude`). Junk values → `400 INVALID_REQUEST`. |
+| `limit` | Integer 1–1000; caps the returned slice after filtering. |
+| `since` | ISO 8601 timestamp or epoch milliseconds; keeps entries with `lastActivity >= since`. |
+| `cwd` | Exact working-directory match (the web UI sidebar's cwd filter). |
+
+Results are deterministically ordered **newest-first** by `lastActivity`. With
+no params the response is unchanged from earlier contracts (same fields, now
+plus the two additive fields below).
+
+**Additive per-entry fields (since contract 1.30.0):**
+
+- `archived` (boolean) — true when the web UI has archived this session;
+  derived server-side from the same preferences the sidebar uses.
+- `source` — where the session came from, when known: `browser` (web UI
+  WebSocket creation), `internal-api` (Internal API single/batch create),
+  `native-discovered` (a pi CLI session found on disk by the SessionWatcher),
+  or `unknown` (created before origin tracking existed — all pre-1.30.0
+  entries). Use it to separate real work from smoke/validation sessions going
+  forward.
 
 **Response (200):**
 ```json
@@ -575,11 +603,86 @@ GET /api/v1/sessions
       "messageCount": 14,
       "firstMessage": "Write a function that...",
       "createdAt": "2026-04-28T12:00:00.000Z",
-      "lastActivity": "2026-04-28T12:05:00.000Z"
+      "lastActivity": "2026-04-28T12:05:00.000Z",
+      "archived": false,
+      "source": "internal-api"
     }
   ]
 }
 ```
+
+Example — the five most recently active real sessions, anything archived
+excluded client-side:
+
+```
+GET /api/v1/sessions?limit=5
+```
+
+---
+
+### Native (direct-CLI) session discovery
+
+The registry covers sessions that ran through pi-web-ui (web UI or Internal
+API) **plus every native pi session on the host** — the Pi SessionWatcher
+auto-discovers pi CLI sessions from `~/.pi/agent/sessions` regardless of who
+started them. Sessions started by calling the other runtimes' CLIs directly
+never enter the registry. Since contract 1.30.0 a bounded, read-only scan
+surfaces them:
+
+```
+GET /api/v1/sessions/native[?runtime=&limit=&since=]
+```
+
+- `runtime` — comma-separated subset of `claude,commandcode,opencode,antigravity`
+  (default: all four). `runtime=pi` is refused with an explanatory `400`:
+  native pi sessions are already auto-discovered into the registry, so use
+  `GET /api/v1/sessions?runtime=pi` instead.
+- `limit` — integer 1–200, default 20 (applied after sorting).
+- `since` — ISO 8601 or epoch-ms on file mtime.
+
+The scan never mutates the registry. Each item carries the native artefact
+path, mtime, size, best-effort working directory and a bounded first-message
+preview, plus `knownInRegistry` / `registrySessionId` when the pi-web-ui
+registry already tracks that native session:
+
+```json
+{
+  "sessions": [
+    {
+      "runtime": "claude",
+      "nativePath": "/root/.claude/projects/-root-agent-os/6c1119c1-....jsonl",
+      "mtime": "2026-09-01T08:14:02.000Z",
+      "size": 48213,
+      "cwd": "/root/agent-os",
+      "knownInRegistry": false,
+      "preview": "fix the mirror resync chore"
+    }
+  ],
+  "truncated": false,
+  "scannedRoots": [{ "runtime": "claude", "root": "/root/.claude/projects", "considered": 131 }]
+}
+```
+
+To read a discovered session's content, read the native artefact directly
+(claude and commandcode JSONL are line-delimited JSON; opencode session files
+are small JSON documents; antigravity items are SQLite conversation databases
+— use the `agy` CLI for those).
+
+**Manual scan recipe (no API, works from any shell):**
+
+| Runtime | Native store | Quick scan |
+|---|---|---|
+| pi | `~/.pi/agent/sessions/<cwd-slug>/*.jsonl` | `ls -t ~/.pi/agent/sessions/*/*.jsonl \| head` (already in the registry too) |
+| claude | `~/.claude/projects/<encoded-cwd>/*.jsonl` | `find ~/.claude/projects -name '*.jsonl' -mtime -30 \| xargs ls -t \| head` |
+| commandcode | `~/.commandcode/projects/<encoded-cwd>/*.jsonl` (plain CLI) and `~/.pi-web-ui/command-code-native-home/*/projects/...` (server-spawned) | `find ~/.commandcode/projects -name '<uuid>.jsonl' -mtime -30 \| xargs ls -t \| head` |
+| opencode | `~/.local/share/opencode/storage/session/*/*.json` | `find ~/.local/share/opencode/storage/session -name 'ses_*.json' -mtime -30 \| xargs ls -t \| head` |
+| antigravity | `~/.gemini/antigravity-cli/conversations/<uuid>.db` (+ `log/cli-*.log`) | `ls -t ~/.gemini/antigravity-cli/conversations/*.db \| head` |
+
+Server-side log locations for anything the server itself recorded: run
+receipts under `~/.pi-web-ui/run-receipts/` (pruned at 30 days + 1000 entries),
+the service journal (`journalctl -u pi-web-ui`), and the per-session evidence
+bundle (`GET /api/v1/sessions/:id/evidence`), which names the exact on-disk
+sources for that session.
 
 ---
 
@@ -1513,6 +1616,8 @@ any existing endpoint.
 | Need | Preferred endpoint | Notes |
 |---|---|---|
 | Discover runtime support before planning | `GET /capabilities`, `GET /models` | Ask what exists before choosing runtimes/models |
+| Find the latest sessions (incl. after restart) | `GET /sessions?limit=&runtime=&since=` | Newest-first registry listing incl. ended sessions; use `archived`/`source` fields to filter. See [List Sessions](#list-sessions) |
+| Find direct-CLI sessions of other runtimes | `GET /sessions/native` | Bounded read-only scan of claude/commandcode/opencode/antigravity on-disk stores. See [Native discovery](#native-direct-cli-session-discovery) |
 | Create one child | `POST /sessions` | Use for explicit one-off session creation |
 | Create many children | `POST /sessions/batch` | Parallel provisioning helper |
 | Dispatch a prompt and only care about the final answer | `POST /sessions/:id/prompt` with `verbosity=answers` | Simplest request/response path |

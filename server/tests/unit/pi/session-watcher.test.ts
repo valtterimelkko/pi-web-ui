@@ -53,6 +53,35 @@ describe('SessionWatcher canonical metadata', () => {
     await watcher.stop();
   });
 
+  it("tags genuinely-new add events as native-discovered and leaves known/changed sessions' origin alone", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-origin-'));
+    const newPath = path.join(tempDir, '2026-07-29T00-00-00_new-cli-session.jsonl');
+    const knownPath = path.join(tempDir, '2026-07-29T00-00-00_known-session.jsonl');
+    await writeFile(newPath, JSON.stringify({ type: 'session', id: 'new-cli-session', cwd: '/tmp/new', timestamp: 1 }));
+    await writeFile(knownPath, JSON.stringify({ type: 'session', id: 'known-session', cwd: '/tmp/known', timestamp: 1 }));
+    const registry = {
+      upsert: vi.fn().mockResolvedValue(undefined),
+      getByPath: vi.fn(async (p: string) => (p === knownPath ? { id: 'known-session', sdkType: 'pi' } : undefined)),
+    };
+    const watcher = new SessionWatcher(tempDir, registry);
+    const invoke = watcher as unknown as { emitChange(type: 'add' | 'change', filePath: string): Promise<void> };
+
+    await invoke.emitChange('add', newPath);
+    expect(registry.upsert).toHaveBeenCalledWith(expect.objectContaining({ id: 'new-cli-session', origin: 'native-discovered' }));
+
+    await invoke.emitChange('add', knownPath);
+    const knownCall = registry.upsert.mock.calls.find((c) => c[0]?.id === 'known-session')?.[0];
+    expect(knownCall).toBeTruthy();
+    expect(knownCall.origin).toBeUndefined();
+
+    await invoke.emitChange('change', newPath);
+    const changeCall = registry.upsert.mock.calls.filter((c) => c[0]?.id === 'new-cli-session').pop()?.[0];
+    expect(changeCall).toBeTruthy();
+    expect(changeCall.origin).toBeUndefined();
+
+    await watcher.stop();
+  });
+
   it('uses the JSONL session header id and cwd rather than the filename fallback', async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-watcher-'));
     const sessionPath = path.join(tempDir, 'timestamp_filename.jsonl');

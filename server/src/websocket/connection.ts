@@ -1849,6 +1849,22 @@ export class WebSocketConnectionManager {
     }
   }
 
+  /** Contract 1.30.0: tag browser-created sessions with origin provenance so
+   *  the Internal API list can report source 'browser'. Best-effort: a tagging
+   *  failure logs but never fails the creation. */
+  private async tagBrowserSessionOrigin(
+    sessionId: string,
+    sdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode',
+    sessionPath: string,
+    cwd: string,
+  ): Promise<void> {
+    try {
+      await getSessionRegistry().upsert({ id: sessionId, path: sessionPath, sdkType, cwd, origin: 'browser' });
+    } catch (error) {
+      logger.warn(`[handleNewSession] Failed to tag origin for ${sessionId}:`, error);
+    }
+  }
+
   private async handleNewSession(
     clientId: string,
     message: Extract<ClientMessage, { type: 'new_session' }>
@@ -1880,6 +1896,7 @@ export class WebSocketConnectionManager {
           model: selectedModel,
           effort: message.effort,
         });
+        await this.tagBrowserSessionOrigin(created.sessionId, 'commandcode', created.sessionId, cwd);
         const effortSpec = this.commandCodeService.getModels().find((model) => model.id === created.modelSelector);
         this.commandCodeSessionIds.add(created.sessionId);
         this.clientViewingSession.set(clientId, created.sessionId);
@@ -1905,6 +1922,7 @@ export class WebSocketConnectionManager {
     if (sdkType === 'antigravity') {
       try {
         const { sessionId } = await this.antigravityService.createSession(cwd);
+        await this.tagBrowserSessionOrigin(sessionId, 'antigravity', sessionId, cwd);
         this.antigravitySessionIds.add(sessionId);
         this.clientViewingSession.set(clientId, sessionId);
         this.antigravitySubs.subscribe(clientId, sessionId);
@@ -1942,6 +1960,7 @@ export class WebSocketConnectionManager {
       }
       try {
         const { sessionId } = await this.opencodeService.createSession(cwd);
+        await this.tagBrowserSessionOrigin(sessionId, 'opencode', sessionId, cwd);
         this.opencodeSessionIds.add(sessionId);
         this.clientViewingSession.set(clientId, sessionId);
         this.opencodeSubs.subscribe(clientId, sessionId);
@@ -1990,6 +2009,7 @@ export class WebSocketConnectionManager {
 
         // Track this as a Claude session
         this.claudeSessionIds.add(sessionId);
+        await this.tagBrowserSessionOrigin(sessionId, 'claude', sessionId, cwd);
 
         // Register the client as viewing this session
         this.clientViewingSession.set(clientId, sessionId);
@@ -2023,6 +2043,7 @@ export class WebSocketConnectionManager {
     const status = await this.multiSessionManager.createAndSubscribe(clientId, cwd, this.getWebUIContext(clientId));
 
     const sessionPath = status.sessionPath;
+    await this.tagBrowserSessionOrigin(status.sessionId, 'pi', sessionPath, cwd);
 
     // Keep browser-native Pi controls (for example `/compact`) pointed at the
     // newly created session as well as normal prompt routing.

@@ -23,6 +23,14 @@ export interface RegistryEntry {
   createdAt: string;       // ISO string
   lastActivity: string;    // ISO string
   status: 'idle' | 'running' | 'error';
+  /** Where this registry entry came from, when known. Legacy entries created
+   *  before origin tracking have no value and surface as source 'unknown' in
+   *  the Internal API list response.
+   *  - 'browser': created through the WebSocket browser UI path.
+   *  - 'internal-api': created through the Internal API (single or batch create).
+   *  - 'native-discovered': discovered on disk by the Pi SessionWatcher
+   *    (a pi CLI session started outside pi-web-ui). */
+  origin?: 'browser' | 'internal-api' | 'native-discovered';
   /** Claude-specific: which profile was selected for this session */
   claudeProfileId?: string;
   /** Claude-specific: which backend is handling this session */
@@ -207,6 +215,7 @@ export class SessionRegistryManager {
         createdAt: entry.createdAt ?? now,
         lastActivity: entry.lastActivity ?? now,
         status: entry.status ?? 'idle',
+        origin: entry.origin,
         claudeProfileId: entry.claudeProfileId,
         claudeProfileBackend: entry.claudeProfileBackend,
         claudeProviderId: entry.claudeProviderId,

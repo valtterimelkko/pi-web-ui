@@ -6,6 +6,16 @@
 
 When an operator gives you a session identifier, **do not start with `grep -R` from `/` or from the home directory**. The registry already maps the common identifier forms to the runtime-specific evidence. Use this sequence:
 
+### 0. No identifier yet? Find the latest sessions first
+
+If the problem starts from "what ran recently / where did that session go" rather than a given id, use the discovery reads (contract 1.30.0) before touching the ladder:
+
+1. `GET /api/v1/sessions?limit=20` — the full registry (including ended sessions), newest-first; add `?runtime=pi,claude...`, `?since=<iso>`, `?cwd=` filters. The per-entry `source` field tells you browser vs Internal API vs natively-discovered origin, and `archived` mirrors the web UI archive state.
+2. `GET /api/v1/sessions/native?limit=10` — direct-CLI sessions of the other runtimes that never entered the registry (claude `~/.claude/projects`, commandcode `~/.commandcode/projects`, opencode storage, antigravity conversation DBs), newest-first with native paths and previews. `runtime=pi` is refused on purpose: native pi sessions are auto-discovered into the registry.
+3. Then feed the chosen session's id/path into step 1 below as usual.
+
+The web UI sidebar shows the same registry (30-day recent window, archived split) for human use. `npm run debug:where` remains the alias resolver once you have an identifier.
+
 ### 1. Resolve the identifier once
 
 From the repository root:

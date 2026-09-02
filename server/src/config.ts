@@ -264,6 +264,10 @@ export interface ServerConfig {
   piStaleStreamingMs: number;
   antigravityEnabled: boolean;
   antigravitySessionDir: string;
+  /** Native direct-CLI session stores (read-only discovery). */
+  commandCodeCliHomeDir: string;
+  opencodeStorageDir: string;
+  antigravityNativeConversationsDir: string;
   antigravityDefaultModel: string;
   antigravityPromptTimeoutMs: number;
   antigravityIdleTimeoutMs: number;
@@ -411,6 +415,10 @@ export const config: ServerConfig = {
   piStaleStreamingMs: parseInt(process.env.PI_STALE_STREAMING_MS || '900000', 10),
   antigravityEnabled: process.env.ANTIGRAVITY_ENABLED !== 'false',
   antigravitySessionDir: process.env.ANTIGRAVITY_SESSION_DIR || path.join(os.homedir(), '.pi-web-ui', 'antigravity-sessions'),
+  // Native (direct-CLI) session stores scanned read-only by GET /api/v1/sessions/native.
+  commandCodeCliHomeDir: process.env.COMMAND_CODE_CLI_HOME_DIR || path.join(os.homedir(), '.commandcode'),
+  opencodeStorageDir: process.env.OPENCODE_STORAGE_DIR || path.join(os.homedir(), '.local', 'share', 'opencode', 'storage'),
+  antigravityNativeConversationsDir: process.env.ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR || path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations'),
   antigravityDefaultModel: process.env.ANTIGRAVITY_DEFAULT_MODEL || 'Gemini 3.5 Flash (Medium)',
   antigravityPromptTimeoutMs: parseInt(process.env.ANTIGRAVITY_PROMPT_TIMEOUT_MS || '600000', 10),
   antigravityIdleTimeoutMs: parseInt(process.env.ANTIGRAVITY_IDLE_TIMEOUT_MS || '1800000', 10),

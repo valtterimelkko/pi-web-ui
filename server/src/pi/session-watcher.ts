@@ -39,7 +39,11 @@ export class SessionWatcher extends EventEmitter {
 
   constructor(
     sessionsDir?: string,
-    private readonly registry?: Pick<SessionRegistryManager, 'upsert'>,
+    private readonly registry?: Pick<SessionRegistryManager, 'upsert'> & {
+      // Optional so older consumers passing only `upsert` keep working; when
+      // present it gates origin tagging to genuinely-new sessions.
+      getByPath?: SessionRegistryManager['getByPath'];
+    },
   ) {
     super();
     this.sessionsDir = sessionsDir || path.join(process.env.HOME || '/root', '.pi/agent/sessions');
@@ -188,6 +192,16 @@ export class SessionWatcher extends EventEmitter {
         this.sessionIdsByPath.set(filePath, info.id);
         if (this.registry) {
           try {
+            // Contract 1.30.0 origin provenance: a file the registry has never
+            // seen is a pi CLI session started outside pi-web-ui; mark it
+            // 'native-discovered'. Already-registered sessions (browser or
+            // Internal API created) keep their existing origin — the upsert
+            // merge never sees an origin key for them.
+            let origin: 'native-discovered' | undefined;
+            if (type === 'add' && this.registry.getByPath) {
+              const existing = await this.registry.getByPath(filePath).catch(() => undefined);
+              if (!existing) origin = 'native-discovered';
+            }
             await this.registry.upsert({
               id: info.id,
               sdkType: 'pi',
@@ -198,6 +212,7 @@ export class SessionWatcher extends EventEmitter {
               createdAt: info.createdAt.toISOString(),
               lastActivity: info.lastActivity.toISOString(),
               status: 'idle',
+              ...(origin ? { origin } : {}),
             });
           } catch (error) {
             logger.warn(`Failed to index observed Pi session ${filePath}:`, error);

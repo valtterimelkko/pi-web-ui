@@ -21,13 +21,19 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.29.0",
+  "contractVersion": "1.30.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.30.0** (minor, additive session-discovery ergonomics) — makes "find the latest real sessions and their logs" a first-class, server-side capability. Everything is additive; existing consumers keep working unchanged:
+  - **`GET /api/v1/sessions` list filters** — new optional query params: `runtime` (comma-separated subset of `pi,claude,opencode,antigravity,commandcode`), `limit` (integer 1–1000), `since` (ISO 8601 or epoch-ms; filters on `lastActivity`), and `cwd` (exact match). Results are now deterministically ordered newest-first by `lastActivity`. With no params the response carries the same fields as before (full registry, including long-dead sessions — liveness still comes from `busy`/`lastActivity`). Junk values return `400 INVALID_REQUEST`.
+  - **Additive list fields** — every `SessionInfo` now carries `archived` (true when the web UI has archived the session; derived server-side from the same web UI preferences the sidebar uses) and `source` (`browser` | `internal-api` | `native-discovered` | `unknown`). `source` reflects a registry entry's `origin`: browser WebSocket creation, Internal API creation (single or batch), pi sessions discovered on disk by the SessionWatcher (pi CLI sessions started outside pi-web-ui), or `unknown` for entries created before origin tracking existed (all pre-1.30.0 entries).
+  - **New `GET /api/v1/sessions/native`** — bounded, read-only discovery scan of the NATIVE direct-CLI session stores whose sessions never enter the registry: claude (`~/.claude/projects`), commandcode (`~/.commandcode/projects` + server-spawned native home), opencode (`~/.local/share/opencode/storage/session`), and antigravity (`~/.gemini/antigravity-cli/conversations`). Returns mtime-sorted items with `nativePath`, `mtime`, `size`, best-effort `cwd` and `preview`, and `knownInRegistry`/`registrySessionId` annotation. Query params: `runtime` (default: all four; `pi` is refused with an explanatory `400` because native pi sessions are auto-discovered into the registry), `limit` (1–200, default 20), `since`. The registry is never mutated. Roots are configurable via `COMMAND_CODE_CLI_HOME_DIR`, `OPENCODE_STORAGE_DIR`, and `ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR`.
+  - No changes to existing endpoint semantics, error codes, or event shapes.
 
 - **1.29.0** (minor, additive Claude steer) — `POST /sessions/:id/prompt` with `mode: "steer"` is now accepted for Claude sessions whose backend is the SDK (`claudeBackendMode: "sdk"`, i.e. profile-backed `sdk-subscription` sessions). The steer joins the currently running turn at the next tool boundary (Claude Code streaming-input priority `next`), exactly like the browser WebSocket steer path, and takes the same receipted, admission-controlled, prompt-injection-checked dispatch path as every other prompt mode. Semantics per runtime:
   - Busy Claude SDK session → steer is delivered into the active turn; the run receipt completes when the joined turn emits its next `agent_end`.

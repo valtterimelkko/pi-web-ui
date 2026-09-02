@@ -17,6 +17,35 @@ afterEach(async () => {
 });
 
 describe('SessionRegistryManager', () => {
+  it('preserves origin across partial upserts and persists it', async () => {
+    const manager = new SessionRegistryManager(registryPath);
+    const created = await manager.upsert({
+      sdkType: 'pi',
+      path: '/some/native/session.jsonl',
+      cwd: '/home/user',
+      firstMessage: 'Hello',
+      messageCount: 1,
+      origin: 'native-discovered',
+    });
+    expect(created.origin).toBe('native-discovered');
+
+    // A later update that does not carry an origin must not clear it.
+    const updated = await manager.upsert({
+      id: created.id,
+      sdkType: 'pi',
+      path: '/some/native/session.jsonl',
+      cwd: '/home/user',
+      firstMessage: 'Hello again',
+      messageCount: 2,
+    });
+    expect(updated.origin).toBe('native-discovered');
+
+    // And it survives a reload from disk.
+    const reloaded = new SessionRegistryManager(registryPath);
+    const entry = await reloaded.get(created.id);
+    expect(entry?.origin).toBe('native-discovered');
+  });
+
   it('creates empty registry if file does not exist', async () => {
     const manager = new SessionRegistryManager(registryPath);
     const registry = await manager.load();

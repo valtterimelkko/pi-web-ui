@@ -675,6 +675,15 @@ export class InternalApiServer {
           }
           return;
         }
+        // Reserved word: bounded read-only native (direct-CLI) session discovery.
+        if (id === 'native' && !action) {
+          if (req.method === 'GET') {
+            await deps.sessionRoutes.handleListNativeSessions(req, res);
+          } else {
+            sendJson(res, 405, { error: 'Method not allowed', code: ErrorCode.METHOD_NOT_ALLOWED });
+          }
+          return;
+        }
 
         const sessionId = decodeURIComponent(id);
 
