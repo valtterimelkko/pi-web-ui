@@ -14,6 +14,12 @@ If the problem starts from "what ran recently / where did that session go" rathe
 2. `GET /api/v1/sessions/native?limit=10` — direct-CLI sessions of the other runtimes that never entered the registry (claude `~/.claude/projects`, commandcode `~/.commandcode/projects`, opencode storage, antigravity conversation DBs), newest-first with native paths and previews. `runtime=pi` is refused on purpose: native pi sessions are auto-discovered into the registry.
 3. Then feed the chosen session's id/path into step 1 below as usual.
 
+A worked example of this flow exists on this host: the 30-day session retrospective
+(regenerated 2026-09-02, metadata-only, one row per artefact with provenance and log
+paths) at `~/.pi-web-ui/notes/SESSION-RETROSPECTIVE-2026-08-03_to_2026-09-02.md` — a
+point-in-time artefact, useful as a recent-history starting point but regenerate with
+the endpoints above for anything newer.
+
 The web UI sidebar shows the same registry (30-day recent window, archived split) for human use. `npm run debug:where` remains the alias resolver once you have an identifier.
 
 ### 1. Resolve the identifier once
