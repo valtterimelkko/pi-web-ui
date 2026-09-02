@@ -51,7 +51,8 @@ full Tier-1 orchestration loop:
 6. **Extract** — `GET /sessions/:id/transcript`, `GET /sessions/:id/history`
 7. **Transfer** — `POST /sessions/:id/transfer`
 8. **Aggregate** — `POST /sessions/usage`
-9. **Teardown** — `POST /sessions/:id/abort`, `DELETE /sessions/:id`
+9. **Rediscover** (since 1.30.0) — when you come back later without the id: `GET /sessions?limit=&runtime=&since=&cwd=` lists the full registry newest-first (ended sessions included; per-entry `archived`/`source` fields), and `GET /sessions/native` bounds-scans the direct-CLI stores the registry never sees. See [`INTERNAL-API.md`](./INTERNAL-API.md) (List Sessions / Native discovery).
+10. **Teardown** — `POST /sessions/:id/abort`, `DELETE /sessions/:id`
 
 ## What is still missing
 

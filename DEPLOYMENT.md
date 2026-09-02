@@ -188,6 +188,7 @@ Prerequisites:
 | `OPENCODE_SERVER_PORT` | `4096` | OpenCode server port |
 | `OPENCODE_SERVER_PASSWORD` | empty | optional basic-auth password for OpenCode server |
 | `OPENCODE_WORKING_DIR` | `process.cwd()` | default OpenCode working dir |
+| `OPENCODE_STORAGE_DIR` | `~/.local/share/opencode/storage` | native opencode store read read-only by `GET /api/v1/sessions/native` |
 | `OPENCODE_MAX_SESSIONS` | `4` | max active OpenCode sessions tracked by lifecycle logic |
 | `OPENCODE_IDLE_TIMEOUT_MS` | `1800000` | idle timeout |
 | `OPENCODE_STALE_STREAMING_MS` | `900000` | stale-stream reset window |
@@ -219,6 +220,7 @@ If you enable notifications, make sure `NOTIFICATIONS_PUBLIC_BASE_URL` resolves 
 |---|---:|---|
 | `ANTIGRAVITY_ENABLED` | `true` | enable/disable the Antigravity runtime |
 | `ANTIGRAVITY_SESSION_DIR` | `~/.pi-web-ui/antigravity-sessions` | Pi-owned Antigravity JSONL turn log directory |
+| `ANTIGRAVITY_NATIVE_CONVERSATIONS_DIR` | `~/.gemini/antigravity-cli/conversations` | native agy conversation DBs read read-only by `GET /api/v1/sessions/native` |
 | `ANTIGRAVITY_DEFAULT_MODEL` | `Gemini 3.5 Flash (Medium)` | default `agy` model |
 | `ANTIGRAVITY_PROMPT_TIMEOUT_MS` | `600000` | max prompt duration before timeout |
 | `ANTIGRAVITY_IDLE_TIMEOUT_MS` | `1800000` | idle timeout for unpinned inactive sessions |

@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Session-discovery ergonomics (`1.30.0`, `2026-09-02`)**
+  - `GET /api/v1/sessions` gains server-side filters (`?runtime=`, `?limit=`, `?since=`, `?cwd=`) with deterministic newest-first ordering; no-param responses keep their historical shape. Every entry now carries additive `archived` (server-side web-UI archive state) and `source` (`browser` | `internal-api` | `native-discovered` | `unknown`), with registry origin tagged at Internal API single/batch create, browser create, and SessionWatcher discovery.
+  - New bounded read-only `GET /api/v1/sessions/native` scans the direct-CLI stores the registry never sees (claude projects, cmdc CLI + server-spawned native home, opencode storage, antigravity conversations), mtime-sorted with paths, sizes, best-effort cwd/preview and `knownInRegistry` annotation. `runtime=pi` is refused with an explanation — native pi sessions are already auto-discovered into the registry.
+  - TDD (27 RED-first route tests + registry/watcher pins) and disposable-server live validation vs the real pi runtime and real host native stores; the live pass also fixed lossy dash-encoded cwd decoding (now reported only when the decoded path exists on disk).
+  - Canonical docs: [`INTERNAL-API.md`](./INTERNAL-API.md) (List Sessions / Native discovery + manual scan recipe), [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.30.0), [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) (evidence-ladder step 0), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md) (Rediscover step).
+
 - **Five human Web UI pins per runtime (`2026-09-02`)**
   - The browser/UI residency allowance is now five sessions per runtime; a sixth human claim is rejected. Command Code now enforces the same server-side limit instead of accepting unlimited human pins.
   - Source-owned Internal API retention and watch claims remain independent and do not consume these slots. The legacy Command Code Internal API control-pin path now uses its own expiring `internal-api:` claim as the other runtimes already did.
