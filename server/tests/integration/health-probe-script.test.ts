@@ -36,6 +36,7 @@ describe('health-probe.sh', () => {
     const probeTimer = readFileSync(path.join(deployDir, 'pi-web-ui-health-probe.timer'), 'utf8');
 
     expect(webService).toContain('Type=notify');
+    expect(webService).toContain('NotifyAccess=all');
     expect(webService).toContain('WatchdogSec=45');
     expect(probeService).toContain('ExecStart=/root/pi-web-ui/scripts/health-probe.sh');
     expect(probeService).not.toMatch(/systemctl\s+restart/);

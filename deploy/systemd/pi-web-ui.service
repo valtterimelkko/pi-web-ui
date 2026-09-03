@@ -7,7 +7,7 @@ Wants=network.target
 
 [Service]
 Type=notify
-NotifyAccess=main
+NotifyAccess=all
 WatchdogSec=45
 User=root
 WorkingDirectory=/root/pi-web-ui

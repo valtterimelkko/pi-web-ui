@@ -24,11 +24,11 @@ describe('startSystemdNotifier', () => {
 
     expect(notify).toHaveBeenCalledWith(['--ready', '--status=Pi Web UI ready']);
     await vi.advanceTimersByTimeAsync(20_000);
-    expect(notify.mock.calls.filter(([args]) => args[0] === '--watchdog')).toHaveLength(2);
+    expect(notify.mock.calls.filter(([args]) => args[0] === 'WATCHDOG=1')).toHaveLength(2);
 
     stop();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(notify.mock.calls.filter(([args]) => args[0] === '--watchdog')).toHaveLength(2);
+    expect(notify.mock.calls.filter(([args]) => args[0] === 'WATCHDOG=1')).toHaveLength(2);
   });
 
   it('announces readiness without arming heartbeats when WatchdogSec is absent', async () => {

@@ -35,7 +35,7 @@ export function startSystemdNotifier(options: SystemdNotifierOptions = {}): () =
   send(['--ready', '--status=Pi Web UI ready']);
   if (!environment.WATCHDOG_USEC) return () => { stopped = true; };
 
-  const timer = setInterval(() => send(['--watchdog']), 10_000);
+  const timer = setInterval(() => send(['WATCHDOG=1']), 10_000);
   timer.unref();
   return () => {
     stopped = true;
