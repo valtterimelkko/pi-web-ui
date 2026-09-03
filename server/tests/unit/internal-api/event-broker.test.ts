@@ -180,7 +180,7 @@ describe('InternalApiEventBroker', () => {
   });
 
   it('coalesces excess message updates while preserving the latest snapshot and control events', () => {
-    const limited = new InternalApiEventBroker({ eventRateLimitPerSec: 2 });
+    const limited = new InternalApiEventBroker({ eventRateLimitPerSec: 2, shedMonitor: { isShedding: false } });
     const sub = vi.fn();
     limited.subscribe('s1', sub, false);
 
@@ -209,7 +209,7 @@ describe('InternalApiEventBroker', () => {
 
   it('refills the per-session message-update bucket over time', () => {
     let now = 0;
-    const limited = new InternalApiEventBroker({ eventRateLimitPerSec: 1, now: () => now });
+    const limited = new InternalApiEventBroker({ eventRateLimitPerSec: 1, now: () => now, shedMonitor: { isShedding: false } });
     const sub = vi.fn();
     limited.subscribe('s1', sub, false);
     const update = (delta: string) => makeEvent('message_update', {

@@ -34,6 +34,10 @@ export interface OperationalSnapshot {
     adapterDrops: Partial<Record<SessionRuntime, Record<string, number>>>;
     watchPersistenceFailures: number;
     workerReadinessFallbacks: number;
+    brokerPublishBytesTotal: number;
+    brokerEventsTruncatedTotal: number;
+    brokerEventsCoalescedTotal: number;
+    eventLoopLagMs: number;
     lastEventAt?: string;
     lastEventAgeMs?: number;
   };
@@ -75,6 +79,10 @@ export class OperationalMetrics {
   private notificationSent = 0;
   private notificationFailedAttempts = 0;
   private notificationTerminalFailed = 0;
+  private brokerPublishBytesTotal = 0;
+  private brokerEventsTruncatedTotal = 0;
+  private brokerEventsCoalescedTotal = 0;
+  private eventLoopLagMs = 0;
   private lastEventAt?: number;
 
   constructor(options: OperationalMetricsOptions = {}) {
@@ -138,6 +146,19 @@ export class OperationalMetrics {
     if (Number.isFinite(timestamp)) this.lastEventAt = Math.max(this.lastEventAt ?? 0, timestamp);
   }
 
+  recordBrokerPublish(bytes: number, truncated: boolean): void {
+    this.brokerPublishBytesTotal += Math.max(0, bytes);
+    if (truncated) this.brokerEventsTruncatedTotal += 1;
+  }
+
+  recordBrokerCoalesced(count = 1): void {
+    this.brokerEventsCoalescedTotal += Math.max(0, count);
+  }
+
+  recordEventLoopLag(lagMs: number): void {
+    this.eventLoopLagMs = Math.max(0, Math.round(lagMs));
+  }
+
   snapshot(): OperationalSnapshot {
     const now = this.now();
     const turns: OperationalSnapshot['turns'] = {};
@@ -163,6 +184,10 @@ export class OperationalMetrics {
         adapterDrops,
         watchPersistenceFailures: this.watchPersistenceFailures,
         workerReadinessFallbacks: this.workerReadinessFallbacks,
+        brokerPublishBytesTotal: this.brokerPublishBytesTotal,
+        brokerEventsTruncatedTotal: this.brokerEventsTruncatedTotal,
+        brokerEventsCoalescedTotal: this.brokerEventsCoalescedTotal,
+        eventLoopLagMs: this.eventLoopLagMs,
         ...(this.lastEventAt !== undefined
           ? {
               lastEventAt: new Date(this.lastEventAt).toISOString(),

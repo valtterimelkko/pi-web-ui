@@ -28,6 +28,7 @@ import { createLogger } from '../logging/logger.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
 import { config } from '../config.js';
 import { measureAndSlim } from './event-payload-budget.js';
+import { getEventLoopShedMonitor, type EventLoopShedMonitor } from './event-loop-shed.js';
 
 const logger = createLogger('InternalApiEventBroker');
 
@@ -41,6 +42,12 @@ interface BufferedEvent {
 interface RateState { tokens: number; lastMs: number }
 interface PendingUpdate { event: NormalizedEvent; coalesced: number }
 
+function shedMessageUpdate(event: NormalizedEvent): NormalizedEvent {
+  const data = event.data as Record<string, unknown> | undefined;
+  const message = data?.message as Record<string, unknown> | undefined;
+  return { ...event, data: { message: message?.id === undefined ? {} : { id: message.id } } };
+}
+
 export interface EventBrokerOptions {
   /** How many recent events to buffer per session for late subscribers. 0 disables. */
   replayBufferSize?: number;
@@ -52,6 +59,8 @@ export interface EventBrokerOptions {
   eventRateLimitPerSec?: number;
   /** Injected monotonic clock seam (primarily for tests). */
   now?: () => number;
+  /** Injected lag monitor seam (primarily for tests). */
+  shedMonitor?: Pick<EventLoopShedMonitor, 'isShedding'>;
   /** Injected low-cardinality metrics seam (primarily for tests). */
   metrics?: OperationalMetrics;
   /** Optional disposal predicate: when set and it returns true for a session
@@ -77,6 +86,7 @@ export class InternalApiEventBroker {
   private readonly eventRateLimitPerSec: number;
   private readonly eventRateBurst: number;
   private readonly now: () => number;
+  private readonly shedMonitor: Pick<EventLoopShedMonitor, 'isShedding'>;
   private readonly metrics: OperationalMetrics;
   private readonly disposedCheck?: (sessionId: string) => boolean;
 
@@ -87,6 +97,7 @@ export class InternalApiEventBroker {
     this.eventRateLimitPerSec = Math.max(1, options.eventRateLimitPerSec ?? config.internalApiEventRateLimitPerSec);
     this.eventRateBurst = this.eventRateLimitPerSec * 2;
     this.now = options.now ?? Date.now;
+    this.shedMonitor = options.shedMonitor ?? getEventLoopShedMonitor();
     this.metrics = options.metrics ?? getOperationalMetrics();
     this.disposedCheck = options.isSessionDisposed;
   }
@@ -138,11 +149,13 @@ export class InternalApiEventBroker {
   /** Publish an event to all subscribers for a session. */
   publish(sessionId: string, event: NormalizedEvent): void {
     if (this.disposedCheck?.(sessionId)) return;
+    if (event.type === 'message_update' && this.shedMonitor.isShedding) event = shedMessageUpdate(event);
     if (event.type === 'message_update') {
       this.refill(sessionId);
       if (this.pendingUpdates.has(sessionId) && this.availableTokens(sessionId) > 1) this.flushPending(sessionId);
       if (this.availableTokens(sessionId) <= 1) {
         const pending = this.pendingUpdates.get(sessionId);
+        if (pending) this.metrics.recordBrokerCoalesced();
         this.pendingUpdates.set(sessionId, { event, coalesced: (pending?.coalesced ?? -1) + 1 });
         return;
       }
@@ -179,6 +192,7 @@ export class InternalApiEventBroker {
   private deliver(sessionId: string, event: NormalizedEvent): void {
     const measured = measureAndSlim(event, this.eventPayloadMaxBytes);
     event = measured.event;
+    this.metrics.recordBrokerPublish(measured.bytes, measured.truncated);
     if (measured.truncated && !this.warnedOversizedSessions.has(sessionId)) {
       this.warnedOversizedSessions.add(sessionId);
       logger.child({ sessionId }).warn(`event payload truncated: type=${event.type} bytes=${measured.originalBytes} budget=${this.eventPayloadMaxBytes}`);

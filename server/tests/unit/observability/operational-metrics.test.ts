@@ -50,11 +50,18 @@ describe('OperationalMetrics', () => {
     metrics.recordNotificationQueued();
     metrics.recordNotificationSent();
     metrics.recordNotificationFailure(true);
+    metrics.recordBrokerPublish(123, true);
+    metrics.recordBrokerCoalesced(2);
+    metrics.recordEventLoopLag(1_200);
     metrics.recordEvent(19_500);
 
     expect(metrics.snapshot()).toMatchObject({
       notifications: { queued: 1, sent: 1, failedAttempts: 1, terminalFailed: 1 },
       pipeline: {
+        brokerPublishBytesTotal: 123,
+        brokerEventsTruncatedTotal: 1,
+        brokerEventsCoalescedTotal: 2,
+        eventLoopLagMs: 1_200,
         subscriberFailures: { watch: 2 },
         adapterDrops: { claude: { invalid_json: 1 } },
         watchPersistenceFailures: 1,
