@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.30.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.31.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -1139,6 +1139,7 @@ export interface CapabilitiesResponse {
     executionAdmission: true;
     runLivenessEvidence: true;
     sessionRecoveryEvidence: true;
+    supportsEventPayloadBudget: true;
     capacityEndpoint: '/api/v1/capacity';
     piProviderPolicy: {
       blockedProviders: string[];

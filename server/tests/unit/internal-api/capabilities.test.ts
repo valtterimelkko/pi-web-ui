@@ -65,7 +65,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.30.0',
+        contractVersion: '1.31.0',
       },
       features: {
         retentionLeases: true,
@@ -74,6 +74,7 @@ describe('createCapabilitiesRoutes', () => {
         executionAdmission: true,
         runLivenessEvidence: true,
         sessionRecoveryEvidence: true,
+        supportsEventPayloadBudget: true,
         capacityEndpoint: '/api/v1/capacity',
         piProviderPolicy: {
           blockedProviders: ['openai', 'openrouter'],

@@ -55,6 +55,7 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
         executionAdmission: true,
         runLivenessEvidence: true,
         sessionRecoveryEvidence: true,
+        supportsEventPayloadBudget: true,
         capacityEndpoint: '/api/v1/capacity',
         piProviderPolicy: { blockedProviders: blockedPiProviders },
       },

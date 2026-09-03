@@ -32,7 +32,7 @@ Production code changes are permitted **only** in the files below (plus each pha
 
 | Phase | Permitted production files |
 |---|---|
-| 0 | `server/src/internal-api/types.ts` (version string only) · `server/src/config.ts` (the two env vars only) · `server/src/internal-api/routes/capabilities.ts` (the one flag) |
+| 0 | `server/src/internal-api/types.ts` (version string + exactly one `CapabilitiesResponse.features.supportsEventPayloadBudget: true` field) · `server/src/config.ts` (the two env vars only) · `server/src/internal-api/routes/capabilities.ts` (the one flag) |
 | 1 | NEW `server/src/internal-api/event-payload-budget.ts` · `server/src/internal-api/event-broker.ts` (publish seam only) |
 | 2 | `server/src/internal-api/event-broker.ts` (buffer internals only) |
 | 3 | `server/src/internal-api/event-broker.ts` (rate guard only) |
@@ -321,3 +321,4 @@ External consumers (agent-os) read transcripts and the watch ledger, not raw bro
 | Date | Owner | Change |
 |---|---|---|
 | 2026-09-03 | (owner, in-conversation) | Added §0.5 execution-discipline gates + §10 amendment ledger on owner request |
+| 2026-09-03 | (owner, in-conversation) | Approved G1 Phase 0 amendment permitting exactly one additional `CapabilitiesResponse.features.supportsEventPayloadBudget: true` field in `types.ts`, required by DD8; no wider scope change |
