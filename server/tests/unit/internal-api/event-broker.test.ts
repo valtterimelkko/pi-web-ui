@@ -148,6 +148,37 @@ describe('InternalApiEventBroker', () => {
     }
   });
 
+  it('serializes each published event once even when byte eviction runs', () => {
+    const bounded = new InternalApiEventBroker({
+      eventPayloadMaxBytes: 0,
+      replayBufferSize: 100,
+      replayBufferMaxBytes: 150_000,
+    });
+    const event = makeEvent('message_update', { huge: 'x'.repeat(100_000) });
+    const stringify = vi.spyOn(JSON, 'stringify');
+
+    try {
+      for (let index = 0; index < 20; index += 1) bounded.publish('s1', event);
+      expect(stringify).toHaveBeenCalledTimes(20);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it('publishes 200 large events within the bounded performance budget', () => {
+    const bounded = new InternalApiEventBroker({
+      eventPayloadMaxBytes: 0,
+      replayBufferSize: 100,
+      replayBufferMaxBytes: 8 * 1024 * 1024,
+    });
+    const event = makeEvent('message_update', { huge: 'x'.repeat(100_000) });
+    const startedAt = performance.now();
+
+    for (let index = 0; index < 200; index += 1) bounded.publish('s1', event);
+
+    expect(performance.now() - startedAt).toBeLessThan(2_000);
+  });
+
   it('bounds the replay buffer by total bytes (trims oldest large events)', () => {
     const broker = new InternalApiEventBroker({ replayBufferSize: 100, replayBufferMaxBytes: 500 });
     const big = { type: 'message_update', timestamp: 1, data: { huge: 'x'.repeat(400) } } as unknown as NormalizedEvent;

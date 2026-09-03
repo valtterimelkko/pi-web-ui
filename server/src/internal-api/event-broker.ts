@@ -33,6 +33,11 @@ const logger = createLogger('InternalApiEventBroker');
 
 export type EventBrokerSubscriber = (event: NormalizedEvent) => void;
 
+interface BufferedEvent {
+  event: NormalizedEvent;
+  bytes: number;
+}
+
 export interface EventBrokerOptions {
   /** How many recent events to buffer per session for late subscribers. 0 disables. */
   replayBufferSize?: number;
@@ -54,7 +59,7 @@ const DEFAULT_REPLAY_BUFFER_MAX_BYTES = 8 * 1024 * 1024;
 export class InternalApiEventBroker {
   private subscribers: Map<string, Set<EventBrokerSubscriber>> = new Map();
   private subscriberClasses = new WeakMap<EventBrokerSubscriber, string>();
-  private replayBuffers: Map<string, NormalizedEvent[]> = new Map();
+  private replayBuffers: Map<string, BufferedEvent[]> = new Map();
   private replayBufferBytes: Map<string, number> = new Map();
   private warnedOversizedSessions = new Set<string>();
   private readonly replayBufferSize: number;
@@ -96,8 +101,8 @@ export class InternalApiEventBroker {
     if (replay) {
       const buffer = this.replayBuffers.get(sessionId);
       if (buffer) {
-        for (const event of buffer) {
-          this.safeInvoke(sessionId, subscriber, event, subscriberClass);
+        for (const entry of buffer) {
+          this.safeInvoke(sessionId, subscriber, entry.event, subscriberClass);
         }
       }
     }
@@ -134,11 +139,11 @@ export class InternalApiEventBroker {
         buffer = [];
         this.replayBuffers.set(sessionId, buffer);
       }
-      buffer.push(event);
-      // Bound by count AND bytes: trim oldest events that exceed either cap.
+      buffer.push({ event, bytes: measured.bytes });
+      // Bound by count AND bytes: trim oldest events using cached sizes.
       let bytes = (this.replayBufferBytes.get(sessionId) ?? 0) + measured.bytes;
-      while (buffer.length > this.replayBufferSize) { const old = buffer.shift(); if (old) bytes -= JSON.stringify(old).length; }
-      while (bytes > this.replayBufferMaxBytes && buffer.length > 0) { const old = buffer.shift(); if (old) bytes -= JSON.stringify(old).length; }
+      while (buffer.length > this.replayBufferSize) { const old = buffer.shift(); if (old) bytes -= old.bytes; }
+      while (bytes > this.replayBufferMaxBytes && buffer.length > 0) { const old = buffer.shift(); if (old) bytes -= old.bytes; }
       this.replayBufferBytes.set(sessionId, Math.max(0, bytes));
     }
 
@@ -166,7 +171,7 @@ export class InternalApiEventBroker {
   getRecentEvents(sessionId: string, limit = this.replayBufferSize): NormalizedEvent[] {
     const buffer = this.replayBuffers.get(sessionId);
     if (!buffer) return [];
-    return buffer.slice(-Math.max(0, limit));
+    return buffer.slice(-Math.max(0, limit)).map((entry) => entry.event);
   }
 
   /** Drop everything. */
