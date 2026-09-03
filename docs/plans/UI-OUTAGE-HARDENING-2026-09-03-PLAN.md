@@ -1,6 +1,6 @@
 # Plan: 2026-09-03 UI Outage — Event-Broker Flood Hardening (pi-web-ui) + CSRF Lifecycle Fix (tmux-web-ui)
 
-> **Status:** PLANNED — not started. Awaiting explicit owner go before execution ("I will later ask you to execute it", 2026-09-03).
+> **Status:** EXECUTION IN PROGRESS — pi-web-ui Phases 0–5 and its Phase 7 production delivery are complete (commits `d7dc551` through `6da503d`); tmux Phase 6 is code-complete at `cb6cccc` but its production deployment remains pending. Phase 8 remains optional and separately decided.
 > **Incident analysis (input):** `/root/slow-ui-root-causes-2026-09-03.md` (on-the-day forensics) + the deep re-analysis of 2026-09-03 (this session; two corrections to the on-the-day doc are recorded in §1.3 and are load-bearing).
 > **Repos touched:** `pi-web-ui` (primary, this repo), `tmux-web-ui` (`/root/tmux`, Phase 6), `agent-os` (mirror resync only, Phase 7, owner-gated).
 > **Contract:** Internal API `1.30.0` → **`1.31.0`** (allocated to this plan; see D2).
@@ -305,12 +305,13 @@ External consumers (agent-os) read transcripts and the watch ledger, not raw bro
 
 ## 8. Completion checklist
 
-- [ ] Phase 0–5 committed & pushed (pi-web-ui), contract 1.31.0, flood gate RED evidence recorded
-- [ ] Phase 6 committed & pushed (tmux-web-ui), e2e green
-- [ ] §0.5 gates respected throughout: no allowlist/diff-budget/deck breaches; every stop-and-ask recorded with its outcome
-- [ ] Docs updated (INTERNAL-API, CONTRACT, EVENT-PIPELINE, OBSERVABILITY, TROUBLESHOOTING; tmux RUNBOOK/SECURITY/CHANGELOG)
-- [ ] Phase 7 each item owner-approved, executed, verified; production at 1.31.0; agent-os mirror resynced; probe + watchdog live
-- [ ] Agent OS capture of outcomes filed; this plan's status header updated to EXECUTED with commit range
+- [x] Phase 0–5 committed & pushed (pi-web-ui), contract 1.31.0, flood gate RED evidence recorded
+- [x] Phase 6 committed & pushed (tmux-web-ui), e2e green
+- [x] §0.5 gates respected throughout: allowlist changes were owner-approved and recorded; diff budgets and no-new-dependency gate held
+- [x] Docs updated (INTERNAL-API, CONTRACT, EVENT-PIPELINE, OBSERVABILITY, TROUBLESHOOTING; tmux RUNBOOK/SECURITY/CHANGELOG)
+- [x] Pi-web-ui Phase 7 delivery owner-approved and verified: production at 1.31.0; agent-os mirror `9b2c101`; authenticated probe timer + watchdog live
+- [ ] Tmux-web-ui Phase 7 production deploy (including `CSRF_SECRET` write and restart) remains owner-gated; optional tmux watchdog separately undecided
+- [x] Agent OS captures filed; status header and commit ranges updated
 
 ## 9. Evidence index
 
