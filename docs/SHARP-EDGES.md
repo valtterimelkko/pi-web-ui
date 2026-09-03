@@ -155,6 +155,23 @@ The same per-session HOME means the harness's user-scope mod directory (`$HOME/.
 
 ## Pi Coding Agent
 
+### The SDK restores model/thinking bindings only for sessions with messages
+`createAgentSession` (SDK `sdk.js`) restores a session's model from history only
+when `existingSession.messages.length > 0`. A message-less session (freshly
+created, never prompted) rehydrates on the runtime default — the create-time
+`setModel` lives only in the in-memory `AgentSession`, and idle-session
+eviction (`maxSessions: 4`, hardcoded in `websocket/connection.ts`) routinely
+unloads headless creates before their first dispatch. This caused the
+2026-09-03 benchmark drift incident (6 of 8 dispatches ran the wrong model).
+Contract 1.33.0 fixes it server-side: the binding is persisted in the session
+registry (`patchSessionMeta`), dispatch re-applies it before the turn
+(`ensurePiModelBinding` — note it must run OUTSIDE `withPiModelLock`'s shared
+lease: `piService.setModel` takes the exclusive model-change lock and calling
+it under the shared lease self-deadlocks), the receipt carries `servedModel` /
+`modelRebound`, and a `model_rebound` broker event fires. If you touch this
+path, keep the lock ordering; the deadlock survived the whole unit suite and
+was only caught by live validation against a real rehydration.
+
 ### `agentSession.dispose()` must be try/catch guarded
 Disposing a worker session can throw if the worker crashed. `multi-session-manager.ts` wraps every `dispose()` in try/catch. If you add new dispose paths, do the same.
 

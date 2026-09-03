@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.32.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.33.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -963,6 +963,10 @@ export interface RunReceipt {
   executionInstanceId: string;
   /** Effective runtime model used by the run. */
   model?: string;
+  /** Model actually bound at dispatch after any rehydration re-bind. Additive since 1.33.0. */
+  servedModel?: string;
+  /** True when dispatch re-applied the stored binding because the live session had drifted. Additive since 1.33.0. */
+  modelRebound?: boolean;
   /** Canonical creation selector bound to the run, when distinct from model. */
   modelSelector?: string;
   /** Native Command Code effort binding; never mapped to thinkingLevel. */
@@ -1227,6 +1231,8 @@ export const SSE_EVENT_TYPES = {
   GOAL_STATE: 'goal_state',
   /** Contract 1.27.0: terminal goal transition (achieved|failed|cleared) — the watchable goal event. */
   GOAL_END: 'goal_end',
+  /** Contract 1.33.0: dispatch re-applied a stored model binding (rehydration drift guard). */
+  MODEL_REBOUND: 'model_rebound',
 } as const;
 
 export interface SSETaskStatusEvent {

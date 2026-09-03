@@ -47,6 +47,7 @@ export const EVENT_TYPE_REGISTRY: readonly EventTypeInfo[] = [
   { type: 'ask_user_question_closed', description: 'A Claude SDK AskUserQuestion dialog closed for a non-answer reason (timeout/aborted/turn_end/disconnected). The reason is in data.reason.', category: 'control', verbosity: FULL },
   { type: SSE_EVENT_TYPES.GOAL_STATE, description: 'Goal function state snapshot (canonical projection, contract 1.27.0).', category: 'control', verbosity: BOTH },
   { type: SSE_EVENT_TYPES.GOAL_END, description: 'Goal reached a terminal status (achieved|failed|cleared) — the watchable goal event.', category: 'control', verbosity: BOTH },
+  { type: SSE_EVENT_TYPES.MODEL_REBOUND, description: 'Dispatch re-applied the stored model binding before the turn (rehydration drift guard, contract 1.33.0).', category: 'control', verbosity: FULL },
 ];
 
 /** All registered event type names (drift-guard set). */

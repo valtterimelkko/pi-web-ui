@@ -21,13 +21,19 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.32.0",
+  "contractVersion": "1.33.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.33.0** (minor, additive Pi model-binding durability) — makes the create-time Pi model/thinking binding survive rehydration instead of silently degrading to the runtime default:
+  - the create-time binding is persisted in the session registry, and control `set_model` / `set_thinking_level` update the stored binding (thinking level stores the clamped read-back);
+  - dispatch re-applies a drifted stored binding before the turn runs (the Pi SDK restores history bindings only for sessions that already carry messages, so an unloaded-then-rehydrated session otherwise starts on the runtime default), publishing an additive `model_rebound` control event (`data`: `intended`, `served`, `thinkingLevel`);
+  - run receipts gain additive `servedModel` (model actually bound at dispatch) and `modelRebound` (re-apply happened) so receipt reconciliation detects drift without scraping session files;
+  - a stored binding that can no longer be applied fails loudly — unresolvable → run `MODEL_NOT_APPLIED`, blocked provider → `PROVIDER_NOT_ALLOWED` before the turn. Sessions created without a model are unchanged.
 
 - **1.32.0** (minor, additive watch-wake busy delivery and robustness) — makes opt-in watch wakes reliable and honestly observable without changing the historical omitted-mode default (`follow_up`):
   - `onFire.mode` accepts `steer`. A busy Pi or SDK-backed Claude target receives the wake in its active turn with no new run receipt; an idle target promotes to a normal receipted prompt. Other busy runtimes continue to fail honestly. Successful attempts now expose `deliveryKind` (`turn`, `steer`, or `deferred-follow-up`), and `runId` is absent for an in-flight steer. Pi wakes retain the Internal API blocked-provider gate;

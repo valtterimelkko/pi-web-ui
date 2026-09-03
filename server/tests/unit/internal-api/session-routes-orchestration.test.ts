@@ -115,6 +115,7 @@ describe('createSessionRoutes orchestration endpoints', () => {
       listAll: vi.fn().mockResolvedValue([]),
       delete: vi.fn().mockResolvedValue(undefined),
       upsert: vi.fn().mockResolvedValue(undefined),
+      patchSessionMeta: vi.fn().mockResolvedValue(undefined),
     };
 
     const agentSession = {

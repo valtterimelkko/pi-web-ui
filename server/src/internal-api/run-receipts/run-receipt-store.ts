@@ -42,6 +42,8 @@ const ALLOWED_KEYS = new Set([
   'executionInstanceId',
   'model',
   'modelSelector',
+  'servedModel',
+  'modelRebound',
   'effort',
   'defaultEffort',
   'tokenUsage',
@@ -211,7 +213,7 @@ export class RunReceiptStore {
 
   async patch(
     runId: string,
-    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode' | 'liveness' | 'phase7Shadow' | 'outputEvidence'>>,
+    patch: Partial<Pick<PersistedRunReceipt, 'dispatchMode' | 'liveness' | 'phase7Shadow' | 'outputEvidence' | 'servedModel' | 'modelRebound'>>,
   ): Promise<PersistedRunReceipt | undefined> {
     await this.ensureReady();
     const current = this.cache.get(runId);
@@ -438,6 +440,12 @@ export class RunReceiptStore {
     }
     if (record.dispatchMode !== undefined && !['prompt', 'follow_up', 'steer'].includes(record.dispatchMode)) {
       throw new Error('Invalid receipt dispatch mode');
+    }
+    if (record.servedModel !== undefined && (typeof record.servedModel !== 'string' || record.servedModel.length === 0 || record.servedModel.length > 200)) {
+      throw new Error('Invalid servedModel');
+    }
+    if (record.modelRebound !== undefined && typeof record.modelRebound !== 'boolean') {
+      throw new Error('Invalid modelRebound');
     }
     if (record.idempotencyKeyDigest !== undefined && !SAFE_DIGEST.test(record.idempotencyKeyDigest)) {
       throw new Error('Invalid idempotency key digest');

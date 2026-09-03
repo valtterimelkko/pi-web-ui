@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Pi model-binding durability across rehydration (`1.33.0`, `2026-09-03`)**
+  - Root-cause fix for the 2026-09-03 benchmark drift incident (6 of 8 detached dispatches ran on the runtime default `zai/glm-5.3` instead of the requested `commandcode/*` models): create-time Pi bindings are now persisted in the session registry, control `set_model`/`set_thinking_level` update that stored binding, and dispatch re-applies a drifted binding before the turn runs. The Pi SDK restores history bindings only for sessions that already carry messages, so a session unloaded between create and dispatch (eviction at `maxSessions=4`, server restart) used to rehydrate silently on the default.
+  - Additive observability: run receipts carry `servedModel` + `modelRebound`; a `model_rebound` broker event reports `intended`/`served`/`thinkingLevel`. Unresolvable or provider-blocked stored bindings fail loudly (`MODEL_NOT_APPLIED` / `PROVIDER_NOT_ALLOWED`) instead of silently running the default. Sessions created without a model are unchanged.
+  - TDD (11 RED-first route tests including a reader-writer self-deadlock regression pin that live validation exposed in the first implementation) + disposable-server live validation replaying the exact incident (create → restart → dispatch: drift signature rebinds in ~190 ms, run completes on the intended model).
+  - Canonical docs: [`INTERNAL-API.md`](./INTERNAL-API.md) (Pi model binding durability), [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.33.0), `docs/plans/PI-MODEL-BINDING-DURABILITY-PLAN.md` (execution plan with the incident evidence trail).
+
 - **Watch-wake busy delivery and robustness (`1.32.0`, `2026-09-03`)**
   - Watch `onFire.mode:'steer'` now joins busy Pi and SDK-backed Claude parent turns without creating a second run receipt; idle targets promote to normal receipted prompts. Successful wake attempts report `deliveryKind` (`turn`, `steer`, or `deferred-follow-up`).
   - Transient failures no longer spend `maxWakeups` and receive one bounded retry. Fan-in permits only one pending steer per target and records additional attempts as `steer_pending` suppression.

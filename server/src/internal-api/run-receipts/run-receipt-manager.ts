@@ -272,6 +272,20 @@ export class RunReceiptManager {
     });
   }
 
+  /**
+   * Record the model actually bound at dispatch, after any rehydration re-bind
+   * (contract 1.33.0). Post-dispatch truth, distinct from the accept-time
+   * `model` observation; lets receipt reconciliation detect drift without
+   * scraping session files. Safe no-op for unknown or terminal runs.
+   */
+  async recordServedModel(runId: string, servedModel: string | undefined, rebound: boolean): Promise<RunReceipt | undefined> {
+    await this.init();
+    return this.withRunLock(runId, async () => {
+      const updated = await this.store.patch(runId, { servedModel, modelRebound: rebound });
+      return updated ? toPublicReceipt(updated) : undefined;
+    });
+  }
+
   async markQueued(runId: string): Promise<RunReceipt | undefined> {
     await this.init();
     return this.withRunLock(runId, async () => {

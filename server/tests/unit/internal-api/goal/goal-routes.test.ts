@@ -105,6 +105,7 @@ describe('goal function (contract 1.27.0)', () => {
       get: vi.fn(async (id: string) => entry({ id, path: id === 'session-1' ? '/tmp/sessions/session-1.jsonl' : id })),
       listAll: vi.fn().mockResolvedValue([entry()]),
       upsert: vi.fn().mockResolvedValue(undefined),
+      patchSessionMeta: vi.fn().mockResolvedValue(undefined),
     };
     claudeService = {
       isAvailable: vi.fn().mockResolvedValue(true),

@@ -77,6 +77,7 @@ describe('Internal API orchestration honesty (contract 1.25.0 defect fixes)', ()
       listAll: vi.fn().mockResolvedValue([]),
       delete: vi.fn().mockResolvedValue(undefined),
       upsert: vi.fn().mockResolvedValue(undefined),
+      patchSessionMeta: vi.fn().mockResolvedValue(undefined),
     };
 
     claudeService = {

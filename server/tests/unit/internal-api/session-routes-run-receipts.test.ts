@@ -88,6 +88,7 @@ describe('Internal API run receipt integration', () => {
       listAll: vi.fn().mockResolvedValue([entry()]),
       delete: vi.fn().mockResolvedValue(undefined),
       upsert: vi.fn().mockResolvedValue(undefined),
+      patchSessionMeta: vi.fn().mockResolvedValue(undefined),
     };
     claudeService = {
       isRunning: vi.fn(() => false),
@@ -116,7 +117,7 @@ describe('Internal API run receipt integration', () => {
       antigravityService: { isRunning: vi.fn(() => false), abort: vi.fn() } as any,
       multiSessionManager: multiSessionManager as unknown as SessionRoutesDeps['multiSessionManager'],
       sessionRegistry: registry,
-      piService: {} as any,
+      piService: { setModel: vi.fn().mockResolvedValue(undefined) } as any,
       internalClientId: 'test-client',
       watchDir: path.join(dir, 'watches'),
       runReceiptManager: manager,
@@ -343,7 +344,7 @@ describe('Internal API run receipt integration', () => {
       antigravityService: { isRunning: vi.fn(() => false), abort: vi.fn() } as unknown as SessionRoutesDeps['antigravityService'],
       multiSessionManager: multiSessionManager as unknown as SessionRoutesDeps['multiSessionManager'],
       sessionRegistry: registry,
-      piService: {} as any,
+      piService: { setModel: vi.fn().mockResolvedValue(undefined) } as any,
       internalClientId: 'test-client',
       watchDir: path.join(dir, 'watches-delayed'),
       runReceiptManager: delayedManager,
@@ -407,7 +408,7 @@ describe('Internal API run receipt integration', () => {
     registry.get.mockResolvedValue(entry({
       sdkType: 'pi',
       claudeProfileId: undefined,
-      model: 'openai/gpt-5.6-terra',
+      model: 'openai-codex/gpt-5.6-terra',
       path: '/tmp/pi-compaction-session.jsonl',
     }));
     const observers = new Set<(event: unknown) => void>();
@@ -450,7 +451,7 @@ describe('Internal API run receipt integration', () => {
     registry.get.mockResolvedValue(entry({
       sdkType: 'pi',
       claudeProfileId: undefined,
-      model: 'openai/gpt-5.6-terra',
+      model: 'openai-codex/gpt-5.6-terra',
       path: '/tmp/pi-synthetic-end-session.jsonl',
     }));
     const observers = new Set<(event: unknown) => void>();
@@ -493,7 +494,7 @@ describe('Internal API run receipt integration', () => {
   });
 
   it('completes a Pi slash command when its handler returns without agent_end', async () => {
-    registry.get.mockResolvedValue(entry({ sdkType: 'pi', claudeProfileId: undefined, model: 'openai/gpt-5.6-terra', path: '/tmp/pi-command-session.jsonl' }));
+    registry.get.mockResolvedValue(entry({ sdkType: 'pi', claudeProfileId: undefined, model: 'openai-codex/gpt-5.6-terra', path: '/tmp/pi-command-session.jsonl' }));
     multiSessionManager.getAgentSession.mockReturnValue({
       model: { provider: 'openai-codex', id: 'gpt-5.6-terra' },
       prompt: vi.fn().mockResolvedValue(undefined),

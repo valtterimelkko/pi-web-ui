@@ -8,6 +8,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { PassThrough, Writable } from 'stream';
 import type { NormalizedEvent, SdkType } from '@pi-web-ui/shared';
+import { SSE_EVENT_TYPES } from '../types.js';
 import { projectDefaultViewFromEvents, renderScreenViewMarkdown } from '@pi-web-ui/shared';
 import { detectPromptInjection } from '../../security/prompt-injection.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
@@ -155,6 +156,18 @@ class TurnStalledError extends Error {
   constructor() {
     super('Accepted run stalled before a terminal runtime event');
     this.name = 'TurnStalledError';
+  }
+}
+
+/**
+ * Contract 1.33.0: the stored model binding could not be re-applied at dispatch
+ * (unresolvable after eviction/rehydration). Fails the run loudly instead of
+ * silently running on the runtime default.
+ */
+class PiModelBindingError extends Error {
+  constructor(readonly intended: string, readonly served: string | undefined, cause?: unknown) {
+    super(`Stored model binding '${intended}' could not be re-applied before dispatch (session serving '${served ?? 'runtime default'}'); refusing to run on an unintended model${cause instanceof Error ? `: ${cause.message}` : ''}`);
+    this.name = 'PiModelBindingError';
   }
 }
 
@@ -904,6 +917,48 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       : operation();
   }
 
+  /**
+   * Contract 1.33.0: model binding durability across rehydration. A session
+   * unloaded between create and dispatch rehydrates on the runtime default —
+   * the SDK restores history bindings only for sessions that already have
+   * messages — so re-apply the registry binding before the turn runs. Returns
+   * the post-bind served model; `rebound` is true only when a re-apply
+   * happened. Loud-fails instead of ever running on an unintended model.
+   */
+  async function ensurePiModelBinding(
+    sessionId: string,
+    entry: RegistryEntry,
+    agentSession: { model?: { provider: string; id: string } | null; thinkingLevel?: string; setThinkingLevel?: (level: never) => void },
+  ): Promise<{ servedModel: string | undefined; rebound: boolean; thinkingLevel: string | undefined }> {
+    const liveModel = agentSession.model ? `${agentSession.model.provider}/${agentSession.model.id}` : undefined;
+    if (!entry.model) return { servedModel: liveModel, rebound: false, thinkingLevel: undefined };
+    if (liveModel === entry.model) return { servedModel: liveModel, rebound: false, thinkingLevel: undefined };
+    // Provider policy first: a stored binding for a now-blocked provider must
+    // fail with PROVIDER_NOT_ALLOWED, never be applied.
+    assertResolvedPiModelAllowed(entry.model, blockedPiProviders);
+    const resolvedRequest = await resolvePiModelSelector(entry.model);
+    if ('error' in resolvedRequest) {
+      throw new PiModelBindingError(entry.model, liveModel);
+    }
+    try {
+      await piService.setModel(sessionId, resolvedRequest.selector);
+    } catch (error) {
+      throw new PiModelBindingError(entry.model, liveModel, error);
+    }
+    let appliedLevel: string | undefined;
+    if (entry.thinkingLevel && agentSession.thinkingLevel !== entry.thinkingLevel) {
+      // The SDK parameter is the ThinkingLevel union; the value came from the
+      // registry (validated at set_thinking_level time) and is re-clamped by
+      // the SDK itself, so the never-cast is call-shape only.
+      (agentSession.setThinkingLevel as unknown as ((level: string) => void) | undefined)?.(entry.thinkingLevel);
+      appliedLevel = agentSession.thinkingLevel ?? entry.thinkingLevel;
+    }
+    const reboundModel = agentSession.model
+      ? `${agentSession.model.provider}/${agentSession.model.id}`
+      : resolvedRequest.selector;
+    return { servedModel: reboundModel, rebound: true, thinkingLevel: appliedLevel };
+  }
+
   function acquirePiModelLock(sessionId: string): Promise<() => void> {
     return typeof piService.acquireSessionModelLock === 'function'
       ? piService.acquireSessionModelLock(sessionId)
@@ -1432,6 +1487,24 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               throw new Error('Pi session not loaded');
             }
             agentSession.setThinkingLevel(body.thinkingLevel);
+          }
+          // Contract 1.33.0: persist the binding so dispatch-time rehydration
+          // can restore it. Without this the create-time setModel lives only
+          // in the (evictable) in-memory session and a later dispatch silently
+          // runs on the runtime default. Fail-closed: an unpersistable binding
+          // must not survive as a silently-driftable session.
+          try {
+            await sessionRegistry.patchSessionMeta(status.sessionId, {
+              model: appliedPiSelector ?? resolvedPiModel,
+              ...(body.thinkingLevel ? { thinkingLevel: body.thinkingLevel } : {}),
+            });
+          } catch (error) {
+            await cleanupRejectedCreatedSession(status.sessionId);
+            sendJson(res, 500, enrichedErrorBody(
+              ErrorCode.INTERNAL_ERROR,
+              `Session created but the model binding could not be persisted; session discarded (${error instanceof Error ? error.message : String(error)})`,
+            ));
+            return;
           }
           base = {
             sessionId: status.sessionId,
@@ -2522,7 +2595,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               status: 'failed',
               errorCode: error instanceof PiProviderNotAllowedError
                 ? ErrorCode.PROVIDER_NOT_ALLOWED
-                : runtimeErrorCode(error, runtime),
+                : error instanceof PiModelBindingError
+                  ? ErrorCode.MODEL_NOT_APPLIED
+                  : runtimeErrorCode(error, runtime),
             }
           : cessationBasis
             ? { status: 'completed', cessationBasis }
@@ -3501,6 +3576,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               throw error;
             }
             await piService.setModel(sessionId, body.modelId);
+            // Contract 1.33.0: persist the rebind so it survives rehydration
+            // (the old in-memory-only rebind was lost on eviction).
+            await sessionRegistry.patchSessionMeta(sessionId, { model: body.modelId });
             response = { success: true, action: 'set_model', modelId: body.modelId };
           }
           break;
@@ -3536,6 +3614,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             // level. Return the read-back value so callers can fail closed
             // instead of treating an echoed request as proof of effect.
             effectiveThinkingLevel = agentSession.thinkingLevel;
+            // Contract 1.33.0: persist the clamped read-back so dispatch-time
+            // rehydration restores the level actually in force.
+            await sessionRegistry.patchSessionMeta(sessionId, { thinkingLevel: effectiveThinkingLevel });
           } else {
             sendJson(res, 400, enrichedErrorBody(ErrorCode.UNSUPPORTED_OPERATION, 'Thinking level not supported for this runtime'));
             return;
@@ -4623,12 +4704,33 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const sessionPath = entry.path;
         await multiSessionManager.subscribeClient(internalClientId, sessionPath);
         await pinExpiry?.reapplyForSession(sessionId);
+        // Contract 1.33.0: re-apply the stored binding BEFORE taking the shared
+        // model lock. The re-bind uses piService.setModel, which takes the
+        // exclusive model-change lock — calling it inside withPiModelLock's
+        // shared lease would self-deadlock the reader-writer pair (live-
+        // validated against a real rehydration during this contract's batch).
+        const preLockSession = multiSessionManager.getAgentSession(sessionPath);
+        if (!preLockSession) {
+          throw new Error(`Pi session not loaded: ${sessionId}`);
+        }
+        const preLockBinding = await ensurePiModelBinding(sessionId, entry, preLockSession);
         try {
         await withPiModelLock(sessionId, async () => {
         const agentSession = multiSessionManager.getAgentSession(sessionPath);
         if (!agentSession) {
           throw new Error(`Pi session not loaded: ${sessionId}`);
         }
+
+        // Served model truth under the shared lease: the post-bind live value
+        // (a concurrent control set_model would be an explicit change, not
+        // silent drift).
+        const binding = {
+          ...preLockBinding,
+          servedModel: agentSession.model
+            ? `${agentSession.model.provider}/${agentSession.model.id}`
+            : preLockBinding.servedModel,
+        };
+
         assertResolvedPiModelAllowed(
           agentSession.model ? `${agentSession.model.provider}/${agentSession.model.id}` : entry.model,
           blockedPiProviders,
@@ -4660,6 +4762,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           }
         };
         multiSessionManager.addApiObserver(sessionPath, endObserver);
+
+        // Announce + record the re-bind only once observers are attached so
+        // broker subscribers and the caller both see it.
+        if (binding.rebound) {
+          const reboundEvent: NormalizedEvent = {
+            type: SSE_EVENT_TYPES.MODEL_REBOUND,
+            sessionId,
+            timestamp: Date.now(),
+            data: {
+              intended: entry.model,
+              served: binding.servedModel,
+              ...(binding.thinkingLevel ? { thinkingLevel: binding.thinkingLevel } : {}),
+            },
+          };
+          try { broker.publish(sessionPath, reboundEvent); } catch { /* non-fatal */ }
+          try { onEvent(reboundEvent); } catch { /* non-fatal */ }
+        }
+        if (runId) {
+          void runReceipts.recordServedModel(runId, binding.servedModel, binding.rebound)
+            .catch(() => { /* receipt truth is best-effort; the run continues */ });
+        }
 
         try {
           if (mode === 'follow_up') {

@@ -68,6 +68,7 @@ describe('Round-2 defect fixes (contract 1.26.0)', () => {
       get: vi.fn().mockResolvedValue(mkEntry('pi-1')),
       delete: vi.fn().mockResolvedValue(undefined),
       upsert: vi.fn().mockResolvedValue(undefined),
+      patchSessionMeta: vi.fn().mockResolvedValue(undefined),
       listAll: vi.fn().mockResolvedValue([]),
     };
     multiSessionManager = {

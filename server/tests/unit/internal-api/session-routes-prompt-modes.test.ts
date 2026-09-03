@@ -106,6 +106,7 @@ describe('Internal API prompt mode dispatch semantics', () => {
       get: vi.fn().mockResolvedValue(entry()),
       listAll: vi.fn().mockResolvedValue([entry()]),
       upsert: vi.fn().mockResolvedValue(undefined),
+      patchSessionMeta: vi.fn().mockResolvedValue(undefined),
     };
     claudeService = {
       isAvailable: vi.fn().mockResolvedValue(true),
@@ -121,7 +122,7 @@ describe('Internal API prompt mode dispatch semantics', () => {
     };
     opencodeService = { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn(() => false), replyPermission: vi.fn() };
     antigravityService = { isAvailable: vi.fn().mockResolvedValue(true), isRunning: vi.fn(() => false) };
-    piService = {};
+    piService = { setModel: vi.fn().mockResolvedValue(undefined) };
     multiSessionManager = createMultiSessionManagerMock();
   });
 
