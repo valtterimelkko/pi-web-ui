@@ -1,6 +1,6 @@
 # Plan: 2026-09-03 UI Outage — Event-Broker Flood Hardening (pi-web-ui) + CSRF Lifecycle Fix (tmux-web-ui)
 
-> **Status:** EXECUTION IN PROGRESS — pi-web-ui Phases 0–5 and its Phase 7 production delivery are complete (commits `d7dc551` through `6da503d`); tmux Phase 6 is code-complete at `cb6cccc` but its production deployment remains pending. Phase 8 remains optional and separately decided.
+> **Status:** EXECUTED — Phases 0–7 are complete. Pi-web-ui commits `d7dc551` through `f67e40a`, tmux-web-ui commit `cb6cccc`, and Agent OS mirror commit `9b2c101` are pushed; both production services were restarted and verified on 2026-09-03. Phase 8 was explicitly optional/separate and was not selected.
 > **Incident analysis (input):** `/root/slow-ui-root-causes-2026-09-03.md` (on-the-day forensics) + the deep re-analysis of 2026-09-03 (this session; two corrections to the on-the-day doc are recorded in §1.3 and are load-bearing).
 > **Repos touched:** `pi-web-ui` (primary, this repo), `tmux-web-ui` (`/root/tmux`, Phase 6), `agent-os` (mirror resync only, Phase 7, owner-gated).
 > **Contract:** Internal API `1.30.0` → **`1.31.0`** (allocated to this plan; see D2).
@@ -23,6 +23,7 @@
 | D8 | **Owner-approved Phase 6 wiring amendment (2026-09-03):** add `/root/tmux/server/src/security/config.ts`, `/root/tmux/server/src/ws/attach-websocket.ts`, and `/root/tmux/.env.example` to the Phase 6 allowlist. These are the minimum files needed to configure `CSRF_SECRET`, validate against the raw JWT already present on the attach request, and document the variable. A user-id-derived substitute is rejected because it weakens the intended HMAC-of-JWT binding. |
 | D9 | **Owner-approved Phase 7 watchdog amendment (2026-09-03):** Node 24's built-in `dgram` supports only UDP, not Unix datagrams, so use the installed `/usr/bin/systemd-notify` helper from the process-owned unref'd 10-second timer. Permit NEW `server/src/systemd-notifier.ts`, its focused unit test, the startup/shutdown wiring in `server/src/index.ts`, and NEW `deploy/systemd/pi-web-ui.service`, `pi-web-ui-health-probe.service`, and `.timer` source templates. No npm dependency or general supervisor framework. Owner separately authorised delivery and the required production restart. |
 | D10 | **Owner-approved Phase 7 health-route correction (2026-09-03):** the planned TCP `127.0.0.1:3456/api/v1/health` request returns SPA HTML with HTTP 200 and would be a false-positive. Probe the real authenticated `/api/v1/health` over the existing Internal API Unix socket and token file instead; require valid health JSON. |
+| D11 | **Owner-approved tmux production delivery (2026-09-03):** generate a distinct `CSRF_SECRET`, write it without disclosure to `/root/tmux/.env.production`, restart `tmux-web-ui.service`, and leave the optional tmux watchdog off. |
 
 ---
 
@@ -310,7 +311,7 @@ External consumers (agent-os) read transcripts and the watch ledger, not raw bro
 - [x] §0.5 gates respected throughout: allowlist changes were owner-approved and recorded; diff budgets and no-new-dependency gate held
 - [x] Docs updated (INTERNAL-API, CONTRACT, EVENT-PIPELINE, OBSERVABILITY, TROUBLESHOOTING; tmux RUNBOOK/SECURITY/CHANGELOG)
 - [x] Pi-web-ui Phase 7 delivery owner-approved and verified: production at 1.31.0; agent-os mirror `9b2c101`; authenticated probe timer + watchdog live
-- [ ] Tmux-web-ui Phase 7 production deploy (including `CSRF_SECRET` write and restart) remains owner-gated; optional tmux watchdog separately undecided
+- [x] Tmux-web-ui Phase 7 production deploy owner-approved and verified: distinct `CSRF_SECRET` loaded, environment file mode `0600`, service restarted healthy, six tmux sessions preserved; optional tmux watchdog left off
 - [x] Agent OS captures filed; status header and commit ranges updated
 
 ## 9. Evidence index
@@ -331,3 +332,4 @@ External consumers (agent-os) read transcripts and the watch ledger, not raw bro
 | 2026-09-03 | (owner, in-conversation) | Approved D8/G1 Phase 6 amendment adding only tmux `security/config.ts`, `ws/attach-websocket.ts`, and `.env.example`: raw-JWT attach validation and configured/documented `CSRF_SECRET` are required by the named HMAC double-submit design. |
 | 2026-09-03 | (owner, in-conversation) | Approved D9/G1 Phase 7 amendment: use installed `/usr/bin/systemd-notify` because Node 24 has no built-in Unix datagram support; permit one focused notifier module/test plus startup/shutdown wiring and the three deploy unit templates; deliver pi-web-ui first and restart production as needed. |
 | 2026-09-03 | (owner, in-conversation) | Approved D10 Phase 7 correction: replace the false-positive TCP SPA route with authenticated Unix-socket `/api/v1/health` and validate its JSON health status. |
+| 2026-09-03 | (owner, in-conversation) | Approved D11 Phase 7 tmux delivery: generate/write the distinct production `CSRF_SECRET`, restart and verify `tmux-web-ui.service`, and leave the optional tmux watchdog off. |
