@@ -19,6 +19,7 @@
 | D4 | **Owner-gated actions** (pause and ask, never do silently): production restart of `pi-web-ui` or `tmux-web-ui`; agent-os mirror resync; any systemd unit edit (`/etc/systemd/system/*.service`, timers); writing `CSRF_SECRET` into `/root/tmux/.env.production`. **Never** touch the Caddyfile or Authelia config — report-only per SYSTEM_MAP §0. |
 | D5 | **TDD mandatory** (RED → GREEN per behaviour), plus the integration flood gate (§6) must pass before any deploy step. Live validation per repo convention (`docs/LIVE-VALIDATION.md`). |
 | D6 | The **websocket event-forwarder path is NOT modified** — it already slims `message_update` correctly (`server/src/pi/event-forwarder.ts:295-302`). This plan aligns the Internal API broker path with that existing policy. |
+| D7 | **Owner-approved Phase 5 residual-hotspot fix (2026-09-03):** permit one focused follow-up in `server/src/internal-api/event-payload-budget.ts` so oversized `message_update` snapshots are identified and slimmed before any full-event `JSON.stringify`; calculate truthful `originalBytes` without materialising the multi-megabyte serialized event. This is required because the fixed full-suite flood gate measured +161 MB RSS against its hard 100 MiB cap. No threshold relaxation or test-only isolation workaround. |
 
 ---
 
@@ -322,3 +323,4 @@ External consumers (agent-os) read transcripts and the watch ledger, not raw bro
 |---|---|---|
 | 2026-09-03 | (owner, in-conversation) | Added §0.5 execution-discipline gates + §10 amendment ledger on owner request |
 | 2026-09-03 | (owner, in-conversation) | Approved G1 Phase 0 amendment permitting exactly one additional `CapabilitiesResponse.features.supportsEventPayloadBudget: true` field in `types.ts`, required by DD8; no wider scope change |
+| 2026-09-03 | (owner, in-conversation) | Approved D7/G1 Phase 5 amendment permitting a focused `event-payload-budget.ts` follow-up: pre-measure `message_update` without materialising its full JSON, then stringify only the retained bounded event. This responds to the unweakened flood gate (+161 MB RSS vs <100 MiB); test-only isolation was explicitly rejected as hiding the residual production hotspot. |
