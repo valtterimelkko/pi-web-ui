@@ -94,6 +94,60 @@ describe('InternalApiEventBroker', () => {
     expect(types).toEqual(['e3', 'e4', 'e5']);
   });
 
+  it('slims oversized message updates before subscriber delivery without losing the delta', () => {
+    const bounded = new InternalApiEventBroker({ eventPayloadMaxBytes: 32 * 1024 });
+    const event = makeEvent('message_update', {
+      message: { id: 'm1', role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'x'.repeat(100_000) }] },
+      assistantMessageEvent: { type: 'text_delta', delta: 'hello' },
+    });
+    const sub = vi.fn();
+    bounded.subscribe('s1', sub, false);
+
+    bounded.publish('s1', event);
+
+    const delivered = sub.mock.calls[0]?.[0] as NormalizedEvent;
+    expect(Buffer.byteLength(JSON.stringify(delivered))).toBeLessThanOrEqual(32 * 1024);
+    expect(delivered.data).toMatchObject({
+      message: { id: 'm1', role: 'assistant', stopReason: 'stop' },
+      assistantMessageEvent: { type: 'text_delta', delta: 'hello' },
+      payloadTruncated: { budgetBytes: 32 * 1024 },
+    });
+    expect(((event.data as { message: { content: unknown[] } }).message.content)).toHaveLength(1);
+  });
+
+  it('replays the bounded form of an oversized event', () => {
+    const bounded = new InternalApiEventBroker({ eventPayloadMaxBytes: 1024 });
+    bounded.publish('s1', makeEvent('message_update', {
+      message: { id: 'm1', content: [{ type: 'text', text: 'x'.repeat(10_000) }] },
+      assistantMessageEvent: { type: 'text_delta', delta: 'ok' },
+    }));
+
+    const replayed = bounded.getRecentEvents('s1');
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]?.data).toMatchObject({
+      message: { id: 'm1' },
+      assistantMessageEvent: { type: 'text_delta', delta: 'ok' },
+      payloadTruncated: { budgetBytes: 1024 },
+    });
+  });
+
+  it('warns only once per session when payloads exceed the budget', () => {
+    const bounded = new InternalApiEventBroker({ eventPayloadMaxBytes: 1024 });
+    const records: LogRecord[] = [];
+    setLogTap((record) => records.push(record));
+    try {
+      const oversized = makeEvent('message_update', {
+        message: { id: 'm1', content: [{ type: 'text', text: 'x'.repeat(10_000) }] },
+      });
+      bounded.publish('s1', oversized);
+      bounded.publish('s1', oversized);
+
+      expect(records.filter((record) => record.msg.includes('event payload truncated'))).toHaveLength(1);
+    } finally {
+      setLogTap(null);
+    }
+  });
+
   it('bounds the replay buffer by total bytes (trims oldest large events)', () => {
     const broker = new InternalApiEventBroker({ replayBufferSize: 100, replayBufferMaxBytes: 500 });
     const big = { type: 'message_update', timestamp: 1, data: { huge: 'x'.repeat(400) } } as unknown as NormalizedEvent;

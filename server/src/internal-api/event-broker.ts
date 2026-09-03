@@ -26,6 +26,8 @@
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { createLogger } from '../logging/logger.js';
 import { getOperationalMetrics, type OperationalMetrics } from '../observability/operational-metrics.js';
+import { config } from '../config.js';
+import { measureAndSlim } from './event-payload-budget.js';
 
 const logger = createLogger('InternalApiEventBroker');
 
@@ -36,6 +38,8 @@ export interface EventBrokerOptions {
   replayBufferSize?: number;
   /** Max total bytes of the per-session replay buffer (defense against large-event memory growth). */
   replayBufferMaxBytes?: number;
+  /** Max serialized bytes delivered/buffered per event. 0 disables. */
+  eventPayloadMaxBytes?: number;
   /** Injected low-cardinality metrics seam (primarily for tests). */
   metrics?: OperationalMetrics;
   /** Optional disposal predicate: when set and it returns true for a session
@@ -52,14 +56,17 @@ export class InternalApiEventBroker {
   private subscriberClasses = new WeakMap<EventBrokerSubscriber, string>();
   private replayBuffers: Map<string, NormalizedEvent[]> = new Map();
   private replayBufferBytes: Map<string, number> = new Map();
+  private warnedOversizedSessions = new Set<string>();
   private readonly replayBufferSize: number;
   private readonly replayBufferMaxBytes: number;
+  private readonly eventPayloadMaxBytes: number;
   private readonly metrics: OperationalMetrics;
   private readonly disposedCheck?: (sessionId: string) => boolean;
 
   constructor(options: EventBrokerOptions = {}) {
     this.replayBufferSize = Math.max(0, options.replayBufferSize ?? DEFAULT_REPLAY_BUFFER_SIZE);
     this.replayBufferMaxBytes = Math.max(0, options.replayBufferMaxBytes ?? DEFAULT_REPLAY_BUFFER_MAX_BYTES);
+    this.eventPayloadMaxBytes = Math.max(0, options.eventPayloadMaxBytes ?? config.internalApiEventPayloadMaxBytes);
     this.metrics = options.metrics ?? getOperationalMetrics();
     this.disposedCheck = options.isSessionDisposed;
   }
@@ -114,6 +121,12 @@ export class InternalApiEventBroker {
     // prevents a late event from recreating the replay buffer or notifying
     // subscribers after handleDeleteSession has tombstoned the session.
     if (this.disposedCheck?.(sessionId)) return;
+    const measured = measureAndSlim(event, this.eventPayloadMaxBytes);
+    event = measured.event;
+    if (measured.truncated && !this.warnedOversizedSessions.has(sessionId)) {
+      this.warnedOversizedSessions.add(sessionId);
+      logger.child({ sessionId }).warn(`event payload truncated: type=${event.type} bytes=${measured.originalBytes} budget=${this.eventPayloadMaxBytes}`);
+    }
     this.metrics.recordEvent(event.timestamp);
     if (this.replayBufferSize > 0 || this.replayBufferMaxBytes > 0) {
       let buffer = this.replayBuffers.get(sessionId);
@@ -123,7 +136,7 @@ export class InternalApiEventBroker {
       }
       buffer.push(event);
       // Bound by count AND bytes: trim oldest events that exceed either cap.
-      let bytes = (this.replayBufferBytes.get(sessionId) ?? 0) + JSON.stringify(event).length;
+      let bytes = (this.replayBufferBytes.get(sessionId) ?? 0) + measured.bytes;
       while (buffer.length > this.replayBufferSize) { const old = buffer.shift(); if (old) bytes -= JSON.stringify(old).length; }
       while (bytes > this.replayBufferMaxBytes && buffer.length > 0) { const old = buffer.shift(); if (old) bytes -= JSON.stringify(old).length; }
       this.replayBufferBytes.set(sessionId, Math.max(0, bytes));
@@ -146,6 +159,7 @@ export class InternalApiEventBroker {
     this.subscribers.delete(sessionId);
     this.replayBuffers.delete(sessionId);
     this.replayBufferBytes.delete(sessionId);
+    this.warnedOversizedSessions.delete(sessionId);
   }
 
   /** Return a copy of the recent buffered events for a session, oldest first. */
@@ -160,6 +174,7 @@ export class InternalApiEventBroker {
     this.subscribers.clear();
     this.replayBuffers.clear();
     this.replayBufferBytes.clear();
+    this.warnedOversizedSessions.clear();
   }
 
   /** Number of active subscribers for a session. */
