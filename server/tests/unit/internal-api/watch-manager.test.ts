@@ -67,6 +67,23 @@ describe('WatchManager — standing observation + durable ledger', () => {
     expect(w.conditions[0].fireCount).toBe(1);
   });
 
+  it('auto-completes a pure-observer watch after all once conditions fire and releases its claim', async () => {
+    await manager.register({
+      sessionId: 'done-observer', sessionPath: 'done-observer', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+    });
+
+    broker.publish('done-observer', ev('agent_end'));
+    await flush();
+
+    const done = manager.get('done-observer')!;
+    expect(done.status).toBe('done');
+    expect(done.allFired).toBe(true);
+    expect(done.firingCount).toBe(1);
+    expect(done.pinned).toBe(false);
+    expect(unpin).toHaveBeenCalledWith('done-observer', 'watch:watch-done-observer');
+  });
+
   it('records every match when once=false', async () => {
     await manager.register({
       sessionId: 's3', sessionPath: 's3', runtime: 'pi',
@@ -99,7 +116,7 @@ describe('WatchManager — standing observation + durable ledger', () => {
     const manager2 = new WatchManager({ broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin });
     await manager2.init();
     const reloaded = manager2.get('s4')!;
-    expect(reloaded.status).toBe('detached');
+    expect(reloaded.status).toBe('done');
     expect(reloaded.allFired).toBe(true);
     expect(reloaded.firingCount).toBe(1);
   });
@@ -158,17 +175,162 @@ describe('WatchManager — standing observation + durable ledger', () => {
   });
 
   it('releases the old claim when replacing a pinned watch with pin=false', async () => {
-    await manager.register({
+    const first = await manager.register({
       sessionId: 'replace', sessionPath: 'replace', runtime: 'pi',
       request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
     });
-    await manager.register({
+    const replacement = await manager.register({
       sessionId: 'replace', sessionPath: 'replace', runtime: 'pi',
       request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }], pin: false },
     });
 
+    expect(first.replaced).toBe(false);
+    expect(replacement.replaced).toBe(true);
     expect(unpin).toHaveBeenCalledWith('replace', 'watch:watch-replace');
     expect(manager.get('replace')?.pinned).toBe(false);
+  });
+
+  it('auto-completes a successful one-shot wake and releases subject and target claims', async () => {
+    const dispatchWake = vi.fn(async () => ({ status: 'dispatched' as const, deliveryKind: 'steer' as const }));
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin, dispatchWake });
+    await manager.register({
+      sessionId: 'done-wake', sessionPath: 'done-wake', runtime: 'pi',
+      request: {
+        conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+        onFire: { type: 'prompt', targetSessionId: 'parent', message: 'done', mode: 'steer' },
+      },
+    });
+
+    broker.publish('done-wake', ev('agent_end'));
+    await flush();
+
+    const done = manager.get('done-wake')!;
+    expect(done.status).toBe('done');
+    expect(done.wakeAttempts).toMatchObject([{ status: 'dispatched', deliveryKind: 'steer' }]);
+    expect(done.pinned).toBe(false);
+    expect(unpin).toHaveBeenCalledWith('done-wake', 'watch:watch-done-wake');
+    expect(unpin).toHaveBeenCalledWith('parent', 'watch-target:watch-done-wake');
+  });
+
+  it('does not complete an all-one-shot watch until its in-flight wake settles', async () => {
+    let resolveWake!: (result: { status: 'dispatched'; deliveryKind: 'steer' }) => void;
+    const pendingWake = new Promise<{ status: 'dispatched'; deliveryKind: 'steer' }>((resolve) => { resolveWake = resolve; });
+    const dispatchWake = vi.fn(() => pendingWake);
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin, dispatchWake });
+    await manager.register({
+      sessionId: 'pending-terminal', sessionPath: 'pending-terminal', runtime: 'pi',
+      request: {
+        conditions: [
+          { id: 'a', type: 'event_type', eventType: 'agent_end' },
+          { id: 'b', type: 'event_type', eventType: 'agent_end' },
+        ],
+        onFire: { type: 'prompt', targetSessionId: 'parent', message: 'done', mode: 'steer', maxWakeups: 1, cooldownSeconds: 0 },
+      },
+    });
+
+    broker.publish('pending-terminal', ev('agent_end'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(manager.get('pending-terminal')?.status).toBe('active');
+    expect(manager.get('pending-terminal')?.wakeAttempts).toMatchObject([
+      { status: 'pending' },
+      { status: 'suppressed', reason: 'max_wakeups_reached' },
+    ]);
+
+    resolveWake({ status: 'dispatched', deliveryKind: 'steer' });
+    await flush();
+    expect(manager.get('pending-terminal')?.status).toBe('done');
+  });
+
+  it.each([
+    { maxWakeups: 1, cooldownSeconds: 0, reason: 'max_wakeups_reached' },
+    { maxWakeups: 2, cooldownSeconds: 60, reason: 'cooldown' },
+  ])('completes an all-one-shot watch when its final wake is suppressed by $reason', async ({ maxWakeups, cooldownSeconds, reason }) => {
+    const dispatchWake = vi.fn(async () => ({ status: 'dispatched' as const, deliveryKind: 'turn' as const, runId: 'first-run' }));
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin, dispatchWake });
+    await manager.register({
+      sessionId: `suppressed-done-${reason}`, sessionPath: `suppressed-done-${reason}`, runtime: 'pi',
+      request: {
+        conditions: [
+          { type: 'event_type', eventType: 'message_end' },
+          { type: 'event_type', eventType: 'agent_end' },
+        ],
+        onFire: { type: 'prompt', targetSessionId: 'parent', message: 'done', maxWakeups, cooldownSeconds },
+      },
+    });
+
+    broker.publish(`suppressed-done-${reason}`, ev('message_end'));
+    await flush();
+    broker.publish(`suppressed-done-${reason}`, ev('agent_end'));
+    await flush();
+
+    const watch = manager.get(`suppressed-done-${reason}`)!;
+    expect(watch.wakeAttempts.at(-1)).toMatchObject({ status: 'suppressed', reason });
+    expect(watch.status).toBe('done');
+    expect(unpin).toHaveBeenCalledWith(`suppressed-done-${reason}`, `watch:watch-suppressed-done-${reason}`);
+    expect(unpin).toHaveBeenCalledWith('parent', `watch-target:watch-suppressed-done-${reason}`);
+  });
+
+  it('retries one-shot transient wake failure once without spending maxWakeups', async () => {
+    const dispatchWake = vi.fn()
+      .mockResolvedValueOnce({ status: 'failed', errorCode: 'SESSION_BUSY' })
+      .mockResolvedValueOnce({ status: 'dispatched', deliveryKind: 'turn', runId: 'retry-run' });
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin, dispatchWake });
+    await manager.register({
+      sessionId: 'retry-once', sessionPath: 'retry-once', runtime: 'pi',
+      request: {
+        conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+        onFire: {
+          type: 'prompt', targetSessionId: 'parent', message: 'done',
+          maxWakeups: 1, cooldownSeconds: 0,
+        },
+      },
+    });
+
+    broker.publish('retry-once', ev('agent_end'));
+    await flush();
+
+    expect(dispatchWake).toHaveBeenCalledTimes(2);
+    expect(manager.get('retry-once')?.wakeAttempts).toMatchObject([
+      { status: 'failed', errorCode: 'SESSION_BUSY' },
+      { status: 'dispatched', runId: 'retry-run', deliveryKind: 'turn' },
+    ]);
+    expect(manager.get('retry-once')?.status).toBe('done');
+    expect(unpin).toHaveBeenCalledWith('retry-once', 'watch:watch-retry-once');
+    expect(unpin).toHaveBeenCalledWith('parent', 'watch-target:watch-retry-once');
+  });
+
+  it('suppresses a second pending steer to the same target without spending its budget', async () => {
+    let resolveFirst!: (result: { status: 'dispatched'; deliveryKind: 'steer' }) => void;
+    const firstPending = new Promise<{ status: 'dispatched'; deliveryKind: 'steer' }>((resolve) => { resolveFirst = resolve; });
+    const dispatchWake = vi.fn(() => firstPending);
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, unpinSession: unpin, dispatchWake });
+    for (const sessionId of ['steer-a', 'steer-b']) {
+      await manager.register({
+        sessionId, sessionPath: sessionId, runtime: 'pi',
+        request: {
+          conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+          onFire: { type: 'prompt', targetSessionId: 'same-parent', message: sessionId, mode: 'steer' },
+        },
+      });
+    }
+
+    broker.publish('steer-a', ev('agent_end'));
+    broker.publish('steer-b', ev('agent_end'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(dispatchWake).toHaveBeenCalledTimes(1);
+    expect(manager.get('steer-b')?.wakeAttempts).toMatchObject([
+      { status: 'suppressed', reason: 'steer_pending' },
+    ]);
+    resolveFirst({ status: 'dispatched', deliveryKind: 'steer' });
+    await flush();
   });
 
   it('deletes a watch and stops recording', async () => {

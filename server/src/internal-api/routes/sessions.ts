@@ -706,10 +706,38 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (!entry) return { status: 'failed', errorCode: ErrorCode.SESSION_NOT_FOUND };
 
     const runtime = entry.sdkType as SessionRuntime;
+    const providerPolicyError = piProviderPolicyError(entry);
+    if (providerPolicyError) {
+      return { status: 'failed', errorCode: ErrorCode.PROVIDER_NOT_ALLOWED, detail: providerPolicyError.message };
+    }
     const busy = isSessionBusy(entry);
+    if (busy && mode === 'steer') {
+      try {
+        if (runtime === 'pi') {
+          const agentSession = multiSessionManager.getAgentSession(entry.path);
+          if (!agentSession) return { status: 'failed', errorCode: ErrorCode.SESSION_NOT_FOUND };
+          await agentSession.steer(message);
+          return { status: 'dispatched', deliveryKind: 'steer' };
+        }
+        if (runtime === 'claude' && await claudeService.getBackendMode() === 'sdk') {
+          const steered = claudeService.steer(targetSessionId, message);
+          return steered
+            ? { status: 'dispatched', deliveryKind: 'steer' }
+            : { status: 'failed', errorCode: ErrorCode.SESSION_NOT_STREAMING };
+        }
+      } catch (error) {
+        return {
+          status: 'failed',
+          errorCode: ErrorCode.SESSION_NOT_STREAMING,
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+      return { status: 'failed', errorCode: ErrorCode.SESSION_BUSY };
+    }
+
     // follow_up: queued on a busy Pi target, idle-promoted to a plain prompt
-    // when idle. Busy non-Pi targets cannot be queued or steered — refuse
-    // honestly (steer is structurally rejected at registration, not here).
+    // when idle. Steer also promotes to prompt when idle. Unsupported busy
+    // targets refuse honestly.
     let dispatchMode: PromptMode;
     if (!busy) dispatchMode = 'prompt';
     else if (mode === 'follow_up' && runtime === 'pi') dispatchMode = 'follow_up';
@@ -721,6 +749,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       message,
       mode,
       dispatchMode,
+      deliveryKind: dispatchMode === 'follow_up' ? 'deferred-follow-up' : 'turn',
       idempotencyKey,
     });
   }
@@ -732,11 +761,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     entry?: RegistryEntry;
     record?: CommandCodeInternalSessionRecord;
     message: string;
-    mode: 'prompt' | 'follow_up';
+    mode: PromptMode;
     dispatchMode: PromptMode;
+    deliveryKind?: 'turn' | 'deferred-follow-up';
     idempotencyKey: string;
   }): Promise<WatchWakeDispatchResult> {
     const { targetSessionId, runtime, message, mode, dispatchMode, idempotencyKey } = run;
+    const deliveryKind = run.deliveryKind ?? 'turn';
     const beginInput = {
       sessionId: targetSessionId,
       runtime,
@@ -766,7 +797,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (reservation.kind !== 'created') {
       // Same key + same payload replaying is fine (at-least-once dispatch); a
       // conflict means the key was burned on different content.
-      if (reservation.kind === 'duplicate') return { status: 'dispatched', runId: reservation.receipt.runId };
+      if (reservation.kind === 'duplicate') return { status: 'dispatched', runId: reservation.receipt.runId, deliveryKind };
       return { status: 'failed', errorCode: ErrorCode.IDEMPOTENCY_KEY_CONFLICT };
     }
     const runId = reservation.receipt.runId;
@@ -807,7 +838,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       }
     })();
     logger.info(`[InternalAPI] Watch wake dispatched: runtime=${runtime} target=${targetSessionId} dispatchMode=${dispatchMode} runId=${runId}`);
-    return { status: 'dispatched', runId };
+    return { status: 'dispatched', runId, deliveryKind };
   }
 
   /**

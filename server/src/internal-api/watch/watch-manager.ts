@@ -12,6 +12,7 @@
  * singular). Re-registering replaces the previous watch for that session.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { InternalApiEventBroker } from '../event-broker.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import type {
@@ -24,6 +25,7 @@ import type {
   WatchResponse,
   WatchSnapshot,
   WatchWakeAttempt,
+  WatchWakeDeliveryKind,
 } from '../types.js';
 import { ConditionEngine, resolveConditions, type ResolvedCondition } from './condition-evaluator.js';
 import { WatchStore, type PersistedWatch } from './watch-store.js';
@@ -38,13 +40,13 @@ export interface WatchWakeDispatchInput {
   targetSessionId: string;
   /** Final composed message (placeholders already interpolated). */
   message: string;
-  mode: 'prompt' | 'follow_up';
+  mode: 'prompt' | 'follow_up' | 'steer';
   /** Stable per-attempt key so a retried dispatch cannot double-prompt. */
   idempotencyKey: string;
 }
 
 export type WatchWakeDispatchResult =
-  | { status: 'dispatched'; runId: string }
+  | { status: 'dispatched'; runId?: string; deliveryKind?: WatchWakeDeliveryKind }
   | { status: 'failed'; errorCode: string; detail?: string };
 
 export interface WatchManagerDeps {
@@ -81,12 +83,27 @@ interface ActiveWatch {
   flushTimer?: NodeJS.Timeout;
   /** Serialises wake-attempt mutations so async dispatch results can't race. */
   wakeChain: Promise<unknown>;
+  /** At most one bounded transient retry timer per firing; cleared on teardown. */
+  wakeRetryTimers: Set<NodeJS.Timeout>;
 }
 
 const DEFAULT_MAX_PER_CONDITION = 50;
 const DEFAULT_MAX_TOTAL = 500;
 const SNAPSHOT_FLUSH_MS = 1000;
 const MAX_WAKE_ATTEMPTS_RECORDED = 50;
+const TRANSIENT_WAKE_ERRORS = new Set([
+  'SESSION_BUSY',
+  'ADMISSION_CAPACITY_EXHAUSTED',
+  'WAKE_DISPATCH_UNAVAILABLE',
+  'WAKE_DISPATCH_ERROR',
+  'SESSION_NOT_STREAMING',
+]);
+
+function consumesWakeBudget(attempt: WatchWakeAttempt): boolean {
+  return attempt.status === 'dispatched'
+    || (attempt.status === 'failed' && !TRANSIENT_WAKE_ERRORS.has(attempt.errorCode ?? ''))
+    || attempt.status === 'pending';
+}
 
 /** Structural validation + defaults for the opt-in wake action. */
 export function validateOnFireAction(sessionId: string, raw: unknown): WatchOnFireAction {
@@ -111,8 +128,8 @@ export function validateOnFireAction(sessionId: string, raw: unknown): WatchOnFi
   if (action.message.length > 4000) {
     throw new WatchValidationError('onFire.message must be at most 4000 characters');
   }
-  if (action.mode !== undefined && action.mode !== 'prompt' && action.mode !== 'follow_up') {
-    throw new WatchValidationError("onFire.mode must be 'prompt' or 'follow_up'");
+  if (action.mode !== undefined && action.mode !== 'prompt' && action.mode !== 'follow_up' && action.mode !== 'steer') {
+    throw new WatchValidationError("onFire.mode must be 'prompt', 'follow_up', or 'steer'");
   }
   const maxWakeups = action.maxWakeups ?? 1;
   if (!Number.isInteger(maxWakeups) || maxWakeups < 1 || maxWakeups > 10) {
@@ -161,6 +178,8 @@ export class WatchManager {
   private readonly dispatchWake?: WatchManagerDeps['dispatchWake'];
   /** Live watches keyed by sessionId. */
   private readonly active = new Map<string, ActiveWatch>();
+  /** Minimal cross-watch backpressure: one in-flight steer dispatch per target. */
+  private readonly pendingSteerTargets = new Set<string>();
   private initialized = false;
 
   constructor(deps: WatchManagerDeps) {
@@ -301,6 +320,7 @@ export class WatchManager {
       unsub,
       snapshotDirty: false,
       wakeChain: Promise.resolve(),
+      wakeRetryTimers: new Set(),
     });
 
     try {
@@ -316,7 +336,7 @@ export class WatchManager {
       await this.store.delete(sessionId);
       throw error;
     }
-    return this.toResponse(record);
+    return { ...this.toResponse(record), replaced: previous !== undefined };
   }
 
   /** Current watch for a session (live or reloaded-detached), if any. */
@@ -357,6 +377,8 @@ export class WatchManager {
       try { u(); } catch { /* non-fatal */ }
     }
     if (live.flushTimer) clearTimeout(live.flushTimer);
+    for (const timer of live.wakeRetryTimers) clearTimeout(timer);
+    live.wakeRetryTimers.clear();
     this.active.delete(sessionId);
   }
 
@@ -364,6 +386,7 @@ export class WatchManager {
     const live = this.active.get(sessionId);
     if (!live) return;
     const { record, engine } = live;
+    if (record.status !== 'active') return;
 
     // ── Snapshot bookkeeping (event-derived, no service calls) ──
     const snap = record.snapshot;
@@ -414,6 +437,9 @@ export class WatchManager {
     }
 
     record.updatedAt = new Date().toISOString();
+    if (firedSomething && !record.onFire && this.allOneShotConditionsFired(record)) {
+      this.completeWatch(sessionId, live);
+    }
 
     if (firedSomething) {
       // Firings are rare and important — persist immediately so they survive a
@@ -438,13 +464,14 @@ export class WatchManager {
     sessionId: string,
     live: ActiveWatch,
     context: { conditionId: string; eventType: string; evidence: string; firedAt: number },
+    isRetry = false,
   ): void {
     const record = live.record;
     const action = record.onFire;
     if (!action) return;
 
     const now = Date.now();
-    const dispatchedCount = record.wakeAttempts.filter((a) => a.status !== 'suppressed').length;
+    const dispatchedCount = record.wakeAttempts.filter(consumesWakeBudget).length;
     const lastDispatchedAt = record.wakeAttempts
       .filter((a) => a.status === 'dispatched' || a.status === 'failed' || a.status === 'pending')
       .map((a) => a.attemptedAt)
@@ -458,6 +485,7 @@ export class WatchManager {
         conditionId: context.conditionId,
         reason: 'max_wakeups_reached',
       });
+      if (this.allOneShotConditionsFired(record)) this.completeWatch(sessionId, live);
       return;
     }
     const cooldownMs = (action.cooldownSeconds ?? 60) * 1000;
@@ -469,8 +497,22 @@ export class WatchManager {
         conditionId: context.conditionId,
         reason: 'cooldown',
       });
+      if (this.allOneShotConditionsFired(record)) this.completeWatch(sessionId, live);
       return;
     }
+
+    if (action.mode === 'steer' && this.pendingSteerTargets.has(action.targetSessionId)) {
+      this.appendWakeAttempt(record, {
+        attemptedAt: now,
+        targetSessionId: action.targetSessionId,
+        status: 'suppressed',
+        conditionId: context.conditionId,
+        reason: 'steer_pending',
+      });
+      if (this.allOneShotConditionsFired(record)) this.completeWatch(sessionId, live);
+      return;
+    }
+    if (action.mode === 'steer') this.pendingSteerTargets.add(action.targetSessionId);
 
     const attempt: WatchWakeAttempt = {
       attemptedAt: now,
@@ -491,7 +533,9 @@ export class WatchManager {
       targetSessionId: action.targetSessionId,
       message: composeWakeMessage(action, { ...context, sessionId }),
       mode: action.mode ?? 'follow_up',
-      idempotencyKey: `wake:${record.watchId}:${record.wakeAttempts.length}`,
+      // The watch id is deterministic per session and survives replacement;
+      // give each actual dispatch attempt a fresh receipt identity.
+      idempotencyKey: `wake:${record.watchId}:${randomUUID()}`,
     };
 
     // Serialise attempts per watch so async dispatch results cannot interleave
@@ -515,14 +559,73 @@ export class WatchManager {
         // decision order while gaining the durable outcome.
         attempt.attemptedAt = Date.now();
         attempt.status = result.status === 'dispatched' ? 'dispatched' : 'failed';
-        if (result.status === 'dispatched') attempt.runId = result.runId;
-        else attempt.errorCode = result.errorCode;
+        if (result.status === 'dispatched') {
+          if (result.runId) attempt.runId = result.runId;
+          if (result.deliveryKind) attempt.deliveryKind = result.deliveryKind;
+        } else attempt.errorCode = result.errorCode;
         record.updatedAt = new Date().toISOString();
         if (live.flushTimer) { clearTimeout(live.flushTimer); live.flushTimer = undefined; }
         live.snapshotDirty = false;
         this.persistLive(sessionId, live, 'wake-attempt');
+
+        const shouldRetry = result.status === 'failed'
+          && TRANSIENT_WAKE_ERRORS.has(result.errorCode)
+          && !isRetry;
+        if (shouldRetry) {
+          // Add 1 ms so the retry cannot land fractionally inside its own
+          // cooldown window because of timer granularity.
+          const delayMs = Math.max(1, (action.cooldownSeconds ?? 60) * 1000 + 1);
+          const timer = setTimeout(() => {
+            live.wakeRetryTimers.delete(timer);
+            if (this.active.get(sessionId) === live) this.dispatchWakeForFiring(sessionId, live, context, true);
+          }, delayMs);
+          timer.unref?.();
+          live.wakeRetryTimers.add(timer);
+        } else if (this.allOneShotConditionsFired(record)) {
+          this.completeWatch(sessionId, live);
+        }
+      })
+      .finally(() => {
+        if (action.mode === 'steer') this.pendingSteerTargets.delete(action.targetSessionId);
       })
       .catch(() => undefined); // persistence failures must not reject the chain
+  }
+
+  private allOneShotConditionsFired(record: PersistedWatch): boolean {
+    return record.conditions.length > 0
+      && record.conditions.every((condition) => condition.spec.once !== false && condition.fired);
+  }
+
+  /** Mark a terminal one-shot watch done, stop observation, and release only its own claims. */
+  private completeWatch(sessionId: string, live: ActiveWatch): void {
+    const { record } = live;
+    if (record.status === 'done'
+      || !this.allOneShotConditionsFired(record)
+      || record.wakeAttempts.some((attempt) => attempt.status === 'pending')
+      || live.wakeRetryTimers.size > 0) return;
+    record.status = 'done';
+    record.updatedAt = new Date().toISOString();
+    for (const unsubscribe of live.unsub.splice(0)) {
+      try { unsubscribe(); } catch { /* non-fatal */ }
+    }
+    for (const timer of live.wakeRetryTimers) clearTimeout(timer);
+    live.wakeRetryTimers.clear();
+    this.persistLive(sessionId, live, 'wake-attempt');
+
+    const releases: Promise<void>[] = [];
+    if (record.pinned && this.unpinSession) {
+      releases.push(Promise.resolve(this.unpinSession(sessionId, `watch:${record.watchId}`)).then((released) => {
+        if (released) record.pinned = false;
+      }).catch(() => undefined));
+    }
+    if (record.targetPinned && record.onFire && this.unpinSession) {
+      releases.push(Promise.resolve(this.unpinSession(record.onFire.targetSessionId, `watch-target:${record.watchId}`)).then((released) => {
+        if (released) record.targetPinned = false;
+      }).catch(() => undefined));
+    }
+    if (releases.length > 0) {
+      void Promise.all(releases).then(() => this.persistLive(sessionId, live, 'wake-attempt'));
+    }
   }
 
   /** Append a bounded wake-attempt audit entry and persist it immediately. */

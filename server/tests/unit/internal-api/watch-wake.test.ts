@@ -85,6 +85,23 @@ describe('WatchManager — onFire wake dispatch (watch the child, wake the paren
     expect(after.wakeAttempts[0].conditionId).toBe('done');
   });
 
+  it('uses a fresh wake idempotency key after replacing a watch on the same session', async () => {
+    const request = {
+      conditions: [{ type: 'event_type' as const, eventType: 'agent_end' }],
+      onFire: { type: 'prompt' as const, targetSessionId: 'parent-1', message: 'wake', cooldownSeconds: 0 },
+    };
+    await manager.register({ sessionId: 'child-replace-key', sessionPath: 'child-replace-key', runtime: 'pi', request });
+    broker.publish('child-replace-key', { type: 'agent_end', timestamp: 1_000, data: {} });
+    await flush();
+    const firstKey = dispatchCalls()[0].idempotencyKey;
+
+    await manager.register({ sessionId: 'child-replace-key', sessionPath: 'child-replace-key', runtime: 'pi', request });
+    broker.publish('child-replace-key', { type: 'agent_end', timestamp: 2_000, data: {} });
+    await flush();
+
+    expect(dispatchCalls()[1].idempotencyKey).not.toBe(firstKey);
+  });
+
   it('caps wake dispatch attempts at maxWakeups (default 1) and records suppressed attempts', async () => {
     await manager.register({
       sessionId: 'child-2',
@@ -243,7 +260,6 @@ describe('WatchManager — onFire wake dispatch (watch the child, wake the paren
       { type: 'prompt', message: 'm' },                                     // missing target
       { type: 'prompt', targetSessionId: 'p' },                             // missing message
       { type: 'prompt', targetSessionId: 'p', message: '' },                // empty message
-      { type: 'prompt', targetSessionId: 'p', message: 'm', mode: 'steer' },// unsupported mode
       { type: 'prompt', targetSessionId: 'p', message: 'm', maxWakeups: 0 },// below 1
       { type: 'prompt', targetSessionId: 'p', message: 'm', maxWakeups: 11 },// above 10
       { type: 'prompt', targetSessionId: 'p', message: 'm', cooldownSeconds: -1 },
@@ -275,7 +291,7 @@ describe('WatchManager — onFire wake dispatch (watch the child, wake the paren
     const manager2 = new WatchManager({ broker: new InternalApiEventBroker(), storeDir: dir, pinSession: pin });
     await manager2.init();
     const reloaded = manager2.get('child-11')!;
-    expect(reloaded.status).toBe('detached');
+    expect(reloaded.status).toBe('done');
     expect(reloaded.onFire?.targetSessionId).toBe('parent-1');
     expect(reloaded.wakeAttempts).toHaveLength(1);
     expect(reloaded.wakeAttempts[0].status).toBe('dispatched');

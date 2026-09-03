@@ -47,6 +47,31 @@ describe('WatchStore — durable ledger persistence', () => {
     expect(reloaded?.snapshot.eventCount).toBe(5);
   });
 
+  it('loads a pre-change ledger with no deliveryKind or done status', async () => {
+    const legacy = {
+      watchId: 'watch-legacy',
+      sessionId: 'legacy',
+      sessionPath: 'legacy',
+      runtime: 'pi',
+      status: 'active',
+      pinned: true,
+      targetPinned: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      conditions: [{ id: 'c0', type: 'event_type', spec: { id: 'c0', type: 'event_type', eventType: 'agent_end' }, fired: true, fireCount: 1 }],
+      onFire: { type: 'prompt', targetSessionId: 'parent', message: 'done', mode: 'follow_up' },
+      wakeAttempts: [{ attemptedAt: 1000, targetSessionId: 'parent', status: 'dispatched', conditionId: 'c0', runId: 'legacy-run' }],
+      firings: [{ conditionId: 'c0', firedAt: 1000, eventType: 'agent_end', evidence: 'event agent_end' }],
+      snapshot: { status: 'idle', eventCount: 1, toolCallCount: 0, sawAgentEnd: true },
+    };
+    await fs.writeFile(path.join(dir, 'legacy.json'), JSON.stringify(legacy), 'utf8');
+
+    const store = new WatchStore(dir);
+    await store.init();
+    expect(store.get('legacy')?.status).toBe('active');
+    expect(store.get('legacy')?.wakeAttempts[0].deliveryKind).toBeUndefined();
+  });
+
   it('serializes concurrent saves without corrupting the file', async () => {
     const store = new WatchStore(dir);
     await store.init();

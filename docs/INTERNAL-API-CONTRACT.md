@@ -21,13 +21,19 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.31.0",
+  "contractVersion": "1.32.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.32.0** (minor, additive watch-wake busy delivery and robustness) — makes opt-in watch wakes reliable and honestly observable without changing the historical omitted-mode default (`follow_up`):
+  - `onFire.mode` accepts `steer`. A busy Pi or SDK-backed Claude target receives the wake in its active turn with no new run receipt; an idle target promotes to a normal receipted prompt. Other busy runtimes continue to fail honestly. Successful attempts now expose `deliveryKind` (`turn`, `steer`, or `deferred-follow-up`), and `runId` is absent for an in-flight steer. Pi wakes retain the Internal API blocked-provider gate;
+  - transient dispatch failures do not consume `maxWakeups` and receive exactly one bounded in-memory retry after the cooldown. At most one steer dispatch may be pending per target; concurrent fan-in is recorded as suppressed with `reason: "steer_pending"` rather than queued invisibly;
+  - replacing an existing watch returns additive `replaced: true` and subsequent wake attempts use fresh receipt identities rather than colliding with the replaced ledger. Once every one-shot condition has fired and no retry remains, the watch becomes `status: "done"`, releases its source and target watch-owned residency claims, and keeps its ledger readable;
+  - legacy ledgers remain readable. Under the 1.31.0 broker payload policy, text conditions can only match retained streamed content; terminal `agent_end` / `goal_end` watch triggers are not shed.
 
 - **1.31.0** (minor, bounded Internal API event delivery) — prevents one pathological runtime stream from starving the shared server while keeping terminal/control evidence intact:
   - every event is budgeted at the broker publish choke point (default 256 KiB; `INTERNAL_API_EVENT_PAYLOAD_MAX_BYTES=0` disables). Oversized events carry `data.payloadTruncated { originalBytes, budgetBytes }`; `message_update` drops its redundant full snapshot but retains message identity plus its bounded delta. Full content remains available from `message_end` and `/transcript`;

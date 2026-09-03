@@ -193,9 +193,22 @@ describe('watch routes — onFire wake action validation', () => {
     );
     expect(res.statusCode).toBe(201);
     const created = JSON.parse(res.body);
-    expect(created.onFire).toMatchObject({ type: 'prompt', targetSessionId: 'parent-1' });
+    expect(created.onFire).toMatchObject({ type: 'prompt', targetSessionId: 'parent-1', mode: 'follow_up' });
     expect(created.wakeAttempts).toEqual([]);
     expect(multiSessionManager.pinSession).toHaveBeenCalledWith('parent-1', 'watch-target:watch-pi-1');
+  });
+
+  it('accepts steer as an explicit onFire delivery mode', async () => {
+    const res = createMockRes();
+    await routes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/pi-1/watch', {
+        conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+        onFire: { ...onFire, mode: 'steer' },
+      }),
+      res, 'pi-1',
+    );
+    expect(res.statusCode).toBe(201);
+    expect(JSON.parse(res.body).onFire.mode).toBe('steer');
   });
 
   it('rejects a wake targeting the watched session itself with 400', async () => {

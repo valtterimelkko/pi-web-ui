@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Watch-wake busy delivery and robustness (`1.32.0`, `2026-09-03`)**
+  - Watch `onFire.mode:'steer'` now joins busy Pi and SDK-backed Claude parent turns without creating a second run receipt; idle targets promote to normal receipted prompts. Successful wake attempts report `deliveryKind` (`turn`, `steer`, or `deferred-follow-up`).
+  - Transient failures no longer spend `maxWakeups` and receive one bounded retry. Fan-in permits only one pending steer per target and records additional attempts as `steer_pending` suppression.
+  - Replacement is explicit (`replaced:true`), terminal one-shot watches become `done`, both watch-owned residency claims are released, and the ledger remains readable. Existing omitted-mode `follow_up` behaviour and legacy ledgers remain compatible.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md), [`INTERNAL-API.md`](./INTERNAL-API.md), [`INTERNAL-API-ORCHESTRATION.md`](./INTERNAL-API-ORCHESTRATION.md), and [`LONG-HORIZON-VALIDATION.md`](./LONG-HORIZON-VALIDATION.md).
+
 - **Session-discovery ergonomics (`1.30.0`, `2026-09-02`)**
   - `GET /api/v1/sessions` gains server-side filters (`?runtime=`, `?limit=`, `?since=`, `?cwd=`) with deterministic newest-first ordering; no-param responses keep their historical shape. Every entry now carries additive `archived` (server-side web-UI archive state) and `source` (`browser` | `internal-api` | `native-discovered` | `unknown`), with registry origin tagged at Internal API single/batch create, browser create, and SessionWatcher discovery.
   - New bounded read-only `GET /api/v1/sessions/native` scans the direct-CLI stores the registry never sees (claude projects, cmdc CLI + server-spawned native home, opencode storage, antigravity conversations), mtime-sorted with paths, sizes, best-effort cwd/preview and `knownInRegistry` annotation. `runtime=pi` is refused with an explanation — native pi sessions are already auto-discovered into the registry.

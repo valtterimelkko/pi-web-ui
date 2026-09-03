@@ -2161,19 +2161,23 @@ OpenCode, Antigravity, Command Code), regardless of the child's runtime.
   receipts, admission control (`P2`), and prompt-injection detection on the
   composed message. It is always detached — the watch never blocks on the
   model turn; poll the returned `runId` via the run-receipt route.
-- `mode: "follow_up"` (default) queues on a busy Pi target and idle-promotes to
-  a plain prompt; `mode: "prompt"` refuses a busy target. Busy non-Pi targets
-  fail with `SESSION_BUSY` either way (Claude/Command Code cannot be
-  interrupted mid-turn); the failure is honestly recorded in `wakeAttempts`.
-- `maxWakeups` (default 1, 1–10) bounds dispatch *attempts* over the watch's
-  life; `cooldownSeconds` (default 60, 0–3600) enforces a minimum gap between
-  dispatch attempts. A `once: false` streaming text condition cannot machine-gun
-  the target: later firings are recorded as `suppressed` with the reason.
+- `mode: "follow_up"` remains the default: it queues on a busy Pi target and
+  idle-promotes to a plain prompt. `mode: "prompt"` refuses a busy target.
+  Contract 1.32.0 adds opt-in `mode: "steer"`: a busy Pi or SDK-backed Claude
+  target receives the wake in its active turn at the next tool boundary, while
+  an idle target promotes to a plain prompt. Other busy runtimes fail honestly.
+- `maxWakeups` (default 1, 1–10) bounds budget-consuming outcomes over the
+  watch's life. Dispatched attempts and permanent failures consume it;
+  transient failures do not and receive exactly one in-memory retry after
+  `cooldownSeconds` (default 60, 0–3600). A `once: false` streaming text
+  condition cannot machine-gun the target: later firings are recorded as
+  `suppressed` with the reason.
 - The target is pinned with a source-owned `watch-target:<watchId>` claim by
-  default (`pinTarget: false` opts out) and released when the watch is deleted
-  or replaced — Pi rehydrates idle sessions on demand, but e.g. OpenCode evicts
-  unpinned idle sessions, and the whole point is that the parent survives until
-  the wake.
+  default (`pinTarget: false` opts out) and released when the watch is deleted,
+  replaced, or reaches terminal `done`; the source `watch:<watchId>` claim is
+  also released on `done`. Pi rehydrates idle sessions on demand, but e.g.
+  OpenCode evicts unpinned idle sessions, and the whole point is that the parent
+  survives until the wake.
 - `message` placeholders: `{{conditionId}}`, `{{eventType}}`, `{{sessionId}}`,
   `{{firedAt}}` (ISO). `{{evidence}}` is interpolated **only** with
   `includeEvidence: true` — evidence is child-controlled text (guarded by
@@ -2201,23 +2205,27 @@ OpenCode, Antigravity, Command Code), regardless of the child's runtime.
 `GET ...?sinceIndex=N` returns only firings after the caller's last poll;
 `firingCount` stays the absolute total. `status` is `active`, `detached`
 (reloaded from disk after a restart — past firings readable, new ones need a
-re-register), or `closed`. When `onFire` is registered, the response also
-echoes it and carries `wakeAttempts[]`:
+re-register), `done` (all one-shot conditions fired, no wake work remains,
+watch-owned claims released, ledger still readable), or `closed`. A successful
+replacement registration also carries `replaced: true`. When `onFire` is
+registered, the response echoes it and carries `wakeAttempts[]`:
 
 ```json
 {
   "onFire": { "type": "prompt", "targetSessionId": "...", "mode": "follow_up", "maxWakeups": 1, "cooldownSeconds": 60, "pinTarget": true, "includeEvidence": false },
   "wakeAttempts": [
-    { "attemptedAt": 1747744010000, "targetSessionId": "...", "status": "dispatched", "conditionId": "sentinel", "runId": "..." }
+    { "attemptedAt": 1747744010000, "targetSessionId": "...", "status": "dispatched", "conditionId": "sentinel", "deliveryKind": "deferred-follow-up", "runId": "..." }
   ]
 }
 ```
 
-`wakeAttempts[].status` is `dispatched` (with `runId`), `failed` (with
-`errorCode`, e.g. `SESSION_BUSY`, `PROMPT_INJECTION`,
-`ADMISSION_CAPACITY_EXHAUSTED`, `SESSION_NOT_FOUND`), or `suppressed` (with
-`reason` `max_wakeups_reached` or `cooldown`). At most the last 50 attempts are
-kept in the ledger.
+`wakeAttempts[].status` is `dispatched`, `failed` (with `errorCode`, e.g.
+`SESSION_BUSY`, `PROMPT_INJECTION`, `ADMISSION_CAPACITY_EXHAUSTED`,
+`SESSION_NOT_FOUND`), or `suppressed` (with `reason` `max_wakeups_reached`,
+`cooldown`, or `steer_pending`). A successful attempt carries `deliveryKind`:
+`turn` and `deferred-follow-up` also carry a receipted `runId`; `steer` joins the
+existing target run and therefore has no new `runId`. At most the last 50
+attempts are kept in the ledger.
 
 **Errors:**
 - `400` — empty `conditions`, an invalid regex `pattern`, a malformed

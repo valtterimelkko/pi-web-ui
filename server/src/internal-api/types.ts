@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.31.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.32.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -1328,7 +1328,7 @@ export interface WatchSnapshot {
   lastEventAt?: number;
 }
 
-export type WatchStatus = 'active' | 'detached' | 'closed';
+export type WatchStatus = 'active' | 'detached' | 'done' | 'closed';
 
 /**
  * Opt-in action executed when a watch condition fires. This is the
@@ -1349,9 +1349,9 @@ export interface WatchOnFireAction {
    * `{{evidence}}` (only interpolated when `includeEvidence` is true).
    */
   message: string;
-  /** Dispatch mode. `follow_up` (default) queues on a busy Pi target and prompts when idle; `prompt` refuses when busy. */
-  mode?: 'prompt' | 'follow_up';
-  /** Max wake dispatch attempts over the watch's life (default 1, 1-10). Counts attempts, not successes. */
+  /** Dispatch mode. `follow_up` (default) queues on a busy Pi target; `steer` joins a steer-capable active turn; idle non-prompt modes promote to `prompt`. */
+  mode?: 'prompt' | 'follow_up' | 'steer';
+  /** Max budget-consuming wake outcomes over the watch's life (default 1, 1-10). Transient failures and suppressed attempts do not consume it. */
   maxWakeups?: number;
   /** Minimum seconds between wake dispatch attempts (default 60, 0-3600). */
   cooldownSeconds?: number;
@@ -1362,6 +1362,7 @@ export interface WatchOnFireAction {
 }
 
 export type WatchWakeAttemptStatus = 'pending' | 'dispatched' | 'failed' | 'suppressed';
+export type WatchWakeDeliveryKind = 'turn' | 'steer' | 'deferred-follow-up';
 
 /** Durable audit record of one wake attempt, stored in the watch ledger. */
 export interface WatchWakeAttempt {
@@ -1370,11 +1371,13 @@ export interface WatchWakeAttempt {
   status: WatchWakeAttemptStatus;
   /** Condition whose firing triggered this attempt. */
   conditionId?: string;
-  /** Run receipt id when the dispatch was accepted. */
+  /** Run receipt id when a new turn or deferred follow-up was accepted; steer joins the host run and has none. */
   runId?: string;
+  /** Honest delivery path: a new turn, in-flight steer, or queued follow-up. */
+  deliveryKind?: WatchWakeDeliveryKind;
   /** Error code when `failed` (e.g. `SESSION_BUSY`, `WAKE_DISPATCH_UNAVAILABLE`). */
   errorCode?: string;
-  /** Suppression reason: `max_wakeups_reached` or `cooldown`. */
+  /** Suppression reason: `max_wakeups_reached`, `cooldown`, or `steer_pending`. */
   reason?: string;
 }
 
@@ -1405,9 +1408,12 @@ export interface WatchResponse {
    * `detached` — ledger restored from disk but no live subscription (e.g. after
    *   a server restart, or the session no longer exists). Past firings are still
    *   readable; new ones won't be recorded until re-registered.
+   * `done` — every one-shot condition fired and no wake work remains; ledger is readable and owned claims are released.
    * `closed` — explicitly torn down.
    */
   status: WatchStatus;
+  /** Register response only: true when this registration replaced an existing watch. */
+  replaced?: boolean;
   pinned: boolean;
   createdAt: string;
   updatedAt: string;
