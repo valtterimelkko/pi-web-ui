@@ -5,6 +5,7 @@
 > **Repos touched:** `pi-web-ui` (primary, this repo), `tmux-web-ui` (`/root/tmux`, Phase 6), `agent-os` (mirror resync only, Phase 7, owner-gated).
 > **Contract:** Internal API `1.30.0` → **`1.31.0`** (allocated to this plan; see D2).
 > **Created:** 2026-09-03 · **Size:** ~1–1.5 working days for Phases 0–6; Phase 7 is owner-gated ops.
+> **Discipline:** §0.5 gates are BINDING for the executing agent — they exist to prevent over-engineering and scope drift.
 
 ---
 
@@ -18,6 +19,78 @@
 | D4 | **Owner-gated actions** (pause and ask, never do silently): production restart of `pi-web-ui` or `tmux-web-ui`; agent-os mirror resync; any systemd unit edit (`/etc/systemd/system/*.service`, timers); writing `CSRF_SECRET` into `/root/tmux/.env.production`. **Never** touch the Caddyfile or Authelia config — report-only per SYSTEM_MAP §0. |
 | D5 | **TDD mandatory** (RED → GREEN per behaviour), plus the integration flood gate (§6) must pass before any deploy step. Live validation per repo convention (`docs/LIVE-VALIDATION.md`). |
 | D6 | The **websocket event-forwarder path is NOT modified** — it already slims `message_update` correctly (`server/src/pi/event-forwarder.ts:295-302`). This plan aligns the Internal API broker path with that existing policy. |
+
+---
+
+## 0.5 Execution discipline gates (BINDING — steer to the plan, do not expand it)
+
+These gates bind every phase. The executing agent did not write this plan and will notice things worth "improving" along the way; that is not its job. Its job is to land §4 as written, minimally.
+
+### G1 — File allowlist gate: only these production files change
+
+Production code changes are permitted **only** in the files below (plus each phase's named test files). Anything else — including "while I'm here" fixes, renames, drive-by lint of untouched code, comment reflows — is a stop-and-ask (G5).
+
+| Phase | Permitted production files |
+|---|---|
+| 0 | `server/src/internal-api/types.ts` (version string only) · `server/src/config.ts` (the two env vars only) · `server/src/internal-api/routes/capabilities.ts` (the one flag) |
+| 1 | NEW `server/src/internal-api/event-payload-budget.ts` · `server/src/internal-api/event-broker.ts` (publish seam only) |
+| 2 | `server/src/internal-api/event-broker.ts` (buffer internals only) |
+| 3 | `server/src/internal-api/event-broker.ts` (rate guard only) |
+| 4 | `server/src/observability/operational-metrics.ts` (additive counters/gauge) · NEW `server/src/internal-api/event-loop-shed.ts` (or inline in `event-broker.ts`) |
+| 5 | test + docs files only — no production code |
+| 6 (tmux) | `/root/tmux/server/src/security/csrf.ts` · `/root/tmux/server/src/routes/auth.ts` (token mint only) · `/root/tmux/client/src/hooks/useAttach.ts` + the one component rendering attach state · e2e specs · docs |
+| 7 | NEW `scripts/health-probe.sh` · systemd unit copies (owner-gated) · sd-notify pinger at the existing server startup path |
+
+Docs: only the files named in Phases 5–6. Existing tests may be extended only where they assert behaviour this plan changes.
+
+### G2 — Diff budgets (hard caps, production code, excluding tests/docs)
+
+Phase 0: ≤ 30 lines · Phase 1: ≤ 150 · Phase 2: ≤ 80 · Phase 3: ≤ 80 · Phase 4: ≤ 120 · Phase 6: ≤ 150 (tmux) · Phase 7 pinger: ≤ 60.
+
+If the minimal implementation genuinely cannot fit a cap, that is a stop-and-ask (G5) — never a licence to raise the cap silently.
+
+### G3 — No new dependencies, no new machinery
+
+Zero new npm packages, zero new config systems, zero codegen. The lag probe is a plain `setInterval` + monotonic-clock drift measurement. The sd-notify pinger is a raw `NOTIFY_SOCKET` datagram (a few lines); if that proves to need a package, stop-and-ask.
+
+### G4 — Build the named shape, not a generalisation of it
+
+Each of these has been considered and rejected in design; re-implementing them is over-engineering:
+- NO generic event-transformation pipeline/plugin architecture for the budget — one `measureAndSlim` function at the publish choke point.
+- NO general-purpose rate-limiting framework — one per-session token bucket inside the broker, for this one purpose.
+- NO metrics/tracing platform beyond the listed counters + gauge.
+- NO worker-thread move of broker fan-out (deferred by design, §3).
+- NO second budget mechanism (chunked/streamed events, compression, reference-by-id indirection for content) — slim, mark, done.
+- NO changes to the websocket event path, per-runtime normalisers, the Pi SDK, Caddy, or Authelia (D4/D6).
+- NO attempt to also "fix" model behaviour (the 9,310-tool-call turn) inside pi-web-ui — that is Phase 8, elsewhere, optional.
+
+### G5 — Mandatory stop-and-ask triggers
+
+Stop work and present the owner 2–3 options with trade-offs and a recommendation if ANY of:
+1. The §5 consumer audit finds a consumer that genuinely needs full `message_update` snapshots from the broker.
+2. A RED test cannot be made green within the named approach and the G1 allowlist.
+3. A change seems to need a file outside G1, a dependency (G3), or a diff beyond G2.
+4. The flood gate cannot pass without weakening its §6 assertions (thresholds may be relaxed only with owner approval).
+5. Implementation reality contradicts a §1.2 load-bearing mechanic (line numbers may drift; mechanics must not).
+6. Any Phase 7/8 action lacking its owner approval.
+
+When stopped: do not pick an option unilaterally; do not leave half-written or "experimental" code behind; commit only completed phase work or revert cleanly.
+
+### G6 — Amendment protocol
+
+This plan changes only via a dated entry in §10 "Amendments" after owner approval in-conversation. The executor never silently edits §0/§0.5/DD sections. Discovered facts that do not change the approach go into the phase commit message or final report — not into a plan rewrite.
+
+### G7 — Pre-commit conformance checklist (every commit)
+1. Does every hunk map to a line item in §4? (else G5)
+2. Files ⊆ G1 allowlist, diff ≤ G2 cap, no new deps (G3)?
+3. Is it the DD-named shape, not a generalisation (G4)?
+4. Was the phase's named RED test written first and demonstrated failing?
+5. Are lint/typecheck/tests green at this phase's gate?
+If any answer is "no", the commit does not happen.
+
+### G8 — Effort ceilings
+
+Phases 0–5 total ≈ 6.5 h; Phase 6 ≈ 2–3 h. If a phase exceeds ~1.5× its §4 estimate, stop-and-ask with a short status summary — overruns are a symptom of drift, not something to grind through.
 
 ---
 
@@ -230,6 +303,7 @@ External consumers (agent-os) read transcripts and the watch ledger, not raw bro
 
 - [ ] Phase 0–5 committed & pushed (pi-web-ui), contract 1.31.0, flood gate RED evidence recorded
 - [ ] Phase 6 committed & pushed (tmux-web-ui), e2e green
+- [ ] §0.5 gates respected throughout: no allowlist/diff-budget/deck breaches; every stop-and-ask recorded with its outcome
 - [ ] Docs updated (INTERNAL-API, CONTRACT, EVENT-PIPELINE, OBSERVABILITY, TROUBLESHOOTING; tmux RUNBOOK/SECURITY/CHANGELOG)
 - [ ] Phase 7 each item owner-approved, executed, verified; production at 1.31.0; agent-os mirror resynced; probe + watchdog live
 - [ ] Agent OS capture of outcomes filed; this plan's status header updated to EXECUTED with commit range
@@ -241,3 +315,9 @@ External consumers (agent-os) read transcripts and the watch ledger, not raw bro
 - Runaway child session: `--root-agentos-usage-study-phase2-research--/2026-09-02T23-13-17-516Z_01a06465-f0cc-723c-8afb-8e2766b51647.jsonl` (line 101 = the 1 MB mega-message; tail = zai 500 loop)
 - pi-web-ui service uptime proof at analysis time: active since 2026-09-02 11:27:57 UTC (never restarted through the incident)
 - Code anchors: `event-broker.ts:107-128` · `routes/sessions.ts:491` · `multi-session-manager.ts:898-933` · `event-forwarder.ts:295-302` · `sse-stream.ts:59-63` · `watch-manager.ts:289` · `/root/tmux/server/src/security/csrf.ts` · `/root/tmux/server/src/routes/auth.ts:31`
+
+## 10. Amendments
+
+| Date | Owner | Change |
+|---|---|---|
+| 2026-09-03 | (owner, in-conversation) | Added §0.5 execution-discipline gates + §10 amendment ledger on owner request |
