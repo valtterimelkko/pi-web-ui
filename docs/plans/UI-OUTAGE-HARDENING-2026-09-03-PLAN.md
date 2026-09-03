@@ -21,6 +21,8 @@
 | D6 | The **websocket event-forwarder path is NOT modified** — it already slims `message_update` correctly (`server/src/pi/event-forwarder.ts:295-302`). This plan aligns the Internal API broker path with that existing policy. |
 | D7 | **Owner-approved Phase 5 residual-hotspot fix (2026-09-03):** permit one focused follow-up in `server/src/internal-api/event-payload-budget.ts` so oversized `message_update` snapshots are identified and slimmed before any full-event `JSON.stringify`; calculate truthful `originalBytes` without materialising the multi-megabyte serialized event. This is required because the fixed full-suite flood gate measured +161 MB RSS against its hard 100 MiB cap. No threshold relaxation or test-only isolation workaround. |
 | D8 | **Owner-approved Phase 6 wiring amendment (2026-09-03):** add `/root/tmux/server/src/security/config.ts`, `/root/tmux/server/src/ws/attach-websocket.ts`, and `/root/tmux/.env.example` to the Phase 6 allowlist. These are the minimum files needed to configure `CSRF_SECRET`, validate against the raw JWT already present on the attach request, and document the variable. A user-id-derived substitute is rejected because it weakens the intended HMAC-of-JWT binding. |
+| D9 | **Owner-approved Phase 7 watchdog amendment (2026-09-03):** Node 24's built-in `dgram` supports only UDP, not Unix datagrams, so use the installed `/usr/bin/systemd-notify` helper from the process-owned unref'd 10-second timer. Permit NEW `server/src/systemd-notifier.ts`, its focused unit test, the startup/shutdown wiring in `server/src/index.ts`, and NEW `deploy/systemd/pi-web-ui.service`, `pi-web-ui-health-probe.service`, and `.timer` source templates. No npm dependency or general supervisor framework. Owner separately authorised delivery and the required production restart. |
+| D10 | **Owner-approved Phase 7 health-route correction (2026-09-03):** the planned TCP `127.0.0.1:3456/api/v1/health` request returns SPA HTML with HTTP 200 and would be a false-positive. Probe the real authenticated `/api/v1/health` over the existing Internal API Unix socket and token file instead; require valid health JSON. |
 
 ---
 
@@ -41,7 +43,7 @@ Production code changes are permitted **only** in the files below (plus each pha
 | 4 | `server/src/observability/operational-metrics.ts` (additive counters/gauge) · NEW `server/src/internal-api/event-loop-shed.ts` (or inline in `event-broker.ts`) |
 | 5 | test + docs files only — no production code |
 | 6 (tmux) | `/root/tmux/server/src/security/csrf.ts` · `/root/tmux/server/src/routes/auth.ts` (token mint only) · `/root/tmux/client/src/hooks/useAttach.ts` + the one component rendering attach state · e2e specs · docs |
-| 7 | NEW `scripts/health-probe.sh` · systemd unit copies (owner-gated) · sd-notify pinger at the existing server startup path |
+| 7 | NEW `scripts/health-probe.sh` · NEW `server/src/systemd-notifier.ts` + startup/shutdown wiring in `server/src/index.ts` · NEW `deploy/systemd/pi-web-ui.service`, `pi-web-ui-health-probe.service`, and `.timer` · systemd live copies (owner-gated) |
 
 Docs: only the files named in Phases 5–6. Existing tests may be extended only where they assert behaviour this plan changes.
 
@@ -53,7 +55,7 @@ If the minimal implementation genuinely cannot fit a cap, that is a stop-and-ask
 
 ### G3 — No new dependencies, no new machinery
 
-Zero new npm packages, zero new config systems, zero codegen. The lag probe is a plain `setInterval` + monotonic-clock drift measurement. The sd-notify pinger is a raw `NOTIFY_SOCKET` datagram (a few lines); if that proves to need a package, stop-and-ask.
+Zero new npm packages, zero new config systems, zero codegen. The lag probe is a plain `setInterval` + monotonic-clock drift measurement. The sd-notify pinger uses the installed `/usr/bin/systemd-notify` helper from an unref'd timer (D9); no package or supervisor framework.
 
 ### G4 — Build the named shape, not a generalisation of it
 
@@ -253,7 +255,7 @@ Phases 0–5 total ≈ 6.5 h; Phase 6 ≈ 2–3 h. If a phase exceeds ~1.5× its
 ### Phase 7 — Owner-gated ops (pause and ask before each)
 
 1. **systemd watchdog (pi-web-ui):** add `Type=notify` + `WatchdogSec=45` to the unit (edit live unit + `deploy/` source-of-truth copy if present); sd-notify pinger in server startup (unref'd 10 s interval). Requires owner approval for the unit edit; verify with `systemdctl show -p WatchdogUSec` and a deliberate block test on a disposable instance.
-2. **Health-probe timer:** `scripts/health-probe.sh` (curl `127.0.0.1:3456/api/v1/health`, works unauthenticated from localhost — verified 200/17 ms during analysis) + systemd timer every minute, alert-only (journal WARN + optional Telegram via the existing notifications path). Auto-restart on repeated failure: separate owner decision, default OFF.
+2. **Health-probe timer:** `scripts/health-probe.sh` probes the authenticated Internal API `/api/v1/health` over its Unix socket and requires valid health JSON (D10) + systemd timer every minute, alert-only (journal WARN + optional Telegram via the existing notifications path). Auto-restart on repeated failure: separate owner decision, default OFF.
 3. **Production restart pi-web-ui** (contract 1.31.0 live): owner permission + pre-checks (activeTurns 0, zero nonterminal run receipts) per established practice.
 4. **agent-os mirror resync to 1.31.0**: `client.ts` constant + observability pin + `PI-WEB-UI-INTERNAL-API-CONTRACT.md` mirror — owner-gated; Command Code creation fails closed until done (known coupling).
 5. **tmux-web-ui production deploy:** write `CSRF_SECRET` to `/root/tmux/.env.production` (generate), `systemctl restart tmux-web-ui`, verify attach self-heals on a live tab.
@@ -326,3 +328,5 @@ External consumers (agent-os) read transcripts and the watch ledger, not raw bro
 | 2026-09-03 | (owner, in-conversation) | Approved G1 Phase 0 amendment permitting exactly one additional `CapabilitiesResponse.features.supportsEventPayloadBudget: true` field in `types.ts`, required by DD8; no wider scope change |
 | 2026-09-03 | (owner, in-conversation) | Approved D7/G1 Phase 5 amendment permitting a focused `event-payload-budget.ts` follow-up: pre-measure `message_update` without materialising its full JSON, then stringify only the retained bounded event. This responds to the unweakened flood gate (+161 MB RSS vs <100 MiB); test-only isolation was explicitly rejected as hiding the residual production hotspot. |
 | 2026-09-03 | (owner, in-conversation) | Approved D8/G1 Phase 6 amendment adding only tmux `security/config.ts`, `ws/attach-websocket.ts`, and `.env.example`: raw-JWT attach validation and configured/documented `CSRF_SECRET` are required by the named HMAC double-submit design. |
+| 2026-09-03 | (owner, in-conversation) | Approved D9/G1 Phase 7 amendment: use installed `/usr/bin/systemd-notify` because Node 24 has no built-in Unix datagram support; permit one focused notifier module/test plus startup/shutdown wiring and the three deploy unit templates; deliver pi-web-ui first and restart production as needed. |
+| 2026-09-03 | (owner, in-conversation) | Approved D10 Phase 7 correction: replace the false-positive TCP SPA route with authenticated Unix-socket `/api/v1/health` and validate its JSON health status. |

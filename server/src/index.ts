@@ -18,6 +18,7 @@ import { createFatalErrorHandlers } from './fatal-error-handlers.js';
 import { ShutdownCoordinator } from './shutdown-coordinator.js';
 import { CommandCodeService } from './command-code/command-code-service.js';
 import { setCommandCodeService } from './command-code/command-code-instance.js';
+import { startSystemdNotifier } from './systemd-notifier.js';
 
 // State used by createApp's lazy notification-router getters. Declared before
 // createApp() (which runs at module load) so the getters close over initialized
@@ -26,6 +27,7 @@ let wsManager: WebSocketConnectionManager | null = null;
 let sessionCleanup: SessionCleanupService | null = null;
 let internalApiServer: import('./internal-api/index.js').InternalApiServer | null = null;
 let notificationsRegistry: ReturnType<typeof getSessionRegistry> | null = null;
+let stopSystemdNotifier: () => void = () => {};
 let browserCommandCodeSessionResolver: ((sessionId: string, runtime: import('./notifications/types.js').NotificationRuntime, sessionPath: string) => Promise<boolean>) | undefined;
 
 const app = createApp({
@@ -227,6 +229,7 @@ async function start(): Promise<void> {
     logger.info(`Health check: http://localhost:${config.port}/health`);
     logger.info(`WebSocket: ws://localhost:${config.port}/ws`);
     logger.info(`Allowed origins: ${config.allowedOrigins.join(', ')}`);
+    stopSystemdNotifier = startSystemdNotifier({ logger });
   });
 }
 
@@ -235,6 +238,7 @@ async function start(): Promise<void> {
 // The hard exit(1) deadline stays below systemd's TimeoutStopSec window.
 const shutdownCoordinator = new ShutdownCoordinator({
   steps: [
+    { name: 'systemd-notifier', run: () => { stopSystemdNotifier(); } },
     { name: 'session-watcher', run: async () => { const { stopSessionWatcher } = await import('./pi/index.js'); await stopSessionWatcher(); } },
     { name: 'websocket-clients', run: async () => { if (wsManager) await wsManager.close(); } },
     { name: 'session-cleanup', run: () => { sessionCleanup?.stop(); } },

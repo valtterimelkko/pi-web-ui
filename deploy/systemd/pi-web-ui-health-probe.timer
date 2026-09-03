@@ -1,0 +1,12 @@
+[Unit]
+Description=Pi Web UI - one-minute authenticated health probe timer
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Persistent=true
+Unit=pi-web-ui-health-probe.service
+
+[Install]
+WantedBy=timers.target

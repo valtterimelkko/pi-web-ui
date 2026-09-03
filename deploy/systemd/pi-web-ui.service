@@ -1,0 +1,31 @@
+# Source-of-truth unit for the production Pi Web UI service.
+# Install: cp deploy/systemd/pi-web-ui.service /etc/systemd/system/
+[Unit]
+Description=Pi Web UI - Web Interface for Pi Coding Agent
+After=network.target
+Wants=network.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=45
+User=root
+WorkingDirectory=/root/pi-web-ui
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--max-old-space-size=2048
+Environment=PATH=/root/.opencode/bin:/root/.local/bin:/root/.npm-global/bin:/usr/bin:/bin
+EnvironmentFile=/root/pi-web-ui/.env.production
+ExecStart=/usr/bin/node server/dist/index.js
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillSignal=SIGTERM
+MemoryMax=4G
+MemoryHigh=3G
+MemorySwapMax=512M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-web-ui
+
+[Install]
+WantedBy=multi-user.target

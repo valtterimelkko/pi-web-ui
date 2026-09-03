@@ -1,0 +1,14 @@
+# Alert-only health probe. It never restarts Pi Web UI.
+[Unit]
+Description=Pi Web UI - authenticated Internal API health probe
+After=pi-web-ui.service
+Wants=pi-web-ui.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/pi-web-ui
+ExecStart=/root/pi-web-ui/scripts/health-probe.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-web-ui-health-probe
