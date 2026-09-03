@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { measureAndSlim } from '../../../src/internal-api/event-payload-budget.js';
 
@@ -29,6 +29,28 @@ describe('measureAndSlim', () => {
       originalBytes: measured.originalBytes,
       budgetBytes: 32 * 1024,
     });
+  });
+
+  it('does not materialize the original JSON before slimming an oversized message update', () => {
+    const original = event('message_update', {
+      message: {
+        id: 'm1',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'x"\\\n😀'.repeat(500_000) }],
+      },
+      assistantMessageEvent: { type: 'text_delta', delta: 'ok' },
+    });
+    const expectedOriginalBytes = Buffer.byteLength(JSON.stringify(original));
+    const stringify = vi.spyOn(JSON, 'stringify');
+
+    try {
+      const measured = measureAndSlim(original, 32 * 1024);
+      expect(measured.originalBytes).toBe(expectedOriginalBytes);
+      expect(stringify).toHaveBeenCalledTimes(1);
+      expect(stringify.mock.calls[0]?.[0]).not.toBe(original);
+    } finally {
+      stringify.mockRestore();
+    }
   });
 
   it('passes a small event through byte-identical', () => {

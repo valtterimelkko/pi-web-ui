@@ -21,13 +21,19 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.30.0",
+  "contractVersion": "1.31.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.31.0** (minor, bounded Internal API event delivery) — prevents one pathological runtime stream from starving the shared server while keeping terminal/control evidence intact:
+  - every event is budgeted at the broker publish choke point (default 256 KiB; `INTERNAL_API_EVENT_PAYLOAD_MAX_BYTES=0` disables). Oversized events carry `data.payloadTruncated { originalBytes, budgetBytes }`; `message_update` drops its redundant full snapshot but retains message identity plus its bounded delta. Full content remains available from `message_end` and `/transcript`;
+  - replay entries cache their measured size, so byte/count eviction never re-stringifies old payloads;
+  - a per-session token bucket (`INTERNAL_API_EVENT_RATE_LIMIT_PER_SEC`, default 200/s, burst 400) coalesces only intermediate `message_update` snapshots and reports `data.coalescedDeltas`; terminal, tool, goal and error events are never rate-dropped;
+  - event-loop lag above one second activates ids-only update shedding until lag stays below 250 ms for ten seconds. `/diagnostics.operational.pipeline` adds aggregate publish-byte, truncation, coalescing and loop-lag metrics; `/capabilities.features.supportsEventPayloadBudget=true` advertises the policy.
 
 - **1.30.0** (minor, additive session-discovery ergonomics) — makes "find the latest real sessions and their logs" a first-class, server-side capability. Everything is additive; existing consumers keep working unchanged:
   - **`GET /api/v1/sessions` list filters** — new optional query params: `runtime` (comma-separated subset of `pi,claude,opencode,antigravity,commandcode`), `limit` (integer 1–1000), `since` (ISO 8601 or epoch-ms; filters on `lastActivity`), and `cwd` (exact match). Results are now deterministically ordered newest-first by `lastActivity`. With no params the response carries the same fields as before (full registry, including long-dead sessions — liveness still comes from `busy`/`lastActivity`). Junk values return `400 INVALID_REQUEST`.

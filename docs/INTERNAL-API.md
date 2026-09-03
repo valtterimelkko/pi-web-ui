@@ -1664,11 +1664,21 @@ data: {"type":"agent_end",...}
 ```
 
 Each SSE event is one normalized event with `event:` set to the event
-type and `data:` set to the full event JSON. The connection stays open
-across multiple prompts. Up to 100 recent events are buffered per
-session and replayed to late subscribers on connect (so you can open
-the stream after dispatching a prompt and still see the start of the
-turn). Send `Connection: close` or simply disconnect to unsubscribe.
+type and `data:` set to the bounded event JSON. The broker is a notification
+bus, not a content bus: the default `INTERNAL_API_EVENT_PAYLOAD_MAX_BYTES` is
+262144 bytes (`0` disables), and oversized events carry
+`data.payloadTruncated { originalBytes, budgetBytes }`. For
+`message_update`, the redundant full message snapshot is removed while its id,
+role/stop reason and `assistantMessageEvent` delta are retained; under overload,
+intermediate snapshots may be coalesced and the next delivered update reports
+`data.coalescedDeltas`. Read `message_end` and `/transcript` when full content is
+required.
+
+The connection stays open across multiple prompts. Up to 100 recent bounded
+events are buffered per session and replayed to late subscribers on connect.
+`INTERNAL_API_EVENT_RATE_LIMIT_PER_SEC` controls the per-session update rate
+(default 200/s, burst 400); terminal, tool, goal and error events are never
+rate-dropped. Send `Connection: close` or simply disconnect to unsubscribe.
 
 **Errors:**
 - `404` — Session not found

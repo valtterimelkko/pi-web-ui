@@ -157,6 +157,21 @@ bounded/readable event sequence when a session is opened, while observers react
 to live events. A replayed `agent_end` is not a new live turn for notification
 purposes.
 
+### Broker payload and rate boundary (contract 1.31.0)
+
+The Internal API broker is a notification bus, not a content bus. At its single
+publish choke point it budgets every serialized event (256 KiB by default),
+marks truncation explicitly, caches each replay entry's measured size, and
+coalesces only excess `message_update` snapshots. Terminal, tool, goal and error
+events are never rate-dropped. `message_update` already has delta semantics: a
+bounded broker event retains message identity plus `assistantMessageEvent`,
+while full content remains available from `message_end` and `/transcript`.
+
+If event-loop lag exceeds one second, the broker temporarily sheds update
+payloads to message ids only; it restores normal deltas after ten sustained
+seconds below 250 ms. This deliberately preserves control-plane responsiveness
+over live-rendering fidelity during an overload.
+
 ## Frontend Ingestion
 
 All paths converge in `client/src/store/sessionStore.ts` via `handleServerMessage()`:

@@ -126,9 +126,15 @@ GET /api/v1/sessions/:sessionId/diagnostics   # same filters, scoped to one sess
 Authed like every other internal-api route (only `/health` is exempt). The
 `operational` snapshot is bounded and process-local: low-cardinality turn and
 notification outcomes, latency buckets, adapter/subscriber/watch/worker anomaly
-counts, aggregate session counts, and path-free worker crash totals. It contains
-no prompts, transcripts, tool payloads, models, session paths, tokens, or
-credentials. It is an operational snapshot, not a durable historical database;
+counts, aggregate session counts, and path-free worker crash totals. Contract
+1.31.0 also exposes `pipeline.brokerPublishBytesTotal`,
+`brokerEventsTruncatedTotal`, `brokerEventsCoalescedTotal`, and the current
+`eventLoopLagMs`. The `InternalApiEventBroker` logs one warning per affected
+session when its payload budget first truncates an event; `EventLoopShed` logs
+transitions into ids-only overload shedding and back to normal delivery.
+
+The snapshot contains no prompts, transcripts, tool payloads, models, session
+paths, tokens, or credentials. It is an operational snapshot, not a durable historical database;
 the ring, counters, and latest runtime-health failures reset when the server
 process restarts.
 

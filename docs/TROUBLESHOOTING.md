@@ -130,6 +130,25 @@ sudo journalctl -u pi-web-ui --since '15 minutes ago' | grep -F -- "sid=$CANONIC
 
 With `LOG_FORMAT=json`, filter fields rather than grepping message text. With pretty logs, `sid=`, `run=`, `req=`, `rt=`, and `exec=` are the correlation suffixes. A repository-wide or home-directory-wide grep is a last resort for a known time/path, never the default session lookup strategy.
 
+## UI unresponsive / backend event-loop overload
+
+A fast public 302 proves only that Authelia answered; it does **not** prove the
+Pi Web UI backend is responsive. Test the backend directly first:
+
+```bash
+curl --max-time 5 http://127.0.0.1:3456/api/v1/health
+```
+
+If that times out, inspect `journalctl -u pi-web-ui` for
+`InternalApiEventBroker` payload warnings and `EventLoopShed` transitions, then
+read authenticated `/api/v1/diagnostics` after recovery. Contract 1.31.0 exposes
+`operational.pipeline.eventLoopLagMs` plus broker publish-byte, truncation and
+coalescing counters. High lag with rising truncations/coalescing indicates a
+runtime event storm; the broker should degrade `message_update` rendering while
+preserving health and terminal/control events. Do not blame Caddy/Authelia from
+the public redirect alone, and do not restart production without the owner's
+fresh approval and active-turn/run-receipt pre-checks.
+
 ## Fastest Starting Points
 
 Follow this order unless you already know the exact failing subsystem:

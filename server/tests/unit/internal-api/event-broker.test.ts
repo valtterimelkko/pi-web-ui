@@ -180,7 +180,7 @@ describe('InternalApiEventBroker', () => {
   });
 
   it('coalesces excess message updates while preserving the latest snapshot and control events', () => {
-    const limited = new InternalApiEventBroker({ eventRateLimitPerSec: 2, shedMonitor: { isShedding: false } });
+    const limited = new InternalApiEventBroker({ eventRateLimitPerSec: 2, now: () => 0, shedMonitor: { isShedding: false } });
     const sub = vi.fn();
     limited.subscribe('s1', sub, false);
 
