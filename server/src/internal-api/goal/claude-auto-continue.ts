@@ -65,7 +65,11 @@ export interface ClaudeGoalControlRecord {
 }
 
 export class ClaudeGoalControlStore {
-  constructor(private readonly dir: string) {}
+  constructor(
+    private readonly dir: string,
+    /** Invoked after every patch so sweep caches can invalidate per-session. */
+    private readonly onWrite?: (sessionId: string) => void,
+  ) {}
 
   private fileFor(sessionId: string): string {
     return path.join(this.dir, `${sessionId}.json`);
@@ -86,7 +90,45 @@ export class ClaudeGoalControlStore {
     const current = (await this.get(sessionId)) ?? {};
     const next = { ...current, ...patch };
     await fsp.writeFile(this.fileFor(sessionId), JSON.stringify(next), 'utf8');
+    this.onWrite?.(sessionId);
     return next;
+  }
+}
+
+/**
+ * mtime-keyed memo for nudger sweep reads (2026-09-03 defect batch).
+ *
+ * The sweep re-read EVERY supported Claude transcript each tick — with a large
+ * registry that is a log/IO flood (measured on production: ~4.4 log lines/s,
+ * hundreds of transcript reads per sweep). A projection is a pure function of
+ * (transcript content, control record); the control record invalidates
+ * per-session via {@link ClaudeGoalControlStore}'s onWrite hook, so an
+ * unchanged transcript mtime can safely return the cached projection.
+ */
+export class GoalSweepReadCache<V> {
+  private readonly entries = new Map<string, { key: string; value: V }>();
+
+  constructor(private readonly limit = 500) {}
+
+  get(id: string, key: string): V | undefined {
+    const hit = this.entries.get(id);
+    return hit && hit.key === key ? hit.value : undefined;
+  }
+
+  set(id: string, key: string, value: V): void {
+    if (this.entries.size >= this.limit && !this.entries.has(id)) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest !== undefined) this.entries.delete(oldest);
+    }
+    this.entries.set(id, { key, value });
+  }
+
+  invalidate(id: string): void {
+    this.entries.delete(id);
+  }
+
+  get size(): number {
+    return this.entries.size;
   }
 }
 

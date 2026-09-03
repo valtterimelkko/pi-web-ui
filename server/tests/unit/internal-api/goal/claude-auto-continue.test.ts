@@ -8,6 +8,7 @@ import path from 'node:path';
 import {
   loadClaudeGoalAutoContinueConfig,
   ClaudeGoalControlStore,
+  GoalSweepReadCache,
   backoffDelayMs,
   createClaudeGoalNudger,
   type ClaudeGoalNudgerDeps,
@@ -62,6 +63,59 @@ describe('ClaudeGoalControlStore', () => {
   });
   it('get returns null when no record exists', async () => {
     expect(await new ClaudeGoalControlStore(dir).get('ghost')).toBeNull();
+  });
+  it('fires the onWrite hook on every patch so sweep caches can invalidate per-session', async () => {
+    const written: string[] = [];
+    const store = new ClaudeGoalControlStore(dir, (id) => written.push(id));
+    await store.patch('s1', { nudges: 1 });
+    await store.patch('s2', { nudges: 2 });
+    await store.patch('s1', { nudges: 3 });
+    expect(written).toEqual(['s1', 's2', 's1']);
+  });
+  it('works without an onWrite hook (optional dep)', async () => {
+    const store = new ClaudeGoalControlStore(dir);
+    await expect(store.patch('s1', { nudges: 1 })).resolves.toMatchObject({ nudges: 1 });
+  });
+});
+
+describe('GoalSweepReadCache', () => {
+  it('returns the cached value only while the mtime key is unchanged', () => {
+    const cache = new GoalSweepReadCache<string>();
+    cache.set('s1', 'mtime:1', 'projection-v1');
+    expect(cache.get('s1', 'mtime:1')).toBe('projection-v1');
+    // Transcript changed → key mismatch → miss (caller re-reads and re-sets).
+    expect(cache.get('s1', 'mtime:2')).toBeUndefined();
+    cache.set('s1', 'mtime:2', 'projection-v2');
+    expect(cache.get('s1', 'mtime:2')).toBe('projection-v2');
+  });
+
+  it('invalidate drops exactly one session (control-record writes)', () => {
+    const cache = new GoalSweepReadCache<string>();
+    cache.set('s1', 'k', 'v1');
+    cache.set('s2', 'k', 'v2');
+    cache.invalidate('s1');
+    expect(cache.get('s1', 'k')).toBeUndefined();
+    expect(cache.get('s2', 'k')).toBe('v2');
+  });
+
+  it('stays bounded by evicting the oldest entry', () => {
+    const cache = new GoalSweepReadCache<string>(2);
+    cache.set('a', 'k', 'va');
+    cache.set('b', 'k', 'vb');
+    cache.set('c', 'k', 'vc');
+    expect(cache.get('a', 'k')).toBeUndefined();
+    expect(cache.get('b', 'k')).toBe('vb');
+    expect(cache.get('c', 'k')).toBe('vc');
+    expect(cache.size).toBe(2);
+  });
+
+  it('re-setting an existing session does not evict itself', () => {
+    const cache = new GoalSweepReadCache<string>(2);
+    cache.set('a', 'k1', 'v1');
+    cache.set('b', 'k1', 'v2');
+    cache.set('a', 'k2', 'v3'); // refresh a in place
+    expect(cache.get('a', 'k2')).toBe('v3');
+    expect(cache.get('b', 'k1')).toBe('v2');
   });
 });
 

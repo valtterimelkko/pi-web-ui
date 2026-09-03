@@ -119,4 +119,49 @@ describe('deriveGoalTag', () => {
     expect(tag.pulsing).toBe(true);
     expect(tag.run).toBeNull();
   });
+
+  // ── Status-grammar mislabels (2026-09-03 defect batch) ──────────────────
+  // The extension/bridge status grammars include states that must never
+  // render as an actionable running goal: a pending suggestion (pause/clear
+  // would answer "no goal"), a terminal failure, an awaiting-input pause, and
+  // anything unrecognised. Default-closed: only known live states show a tag.
+  it('treats a pending goal suggestion as inactive — pause/clear do not apply', () => {
+    const suggestion = '💡 Goal suggested — awaiting owner approval: "Next big thing"';
+    expect(deriveGoalTag(suggestion, false).active).toBe(false);
+    expect(deriveGoalTag(suggestion, true).active).toBe(false);
+  });
+
+  it('treats a failed goal as inactive (terminal — no actionable controls)', () => {
+    expect(deriveGoalTag('🎯 ✖ Failed — Run 3', false).active).toBe(false);
+    expect(deriveGoalTag('🎯 ✖ Failed', true).active).toBe(false);
+  });
+
+  it('treats awaiting-user-input as a paused-style state, not running', () => {
+    const tag = deriveGoalTag('🎯 ⏸ Awaiting user input', true);
+    expect(tag.active).toBe(true);
+    expect(tag.paused).toBe(true);
+    expect(tag.pulsing).toBe(false);
+    expect(tag.label).toBe('paused');
+  });
+
+  it('never renders unrecognised status text as running', () => {
+    expect(deriveGoalTag('🎯 Mystery status', false).active).toBe(false);
+    expect(deriveGoalTag('💎 Goal suggested — awaiting owner approval: "x"', true).active).toBe(false);
+    expect(deriveGoalTag('🎯 ▶ Sprinting — Run 2', true).active).toBe(false);
+  });
+
+  it('still recognises the real running grammar every runtime emits', () => {
+    expect(deriveGoalTag('🎯 ▶ Running — Run 4', false).active).toBe(true);
+    expect(deriveGoalTag('running', true).active).toBe(true);
+  });
+
+  it('keeps pause-on-stop willing for the full status text runtimes actually emit', () => {
+    // Latent inverse bug: the real grammar ("🎯 ▶ Running — Run N") never
+    // matched startsWith('running'), so mid-run stop did not pause the goal.
+    expect(shouldPauseGoalOnStop('pi', '🎯 ▶ Running — Run 4')).toBe(true);
+    expect(shouldPauseGoalOnStop('claude', '🎯 ⏸ Wrapping up… — Run 2')).toBe(true);
+    expect(shouldPauseGoalOnStop('pi', '💡 Goal suggested — awaiting owner approval: "x"')).toBe(false);
+    expect(shouldPauseGoalOnStop('claude', '🎯 ✖ Failed')).toBe(false);
+    expect(shouldPauseGoalOnStop('opencode', '🎯 ⏸ Awaiting user input')).toBe(false);
+  });
 });

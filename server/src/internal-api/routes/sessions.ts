@@ -67,7 +67,7 @@ import { composePiGoalCommand, type SessionGoalControlRequest } from '../goal/go
 import { readProjectPiGoalState } from '../goal/pi-goal.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
-import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
+import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, GoalSweepReadCache, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
 import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
@@ -3784,8 +3784,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     return unsupportedGoalProjection();
   }
 
-  /** Per-session auto-continue/pause ledger (Claude). Lives under the claude session dir. */
-  const claudeGoalStore = new ClaudeGoalControlStore(path.join(claudeSessionDir, 'goal-control'));
+  /** Per-session auto-continue/pause ledger (Claude). Lives under the claude session dir.
+   *  Every patch invalidates that session's nudger sweep cache entry, keeping the
+   *  cached projections consistent with the control records they were built from. */
+  const claudeGoalSweepCache = new GoalSweepReadCache<SessionGoalProjection>();
+  const claudeGoalStore = new ClaudeGoalControlStore(path.join(claudeSessionDir, 'goal-control'), (sessionId) => claudeGoalSweepCache.invalidate(sessionId));
 
   /** Auto-continue nudger (D3 wide). Started with the routes, stopped in shutdown(). */
   const claudeGoalNudger = createClaudeGoalNudger({
@@ -3798,7 +3801,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     readGoal: async (id) => {
       const entry = await getNonCommandCodeRegistryEntry(id);
       if (!entry || entry.sdkType !== 'claude') return null;
-      return readClaudeGoalProjection(entry);
+      // Sweep path uses the mtime-keyed cache: unchanged transcripts return the
+      // cached projection instead of re-reading every transcript each tick.
+      return readClaudeGoalProjectionCached(entry);
     },
     getStore: () => claudeGoalStore,
     dispatchDetached: async (id, message) => {
@@ -3893,7 +3898,36 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   async function readClaudeGoalProjection(entry: RegistryEntry): Promise<SessionGoalProjection> {
-    logger.info(`[Goal] reading claude transcript sessionId=${entry.id} claudeSessionId=${entry.claudeSessionId ?? 'none'} projectsRoot=${claudeProjectsDir} backend=${entry.claudeProfileBackend ?? 'default'}`);
+    // User-triggered reads (routes, control responses) are always fresh.
+    return readClaudeGoalProjectionUncached(entry);
+  }
+
+  /**
+   * Nudger-sweep read with an mtime-keyed cache (2026-09-03 defect batch).
+   * The sweep runs every interval over ALL supported claude sessions; without
+   * this it re-read every transcript each tick (measured on production:
+   * ~4.4 [Goal] log lines/s and hundreds of transcript reads per sweep).
+   * A projection is a pure function of (transcript content, control record);
+   * control-record writes invalidate the session via the store's onWrite hook.
+   */
+  async function readClaudeGoalProjectionCached(entry: RegistryEntry): Promise<SessionGoalProjection> {
+    if (entry.claudeProfileBackend === 'channel' || !entry.claudeSessionId) {
+      return readClaudeGoalProjectionUncached(entry);
+    }
+    const transcriptPath = resolveClaudeTranscriptPath(entry.cwd, entry.claudeSessionId, claudeProjectsDir);
+    let transcriptMtimeMs = 0;
+    try {
+      transcriptMtimeMs = (await stat(transcriptPath)).mtimeMs;
+    } catch { /* missing transcript: mtime 0, still cached */ }
+    const cached = claudeGoalSweepCache.get(entry.id, String(transcriptMtimeMs));
+    if (cached) return cached;
+    const projection = await readClaudeGoalProjectionUncached(entry);
+    claudeGoalSweepCache.set(entry.id, String(transcriptMtimeMs), projection);
+    return projection;
+  }
+
+  async function readClaudeGoalProjectionUncached(entry: RegistryEntry): Promise<SessionGoalProjection> {
+    logger.debug(`[Goal] reading claude transcript sessionId=${entry.id} claudeSessionId=${entry.claudeSessionId ?? 'none'} projectsRoot=${claudeProjectsDir} backend=${entry.claudeProfileBackend ?? 'default'}`);
     // Native /goal works on every backend that runs the local CLI (direct and
     // SDK subscription share the transcript layout). Only the remote channel
     // process cannot do goals.
@@ -3903,7 +3937,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const transcriptPath = resolveClaudeTranscriptPath(entry.cwd, entry.claudeSessionId, claudeProjectsDir);
     const statuses = await readClaudeGoalStatuses(transcriptPath);
     const control = await claudeGoalStore.get(entry.id);
-    logger.info(`[Goal] claude statuses=${statuses.length} path=${transcriptPath} control=${JSON.stringify(control ?? {})} lastTs=${statuses.at(-1)?.timestampMs ?? 'none'}`);
+    // Goal-bearing transcripts are rare; only they justify info-level logging.
+    const log = statuses.length > 0 ? logger.info.bind(logger) : logger.debug.bind(logger);
+    log(`[Goal] claude statuses=${statuses.length} path=${transcriptPath} control=${JSON.stringify(control ?? {})} lastTs=${statuses.at(-1)?.timestampMs ?? 'none'}`);
     return projectClaudeGoal(statuses, {
       autoContinue: control?.autoContinue,
       clearedAt: control?.clearedAt,

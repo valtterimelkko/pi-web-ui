@@ -48,9 +48,8 @@ export function shouldPauseGoalOnStop(
   sdkType: RuntimeSdkType,
   goalStatus: string | undefined,
 ): boolean {
-  if (!goalStatus) return false;
-  const normalized = goalStatus.trim().toLowerCase();
-  const isActive = normalized === 'wrapping-up' || normalized.startsWith('running');
+  const kind = classifyGoalStatusText(goalStatus);
+  const isActive = kind === 'running' || kind === 'wrapping-up';
   if (!isActive) return false;
   // Pi: user triggers /goal pause-now slash command before abort.
   // OpenCode: server pauses goal state automatically on abort (no extra client action needed).
@@ -61,6 +60,30 @@ export function shouldPauseGoalOnStop(
 }
 
 export type GoalControlAction = 'pause' | 'resume' | 'clear';
+
+/** Status kind recognised from a goal-engine status line. */
+export type GoalStatusKind = 'running' | 'paused' | 'wrapping-up' | 'suggested' | 'failed' | 'unknown';
+
+/**
+ * Single recogniser for every goal-engine status-text grammar (Pi extension,
+ * Internal API browser bridge, OpenCode bridge). Default-closed by design:
+ * only the known live states (running / paused / wrapping-up / awaiting-input)
+ * count as active — a pending suggestion, a terminal failure, an idle line, or
+ * unrecognised text must never render as an actionable running goal, because
+ * the pause/clear controls it enables answer "no goal" (2026-09-03 defect).
+ */
+export function classifyGoalStatusText(goalStatus: string | undefined | null): GoalStatusKind {
+  if (!goalStatus) return 'unknown';
+  const text = goalStatus.trim();
+  if (!text) return 'unknown';
+  if (/\bidle\b/i.test(text)) return 'unknown';
+  if (/goal suggested|awaiting owner approval/i.test(text)) return 'suggested';
+  if (/wrapping/i.test(text)) return 'wrapping-up';
+  if (/paus/i.test(text) || /awaiting user input/i.test(text)) return 'paused';
+  if (/✖/.test(text) || /\bfailed\b/i.test(text)) return 'failed';
+  if (/\brunning\b/i.test(text)) return 'running';
+  return 'unknown';
+}
 
 /** Pi goal controls are extension commands; OpenCode has a server-side control path. */
 export function getGoalControlCommand(
@@ -101,26 +124,28 @@ const INACTIVE_GOAL_TAG: GoalTag = {
  * with the session's live `isStreaming` flag we can show a pulsing "running…"
  * state during the long, silent model-thinking gaps that otherwise make an
  * actively-progressing goal look frozen.
+ *
+ * Only recognised live states produce a tag; {@link classifyGoalStatusText}
+ * owns the grammar so suggestion/failed/unknown lines can never enable the
+ * pause/clear controls (they would answer "no goal").
  */
 export function deriveGoalTag(
   goalStatus: string | undefined,
   isStreaming: boolean,
 ): GoalTag {
-  if (!goalStatus) return INACTIVE_GOAL_TAG;
-  const text = goalStatus.trim();
-  if (!text) return INACTIVE_GOAL_TAG;
-  if (/\bidle\b/i.test(text)) return INACTIVE_GOAL_TAG;
+  const kind = classifyGoalStatusText(goalStatus);
+  const paused = kind === 'paused' || kind === 'wrapping-up';
+  if (kind !== 'running' && !paused) return INACTIVE_GOAL_TAG;
 
-  const wrapping = /wrapping/i.test(text);
-  const paused = wrapping || /paus/i.test(text);
+  const text = (goalStatus as string).trim();
   const runMatch = text.match(/run\s+(\d+)/i);
   const run = runMatch ? Number(runMatch[1]) : null;
 
   const pulsing = isStreaming && !paused;
   let label: string;
-  if (pulsing) label = 'running…';
-  else if (wrapping) label = 'wrapping up…';
-  else if (paused) label = 'paused';
+  if (kind === 'wrapping-up') label = 'wrapping up…';
+  else if (pulsing) label = 'running…';
+  else if (kind === 'paused') label = 'paused';
   else label = 'running';
 
   return { active: true, label, paused, pulsing, run };
