@@ -179,6 +179,55 @@ describe('InternalApiEventBroker', () => {
     expect(performance.now() - startedAt).toBeLessThan(2_000);
   });
 
+  it('coalesces excess message updates while preserving the latest snapshot and control events', () => {
+    const limited = new InternalApiEventBroker({ eventRateLimitPerSec: 2 });
+    const sub = vi.fn();
+    limited.subscribe('s1', sub, false);
+
+    for (let index = 0; index < 10; index += 1) {
+      limited.publish('s1', makeEvent('message_update', {
+        message: { id: 'm1' },
+        assistantMessageEvent: { type: 'text_delta', delta: String(index) },
+      }));
+    }
+    limited.publish('s1', makeEvent('message_end'));
+    limited.publish('s1', makeEvent('agent_end'));
+
+    const updates = sub.mock.calls
+      .map((call) => call[0] as NormalizedEvent)
+      .filter((event) => event.type === 'message_update');
+    expect(updates).toHaveLength(4);
+    const lastData = updates.at(-1)?.data as {
+      assistantMessageEvent: { delta: string };
+      coalescedDeltas: number;
+    };
+    expect(lastData.assistantMessageEvent.delta).toBe('9');
+    expect(lastData.coalescedDeltas).toBe(6);
+    expect(sub.mock.calls.filter((call) => (call[0] as NormalizedEvent).type === 'message_end')).toHaveLength(1);
+    expect(sub.mock.calls.filter((call) => (call[0] as NormalizedEvent).type === 'agent_end')).toHaveLength(1);
+  });
+
+  it('refills the per-session message-update bucket over time', () => {
+    let now = 0;
+    const limited = new InternalApiEventBroker({ eventRateLimitPerSec: 1, now: () => now });
+    const sub = vi.fn();
+    limited.subscribe('s1', sub, false);
+    const update = (delta: string) => makeEvent('message_update', {
+      message: { id: 'm1' },
+      assistantMessageEvent: { type: 'text_delta', delta },
+    });
+
+    limited.publish('s1', update('1'));
+    limited.publish('s1', update('2'));
+    expect(sub).toHaveBeenCalledTimes(1);
+
+    now = 1_000;
+    limited.publish('s1', update('3'));
+    expect(sub).toHaveBeenCalledTimes(2);
+    limited.publish('s1', makeEvent('message_end'));
+    expect(sub).toHaveBeenCalledTimes(4);
+  });
+
   it('bounds the replay buffer by total bytes (trims oldest large events)', () => {
     const broker = new InternalApiEventBroker({ replayBufferSize: 100, replayBufferMaxBytes: 500 });
     const big = { type: 'message_update', timestamp: 1, data: { huge: 'x'.repeat(400) } } as unknown as NormalizedEvent;

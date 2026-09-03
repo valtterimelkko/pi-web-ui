@@ -38,6 +38,9 @@ interface BufferedEvent {
   bytes: number;
 }
 
+interface RateState { tokens: number; lastMs: number }
+interface PendingUpdate { event: NormalizedEvent; coalesced: number }
+
 export interface EventBrokerOptions {
   /** How many recent events to buffer per session for late subscribers. 0 disables. */
   replayBufferSize?: number;
@@ -45,6 +48,10 @@ export interface EventBrokerOptions {
   replayBufferMaxBytes?: number;
   /** Max serialized bytes delivered/buffered per event. 0 disables. */
   eventPayloadMaxBytes?: number;
+  /** Sustained message-update rate; burst capacity is twice this value. */
+  eventRateLimitPerSec?: number;
+  /** Injected monotonic clock seam (primarily for tests). */
+  now?: () => number;
   /** Injected low-cardinality metrics seam (primarily for tests). */
   metrics?: OperationalMetrics;
   /** Optional disposal predicate: when set and it returns true for a session
@@ -62,9 +69,14 @@ export class InternalApiEventBroker {
   private replayBuffers: Map<string, BufferedEvent[]> = new Map();
   private replayBufferBytes: Map<string, number> = new Map();
   private warnedOversizedSessions = new Set<string>();
+  private rateStates = new Map<string, RateState>();
+  private pendingUpdates = new Map<string, PendingUpdate>();
   private readonly replayBufferSize: number;
   private readonly replayBufferMaxBytes: number;
   private readonly eventPayloadMaxBytes: number;
+  private readonly eventRateLimitPerSec: number;
+  private readonly eventRateBurst: number;
+  private readonly now: () => number;
   private readonly metrics: OperationalMetrics;
   private readonly disposedCheck?: (sessionId: string) => boolean;
 
@@ -72,6 +84,9 @@ export class InternalApiEventBroker {
     this.replayBufferSize = Math.max(0, options.replayBufferSize ?? DEFAULT_REPLAY_BUFFER_SIZE);
     this.replayBufferMaxBytes = Math.max(0, options.replayBufferMaxBytes ?? DEFAULT_REPLAY_BUFFER_MAX_BYTES);
     this.eventPayloadMaxBytes = Math.max(0, options.eventPayloadMaxBytes ?? config.internalApiEventPayloadMaxBytes);
+    this.eventRateLimitPerSec = Math.max(1, options.eventRateLimitPerSec ?? config.internalApiEventRateLimitPerSec);
+    this.eventRateBurst = this.eventRateLimitPerSec * 2;
+    this.now = options.now ?? Date.now;
     this.metrics = options.metrics ?? getOperationalMetrics();
     this.disposedCheck = options.isSessionDisposed;
   }
@@ -122,10 +137,46 @@ export class InternalApiEventBroker {
 
   /** Publish an event to all subscribers for a session. */
   publish(sessionId: string, event: NormalizedEvent): void {
-    // Drop late runtime callbacks for a deleted session: this is the fence that
-    // prevents a late event from recreating the replay buffer or notifying
-    // subscribers after handleDeleteSession has tombstoned the session.
     if (this.disposedCheck?.(sessionId)) return;
+    if (event.type === 'message_update') {
+      this.refill(sessionId);
+      if (this.pendingUpdates.has(sessionId) && this.availableTokens(sessionId) > 1) this.flushPending(sessionId);
+      if (this.availableTokens(sessionId) <= 1) {
+        const pending = this.pendingUpdates.get(sessionId);
+        this.pendingUpdates.set(sessionId, { event, coalesced: (pending?.coalesced ?? -1) + 1 });
+        return;
+      }
+      const state = this.rateStates.get(sessionId);
+      if (state) state.tokens -= 1;
+    } else {
+      this.flushPending(sessionId);
+    }
+    this.deliver(sessionId, event);
+  }
+
+  private refill(sessionId: string): void {
+    const now = this.now();
+    const state = this.rateStates.get(sessionId) ?? { tokens: this.eventRateBurst, lastMs: now };
+    state.tokens = Math.min(this.eventRateBurst, state.tokens + ((now - state.lastMs) * this.eventRateLimitPerSec / 1000));
+    state.lastMs = now;
+    this.rateStates.set(sessionId, state);
+  }
+
+  private availableTokens(sessionId: string): number {
+    return this.rateStates.get(sessionId)?.tokens ?? this.eventRateBurst;
+  }
+
+  private flushPending(sessionId: string): void {
+    const pending = this.pendingUpdates.get(sessionId);
+    if (!pending) return;
+    this.pendingUpdates.delete(sessionId);
+    const data = { ...pending.event.data as Record<string, unknown>, ...(pending.coalesced > 0 ? { coalescedDeltas: pending.coalesced } : {}) };
+    const state = this.rateStates.get(sessionId);
+    if (state) state.tokens = Math.max(0, state.tokens - 1);
+    this.deliver(sessionId, { ...pending.event, data });
+  }
+
+  private deliver(sessionId: string, event: NormalizedEvent): void {
     const measured = measureAndSlim(event, this.eventPayloadMaxBytes);
     event = measured.event;
     if (measured.truncated && !this.warnedOversizedSessions.has(sessionId)) {
@@ -165,6 +216,8 @@ export class InternalApiEventBroker {
     this.replayBuffers.delete(sessionId);
     this.replayBufferBytes.delete(sessionId);
     this.warnedOversizedSessions.delete(sessionId);
+    this.rateStates.delete(sessionId);
+    this.pendingUpdates.delete(sessionId);
   }
 
   /** Return a copy of the recent buffered events for a session, oldest first. */
@@ -180,6 +233,8 @@ export class InternalApiEventBroker {
     this.replayBuffers.clear();
     this.replayBufferBytes.clear();
     this.warnedOversizedSessions.clear();
+    this.rateStates.clear();
+    this.pendingUpdates.clear();
   }
 
   /** Number of active subscribers for a session. */
