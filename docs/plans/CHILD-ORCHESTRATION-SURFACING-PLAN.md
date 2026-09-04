@@ -1,6 +1,6 @@
 # Child-Orchestration Surfacing Plan — harness subagents, Internal-API children, and watch events in the session view
 
-> **Status: PLANNED — NOT EXECUTED. No code has been changed. Owner will issue the execution goal.**
+> **Status: EXECUTED (2026-09-04).** Phases 0–7 implemented TDD-first and live-validated on a disposable server against the real Pi runtime (screen-view parity, header linkage + child events, watch surfacing, background-subagent lifecycle). Phase 8 done with owner authorisation: agent-os mirror resynced to 1.34.0, production restarted and serving 1.34.0 (`childSurfacing: true` verified via `/capabilities`). Commits: pi-web-ui `10d10a5`, `0f86e51`, `e1a23a5`, `0a7a543`, `70043f8`; pi-enhancement `75954f3`; agent-os `915477e`.
 > Contract allocation: **1.34.0** (repo and production both serve 1.33.0 as of 2026-09-04; verified via prod `/api/v1/capabilities`).
 > Revision 2 (2026-09-04): both tracks — (A) harness subagent gaps and (B) Internal-API orchestration — grounded in real session logs and made equally concrete. Supersedes revision 1 in full.
 
