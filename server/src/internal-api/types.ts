@@ -162,6 +162,8 @@ export interface CreateSessionRequest {
     modelVerifier?: string;
     autoContinue?: boolean;
   };
+  /** Contract 1.34.0 child surfacing: parent linkage (X-Parent-Session header wins over this). */
+  parentSessionId?: string;
   // TODO(remove once Agent OS drops the fields): accepted and ignored legacy role field.
   invocationRole?: 'conductor-root' | 'implementation-child';
   // TODO(remove once Agent OS drops the fields): accepted and ignored legacy attestation field.
@@ -585,6 +587,8 @@ export interface CreateSessionResponse {
   executionInstanceId?: string;
   cwd: string;
   createdAt: string;
+  /** Parent session linkage when the caller identified itself (contract 1.34.0). */
+  parentSessionId?: string;
   /** True when the session was pinned at creation (pin:true requested). */
   pinned?: boolean;
   /** ISO timestamp of the pin's absolute expiry, when pinned. */

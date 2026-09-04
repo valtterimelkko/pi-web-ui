@@ -16,6 +16,7 @@ import { messagesToLiveMessages } from '../../lib/messageAdapter';
 import { getGoalControlCommand, type GoalControlAction } from '../../lib/piExtensionControls';
 import { GOAL_WIDGET_KEY } from '../../lib/goalModel';
 import { GoalPanel } from './GoalPanel';
+import { ChildrenStrip } from './ChildrenStrip';
 
 interface ChatViewProps {
   onOpenSettings?: () => void;
@@ -163,6 +164,8 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
               statusText={goalEngineStatus}
               onControl={handleGoalControl}
             />
+            {/* Contract 1.34.0 child surfacing: live "children running" strip. */}
+            <ChildrenStrip sessionId={currentSessionId} />
             {otherExtensionWidgets.length > 0 && (
               <div className="mb-2 space-y-2" data-testid="extension-widgets">
                 {otherExtensionWidgets.map(([key, lines]) => (

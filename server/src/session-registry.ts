@@ -35,6 +35,8 @@ export interface RegistryEntry {
   claudeProfileId?: string;
   /** Claude-specific: which backend is handling this session */
   claudeProfileBackend?: 'sdk-subscription' | 'cli-direct' | 'channel';
+  /** Contract 1.34.0 child surfacing: parent session linkage when known (display-only). */
+  parentSessionId?: string;
   /** Claude-specific: provider id (anthropic, zai, etc.) — never a secret */
   claudeProviderId?: string;
 }
@@ -233,13 +235,14 @@ export class SessionRegistryManager {
    */
   async patchSessionMeta(
     id: string,
-    patch: { model?: string; thinkingLevel?: string },
+    patch: { model?: string; thinkingLevel?: string; parentSessionId?: string },
   ): Promise<RegistryEntry | undefined> {
     const registry = await this.load();
     const entry = registry.entries.find(e => e.id === id);
     if (!entry) return undefined;
     if (patch.model !== undefined) entry.model = patch.model;
     if (patch.thinkingLevel !== undefined) entry.thinkingLevel = patch.thinkingLevel;
+    if (patch.parentSessionId !== undefined) entry.parentSessionId = patch.parentSessionId;
     entry.lastActivity = new Date().toISOString();
     await this.save();
     return entry;

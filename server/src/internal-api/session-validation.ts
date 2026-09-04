@@ -88,6 +88,8 @@ export const createSessionBodySchema = z.object({
   profileId: z.string().min(1).max(200).optional(),
   invocationRole: invocationRoleSchema.optional(),
   commandCodeAttestation: commandCodeAttestationSchema.optional(),
+  // Contract 1.34.0 child surfacing: explicit parent linkage (header wins).
+  parentSessionId: z.string().min(1).max(200).optional(),
   ...pinFields,
   ...goalField,
 }).strict().superRefine((body, ctx) => {

@@ -68,6 +68,7 @@ import { composePiGoalCommand, type SessionGoalControlRequest } from '../goal/go
 import { readProjectPiGoalState } from '../goal/pi-goal.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
 import { createPiBackgroundChildBridge, readBackgroundTasksSnapshot } from '../background-children.js';
+import { pickExplicitParentId, InFlightBashCorrelator, ChildLinkRegistry, buildChildDispatchedCard, type ParentLink, type LinkageRegistry } from '../child-linkage.js';
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, GoalSweepReadCache, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
@@ -408,6 +409,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   } = deps;
   const commandCodeService = deps.commandCodeService;
 
+  // Contract 1.34.0 child surfacing: automatic parent linkage fallback fed by
+  // the pi tool event stream (header-first linkage needs no correlation).
+  const bashCorrelator = new InFlightBashCorrelator();
+
   const claudeSessionDir = deps.claudeSessionDir ?? config.claudeSessionDir;
   const claudeProjectsDir = deps.claudeProjectsDir ?? resolveClaudeProjectsRoot();
   const antigravitySessionDir = deps.antigravitySessionDir ?? config.antigravitySessionDir;
@@ -510,6 +515,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     isSessionDisposed: (key) => disposal.isDisposed(key),
   });
 
+  // Contract 1.34.0 child surfacing: child link registry (created after the
+  // broker; fans child terminal turns out to the parent's broker key and the
+  // browser bridge).
+  const childLinks = new ChildLinkRegistry({
+    broker,
+    broadcast: (message) => {
+      try { onBrowserMessage?.(message); } catch { /* non-fatal */ }
+    },
+    publish: (key, event) => {
+      try {
+        broker.publish(key, { type: event.type, timestamp: event.timestamp, data: event.data } as NormalizedEvent);
+      } catch { /* non-fatal */ }
+    },
+    registry: sessionRegistry as unknown as LinkageRegistry,
+  });
+
   /** Track Pi/OpenCode sessions we have already attached a long-lived observer to. */
   const piObservedSessions = new Set<string>();
   const opencodeObservedSessions = new Set<string>();
@@ -532,6 +553,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (piObservedSessions.has(sessionPath)) return;
     const observer = (event: unknown) => {
       try {
+        // Contract 1.34.0: feed the in-flight bash correlator (parent linkage
+        // fallback) before publishing.
+        bashCorrelator.observe(sessionPath, event as { type: string });
         broker.publish(sessionPath, event as NormalizedEvent);
       } catch {
         /* non-fatal */
@@ -1580,6 +1604,51 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         logger.warn('Failed to tag session origin:', originError);
       }
 
+      // Contract 1.34.0 child surfacing: link the child to its parent. Header
+      // first (X-Parent-Session), body parentSessionId second, in-flight bash
+      // correlation last. Unresolvable → silently unlinked (display-only).
+      try {
+        const explicit = pickExplicitParentId(
+          req.headers['x-parent-session'] as string | undefined,
+          body.parentSessionId,
+        );
+        let parentLink: ParentLink | null = null;
+        if (explicit) {
+          parentLink = await childLinks.resolveParent(explicit, undefined);
+        } else {
+          const correlatedKey = bashCorrelator.correlate();
+          if (correlatedKey) {
+            parentLink = await childLinks.resolveParent(undefined, correlatedKey);
+          }
+        }
+        if (parentLink) {
+          await sessionRegistry.patchSessionMeta(base.sessionId, { parentSessionId: parentLink.parentSessionId });
+          (base as unknown as Record<string, unknown>).parentSessionId = parentLink.parentSessionId;
+          const card = buildChildDispatchedCard({
+            childSessionId: base.sessionId,
+            runtime: base.runtime,
+            model: base.model,
+            modelSelector: base.modelSelector,
+            resolvedModel: base.resolvedModel,
+            cwd: base.cwd,
+            parentSessionId: parentLink.parentSessionId,
+          });
+          const timestamp = Date.now();
+          try {
+            broker.publish(parentLink.parentBrokerKey, { type: 'child_dispatched', timestamp, data: { sessionId: parentLink.parentSessionId, child: card } } as NormalizedEvent);
+          } catch { /* non-fatal */ }
+          try {
+            onBrowserMessage?.({ type: 'child_dispatched', sessionId: parentLink.parentSessionId, child: card });
+          } catch { /* non-fatal */ }
+          await childLinks.linkChild(
+            { sessionId: base.sessionId, sessionPath: base.sessionPath, runtime: base.runtime, model: card.model },
+            parentLink,
+          );
+        }
+      } catch (linkError) {
+        logger.warn('child linkage failed (non-fatal):', linkError instanceof Error ? linkError.message : String(linkError));
+      }
+
       // Required source-owned retention is atomic from the caller's perspective:
       // if the guarantee cannot be persisted/applied, remove the unused session.
       if (body.retention) {
@@ -2042,6 +2111,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             })();
         if (goal) (detail as unknown as Record<string, unknown>).goal = goal;
       } catch { /* non-fatal */ }
+      // Contract 1.34.0 child surfacing: additive children list + parent id so
+      // parents can re-hydrate cards after reload and clients can badge children.
+      try {
+        const entry = await sessionRegistry.get(sessionId);
+        if (entry?.parentSessionId) {
+          (detail as unknown as Record<string, unknown>).parentSessionId = entry.parentSessionId;
+        }
+        const all = await sessionRegistry.listAll();
+        const children = all.filter((e) => e.parentSessionId === sessionId);
+        if (children.length > 0) {
+          (detail as unknown as Record<string, unknown>).children = children.map((c) => ({
+            sessionId: c.id,
+            runtime: c.sdkType,
+            model: c.model,
+            status: c.status,
+            parentSessionId: c.parentSessionId,
+            lastActivity: c.lastActivity,
+          }));
+        }
+      } catch { /* non-fatal */ }
       sendJson(res, 200, detail);
     } catch (err) {
       logger.errorObject('Failed to get session', err);
@@ -2074,6 +2163,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               return entry ? await readGoalProjection(entry) : null;
             })();
         if (goal) (detail as unknown as Record<string, unknown>).goal = goal;
+      } catch { /* non-fatal */ }
+      // Contract 1.34.0 child surfacing: additive children list + parent id so
+      // parents can re-hydrate cards after reload and clients can badge children.
+      try {
+        const entry = await sessionRegistry.get(sessionId);
+        if (entry?.parentSessionId) {
+          (detail as unknown as Record<string, unknown>).parentSessionId = entry.parentSessionId;
+        }
+        const all = await sessionRegistry.listAll();
+        const children = all.filter((e) => e.parentSessionId === sessionId);
+        if (children.length > 0) {
+          (detail as unknown as Record<string, unknown>).children = children.map((c) => ({
+            sessionId: c.id,
+            runtime: c.sdkType,
+            model: c.model,
+            status: c.status,
+            parentSessionId: c.parentSessionId,
+            lastActivity: c.lastActivity,
+          }));
+        }
       } catch { /* non-fatal */ }
       sendJson(res, 200, detail);
     } catch (err) {

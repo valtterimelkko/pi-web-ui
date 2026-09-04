@@ -14,6 +14,8 @@ import type { ChildCardProjection } from '@pi-web-ui/shared';
 interface BackgroundChildrenState {
   bySession: Record<string, ChildCardProjection[]>;
   applyChildren: (sessionId: string, children: ChildCardProjection[]) => void;
+  /** Upsert a single child projection (Internal-API child events). */
+  applyChild: (sessionId: string, child: ChildCardProjection) => void;
   clear: (sessionId: string) => void;
   /** Resolve one child by its stable id (background taskId / child session id). */
   getChild: (sessionId: string, childId: string) => ChildCardProjection | undefined;
@@ -23,6 +25,17 @@ export const useBackgroundChildrenStore = create<BackgroundChildrenState>()((set
   bySession: {},
   applyChildren: (sessionId, children) => {
     set((state) => ({ bySession: { ...state.bySession, [sessionId]: children } }));
+  },
+  /** Upsert one child (child_dispatched). */
+  applyChild: (sessionId, child) => {
+    set((state) => {
+      const existing = state.bySession[sessionId] ?? [];
+      const idx = existing.findIndex((c) => c.id === child.id);
+      const next = idx >= 0
+        ? existing.map((c) => (c.id === child.id ? child : c))
+        : [...existing, child];
+      return { bySession: { ...state.bySession, [sessionId]: next } };
+    });
   },
   clear: (sessionId) => {
     set((state) => {

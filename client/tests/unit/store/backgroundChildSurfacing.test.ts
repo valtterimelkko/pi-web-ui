@@ -67,3 +67,39 @@ describe('sessionStore routes background_child_state into the child store', () =
     expect(useBackgroundChildrenStore.getState().getChild('sess-8', 'bg_k2')?.status).toBe('running');
   });
 });
+
+describe('internal-api child events (contract 1.34.0 Track B)', () => {
+  beforeEach(() => {
+    useBackgroundChildrenStore.setState({ bySession: {} });
+  });
+
+  it('upserts a child on child_dispatched (top-level)', () => {
+    useSessionStore.getState().handleServerMessage({
+      type: 'child_dispatched',
+      sessionId: 'parent-1',
+      child: { id: 'child-9', kind: 'internal_api_child', status: 'dispatched', label: 'pi child child-9', runtime: 'pi', model: 'zai/glm-5.3-flash', parentSessionId: 'parent-1' },
+    } as never);
+    expect(useBackgroundChildrenStore.getState().getChild('parent-1', 'child-9')?.status).toBe('dispatched');
+  });
+
+  it('marks the child completed on child_turn_ended', () => {
+    useBackgroundChildrenStore.getState().applyChildren('parent-1', [
+      { id: 'child-9', kind: 'internal_api_child', status: 'running', label: 'x', parentSessionId: 'parent-1' },
+    ]);
+    useSessionStore.getState().handleServerMessage({
+      type: 'child_turn_ended',
+      sessionId: 'parent-1',
+      child: { id: 'child-9', kind: 'internal_api_child', status: 'completed', label: 'x', parentSessionId: 'parent-1', endedAt: 123 },
+    } as never);
+    expect(useBackgroundChildrenStore.getState().getChild('parent-1', 'child-9')?.status).toBe('completed');
+  });
+
+  it('handles the wrapped envelope form', () => {
+    useSessionStore.getState().handleServerMessage({
+      type: 'session_event',
+      sessionId: 'parent-1',
+      event: { type: 'child_dispatched', sessionId: 'parent-1', child: { id: 'c-2', kind: 'internal_api_child', status: 'dispatched', label: 'y', parentSessionId: 'parent-1' } },
+    } as never);
+    expect(useBackgroundChildrenStore.getState().getChild('parent-1', 'c-2')?.status).toBe('dispatched');
+  });
+});

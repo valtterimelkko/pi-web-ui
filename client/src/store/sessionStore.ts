@@ -2274,6 +2274,22 @@ export const useSessionStore = create<SessionState>()(
             break;
           }
 
+          // Contract 1.34.0 Track B: Internal-API child linkage events.
+          case 'child_dispatched': {
+            const dispatched = msg as unknown as { sessionId?: string; child?: import('@pi-web-ui/shared').ChildCardProjection };
+            if (dispatched.sessionId && dispatched.child) {
+              useBackgroundChildrenStore.getState().applyChild(dispatched.sessionId, dispatched.child);
+            }
+            break;
+          }
+          case 'child_turn_ended': {
+            const ended = msg as unknown as { sessionId?: string; child?: import('@pi-web-ui/shared').ChildCardProjection };
+            if (ended.sessionId && ended.child) {
+              useBackgroundChildrenStore.getState().applyChild(ended.sessionId, { ...ended.child, status: 'completed' });
+            }
+            break;
+          }
+
           case 'extension_error': {
             const extensionError = msg as unknown as {
               sessionId?: string;
@@ -2984,8 +3000,10 @@ export const useSessionStore = create<SessionState>()(
 
               // Contract 1.34.0: wrapped background_child_state re-dispatches
               // through the top-level handler so the child store updates.
-              case 'background_child_state': {
-                get().handleServerMessage({ ...(event as Record<string, unknown>), type: 'background_child_state', sessionId } as never);
+              case 'background_child_state':
+              case 'child_dispatched':
+              case 'child_turn_ended': {
+                get().handleServerMessage({ ...(event as Record<string, unknown>), type: event.type, sessionId } as never);
                 break;
               }
 
