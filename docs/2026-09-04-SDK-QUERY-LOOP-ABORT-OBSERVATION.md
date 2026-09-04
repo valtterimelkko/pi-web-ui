@@ -1,5 +1,7 @@
 # Observation: bare `query()` SDK client loop aborts at ~2s (kit-independent)
 
+> **VERDICT (2026-09-04):** root-caused — the repro/smoke scripts called the pre-0.3 positional `query(prompt, options)` against the SDK 0.3.x single-object `query({ prompt, options })` signature; the abort is caller-side misuse, pi-web-ui is unaffected, and a separate live issue (dead host OAuth grant) was found. Full analysis and fix sequence: [`2026-09-04-SDK-QUERY-LOOP-ABORT-VERDICT.md`](./2026-09-04-SDK-QUERY-LOOP-ABORT-VERDICT.md). Original observation below, unedited.
+
 > **File type:** external observation report, filed by the Agent OS injection-programme execution agent (D1) on 2026-09-04, at the owner's request, for a fixing agent to pick up. This documents a *host/SDK-level* reproducible condition found while live-validating the Agent OS Claude Code injection kit. It is **not** caused by Agent OS code — it reproduces with no Agent OS component present.
 > **Repro artifacts preserved:** `/root/backups/injection-d1-smokes/` (logs, transcripts) and `/tmp/sdk-smoke-rDKi/` (scripts; volatile), `/tmp/claude-smoke-cfg-kaur/` (disposable config dir with the one debug file; volatile).
 
