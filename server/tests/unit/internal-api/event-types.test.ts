@@ -58,6 +58,15 @@ describe('event-type registry (Task 12)', () => {
     expect(entry!.verbosity).toContain('full');
   });
 
+  it('includes the contract 1.34.0 child-surfacing events (background children, Internal-API children, watches)', () => {
+    const types = REGISTRY_EVENT_TYPES;
+    expect(types).toContain('background_child_state');
+    expect(types).toContain('child_dispatched');
+    expect(types).toContain('child_turn_ended');
+    expect(types).toContain('watch_registered');
+    expect(types).toContain('watch_fired');
+  });
+
   it('GET /events/types returns the registry as JSON', async () => {
     const routes = createEventTypesRoutes();
     const res = mockRes();

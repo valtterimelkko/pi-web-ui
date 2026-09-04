@@ -65,9 +65,20 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.33.0',
+        contractVersion: '1.34.0',
       },
       features: {
+        // Contract 1.34.0: child-orchestration surfacing (background subagents,
+        // Internal-API children, watch lifecycle) advertised for automation clients.
+        childSurfacing: true,
+        childSurfacingEvents: [
+          'background_child_state',
+          'child_dispatched',
+          'child_turn_ended',
+          'watch_registered',
+          'watch_fired',
+        ],
+        childParentHeader: 'X-Parent-Session',
         retentionLeases: true,
         durableRetention: true,
         residentRetention: true,

@@ -5,3 +5,4 @@ export * from './protocol-types.js';
 export * from './screen-view.js';
 export * from './notification-identity.js';
 export * from './subagent-summary.js';
+export * from './child-surfacing.js';

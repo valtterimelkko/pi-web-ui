@@ -59,6 +59,32 @@ export async function piSessionToReplayEvents(
 
     if (entry.type === 'message' && entry.message) {
       const role = entry.message.role;
+
+      // Contract 1.34.0: toolResult messages become tool_execution_end events so
+      // the shared screen-view projection renders tool cards for Pi sessions
+      // exactly like the live browser path does.
+      if (role === 'toolResult') {
+        const toolCallId = (entry.message as unknown as { toolCallId?: unknown }).toolCallId;
+        const toolName = (entry.message as unknown as { toolName?: unknown }).toolName;
+        if (typeof toolCallId === 'string' && typeof toolName === 'string') {
+          const result: Record<string, unknown> = {
+            content: Array.isArray(entry.message.content) ? entry.message.content : [],
+            isError: entry.message.isError === true,
+          };
+          const details = (entry.message as unknown as { details?: unknown }).details;
+          if (details !== undefined) result.details = details;
+          events.push({
+            type: 'tool_execution_end',
+            toolCallId,
+            toolName,
+            result,
+            isError: entry.message.isError === true,
+            timestamp: entry.message.timestamp ?? entry.timestamp,
+          });
+        }
+        continue;
+      }
+
       if (role !== 'user' && role !== 'assistant') continue;
       const id = entry.id ?? `msg_${entry.timestamp ?? events.length}`;
       const ts = entry.message.timestamp ?? entry.timestamp;
@@ -82,6 +108,25 @@ export async function piSessionToReplayEvents(
         }
       }
       events.push({ type: 'message_end', message: { id }, timestamp: ts });
+
+      // Contract 1.34.0: assistant toolCall blocks become tool_execution_start
+      // events, emitted AFTER the message_end so the projected item order
+      // matches the live browser card order.
+      if (role === 'assistant' && Array.isArray(entry.message.content)) {
+        for (const block of entry.message.content) {
+          if (!block || block.type !== 'toolCall') continue;
+          const toolCallId = (block as unknown as { id?: unknown }).id;
+          const toolName = (block as unknown as { name?: unknown }).name;
+          if (typeof toolCallId !== 'string' || typeof toolName !== 'string') continue;
+          events.push({
+            type: 'tool_execution_start',
+            toolCallId,
+            toolName,
+            args: (block as unknown as { arguments?: unknown }).arguments,
+            timestamp: (block as unknown as { timestamp?: number }).timestamp ?? ts,
+          });
+        }
+      }
     } else if (entry.type === 'tool_execution_start' || entry.type === 'tool_execution_end') {
       // Already in the common replay-event shape — pass straight through.
       events.push(entry as unknown as Record<string, unknown>);

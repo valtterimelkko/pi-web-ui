@@ -299,8 +299,13 @@ function buildToolHeaderText(
     // Enriched Pi SDK summary (model + tool-usage one-line), faithful to the
     // client card. Preferred over the legacy args-only task-count summary.
     if (summary) {
-      const agent = summary.agents[0]?.agent ?? 'agent';
-      const model = summary.agents[0]?.model;
+      // Contract 1.34.0: with no per-agent results (e.g. a background launch's
+      // empty `results: []`), fall back to the agent name from the tool args so
+      // the header names the dispatched child instead of a generic "agent".
+      const agent = summary.agents[0]?.agent
+        ?? (typeof argsRecord?.agent === 'string' && argsRecord.agent ? argsRecord.agent : 'agent');
+      const model = summary.agents[0]?.model
+        ?? (typeof argsRecord?.model === 'string' && argsRecord.model ? argsRecord.model : undefined);
       let text = `${toolName}: ${summary.mode} · ${agent}`;
       if (model) text += ` · ${model}`;
       text += ` · ${formatSubagentOneLine(summary)}`;

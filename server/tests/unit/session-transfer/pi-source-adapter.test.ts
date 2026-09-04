@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { extractPiTranscript } from '../../../src/session-transfer/pi-source-adapter.js';
+import { extractPiTranscript, piSessionToReplayEvents } from '../../../src/session-transfer/pi-source-adapter.js';
+import { projectDefaultViewFromEvents } from '@pi-web-ui/shared';
 import type { VisibleTranscriptSource, TransferScope } from '../../../src/session-transfer/types.js';
 
 const TS = 1700000000000;
@@ -20,6 +21,93 @@ function makeSource(overrides: Partial<VisibleTranscriptSource> = {}): VisibleTr
 function makeEntry(overrides: Record<string, unknown>): string {
   return JSON.stringify({ timestamp: TS, ...overrides });
 }
+
+describe('piSessionToReplayEvents — tool parity (contract 1.34.0)', () => {
+  let tmpDir: string;
+  let sessionFile: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-replay-tools-'));
+    sessionFile = path.join(tmpDir, 'session.jsonl');
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('emits tool_execution_start/end from assistant toolCall blocks and toolResult messages', async () => {
+    await fs.writeFile(sessionFile, [
+      makeEntry({ type: 'message', id: 'm1', message: { role: 'user', content: [{ type: 'text', text: 'run it' }], timestamp: TS } }),
+      makeEntry({ type: 'message', id: 'm2', message: { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'let me look' },
+        { type: 'toolCall', id: 'tool_01', name: 'bash', arguments: { command: 'ls -la' } },
+      ], timestamp: TS } }),
+      makeEntry({ type: 'message', id: 'm3', message: { role: 'toolResult', toolCallId: 'tool_01', toolName: 'bash', content: [{ type: 'text', text: 'file.txt' }], isError: false, timestamp: TS } }),
+    ].join('\n'));
+
+    const events = await piSessionToReplayEvents(sessionFile);
+    const types = events.map((e) => e.type);
+    expect(types).toContain('tool_execution_start');
+    expect(types).toContain('tool_execution_end');
+
+    const start = events.find((e) => e.type === 'tool_execution_start');
+    expect(start).toMatchObject({ toolCallId: 'tool_01', toolName: 'bash', args: { command: 'ls -la' } });
+    // The start must come after the assistant message_end so projection order matches the browser.
+    expect(types.indexOf('tool_execution_start')).toBeGreaterThan(types.indexOf('message_end'));
+
+    const end = events.find((e) => e.type === 'tool_execution_end') as Record<string, unknown>;
+    expect(end).toMatchObject({ toolCallId: 'tool_01', toolName: 'bash', isError: false });
+    expect((end.result as { content: unknown }).content).toEqual([{ type: 'text', text: 'file.txt' }]);
+  });
+
+  it('carries toolResult details so background-subagent identity survives replay', async () => {
+    await fs.writeFile(sessionFile, [
+      makeEntry({ type: 'message', id: 'm2', message: { role: 'assistant', content: [
+        { type: 'toolCall', id: 'tool_bg', name: 'subagent', arguments: { agent: 'web-researcher', run_in_background: true, task: 'research ETFs' } },
+      ], timestamp: TS } }),
+      makeEntry({ type: 'message', id: 'm3', message: { role: 'toolResult', toolCallId: 'tool_bg', toolName: 'subagent', content: [{ type: 'text', text: 'Background subagent launched (detached).' }], isError: false, details: {
+        mode: 'single', results: [], background: { taskId: 'bg_abc', runId: 'sa_abc', kind: 'bounded' },
+      }, timestamp: TS } }),
+    ].join('\n'));
+
+    const events = await piSessionToReplayEvents(sessionFile);
+    const end = events.find((e) => e.type === 'tool_execution_end') as Record<string, unknown>;
+    const details = (end.result as { details?: { background?: unknown } }).details;
+    expect(details?.background).toEqual({ taskId: 'bg_abc', runId: 'sa_abc', kind: 'bounded' });
+  });
+
+  it('end-to-end: the shared screen projection renders tool cards from the replayed events', async () => {
+    await fs.writeFile(sessionFile, [
+      makeEntry({ type: 'message', id: 'm1', message: { role: 'user', content: [{ type: 'text', text: 'go' }], timestamp: TS } }),
+      makeEntry({ type: 'message', id: 'm2', message: { role: 'assistant', content: [
+        { type: 'text', text: 'Dispatching three research children.' },
+        { type: 'toolCall', id: 't1', name: 'subagent', arguments: { agent: 'web-researcher', task: 'ETF pack', run_in_background: true } },
+        { type: 'toolCall', id: 't2', name: 'subagent', arguments: { agent: 'web-researcher', task: 'HL costs', run_in_background: true } },
+        { type: 'toolCall', id: 't3', name: 'subagent', arguments: { agent: 'web-researcher', task: 'performance', run_in_background: true } },
+      ], timestamp: TS } }),
+      makeEntry({ type: 'message', id: 'm3', message: { role: 'toolResult', toolCallId: 't1', toolName: 'subagent', content: [{ type: 'text', text: 'Background subagent launched (detached).' }], isError: false, details: { mode: 'single', results: [], background: { taskId: 'bg_1', runId: 'sa_1', kind: 'bounded' } }, timestamp: TS } }),
+      makeEntry({ type: 'message', id: 'm4', message: { role: 'toolResult', toolCallId: 't2', toolName: 'subagent', content: [{ type: 'text', text: 'Background subagent launched (detached).' }], isError: false, details: { mode: 'single', results: [], background: { taskId: 'bg_2', runId: 'sa_2', kind: 'bounded' } }, timestamp: TS } }),
+      makeEntry({ type: 'message', id: 'm5', message: { role: 'toolResult', toolCallId: 't3', toolName: 'subagent', content: [{ type: 'text', text: 'Background subagent launched (detached).' }], isError: false, details: { mode: 'single', results: [], background: { taskId: 'bg_3', runId: 'sa_3', kind: 'bounded' } }, timestamp: TS } }),
+    ].join('\n'));
+
+    const events = await piSessionToReplayEvents(sessionFile);
+    const view = projectDefaultViewFromEvents(events, { expand: { tools: true, thinking: false } });
+    const toolItems = view.items.filter((i) => i.kind === 'tool');
+    expect(toolItems).toHaveLength(3);
+    expect(toolItems.every((i) => i.toolName === 'subagent')).toBe(true);
+  });
+
+  it('skips orphan toolResult entries with no matching start (projection drops them)', async () => {
+    await fs.writeFile(sessionFile, [
+      makeEntry({ type: 'message', id: 'm3', message: { role: 'toolResult', toolCallId: 'ghost', toolName: 'bash', content: [{ type: 'text', text: 'x' }], isError: false, timestamp: TS } }),
+    ].join('\n'));
+    const events = await piSessionToReplayEvents(sessionFile);
+    // Emitted for completeness; the shared projection ignores ends without starts.
+    expect(events.filter((e) => e.type === 'tool_execution_end')).toHaveLength(1);
+    const view = projectDefaultViewFromEvents(events, { expand: { tools: true, thinking: false } });
+    expect(view.items.filter((i) => i.kind === 'tool')).toHaveLength(0);
+  });
+});
 
 describe('extractPiTranscript', () => {
   let tmpDir: string;

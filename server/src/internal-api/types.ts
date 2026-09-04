@@ -72,7 +72,7 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.33.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.34.0' as const;
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 
@@ -1145,6 +1145,12 @@ export interface CapabilitiesResponse {
     sessionRecoveryEvidence: true;
     supportsEventPayloadBudget: true;
     capacityEndpoint: '/api/v1/capacity';
+    /** Contract 1.34.0: child-orchestration surfacing (cards + events) is available. */
+    childSurfacing: true;
+    /** Contract 1.34.0: the normalized event types the surfacing emits. */
+    childSurfacingEvents: readonly string[];
+    /** Contract 1.34.0: request header that links an Internal-API call to the calling parent session. */
+    childParentHeader: 'X-Parent-Session';
     piProviderPolicy: {
       blockedProviders: string[];
     };
@@ -1233,6 +1239,16 @@ export const SSE_EVENT_TYPES = {
   GOAL_END: 'goal_end',
   /** Contract 1.33.0: dispatch re-applied a stored model binding (rehydration drift guard). */
   MODEL_REBOUND: 'model_rebound',
+  /** Contract 1.34.0: background-subagent launch/settlement state on the parent session. */
+  BACKGROUND_CHILD_STATE: 'background_child_state',
+  /** Contract 1.34.0: an Internal-API child session was created and linked to a parent. */
+  CHILD_DISPATCHED: 'child_dispatched',
+  /** Contract 1.34.0: a linked child session reached a terminal turn state. */
+  CHILD_TURN_ENDED: 'child_turn_ended',
+  /** Contract 1.34.0: a durable watch was registered on a session (source-session linkage). */
+  WATCH_REGISTERED: 'watch_registered',
+  /** Contract 1.34.0: a durable watch fired and its wake was dispatched. */
+  WATCH_FIRED: 'watch_fired',
 } as const;
 
 export interface SSETaskStatusEvent {

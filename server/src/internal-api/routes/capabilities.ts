@@ -6,7 +6,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'http';
-import { getInternalApiContractInfo, type CapabilitiesResponse } from '../types.js';
+import { getInternalApiContractInfo, SSE_EVENT_TYPES, type CapabilitiesResponse } from '../types.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
@@ -57,6 +57,18 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
         sessionRecoveryEvidence: true,
         supportsEventPayloadBudget: true,
         capacityEndpoint: '/api/v1/capacity',
+        // Contract 1.34.0: child-orchestration surfacing (background subagents,
+        // Internal-API children, watch lifecycle). Events are additive normalized
+        // types on the broker/SSE stream; see docs/INTERNAL-API-CONTRACT.md.
+        childSurfacing: true,
+        childSurfacingEvents: [
+          SSE_EVENT_TYPES.BACKGROUND_CHILD_STATE,
+          SSE_EVENT_TYPES.CHILD_DISPATCHED,
+          SSE_EVENT_TYPES.CHILD_TURN_ENDED,
+          SSE_EVENT_TYPES.WATCH_REGISTERED,
+          SSE_EVENT_TYPES.WATCH_FIRED,
+        ],
+        childParentHeader: 'X-Parent-Session',
         piProviderPolicy: { blockedProviders: blockedPiProviders },
       },
       runtimes: {

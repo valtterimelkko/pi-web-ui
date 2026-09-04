@@ -48,6 +48,11 @@ export const EVENT_TYPE_REGISTRY: readonly EventTypeInfo[] = [
   { type: SSE_EVENT_TYPES.GOAL_STATE, description: 'Goal function state snapshot (canonical projection, contract 1.27.0).', category: 'control', verbosity: BOTH },
   { type: SSE_EVENT_TYPES.GOAL_END, description: 'Goal reached a terminal status (achieved|failed|cleared) — the watchable goal event.', category: 'control', verbosity: BOTH },
   { type: SSE_EVENT_TYPES.MODEL_REBOUND, description: 'Dispatch re-applied the stored model binding before the turn (rehydration drift guard, contract 1.33.0).', category: 'control', verbosity: FULL },
+  { type: SSE_EVENT_TYPES.BACKGROUND_CHILD_STATE, description: 'Background-subagent state changed on this session (launched/running/settled; contract 1.34.0).', category: 'control', verbosity: BOTH },
+  { type: SSE_EVENT_TYPES.CHILD_DISPATCHED, description: 'An Internal-API child session was created and linked to this parent session (contract 1.34.0).', category: 'control', verbosity: BOTH },
+  { type: SSE_EVENT_TYPES.CHILD_TURN_ENDED, description: 'A linked child session reached a terminal turn state (contract 1.34.0).', category: 'control', verbosity: BOTH },
+  { type: SSE_EVENT_TYPES.WATCH_REGISTERED, description: 'A durable watch was registered linking this session to a watched target (contract 1.34.0).', category: 'control', verbosity: BOTH },
+  { type: SSE_EVENT_TYPES.WATCH_FIRED, description: 'A durable watch registered from this session fired and its wake was dispatched (contract 1.34.0).', category: 'control', verbosity: BOTH },
 ];
 
 /** All registered event type names (drift-guard set). */
