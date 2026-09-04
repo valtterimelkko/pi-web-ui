@@ -17,7 +17,7 @@ import {
   ChevronDown,
   Clock,
 } from 'lucide-react';
-import { formatSubagentOneLine, type SubagentToolSummary } from '@pi-web-ui/shared';
+import { formatSubagentOneLine, type SubagentToolSummary, type ChildCardProjection } from '@pi-web-ui/shared';
 
 /**
  * SubagentToolCard - Hierarchical display of subagent execution
@@ -39,6 +39,10 @@ interface SubagentToolCardProps {
     summary?: SubagentToolSummary;
   } | null;
   startTime?: number; // Unix timestamp when tool started
+  /** Contract 1.34.0: bounded background-child identity for background launches. */
+  background?: { taskId: string; runId?: string; kind?: string; model?: string };
+  /** Live projection from background_child_state, when known. */
+  childState?: ChildCardProjection;
 }
 
 interface ToolCall {
@@ -398,7 +402,9 @@ export const SubagentToolCard = memo(function SubagentToolCard({
   name, 
   args, 
   result,
-  startTime
+  startTime,
+  background,
+  childState,
 }: SubagentToolCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedTasks, setExpandedTasks] = useState<Set<number>>(new Set());
@@ -422,6 +428,18 @@ export const SubagentToolCard = memo(function SubagentToolCard({
     
     return () => clearInterval(interval);
   }, [isPending, startTime]);
+
+  // Contract 1.34.0: background launches complete instantly as tool calls but
+  // the CHILD keeps running — childState (from background_child_state) drives
+  // the card status instead of the tool call's own success flag.
+  const bgActive = !!background;
+  const childStatus: 'running' | 'completed' | 'failed' | 'cancelled' | undefined = bgActive
+    ? ((childState?.status as 'running' | 'completed' | 'failed' | 'cancelled' | undefined) ?? 'running')
+    : undefined;
+  const childModel = childState?.model ?? background?.model;
+  const childDuration = (childState?.startedAt && childState?.endedAt)
+    ? formatElapsed(Math.max(0, Math.round((childState.endedAt - childState.startedAt) / 1000)))
+    : undefined;
 
   // Parse subagent result (legacy orchestrator-JSON shape; other runtimes).
   const subagentData = useMemo(() => {
@@ -519,7 +537,19 @@ export const SubagentToolCard = memo(function SubagentToolCard({
 
         {/* Status */}
         <div className="ml-auto flex items-center gap-2">
-          {isPending ? (
+          {childStatus === 'running' ? (
+            <span className="text-xs text-amber-500 flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              Child running
+              {elapsedSeconds > 0 && (
+                <span className="font-mono">({formatElapsed(elapsedSeconds)})</span>
+              )}
+            </span>
+          ) : childStatus === 'completed' ? (
+            <CheckCircle className="w-4 h-4 text-emerald-500" />
+          ) : childStatus ? (
+            <XCircle className="w-4 h-4 text-red-500" />
+          ) : isPending ? (
             <span className="text-xs text-amber-500 flex items-center gap-1">
               <Clock className="w-3 h-3" />
               Running
@@ -616,8 +646,24 @@ export const SubagentToolCard = memo(function SubagentToolCard({
         </div>
       )}
 
+      {/* Collapsed summary — background child (contract 1.34.0) */}
+      {!isExpanded && bgActive && (
+        <div className="px-3 py-1.5 bg-gray-50 border-t border-gray-100">
+          <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
+            {childModel && (
+              <span className="font-mono text-[10px] text-gray-400 truncate max-w-[55%]" title={childModel}>
+                {childModel}
+              </span>
+            )}
+            <span>{childStatus === 'completed' ? '✓ completed' : childStatus === 'running' ? 'running' : childStatus}</span>
+            {childDuration && <span className="font-mono text-[10px] text-gray-400">{childDuration}</span>}
+            {childState?.error && <span className="text-[10px] text-red-500 truncate">{childState.error}</span>}
+          </div>
+        </div>
+      )}
+
       {/* Collapsed summary — enriched (Pi SDK) */}
-      {!isExpanded && hasResult && summary && (
+      {!isExpanded && hasResult && summary && !bgActive && (
         <div className="px-3 py-1.5 bg-gray-50 border-t border-gray-100">
           <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
             {summary.agents[0]?.model && (
@@ -631,7 +677,7 @@ export const SubagentToolCard = memo(function SubagentToolCard({
       )}
 
       {/* Collapsed summary — legacy (orchestrator-JSON shape; other runtimes) */}
-      {!isExpanded && hasResult && !summary && subagentData && (
+      {!isExpanded && hasResult && !summary && subagentData && !bgActive && (
         <div className="px-3 py-1.5 bg-gray-50 border-t border-gray-100">
           <div className="flex items-center gap-3 text-xs text-gray-500">
             {tasks.length > 0 && (

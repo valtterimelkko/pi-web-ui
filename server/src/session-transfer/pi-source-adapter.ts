@@ -19,6 +19,7 @@ export interface PiSessionEntry {
     role?: string;
     content?: Array<{ type: string; text?: string; thinking?: string }> | string;
     timestamp?: number;
+    isError?: boolean;
   };
   timestamp?: number;
   [key: string]: unknown;

@@ -67,6 +67,7 @@ import { isThinkingLevel } from '../types.js';
 import { composePiGoalCommand, type SessionGoalControlRequest } from '../goal/goal-actions.js';
 import { readProjectPiGoalState } from '../goal/pi-goal.js';
 import { createPiGoalEventBridge } from '../goal/goal-events.js';
+import { createPiBackgroundChildBridge, readBackgroundTasksSnapshot } from '../background-children.js';
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, GoalSweepReadCache, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
@@ -540,6 +541,32 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       multiSessionManager.addApiObserver(sessionPath, observer);
       piObservedSessions.add(sessionPath);
       piObserverByPath.set(sessionPath, observer);
+
+      // Contract 1.34.0 (child surfacing): bridge the subagent extension's
+      // background-task UI messages into a `background_child_state` broker
+      // event + structured browser message, using the on-disk snapshot as
+      // truth. Same disposal key as the observer itself.
+      void sessionRegistry.getByPath(sessionPath).then((entry) => {
+        if (!entry) return;
+        const backgroundBridge = createPiBackgroundChildBridge({
+          sessionId: entry.id,
+          readChildren: () => readBackgroundTasksSnapshot(sessionPath),
+          publish: (event) => {
+            try {
+              broker.publish(sessionPath, { type: event.type, timestamp: event.timestamp, data: event.data } as NormalizedEvent);
+            } catch { /* non-fatal */ }
+          },
+          broadcast: (message) => {
+            try { onBrowserMessage?.(message); } catch { /* non-fatal */ }
+          },
+        });
+        try {
+          multiSessionManager.addExtensionUiObserver?.(sessionPath, backgroundBridge);
+          disposal.register(sessionPath, 'pi-background-child-bridge', () => {
+            multiSessionManager.removeExtensionUiObserver?.(sessionPath, backgroundBridge);
+          });
+        } catch { /* non-fatal */ }
+      }).catch(() => { /* registry race — retried on next attach */ });
 
       // Contract 1.27.0 (goal function): bridge goal-engine extension UI
       // messages into broker `goal_state` / `goal_end` events, using the

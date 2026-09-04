@@ -74,6 +74,8 @@ export interface LiveMessage {
     output: string;
     isError: boolean;
     summary?: SubagentToolSummary;
+    /** Contract 1.34.0: bounded background-child identity for background launches. */
+    background?: { taskId: string; runId?: string; kind?: string; model?: string };
   };
   timestamp: number;
   isComplete: boolean;

@@ -9,6 +9,7 @@ import { ReadAloudButton } from './ReadAloudButton';
 import { useReadAloud } from '../../hooks/useReadAloud';
 import type { LiveMessage } from '../../hooks/useSessionStream.js';
 import { useSessionStore } from '../../store';
+import { useBackgroundChildrenStore } from '../../store/backgroundChildrenStore';
 import { StreamingText } from './StreamingText';
 import { isGoalContinuationPrompt } from '../../lib/goalModel';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -75,6 +76,12 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
   const [showThinking, setShowThinking] = useState(!THINKING_COLLAPSED_BY_DEFAULT);
   const [copied, setCopied] = useState(false);
   const isStreaming = useSessionStore((state) => state.isStreaming);
+  // Contract 1.34.0 child surfacing: resolve a background-subagent launch's
+  // live state so its card shows running/completed instead of an instant ✓.
+  const currentSessionId = useSessionStore((state) => state.currentSessionId);
+  const backgroundIdentity = message.toolResult?.background;
+  const backgroundChildState = useBackgroundChildrenStore((state) =>
+    (currentSessionId && backgroundIdentity ? state.getChild(currentSessionId, backgroundIdentity.taskId) : undefined));
   const sessionSdkType = useSessionStore((state) => state.currentSessionSdkType);
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
@@ -208,6 +215,8 @@ export const MessageBubble = memo(function MessageBubble({ message, isLast, isCu
           args={message.toolCall.args}
           result={message.toolResult}
           startTime={message.timestamp}
+          background={backgroundIdentity}
+          childState={backgroundChildState}
         />
       );
     }

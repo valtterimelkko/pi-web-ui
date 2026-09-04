@@ -17,6 +17,7 @@ import {
 import { SessionPool } from '../pi/session-pool.js';
 import { readSessionCwd } from '../pi/session-cwd.js';
 import { parsePiSessionHistory } from '../pi/session-history.js';
+import { readBackgroundTasksSnapshot } from '../internal-api/background-children.js';
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
@@ -2261,6 +2262,22 @@ export class WebSocketConnectionManager {
       fileTimestamp,
       isStreaming,
     });
+
+    // Contract 1.34.0 child surfacing: re-hydrate the switching client's
+    // background-child states from the on-disk snapshot so replayed launch
+    // cards show their true running/completed state.
+    try {
+      const children = await readBackgroundTasksSnapshot(sessionPath);
+      if (children.length > 0) {
+        this.sendMessage(clientId, {
+          type: 'background_child_state',
+          sessionId: status.sessionId,
+          children,
+        });
+      }
+    } catch {
+      /* surfacing is best-effort */
+    }
 
     // Note: The old session (oldSessionPath) is NOT disposed here.
     // It remains active in MultiSessionManager for background processing

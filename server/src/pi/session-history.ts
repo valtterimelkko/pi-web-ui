@@ -7,7 +7,7 @@ export interface PiSessionHistoryMessage {
   content: string | Array<{ type: string; text?: string; thinking?: string }>;
   timestamp: number;
   toolCall?: { id: string; name: string; args: unknown };
-  toolResult?: { output: string; isError: boolean; summary?: SubagentToolSummary };
+  toolResult?: { output: string; isError: boolean; summary?: SubagentToolSummary; background?: { taskId: string; runId?: string; kind?: string; model?: string } };
 }
 
 interface PendingSubagentCall {
@@ -102,6 +102,17 @@ export function parsePiSessionHistory(entries: unknown[]): PiSessionHistoryMessa
 
     const summary = summarizeSubagentDetails(call.name, message.details);
     if (!summary) continue;
+    // Contract 1.34.0: carry the bounded background identity so a replayed
+    // launch card stays linkable to its background_child_state projections.
+    const bgDetails = (message.details as { background?: Record<string, unknown> } | undefined)?.background;
+    const background = bgDetails && typeof bgDetails.taskId === 'string'
+      ? {
+          taskId: bgDetails.taskId as string,
+          ...(typeof bgDetails.runId === 'string' ? { runId: bgDetails.runId as string } : {}),
+          ...(typeof bgDetails.kind === 'string' ? { kind: bgDetails.kind as string } : {}),
+          ...(typeof bgDetails.model === 'string' ? { model: bgDetails.model as string } : {}),
+        }
+      : undefined;
     messages.push({
       // Match the live event's `toolCallId`, so an in-flight replay card is
       // updated in place when its subsequent tool_execution_end arrives.
@@ -110,7 +121,7 @@ export function parsePiSessionHistory(entries: unknown[]): PiSessionHistoryMessa
       content: [],
       timestamp,
       toolCall: { id: call.id, name: call.name, args: call.args },
-      toolResult: { output: '', isError: isError(message, summary), summary },
+      toolResult: { output: '', isError: isError(message, summary), summary, ...(background ? { background } : {}) },
     });
   }
 

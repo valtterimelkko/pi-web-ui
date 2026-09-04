@@ -18,6 +18,7 @@ import type { CommandCodeEffort, CommandCodeModelInfo, SubagentToolSummary } fro
 
 import { useTransferStore } from './transferStore';
 import { useGoalStore } from './goalStore';
+import { useBackgroundChildrenStore } from './backgroundChildrenStore';
 import { GOAL_STATUS_KEY, GOAL_WIDGET_KEY } from '../lib/goalModel';
 import { recordBrowserDiagnostic, recordProtocolDrift } from '../lib/browserDiagnostics.js';
 
@@ -452,6 +453,31 @@ function extractToolResultText(result: unknown): string {
   return '';
 }
 
+/** Bounded background-child identity carried on subagent tool results (contract 1.34.0). */
+export interface BackgroundChildIdentity {
+  taskId: string;
+  runId?: string;
+  kind?: string;
+  model?: string;
+}
+
+/** Extract `details.background` (bounded fields only) from a subagent tool result. */
+function extractBackgroundIdentity(result: unknown): BackgroundChildIdentity | undefined {
+  if (!result || typeof result === 'object') {
+    const details = (result as { details?: { background?: Record<string, unknown> } }).details;
+    const bg = details?.background;
+    if (bg && typeof bg === 'object' && typeof bg.taskId === 'string') {
+      return {
+        taskId: bg.taskId,
+        ...(typeof bg.runId === 'string' ? { runId: bg.runId } : {}),
+        ...(typeof bg.kind === 'string' ? { kind: bg.kind } : {}),
+        ...(typeof bg.model === 'string' ? { model: bg.model } : {}),
+      };
+    }
+  }
+  return undefined;
+}
+
 export interface Session {
   id: string;
   path: string;
@@ -546,6 +572,8 @@ export interface Message {
     // server-side and forwarded on `tool_execution_end`. Present only for Pi
     // subagent-family tools; absent for every other tool/runtime.
     summary?: SubagentToolSummary;
+    // Contract 1.34.0: bounded background-child identity for background launches.
+    background?: BackgroundChildIdentity;
   };
   isComplete?: boolean; // Optional for backward compatibility with LiveMessage
   error?: {
@@ -2021,9 +2049,12 @@ export const useSessionStore = create<SessionState>()(
               resultSummary?: SubagentToolSummary;
             };
             const content = extractToolResultText(result);
+            // Contract 1.34.0 child surfacing: keep the bounded background
+            // identity so the card can name/link the dispatched child.
+            const background = extractBackgroundIdentity(result);
             get().updateMessage(toolCallId, {
               content,
-              toolResult: { output: content, isError, summary: resultSummary },
+              toolResult: { output: content, isError, summary: resultSummary, ...(background ? { background } : {}) },
             });
             break;
           }
@@ -2229,6 +2260,16 @@ export const useSessionStore = create<SessionState>()(
                     : state.extensionStatuses,
                 };
               });
+            }
+            break;
+          }
+
+          // Contract 1.34.0 child surfacing: structured background-subagent
+          // state broadcasts (server-synthesized from the on-disk snapshot).
+          case 'background_child_state': {
+            const childMsg = msg as unknown as { sessionId?: string; children?: import('@pi-web-ui/shared').ChildCardProjection[] };
+            if (childMsg.sessionId && Array.isArray(childMsg.children)) {
+              useBackgroundChildrenStore.getState().applyChildren(childMsg.sessionId, childMsg.children);
             }
             break;
           }
@@ -2938,6 +2979,13 @@ export const useSessionStore = create<SessionState>()(
               case 'widget_cleared':
               case 'extension_status': {
                 get().handleServerMessage({ ...event, sessionId });
+                break;
+              }
+
+              // Contract 1.34.0: wrapped background_child_state re-dispatches
+              // through the top-level handler so the child store updates.
+              case 'background_child_state': {
+                get().handleServerMessage({ ...(event as Record<string, unknown>), type: 'background_child_state', sessionId } as never);
                 break;
               }
 

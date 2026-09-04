@@ -232,6 +232,8 @@ export type ServerMessage =
   | { type: 'auto_retry_start'; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: 'auto_retry_end'; success: boolean; attempt: number; finalError?: string }
   | { type: 'extension_error'; extensionPath: string; event: string; error: string }
+  // Contract 1.34.0 child surfacing: structured background-subagent state.
+  | { type: 'background_child_state'; sessionId: string; children: unknown[] }
   | { type: 'extension_ui_request'; request: { id: string; type: 'confirm' | 'select' | 'input' | 'editor' | 'ask_user_question'; method: string; params: Record<string, unknown>; timeout: number } }
   | { type: 'extension_ui_cancel'; request: { id: string; reason: 'timeout' | 'aborted' | 'turn_end' | 'disconnected' | 'answered' } }
   | { type: 'pong' }
