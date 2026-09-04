@@ -1438,6 +1438,10 @@ export interface WatchResponse {
    * `closed` — explicitly torn down.
    */
   status: WatchStatus;
+  /** Contract 1.34.0 surfacing: the arming (parent) session, when known. */
+  sourceSessionId?: string;
+  /** Contract 1.34.0 surfacing: broker key for the arming session. */
+  sourceBrokerKey?: string;
   /** Register response only: true when this registration replaced an existing watch. */
   replaced?: boolean;
   pinned: boolean;

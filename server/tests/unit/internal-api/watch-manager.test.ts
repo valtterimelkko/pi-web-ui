@@ -355,3 +355,133 @@ describe('WatchManager — standing observation + durable ledger', () => {
     })).rejects.toThrow();
   });
 });
+
+describe('watch surfacing (contract 1.34.0)', () => {
+  let dir: string;
+  let broker: InternalApiEventBroker;
+  let pin: ReturnType<typeof vi.fn>;
+  let manager: WatchManager;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-watch-surf-'));
+    broker = new InternalApiEventBroker({ replayBufferSize: 10 });
+    pin = vi.fn(() => true);
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin });
+  });
+
+  afterEach(async () => {
+    manager.close();
+    await flush();
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  it('emits watch_registered to the surface callback with the parent linkage', async () => {
+    const surface = vi.fn();
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, surface });
+    await manager.register({
+      sessionId: 'surf-reg',
+      sessionPath: 'surf-reg',
+      runtime: 'pi',
+      sourceSessionId: 'parent-1',
+      sourceBrokerKey: '/sessions/parent.jsonl',
+      request: { conditions: [{ id: 'c0', type: 'event_type', eventType: 'agent_end' }], label: 'msb13-fxa-agent_end' },
+    });
+
+    expect(surface).toHaveBeenCalledTimes(1);
+    const [record, event] = surface.mock.calls[0];
+    expect(record).toMatchObject({ watchId: 'watch-surf-reg', sourceSessionId: 'parent-1', sourceBrokerKey: '/sessions/parent.jsonl' });
+    expect(event.type).toBe('watch_registered');
+    expect(event.data).toMatchObject({
+      sessionId: 'parent-1',
+      watch: { watchId: 'watch-surf-reg', targetSessionId: 'surf-reg', label: 'msb13-fxa-agent_end', status: 'active' },
+    });
+    expect(event.data.watch.conditions).toEqual([{ id: 'c0', type: 'event_type', description: 'event agent_end' }]);
+  });
+
+  it('does not emit watch_registered when no source linkage exists', async () => {
+    const surface = vi.fn();
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, surface });
+    await manager.register({
+      sessionId: 'surf-reg-nolink', sessionPath: 'surf-reg-nolink', runtime: 'pi',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+    });
+    expect(surface).not.toHaveBeenCalled();
+  });
+
+  it('emits watch_fired once per successful wake with the delivery kind', async () => {
+    const surface = vi.fn();
+    const dispatchWake = vi.fn(async () => ({ status: 'dispatched' as const, deliveryKind: 'steer' as const }));
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, surface, dispatchWake });
+    await manager.register({
+      sessionId: 'surf-fire',
+      sessionPath: 'surf-fire',
+      runtime: 'pi',
+      sourceSessionId: 'parent-1',
+      sourceBrokerKey: '/sessions/parent.jsonl',
+      request: {
+        conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+        onFire: { type: 'prompt', targetSessionId: 'parent', message: 'wake up', mode: 'steer' },
+      },
+    });
+    surface.mockClear();
+
+    broker.publish('surf-fire', ev('agent_end'));
+    await flush();
+
+    const fired = surface.mock.calls.filter(([, event]) => (event as { type: string }).type === 'watch_fired');
+    expect(fired).toHaveLength(1);
+    const [record, event] = fired[0];
+    expect(record.sourceSessionId).toBe('parent-1');
+    expect(event.data).toMatchObject({
+      sessionId: 'parent-1',
+      watchId: 'watch-surf-fire',
+      targetSessionId: 'surf-fire',
+      conditionId: 'c0',
+      deliveryKind: 'steer',
+    });
+  });
+
+  it('does not emit watch_fired when the wake fails', async () => {
+    const surface = vi.fn();
+    const dispatchWake = vi.fn(async () => ({ status: 'failed' as const, errorCode: 'SESSION_BUSY' as const }));
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin, surface, dispatchWake });
+    await manager.register({
+      sessionId: 'surf-fail',
+      sessionPath: 'surf-fail',
+      runtime: 'pi',
+      sourceSessionId: 'parent-1',
+      sourceBrokerKey: '/sessions/parent.jsonl',
+      request: {
+        conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+        onFire: { type: 'prompt', targetSessionId: 'parent', message: 'wake up', mode: 'follow_up' },
+      },
+    });
+    surface.mockClear();
+
+    broker.publish('surf-fail', ev('agent_end'));
+    await flush();
+
+    expect(surface.mock.calls.filter(([, event]) => (event as { type: string }).type === 'watch_fired')).toHaveLength(0);
+  });
+
+  it('persists sourceSessionId/sourceBrokerKey on the ledger record', async () => {
+    manager.close();
+    manager = new WatchManager({ broker, storeDir: dir, pinSession: pin });
+    await manager.register({
+      sessionId: 'surf-persist',
+      sessionPath: 'surf-persist',
+      runtime: 'pi',
+      sourceSessionId: 'parent-1',
+      sourceBrokerKey: '/sessions/parent.jsonl',
+      request: { conditions: [{ type: 'event_type', eventType: 'agent_end' }] },
+    });
+    expect(manager.get('surf-persist')).toMatchObject({
+      sourceSessionId: 'parent-1',
+      sourceBrokerKey: '/sessions/parent.jsonl',
+    });
+  });
+});

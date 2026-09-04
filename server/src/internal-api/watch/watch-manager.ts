@@ -15,6 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import type { InternalApiEventBroker } from '../event-broker.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
+import { describeWatchCondition } from '@pi-web-ui/shared';
 import type {
   RegisterWatchRequest,
   SessionRuntime,
@@ -72,6 +73,8 @@ export interface WatchManagerDeps {
   persistenceRetryMs?: number;
   /** Execute one wake dispatch (run receipts, admission, injection checks live in the caller). */
   dispatchWake?: (input: WatchWakeDispatchInput) => Promise<WatchWakeDispatchResult>;
+  /** Contract 1.34.0 surfacing: called on watch_registered / watch_fired when the watch has parent linkage. */
+  surface?: (record: PersistedWatch, event: { type: 'watch_registered' | 'watch_fired'; timestamp: number; data: Record<string, unknown> }) => void;
 }
 
 interface ActiveWatch {
@@ -176,6 +179,7 @@ export class WatchManager {
   private readonly metrics: OperationalMetrics;
   private readonly persistenceRetryMs: number;
   private readonly dispatchWake?: WatchManagerDeps['dispatchWake'];
+  private readonly surface?: WatchManagerDeps['surface'];
   /** Live watches keyed by sessionId. */
   private readonly active = new Map<string, ActiveWatch>();
   /** Minimal cross-watch backpressure: one in-flight steer dispatch per target. */
@@ -193,6 +197,7 @@ export class WatchManager {
     this.metrics = deps.metrics ?? getOperationalMetrics();
     this.persistenceRetryMs = deps.persistenceRetryMs ?? 5_000;
     this.dispatchWake = deps.dispatchWake;
+    this.surface = deps.surface;
   }
 
   /**
@@ -218,6 +223,10 @@ export class WatchManager {
     sessionPath: string;
     runtime: SessionRuntime;
     request: RegisterWatchRequest;
+    /** Contract 1.34.0 surfacing: the arming (parent) session, resolved by the route. */
+    sourceSessionId?: string;
+    /** Broker publish key for the source session (pi = path). */
+    sourceBrokerKey?: string;
   }): Promise<WatchResponse> {
     await this.init();
     const { sessionId, sessionPath, runtime, request } = params;
@@ -291,6 +300,8 @@ export class WatchManager {
       sessionPath,
       runtime,
       label: request.label,
+      ...(params.sourceSessionId ? { sourceSessionId: params.sourceSessionId } : {}),
+      ...(params.sourceBrokerKey ? { sourceBrokerKey: params.sourceBrokerKey } : {}),
       status: 'active',
       pinned,
       targetPinned,
@@ -336,6 +347,32 @@ export class WatchManager {
       await this.store.delete(sessionId);
       throw error;
     }
+
+    // Contract 1.34.0 surfacing: announce the registration to the arming
+    // session's surfaces (never fatal, and only when linkage exists).
+    if (this.surface && record.sourceSessionId) {
+      try {
+        this.surface(record, {
+          type: 'watch_registered',
+          timestamp: Date.now(),
+          data: {
+            sessionId: record.sourceSessionId,
+            watch: {
+              watchId: record.watchId,
+              targetSessionId: record.sessionId,
+              ...(record.label ? { label: record.label } : {}),
+              status: record.status,
+              conditions: record.conditions.map((c) => ({
+                id: c.id,
+                type: c.type,
+                description: describeWatchCondition(c.spec as never),
+              })),
+            },
+          },
+        });
+      } catch { /* surfacing is best-effort */ }
+    }
+
     return { ...this.toResponse(record), replaced: previous !== undefined };
   }
 
@@ -564,6 +601,25 @@ export class WatchManager {
           if (result.deliveryKind) attempt.deliveryKind = result.deliveryKind;
         } else attempt.errorCode = result.errorCode;
         record.updatedAt = new Date().toISOString();
+
+        // Contract 1.34.0 surfacing: announce a successful wake to the arming
+        // session's surfaces (once per firing, success only).
+        if (result.status === 'dispatched' && this.surface && record.sourceSessionId) {
+          try {
+            this.surface(record, {
+              type: 'watch_fired',
+              timestamp: Date.now(),
+              data: {
+                sessionId: record.sourceSessionId,
+                watchId: record.watchId,
+                targetSessionId: record.sessionId,
+                conditionId: attempt.conditionId,
+                firedAt: context.firedAt,
+                ...(attempt.deliveryKind ? { deliveryKind: attempt.deliveryKind } : {}),
+              },
+            });
+          } catch { /* surfacing is best-effort */ }
+        }
         if (live.flushTimer) { clearTimeout(live.flushTimer); live.flushTimer = undefined; }
         live.snapshotDirty = false;
         this.persistLive(sessionId, live, 'wake-attempt');
@@ -679,6 +735,8 @@ export class WatchManager {
       label: record.label,
       status: record.status,
       pinned: record.pinned,
+      ...(record.sourceSessionId ? { sourceSessionId: record.sourceSessionId } : {}),
+      ...(record.sourceBrokerKey ? { sourceBrokerKey: record.sourceBrokerKey } : {}),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       conditions: record.conditions,

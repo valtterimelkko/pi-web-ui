@@ -17,6 +17,7 @@ import { getGoalControlCommand, type GoalControlAction } from '../../lib/piExten
 import { GOAL_WIDGET_KEY } from '../../lib/goalModel';
 import { GoalPanel } from './GoalPanel';
 import { ChildrenStrip } from './ChildrenStrip';
+import { WatchStrip } from './WatchStrip';
 
 interface ChatViewProps {
   onOpenSettings?: () => void;
@@ -166,6 +167,8 @@ export function ChatView({ onOpenSettings }: ChatViewProps) {
             />
             {/* Contract 1.34.0 child surfacing: live "children running" strip. */}
             <ChildrenStrip sessionId={currentSessionId} />
+            {/* Contract 1.34.0 watch surfacing: live "watches armed" strip. */}
+            <WatchStrip sessionId={currentSessionId} />
             {otherExtensionWidgets.length > 0 && (
               <div className="mb-2 space-y-2" data-testid="extension-widgets">
                 {otherExtensionWidgets.map(([key, lines]) => (

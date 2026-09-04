@@ -729,6 +729,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     pinSession: pinSessionById,
     unpinSession: unpinSessionById,
     dispatchWake: dispatchWatchWake,
+    // Contract 1.34.0 watch surfacing: fan watch_registered / watch_fired out
+    // to the arming session's broker key + browser bridge.
+    surface: (record, event) => {
+      const key = record.sourceBrokerKey ?? record.sourceSessionId;
+      if (!key) return;
+      try {
+        broker.publish(key, { type: event.type, timestamp: event.timestamp, data: event.data } as NormalizedEvent);
+      } catch { /* non-fatal */ }
+      try {
+        onBrowserMessage?.({ type: event.type, ...(event.data as Record<string, unknown>) });
+      } catch { /* non-fatal */ }
+    },
   });
 
   /**
@@ -6214,12 +6226,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       attachOpenCodeObserverIfNeeded(sessionId);
     }
 
+    // Contract 1.34.0 watch surfacing: resolve the arming (parent) session
+    // from X-Parent-Session (unresolvable -> silently unlinked, display-only).
+    let sourceSessionId: string | undefined;
+    let sourceBrokerKey: string | undefined;
+    try {
+      const headerValue = req.headers['x-parent-session'] as string | undefined;
+      const parentLink = await childLinks.resolveParent(headerValue, undefined);
+      if (parentLink) {
+        sourceSessionId = parentLink.parentSessionId;
+        sourceBrokerKey = parentLink.parentBrokerKey;
+      }
+    } catch { /* linkage is best-effort */ }
+
     try {
       const watch = await watchManager.register({
         sessionId: commandCodeSubject ? commandCodeSubject.sessionId : sessionId,
         sessionPath: entry ? entry.path : commandCodeSubject!.sessionId,
         runtime: (commandCodeSubject ? 'commandcode' : entry!.sdkType) as SessionRuntime,
         request: body,
+        ...(sourceSessionId ? { sourceSessionId } : {}),
+        ...(sourceBrokerKey ? { sourceBrokerKey } : {}),
       });
       sendJson(res, 201, watch);
     } catch (err) {

@@ -29,6 +29,10 @@ export interface PersistedWatch {
   sessionPath: string;
   runtime: SessionRuntime;
   label?: string;
+  /** Contract 1.34.0 surfacing: the arming (parent) session, when known. */
+  sourceSessionId?: string;
+  /** Broker publish key for the source session (pi = path). */
+  sourceBrokerKey?: string;
   status: WatchStatus;
   pinned: boolean;
   /** Whether this watch currently owns a `watch-target:` claim on the wake target. */

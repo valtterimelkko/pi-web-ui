@@ -19,6 +19,7 @@ import type { CommandCodeEffort, CommandCodeModelInfo, SubagentToolSummary } fro
 import { useTransferStore } from './transferStore';
 import { useGoalStore } from './goalStore';
 import { useBackgroundChildrenStore } from './backgroundChildrenStore';
+import { useWatchSurfacingStore } from './watchSurfacingStore';
 import { GOAL_STATUS_KEY, GOAL_WIDGET_KEY } from '../lib/goalModel';
 import { recordBrowserDiagnostic, recordProtocolDrift } from '../lib/browserDiagnostics.js';
 
@@ -2290,6 +2291,22 @@ export const useSessionStore = create<SessionState>()(
             break;
           }
 
+          // Contract 1.34.0 Track B: watch surfacing events.
+          case 'watch_registered': {
+            const reg = msg as unknown as { sessionId?: string; watch?: import('@pi-web-ui/shared').WatchCardProjection };
+            if (reg.sessionId && reg.watch) {
+              useWatchSurfacingStore.getState().upsert(reg.sessionId, reg.watch);
+            }
+            break;
+          }
+          case 'watch_fired': {
+            const fired = msg as unknown as { sessionId?: string; watchId?: string; deliveryKind?: string };
+            if (fired.sessionId && fired.watchId) {
+              useWatchSurfacingStore.getState().markFired(fired.sessionId, fired.watchId, fired.deliveryKind);
+            }
+            break;
+          }
+
           case 'extension_error': {
             const extensionError = msg as unknown as {
               sessionId?: string;
@@ -3002,7 +3019,9 @@ export const useSessionStore = create<SessionState>()(
               // through the top-level handler so the child store updates.
               case 'background_child_state':
               case 'child_dispatched':
-              case 'child_turn_ended': {
+              case 'child_turn_ended':
+              case 'watch_registered':
+              case 'watch_fired': {
                 get().handleServerMessage({ ...(event as Record<string, unknown>), type: event.type, sessionId } as never);
                 break;
               }
