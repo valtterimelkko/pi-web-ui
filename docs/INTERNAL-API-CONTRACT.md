@@ -21,13 +21,21 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.33.0",
+  "contractVersion": "1.34.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.34.0** (minor, additive child-orchestration surfacing) — makes harness background subagents, Internal-API-dispatched children, and durable watches visible on the parent session's surfaces without changing any wake/steer/prompt semantics:
+  - five additive normalized event types: `background_child_state` (background-subagent state on the parent session; `data`: `sessionId`, `children` — shared `ChildCardProjection[]`), `child_dispatched` and `child_turn_ended` (Internal-API child linkage; `data`: `sessionId`, `child` projection), and `watch_registered` / `watch_fired` (watch lifecycle for the arming session; `watch_fired` carries the wake `deliveryKind`). All are control-category, both-verbosity, watchable;
+  - `POST /sessions` and `POST /sessions/:id/watch` accept an optional `X-Parent-Session` header identifying the calling (parent) session; `POST /sessions` also accepts additive `parentSessionId` in the body (header wins). The header value must resolve to a registry id or path; unresolvable values are silently ignored (linkage is display-only metadata on a local, same-user socket). With no explicit identity, create falls back to correlating the newest in-flight bash tool command referencing the Internal API socket (fed by the Pi event stream; Node v24 exposes no `SO_PEERCRED`);
+  - linked sessions persist `parentSessionId` in the registry; the create response echoes it, `GET /sessions/:id` and `/info` gain additive `parentSessionId` and `children` arrays, and watch responses/ledger gain `sourceSessionId`/`sourceBrokerKey`;
+  - the browser receives the same events as additive WebSocket messages (`background_child_state`, `child_dispatched`, `child_turn_ended`, `watch_registered`, `watch_fired`) plus the subagent extension's own `background-tasks` status/widget lines, so clients can render dispatched→running→completed child cards and watch strips;
+  - Pi session replay (`piSessionToReplayEvents`) now emits `tool_execution_start`/`tool_execution_end` from assistant `toolCall` blocks and `toolResult` messages (details preserved), so `transcript?view=screen` shows tool cards for Pi sessions;
+  - capabilities advertise `features.childSurfacing`, `features.childSurfacingEvents`, and `features.childParentHeader`.
 
 - **1.33.0** (minor, additive Pi model-binding durability) — makes the create-time Pi model/thinking binding survive rehydration instead of silently degrading to the runtime default:
   - the create-time binding is persisted in the session registry, and control `set_model` / `set_thinking_level` update the stored binding (thinking level stores the clamped read-back);

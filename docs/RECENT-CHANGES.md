@@ -4,6 +4,14 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Child-orchestration surfacing (`1.34.0`, `2026-09-04`)**
+  - Background subagents, Internal-API children, and durable watches are now visible on the parent session's surfaces. Five additive normalized events (`background_child_state`, `child_dispatched`, `child_turn_ended`, `watch_registered`, `watch_fired`) reach `/events`, durable watches, and the browser (cards + live "children running"/"watches armed" strips with runtime/model).
+  - Parent linkage: `X-Parent-Session` header (or `parentSessionId` body field) on create and watch registration; unresolvable values are ignored; in-flight bash-tool correlation is the automatic fallback. Linked children persist `parentSessionId`; `GET /sessions/:id` gains additive `children`.
+  - Defect fix: Pi sessions showed **zero tool cards** on `transcript?view=screen` — the replay adapter now emits `tool_execution_start`/`tool_execution_end` from session-file tool data (details preserved).
+  - The Pi subagent extension pushes background-task status/widget lines and stamps the resolved child model on launch details; the watch-wake extension sends `X-Parent-Session` automatically. Wake/steer/prompt semantics are untouched; the dead-man backstop renders as an ordinary background child by design.
+  - Canonical docs: [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (changelog 1.34.0), [`INTERNAL-API.md`](./INTERNAL-API.md) (child-orchestration surfacing), `docs/plans/CHILD-ORCHESTRATION-SURFACING-PLAN.md` (grounded plan).
+
+
 - **Pi model-binding durability across rehydration (`1.33.0`, `2026-09-03`)**
   - Root-cause fix for the 2026-09-03 benchmark drift incident (6 of 8 detached dispatches ran on the runtime default `zai/glm-5.3` instead of the requested `commandcode/*` models): create-time Pi bindings are now persisted in the session registry, control `set_model`/`set_thinking_level` update that stored binding, and dispatch re-applies a drifted binding before the turn runs. The Pi SDK restores history bindings only for sessions that already carry messages, so a session unloaded between create and dispatch (eviction at `maxSessions=4`, server restart) used to rehydrate silently on the default.
   - Additive observability: run receipts carry `servedModel` + `modelRebound`; a `model_rebound` broker event reports `intended`/`served`/`thinkingLevel`. Unresolvable or provider-blocked stored bindings fail loudly (`MODEL_NOT_APPLIED` / `PROVIDER_NOT_ALLOWED`) instead of silently running the default. Sessions created without a model are unchanged.

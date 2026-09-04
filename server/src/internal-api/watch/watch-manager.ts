@@ -461,6 +461,26 @@ export class WatchManager {
         }
         firedSomething = true;
 
+        // Contract 1.34.0 surfacing: a pure-observer watch (no onFire — e.g.
+        // the watch-wake extension's local-delivery flow) still announces its
+        // firing to the arming session's surfaces. onFire watches announce at
+        // successful dispatch instead, so deliveryKind can be included.
+        if (!record.onFire && this.surface && record.sourceSessionId) {
+          try {
+            this.surface(record, {
+              type: 'watch_fired',
+              timestamp: Date.now(),
+              data: {
+                sessionId: record.sourceSessionId,
+                watchId: record.watchId,
+                targetSessionId: record.sessionId,
+                conditionId: cond.id,
+                firedAt: firing.firedAt,
+              },
+            });
+          } catch { /* surfacing is best-effort */ }
+        }
+
         // ── Opt-in wake dispatch (watch the child, wake the parent) ──
         if (record.onFire) {
           this.dispatchWakeForFiring(sessionId, live, {

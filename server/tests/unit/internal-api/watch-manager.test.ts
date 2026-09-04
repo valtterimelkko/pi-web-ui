@@ -485,3 +485,37 @@ describe('watch surfacing (contract 1.34.0)', () => {
     });
   });
 });
+
+describe('watch surfacing — pure-observer watches (contract 1.34.0)', () => {
+  it('emits watch_fired at firing time for a pure-observer watch (no onFire), without deliveryKind', async () => {
+    let dir2: string;
+    dir2 = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-watch-surf2-'));
+    const broker2 = new InternalApiEventBroker({ replayBufferSize: 10 });
+    const surface = vi.fn();
+    const pin2 = vi.fn(() => true);
+    const manager2 = new WatchManager({ broker: broker2, storeDir: dir2, pinSession: pin2, surface });
+    try {
+      await manager2.register({
+        sessionId: 'surf-obs',
+        sessionPath: 'surf-obs',
+        runtime: 'pi',
+        sourceSessionId: 'parent-1',
+        sourceBrokerKey: '/sessions/parent.jsonl',
+        request: { conditions: [{ id: 'c0', type: 'event_type', eventType: 'agent_end' }] },
+      });
+      surface.mockClear();
+
+      broker2.publish('surf-obs', ev('agent_end'));
+      await flush();
+
+      const fired = surface.mock.calls.filter(([, event]) => (event as { type: string }).type === 'watch_fired');
+      expect(fired).toHaveLength(1);
+      const [, event] = fired[0];
+      expect(event.data).toMatchObject({ sessionId: 'parent-1', watchId: 'watch-surf-obs', conditionId: 'c0' });
+      expect(event.data.deliveryKind).toBeUndefined();
+    } finally {
+      manager2.close();
+      await fs.rm(dir2, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+    }
+  });
+});

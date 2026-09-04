@@ -2438,6 +2438,46 @@ events; on Claude the goal prompt is dispatched **detached** and the CLI loop
 holds `query()` open until the goal settles. Either way: poll `GET /goal` or
 watch `goal_end` — never treat the start receipt as "goal done".
 
+### Child-orchestration surfacing (contract 1.34.0)
+
+Child orchestration — harness background subagents, Internal-API children, and
+durable watches — is surfaced on the **parent** session's event stream and in
+the browser. All additions are presentation-only: wake, steer, and prompt
+semantics are unchanged.
+
+**Parent linkage.** Internal API calls may identify the calling session with
+the `X-Parent-Session` header (or `parentSessionId` in the create body; the
+header wins). The value must resolve to a registry id or path; unresolvable
+values are ignored. With no explicit identity, `POST /sessions` falls back to
+correlating the newest in-flight bash tool command that references the
+Internal API socket. Linked children persist `parentSessionId` in the
+registry; `GET /sessions/:id` and `/info` gain additive `parentSessionId` and
+`children` arrays.
+
+**Events** (all on `/events`, watchable, and bridged to the browser):
+
+- `background_child_state` — background-subagent state for a Pi session
+  (`data`: `sessionId`, `children` — compact `ChildCardProjection[]`);
+- `child_dispatched` / `child_turn_ended` — an Internal-API child linked to
+  the parent was created / reached a terminal turn (`data`: `sessionId`,
+  `child` projection);
+- `watch_registered` / `watch_fired` — a watch armed from the parent session
+  registered / its wake dispatched successfully (`watch_fired` carries the
+  wake `deliveryKind`).
+
+**Usage pattern** (parent links itself so its orchestrator sees the child):
+
+```bash
+curl --unix-socket $SOCK -X POST /api/v1/sessions \
+  -H "Authorization: Bearer $TOK" -H 'content-type: application/json' \
+  -H "X-Parent-Session: $PI_SESSION_ID" \
+  -d '{"runtime":"pi","model":"zai/glm-5.3-flash","cwd":"/tmp/work"}'
+```
+
+The Pi `watch-wake` extension sends the header automatically, and Pi bash
+tools expose `PI_SESSION_ID`/`PI_PROVIDER`/`PI_MODEL` so skill-taught curl
+calls can do the same.
+
 ### Goal events + watches
 
 Every goal state transition publishes normalized events to the broker:

@@ -182,6 +182,18 @@ All paths converge in `client/src/store/sessionStore.ts` via `handleServerMessag
 - `extension_ui_request` → surfaced as approval/dialog UI (used by Pi extensions, OpenCode permissions, and **Claude SDK `AskUserQuestion` requests**)
 - `extension_ui_cancel` → closes an open dialog when the request was resolved for a non-answer reason (e.g. `AskUserQuestion` timeout/disconnect)
 
+## Synthesized control events (child-orchestration surfacing)
+
+Beyond runtime-originated events, the Internal API synthesizes additive
+control events onto the same broker: goal state (`goal_state`/`goal_end`),
+model rebinds (`model_rebound`), and — since contract 1.34.0 — child/watch
+surfacing (`background_child_state`, `child_dispatched`, `child_turn_ended`,
+`watch_registered`, `watch_fired`). These are published to the **parent**
+session's broker key (Pi: session path) and bridged to the browser as
+additive WebSocket messages. See
+[`INTERNAL-API.md`](./INTERNAL-API.md) "Child-orchestration surfacing" for
+payloads and linkage rules.
+
 ## Key Rule for New Runtimes
 
 If you add another runtime, you must:
