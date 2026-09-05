@@ -135,6 +135,33 @@ interface SessionModelLockState {
   waitingWriters: Array<(release: () => void) => void>;
 }
 
+/** Owning maps that participate in per-session reference release. */
+export interface SessionRefMaps {
+  sessions: Map<string, unknown>;
+  clientSessionMap: Map<string, string>;
+  eventHandlers: Map<string, unknown>;
+  clientWebUIContexts: Map<string, unknown>;
+}
+
+/**
+ * Pure release used by PiService.releaseSessionRefs (WS-path memory
+ * robustness, 2026-09-05): drop every owned reference for one exact
+ * handler/session identity. A different owner still mapping the same session
+ * id keeps the sessions entry alive (identity-safe, sibling-preserving).
+ */
+export function releaseSessionRefsFrom(maps: SessionRefMaps, handlerKey: string, sessionId: string): void {
+  maps.eventHandlers.delete(handlerKey);
+  maps.clientWebUIContexts.delete(handlerKey);
+  if (maps.clientSessionMap.get(handlerKey) === sessionId) {
+    maps.clientSessionMap.delete(handlerKey);
+  }
+  let stillOwned = false;
+  for (const owner of maps.clientSessionMap.values()) {
+    if (owner === sessionId) { stillOwned = true; break; }
+  }
+  if (!stillOwned) maps.sessions.delete(sessionId);
+}
+
 export class PiService {
   private modelRuntime: ModelRuntime | null = null;
   private initialization: Promise<void> | null = null;
@@ -505,6 +532,28 @@ export class PiService {
 
   removeEventHandler(clientId: string): void {
     this.eventHandlers.delete(clientId);
+  }
+
+  /**
+   * Canonical per-session reference release (WS-path memory robustness,
+   * 2026-09-05). MultiSessionManager unload/dispose previously removed only
+   * the event handler and its own map entry, leaving strong references here —
+   * probe: 30 unloads left 30 sessions + 30 client mappings + 30 UI contexts
+   * retained, so maxSessions-style bounds understated true residency. Removes
+   * every owned reference for the exact handler/session identity; idempotent;
+   * never touches a sibling session or an unrelated owner of the same id.
+   */
+  releaseSessionRefs(handlerKey: string, sessionId: string): void {
+    releaseSessionRefsFrom(
+      {
+        sessions: this.sessions,
+        clientSessionMap: this.clientSessionMap,
+        eventHandlers: this.eventHandlers,
+        clientWebUIContexts: this.clientWebUIContexts,
+      },
+      handlerKey,
+      sessionId,
+    );
   }
 
   async listSessions(cwd?: string): Promise<SessionInfo[]> {

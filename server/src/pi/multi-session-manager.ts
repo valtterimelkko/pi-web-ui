@@ -1612,8 +1612,10 @@ export class MultiSessionManager {
       );
     }
 
-    // Remove event handler
+    // Remove event handler + every other PiService-owned reference for this
+    // exact session identity (WS-path memory robustness F4).
     this.piService.removeEventHandler(activeSession.handlerKey);
+    this.piService.releaseSessionRefs?.(activeSession.handlerKey, activeSession.sessionId);
 
     // Remove from sessions map
     this.sessions.delete(sessionPath);

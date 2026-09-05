@@ -2295,4 +2295,25 @@ describe('MultiSessionManager', () => {
     });
   });
 
+  describe('PiService release wiring (WS-path memory robustness F4)', () => {
+    it('unload/dispose releases every PiService-owned reference, not just the event handler', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'session-release',
+        sessionFile: '/path/to/session-release.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const releaseSessionRefs = vi.fn();
+      (mockPiService as any).releaseSessionRefs = releaseSessionRefs;
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.createAndSubscribe('client-1', '/work');
+
+      const handlerKey = mockPiService.setEventHandler.mock.calls[0][0] as string;
+      const stopped = manager.stopSession('/path/to/session-release.jsonl');
+
+      expect(stopped).toBe(true);
+      expect(releaseSessionRefs).toHaveBeenCalledWith(handlerKey, 'session-release');
+      expect(manager.hasSession('/path/to/session-release.jsonl')).toBe(false);
+    });
+  });
+
 });
