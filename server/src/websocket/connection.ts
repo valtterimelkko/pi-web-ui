@@ -147,6 +147,51 @@ export interface WebSocketClient {
  * (deltas + message_end + history replay carry the content). Control,
  * terminal, tool, goal and error frames are never coalescable.
  */
+/**
+ * WS-path memory robustness (2026-09-05, F5): reconcile a rehydrated Pi
+ * session whose persisted registry status says `running` (a crashed/restarted
+ * server left it stuck) while the freshly loaded session is idle. Sends the
+ * viewing client ONE stale_stream_reset-style notice explaining the
+ * interruption and corrects the registry to idle, instead of leaving a
+ * silently dead turn for up to the 15-minute stale-stream threshold.
+ * Returns true when an interruption was surfaced.
+ */
+export async function reconcileInterruptedPiSession(options: {
+  sessionPath: string;
+  liveStatus: string;
+  registry: {
+    getByPath(sessionPath: string): Promise<{ id: string; status?: string } | undefined>;
+    updateStatus(id: string, status: string): Promise<void>;
+  };
+  notify: (message: unknown) => void;
+}): Promise<boolean> {
+  const { sessionPath, liveStatus, registry, notify } = options;
+  let entry: { id: string; status?: string } | undefined;
+  try {
+    entry = await registry.getByPath(sessionPath);
+  } catch {
+    return false; // registry outage must never block subscribe flows
+  }
+  if (!entry || entry.status !== 'running') return false;
+  if (liveStatus === 'streaming' || liveStatus === 'busy') return false; // a real turn is live
+
+  try {
+    await registry.updateStatus(entry.id, 'idle');
+  } catch {
+    // Best-effort correction; the client notice is still useful.
+  }
+  notify({
+    type: 'session_event',
+    sessionId: sessionPath,
+    event: {
+      type: 'stale_stream_reset',
+      message:
+        'The previous turn was interrupted by a server restart. The session is idle now — resend your prompt to continue (already-applied work is preserved in the transcript).',
+    },
+  });
+  return true;
+}
+
 function isCoalescableSessionEvent(message: unknown): boolean {
   if (!message || typeof message !== 'object') return false;
   const envelope = message as { type?: unknown; event?: { type?: unknown } | null };
@@ -1069,6 +1114,20 @@ export class WebSocketConnectionManager {
 
   private getCurrentSessionPath(clientId: string): string | undefined {
     return this.clientViewingSession.get(clientId) || this.multiSessionManager.getClientSessionPath(clientId);
+  }
+
+  /** F5 helper: reconcile a crash-interrupted Pi session on subscribe (see reconcileInterruptedPiSession). */
+  private async reconcileInterruptedSession(clientId: string, sessionPath: string, liveStatus: string): Promise<void> {
+    try {
+      await reconcileInterruptedPiSession({
+        sessionPath,
+        liveStatus,
+        registry: getSessionRegistry(),
+        notify: (message) => this.sendMessage(clientId, message as ServerMessage),
+      });
+    } catch {
+      // Never block a subscribe on interruption reconciliation.
+    }
   }
 
   /**
@@ -2261,6 +2320,10 @@ export class WebSocketConnectionManager {
     // Subscribe to the validated existing session via MultiSessionManager.
     const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath, cwd, this.getWebUIContext(clientId));
 
+    // WS-path memory robustness F5: surface a crash-interrupted turn immediately
+    // when the persisted registry status is stuck at `running` for an idle session.
+    await this.reconcileInterruptedSession(clientId, sessionPath, status.status);
+
     // Keep the connection's runtime-neutral view and the Pi session manager's
     // view in sync. Browser-native controls such as `/compact` resolve through
     // MultiSessionManager, unlike prompt routing which carries a session ID.
@@ -3362,6 +3425,9 @@ export class WebSocketConnectionManager {
 
     try {
       const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath, undefined, this.getWebUIContext(clientId));
+
+      // WS-path memory robustness F5: crash-interrupted turns surface immediately.
+      await this.reconcileInterruptedSession(clientId, sessionPath, status.status);
 
       this.sendMessage(clientId, {
         type: 'session_subscribed',
