@@ -172,6 +172,29 @@ payloads to message ids only; it restores normal deltas after ten sustained
 seconds below 250 ms. This deliberately preserves control-plane responsiveness
 over live-rendering fidelity during an overload.
 
+### Source-level streaming projection (browser path + broker, 2026-09-05)
+
+The same delta policy now applies **before** any transport or retention
+boundary: `server/src/pi/stream-transport.ts` (`projectStreamingEventForTransport`)
+runs once in `MultiSessionManager.handleAgentEvent` for Pi events, so the
+browser envelope, the Internal API normalization/broker path, and direct SSE
+all receive `message_update` events whose `message` is reduced to identity /
+status fields (`id`, `role`, `stopReason`, `errorMessage`) and whose
+`assistantMessageEvent` never carries the SDK's accumulated `partial` alias.
+`message_start` content is detached (copied) so later provider mutation cannot
+grow an already-delivered or already-retained frame. Terminal and tool events
+pass through unchanged at full fidelity.
+
+The browser WebSocket send path is additionally bounded per client
+(`server/src/websocket/outbound-governor.ts`): while `ws.bufferedAmount`
+exceeds the soft cap, replaceable `message_update` frames queue FIFO (byte-
+capped); control/terminal frames always attempt delivery; a socket that stays
+stuck past the hard cap — or a queue past its own cap — is closed once with
+1013 and the browser reconnects and re-syncs from history. Under shed mode
+(event-loop lag **or** heap pressure ≥ 80% of the real V8 `heap_size_limit`),
+updates degrade to ids-only, mirroring the broker's policy. Knobs:
+`WS_SEND_{SOFT_CAP,HARD_CAP,PENDING_MAX,LOW_WATER}_BYTES`.
+
 ## Frontend Ingestion
 
 All paths converge in `client/src/store/sessionStore.ts` via `handleServerMessage()`:

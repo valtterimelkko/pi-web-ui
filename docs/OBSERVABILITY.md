@@ -132,6 +132,14 @@ counts, aggregate session counts, and path-free worker crash totals. Contract
 `eventLoopLagMs`. The `InternalApiEventBroker` logs one warning per affected
 session when its payload budget first truncates an event; `EventLoopShed` logs
 transitions into ids-only overload shedding and back to normal delivery.
+Shed mode is armed by sustained event-loop lag **or** heap pressure (the
+MultiSessionManager memory check arms it at ≥ 80% of the real V8
+`heap_size_limit` and disarms below 70%), and the same signal degrades browser
+`message_update` sends to ids-only. The WS bounded-send path adds
+`pipeline.wsUpdatesQueuedTotal` (updates queued under socket backpressure),
+`pipeline.wsSlowClientsClosedTotal` (sockets closed 1013 as stuck consumers),
+and `pipeline.memoryShedActive`. Browser slow-consumer closures are also
+logged as `[Connection] Closed slow WebSocket consumer …` warnings.
 
 The snapshot contains no prompts, transcripts, tool payloads, models, session
 paths, tokens, or credentials. It is an operational snapshot, not a durable historical database;

@@ -334,8 +334,8 @@ Environment=OPENCODE_SERVER_PORT=4097
 ExecStart=/usr/bin/node server/dist/index.js
 Restart=on-failure
 RestartSec=10
-MemoryMax=6G
-MemoryHigh=5G
+MemoryMax=12G
+MemoryHigh=9G
 
 [Install]
 WantedBy=multi-user.target

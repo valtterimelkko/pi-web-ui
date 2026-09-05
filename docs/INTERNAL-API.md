@@ -1676,6 +1676,14 @@ intermediate snapshots may be coalesced and the next delivered update reports
 `data.coalescedDeltas`. Read `message_end` and `/transcript` when full content is
 required.
 
+> **2026-09-05 note:** Pi `message_update` events are now slimmed at the source
+> (`server/src/pi/stream-transport.ts`) before they reach any transport — the
+> `assistantMessageEvent` never carries the SDK's accumulated `partial` alias,
+> for all sessions regardless of size. This tightens enforcement of the same
+> documented invariant (deltas + `message_end` + `/transcript` carry content)
+> and removes a mutable-reference replay-drift vector; no contract version
+> change is required.
+
 The connection stays open across multiple prompts. Up to 100 recent bounded
 events are buffered per session and replayed to late subscribers on connect.
 `INTERNAL_API_EVENT_RATE_LIMIT_PER_SEC` controls the per-session update rate

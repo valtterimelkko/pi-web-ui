@@ -149,6 +149,23 @@ preserving health and terminal/control events. Do not blame Caddy/Authelia from
 the public redirect alone, and do not restart production without the owner's
 fresh approval and active-turn/run-receipt pre-checks.
 
+### Server OOM'd or restarted mid-turn (2026-09-05 class)
+
+If the service restarted while one ordinary turn was running (V8 heap OOM in
+`journalctl -u pi-web-ui` — look for `FATAL ERROR: Reached heap limit`), the
+surviving evidence is the session JSONL plus the pre-crash
+`[MultiSessionManager] Memory: heap=…MB/<limit>MB (limit)` log lines. Since
+the WS-path memory robustness work: `message_update` frames are slim at the
+source (no accumulated `partial`), slow browser consumers are closed 1013 with
+`[Connection] Closed slow WebSocket consumer …` +
+`pipeline.wsSlowClientsClosedTotal`, and heap pressure ≥ 80% of the real V8
+limit arms memory-shed (`pipeline.memoryShedActive`, ids-only updates). On
+reopening an interrupted session the client now receives an immediate
+`stale_stream_reset` notice; already-applied work is in the transcript. If it
+recurs, capture the counters above plus per-client queue metrics before any
+further remediation — and check `pi-web-ui-oom-robustness-review-2026-09-05.md`
+for the deferred-isolation triggers.
+
 ## Fastest Starting Points
 
 Follow this order unless you already know the exact failing subsystem:
