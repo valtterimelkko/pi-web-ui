@@ -2246,4 +2246,53 @@ describe('MultiSessionManager', () => {
     });
   });
 
+  describe('heap-truth memory valve (WS-path memory robustness F3)', () => {
+    it('arms shedding and aggressive cleanup when heapUsed approaches the real heap_size_limit', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'session-valve',
+        sessionFile: '/path/to/session-valve.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const shedMonitor = { isShedding: false, observeMemoryPressure: vi.fn() };
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast, {
+        memoryStats: () => ({ heapUsedMb: 1_900, heapLimitMb: 2_091 }), // 91% of the real cap
+        shedMonitor,
+      });
+      await manager.subscribeClient('client-1', '/path/to/session-valve.jsonl');
+      // Make the session idle with no subscribers so aggressive cleanup can dispose it.
+      manager.unsubscribeClient('client-1', '/path/to/session-valve.jsonl');
+
+      manager.checkMemoryPressure();
+
+      expect(shedMonitor.observeMemoryPressure).toHaveBeenCalledWith(true);
+      expect(manager.hasSession('/path/to/session-valve.jsonl')).toBe(false); // aggressive cleanup disposed it
+    });
+
+    it('disarms once heap usage falls back below the recovery threshold', async () => {
+      const shedMonitor = { isShedding: true, observeMemoryPressure: vi.fn() };
+      let heapUsedMb = 1_900;
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast, {
+        memoryStats: () => ({ heapUsedMb, heapLimitMb: 2_091 }),
+        shedMonitor,
+      });
+
+      manager.checkMemoryPressure();
+      expect(shedMonitor.observeMemoryPressure).toHaveBeenCalledWith(true);
+
+      heapUsedMb = 1_200; // ~57%
+      manager.checkMemoryPressure();
+      expect(shedMonitor.observeMemoryPressure).toHaveBeenCalledWith(false);
+    });
+
+    it('arms below the old dead 2500MB constant — the threshold follows the real limit', async () => {
+      const shedMonitor = { isShedding: false, observeMemoryPressure: vi.fn() };
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast, {
+        memoryStats: () => ({ heapUsedMb: 1_700, heapLimitMb: 2_091 }), // 81% — above 80% arm line
+        shedMonitor,
+      });
+      manager.checkMemoryPressure();
+      expect(shedMonitor.observeMemoryPressure).toHaveBeenCalledWith(true);
+    });
+  });
+
 });

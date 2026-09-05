@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { OutboundGovernor } from '../../../src/websocket/outbound-governor.js';
+import { OutboundGovernor, shedBrowserMessageUpdate } from '../../../src/websocket/outbound-governor.js';
 
 const OPEN = 1;
 
@@ -105,5 +105,24 @@ describe('OutboundGovernor (WS-path memory robustness F2)', () => {
     ws.readyState = 3;
     expect(g.send(ws as any, 'x', { coalescable: false, clientId: 'c1' })).toBe('closed');
     expect(ws.sent).toEqual([]);
+  });
+
+  it('shedBrowserMessageUpdate reduces an update envelope to ids-only (memory/lag shed mode)', () => {
+    const envelope = {
+      type: 'session_event',
+      sessionId: 's1',
+      event: {
+        type: 'message_update',
+        message: { id: 'm1', role: 'assistant' },
+        assistantMessageEvent: { type: 'thinking_delta', delta: 'chunk' },
+      },
+    };
+    const shed = shedBrowserMessageUpdate(envelope) as typeof envelope;
+    expect(shed.type).toBe('session_event');
+    expect(shed.sessionId).toBe('s1');
+    expect(shed.event.type).toBe('message_update');
+    expect(shed.event.message).toEqual({ id: 'm1' });
+    expect(shed.event.assistantMessageEvent).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(shed))).toBeLessThan(150);
   });
 });

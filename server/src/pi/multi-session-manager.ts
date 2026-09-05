@@ -3,6 +3,8 @@ import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { createLogger } from '../logging/logger.js';
 import { enrichSubagentEvent } from './event-forwarder.js';
 import { projectStreamingEventForTransport } from './stream-transport.js';
+import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
+import { getHeapStatistics } from 'node:v8';
 import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
 const logger = createLogger('MultiSessionManager');
@@ -79,6 +81,10 @@ export interface MultiSessionManagerOptions {
   maxPinnedSessions?: number;
   /** How long before a streaming session with no events is considered stale (default: 900000ms = 15 minutes) */
   staleStreamingThresholdMs?: number;
+  /** Injectable memory stats seam (tests); defaults to process.memoryUsage + v8 heap limit. */
+  memoryStats?: () => { heapUsedMb: number; heapLimitMb: number; rssMb: number; externalMb: number };
+  /** Injectable shed monitor seam (tests); defaults to the process-wide monitor. */
+  shedMonitor?: { isShedding: boolean; observeMemoryPressure(pressure: boolean): void };
 }
 
 /**
@@ -90,6 +96,28 @@ export type BroadcastFunction = (clientId: string, message: any) => void;
  * Type for the WebUI context provider function
  */
 export type WebUIContextProvider = (sessionPath: string) => WebUIContext | undefined;
+
+/** Real-process memory stats: heap used + the true V8 heap_size_limit (not committed size). */
+function defaultMemoryStats(): { heapUsedMb: number; heapLimitMb: number; rssMb: number; externalMb: number } {
+  const memUsage = process.memoryUsage();
+  let heapLimitBytes = 0;
+  try {
+    heapLimitBytes = getHeapStatistics().heap_size_limit;
+  } catch {
+    heapLimitBytes = memUsage.heapTotal; // honest fallback: committed heap
+  }
+  return {
+    heapUsedMb: Math.round(memUsage.heapUsed / 1024 / 1024),
+    heapLimitMb: Math.round(heapLimitBytes / 1024 / 1024),
+    rssMb: Math.round(memUsage.rss / 1024 / 1024),
+    externalMb: Math.round(memUsage.external / 1024 / 1024),
+  };
+}
+
+/** "heap=871MB/limit-2091MB" display so the log shows the true ceiling. */
+function heapTotalDisplay(heapLimitMb: number): string {
+  return `${heapLimitMb}MB (limit)`;
+}
 
 function attachSessionIdToWebUiMessage(message: unknown, sessionId: string): unknown {
   if (!message || typeof message !== 'object' || Array.isArray(message)) {
@@ -149,6 +177,17 @@ export class MultiSessionManager {
   private cleanupTimer?: ReturnType<typeof setInterval>;
   private memoryCheckTimer?: ReturnType<typeof setInterval>;
 
+  // Heap-truth memory valve (WS-path memory robustness, 2026-09-05):
+  // arm when heapUsed >= 80% of the REAL V8 heap_size_limit (the old hardcoded
+  // 2500MB constant could never fire below a --max-old-space-size=2048 cap),
+  // disarm below 70%. Arming triggers aggressive cleanup AND the shared shed
+  // monitor, which degrades message_update delivery to ids-only (broker and
+  // browser) while pressure persists.
+  private readonly memoryStats: () => { heapUsedMb: number; heapLimitMb: number; rssMb: number; externalMb: number };
+  private readonly shedMonitor: { isShedding: boolean; observeMemoryPressure(pressure: boolean): void };
+  private static readonly MEMORY_SHED_ARM_RATIO = 0.8;
+  private static readonly MEMORY_SHED_RECOVER_RATIO = 0.7;
+
   constructor(
     piService: PiService,
     broadcast: BroadcastFunction,
@@ -164,6 +203,8 @@ export class MultiSessionManager {
     this.enableMemoryMonitoring = options.enableMemoryMonitoring ?? true;
     this.maxPinnedSessions = options.maxPinnedSessions ?? MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME;
     this.staleStreamingThresholdMs = options.staleStreamingThresholdMs ?? 15 * 60 * 1000;
+    this.memoryStats = options.memoryStats ?? defaultMemoryStats;
+    this.shedMonitor = options.shedMonitor ?? getEventLoopShedMonitor();
     
     // Start cleanup timer
     this.startCleanupTimer();
@@ -282,24 +323,35 @@ export class MultiSessionManager {
    * Log memory usage for monitoring
    */
   private logMemoryUsage(): void {
-    const memUsage = process.memoryUsage();
-    const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
-    const heapTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
-    const rssMB = Math.round(memUsage.rss / 1024 / 1024);
-    const externalMB = Math.round(memUsage.external / 1024 / 1024);
-    
+    const { heapUsedMb: heapUsedMB, heapLimitMb: heapLimitMB, rssMb: rssMB, externalMb: externalMB } = this.memoryStats();
+
     const sessionCount = this.sessions.size;
-    
+
     // Only log if memory is high or session count is significant
     if (heapUsedMB > 500 || sessionCount > 5) {
-      logger.info(`[MultiSessionManager] Memory: heap=${heapUsedMB}MB/${heapTotalMB}MB, rss=${rssMB}MB, external=${externalMB}MB, sessions=${sessionCount}`);
+      logger.info(`[MultiSessionManager] Memory: heap=${heapUsedMB}MB/${heapTotalDisplay(heapLimitMB)}, rss=${rssMB}MB, external=${externalMB}MB, sessions=${sessionCount}`);
     }
-    
-    // If memory is very high, trigger aggressive cleanup
-    // Threshold is 2.5GB to provide buffer before systemd MemoryHigh (3GB) kicks in
-    if (heapUsedMB > 2500) {
-      logger.warn(`[MultiSessionManager] High memory usage detected (${heapUsedMB}MB), triggering aggressive cleanup`);
+
+    this.checkMemoryPressure();
+  }
+
+  /**
+   * Heap-truth memory valve: run the pressure check on demand (the 30s memory
+   * timer calls this; tests call it directly). Public for observability/tests.
+   */
+  checkMemoryPressure(): void {
+    const { heapUsedMb: heapUsedMB, heapLimitMb: heapLimitMB } = this.memoryStats();
+    if (heapLimitMB <= 0) return;
+    const ratio = heapUsedMB / heapLimitMB;
+
+    if (ratio >= MultiSessionManager.MEMORY_SHED_ARM_RATIO) {
+      logger.warn(
+        `[MultiSessionManager] High memory usage detected (${heapUsedMB}MB of ${heapLimitMB} heap limit, ${(ratio * 100).toFixed(1)}%), triggering aggressive cleanup + shed mode`,
+      );
+      this.shedMonitor.observeMemoryPressure(true);
       this.aggressiveCleanup();
+    } else if (ratio <= MultiSessionManager.MEMORY_SHED_RECOVER_RATIO) {
+      this.shedMonitor.observeMemoryPressure(false);
     }
   }
   

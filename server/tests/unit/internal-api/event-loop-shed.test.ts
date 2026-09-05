@@ -53,4 +53,31 @@ describe('event-loop shed delivery', () => {
       monitor.close();
     }
   });
+
+  it('memory pressure arms shedding independently of event-loop lag (WS-path memory robustness)', () => {
+    const metrics = new OperationalMetrics({ now: () => 0 });
+    const monitor = new EventLoopShedMonitor({ metrics });
+    const records: LogRecord[] = [];
+    setLogTap((record) => records.push(record));
+    try {
+      // Healthy lag, but heap pressure armed by the manager's memory check.
+      monitor.observeLag(10, 0);
+      expect(monitor.isShedding).toBe(false);
+
+      monitor.observeMemoryPressure(true);
+      expect(monitor.isShedding).toBe(true);
+
+      // Disarms once memory pressure clears (lag never crossed the threshold).
+      monitor.observeMemoryPressure(false);
+      expect(monitor.isShedding).toBe(false);
+
+      expect(records.map((record) => record.msg)).toEqual([
+        'memory-pressure shed mode enabled',
+        'memory-pressure shed mode disabled',
+      ]);
+    } finally {
+      setLogTap(null);
+      monitor.close();
+    }
+  });
 });

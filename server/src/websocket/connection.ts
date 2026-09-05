@@ -21,7 +21,8 @@ import { readBackgroundTasksSnapshot } from '../internal-api/background-children
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
-import { OutboundGovernor } from './outbound-governor.js';
+import { OutboundGovernor, shedBrowserMessageUpdate } from './outbound-governor.js';
+import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
 import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
 import { isTransferSessionContext } from './protocol.js';
 import { handleSessionWebSocket } from './session-websocket.js';
@@ -3632,9 +3633,15 @@ export class WebSocketConnectionManager {
       // through the outbound governor. Replaceable streaming updates queue per
       // client while the socket is backpressured; control/terminal frames always
       // attempt delivery; a truly stuck consumer is closed once (1013) instead of
-      // retaining unbounded serialised frames in userland buffers.
-      this.outbound.send(client.ws, JSON.stringify(message), {
-        coalescable: isCoalescableSessionEvent(message),
+      // retaining unbounded serialised frames in userland buffers. Under shed
+      // mode (event-loop lag OR heap pressure) updates degrade to ids-only,
+      // mirroring the broker's DD7 policy.
+      const coalescable = isCoalescableSessionEvent(message);
+      const frame = coalescable && getEventLoopShedMonitor().isShedding
+        ? (shedBrowserMessageUpdate(message as unknown as Parameters<typeof shedBrowserMessageUpdate>[0]) as unknown as ServerMessage)
+        : message;
+      this.outbound.send(client.ws, JSON.stringify(frame), {
+        coalescable,
         clientId,
         onSlowClientClosed: (id: string | undefined, reason: string) => {
           logger.warn(`[Connection] Closed slow WebSocket consumer ${id}: ${reason}`);

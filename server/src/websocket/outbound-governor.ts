@@ -60,6 +60,24 @@ function byteLength(value: string): number {
   return Buffer.byteLength(value);
 }
 
+/**
+ * WS-path memory robustness (shed mode): reduce a browser message_update
+ * envelope to ids-only while the shared shed monitor (event-loop lag OR heap
+ * pressure) is armed — the browser twin of the broker's shedMessageUpdate.
+ * Terminal/tool/control frames are never passed here.
+ */
+export function shedBrowserMessageUpdate<T extends { type?: unknown; sessionId?: unknown; event?: { type?: unknown; message?: { id?: unknown } | null } }>(envelope: T): T {
+  const id = envelope.event?.message?.id;
+  return {
+    ...envelope,
+    event: {
+      type: 'message_update',
+      message: id === undefined ? {} : { id },
+      payloadShed: true,
+    },
+  } as T;
+}
+
 export class OutboundGovernor {
   private readonly states = new WeakMap<GovernedSocket, PendingState>();
   private readonly softCapBytes: number;
