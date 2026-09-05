@@ -70,4 +70,25 @@ describe('measureAndSlim', () => {
     expect(measured.truncated).toBe(false);
     expect(measured.bytes).toBeGreaterThan(10_000);
   });
+
+  it('never carries assistantMessageEvent.partial in an over-budget message_update fallback (WS-path memory robustness)', () => {
+    const partial = { role: 'assistant', content: [{ type: 'text', text: 'x'.repeat(2_000_000) }] };
+    const original = event('message_update', {
+      message: { id: 'm1', content: partial.content },
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'x', partial },
+    });
+
+    const measured = measureAndSlim(original, 64 * 1024);
+    const data = measured.event.data as {
+      message?: Record<string, unknown>;
+      assistantMessageEvent?: Record<string, unknown>;
+      payloadTruncated?: unknown;
+    };
+
+    expect(measured.truncated).toBe(true);
+    expect(data.assistantMessageEvent?.partial).toBeUndefined();
+    expect(data.assistantMessageEvent?.delta).toBe('x');
+    expect(data.message?.content).toBeUndefined();
+    expect(data.payloadTruncated).toBeDefined();
+  });
 });

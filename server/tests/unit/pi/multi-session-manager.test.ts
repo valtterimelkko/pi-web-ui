@@ -2162,4 +2162,88 @@ describe('MultiSessionManager', () => {
     });
   });
 
+  describe('streaming transport projection (WS-path memory robustness, 2026-09-05 plan F1)', () => {
+    it('slims message_update on the browser wire: no accumulated message content, no assistantMessageEvent.partial', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'session-slim',
+        sessionFile: '/path/to/session-slim.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session-slim.jsonl');
+      mockBroadcast.mockClear();
+
+      const partial = {
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: 'x'.repeat(40_000) }],
+      };
+      manager.handleAgentEvent('/path/to/session-slim.jsonl', {
+        type: 'message_update',
+        message: { ...partial, id: 'msg-1', role: 'assistant' },
+        assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'x', partial },
+      });
+
+      expect(mockBroadcast).toHaveBeenCalledTimes(1);
+      const envelope = mockBroadcast.mock.calls[0][1] as {
+        type: string;
+        sessionId: string;
+        event: { type: string; message?: Record<string, unknown>; assistantMessageEvent?: Record<string, unknown> };
+      };
+      expect(envelope.type).toBe('session_event');
+      expect(envelope.event.type).toBe('message_update');
+      expect(envelope.event.message?.content).toBeUndefined();
+      expect(envelope.event.assistantMessageEvent?.delta).toBe('x');
+      expect(envelope.event.assistantMessageEvent?.partial).toBeUndefined();
+      expect(Buffer.byteLength(JSON.stringify(envelope))).toBeLessThan(1_000);
+    });
+
+    it('feeds Internal API observers the same slim shape via normalizeEventForApi', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'session-obs',
+        sessionFile: '/path/to/session-obs.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session-obs.jsonl');
+
+      const observed: Array<Record<string, unknown>> = [];
+      manager.addApiObserver('/path/to/session-obs.jsonl', (event) => observed.push(event as Record<string, unknown>));
+
+      const partial = { role: 'assistant', content: [{ type: 'text', text: 'accumulated'.repeat(5_000) }] };
+      manager.handleAgentEvent('/path/to/session-obs.jsonl', {
+        type: 'message_update',
+        message: { ...partial },
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'accumulated', partial },
+      });
+
+      expect(observed).toHaveLength(1);
+      const data = observed[0].data as Record<string, unknown>;
+      expect((data.message as Record<string, unknown>).content).toBeUndefined();
+      expect((data.assistantMessageEvent as Record<string, unknown>).partial).toBeUndefined();
+      expect((data.assistantMessageEvent as Record<string, unknown>).delta).toBe('accumulated');
+      // replay/broker retention stays bounded: whole normalized event is small
+      expect(Buffer.byteLength(JSON.stringify(observed[0]))).toBeLessThan(1_000);
+    });
+
+    it('keeps api_error detection working on raw stopReason/errorMessage before projection', async () => {
+      const mockSession = createMockAgentSession({
+        sessionId: 'session-err',
+        sessionFile: '/path/to/session-err.jsonl',
+      });
+      mockPiService.createSession.mockResolvedValueOnce(mockSession);
+      const manager = new MultiSessionManager(mockPiService as any, mockBroadcast);
+      await manager.subscribeClient('client-1', '/path/to/session-err.jsonl');
+      manager.updateSessionStatus('/path/to/session-err.jsonl', 'streaming');
+      mockBroadcast.mockClear();
+
+      manager.handleAgentEvent('/path/to/session-err.jsonl', {
+        type: 'message_start',
+        message: { role: 'assistant', stopReason: 'error', errorMessage: '429 rate limited' },
+      });
+
+      const types = mockBroadcast.mock.calls.map((c: any[]) => (c[1] as { event?: { type: string } }).event?.type);
+      expect(types).toContain('api_error');
+    });
+  });
+
 });

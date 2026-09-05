@@ -1,4 +1,5 @@
 import type { NormalizedEvent } from '@pi-web-ui/shared';
+import { stripAssistantMessageEventPartial } from '../pi/stream-transport.js';
 
 export interface MeasuredEvent {
   event: NormalizedEvent;
@@ -114,6 +115,11 @@ export function measureAndSlim(event: NormalizedEvent, budgetBytes: number): Mea
     ? {
         ...data,
         ...(slimMessage(data.message) ? { message: slimMessage(data.message) } : {}),
+        // WS-path memory robustness: the over-budget fallback must never carry
+        // the accumulated `partial` alias either — delta fields survive.
+        ...(data.assistantMessageEvent !== undefined
+          ? { assistantMessageEvent: stripAssistantMessageEventPartial(data.assistantMessageEvent) }
+          : {}),
         payloadTruncated: marker,
       }
     : {

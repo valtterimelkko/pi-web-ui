@@ -2,6 +2,7 @@ import type { PiService } from './pi-service.js';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { createLogger } from '../logging/logger.js';
 import { enrichSubagentEvent } from './event-forwarder.js';
+import { projectStreamingEventForTransport } from './stream-transport.js';
 import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
 const logger = createLogger('MultiSessionManager');
@@ -1140,7 +1141,16 @@ export class MultiSessionManager {
     // — so the wire gets counts/totals, not 100s of KB of inner messages. Shared
     // with the single-client EventForwarder path via enrichSubagentEvent.
     // Internal-API observers below still receive the raw event unchanged.
-    const browserEvent = enrichSubagentEvent(event);
+    //
+    // WS-path memory robustness (2026-09-05): BEFORE either consumer sees it,
+    // project streaming events for transport — slim `message_update` to delta
+    // semantics (no accumulated message content, no `assistantMessageEvent.partial`)
+    // and detach `message_start` content. One projection serves the browser
+    // envelope, the Internal API normalization/broker path, and direct SSE, so
+    // no transport or replay buffer retains a live alias of the provider's
+    // growing output. Terminal/tool events pass through untouched.
+    const projectedEvent = projectStreamingEventForTransport(event);
+    const browserEvent = enrichSubagentEvent(projectedEvent);
 
     // Wrap the event in a session_event envelope with sessionId for proper client routing
     const sessionEvent = {
@@ -1175,7 +1185,7 @@ export class MultiSessionManager {
     // (Claude/OpenCode already emit NormalizedEvent natively)
     const observers = this.apiObservers.get(sessionPath);
     if (observers && observers.size > 0) {
-      const normalized = this.normalizeEventForApi(event);
+      const normalized = this.normalizeEventForApi(projectedEvent);
       for (const observer of observers) {
         try {
           observer(normalized);
