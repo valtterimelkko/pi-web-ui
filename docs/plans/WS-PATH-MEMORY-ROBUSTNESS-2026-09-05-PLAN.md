@@ -1,6 +1,6 @@
 # WS-Path Memory Robustness — 2026-09-05
 
-> **Status:** EXECUTING (owner-approved in-conversation 2026-09-05: "Execute the recommended fix sequence end-to-end, use TDD and live validation… You have my permission to restart the production at the end").
+> **Status:** EXECUTED 2026-09-05 (all phases; production restarted 21:04:52 UTC under the owner's pre-approved restart, contract 1.34.0 unchanged). Commits c0bbb27..c676f47. Live-validated disposable + production-smoked; see §6 for evidence.
 > **Incident input:** `/root/pi-web-ui-oom-robustness-review-2026-09-05.md` (deep review, same day) — session `01a072e7` main-process V8 heap OOM at 19:35:25 during ONE ordinary browser turn.
 > **Scope:** the minimal-complete fix sequence agreed with the owner after the review: break the causal chain (streaming amplification + unbounded transport retention + dead pre-OOM valve), one ownership-leak fix, one interruption-notice UX item, verify, ship. **Worker isolation and browser admission/receipt unification are explicitly deferred** with triggers recorded in the review.
 
@@ -84,3 +84,17 @@ Anything outside this list = stop-and-note in the final report rather than silen
 | Other runtimes | Claude/OpenCode/Antigravity/Command Code paths untouched. |
 
 Rollback: revert the commit(s); no data migrations, no contract changes, no config removals (knobs default on).
+
+## 6. Execution evidence (2026-09-05)
+
+- **F1** `b8e4cf0` — projection helper + 3 seams; RED shown (module absent / wire not slim).
+- **F2+F7** `542ea6e` — governor + config knobs + wiring; flood gate `ws-flood.wedge.test.ts` (4000 growing thinking deltas: fast-client wire <2MB vs 162MB unprojected, stuck consumer closed 1013, health responsive).
+- **F3** `3243d18` — heap-truth valve (80%/70% of real `heap_size_limit`), lag-OR-memory shed, browser ids-only degradation.
+- **F4** `91effe6` — `releaseSessionRefsFrom` + `PiService.releaseSessionRefs` wired into unload/dispose/stop.
+- **F5** `343014c` — `reconcileInterruptedPiSession` on both Pi subscribe paths.
+- **F6** `887334e` — `pipeline.wsUpdatesQueuedTotal` / `wsSlowClientsClosedTotal` / `memoryShedActive`.
+- **Docs** `c676f47` — EVENT-PIPELINE, OBSERVABILITY, INTERNAL-API note, TROUBLESHOOTING OOM runbook, DEPLOYMENT 12G/9G fix, `.env.example` knobs. docs gates clean.
+- **Gates:** lint 0 errors; typecheck + build clean; tests 3374 (server) + 941 (client) + 71 (shared) green.
+- **Disposable live validation** (real `zai/glm-5.3`, 58s thinking turn, `/events` + prompt-SSE + transcript): 5,945 updates, **0 `assistantMessageEvent.partial`, 0 accumulated `message.content`**, max frame 23.6KB (single delta chunk), total 1.2MB (linear), health max 5ms across 116 probes, transcript complete; `pi:smoke` green.
+- **Production:** pre-checks (0 active turns, 0 stalled/quarantined, 0 nonterminal receipts) → restart 21:04:52 UTC → contract 1.34.0 unchanged, new counters live, zero error lines, prod smoke turn `READY-WSMEM-PROD` complete + session deleted.
+- **Deferred by design** (triggers in the review): per-session worker isolation; browser admission/receipt unification; validation-state programme (cleanup funnel already live).
