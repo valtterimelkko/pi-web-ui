@@ -39,9 +39,11 @@ export class EventLoopShedMonitor {
   observeMemoryPressure(pressure: boolean): void {
     if (pressure && !this.memoryShed) {
       this.memoryShed = true;
+      this.metrics.setMemoryShed(true);
       logger.warn('memory-pressure shed mode enabled');
     } else if (!pressure && this.memoryShed) {
       this.memoryShed = false;
+      this.metrics.setMemoryShed(false);
       logger.info('memory-pressure shed mode disabled');
     }
   }

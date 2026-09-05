@@ -38,6 +38,10 @@ export interface OperationalSnapshot {
     brokerEventsTruncatedTotal: number;
     brokerEventsCoalescedTotal: number;
     eventLoopLagMs: number;
+    /** WS-path memory robustness (2026-09-05): bounded-send + shed observability. */
+    wsUpdatesQueuedTotal: number;
+    wsSlowClientsClosedTotal: number;
+    memoryShedActive: boolean;
     lastEventAt?: string;
     lastEventAgeMs?: number;
   };
@@ -83,6 +87,9 @@ export class OperationalMetrics {
   private brokerEventsTruncatedTotal = 0;
   private brokerEventsCoalescedTotal = 0;
   private eventLoopLagMs = 0;
+  private wsUpdatesQueuedTotal = 0;
+  private wsSlowClientsClosedTotal = 0;
+  private memoryShedActive = false;
   private lastEventAt?: number;
 
   constructor(options: OperationalMetricsOptions = {}) {
@@ -159,6 +166,21 @@ export class OperationalMetrics {
     this.eventLoopLagMs = Math.max(0, Math.round(lagMs));
   }
 
+  /** WS-path memory robustness: a browser message_update was queued under backpressure. */
+  recordWsUpdateQueued(count = 1): void {
+    this.wsUpdatesQueuedTotal += Math.max(0, count);
+  }
+
+  /** WS-path memory robustness: a stuck WebSocket consumer was closed (1013). */
+  recordWsSlowClientClosed(_reason: string): void {
+    this.wsSlowClientsClosedTotal += 1;
+  }
+
+  /** WS-path memory robustness: heap-pressure shed mode armed/disarmed. */
+  setMemoryShed(active: boolean): void {
+    this.memoryShedActive = active;
+  }
+
   snapshot(): OperationalSnapshot {
     const now = this.now();
     const turns: OperationalSnapshot['turns'] = {};
@@ -188,6 +210,9 @@ export class OperationalMetrics {
         brokerEventsTruncatedTotal: this.brokerEventsTruncatedTotal,
         brokerEventsCoalescedTotal: this.brokerEventsCoalescedTotal,
         eventLoopLagMs: this.eventLoopLagMs,
+        wsUpdatesQueuedTotal: this.wsUpdatesQueuedTotal,
+        wsSlowClientsClosedTotal: this.wsSlowClientsClosedTotal,
+        memoryShedActive: this.memoryShedActive,
         ...(this.lastEventAt !== undefined
           ? {
               lastEventAt: new Date(this.lastEventAt).toISOString(),

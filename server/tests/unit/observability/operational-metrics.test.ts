@@ -71,4 +71,22 @@ describe('OperationalMetrics', () => {
       },
     });
   });
+
+  it('tracks WS-path memory robustness counters (queued updates, closed slow clients, memory shed)', () => {
+    const metrics = new OperationalMetrics();
+
+    metrics.recordWsUpdateQueued();
+    metrics.recordWsUpdateQueued();
+    metrics.recordWsSlowClientClosed('hard');
+    metrics.setMemoryShed(true);
+
+    expect(metrics.snapshot().pipeline).toMatchObject({
+      wsUpdatesQueuedTotal: 2,
+      wsSlowClientsClosedTotal: 1,
+      memoryShedActive: true,
+    });
+
+    metrics.setMemoryShed(false);
+    expect(metrics.snapshot().pipeline.memoryShedActive).toBe(false);
+  });
 });

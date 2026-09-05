@@ -23,6 +23,7 @@ import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-man
 import { EventForwarder } from '../pi/event-forwarder.js';
 import { OutboundGovernor, shedBrowserMessageUpdate } from './outbound-governor.js';
 import { getEventLoopShedMonitor } from '../internal-api/event-loop-shed.js';
+import { getOperationalMetrics } from '../observability/operational-metrics.js';
 import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
 import { isTransferSessionContext } from './protocol.js';
 import { handleSessionWebSocket } from './session-websocket.js';
@@ -3709,7 +3710,9 @@ export class WebSocketConnectionManager {
       this.outbound.send(client.ws, JSON.stringify(frame), {
         coalescable,
         clientId,
+        onQueued: () => getOperationalMetrics().recordWsUpdateQueued(),
         onSlowClientClosed: (id: string | undefined, reason: string) => {
+          getOperationalMetrics().recordWsSlowClientClosed(reason);
           logger.warn(`[Connection] Closed slow WebSocket consumer ${id}: ${reason}`);
         },
       });

@@ -34,6 +34,8 @@ export interface OutboundSendContext {
   coalescable: boolean;
   clientId?: string;
   onSlowClientClosed?: (clientId: string | undefined, reason: string) => void;
+  /** Invoked when a frame is queued under backpressure (observability). */
+  onQueued?: (clientId: string | undefined) => void;
 }
 
 export interface OutboundGovernorOptions {
@@ -133,6 +135,11 @@ export class OutboundGovernor {
     if (context.coalescable && buffered > this.softCapBytes) {
       state.queue.push(serialized);
       state.queuedBytes += byteLength(serialized);
+      try {
+        context.onQueued?.(context.clientId);
+      } catch {
+        // Callback failures must never affect delivery semantics.
+      }
       if (state.queuedBytes > this.pendingMaxBytes) {
         return this.closeSlow(ws, state, context, `slow consumer closed: pending queue ${state.queuedBytes} exceeds cap ${this.pendingMaxBytes}`);
       }
