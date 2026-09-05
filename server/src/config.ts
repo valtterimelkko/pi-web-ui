@@ -214,6 +214,11 @@ export interface ServerConfig {
   internalApiRunIdempotencyTtlMs: number;
   internalApiEventPayloadMaxBytes: number;
   internalApiEventRateLimitPerSec: number;
+  /** WS-path memory robustness (2026-09-05): per-client outbound send bounds. */
+  wsSendSoftCapBytes: number;
+  wsSendHardCapBytes: number;
+  wsSendPendingMaxBytes: number;
+  wsSendLowWaterBytes: number;
   /** Directory for the durable API-pin expiry ledger. */
   internalApiPinDir: string;
   /** Default API-pin lifetime (ms). */
@@ -368,6 +373,11 @@ export const config: ServerConfig = {
   internalApiRunIdempotencyTtlMs: parseInt(process.env.INTERNAL_API_RUN_IDEMPOTENCY_TTL_MS || String(24 * 60 * 60 * 1000), 10),
   internalApiEventPayloadMaxBytes: parseNonnegativeInteger(process.env.INTERNAL_API_EVENT_PAYLOAD_MAX_BYTES, 256 * 1024, 'INTERNAL_API_EVENT_PAYLOAD_MAX_BYTES'),
   internalApiEventRateLimitPerSec: parsePositiveInteger(process.env.INTERNAL_API_EVENT_RATE_LIMIT_PER_SEC, 200, 'INTERNAL_API_EVENT_RATE_LIMIT_PER_SEC'),
+  // WS-path memory robustness (2026-09-05): per-client outbound send bounds.
+  wsSendSoftCapBytes: parseNonnegativeInteger(process.env.WS_SEND_SOFT_CAP_BYTES, 4 * 1024 * 1024, 'WS_SEND_SOFT_CAP_BYTES'),
+  wsSendHardCapBytes: parsePositiveInteger(process.env.WS_SEND_HARD_CAP_BYTES, 16 * 1024 * 1024, 'WS_SEND_HARD_CAP_BYTES'),
+  wsSendPendingMaxBytes: parsePositiveInteger(process.env.WS_SEND_PENDING_MAX_BYTES, 8 * 1024 * 1024, 'WS_SEND_PENDING_MAX_BYTES'),
+  wsSendLowWaterBytes: parseNonnegativeInteger(process.env.WS_SEND_LOW_WATER_BYTES, 256 * 1024, 'WS_SEND_LOW_WATER_BYTES'),
   internalApiPinDir: process.env.INTERNAL_API_PIN_DIR || path.join(os.homedir(), '.pi-web-ui', 'pins'),
   internalApiPinDefaultTtlMs: parseInt(process.env.INTERNAL_API_PIN_DEFAULT_TTL_MS || String(24 * 60 * 60 * 1000), 10),
   internalApiPinMaxTtlMs: parseInt(process.env.INTERNAL_API_PIN_MAX_TTL_MS || String(7 * 24 * 60 * 60 * 1000), 10),

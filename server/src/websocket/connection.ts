@@ -21,6 +21,7 @@ import { readBackgroundTasksSnapshot } from '../internal-api/background-children
 import { getPiSessionListCache } from '../pi/session-list-cache.js';
 import { MultiSessionManager, type SessionStatus } from '../pi/multi-session-manager.js';
 import { EventForwarder } from '../pi/event-forwarder.js';
+import { OutboundGovernor } from './outbound-governor.js';
 import type { ClientMessage, ServerMessage, ImageContent, SessionMessage } from './protocol.js';
 import { isTransferSessionContext } from './protocol.js';
 import { handleSessionWebSocket } from './session-websocket.js';
@@ -136,6 +137,22 @@ export interface WebSocketClient {
   isAuthenticated: boolean;
   userId?: string;
   sessionId?: string;
+}
+
+/**
+ * WS-path memory robustness (2026-09-05): a browser-bound frame is coalescable
+ * only when it is a session_event envelope carrying a streaming
+ * `message_update` — the one frame class whose loss-or-delay is recoverable
+ * (deltas + message_end + history replay carry the content). Control,
+ * terminal, tool, goal and error frames are never coalescable.
+ */
+function isCoalescableSessionEvent(message: unknown): boolean {
+  if (!message || typeof message !== 'object') return false;
+  const envelope = message as { type?: unknown; event?: { type?: unknown } | null };
+  return envelope.type === 'session_event'
+    && !!envelope.event
+    && typeof envelope.event === 'object'
+    && envelope.event.type === 'message_update';
 }
 
 type ClaudeAvailabilityService = Pick<ClaudeService, 'isAvailable' | 'validateAuth'>;
@@ -289,6 +306,13 @@ export class WebSocketConnectionManager {
    * so repeated init (e.g. re-initialisation in tests) cannot stack intervals.
    */
   private statusBroadcastTimer: NodeJS.Timeout | null = null;
+  /** WS-path memory robustness (2026-09-05): bounded per-client outbound send. */
+  private readonly outbound = new OutboundGovernor({
+    softCapBytes: config.wsSendSoftCapBytes,
+    hardCapBytes: config.wsSendHardCapBytes,
+    pendingMaxBytes: config.wsSendPendingMaxBytes,
+    lowWaterBytes: config.wsSendLowWaterBytes,
+  });
   private opencodeService: OpenCodeService;
   private opencodeSessionIds: Set<string> = new Set();
   private opencodeSubs = new OpenCodeSessionSubscribers();
@@ -479,6 +503,13 @@ export class WebSocketConnectionManager {
     }
     // Poll for session status changes every second
     this.statusBroadcastTimer = setInterval(() => {
+      // WS-path memory robustness: opportunistic drain sweep — flush any
+      // per-client pending update queues whose sockets recovered below low
+      // water during a quiet period (no new sends to piggyback on).
+      for (const client of this.clients.values()) {
+        this.outbound.flushPending(client.ws);
+      }
+
       // Pi SDK session statuses
       const statuses = this.multiSessionManager.getAllSessionStatuses();
       for (const status of statuses) {
@@ -3597,7 +3628,18 @@ export class WebSocketConnectionManager {
   private sendMessage(clientId: string, message: ServerMessage): void {
     const client = this.clients.get(clientId);
     if (client && client.ws.readyState === WebSocket.OPEN) {
-      client.ws.send(JSON.stringify(message));
+      // WS-path memory robustness (2026-09-05): every browser-bound frame goes
+      // through the outbound governor. Replaceable streaming updates queue per
+      // client while the socket is backpressured; control/terminal frames always
+      // attempt delivery; a truly stuck consumer is closed once (1013) instead of
+      // retaining unbounded serialised frames in userland buffers.
+      this.outbound.send(client.ws, JSON.stringify(message), {
+        coalescable: isCoalescableSessionEvent(message),
+        clientId,
+        onSlowClientClosed: (id: string | undefined, reason: string) => {
+          logger.warn(`[Connection] Closed slow WebSocket consumer ${id}: ${reason}`);
+        },
+      });
     }
   }
 
@@ -3659,7 +3701,10 @@ export class WebSocketConnectionManager {
     const serialized = JSON.stringify(message);
     for (const client of this.clients.values()) {
       if (client.ws.readyState === WebSocket.OPEN) {
-        client.ws.send(serialized);
+        // broadcast() carries control/status frames only (never streaming
+        // updates), so nothing here is coalescable — but the hard-cap guard
+        // still applies per client.
+        this.outbound.send(client.ws, serialized, { coalescable: false });
       }
     }
   }
