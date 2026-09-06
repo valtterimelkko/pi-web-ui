@@ -300,6 +300,34 @@ describe('GET /api/v1/sessions/native (contract 1.30.0)', () => {
     expect(limitBody.body.truncated).toBe(true);
   });
 
+  it('applies the before cursor (exclusive) on mtime for paging past the limit', async () => {
+    const t = Date.parse('2026-08-10T00:00:00.000Z');
+    for (let i = 0; i < 5; i++) {
+      const uuid = `b0000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+      await writeJsonl(path.join(claudeProjectsDir, '-root-proj', `${uuid}.jsonl`), [
+        { type: 'user', message: { role: 'user', content: `page q${i}` } },
+      ], t - i * 1000); // distinct mtimes, i=0 newest
+    }
+
+    const page1 = await getNative('/api/v1/sessions/native?runtime=claude&limit=2');
+    expect(page1.body.sessions).toHaveLength(2);
+    expect(page1.body.truncated).toBe(true);
+    const oldest1 = Date.parse(page1.body.sessions[1].mtime);
+
+    const page2 = await getNative(`/api/v1/sessions/native?runtime=claude&limit=2&before=${oldest1}`);
+    expect(page2.body.sessions).toHaveLength(2);
+    for (const s of page2.body.sessions) {
+      expect(Date.parse(s.mtime)).toBeLessThan(oldest1); // exclusive: no overlap with page 1
+    }
+
+    const last = Date.parse(page2.body.sessions[1].mtime);
+    const page3 = await getNative(`/api/v1/sessions/native?runtime=claude&limit=2&before=${last}`);
+    expect(page3.body.sessions).toHaveLength(1);
+    expect(page3.body.truncated).toBe(false);
+
+    expect((await getNative('/api/v1/sessions/native?before=nonsense')).status).toBe(400);
+  });
+
   it('rejects junk limit and since with 400', async () => {
     expect((await getNative('/api/v1/sessions/native?limit=abc')).status).toBe(400);
     expect((await getNative('/api/v1/sessions/native?since=nonsense')).status).toBe(400);

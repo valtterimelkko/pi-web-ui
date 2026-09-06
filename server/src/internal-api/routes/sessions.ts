@@ -1930,6 +1930,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
         since = new Date(parsed);
       }
+      let before: Date | undefined;
+      const beforeParam = query.get('before');
+      if (beforeParam !== null) {
+        const parsed = parseSinceParam(beforeParam);
+        if (parsed === null) {
+          sendJson(res, 400, { error: 'before must be an ISO 8601 timestamp or epoch milliseconds', code: ErrorCode.INVALID_REQUEST });
+          return;
+        }
+        before = new Date(parsed);
+      }
 
       const known = {
         claudeSessionIds: new Map<string, string>(),
@@ -1944,7 +1954,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         if (entry.antigravityConversationId) known.antigravityConversationIds.set(entry.antigravityConversationId, entry.id);
       }
 
-      const result = await scanNativeSessions({ runtimes, limit, since, roots: nativeRoots, known });
+      const result = await scanNativeSessions({ runtimes, limit, since, before, roots: nativeRoots, known });
       sendJson(res, 200, {
         sessions: result.items,
         truncated: result.truncated,

@@ -54,6 +54,10 @@ export interface NativeScanInput {
   runtimes: NativeRuntime[];
   limit: number;
   since?: Date;
+  /** Exclusive upper bound on mtime (ISO or epoch ms) — the paging cursor for
+   *  walking past the 200-item limit: pass the oldest mtime of the previous
+   * page to fetch the next-older page without overlap. */
+  before?: Date;
   roots: NativeScanRoots;
   known: NativeKnownSets;
 }
@@ -318,7 +322,7 @@ async function scanAntigravity(root: string | undefined): Promise<RawItem[]> {
 }
 
 export async function scanNativeSessions(input: NativeScanInput): Promise<NativeScanResult> {
-  const { runtimes, limit, since, roots, known } = input;
+  const { runtimes, limit, since, before, roots, known } = input;
   const scannedRoots: NativeScanResult['scannedRoots'] = [];
   let raw: RawItem[] = [];
 
@@ -338,6 +342,7 @@ export async function scanNativeSessions(input: NativeScanInput): Promise<Native
 
   raw.sort((a, b) => b.mtimeMs - a.mtimeMs);
   if (since) raw = raw.filter((item) => item.mtimeMs >= since.getTime());
+  if (before) raw = raw.filter((item) => item.mtimeMs < before.getTime());
 
   const truncated = raw.length > limit;
   const page = raw.slice(0, limit);
