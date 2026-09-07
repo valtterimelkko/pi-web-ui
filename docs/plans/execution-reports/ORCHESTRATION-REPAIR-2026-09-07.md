@@ -27,11 +27,13 @@ could be separately authorised.
   client; `32a6744` makes in-run tool resume start a distinct governed run, and
   `4ef26a3` preserves fresh-generation events that arrive before acknowledgement.
   Earlier transport bootstrap `f5fb7d6` and real-Pi tool proof `4504185`.
-- Server: `79b5167` generation preconditions and plain Pi pause reasons;
-  `011b78c` malformed-body/migration correction; `9914bb2` immutable durable-cache
-  rollback correction; `a4f239b` preserves rejected replacements, fences late
-  completion and normalises wake targets; `67304d3` activates the committed
+- Integrated server commits: `795360d` generation preconditions and plain Pi pause
+  reasons; `c2b8168` malformed-body/migration correction; `4db358f` immutable
+  durable-cache rollback; `4da02c1` rejected-replacement preservation, late
+  completion fencing and target normalisation; `c7c902c` activates the committed
   observer before awaited claim rotation. Contract metadata is 1.35.0.
+  The private proof used pre-rebase equivalents; rebasing onto the separately
+  landed documentation-only `e565d73` produced no code/test/configuration delta.
 - Canonical skills: `e49306e` and `f15b62a`, preserving intervening capacity,
   steering, native-discovery and multi-phase guidance rather than applying a
   stale draft. No skill evals were requested or performed.
@@ -57,7 +59,7 @@ Parent probes were added before fixes, not merely after a child's green report:
 - durable rollback could capture a mutable record after I/O rather than the
   serialized payload, or overwrite cache owned by a newer queued write.
 
-Focused acceptance at server `9914bb2`: 14 new tests plus 113 adjacent tests and
+Initial focused acceptance before final review: 14 new tests plus 113 adjacent tests and
 server typecheck passed. The extension gate covers core deadlines, actual loaded
 factory/tools, Unix transport, generation-aware client behaviour, existing watch
 regressions and persistent real Pi tool execution. Source/store parity remains a
@@ -92,8 +94,9 @@ paused wake, performs the resumed artefact write and completes in six requests.
 The parent executed a real Pi Web UI server and three persistent Pi AgentSessions
 with deterministic **local provider responses**. This tests real runtime/protocol
 behaviour, not external model judgement, and makes no subscription calls for the
-fixture. After corrections, the final scenario passed again at server `67304d3`
-/ extension `4ef26a3`:
+fixture. After corrections, the final scenario passed again at pre-integration
+server `67304d3` / extension `4ef26a3`; its server implementation is unchanged
+in integrated `c7c902c` (verified code-tree equivalence):
 
 1. Parent writes a useful artefact, registers two child watches and a deadline,
    then deliberately pauses its goal.
