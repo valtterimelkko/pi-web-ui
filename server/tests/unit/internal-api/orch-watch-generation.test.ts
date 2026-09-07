@@ -110,6 +110,30 @@ describe('WatchStore generation durability boundary', () => {
 });
 
 describe('WatchManager generation CAS', () => {
+  it('retains a terminal event arriving after replacement durability while claim rotation is held', async () => {
+    const dir = await tempDir('watch-review-handover-');
+    const broker = new InternalApiEventBroker({ replayBufferSize: 10 });
+    let releaseRotation!: () => void; let rotationStarted!: () => void;
+    const rotating = new Promise<void>(resolve => { rotationStarted = resolve; });
+    const manager = makeManager(dir, { broker, unpinSession: async () => { rotationStarted(); await new Promise<void>(resolve => { releaseRotation = resolve; }); return true; } });
+    const requestBody = { conditions: [{ type: 'event_type' as const, eventType: 'goal_end', once: false }] };
+    const first = await manager.register({ sessionId: 'subject', sessionPath: 'subject', runtime: 'pi', request: requestBody });
+    const replacing = manager.register({ sessionId: 'subject', sessionPath: 'subject', runtime: 'pi', request: { ...requestBody, expectedGeneration: first.generation } });
+    try {
+      await rotating;
+      const committed = JSON.parse(await fs.readFile(path.join(dir, 'subject.json'), 'utf8'));
+      expect(committed.generation).not.toBe(first.generation);
+      broker.publish('subject', event('goal_end'));
+      releaseRotation();
+      const replacement = await replacing;
+      expect(replacement.firingCount, 'new generation must retain an event during post-commit claim rotation').toBe(1);
+      await settle();
+      const onDisk = JSON.parse(await fs.readFile(path.join(dir, 'subject.json'), 'utf8'));
+      expect(onDisk.generation).toBe(replacement.generation);
+      expect(onDisk.firings).toHaveLength(1);
+    } finally { releaseRotation?.(); await replacing.catch(() => undefined); }
+  });
+
   it('failed conditional replacement preserves the old durable observer and its pin claim', async () => {
     const dir = await tempDir('watch-review-replacement-failure-');
     const broker = new InternalApiEventBroker({ replayBufferSize: 10 });

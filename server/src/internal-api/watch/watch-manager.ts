@@ -396,6 +396,11 @@ export class WatchManager {
       throw error;
     }
 
+    // Commit the observer handover synchronously after durability, before any
+    // awaited claim rotation. Events in that window belong to the new ledger.
+    if (previousLive) this.teardown(sessionId);
+    this.activateWatch(record, resolved);
+
     // Durability commits the replacement. Only now rotate the old generation's
     // claims. Even same-id claims are explicitly released/reacquired under this
     // session mutation, preserving existing claim lifecycle semantics.
@@ -411,9 +416,6 @@ export class WatchManager {
         record.targetPinned = await Promise.resolve(this.pinSession(desiredTargetId, `watch-target:${watchId}`)).catch(() => false);
       }
     }
-    if (previousLive) this.teardown(sessionId);
-    this.activateWatch(record, resolved);
-
     // Contract 1.34.0 surfacing: announce the registration to the arming
     // session's surfaces (never fatal, and only when linkage exists).
     if (this.surface && record.sourceSessionId) {

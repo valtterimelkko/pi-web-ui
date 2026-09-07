@@ -2188,7 +2188,10 @@ legacy deterministic `watchId`.
   CAS, not a distributed lock or security boundary between trusted local users.
 - Detached restart preserves generation and firing history. Accepted replacement
   changes generation and resets the ledger: preserve prior evidence and reset
-  the matching cursor. Legacy migration must finish durably before successful
+  the matching cursor. The new observer becomes active after candidate durability,
+  before awaited claim rotation. Its response may already contain new-generation
+  firings: consume them (or poll from zero), rather than baselining them away as
+  historical events. Legacy migration must finish durably before successful
   initialisation; failed writes are retried rather than acknowledged from cache.
 
 **Register body (legacy omission shown; add a precondition for CAS):**
