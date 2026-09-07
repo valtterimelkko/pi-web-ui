@@ -281,6 +281,24 @@ describe('capacity execution ownership on actual Internal API routes', () => {
     await Promise.all(harnesses.splice(0).map((harness) => harness.cleanup()));
   });
 
+  it('preserves the critical memory floor when a busy steer bypasses execution admission', async () => {
+    const admission = admissionStub(vi.fn());
+    admission.snapshot.mockReturnValue({ controlAvailable: false, retryAfterSeconds: 2 });
+    const harness = makeHarness({ admission, initiallyRunning: ['primary'] });
+    harnesses.push(harness);
+    await harness.ready;
+    const res = mockRes();
+    await harness.routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/primary/prompt', { message: 'redirect', mode: 'steer', detach: true }),
+      res,
+      'primary',
+    );
+    expect(res.statusCode).toBe(503);
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'ADMISSION_CAPACITY_EXHAUSTED', reason: 'memory_pressure' });
+    expect(harness.claudeService.steer).not.toHaveBeenCalled();
+    expect(admission.acquire).not.toHaveBeenCalled();
+  });
+
   it('keeps a busy joined steer at one execution permit and leaves a sibling admissible through direct and batch routes', async () => {
     const harness = makeHarness();
     harnesses.push(harness);

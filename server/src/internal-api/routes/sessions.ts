@@ -3318,8 +3318,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // terminal boundary for caller-visible continuation evidence.
       const joinedExecution = dispatchMode === 'steer';
       let rawAdmissionLease: { release: () => void } | undefined;
-      if (!joinedExecution) {
+      if (!joinedExecution || !admission.snapshot().controlAvailable) {
         try {
+          // Joining avoids a heavy execution reservation, not the emergency
+          // memory floor which bounds all control work.
+          if (joinedExecution) throw new AdmissionCapacityError('memory_pressure');
           rawAdmissionLease = await admission.acquire(runtime, 'P2');
         } catch (error) {
           directClaim?.release();
