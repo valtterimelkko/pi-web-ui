@@ -140,6 +140,11 @@ MultiSessionManager memory check arms it at ≥ 80% of the real V8
 `pipeline.wsSlowClientsClosedTotal` (sockets closed 1013 as stuck consumers),
 and `pipeline.memoryShedActive`. Browser slow-consumer closures are also
 logged as `[Connection] Closed slow WebSocket consumer …` warnings.
+The SSE helper separately logs `[SSEStream] Closing SSE connection: …` with
+pending-byte and 4 MiB limit values when a slow response exceeds its outgoing
+budget (or serialisation/write fails). No payload is logged. This is a transport
+closure, not proof that a detached agent failed; attached streaming prompts
+retain their documented disconnect/cancellation semantics.
 
 The snapshot contains no prompts, transcripts, tool payloads, models, session
 paths, tokens, or credentials. It is an operational snapshot, not a durable historical database;

@@ -1068,6 +1068,10 @@ server-side fire-and-forget mode and is valid only with `verbosity=answers`.
 The `tasks` and `full` prompt modes hold an SSE stream open for supervision; if
 that streaming client disconnects, the server cancels the run and aborts the
 runtime. Do not treat a streaming request as a durable background job.
+SSE responses have a 4 MiB outgoing-buffer limit: a slow reader or an event
+that cannot fit is disconnected explicitly, without a false completion marker.
+For an attached `tasks`/`full` prompt this retains the same cancellation
+semantics; use detached `answers` when the work must survive observer loss.
 
 ---
 
@@ -1688,7 +1692,13 @@ The connection stays open across multiple prompts. Up to 100 recent bounded
 events are buffered per session and replayed to late subscribers on connect.
 `INTERNAL_API_EVENT_RATE_LIMIT_PER_SEC` controls the per-session update rate
 (default 200/s, burst 400); terminal, tool, goal and error events are never
-rate-dropped. Send `Connection: close` or simply disconnect to unsubscribe.
+rate-dropped. Each SSE response also bounds its outgoing buffer to 4 MiB;
+exceeding that limit closes only the slow connection and releases its observer.
+It does not abort an independently running or detached agent. Reconnect for
+bounded replay and read `/transcript` or the run receipt for durable evidence;
+replay is not a guarantee of every missed event. Heartbeats and completion
+frames obey the same bound. Send `Connection: close` or simply disconnect to
+unsubscribe.
 
 **Errors:**
 - `404` — Session not found
