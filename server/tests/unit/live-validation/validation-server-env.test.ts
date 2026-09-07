@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import {
   buildValidationIsolationEnv,
   loadValidationEnvFile,
@@ -10,6 +10,21 @@ import {
 } from '../../../src/live-validation/validation-server-env.js';
 
 const tempDirs: string[] = [];
+
+// The isolation builder deliberately lets an operator-provided
+// COMMAND_CODE_ALLOWED_CWD_ROOTS win (real-CLI UI validation needs it), so
+// these default-path assertions must run without inheriting one from whatever
+// shell happens to execute the suite.
+const ambientAllowedCwdRoots = process.env.COMMAND_CODE_ALLOWED_CWD_ROOTS;
+if (ambientAllowedCwdRoots !== undefined) {
+  delete process.env.COMMAND_CODE_ALLOWED_CWD_ROOTS;
+}
+afterAll(() => {
+  // Restore for whatever runs next in this worker.
+  if (ambientAllowedCwdRoots !== undefined) {
+    process.env.COMMAND_CODE_ALLOWED_CWD_ROOTS = ambientAllowedCwdRoots;
+  }
+});
 
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'pi-validation-env-'));

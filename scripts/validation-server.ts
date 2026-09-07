@@ -9,7 +9,9 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import {
   buildValidationIsolationEnv,
   loadValidationEnvFile,
@@ -87,28 +89,14 @@ async function main(): Promise<void> {
   if (!explicitDir) {
     process.once('exit', () => rmSync(validationDir, { recursive: true, force: true }));
   }
-  // Defect 12 (Part 3): record the process identity so teardown can terminate
-  // the WHOLE process group of a known pid. Terminating only the npm parent
-  // orphaned the server's subprocesses in their process group on a supervised
-  // host; broad command-line matching is explicitly not acceptable. The stopper
-  // (scripts/validation-server-stop.mjs) reads this record.
-  const processRecord = {
-    pid: process.pid,
-    pgid: (() => {
-      try {
-        // Linux: pgrp is field 5 of /proc/self/stat (after the comm field in parens).
-        const stat = readFileSync('/proc/self/stat', 'utf8');
-        const afterComm = stat.slice(stat.lastIndexOf(')') + 2);
-        const fields = afterComm.split(' ');
-        const pgrp = Number(fields[2]);
-        if (Number.isInteger(pgrp) && pgrp > 1) return pgrp;
-      } catch { /* fall through */ }
-      return process.pid;
-    })(),
-    startedAt: new Date().toISOString(),
-  };
-  writeFileSync(path.join(validationDir, 'server-process.json'), `${JSON.stringify(processRecord, null, 2)}\n`, { mode: 0o600 });
-  process.once('exit', () => { try { rmSync(path.join(validationDir, 'server-process.json'), { force: true }); } catch { /* best effort */ } });
+  // Defect 12 (Part 3) / capacity review 2026-09-07 §3: the identity record is
+  // NOT written here. This wrapper runs inside the caller's npm/tsx process
+  // group; recording any pid from this chain invited the old false-success
+  // teardown (stopper probed a group that never existed and claimed "already
+  // gone" while the listener stayed up). Instead the wrapper spawns the server
+  // as a DETACHED child below: the child becomes the leader of a brand-new
+  // process group, verifies that leadership via /proc, and only then writes
+  // scripts/validation-server-stop.mjs's trusted record.
 
   try {
     const portReservation = await reserveValidationPorts([
@@ -173,17 +161,81 @@ async function main(): Promise<void> {
     console.error('');
     console.error(' Point a validator at it, e.g.:');
     console.error(`   npm run validate:long-horizon -- --socket ${socketPath} --token-path ${tokenPath} ...`);
-    console.error(' Stop with Ctrl-C, or for full process-group teardown from another shell:');
+    console.error(' Stop with Ctrl-C (forwarded teardown), or from another shell:');
+    console.error(`   node scripts/validation-server-stop.mjs --dir ${validationDir}`);
     console.error();
     console.error('────────────────────────────────────────────────────────');
 
-    // Imported native dependencies must not see this wrapper's flags.
-    process.argv = process.argv.slice(0, 2);
-    await import('../server/src/index.js');
+    // The server runs as a DETACHED child: the spawn itself makes it the
+    // leader of a brand-new process group that no wrapper, shell or caller
+    // shares. The child verifies that leadership via /proc and writes the
+    // identity record; this wrapper stays in the foreground as the signal
+    // funnel so Ctrl-C keeps working, and forwards teardown through the
+    // stopper — the single teardown authority with bounded TERM/KILL and
+    // verification.
+    const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+    const stopperScript = path.join(scriptsDir, 'validation-server-stop.mjs');
+    const childScript = path.join(scriptsDir, 'validation-server-child.ts');
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      PI_WEB_UI_VALIDATION_SERVER_CHILD: '1',
+      PI_WEB_UI_VALIDATION_RECORD_DIR: validationDir,
+      PI_WEB_UI_VALIDATION_BOUND_PORT: port,
+    };
+    let child: ChildProcess;
+    try {
+      // The tsx loader runs in-process here (single process, like the previous
+      // single-file launcher), so the detached child IS the group leader.
+      // execArgv: [] is load-bearing: Node would otherwise inherit this
+      // wrapper's own tsx loader flags a second time into the child.
+      child = spawn(process.execPath, ['--import', 'tsx', childScript], { detached: true, stdio: 'inherit', env: childEnv, execArgv: [] });
+    } catch (spawnError) {
+      throw new Error(`Failed to spawn the dedicated validation server child: ${spawnError instanceof Error ? spawnError.message : String(spawnError)}`);
+    }
+    let tearingDown = false;
+    const forwardToStopper = (signal: NodeJS.Signals) => {
+      if (tearingDown) return;
+      tearingDown = true;
+      try {
+        const stop = spawnSync(process.execPath, [stopperScript, '--dir', validationDir, '--timeout-ms', '8000'], { stdio: 'inherit' });
+        if ((stop.status ?? 1) !== 0) {
+          // The stopper could not act (e.g. SIGINT arrived before the child
+          // wrote its record). Fall back to the ONE group this wrapper
+          // unambiguously owns — the child it spawned detached. Bounded TERM
+          // then KILL; never broad process matching.
+          try { process.kill(-child.pid!, 'SIGTERM'); } catch { /* already gone */ }
+          blockingWait(2000);
+          try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* already gone */ }
+        }
+      } finally {
+        process.exit(128 + SIGNAL_EXIT_OFFSET[signal]);
+      }
+    };
+    process.on('SIGINT', () => forwardToStopper('SIGINT'));
+    process.on('SIGTERM', () => forwardToStopper('SIGTERM'));
+    process.on('SIGHUP', () => forwardToStopper('SIGHUP'));
+    child.once('exit', (code, signal) => {
+      if (tearingDown) return;
+      tearingDown = true;
+      process.exit(code ?? (signal === 'SIGTERM' ? 143 : signal === 'SIGKILL' ? 137 : 1));
+    });
+    child.once('error', (childError) => {
+      if (tearingDown) return;
+      tearingDown = true;
+      console.error('[validation-server] dedicated server child failed:', childError);
+      process.exit(1);
+    });
   } catch (error) {
     directoryLock.release();
     throw error;
   }
+}
+
+const SIGNAL_EXIT_OFFSET: Record<string, number> = { SIGINT: 2, SIGTERM: 15, SIGHUP: 1 };
+
+/** Sleep without keeping the event loop involved — used only while tearing down. */
+function blockingWait(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 main().catch((error) => {
