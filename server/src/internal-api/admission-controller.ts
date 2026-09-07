@@ -22,8 +22,8 @@ const CONTROL_CLASSES = new Set<AdmissionClass>(['P0', 'P1']);
 const ADMISSION_CLASSES: AdmissionClass[] = ['P0', 'P1', 'P2', 'P3'];
 
 export class AdmissionCapacityError extends Error {
-  constructor(public readonly reason: AdmissionRefusalReason, public readonly retryAfterSeconds = 2) {
-    super(`Internal API admission refused: ${reason}`);
+  constructor(public readonly reason: AdmissionRefusalReason, public readonly retryAfterSeconds = 2, detail?: string) {
+    super(`Internal API admission refused: ${reason}${detail ? ` (${detail})` : ''}`);
     this.name = 'AdmissionCapacityError';
   }
 }
@@ -290,8 +290,15 @@ export class AdmissionController {
   }
 
   async acquire(runtime: SessionRuntime, cls: AdmissionClass = 'P2'): Promise<{ release: () => void }> {
-    const reason = this.refusalReason(runtime, cls);
-    if (reason) throw new AdmissionCapacityError(reason, this.retryAfterSeconds);
+    const pressure = this.evaluatePressure();
+    const reason = this.refusalReason(runtime, cls, pressure);
+    if (reason) {
+      const reservedTasks = (this.activeByClass.P2 + this.activeByClass.P3 + 1) * this.reservedPidsPerTurn;
+      const detail = reason === 'pid_pressure'
+        ? `currentTasks=${pressure.pids.current} reservedTasks=${reservedTasks} projectedTasks=${pressure.pids.current! + reservedTasks} taskLimit=${pressure.pids.max}`
+        : undefined;
+      throw new AdmissionCapacityError(reason, this.retryAfterSeconds, detail);
+    }
     // JavaScript's run-to-completion makes this check+increment atomic within
     // one server process (there is no await between them).
     this.activeTurns += 1;
@@ -387,8 +394,11 @@ export class AdmissionController {
     };
   }
 
-  private refusalReason(runtime: SessionRuntime, cls: AdmissionClass): AdmissionRefusalReason | undefined {
-    const { memoryPressure, memoryCritical, pidPressure, hostPressure } = this.evaluatePressure();
+  private refusalReason(
+    runtime: SessionRuntime,
+    cls: AdmissionClass,
+    { memoryPressure, memoryCritical, pidPressure, hostPressure }: ReturnType<AdmissionController['evaluatePressure']>,
+  ): AdmissionRefusalReason | undefined {
     if (CONTROL_CLASSES.has(cls)) {
       // P0/P1 control is preserved under ordinary memory pressure (emergency mode:
       // execution is refused, control is kept) and refused only at the critical

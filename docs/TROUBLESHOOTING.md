@@ -317,7 +317,11 @@ Fetch `GET /api/v1/runs/:runId`, then compare it with
 `GET /api/v1/capacity`. `activeTurns` shows current admission occupancy and
 `stalledRuns` counts watchdog-terminalised runs. A healthy current server
 bounds every accepted run with an idle timeout and an absolute ceiling; a
-stalled run terminalises as `failed` / `TURN_STALLED` and releases its slot.
+stalled run terminalises as `failed` / `TURN_STALLED`. Its execution permit
+remains held until the runtime adapter confirms quiescence; unresolved cessation
+becomes quarantined capacity debt after the bounded drain window, not a free
+slot. A joined-steer receipt has no separate execution permit and cannot abort
+the underlying turn merely because that observer stalled.
 If an old receipt remains nonterminal beyond both configured bounds, record its
 `runId`, session evidence, server version, and diagnostics—it predates or
 bypassed the watchdog and must not be treated as successful work.

@@ -1229,7 +1229,7 @@ host-pressure/event evidence, conservative-knob provenance, and
 }
 ```
 
-`available`/top-level `reason` reflect memory and global checks. Consumers must
+`available`/top-level `reason` reflect resource pressure and global execution checks. Consumers must
 also inspect their runtime counter; the final prompt-time check can still refuse
 for `runtime_limit`. `controlAvailable` describes the reserved P0/P1 control
 lane, while `executionCapacity` describes ordinary P2/P3 execution. Conductors
@@ -1240,6 +1240,30 @@ resource-pressure reasons) with code `ADMISSION_CAPACITY_EXHAUSTED`, stable
 or `host_memory_pressure`), body `retryAfterSeconds`, and a `Retry-After`
 header. Capacity limits active turns, not durable sessions or retention leases;
 no hidden queue is created.
+
+A busy direct `steer` retains its own request receipt but joins the existing
+execution: it does not reserve another P2 turn. Delivery uses the bounded
+control lane, while receipt completion waits for the joined turn. The emergency
+memory floor still applies. Cancelling a joined observer (including its stream
+or watchdog timeout) must not abort the underlying execution; explicit session
+abort remains the operation that stops it. Busy watch steering remains in-place
+delivery without a new run receipt.
+
+PID pressure is a conservative projection, not a count of child agents:
+`pids.current + (classes.P2.active + classes.P3.active + 1) * pids.reservedPidsPerTurn`
+is refused at or above `pids.max`. Refusal messages include `currentTasks`,
+`reservedTasks`, `projectedTasks` and `taskLimit` from the deciding sample.
+Reservations protect admitted work whose subprocess growth is not yet visible.
+A nominal execution ceiling is therefore not a promise that every slot fits.
+`activeTurns` counts admission permits, not request receipts or all host work;
+browser/native-CLI work and autonomous goal continuations are not comprehensively
+metered by this counter.
+
+The receipt lifecycle owns permit release. Failed/cancelled work with uncertain
+cessation retains its permit until the runtime adapter confirms quiescence;
+the bounded drain deadline quarantines unresolved debt rather than advertising
+false capacity. Rejection before dispatch releases immediately. Adapter-idle
+evidence is not proof that every tool descendant has stopped.
 
 ---
 
