@@ -128,12 +128,11 @@ workspace, registry, sockets, tokens, and runtime metadata under the validation
 directory. They also clear any ambient `INTERNAL_API_KEY`, so the printed isolated
 token file is always authoritative. By design, the wrapper does **not** override
 `PI_AGENT_DIR`: Pi auth/models/resources remain available from the normal agent
-directory, and the derived `web-ui-prefs.json` path is therefore not isolated by
-default. Validation mode disables boot-time session cleanup and real-session
-registry rebuild, but browser tests that mutate preferences (archive/pin/rename)
-must either launch with `PI_AGENT_DIR="$VALIDATION_DIR/pi-agent"` and a deliberately
-provisioned disposable runtime setup, or avoid those mutations. Do not assume a
-runtime-disposable server is a full preference/credential isolation boundary.
+directory. Browser preferences are separately isolated through `WEB_UI_PREFS_PATH`
+by the current wrapper; verify that override when using an older checkout.
+Validation mode disables boot-time session cleanup and real-session registry
+rebuild. Shared credentials and arbitrary extension-owned state are not made
+disposable by these overrides; do not copy or alter credentials as a shortcut.
 Antigravity is disabled in disposable mode because the `agy` CLI has no supported
 conversation-data directory override and would otherwise write to the user's real
 `~/.gemini` conversation store; validate Antigravity only through a separately
@@ -174,9 +173,7 @@ npm run validate:live -- \
   --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" \
   --runtime commandcode --scenario all
-node scripts/validation-server-stop.mjs --dir "$VALIDATION_DIR"
-# Remove state only after verified teardown succeeds.
-rm -rf "$VALIDATION_DIR"
+node scripts/validation-server-stop.mjs --dir "$VALIDATION_DIR" && rm -rf "$VALIDATION_DIR"
 ```
 
 The fixture is provider-free: every advertised model answers deterministically
@@ -239,9 +236,7 @@ npm run validate:mcp:live -- \
   --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" \
   --runtime pi
-node scripts/validation-server-stop.mjs --dir "$VALIDATION_DIR"
-# Remove state only after verified teardown succeeds.
-rm -rf "$VALIDATION_DIR"
+node scripts/validation-server-stop.mjs --dir "$VALIDATION_DIR" && rm -rf "$VALIDATION_DIR"
 ```
 
 The report must say that the disposable server leaves production service,
