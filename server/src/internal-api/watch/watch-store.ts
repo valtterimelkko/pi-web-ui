@@ -111,7 +111,7 @@ export class WatchStore {
    * session are chained so they never overlap; an atomic temp-file rename
    * avoids leaving a half-written file if the process dies mid-write.
    */
-  save(record: PersistedWatch): Promise<void> {
+  save(record: PersistedWatch, options: { expectedGeneration?: string } = {}): Promise<void> {
     this.cache.set(record.sessionId, record);
     const file = this.fileFor(record.sessionId);
     const payload = JSON.stringify(record, null, 2);
@@ -119,6 +119,16 @@ export class WatchStore {
     const next = prev
       .catch(() => { /* don't let a prior failure break the chain */ })
       .then(async () => {
+        if (options.expectedGeneration !== undefined
+          && this.durableCache.get(record.sessionId)?.generation !== options.expectedGeneration) {
+          // A newer generation became durable after this save was queued. Its
+          // ledger must not be overwritten by stale completion/event work.
+          if (this.cache.get(record.sessionId) === record) {
+            const durable = this.durableCache.get(record.sessionId);
+            if (durable) this.cache.set(record.sessionId, structuredClone(durable));
+          }
+          return;
+        }
         await mkdir(this.dir, { recursive: true, mode: 0o700 });
         const tmp = `${file}.${process.pid}.tmp`;
         await writeFile(tmp, payload, { mode: 0o600 });

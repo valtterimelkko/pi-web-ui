@@ -110,6 +110,51 @@ describe('WatchStore generation durability boundary', () => {
 });
 
 describe('WatchManager generation CAS', () => {
+  it('failed conditional replacement preserves the old durable observer and its pin claim', async () => {
+    const dir = await tempDir('watch-review-replacement-failure-');
+    const broker = new InternalApiEventBroker({ replayBufferSize: 10 });
+    const pins = new Set<string>();
+    const manager = makeManager(dir, { broker, pinSession: (_id, claim) => { pins.add(claim); return true; }, unpinSession: (_id, claim) => pins.delete(claim) });
+    const first = await manager.register({ sessionId: 'subject', sessionPath: 'subject', runtime: 'pi', request: { conditions: [{ ...condition, once: false }] } });
+    const blockedTemp = path.join(dir, `subject.json.${process.pid}.tmp`);
+    await fs.mkdir(blockedTemp); // Real candidate writeFile failure; the old ledger still exists.
+    await expect(manager.register({ sessionId: 'subject', sessionPath: 'subject', runtime: 'pi', request: { conditions: [{ ...condition, once: false }], expectedGeneration: first.generation } })).rejects.toBeDefined();
+    await fs.rm(blockedTemp, { recursive: true });
+    expect(manager.get('subject')?.generation, 'a rejected replacement must retain the prior generation').toBe(first.generation);
+    expect(pins.has('watch:watch-subject')).toBe(true);
+    broker.publish('subject', event('agent_end'));
+    expect(manager.get('subject')?.firingCount).toBe(1);
+    await settle();
+    manager.close();
+    const restarted = makeManager(dir); await restarted.init();
+    expect(restarted.get('subject')?.generation).toBe(first.generation);
+    expect(restarted.get('subject')?.firingCount).toBe(1);
+  });
+
+  it('old one-shot completion release cannot unpin or persist over a replacement', async () => {
+    const dir = await tempDir('watch-review-completion-race-');
+    const broker = new InternalApiEventBroker({ replayBufferSize: 10 });
+    const pins = new Set<string>(); let releaseCompletion!: () => void; let unpins = 0;
+    const manager = makeManager(dir, { broker,
+      pinSession: (_id, claim) => { pins.add(claim); return true; },
+      unpinSession: async (_id, claim) => { if (++unpins === 1) await new Promise<void>(resolve => { releaseCompletion = resolve; }); return pins.delete(claim); },
+    });
+    const first = await manager.register({ sessionId: 'subject', sessionPath: 'subject', runtime: 'pi', request: { conditions: [condition] } });
+    broker.publish('subject', event('agent_end'));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(releaseCompletion).toBeTypeOf('function');
+    const replacing = manager.register({ sessionId: 'subject', sessionPath: 'subject', runtime: 'pi', request: { conditions: [{ ...condition, once: false }], expectedGeneration: first.generation } });
+    await new Promise(resolve => setImmediate(resolve)); // Drain admitted JS mutations; old release stays explicitly held.
+    releaseCompletion();
+    const replacement = await replacing;
+    await settle();
+    expect(pins.has('watch:watch-subject'), 'old completion must not remove the new generation pin').toBe(true);
+    expect(manager.get('subject')?.generation).toBe(replacement.generation);
+    expect(JSON.parse(await fs.readFile(path.join(dir, 'subject.json'), 'utf8')).generation).toBe(replacement.generation);
+    broker.publish('subject', event('agent_end'));
+    expect(manager.get('subject')?.firingCount).toBe(1);
+  });
+
   it('retries a failed legacy migration before exposing its generation as durable', async () => {
     const dir = await tempDir('watch-parent-migration-');
     const legacy = {
@@ -312,6 +357,15 @@ async function request(socketPath: string, method: string, body?: unknown): Prom
 }
 
 describe('actual HTTP watch generation contract', () => {
+  it('stores the same normalised wake target identity that the HTTP route validated', async () => {
+    const root = await tempDir('watch-review-target-'); const socket = path.join(root, 'api.sock');
+    await startHttpFixture(path.join(root, 'watches'), socket);
+    const result = await request(socket, 'POST', { conditions: [condition], onFire: { type: 'prompt', targetSessionId: ' parent-session ', message: 'wake the validated parent' } });
+    expect(result.status).toBe(201);
+    expect(result.body.onFire.targetSessionId).toBe('parent-session');
+    expect((await request(socket, 'GET')).body.onFire.targetSessionId).toBe('parent-session');
+  });
+
   it.each(['{', 'null'])('rejects a non-object or malformed chunked DELETE body without deleting the watch: %s', async (rawBody) => {
     const root = await tempDir('watch-parent-chunked-');
     const socket = path.join(root, 'api.sock');

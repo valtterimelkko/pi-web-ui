@@ -137,7 +137,8 @@ export function validateOnFireAction(sessionId: string, raw: unknown): WatchOnFi
   if (typeof action.targetSessionId !== 'string' || !action.targetSessionId.trim()) {
     throw new WatchValidationError('onFire.targetSessionId is required');
   }
-  if (action.targetSessionId === sessionId) {
+  const targetSessionId = action.targetSessionId.trim();
+  if (targetSessionId === sessionId) {
     throw new WatchValidationError(
       'onFire.targetSessionId cannot target its own session: an idle session produces no events for a watch to act on, and a streaming one would self-continue. Watch the child, wake the parent.',
     );
@@ -161,7 +162,7 @@ export function validateOnFireAction(sessionId: string, raw: unknown): WatchOnFi
   }
   return {
     type: 'prompt',
-    targetSessionId: action.targetSessionId,
+    targetSessionId,
     message: action.message,
     mode: action.mode ?? 'follow_up',
     maxWakeups,
@@ -294,7 +295,8 @@ export class WatchManager {
 
     // The check and every destructive step below execute inside the same
     // per-session mutation chain. A route-level pre-read would not be CAS.
-    const previous = this.active.get(sessionId)?.record ?? this.store.get(sessionId);
+    const previousLive = this.active.get(sessionId);
+    const previous = previousLive?.record ?? this.store.get(sessionId);
     const expectedGeneration = request.expectedGeneration;
     if (expectedGeneration !== undefined) {
       const currentGeneration = previous?.generation ?? null;
@@ -310,34 +312,37 @@ export class WatchManager {
       }
     }
 
-    // Replace any existing watch for this session. Release exactly its prior
-    // claims first, including when the replacement opts out of pinning.
-    this.teardown(sessionId);
-    if (previous?.pinned && this.unpinSession) {
-      await Promise.resolve(this.unpinSession(sessionId, `watch:${previous.watchId}`)).catch(() => false);
-    }
-    if (previous?.targetPinned && previous.onFire && this.unpinSession) {
-      await Promise.resolve(this.unpinSession(previous.onFire.targetSessionId, `watch-target:${previous.watchId}`)).catch(() => false);
-    }
-
     const watchId = `watch-${sessionId}`;
     const claimId = `watch:${watchId}`;
-    let pinned = false;
-    if (request.pin !== false) {
+
+    // Prepare only claims the prior generation does not already own. The old
+    // observer and its claims remain intact until the candidate is durable, so
+    // a rejected replacement requires no lossy re-registration rollback.
+    const reuseSubjectClaim = request.pin !== false && previous?.pinned === true;
+    let pinned = reuseSubjectClaim;
+    let newSubjectClaim = false;
+    if (request.pin !== false && !reuseSubjectClaim) {
       try {
         pinned = await this.pinSession(sessionId, claimId);
+        newSubjectClaim = pinned;
       } catch {
         pinned = false;
       }
     }
 
-    // The wake target is exactly the session that must survive until the wake
-    // fires (Pi rehydrates from disk, but e.g. OpenCode evicts unpinned idle
-    // sessions), so claim it with a source-owned target claim by default.
-    let targetPinned = false;
-    if (onFire && onFire.pinTarget !== false) {
+    const previousTargetId = previous?.targetPinned && previous.onFire
+      ? previous.onFire.targetSessionId
+      : undefined;
+    const desiredTargetId = onFire && onFire.pinTarget !== false
+      ? onFire.targetSessionId
+      : undefined;
+    const reuseTargetClaim = desiredTargetId !== undefined && desiredTargetId === previousTargetId;
+    let targetPinned = reuseTargetClaim;
+    let newTargetClaim = false;
+    if (desiredTargetId && !reuseTargetClaim) {
       try {
-        targetPinned = await this.pinSession(onFire.targetSessionId, `watch-target:${watchId}`);
+        targetPinned = await this.pinSession(desiredTargetId, `watch-target:${watchId}`);
+        newTargetClaim = targetPinned;
       } catch {
         targetPinned = false;
       }
@@ -377,39 +382,37 @@ export class WatchManager {
       snapshot: { status: 'idle', eventCount: 0, toolCallCount: 0, sawAgentEnd: false },
     };
 
-    const engine = new ConditionEngine(resolved);
-    const handler = (event: NormalizedEvent) => this.handleEvent(sessionId, event);
-    const unsub: Array<() => void> = [this.broker.subscribe(sessionId, handler, true, 'watch')];
-    // Pi publishes events under the session *path*; other runtimes use the id
-    // (which equals the path). Subscribe to both distinct keys so the watch
-    // sees events regardless of which key the runtime publishes under.
-    if (sessionPath && sessionPath !== sessionId) {
-      unsub.push(this.broker.subscribe(sessionPath, handler, true, 'watch'));
-    }
-
-    this.active.set(sessionId, {
-      record,
-      engine,
-      resolved,
-      unsub,
-      snapshotDirty: false,
-      wakeChain: Promise.resolve(),
-      wakeRetryTimers: new Set(),
-    });
-
     try {
       await this.store.save(record);
     } catch (error) {
-      // Registration is not accepted until its initial ledger exists. Remove
-      // the live subscriptions and cache entry so a caller can retry cleanly.
-      this.teardown(sessionId);
-      if (pinned && this.unpinSession) await Promise.resolve(this.unpinSession(sessionId, claimId)).catch(() => false);
-      if (targetPinned && onFire && this.unpinSession) {
-        await Promise.resolve(this.unpinSession(onFire.targetSessionId, `watch-target:${watchId}`)).catch(() => false);
+      // The old generation is still live/durable. Release only claims newly
+      // prepared for this rejected candidate; reused old claims stay intact.
+      if (newSubjectClaim && this.unpinSession) {
+        await Promise.resolve(this.unpinSession(sessionId, claimId)).catch(() => false);
       }
-      await this.store.delete(sessionId);
+      if (newTargetClaim && desiredTargetId && this.unpinSession) {
+        await Promise.resolve(this.unpinSession(desiredTargetId, `watch-target:${watchId}`)).catch(() => false);
+      }
       throw error;
     }
+
+    // Durability commits the replacement. Only now rotate the old generation's
+    // claims. Even same-id claims are explicitly released/reacquired under this
+    // session mutation, preserving existing claim lifecycle semantics.
+    if (previous?.pinned && this.unpinSession) {
+      await Promise.resolve(this.unpinSession(sessionId, `watch:${previous.watchId}`)).catch(() => false);
+      if (reuseSubjectClaim) {
+        record.pinned = await Promise.resolve(this.pinSession(sessionId, claimId)).catch(() => false);
+      }
+    }
+    if (previous?.targetPinned && previousTargetId && this.unpinSession) {
+      await Promise.resolve(this.unpinSession(previousTargetId, `watch-target:${previous.watchId}`)).catch(() => false);
+      if (reuseTargetClaim && desiredTargetId) {
+        record.targetPinned = await Promise.resolve(this.pinSession(desiredTargetId, `watch-target:${watchId}`)).catch(() => false);
+      }
+    }
+    if (previousLive) this.teardown(sessionId);
+    this.activateWatch(record, resolved);
 
     // Contract 1.34.0 surfacing: announce the registration to the arming
     // session's surfaces (never fatal, and only when linkage exists).
@@ -477,6 +480,29 @@ export class WatchManager {
       await this.store.delete(sessionId);
       return { deleted: true, generation, watchId: record.watchId };
     });
+  }
+
+  private activateWatch(record: PersistedWatch, resolved: ResolvedCondition[]): ActiveWatch {
+    const live: ActiveWatch = {
+      record,
+      engine: new ConditionEngine(resolved),
+      resolved,
+      unsub: [],
+      snapshotDirty: false,
+      wakeChain: Promise.resolve(),
+      wakeRetryTimers: new Set(),
+    };
+    const handler = (event: NormalizedEvent) => {
+      if (this.active.get(record.sessionId) === live) this.handleEvent(record.sessionId, event);
+    };
+    // Match the historical publication order: replay delivered during subscribe
+    // predates this accepted generation and must not seed its fresh ledger.
+    live.unsub.push(this.broker.subscribe(record.sessionId, handler, true, 'watch'));
+    if (record.sessionPath && record.sessionPath !== record.sessionId) {
+      live.unsub.push(this.broker.subscribe(record.sessionPath, handler, true, 'watch'));
+    }
+    this.active.set(record.sessionId, live);
+    return live;
   }
 
   /** Stop all live subscriptions and timers (e.g. on server shutdown). Ledgers stay on disk. */
@@ -752,7 +778,7 @@ export class WatchManager {
       && record.conditions.every((condition) => condition.spec.once !== false && condition.fired);
   }
 
-  /** Mark a terminal one-shot watch done, stop observation, and release only its own claims. */
+  /** Mark a terminal one-shot watch done, then release claims under session mutation authority. */
   private completeWatch(sessionId: string, live: ActiveWatch): void {
     const { record } = live;
     if (record.status === 'done'
@@ -766,22 +792,21 @@ export class WatchManager {
     }
     for (const timer of live.wakeRetryTimers) clearTimeout(timer);
     live.wakeRetryTimers.clear();
-    this.persistLive(sessionId, live, 'wake-attempt');
 
-    const releases: Promise<void>[] = [];
-    if (record.pinned && this.unpinSession) {
-      releases.push(Promise.resolve(this.unpinSession(sessionId, `watch:${record.watchId}`)).then((released) => {
+    void this.withSessionMutation(sessionId, async () => {
+      if (this.active.get(sessionId) !== live) return;
+      if (record.pinned && this.unpinSession) {
+        const released = await Promise.resolve(this.unpinSession(sessionId, `watch:${record.watchId}`)).catch(() => false);
+        if (this.active.get(sessionId) !== live) return;
         if (released) record.pinned = false;
-      }).catch(() => undefined));
-    }
-    if (record.targetPinned && record.onFire && this.unpinSession) {
-      releases.push(Promise.resolve(this.unpinSession(record.onFire.targetSessionId, `watch-target:${record.watchId}`)).then((released) => {
+      }
+      if (record.targetPinned && record.onFire && this.unpinSession) {
+        const released = await Promise.resolve(this.unpinSession(record.onFire.targetSessionId, `watch-target:${record.watchId}`)).catch(() => false);
+        if (this.active.get(sessionId) !== live) return;
         if (released) record.targetPinned = false;
-      }).catch(() => undefined));
-    }
-    if (releases.length > 0) {
-      void Promise.all(releases).then(() => this.persistLive(sessionId, live, 'wake-attempt'));
-    }
+      }
+      await this.persistLiveNow(sessionId, live, 'wake-attempt');
+    }).catch(() => undefined);
   }
 
   /** Append a bounded wake-attempt audit entry and persist it immediately. */
@@ -815,15 +840,24 @@ export class WatchManager {
   }
 
   private persistLive(sessionId: string, live: ActiveWatch, reason: string): void {
-    void this.store.save(live.record).catch((error) => {
-      if (this.active.get(sessionId) !== live) return;
+    void this.persistLiveNow(sessionId, live, reason);
+  }
+
+  private async persistLiveNow(sessionId: string, live: ActiveWatch, reason: string): Promise<boolean> {
+    if (this.active.get(sessionId) !== live || !live.record.generation) return false;
+    try {
+      await this.store.save(live.record, { expectedGeneration: live.record.generation });
+      return this.active.get(sessionId) === live;
+    } catch (error) {
+      if (this.active.get(sessionId) !== live) return false;
       live.snapshotDirty = true;
       this.metrics.recordWatchPersistenceFailure();
       logger.child({ sessionId, runtime: live.record.runtime }).warn(
         `watch ledger persistence failed (${reason}); retrying: ${error instanceof Error ? error.message : String(error)}`,
       );
       this.schedulePersist(sessionId, live, this.persistenceRetryMs, 'retry');
-    });
+      return false;
+    }
   }
 
   private toResponse(record: PersistedWatch): WatchResponse {
