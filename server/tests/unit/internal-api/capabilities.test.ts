@@ -65,7 +65,7 @@ describe('createCapabilitiesRoutes', () => {
       contract: {
         name: 'pi-web-ui-internal-api',
         majorVersion: 'v1',
-        contractVersion: '1.34.0',
+        contractVersion: '1.35.0',
       },
       features: {
         // Contract 1.34.0: child-orchestration surfacing (background subagents,
@@ -79,6 +79,7 @@ describe('createCapabilitiesRoutes', () => {
           'watch_fired',
         ],
         childParentHeader: 'X-Parent-Session',
+        watchGenerationPreconditions: { generationField: 'generation', registerField: 'expectedGeneration', deleteBodyField: 'expectedGeneration' },
         retentionLeases: true,
         durableRetention: true,
         residentRetention: true,

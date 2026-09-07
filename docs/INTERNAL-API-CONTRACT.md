@@ -21,13 +21,21 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.34.0",
+  "contractVersion": "1.35.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.35.0** (minor, additive watch-generation preconditions and Pi pause reasons):
+  - watch responses carry a persisted opaque `generation`, distinct from the deterministic `watchId`; accepted replacement creates a fresh generation, while detached restart/migration preserves it and the existing ledger;
+  - register accepts optional `expectedGeneration`: omitted retains legacy unconditional behaviour, `null` creates only when absent, a string requires that exact current generation. DELETE accepts optional JSON `{ "expectedGeneration": "..." }`; supplied malformed/non-object bodies are rejected rather than treated as legacy empty-body deletion;
+  - checks and awaited destructive steps are serialised per session inside WatchManager. A mismatch returns 409 `WATCH_GENERATION_MISMATCH` with expected/current generation and watch id, without mutating the ledger, subscriptions or pins. Successful conditional DELETE returns the actual removed `generation`; a client must match it before claiming confirmed cleanup;
+  - capabilities advertise `features.watchGenerationPreconditions` with `generationField`, `registerField` and `deleteBodyField`. Legacy clients remain supported, but omission is explicitly non-CAS. Generation checks are process-local to the existing single-server architecture, not distributed consensus;
+  - Pi goal projections expose a non-blank extension `pauseReason` through `pausedReason` and `lastReason`, preserving question/error precedence and all terminal-state/event semantics;
+  - companion Goal Engine/watch-wake lifecycle and model-free deadline repairs are separately loaded extension behaviour, not server deployment implied by this version. See the [execution report](./plans/execution-reports/ORCHESTRATION-REPAIR-2026-09-07.md) for source, real-runtime evidence and activation limits.
 
 - **1.34.0** (minor, additive child-orchestration surfacing) — makes harness background subagents, Internal-API-dispatched children, and durable watches visible on the parent session's surfaces without changing any wake/steer/prompt semantics:
   - five additive normalized event types: `background_child_state` (background-subagent state on the parent session; `data`: `sessionId`, `children` — shared `ChildCardProjection[]`), `child_dispatched` and `child_turn_ended` (Internal-API child linkage; `data`: `sessionId`, `child` projection), and `watch_registered` / `watch_fired` (watch lifecycle for the arming session; `watch_fired` carries the wake `deliveryKind`). All are control-category, both-verbosity, watchable;
@@ -335,6 +343,7 @@ re-introduced.
 | `RETENTION_STORE_UNAVAILABLE` | 503 | Lease guarantee could not be persisted | Owner-only ledger unavailable/unwritable |
 | `ADMISSION_CAPACITY_EXHAUSTED` | 429 | Turn admission temporarily refused | Global/runtime budget or measured memory headroom |
 | `WATCH_NOT_FOUND` | 404 | No long-horizon watch for session | GET/DELETE `/watch` before POST, or post-restart |
+| `WATCH_GENERATION_MISMATCH` | 409 | Watch generation precondition does not match | Reconcile current generation and ownership before any intentional retry |
 | `TRANSFER_DISPATCH_FAILED` | 500 | Transfer could not be dispatched | Target creation / injection / IO failure |
 | `EMPTY_TRANSCRIPT` | 404 | No visible transcript yet | `/transcript` before any turn produced content |
 | `RUN_NOT_FOUND` | 404 | No persisted run receipt exists | Unknown or retention-pruned `runId` |

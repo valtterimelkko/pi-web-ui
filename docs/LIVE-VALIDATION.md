@@ -128,7 +128,13 @@ workspace, registry, sockets, tokens, and runtime metadata under the validation
 directory. They also clear any ambient `INTERNAL_API_KEY`, so the printed isolated
 token file is always authoritative. By design, the wrapper does **not** override
 `PI_AGENT_DIR`: Pi auth/models/resources remain available from the normal agent
-directory. Browser preferences are separately isolated through `WEB_UI_PREFS_PATH`
+directory. For private candidate resources **and** native SDK settings, set both
+`PI_AGENT_DIR` (server) and `PI_CODING_AGENT_DIR` (SDK) to the private agent
+directory before boot. The former alone can leave compaction settings reading
+shared defaults. Copy only non-secret candidate code/private fixture settings;
+never copy real credentials as a shortcut. Verify these values, the extension's
+goal/lease overrides and preferences from the actual server process before
+claiming complete writable-state isolation. Browser preferences are separately isolated through `WEB_UI_PREFS_PATH`
 by the current wrapper; verify that override when using an older checkout.
 Validation mode disables boot-time session cleanup and real-session registry
 rebuild. Shared credentials and arbitrary extension-owned state are not made

@@ -60,6 +60,17 @@ per session.
 > are equally valid `onFire` wake targets. See the
 > [Watch section of `INTERNAL-API.md`](./INTERNAL-API.md#watch-long-horizon-validation).
 
+### Generation-safe mutations
+
+Contract 1.35.0 adds opaque ledger `generation` and capability-advertised
+`expectedGeneration` preconditions. Use create-only `null` or the exact observed
+token for registration, and an exact string in the DELETE JSON body. Omission
+retains legacy unconditional semantics. A mismatch is 409 without mutation;
+matching DELETE returns the removed generation. See the canonical
+[watch contract](./INTERNAL-API.md#watch-long-horizon-validation) for validation,
+acknowledgement and migration details. Never confuse a local cursor/watchId with
+this server token or treat GET-then-unconditional-DELETE as CAS.
+
 ### Register a watch
 
 ```
@@ -116,6 +127,12 @@ while retaining the ledger. Full field reference in
 
 Common fields: `id` (auto-assigned `c0`, `c1`, … if omitted), `once` (default `true` — fire once; set `false` to record every match, capped).
 
+For goal children, prefer `goal_end` plus a paused-state/question condition over
+per-run `agent_end` churn. On a reused session, starting another goal can emit
+an old-goal clear first: filter the exact new objective or retain repeated
+terminal events and reconcile identity. A start receipt or first firing is not
+a child acceptance verdict.
+
 Text matching accumulates streamed deltas across a turn, so a substring or regex that spans multiple `message_update` events is matched correctly. The buffer resets at each turn boundary.
 
 > Anything reachable as a normalized event is reachable here: `agent_end`, `session_compaction`, `permission_request`, `stream_activity`, etc. The engine intentionally ships only three primitives rather than one switch per feature.
@@ -139,7 +156,10 @@ Returns the watch with its `conditions` (each with `fired`/`fireCount`/timestamp
 DELETE /api/v1/sessions/:sessionId/watch
 ```
 
-Tears down the subscription and removes the ledger.
+Tears down the subscription and removes the ledger. On capable servers, send
+`{ "expectedGeneration":"<observed token>" }` and require a matching returned
+`generation` before claiming generation-confirmed cleanup. Use a correctly
+framed JSON body; malformed input is not a legacy deletion request.
 
 ## Safety contract: disposable server first
 

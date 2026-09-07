@@ -336,6 +336,36 @@ This needs a
 **disposable validation server** when validating (`npm run validate:server`),
 never the production instance by default.
 
+## Parent supervision and companion lifecycle
+
+For multi-phase work, keep a durable strategy, a current checkpoint, and bounded
+child briefs/evidence. Run independent parent work while available; pause a Pi
+parent's Goal Engine before actually idling for children, and explicitly resume
+only after that waiting work is settled. Do not use an owner-question exit as a
+substitute for supervision pause, or auto-resume budget/error/owner pauses.
+
+Goal-start receipts end at the command boundary, not the objective boundary.
+Watch goal-specific terminal and paused-state events; a reused child may emit an
+old-goal clear when its next goal starts. See the
+[goal API](./INTERNAL-API.md#goal-function-contract-1270) and reconcile exact
+objective/session identity rather than accepting the first firing.
+
+A bare CLI needs a real local delivery path; a server observer alone cannot wake
+it. The Pi Enhancement [watch-wake companion](https://github.com/valtterimelkko/pi-enhancement/tree/master/watch-wake)
+provides generation-aware local watches and a `wake_deadline` tool. A deadline
+is a model-free wait-window backstop while the host event loop is alive, not a
+semantic completion judgement or a way to resurrect a dead parent. An old or
+suspect host needs its known-good independent recovery path until the repaired
+extension is separately activated. Source, server capability and loaded tool
+schema are separate evidence.
+
+Use the advertised [watch generation preconditions](./INTERNAL-API.md#watch-long-horizon-validation)
+for owned replacement/deletion. Preserve old ledgers and exact leases, release
+only owned resources, and treat ambiguous acknowledgements honestly. These
+existing primitives plus a checkpoint suffice; no extra orchestration daemon or
+semantic job store was added. The [repair execution report](./plans/execution-reports/ORCHESTRATION-REPAIR-2026-09-07.md)
+separates component tests, real-runtime composition and deployment status.
+
 ## Which endpoint should I use?
 
 | Need | Best endpoint |

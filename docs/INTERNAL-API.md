@@ -2165,7 +2165,33 @@ GET /api/v1/watches/wait?ids=watch-<childA>,watch-<childB>[&timeout=<ms>][&curso
 
 Success (`200`) returns `{ fired: true, waitedMs, watches: [{ watchId, sessionId, runtime, firings[], firingCount }], nextCursor }` where each watch's `firings` contains only the new ones and `nextCursor` resumes past them. This makes delivery **at-least-once resumable**: a caller that dies or loses its connection reconnects with the last cursor and receives what it missed. Condition evaluation stays entirely server-side — pure observer watches (no `onFire`) work here exactly like polled ones; what the caller does when the request returns is the caller's own business.
 
-**Register body:**
+**Generation preconditions (contract 1.35.0).** Read
+`features.watchGenerationPreconditions` from `/capabilities`; the supported field
+names are `generation`, `expectedGeneration`, and DELETE-body `expectedGeneration`.
+An opaque `generation` identifies the current ledger independently of the
+legacy deterministic `watchId`.
+
+- Register `expectedGeneration:null` creates only if absent; a string replaces
+  only the matching current generation; omission retains legacy unconditional
+  replacement. Read and reconcile ownership before intentionally replacing.
+- DELETE accepts JSON `{ "expectedGeneration":"<observed generation>" }`.
+  Frame the body correctly (Node HTTP callers should set Content-Length).
+  Supplied malformed, null or non-object bodies are rejected, including chunked
+  requests; they never silently downgrade to unconditional deletion.
+- A stale precondition returns 409 `WATCH_GENERATION_MISMATCH` and leaves the
+  ledger/subscriptions/pin claims unchanged. A matching DELETE returns
+  `{ "success":true, "watchId":"watch-...", "generation":"..." }`; require the
+  exact generation before reporting confirmed cleanup. Missing/mismatched
+  acknowledgement is ambiguous, not permission to repeat an unconditional delete.
+- Generation checks and all awaited mutation steps are serialised per session
+  inside WatchManager. Different sessions are independent. This is single-server
+  CAS, not a distributed lock or security boundary between trusted local users.
+- Detached restart preserves generation and firing history. Accepted replacement
+  changes generation and resets the ledger: preserve prior evidence and reset
+  the matching cursor. Legacy migration must finish durably before successful
+  initialisation; failed writes are retried rather than acknowledged from cache.
+
+**Register body (legacy omission shown; add a precondition for CAS):**
 ```json
 {
   "conditions": [
@@ -2236,6 +2262,7 @@ OpenCode, Antigravity, Command Code), regardless of the child's runtime.
 ```json
 {
   "watchId": "watch-...",
+  "generation": "<opaque-generation>",
   "sessionId": "...",
   "runtime": "pi",
   "status": "active",
@@ -2278,7 +2305,8 @@ attempts are kept in the ledger.
 - `400` — empty `conditions`, an invalid regex `pattern`, a malformed
   `onFire` action, or an `onFire.targetSessionId` that targets the watched
   session itself
-- `404 WATCH_NOT_FOUND` — no watch registered (GET/DELETE)
+- `409 WATCH_GENERATION_MISMATCH` — conditional mutation did not match the current generation
+- `404 WATCH_NOT_FOUND` — no watch registered (GET/legacy DELETE)
 - `404 SESSION_NOT_FOUND` — session does not exist (POST), or the
   `onFire.targetSessionId` does not exist
 
@@ -2482,6 +2510,17 @@ the **command boundary** while the goal loop owns subsequent `agent_end`
 events; on Claude the goal prompt is dispatched **detached** and the CLI loop
 holds `query()` open until the goal settles. Either way: poll `GET /goal` or
 watch `goal_end` — never treat the start receipt as "goal done".
+
+A non-blank Pi extension `pauseReason` is projected through `pausedReason` and
+`lastReason` from contract 1.35.0; pending questions and error classifications
+retain their precedence. This does not change the terminal vocabulary.
+
+When starting a new goal on a reused session, clearing the old goal can emit
+`goal_end` before the new start. A one-shot unfiltered watcher can therefore be
+consumed too early. Filter the exact new `objective` with `dataMatch` and retain
+repeated matches, or reconcile repeated terminal events against the saved goal
+identity. Also watch a filtered paused `goal_state`/question sentinel; terminal
+clear may omit the objective, so retain an independent recovery backstop.
 
 ### Child-orchestration surfacing (contract 1.34.0)
 
