@@ -68,6 +68,25 @@ describe('WatchStore generation durability boundary', () => {
 });
 
 describe('WatchManager generation CAS', () => {
+  it('retries a failed legacy migration before exposing its generation as durable', async () => {
+    const dir = await tempDir('watch-parent-migration-');
+    const legacy = {
+      watchId: 'watch-legacy', sessionId: 'legacy', sessionPath: 'legacy', runtime: 'pi', status: 'active', pinned: false,
+      createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
+      conditions: [], wakeAttempts: [], firings: [], snapshot: { status: 'idle', eventCount: 0, toolCallCount: 0, sawAgentEnd: false },
+    };
+    await fs.writeFile(path.join(dir, 'legacy.json'), JSON.stringify(legacy));
+    const manager = makeManager(dir);
+    const save = vi.spyOn(WatchStore.prototype, 'save').mockRejectedValueOnce(new Error('temporary migration write failure'));
+    try {
+      await expect(manager.init()).rejects.toThrow('temporary migration write failure');
+      await manager.init();
+      const onDisk = JSON.parse(await fs.readFile(path.join(dir, 'legacy.json'), 'utf8'));
+      expect(onDisk.generation, 'successful init must not skip a failed migration write').toBe(manager.get('legacy')?.generation);
+      expect(onDisk.status).toBe('detached');
+    } finally { save.mockRestore(); }
+  });
+
   it('keeps legacy replacement, enforces match/create-only, and leaves mismatches untouched', async () => {
     const dir = await tempDir('watch-generation-');
     const broker = new InternalApiEventBroker({ replayBufferSize: 10 });
@@ -251,6 +270,22 @@ async function request(socketPath: string, method: string, body?: unknown): Prom
 }
 
 describe('actual HTTP watch generation contract', () => {
+  it.each(['{', 'null'])('rejects a non-object or malformed chunked DELETE body without deleting the watch: %s', async (rawBody) => {
+    const root = await tempDir('watch-parent-chunked-');
+    const socket = path.join(root, 'api.sock');
+    await startHttpFixture(path.join(root, 'watches'), socket);
+    const created = await request(socket, 'POST', { conditions: [condition], expectedGeneration: null });
+    expect(created.status).toBe(201);
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request({ socketPath: socket, path: '/api/v1/sessions/pi-1/watch', method: 'DELETE', headers: { 'content-type': 'application/json', 'transfer-encoding': 'chunked' } }, res => {
+        res.resume(); res.once('end', () => resolve(res.statusCode ?? 0));
+      });
+      req.once('error', reject); req.end(rawBody);
+    });
+    expect(status, 'invalid payload must never downgrade to unconditional legacy DELETE').toBe(400);
+    expect((await request(socket, 'GET')).body.generation).toBe(created.body.generation);
+  });
+
   it('validates and enforces register/delete preconditions, then preserves generation and firings over disk restart', async () => {
     const root = await tempDir('watch-generation-http-');
     const watchDir = path.join(root, 'watches');

@@ -6437,9 +6437,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
+    // readJsonBody intentionally maps both an absent body and malformed JSON to
+    // null for legacy routes. DELETE must distinguish them: only a genuinely
+    // bodyless request may select unconditional legacy deletion.
+    const bodyWasSupplied = Number(req.headers['content-length']) > 0
+      || req.headers['transfer-encoding'] !== undefined;
     const raw = await readJsonBody<unknown>(req);
-    if (raw === null && Number(req.headers['content-length']) > 0) {
-      sendJson(res, 400, { error: 'DELETE watch body must be valid JSON', code: ErrorCode.INVALID_REQUEST });
+    if (raw === null && bodyWasSupplied) {
+      sendJson(res, 400, { error: 'DELETE watch body must be a non-null JSON object', code: ErrorCode.INVALID_REQUEST });
       return;
     }
     if (raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {

@@ -233,15 +233,18 @@ export class WatchManager {
         await this.store.init();
         for (const record of this.store.list()) {
           let changed = false;
-          if (!record.generation) {
-            record.generation = randomUUID();
+          const migrated: PersistedWatch = { ...record };
+          if (!migrated.generation) {
+            migrated.generation = randomUUID();
             changed = true;
           }
-          if (record.status === 'active') {
-            record.status = 'detached';
+          if (migrated.status === 'active') {
+            migrated.status = 'detached';
             changed = true;
           }
-          if (changed) await this.store.save(record);
+          // Never mutate the cache-owned legacy object before durability. A
+          // failed save must leave the migration visible for the next init.
+          if (changed) await this.store.save(migrated);
         }
         this.initialized = true;
       })();

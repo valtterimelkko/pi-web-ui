@@ -57,6 +57,8 @@ function sanitize(sessionId: string): string {
 export class WatchStore {
   private readonly dir: string;
   private readonly cache = new Map<string, PersistedWatch>();
+  /** Last record confirmed on disk, used to roll cache back after a failed save. */
+  private readonly durableCache = new Map<string, PersistedWatch>();
   /** Per-session write chain so concurrent saves serialize instead of racing. */
   private readonly writeChains = new Map<string, Promise<void>>();
   private ready = false;
@@ -82,6 +84,7 @@ export class WatchStore {
         const record = JSON.parse(raw) as PersistedWatch;
         if (record && record.sessionId) {
           this.cache.set(record.sessionId, record);
+          this.durableCache.set(record.sessionId, structuredClone(record));
         }
       } catch {
         // A single corrupt file must not prevent the rest from loading.
@@ -120,6 +123,7 @@ export class WatchStore {
         const tmp = `${file}.${process.pid}.tmp`;
         await writeFile(tmp, payload, { mode: 0o600 });
         await rename(tmp, file);
+        this.durableCache.set(record.sessionId, structuredClone(record));
       });
     this.writeChains.set(record.sessionId, next);
     // Remove the settled chain entry so the map cannot grow unbounded — but
@@ -131,7 +135,16 @@ export class WatchStore {
       }
     };
     next.then(cleanup, cleanup);
-    return next;
+    return next.catch((error) => {
+      // A newer queued save owns the visible cache. Otherwise restore exactly
+      // the last disk-confirmed record, never the previous merely queued value.
+      if (this.cache.get(record.sessionId) === record) {
+        const durable = this.durableCache.get(record.sessionId);
+        if (durable) this.cache.set(record.sessionId, structuredClone(durable));
+        else this.cache.delete(record.sessionId);
+      }
+      throw error;
+    });
   }
 
   async delete(sessionId: string): Promise<void> {
@@ -144,10 +157,13 @@ export class WatchStore {
       await unlink(this.fileFor(sessionId));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        if (previous) this.cache.set(sessionId, previous);
+        const durable = this.durableCache.get(sessionId);
+        if (durable) this.cache.set(sessionId, structuredClone(durable));
+        else if (previous) this.cache.set(sessionId, previous);
         throw error;
       }
       // Already gone — the durable absence is satisfied.
     }
+    this.durableCache.delete(sessionId);
   }
 }
