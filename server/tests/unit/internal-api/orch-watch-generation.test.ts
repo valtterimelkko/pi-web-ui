@@ -46,6 +46,48 @@ function makeManager(dir: string, overrides: Partial<ConstructorParameters<typeo
 }
 
 describe('WatchStore generation durability boundary', () => {
+  it('rolls back to the bytes actually written, not a live record mutated while save was pending', async () => {
+    const dir = await tempDir('watch-parent-durable-payload-');
+    const store = new WatchStore(dir); await store.init();
+    const record: PersistedWatch = {
+      watchId: 'watch-subject', generation: 'generation-1', sessionId: 'subject', sessionPath: 'subject', runtime: 'pi',
+      status: 'active', pinned: false, targetPinned: false,
+      createdAt: '2026-09-07T00:00:00.000Z', updatedAt: '2026-09-07T00:00:00.000Z',
+      conditions: [], wakeAttempts: [], firings: [], snapshot: { status: 'idle', eventCount: 0, toolCallCount: 0, sawAgentEnd: false },
+    };
+    const saving = store.save(record);
+    record.snapshot.eventCount = 99; // Like handleEvent mutating the same ActiveWatch record during I/O.
+    await saving;
+    const ledger = path.join(dir, 'subject.json');
+    const persisted = JSON.parse(await fs.readFile(ledger, 'utf8'));
+    expect(persisted.snapshot.eventCount).toBe(0);
+    await fs.unlink(ledger); await fs.mkdir(ledger); // Force the next atomic rename to fail, without mocking store behaviour.
+    await expect(store.save({ ...record, label: 'failed-save' })).rejects.toBeDefined();
+    expect(store.get('subject')?.snapshot.eventCount, 'rollback must match the disk-confirmed payload').toBe(persisted.snapshot.eventCount);
+  });
+
+  it('an older failed save cannot replace cache owned by a newer queued save of the same mutable record', async () => {
+    const dir = await tempDir('watch-parent-queued-payload-');
+    const store = new WatchStore(dir); await store.init();
+    const record: PersistedWatch = {
+      watchId: 'watch-subject', generation: 'generation-1', sessionId: 'subject', sessionPath: 'subject', runtime: 'pi',
+      status: 'active', pinned: false, targetPinned: false,
+      createdAt: '2026-09-07T00:00:00.000Z', updatedAt: '2026-09-07T00:00:00.000Z',
+      conditions: [], wakeAttempts: [], firings: [], snapshot: { status: 'idle', eventCount: 0, toolCallCount: 0, sawAgentEnd: false },
+    };
+    await store.save(record);
+    await fs.mkdir(path.join(dir, `subject.json.${process.pid}.tmp`)); // Real writeFile failure for queued saves.
+    record.snapshot.eventCount = 1;
+    const first = store.save(record);
+    record.snapshot.eventCount = 2;
+    const second = store.save(record);
+    const firstFailure = first.catch(() => store.get('subject')?.snapshot.eventCount);
+    const secondFailure = second.catch(() => undefined);
+    const visibleAfterOlderFailure = await firstFailure;
+    await secondFailure;
+    expect(visibleAfterOlderFailure, 'newer queued save still owns the visible cache at the older rejection').toBe(2);
+  });
+
   it('does not report durable deletion success when the ledger unlink fails', async () => {
     const dir = await tempDir('watch-delete-failure-');
     const store = new WatchStore(dir);

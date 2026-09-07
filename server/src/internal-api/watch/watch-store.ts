@@ -123,7 +123,9 @@ export class WatchStore {
         const tmp = `${file}.${process.pid}.tmp`;
         await writeFile(tmp, payload, { mode: 0o600 });
         await rename(tmp, file);
-        this.durableCache.set(record.sessionId, structuredClone(record));
+        // The caller's live record can mutate while I/O is pending. Only the
+        // serialised payload above is known to match the bytes just renamed.
+        this.durableCache.set(record.sessionId, JSON.parse(payload) as PersistedWatch);
       });
     this.writeChains.set(record.sessionId, next);
     // Remove the settled chain entry so the map cannot grow unbounded — but
@@ -138,7 +140,7 @@ export class WatchStore {
     return next.catch((error) => {
       // A newer queued save owns the visible cache. Otherwise restore exactly
       // the last disk-confirmed record, never the previous merely queued value.
-      if (this.cache.get(record.sessionId) === record) {
+      if (!this.writeChains.has(record.sessionId) && this.cache.get(record.sessionId) === record) {
         const durable = this.durableCache.get(record.sessionId);
         if (durable) this.cache.set(record.sessionId, structuredClone(durable));
         else this.cache.delete(record.sessionId);
