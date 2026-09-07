@@ -479,9 +479,26 @@ export class RunReceiptManager {
         const released = await this.store.releaseIdempotency(runId);
         return released ? toPublicReceipt(released) : undefined;
       }
+      const terminalAt = new Date(this.now()).toISOString();
       const terminal = await this.store.transition(runId, outcome.status, {
         errorCode: outcome.errorCode,
-        terminalAt: new Date(this.now()).toISOString(),
+        terminalAt,
+        // No runtime turn was dispatched, so the route/adapter's documented
+        // rejection boundary is positive cessation evidence. This lets the
+        // lifecycle owner release an already-attached lease without entering
+        // the runtime drain fence.
+        ...(current.liveness
+          ? {
+              liveness: {
+                ...current.liveness,
+                cessation: {
+                  state: 'confirmed' as const,
+                  basis: 'documented_handler_return' as const,
+                  observedAt: terminalAt,
+                },
+              },
+            }
+          : {}),
         clearIdempotency: true,
       });
       this.terminalize(terminal);
@@ -578,8 +595,9 @@ export class RunReceiptManager {
       if (terminal?.errorCode === 'TURN_STALLED') {
         this.stalledRunCount += 1;
         // Quarantine signal: the run is terminalised without confirmed runtime
-        // cessation. The slot is already released by terminalisation; this only
-        // notifies (e.g. operator Telegram ping). No caller action is required.
+        // cessation. terminalize() retains the attached admission lease behind
+        // the drain/quarantine fence; this only notifies (e.g. operator Telegram
+        // ping). No caller action is required.
         this.onStalled?.(terminal);
       }
     }
@@ -619,7 +637,8 @@ export class RunReceiptManager {
     // admission slot is held (not reusable) until the runtime confirms quiescent
     // or the drain timeout elapses (bounded quarantine). Normal completion
     // (agent_end) already confirms cessation, so it releases immediately.
-    if (lease && this.isRuntimeQuiescent && (record.status === 'cancelled' || record.status === 'failed')) {
+    const cessationUnconfirmed = record.liveness?.cessation.state !== 'confirmed';
+    if (lease && this.isRuntimeQuiescent && cessationUnconfirmed && (record.status === 'cancelled' || record.status === 'failed')) {
       this.drainAndRelease(record.runId, record.sessionId, lease);
     } else {
       lease?.release();

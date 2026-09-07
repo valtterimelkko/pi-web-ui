@@ -161,6 +161,8 @@ class TurnStalledError extends Error {
   }
 }
 
+type ExecutionOwnership = 'owner' | 'joined';
+
 /**
  * Contract 1.33.0: the stored model binding could not be re-applied at dispatch
  * (unresolvable after eviction/rehydration). Fails the run loudly instead of
@@ -460,6 +462,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   // via deps.controlLane. (emergency/control ops bypass execution admission but
   // must NOT be unbounded — this lane is their guardrail.)
   const controlLane = deps.controlLane ?? new BoundedControlLane(8, 5000, 16);
+
+  /** Run a short control-side operation without consuming an execution permit.
+   * Joined steering only owns delivery into an existing runtime turn; the
+   * control lane bounds that delivery but is released before the joined turn
+   * reaches its terminal boundary. */
+  async function withControlLane<T>(operation: () => T | Promise<T>): Promise<T> {
+    const slot = await controlLane.acquire();
+    try {
+      return await operation();
+    } finally {
+      slot.release();
+    }
+  }
+
   // Per-session disposal registry: every per-session resource (queued-run
   // correlations, observers, timers, snapshots, drain handles) registers a
   // dispose handle here so handleDeleteSession and shutdown tear them all down
@@ -514,6 +530,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // the sessionPath — handleDeleteSession tombstones that alias too.
     isSessionDisposed: (key) => disposal.isDisposed(key),
   });
+
+  // Claude SDK delivers an event to the prompt callback and then to API
+  // observers as the same object. A joined steer needs the event for its own
+  // receipt/caller, but must not publish a second copy to the global broker.
+  // Keep the mark per broker key so an unusual shared event object cannot be
+  // suppressed if it is legitimately routed to two sessions.
+  const brokerPublishedEvents = new WeakMap<object, Set<string>>();
+  function publishBrokerEventOnce(sessionId: string, event: NormalizedEvent): void {
+    if (typeof event !== 'object' || event === null) {
+      broker.publish(sessionId, event);
+      return;
+    }
+    const publishedFor = brokerPublishedEvents.get(event);
+    if (publishedFor?.has(sessionId)) return;
+    broker.publish(sessionId, event);
+    const next = publishedFor ?? new Set<string>();
+    next.add(sessionId);
+    brokerPublishedEvents.set(event, next);
+  }
 
   // Contract 1.34.0 child surfacing: child link registry (created after the
   // broker; fans child terminal turns out to the parent's broker key and the
@@ -789,26 +824,28 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     const busy = isSessionBusy(entry);
     if (busy && mode === 'steer') {
       try {
-        if (runtime === 'pi') {
-          const agentSession = multiSessionManager.getAgentSession(entry.path);
-          if (!agentSession) return { status: 'failed', errorCode: ErrorCode.SESSION_NOT_FOUND };
-          await agentSession.steer(message);
-          return { status: 'dispatched', deliveryKind: 'steer' };
-        }
-        if (runtime === 'claude' && await claudeService.getBackendMode() === 'sdk') {
-          const steered = claudeService.steer(targetSessionId, message);
-          return steered
-            ? { status: 'dispatched', deliveryKind: 'steer' }
-            : { status: 'failed', errorCode: ErrorCode.SESSION_NOT_STREAMING };
-        }
+        return await withControlLane(async () => {
+          if (runtime === 'pi') {
+            const agentSession = multiSessionManager.getAgentSession(entry.path);
+            if (!agentSession) return { status: 'failed', errorCode: ErrorCode.SESSION_NOT_FOUND };
+            await agentSession.steer(message);
+            return { status: 'dispatched', deliveryKind: 'steer' };
+          }
+          if (runtime === 'claude' && await claudeService.getBackendMode() === 'sdk') {
+            const steered = claudeService.steer(targetSessionId, message);
+            return steered
+              ? { status: 'dispatched', deliveryKind: 'steer' }
+              : { status: 'failed', errorCode: ErrorCode.SESSION_NOT_STREAMING };
+          }
+          return { status: 'failed', errorCode: ErrorCode.SESSION_BUSY };
+        });
       } catch (error) {
         return {
           status: 'failed',
-          errorCode: ErrorCode.SESSION_NOT_STREAMING,
+          errorCode: error instanceof ControlLaneFullError ? 'WAKE_DISPATCH_UNAVAILABLE' : ErrorCode.SESSION_NOT_STREAMING,
           detail: error instanceof Error ? error.message : String(error),
         };
       }
-      return { status: 'failed', errorCode: ErrorCode.SESSION_BUSY };
     }
 
     // follow_up: queued on a busy Pi target, idle-promoted to a plain prompt
@@ -899,8 +936,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     runReceipts.attachLease(runId, wrappedLease);
     try {
       await runReceipts.markStarted(runId);
-    } catch (error) {
-      wrappedLease.release();
+    } catch {
       await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
       return { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR };
     }
@@ -2729,10 +2765,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
     admittedLease?: { release: () => void; turnToken?: number },
+    executionOwnership: ExecutionOwnership = 'owner',
   ): Promise<void> {
-    const admissionLease = admittedLease ?? await admission.acquire(runtime, 'P2');
-    runReceipts.attachLease(runId, admissionLease);
-    try {
+    const admissionLease = admittedLease
+      ?? (executionOwnership === 'joined' ? undefined : await admission.acquire(runtime, 'P2'));
+    if (admissionLease && executionOwnership === 'owner') runReceipts.attachLease(runId, admissionLease);
     let completed = false;
     let completionError: Error | undefined;
     let persistence: Promise<unknown> = Promise.resolve();
@@ -2767,6 +2804,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     };
 
     let executionError: Error | undefined;
+    let executionCancelled = false;
+    let cleanupExecution: (() => void) | undefined;
+    const cancelExecution = (): void => {
+      executionCancelled = true;
+      cleanupExecution?.();
+    };
     const execution = executePrompt(
       sessionId,
       runtime,
@@ -2779,6 +2822,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       complete,
       admittedLease?.turnToken,
       runId,
+      (cleanup) => {
+        cleanupExecution = cleanup;
+        if (executionCancelled) cleanup();
+      },
+      () => executionCancelled,
     ).then(() => {
       // Existing runtimes normally call onComplete at their turn boundary. The
       // fallback keeps the receipt explicit if a runtime returns without doing
@@ -2796,12 +2844,26 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     if (winner.kind === 'terminal' && winner.receipt.errorCode === ErrorCode.TURN_STALLED) {
       const stalled = new TurnStalledError();
       complete(stalled);
-      await abortRuntimeTurn(sessionId, runtime).catch((error) => {
-        logger.warn(`Failed to abort stalled run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
-      });
+      // A joined receipt observes another request's runtime turn. Once its own
+      // watchdog expires, detach its observers so a later/newer turn cannot
+      // satisfy this receipt. Only the actual execution owner may abort the
+      // runtime; a monitor/steer receipt never acquires that authority.
+      cancelExecution();
+      if (executionOwnership === 'owner') {
+        await abortRuntimeTurn(sessionId, runtime).catch((error) => {
+          logger.warn(`Failed to abort stalled run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
       // The runtime promise may settle later; its handlers above are fenced by
       // complete() and prevent an unhandled rejection or false success.
     } else {
+      if (winner.kind === 'terminal' && executionOwnership === 'joined' && winner.receipt.status === 'cancelled') {
+        // A joined observer can be cancelled without cancelling the underlying
+        // runtime turn. Fence its receipt and response, then release only its
+        // own observer/waiter resources.
+        complete(new Error('Joined run observer was cancelled'));
+        cancelExecution();
+      }
       await execution;
     }
 
@@ -2828,9 +2890,6 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
     if (persistenceError) throw persistenceError;
     if (executionError) throw executionError;
-    } finally {
-      admissionLease.release();
-    }
   }
 
   function isSessionBusy(entry: RegistryEntry): boolean {
@@ -2947,12 +3006,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       return;
     }
     let released = false;
+    let runtimeDispatchStarted = false;
     const lease = { release: () => { if (released) return; released = true; rawLease.release(); } };
     runReceipts.attachLease(runId, lease);
     try {
       await runReceipts.markStarted(runId);
     } catch (error) {
-      lease.release();
       await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
       logger.errorObject(`Failed to start Command Code run receipt ${runId}`, error);
       sendJson(res, 500, { error: 'Failed to start run', code: ErrorCode.INTERNAL_ERROR, runId });
@@ -2973,14 +3032,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       await withCorrelation(runContext, async () => {
         logger.info(`[InternalAPI] Prompt dispatched: runtime=commandcode verbosity=${verbosity} mode=${mode} dispatchMode=${dispatchMode} runId=${runId}`);
         if (verbosity === 'full' || verbosity === 'tasks') {
-          await handleStreamingPrompt(req, res, record.sessionId, 'commandcode', body.message, verbosity, mode, dispatchMode, runId, lease);
+          await handleStreamingPrompt(req, res, record.sessionId, 'commandcode', body.message, verbosity, mode, dispatchMode, runId, lease, 'owner', () => { runtimeDispatchStarted = true; });
         } else {
-          await handleAnswersPrompt(res, record.sessionId, 'commandcode', body.message, mode, dispatchMode, runId, lease);
+          await handleAnswersPrompt(res, record.sessionId, 'commandcode', body.message, mode, dispatchMode, runId, lease, 'owner', () => { runtimeDispatchStarted = true; });
         }
       });
     } catch (error) {
-      lease.release();
-      await runReceipts.finish(runId, { status: 'failed', errorCode: runtimeErrorCode(error instanceof Error ? error : new Error(String(error)), 'commandcode') }).catch(() => undefined);
+      const errorCode = runtimeErrorCode(error instanceof Error ? error : new Error(String(error)), 'commandcode');
+      if (runtimeDispatchStarted) {
+        await runReceipts.finish(runId, { status: 'failed', errorCode }).catch(() => undefined);
+      } else {
+        await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode }).catch(() => undefined);
+      }
       if (!res.headersSent) sendJson(res, 500, { error: 'Command Code prompt failed. Inspect evidence using the returned runId.', code: ErrorCode.RUNTIME_ERROR, runId });
     }
   }
@@ -3248,26 +3311,34 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
-      let rawAdmissionLease: { release: () => void };
-      try {
-        rawAdmissionLease = await admission.acquire(runtime, 'P2');
-      } catch (error) {
-        directClaim?.release();
-        await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
-        const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
-        res.setHeader('Retry-After', String(capacityError.retryAfterSeconds));
-        // Pressure refusals (memory/pid/host) are 503 service-unavailable — the
-        // server is under resource pressure and genuinely cannot service the
-        // turn. Capacity refusals (global/runtime limit) are 429 — retryable
-        // admission throttling. Both carry ADMISSION_CAPACITY_EXHAUSTED + reason.
-        const pressureStatus = capacityError.reason.endsWith('_pressure') ? 503 : 429;
-        sendJson(res, pressureStatus, {
-          ...enrichedErrorBody(ErrorCode.ADMISSION_CAPACITY_EXHAUSTED, capacityError.message),
-          reason: capacityError.reason,
-          retryAfterSeconds: capacityError.retryAfterSeconds,
-          runId,
-        });
-        return;
+      // A busy steer joins the already-running runtime turn. It still gets a
+      // request receipt, but it must not acquire a second execution permit. Its
+      // short delivery operation is bounded by withControlLane() inside the
+      // runtime adapter path; the receipt remains attached to the joined turn's
+      // terminal boundary for caller-visible continuation evidence.
+      const joinedExecution = dispatchMode === 'steer';
+      let rawAdmissionLease: { release: () => void } | undefined;
+      if (!joinedExecution) {
+        try {
+          rawAdmissionLease = await admission.acquire(runtime, 'P2');
+        } catch (error) {
+          directClaim?.release();
+          await runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.ADMISSION_CAPACITY_EXHAUSTED });
+          const capacityError = error instanceof AdmissionCapacityError ? error : new AdmissionCapacityError('global_limit');
+          res.setHeader('Retry-After', String(capacityError.retryAfterSeconds));
+          // Pressure refusals (memory/pid/host) are 503 service-unavailable — the
+          // server is under resource pressure and genuinely cannot service the
+          // turn. Capacity refusals (global/runtime limit) are 429 — retryable
+          // admission throttling. Both carry ADMISSION_CAPACITY_EXHAUSTED + reason.
+          const pressureStatus = capacityError.reason.endsWith('_pressure') ? 503 : 429;
+          sendJson(res, pressureStatus, {
+            ...enrichedErrorBody(ErrorCode.ADMISSION_CAPACITY_EXHAUSTED, capacityError.message),
+            reason: capacityError.reason,
+            retryAfterSeconds: capacityError.retryAfterSeconds,
+            runId,
+          });
+          return;
+        }
       }
       let leaseReleased = false;
       const admissionLease = {
@@ -3278,22 +3349,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         release: () => {
           if (leaseReleased) return;
           leaseReleased = true;
-          rawAdmissionLease.release();
+          rawAdmissionLease?.release();
           directClaim?.release();
           directClaim = undefined;
         },
       };
-      runReceipts.attachLease(runId, admissionLease);
+      if (!joinedExecution) runReceipts.attachLease(runId, admissionLease);
       try {
         await runReceipts.markStarted(runId);
       } catch (error) {
-        admissionLease.release();
         await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
         logger.errorObject(`Failed to start run receipt ${runId}`, error);
         sendJson(res, 500, { error: 'Failed to start run', code: ErrorCode.INTERNAL_ERROR, runId });
         return;
       }
 
+      let runtimeDispatchStarted = false;
       return withCorrelation({
         runId,
         executionInstanceId: beginInput.executionInstanceId,
@@ -3312,6 +3383,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             if (err) logger.errorObject(`Detached prompt failed for ${sessionId} run=${runId}`, err);
           },
           admissionLease,
+          joinedExecution ? 'joined' : 'owner',
         ).catch((error) => {
           logger.errorObject(`Detached prompt error for ${sessionId} run=${runId}`, error);
         });
@@ -3321,21 +3393,22 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
 
       try {
         if (verbosity === 'full' || verbosity === 'tasks') {
-          await handleStreamingPrompt(req, res, sessionId, runtime, body.message, verbosity, mode, dispatchMode, runId, admissionLease);
+          await handleStreamingPrompt(req, res, sessionId, runtime, body.message, verbosity, mode, dispatchMode, runId, admissionLease, joinedExecution ? 'joined' : 'owner', () => { runtimeDispatchStarted = true; });
           return;
         }
 
-        await handleAnswersPrompt(res, sessionId, runtime, body.message, mode, dispatchMode, runId, admissionLease);
+        await handleAnswersPrompt(res, sessionId, runtime, body.message, mode, dispatchMode, runId, admissionLease, joinedExecution ? 'joined' : 'owner', () => { runtimeDispatchStarted = true; });
       } catch (err) {
-        admissionLease.release();
         const providerError = err instanceof PiProviderNotAllowedError ? err : undefined;
         // executePromptWithReceipt normally terminalizes before rejecting. This
         // defensive finalizer covers failures in response/stream setup that can
         // occur after markStarted but before the runtime is invoked.
-        await runReceipts.finish(runId, {
-          status: 'failed',
-          errorCode: providerError ? ErrorCode.PROVIDER_NOT_ALLOWED : runtimeErrorCode(err instanceof Error ? err : new Error(String(err)), runtime),
-        }).catch(() => undefined);
+        const errorCode = providerError ? ErrorCode.PROVIDER_NOT_ALLOWED : runtimeErrorCode(err instanceof Error ? err : new Error(String(err)), runtime);
+        if (runtimeDispatchStarted) {
+          await runReceipts.finish(runId, { status: 'failed', errorCode }).catch(() => undefined);
+        } else {
+          await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode }).catch(() => undefined);
+        }
         logger.errorObject('Prompt failed', err);
           if (!res.headersSent) {
             if (providerError) sendPiProviderPolicyError(res, providerError);
@@ -3361,9 +3434,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     dispatchMode: PromptMode,
     runId: string,
     admissionLease: { release: () => void },
+    executionOwnership: ExecutionOwnership = 'owner',
+    onExecutionStart?: () => void,
   ): Promise<void> {
     const collector = createEventCollector();
 
+    onExecutionStart?.();
     await executePromptWithReceipt(
       runId,
       sessionId,
@@ -3378,6 +3454,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         collector.complete = true;
       },
       admissionLease,
+      executionOwnership,
     );
 
     if (collector.error) {
@@ -3418,6 +3495,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     dispatchMode: PromptMode,
     runId: string,
     admissionLease: { release: () => void },
+    executionOwnership: ExecutionOwnership = 'owner',
+    onExecutionStart?: () => void,
   ): Promise<void> {
     res.setHeader('X-Run-Id', runId);
     const sse = createSSEStream(res);
@@ -3435,6 +3514,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           // Completion may win the race while the client connection closes.
           // Never abort a runtime after its receipt became terminal.
           if (cancelled?.status !== 'cancelled') return;
+          // A joined steer is an observer of another request's turn. Closing
+          // this transport cancels only the observer receipt; explicit session
+          // abort remains the separate operation that may stop the runtime.
+          if (executionOwnership === 'joined') return;
           if (runtime === 'commandcode') {
             await commandCodeService?.abort(sessionId);
           } else if (runtime === 'claude') {
@@ -3457,6 +3540,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     res.on('close', handleClientDisconnect);
     req.on('aborted', handleClientDisconnect);
 
+    onExecutionStart?.();
     await executePromptWithReceipt(
       runId,
       sessionId,
@@ -3479,6 +3563,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         }
       },
       admissionLease,
+      executionOwnership,
     );
   }
 
@@ -4745,12 +4830,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     onComplete: (error?: Error, cessationBasis?: 'documented_handler_return') => void,
     turnToken?: number,
     runId?: string,
+    registerCleanup?: (cleanup: () => void) => void,
+    isExecutionCancelled?: () => boolean,
   ): Promise<void> {
     // Wrap onEvent so every event also flows into the broker. This lets
     // long-lived subscribers (e.g. GET /sessions/:id/events) observe the
-    // turn regardless of which client started it.
+    // turn regardless of which client started it. Claude's API observer path
+    // can see the same event object again for a joined steer, so publish only
+    // once while still forwarding the event to each request receipt/caller.
     const broadcast = (event: NormalizedEvent) => {
-      broker.publish(sessionId, event);
+      publishBrokerEventOnce(sessionId, event);
       try { onEvent(event); } catch { /* non-fatal */ }
     };
 
@@ -4784,9 +4873,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           let resolveTurnBoundary!: () => void;
           const turnBoundary = new Promise<void>((resolve) => { resolveTurnBoundary = resolve; });
           // Forward the joined run's remaining events to this steer's caller,
-          // mirroring the Pi steer path.
+          // mirroring the Pi steer path. The primary API callback may already
+          // have published the same object, so only publish the broker copy once.
           const eventObserver = (event: NormalizedEvent): void => {
-            try { broadcast(event); } catch { /* non-fatal */ }
+            try {
+              publishBrokerEventOnce(sessionId, event);
+              onEvent(event);
+            } catch { /* non-fatal */ }
           };
           const endObserver = (event: NormalizedEvent): void => {
             if (event.type !== 'agent_end') return;
@@ -4796,12 +4889,28 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           };
           observers.push(eventObserver, endObserver);
           for (const observer of observers) claudeService.addApiObserver(sessionId, observer);
+          registerCleanup?.(() => {
+            detachObservers();
+            resolveTurnBoundary();
+          });
+          if (isExecutionCancelled?.()) {
+            detachObservers();
+            resolveTurnBoundary();
+            return;
+          }
           let steered = false;
           try {
-            steered = claudeService.steer(sessionId, message);
+            steered = await withControlLane(() => (
+              isExecutionCancelled?.() ? false : claudeService.steer(sessionId, message)
+            ));
           } catch (err) {
             detachObservers();
             throw err;
+          }
+          if (isExecutionCancelled?.()) {
+            detachObservers();
+            resolveTurnBoundary();
+            return;
           }
           if (!steered) {
             detachObservers();
@@ -4874,6 +4983,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         const preLockBinding = await ensurePiModelBinding(sessionId, entry, preLockSession);
         try {
         await withPiModelLock(sessionId, async () => {
+        if (isExecutionCancelled?.()) return;
         const agentSession = multiSessionManager.getAgentSession(sessionPath);
         if (!agentSession) {
           throw new Error(`Pi session not loaded: ${sessionId}`);
@@ -4913,13 +5023,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           const ownsTurn = turnToken === undefined || activeDirectDispatchTokens.get(sessionId) === turnToken;
           if (normalized.type === 'agent_end' && !isSyntheticTerminalEvent(normalized) && ownsTurn && !ended) {
             ended = true;
-            multiSessionManager.removeApiObserver(sessionPath, endObserver);
-            multiSessionManager.removeApiObserver(sessionPath, eventObserver);
+            detachTurnObservers();
             onComplete();
             resolveTurnBoundary();
           }
         };
+        const detachTurnObservers = (): void => {
+          multiSessionManager.removeApiObserver(sessionPath, endObserver);
+          multiSessionManager.removeApiObserver(sessionPath, eventObserver);
+        };
         multiSessionManager.addApiObserver(sessionPath, endObserver);
+        registerCleanup?.(() => {
+          ended = true;
+          detachTurnObservers();
+          resolveTurnBoundary();
+        });
 
         // Announce + record the re-bind only once observers are attached so
         // broker subscribers and the caller both see it.
@@ -4946,7 +5064,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           if (mode === 'follow_up') {
             await agentSession.followUp(message);
           } else if (mode === 'steer') {
-            await agentSession.steer(message);
+            if (isExecutionCancelled?.()) return;
+            await withControlLane(() => isExecutionCancelled?.() ? undefined : agentSession.steer(message));
+            if (isExecutionCancelled?.()) return;
           } else {
             await agentSession.prompt(message);
           }
@@ -4955,14 +5075,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           // documented command boundary, unlike an ordinary LLM prompt return.
           if (!ended && mode === 'prompt' && /^\s*\//.test(message)) {
             ended = true;
-            multiSessionManager.removeApiObserver(sessionPath, endObserver);
-            multiSessionManager.removeApiObserver(sessionPath, eventObserver);
+            detachTurnObservers();
             onComplete(undefined, 'documented_handler_return');
             resolveTurnBoundary();
           }
         } catch (err) {
-          multiSessionManager.removeApiObserver(sessionPath, endObserver);
-          multiSessionManager.removeApiObserver(sessionPath, eventObserver);
+          detachTurnObservers();
           if (!ended) {
             ended = true;
             onComplete(err instanceof Error ? err : new Error(String(err)));
@@ -6018,10 +6136,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             },
           };
         }
+        runReceipts.attachLease(runId, batchAdmissionLease);
         try {
           await runReceipts.markStarted(runId);
         } catch (error) {
-          batchAdmissionLease.release();
           await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
           logger.errorObject(`Failed to start batch run receipt ${runId}`, error);
           return {
