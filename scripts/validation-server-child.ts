@@ -131,9 +131,6 @@ process.once('exit', () => {
   }
   if (remaining !== null && remaining.length === 0) {
     try {
-      rmSync(liveRecordPath, { force: true });
-    } catch { /* best effort */ }
-    try {
       const tombstone = {
         identityVersion: 1,
         pid: record.pid,
@@ -142,7 +139,10 @@ process.once('exit', () => {
         outcome: 'server-process-exit',
       };
       writeFileSync(tombstonePath, `${JSON.stringify(tombstone, null, 2)}\n`, { mode: 0o600 });
-    } catch { /* best effort */ }
+      rmSync(liveRecordPath, { force: true });
+    } catch {
+      console.error(`[validation-server-child] could not finalise stop evidence; live identity record preserved at ${liveRecordPath}`);
+    }
     return;
   }
   console.error(

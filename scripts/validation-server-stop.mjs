@@ -91,7 +91,11 @@ const writeTombstone = (pid, pgid, outcome) => {
       outcome,
     };
     writeFileSync(tombstonePath, `${JSON.stringify(tombstone, null, 2)}\n`, { mode: 0o600 });
-  } catch { /* best effort — the live record above is the primary evidence */ }
+    return true;
+  } catch {
+    console.error('validation-server-stop: could not persist stop evidence — live identity record preserved.');
+    return false;
+  }
 };
 
 const groupAlive = (targetPgid) => {
@@ -223,8 +227,8 @@ if (!groupAlive(pgid)) {
   // an empty group needs no signal, and the pid-reuse risk never materialises
   // because nothing is signalled.
   console.log(`validation-server-stop: process group ${pgid} (leader pid ${pid}) already gone.`);
+  if (!writeTombstone(pid, pgid, 'already-gone')) process.exit(1);
   rmSync(recordPath, { force: true });
-  writeTombstone(pid, pgid, 'already-gone');
   process.exit(0);
 }
 
@@ -271,6 +275,6 @@ if (groupAlive(pgid)) {
   process.exit(1);
 }
 console.log(`validation-server-stop: process group ${pgid} terminated and verified gone.`);
+if (!writeTombstone(pid, pgid, 'stopped-by-stopper')) process.exit(1);
 rmSync(recordPath, { force: true });
-writeTombstone(pid, pgid, 'stopped-by-stopper');
 process.exit(0);

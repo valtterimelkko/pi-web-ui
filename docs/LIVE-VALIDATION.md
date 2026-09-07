@@ -174,8 +174,8 @@ npm run validate:live -- \
   --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" \
   --runtime commandcode --scenario all
-kill "$VALIDATION_PID" 2>/dev/null || true
-wait "$VALIDATION_PID" 2>/dev/null || true
+node scripts/validation-server-stop.mjs --dir "$VALIDATION_DIR"
+# Remove state only after verified teardown succeeds.
 rm -rf "$VALIDATION_DIR"
 ```
 
@@ -239,8 +239,8 @@ npm run validate:mcp:live -- \
   --socket "$VALIDATION_DIR/internal-api.sock" \
   --token-path "$VALIDATION_DIR/internal-api-token" \
   --runtime pi
-kill "$VALIDATION_PID" 2>/dev/null || true
-wait "$VALIDATION_PID" 2>/dev/null || true
+node scripts/validation-server-stop.mjs --dir "$VALIDATION_DIR"
+# Remove state only after verified teardown succeeds.
 rm -rf "$VALIDATION_DIR"
 ```
 
@@ -467,8 +467,8 @@ AUTH_PASSWORD="$HASH" npm run validate:server -- --dir /tmp/pi-vc --port 3093 \
 Pitfalls:
 
 - **Short `--dir` only.** The Internal API Unix socket lives inside it; paths beyond ~100 chars make clients fail with "Unix socket path too long".
-- **Port conflicts.** If startup logs `EADDRINUSE`, another validation server holds the port. Find it with `ss -tlnp | grep <port>`; kill only processes whose command line shows `validation-server.ts` (someone else's may be legitimate — pick a different port instead).
-- **Orphaned children.** Stopping the `npm run` wrapper can leave the underlying `node …validation-server.ts` alive and holding the port. Verify with `ss -tln | grep <port>` after teardown and kill the pid it reports.
+- **Port conflicts.** If startup logs `EADDRINUSE`, inspect that exact port with `ss -tlnp`; pick a different port rather than stopping another agent's server. Never select kill targets by command-line pattern.
+- **Teardown ownership.** Use `node scripts/validation-server-stop.mjs --dir <dir>` for the owned server. The launcher records a verified dedicated group and leader start time; the stopper verifies that group is gone. Do not kill only an npm wrapper or trust a stale PID. Missing/unverifiable records fail explicitly; preserve the directory and investigate rather than claiming success.
 
 ### Step 2 — create a session (Internal API is easiest)
 
@@ -537,7 +537,9 @@ Flags when the defaults don't match: `--base http://localhost:<port>`, `--passwo
 
 ### Teardown
 
-Kill the validation server (and verify the port is really free — see orphan pitfall), then `rm -rf` the `--dir`. Disposable validation redirects Pi session storage and the session watcher to `<dir>/pi-sessions`; Pi's `PI_AGENT_DIR` remains the real agent directory for auth/models/resources, so do not copy or alter that directory and record any provider-side effects separately.
+Run `node scripts/validation-server-stop.mjs --dir <dir>` and verify the owned port is free before removing the directory. `--timeout-ms` accepts whole numbers from 250 to 15000 (default 8000); invalid values are refused before signalling. Repeat stops require a valid tombstone and an empty recorded group, not merely a file saying the process exited. Uncertain exit/inspection or surviving members preserve recovery evidence; do not remove that directory. Process-group ownership is not daemon-proof cgroup containment, and a disposable data directory does not isolate resource usage from an inherited production cgroup. Use an independently owned bounded test unit when exercising resource pressure.
+
+Disposable validation redirects Pi session storage and the session watcher to `<dir>/pi-sessions`; Pi's `PI_AGENT_DIR` remains the real agent directory for auth/models/resources, so do not copy or alter that directory and record any provider-side effects separately.
 
 ## Capability-driven behaviour
 

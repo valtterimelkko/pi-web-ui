@@ -1262,8 +1262,11 @@ metered by this counter.
 The receipt lifecycle owns permit release. Failed/cancelled work with uncertain
 cessation retains its permit until the runtime adapter confirms quiescence;
 the bounded drain deadline quarantines unresolved debt rather than advertising
-false capacity. Rejection before dispatch releases immediately. Adapter-idle
-evidence is not proof that every tool descendant has stopped.
+false capacity. Rejection before dispatch releases immediately once its receipt
+transition is durable. If receipt storage remains unwritable, existing permits
+stay held rather than bypassing the durability/drain fence; restore storage
+access and inspect the receipt before recovery. Adapter-idle evidence is not
+proof that every tool descendant has stopped.
 
 ---
 
