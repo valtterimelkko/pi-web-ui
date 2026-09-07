@@ -60,6 +60,7 @@ import type {
   NativeSessionItem,
   NativeSessionsResponse,
   RegisterWatchRequest,
+  DeleteWatchRequest,
   Phase7PiShadowProfile,
   Phase7PiShadowReasonCode,
 } from '../types.js';
@@ -75,7 +76,7 @@ import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
 import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
 import { InternalApiEventBroker } from '../event-broker.js';
-import { WatchManager, WatchValidationError, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
+import { WatchGenerationMismatchError, WatchManager, WatchValidationError, type WatchWakeDispatchInput, type WatchWakeDispatchResult } from '../watch/watch-manager.js';
 import { PinExpiryManager, type ApplyPinResult } from '../pin-expiry-manager.js';
 import {
   IdempotencyKeyValidationError,
@@ -6308,6 +6309,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       sendJson(res, 400, { error: 'conditions[] is required and must be non-empty', code: ErrorCode.INVALID_REQUEST });
       return;
     }
+    if (Object.prototype.hasOwnProperty.call(body, 'expectedGeneration')
+      && body.expectedGeneration !== null
+      && (typeof body.expectedGeneration !== 'string' || body.expectedGeneration.length === 0 || body.expectedGeneration.length > 200)) {
+      sendJson(res, 400, { error: 'expectedGeneration must be null or a non-empty string up to 200 characters', code: ErrorCode.INVALID_REQUEST });
+      return;
+    }
 
     // Resolve the subject across runtimes: Command Code sessions are watch
     // subjects too (contract 1.23.0) — they live outside the session registry,
@@ -6385,6 +6392,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 400, { error: err.message, code: ErrorCode.INVALID_REQUEST });
         return;
       }
+      if (err instanceof WatchGenerationMismatchError) {
+        sendJson(res, 409, {
+          error: err.message,
+          code: ErrorCode.WATCH_GENERATION_MISMATCH,
+          expectedGeneration: err.expectedGeneration,
+          currentGeneration: err.currentGeneration,
+          watchId: err.watchId,
+        });
+        return;
+      }
       logger.errorObject('Failed to register watch', err);
       sendJson(res, 500, { error: 'Failed to register watch', code: ErrorCode.INTERNAL_ERROR });
     }
@@ -6416,17 +6433,45 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   }
 
   async function handleDeleteWatch(
-    _req: IncomingMessage,
+    req: IncomingMessage,
     res: ServerResponse,
     sessionId: string,
   ): Promise<void> {
-    await watchManager.init();
-    const existed = await watchManager.delete(sessionId);
-    if (!existed) {
-      sendJson(res, 404, { error: 'No watch registered for this session', code: ErrorCode.WATCH_NOT_FOUND });
+    const raw = await readJsonBody<unknown>(req);
+    if (raw === null && Number(req.headers['content-length']) > 0) {
+      sendJson(res, 400, { error: 'DELETE watch body must be valid JSON', code: ErrorCode.INVALID_REQUEST });
       return;
     }
-    sendJson(res, 200, { success: true, watchId: `watch-${sessionId}` });
+    if (raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {
+      sendJson(res, 400, { error: 'DELETE watch body must be an object', code: ErrorCode.INVALID_REQUEST });
+      return;
+    }
+    const body = (raw ?? {}) as DeleteWatchRequest;
+    if (Object.prototype.hasOwnProperty.call(body, 'expectedGeneration')
+      && (typeof body.expectedGeneration !== 'string' || body.expectedGeneration.length === 0 || body.expectedGeneration.length > 200)) {
+      sendJson(res, 400, { error: 'expectedGeneration must be a non-empty string up to 200 characters', code: ErrorCode.INVALID_REQUEST });
+      return;
+    }
+    try {
+      const result = await watchManager.deleteWithPrecondition(sessionId, body.expectedGeneration);
+      if (!result.deleted) {
+        sendJson(res, 404, { error: 'No watch registered for this session', code: ErrorCode.WATCH_NOT_FOUND });
+        return;
+      }
+      sendJson(res, 200, { success: true, watchId: result.watchId, generation: result.generation });
+    } catch (err) {
+      if (err instanceof WatchGenerationMismatchError) {
+        sendJson(res, 409, {
+          error: err.message,
+          code: ErrorCode.WATCH_GENERATION_MISMATCH,
+          expectedGeneration: err.expectedGeneration,
+          currentGeneration: err.currentGeneration,
+          watchId: err.watchId,
+        });
+        return;
+      }
+      throw err;
+    }
   }
 
   /** Opaque resumable cursor: base64url JSON map of {sessionId: lastIndex}. */

@@ -1155,6 +1155,12 @@ export interface CapabilitiesResponse {
     childSurfacingEvents: readonly string[];
     /** Contract 1.34.0: request header that links an Internal-API call to the calling parent session. */
     childParentHeader: 'X-Parent-Session';
+    /** Additive opaque-generation CAS fields for watch register/delete. */
+    watchGenerationPreconditions: {
+      generationField: 'generation';
+      registerField: 'expectedGeneration';
+      deleteBodyField: 'expectedGeneration';
+    };
     piProviderPolicy: {
       blockedProviders: string[];
     };
@@ -1411,6 +1417,11 @@ export interface RegisterWatchRequest {
   /** Conditions to evaluate. Must be non-empty. */
   conditions: WatchConditionSpec[];
   /**
+   * Additive generation precondition. Omitted preserves legacy replacement;
+   * null creates only when absent; a string replaces only that generation.
+   */
+  expectedGeneration?: string | null;
+  /**
    * Pin the subject session so idle/timeout eviction can't kill it while the
    * watch is running and the validator is asleep. Defaults to `true`.
    */
@@ -1426,6 +1437,8 @@ export interface RegisterWatchRequest {
 
 export interface WatchResponse {
   watchId: string;
+  /** Opaque identity that changes on each accepted registration/replacement. */
+  generation: string;
   sessionId: string;
   runtime: SessionRuntime;
   label?: string;
@@ -1463,9 +1476,16 @@ export interface WatchResponse {
   snapshot: WatchSnapshot;
 }
 
+export interface DeleteWatchRequest {
+  /** Omitted preserves legacy delete; a string deletes only that generation. */
+  expectedGeneration?: string;
+}
+
 export interface DeleteWatchResponse {
   success: boolean;
   watchId?: string;
+  /** Actual deleted generation, present on successful deletion. */
+  generation?: string;
 }
 
 /** One watch's new firings inside a /watches/wait response. */

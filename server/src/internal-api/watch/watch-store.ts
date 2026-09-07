@@ -25,6 +25,8 @@ import type {
 /** Full on-disk shape — everything needed to reconstruct a watch after restart. */
 export interface PersistedWatch {
   watchId: string;
+  /** Missing only on legacy ledgers before one-time manager migration. */
+  generation?: string;
   sessionId: string;
   sessionPath: string;
   runtime: SessionRuntime;
@@ -133,14 +135,19 @@ export class WatchStore {
   }
 
   async delete(sessionId: string): Promise<void> {
+    const previous = this.cache.get(sessionId);
     this.cache.delete(sessionId);
     // Wait for any in-flight write to finish before unlinking.
     await (this.writeChains.get(sessionId) ?? Promise.resolve()).catch(() => { /* legitimate: isolate the write chain — a prior failure is already handled/logged */ });
     this.writeChains.delete(sessionId);
     try {
       await unlink(this.fileFor(sessionId));
-    } catch {
-      // Already gone — fine.
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (previous) this.cache.set(sessionId, previous);
+        throw error;
+      }
+      // Already gone — the durable absence is satisfied.
     }
   }
 }

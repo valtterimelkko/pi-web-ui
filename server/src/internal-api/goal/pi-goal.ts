@@ -34,6 +34,8 @@ export interface PiGoalStateLike {
   lastVerificationMessage?: string | null;
   maxTurns?: number | null;
   pendingQuestion?: string | null;
+  /** Plain operator/agent pause rationale persisted by the Pi goal extension. */
+  pauseReason?: string | null;
   /** Agent-suggested goal awaiting explicit owner approval (contract 1.28.0). */
   pendingSuggestion?: { objective?: string; rationale?: string | null; suggestedAt?: number } | null;
   lastRunReason?: string | null;
@@ -106,6 +108,9 @@ function canonicalPiStatus(gs: PiGoalStateLike): { status: CanonicalGoalStatus; 
     case 'paused':
       if (gs.pendingQuestion) return { status: 'paused', pausedReason: 'question' };
       if (hasErrorPause) return { status: 'failed', pausedReason: 'error' };
+      if (typeof gs.pauseReason === 'string' && gs.pauseReason.trim()) {
+        return { status: 'paused', pausedReason: gs.pauseReason };
+      }
       return { status: 'paused' };
     case 'idle': {
       if (gs.completedAt != null) return { status: 'achieved' };
@@ -138,6 +143,7 @@ export function projectPiGoalState(raw: PiGoalStateLike | null | typeof INVALID_
     return { supported: true, status: 'idle', runtimeState: undefined };
   }
   const gs = raw;
+  const plainPauseReason = typeof gs.pauseReason === 'string' && gs.pauseReason.trim() ? gs.pauseReason : null;
   const { status, pausedReason, suggestedObjective } = canonicalPiStatus(gs);
   const projection: SessionGoalProjection = {
     supported: true,
@@ -150,7 +156,7 @@ export function projectPiGoalState(raw: PiGoalStateLike | null | typeof INVALID_
       command: gs.verifyCommand ?? null,
       message: gs.lastVerificationMessage ?? null,
     },
-    lastReason: gs.pendingQuestion ?? gs.lastRunReason ?? null,
+    lastReason: gs.pendingQuestion ?? plainPauseReason ?? gs.lastRunReason ?? null,
     spend: {
       inputTokens: typeof gs.spentInputTokens === 'number' ? gs.spentInputTokens : undefined,
       usd: typeof gs.spentUsd === 'number' ? gs.spentUsd : undefined,

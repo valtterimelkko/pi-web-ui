@@ -43,6 +43,7 @@ export const ErrorCode = {
   // cleans up instead of silently returning a session on a different model.
   MODEL_NOT_APPLIED: 'MODEL_NOT_APPLIED',
   WATCH_NOT_FOUND: 'WATCH_NOT_FOUND',
+  WATCH_GENERATION_MISMATCH: 'WATCH_GENERATION_MISMATCH',
   TRANSFER_DISPATCH_FAILED: 'TRANSFER_DISPATCH_FAILED',
   EMPTY_TRANSCRIPT: 'EMPTY_TRANSCRIPT',
   ASK_ALREADY_CLOSED: 'ASK_ALREADY_CLOSED',
@@ -217,6 +218,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     description: 'No long-horizon watch is registered for this session.',
     cause: 'GET/DELETE /watch before POST /watch, or after teardown/restart without reload.',
     hint: 'Register a watch with POST /sessions/:id/watch first.',
+    docs: 'docs/LONG-HORIZON-VALIDATION.md',
+  },
+  [ErrorCode.WATCH_GENERATION_MISMATCH]: {
+    httpStatus: 409,
+    description: 'The watch generation precondition did not match the current watch.',
+    cause: 'A create-only registration found an existing watch, or a stale client attempted to replace/delete another generation.',
+    hint: 'GET the watch, reconcile ownership, then retry with its exact generation only when replacement or deletion is intended.',
     docs: 'docs/LONG-HORIZON-VALIDATION.md',
   },
   [ErrorCode.TRANSFER_DISPATCH_FAILED]: {

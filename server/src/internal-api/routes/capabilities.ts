@@ -69,6 +69,11 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           SSE_EVENT_TYPES.WATCH_FIRED,
         ],
         childParentHeader: 'X-Parent-Session',
+        watchGenerationPreconditions: {
+          generationField: 'generation',
+          registerField: 'expectedGeneration',
+          deleteBodyField: 'expectedGeneration',
+        },
         piProviderPolicy: { blockedProviders: blockedPiProviders },
       },
       runtimes: {

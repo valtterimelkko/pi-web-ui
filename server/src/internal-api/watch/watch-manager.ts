@@ -77,6 +77,23 @@ export interface WatchManagerDeps {
   surface?: (record: PersistedWatch, event: { type: 'watch_registered' | 'watch_fired'; timestamp: number; data: Record<string, unknown> }) => void;
 }
 
+export interface RegisterWatchParams {
+  sessionId: string;
+  sessionPath: string;
+  runtime: SessionRuntime;
+  request: RegisterWatchRequest;
+  /** Contract 1.34.0 surfacing: the arming (parent) session, resolved by the route. */
+  sourceSessionId?: string;
+  /** Broker publish key for the source session (pi = path). */
+  sourceBrokerKey?: string;
+}
+
+export interface WatchDeleteResult {
+  deleted: boolean;
+  generation?: string;
+  watchId?: string;
+}
+
 interface ActiveWatch {
   record: PersistedWatch;
   engine: ConditionEngine;
@@ -184,7 +201,10 @@ export class WatchManager {
   private readonly active = new Map<string, ActiveWatch>();
   /** Minimal cross-watch backpressure: one in-flight steer dispatch per target. */
   private readonly pendingSteerTargets = new Set<string>();
+  /** Per-session mutation chains make generation checks and destructive steps atomic. */
+  private readonly mutationChains = new Map<string, Promise<unknown>>();
   private initialized = false;
+  private initialization?: Promise<void>;
 
   constructor(deps: WatchManagerDeps) {
     this.broker = deps.broker;
@@ -208,27 +228,49 @@ export class WatchManager {
    */
   async init(): Promise<void> {
     if (this.initialized) return;
-    await this.store.init();
-    for (const record of this.store.list()) {
-      if (record.status === 'active') {
-        record.status = 'detached';
-      }
+    if (!this.initialization) {
+      this.initialization = (async () => {
+        await this.store.init();
+        for (const record of this.store.list()) {
+          let changed = false;
+          if (!record.generation) {
+            record.generation = randomUUID();
+            changed = true;
+          }
+          if (record.status === 'active') {
+            record.status = 'detached';
+            changed = true;
+          }
+          if (changed) await this.store.save(record);
+        }
+        this.initialized = true;
+      })();
     }
-    this.initialized = true;
+    try {
+      await this.initialization;
+    } catch (error) {
+      this.initialization = undefined;
+      throw error;
+    }
+  }
+
+  private withSessionMutation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.mutationChains.get(sessionId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
+    this.mutationChains.set(sessionId, next);
+    void next.finally(() => {
+      if (this.mutationChains.get(sessionId) === next) this.mutationChains.delete(sessionId);
+    }).catch(() => undefined);
+    return next;
   }
 
   /** Create or replace the watch for a session. Throws on an invalid condition spec. */
-  async register(params: {
-    sessionId: string;
-    sessionPath: string;
-    runtime: SessionRuntime;
-    request: RegisterWatchRequest;
-    /** Contract 1.34.0 surfacing: the arming (parent) session, resolved by the route. */
-    sourceSessionId?: string;
-    /** Broker publish key for the source session (pi = path). */
-    sourceBrokerKey?: string;
-  }): Promise<WatchResponse> {
+  async register(params: RegisterWatchParams): Promise<WatchResponse> {
     await this.init();
+    return this.withSessionMutation(params.sessionId, () => this.registerLocked(params));
+  }
+
+  private async registerLocked(params: RegisterWatchParams): Promise<WatchResponse> {
     const { sessionId, sessionPath, runtime, request } = params;
 
     const specs = request.conditions ?? [];
@@ -247,9 +289,26 @@ export class WatchManager {
       ? validateOnFireAction(sessionId, request.onFire)
       : undefined;
 
+    // The check and every destructive step below execute inside the same
+    // per-session mutation chain. A route-level pre-read would not be CAS.
+    const previous = this.active.get(sessionId)?.record ?? this.store.get(sessionId);
+    const expectedGeneration = request.expectedGeneration;
+    if (expectedGeneration !== undefined) {
+      const currentGeneration = previous?.generation ?? null;
+      const matches = expectedGeneration === null
+        ? previous === undefined
+        : previous !== undefined && currentGeneration === expectedGeneration;
+      if (!matches) {
+        throw new WatchGenerationMismatchError({
+          expectedGeneration,
+          currentGeneration,
+          watchId: previous?.watchId ?? `watch-${sessionId}`,
+        });
+      }
+    }
+
     // Replace any existing watch for this session. Release exactly its prior
     // claims first, including when the replacement opts out of pinning.
-    const previous = this.active.get(sessionId)?.record ?? this.store.get(sessionId);
     this.teardown(sessionId);
     if (previous?.pinned && this.unpinSession) {
       await Promise.resolve(this.unpinSession(sessionId, `watch:${previous.watchId}`)).catch(() => false);
@@ -296,6 +355,7 @@ export class WatchManager {
 
     const record: PersistedWatch = {
       watchId,
+      generation: randomUUID(),
       sessionId,
       sessionPath,
       runtime,
@@ -384,19 +444,36 @@ export class WatchManager {
     return persisted ? this.toResponse(persisted) : undefined;
   }
 
-  /** Tear down and delete the watch for a session. */
+  /** Legacy delete projection retained for internal callers that do not need the generation receipt. */
   async delete(sessionId: string): Promise<boolean> {
-    const record = this.active.get(sessionId)?.record ?? this.store.get(sessionId);
-    const existed = !!record;
-    this.teardown(sessionId);
-    if (record?.pinned && this.unpinSession) {
-      await Promise.resolve(this.unpinSession(sessionId, `watch:${record.watchId}`)).catch(() => false);
-    }
-    if (record?.targetPinned && record.onFire && this.unpinSession) {
-      await Promise.resolve(this.unpinSession(record.onFire.targetSessionId, `watch-target:${record.watchId}`)).catch(() => false);
-    }
-    await this.store.delete(sessionId);
-    return existed;
+    return (await this.deleteWithPrecondition(sessionId)).deleted;
+  }
+
+  /** Generation-aware delete; precondition check and teardown are one atomic manager mutation. */
+  async deleteWithPrecondition(sessionId: string, expectedGeneration?: string): Promise<WatchDeleteResult> {
+    await this.init();
+    return this.withSessionMutation(sessionId, async () => {
+      const record = this.active.get(sessionId)?.record ?? this.store.get(sessionId);
+      if (expectedGeneration !== undefined && record?.generation !== expectedGeneration) {
+        throw new WatchGenerationMismatchError({
+          expectedGeneration,
+          currentGeneration: record?.generation ?? null,
+          watchId: record?.watchId ?? `watch-${sessionId}`,
+        });
+      }
+      if (!record) return { deleted: false };
+      if (!record.generation) throw new Error('Watch generation missing after initialization');
+      const generation = record.generation;
+      this.teardown(sessionId);
+      if (record.pinned && this.unpinSession) {
+        await Promise.resolve(this.unpinSession(sessionId, `watch:${record.watchId}`)).catch(() => false);
+      }
+      if (record.targetPinned && record.onFire && this.unpinSession) {
+        await Promise.resolve(this.unpinSession(record.onFire.targetSessionId, `watch-target:${record.watchId}`)).catch(() => false);
+      }
+      await this.store.delete(sessionId);
+      return { deleted: true, generation, watchId: record.watchId };
+    });
   }
 
   /** Stop all live subscriptions and timers (e.g. on server shutdown). Ledgers stay on disk. */
@@ -747,9 +824,11 @@ export class WatchManager {
   }
 
   private toResponse(record: PersistedWatch): WatchResponse {
+    if (!record.generation) throw new Error('Watch generation missing after initialization');
     const pendingConditionIds = record.conditions.filter((c) => !c.fired).map((c) => c.id);
     return {
       watchId: record.watchId,
+      generation: record.generation,
       sessionId: record.sessionId,
       runtime: record.runtime,
       label: record.label,
@@ -768,6 +847,20 @@ export class WatchManager {
       wakeAttempts: record.wakeAttempts ?? [],
       snapshot: { ...record.snapshot } as WatchSnapshot,
     };
+  }
+}
+
+export class WatchGenerationMismatchError extends Error {
+  readonly expectedGeneration: string | null;
+  readonly currentGeneration: string | null;
+  readonly watchId: string;
+
+  constructor(input: { expectedGeneration: string | null; currentGeneration: string | null; watchId: string }) {
+    super('Watch generation precondition did not match the current watch');
+    this.name = 'WatchGenerationMismatchError';
+    this.expectedGeneration = input.expectedGeneration;
+    this.currentGeneration = input.currentGeneration;
+    this.watchId = input.watchId;
   }
 }
 
