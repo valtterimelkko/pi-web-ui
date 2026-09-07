@@ -9,7 +9,7 @@
  * missing record also exited 0.
  *
  * This stopper now acts only on a verified dedicated-group record written by
- * scripts/validation-server-child.mjs:
+ * scripts/validation-server-child.ts:
  *   - identityVersion 1 records name a pgid that equals the recorded leader
  *     pid and carry the leader's /proc starttime, so a stale record or a
  *     reused pid/group is detected BEFORE any signal is sent;
@@ -42,7 +42,23 @@ if (!dir) {
   console.error('usage: node scripts/validation-server-stop.mjs --dir <validation-dir> [--timeout-ms N]');
   process.exit(2);
 }
-const timeoutMs = Number(arg('--timeout-ms') ?? '8000');
+// The TERM wait must be finite: non-numeric, non-finite, negative, fractional,
+// or out-of-bounds values are refused before anything is signalled. Bounds:
+// 250 ms minimum to stay meaningful, 15000 ms maximum as a documented safe
+// ceiling (a TERM-ignoring member is escalated to SIGKILL regardless).
+const rawTimeoutMs = arg('--timeout-ms');
+let timeoutMs = 8000;
+if (rawTimeoutMs !== undefined) {
+  if (!/^\d+$/.test(rawTimeoutMs)) {
+    console.error(`validation-server-stop: --timeout-ms must be a whole number of milliseconds (got '${rawTimeoutMs}').`);
+    process.exit(2);
+  }
+  timeoutMs = Number(rawTimeoutMs);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 250 || timeoutMs > 15000) {
+    console.error(`validation-server-stop: --timeout-ms must be between 250 and 15000 (got ${rawTimeoutMs}).`);
+    process.exit(2);
+  }
+}
 
 const recordPath = path.resolve(dir, 'server-process.json');
 const tombstonePath = path.resolve(dir, 'server-process.stopped.json');
@@ -78,14 +94,86 @@ const writeTombstone = (pid, pgid, outcome) => {
   } catch { /* best effort — the live record above is the primary evidence */ }
 };
 
+const groupAlive = (targetPgid) => {
+  // kill(-pgid, 0) cannot distinguish a dead-but-unreaped (zombie) member from
+  // a live one, and zombies persist until their parent reaps them — a killed
+  // group would verify as alive. ps gives the process state directly.
+  try {
+    const probe = spawnSync('ps', ['-e', '-o', 'pgid=,stat='], { encoding: 'utf8' });
+    if (probe.status === 0) {
+      return probe.stdout.split('\n').some((line) => {
+        const match = line.trim().match(/^(\d+)\s+(\w+)/);
+        return match !== null && Number(match[1]) === targetPgid && !/^[ZX]/.test(match[2]);
+      });
+    }
+  } catch { /* fall through to the signal probe */ }
+  try {
+    process.kill(-targetPgid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== 'ESRCH';
+  }
+};
+
+const killGroup = (signal) => {
+  try {
+    process.kill(-pgid, signal);
+    return true;
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    // EPERM on a dying group is not fatal; verification decides.
+    return true;
+  }
+};
+
+const sleepSync = (ms) => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
+/** A tombstone is evidence: it must parse and carry the bounded identity it names. */
+function readValidatedTombstone() {
+  try {
+    const tombstone = JSON.parse(readFileSync(tombstonePath, 'utf8'));
+    const pid = Number(tombstone.pid);
+    const pgid = Number(tombstone.pgid);
+    if (
+      tombstone.identityVersion !== 1 ||
+      !Number.isInteger(pid) || !Number.isInteger(pgid) || pid <= 1 || pgid <= 1 || pid !== pgid ||
+      typeof tombstone.stoppedAt !== 'string' || tombstone.stoppedAt.length === 0
+    ) {
+      return { ok: false, reason: 'tombstone does not carry a verifiable identity' };
+    }
+    return { ok: true, pid, pgid, stoppedAt: tombstone.stoppedAt, outcome: String(tombstone.outcome ?? 'unknown') };
+  } catch (error) {
+    return { ok: false, reason: `unreadable tombstone: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 if (!existsSync(recordPath)) {
   if (existsSync(tombstonePath)) {
-    let detail = '';
-    try {
-      const tombstone = JSON.parse(readFileSync(tombstonePath, 'utf8'));
-      detail = ` (stopped at ${tombstone.stoppedAt}, outcome: ${tombstone.outcome})`;
-    } catch { /* tombstone unreadable — still evidence a stop happened */ }
-    console.log(`validation-server-stop: server already stopped${detail}.`);
+    const tombstone = readValidatedTombstone();
+    if (!tombstone.ok) {
+      // A malformed or untrustworthy tombstone must never mint a stop outcome.
+      console.error(`validation-server-stop: ${tombstone.reason} — NOT reporting stopped. Tombstone preserved for investigation.`);
+      process.exit(1);
+    }
+    // Even a well-formed tombstone proves only that the leader process once
+    // exited — not that the group's descendants are gone. Verify the named
+    // group is actually dead before reporting success; if members remain the
+    // leader identity can no longer be verified, so this is an explicit
+    // refusal with the evidence preserved.
+    if (groupAlive(tombstone.pgid)) {
+      console.error(
+        `validation-server-stop: tombstone (stopped at ${tombstone.stoppedAt}) names group ${tombstone.pgid} ` +
+        'which still has live members while its leader is unrecorded — ownership cannot be verified. ' +
+        'NOT reporting stopped; tombstone preserved. Investigate manually (do NOT broad-match processes).',
+      );
+      process.exit(1);
+    }
+    console.log(
+      `validation-server-stop: server already stopped (recorded stop at ${tombstone.stoppedAt}, ` +
+      `outcome: ${tombstone.outcome}; group ${tombstone.pgid} verified gone).`,
+    );
     process.exit(0);
   }
   console.error(
@@ -130,43 +218,7 @@ if (pgid === myPgid || pid === process.pid) {
   process.exit(1);
 }
 
-const groupAlive = () => {
-  // kill(-pgid, 0) cannot distinguish a dead-but-unreaped (zombie) member from
-  // a live one, and zombies persist until their parent reaps them — a killed
-  // group would verify as alive. ps gives the process state directly.
-  try {
-    const probe = spawnSync('ps', ['-e', '-o', 'pgid=,stat='], { encoding: 'utf8' });
-    if (probe.status === 0) {
-      return probe.stdout.split('\n').some((line) => {
-        const match = line.trim().match(/^(\d+)\s+(\w+)/);
-        return match !== null && Number(match[1]) === pgid && !/^[ZX]/.test(match[2]);
-      });
-    }
-  } catch { /* fall through to the signal probe */ }
-  try {
-    process.kill(-pgid, 0);
-    return true;
-  } catch (error) {
-    return error.code !== 'ESRCH';
-  }
-};
-
-const killGroup = (signal) => {
-  try {
-    process.kill(-pgid, signal);
-    return true;
-  } catch (error) {
-    if (error.code === 'ESRCH') return false;
-    // EPERM on a dying group is not fatal; verification decides.
-    return true;
-  }
-};
-
-const sleepSync = (ms) => {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-};
-
-if (!groupAlive()) {
+if (!groupAlive(pgid)) {
   // Safe to declare only because the record named a verified dedicated group:
   // an empty group needs no signal, and the pid-reuse risk never materialises
   // because nothing is signalled.
@@ -204,17 +256,17 @@ try {
 
 killGroup('SIGTERM');
 const deadline = Date.now() + timeoutMs;
-while (groupAlive() && Date.now() < deadline) {
+while (groupAlive(pgid) && Date.now() < deadline) {
   sleepSync(200);
 }
-if (groupAlive()) {
+if (groupAlive(pgid)) {
   killGroup('SIGKILL');
   const hardDeadline = Date.now() + 2000;
-  while (groupAlive() && Date.now() < hardDeadline) {
+  while (groupAlive(pgid) && Date.now() < hardDeadline) {
     sleepSync(100);
   }
 }
-if (groupAlive()) {
+if (groupAlive(pgid)) {
   console.error(`validation-server-stop: process group ${pgid} still alive after SIGKILL — investigate manually (do NOT broad-match processes). Record preserved.`);
   process.exit(1);
 }

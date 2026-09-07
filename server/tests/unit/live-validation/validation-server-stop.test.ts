@@ -152,4 +152,96 @@ describe('validation-server-stop (defect 12: process-group teardown)', () => {
     try { process.kill(-pgid, 'SIGKILL'); } catch { /* already gone */ }
     rmSync(dir, { recursive: true, force: true });
   }, 15000);
+
+  // ── Rework regressions (parent review 1, items 1–2) ────────────────────
+
+  it('refuses an unreadable or malformed tombstone instead of reporting already-stopped', () => {
+    const dir = makeValidationTempRoot('vstop-badtomb-');
+    // A tombstone is evidence, not a magic success token: unreadable contents
+    // must never mint a stop outcome.
+    writeFileSync(path.join(dir, 'server-process.stopped.json'), '{ not json at all');
+    const stop = spawnSync(process.execPath, [STOPPER, '--dir', dir], { encoding: 'utf8' });
+    expect(stop.status, `stdout=${stop.stdout} stderr=${stop.stderr}`).toBe(1);
+    expect(stop.stderr).toMatch(/tombstone/i);
+    expect(stop.stdout).not.toMatch(/already stopped/);
+    // The untrustworthy tombstone is preserved for investigation.
+    expect(existsSync(path.join(dir, 'server-process.stopped.json'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses a valid tombstone while its named group still has live members', async () => {
+    const dir = makeValidationTempRoot('vstop-tomblive-');
+    // Repro of review item 1: the leader exited (so a tombstone exists) but a
+    // SIGTERM-ignoring descendant of the same group remains. A tombstone plus
+    // a live group must be an explicit refusal, never "already stopped".
+    const ignoreTerm = `process.on('SIGTERM', () => {}); setInterval(() => {}, 500);`;
+    const leader = spawn('bash', ['-c', `exec node -e ${JSON.stringify(ignoreTerm)} & child=$!; trap '' TERM; wait $child`], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    leader.unref();
+    const pgid = leader.pid!;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    onTestFinished(() => { try { process.kill(-pgid, 'SIGKILL'); } catch { /* already gone */ } });
+    expect(groupLeaderAlive(pgid)).toBe(true);
+
+    writeFileSync(path.join(dir, 'server-process.stopped.json'), `${JSON.stringify({
+      identityVersion: 1,
+      pid: pgid,
+      pgid,
+      stoppedAt: new Date().toISOString(),
+      outcome: 'server-process-exit',
+    })}\n`);
+    const stop = spawnSync(process.execPath, [STOPPER, '--dir', dir, '--timeout-ms', '2000'], { encoding: 'utf8' });
+    expect(stop.status, `stdout=${stop.stdout} stderr=${stop.stderr}`).toBe(1);
+    expect(stop.stdout).not.toMatch(/already stopped/);
+    expect(groupLeaderAlive(pgid)).toBe(true);
+    expect(existsSync(path.join(dir, 'server-process.stopped.json'))).toBe(true);
+    try { process.kill(-pgid, 'SIGKILL'); } catch { /* already gone */ }
+    rmSync(dir, { recursive: true, force: true });
+  }, 20000);
+
+  it('rejects invalid --timeout-ms values before signalling a live fixture', async () => {
+    const dir = makeValidationTempRoot('vstop-timeout-');
+    const ignoreTerm = `process.on('SIGTERM', () => {}); setInterval(() => {}, 500);`;
+    const leader = spawn('bash', ['-c', `exec node -e ${JSON.stringify(ignoreTerm)} & child=$!; trap '' TERM; wait $child`], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    leader.unref();
+    const pgid = leader.pid!;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    onTestFinished(() => { try { process.kill(-pgid, 'SIGKILL'); } catch { /* already gone */ } });
+    expect(groupLeaderAlive(pgid)).toBe(true);
+
+    writeFileSync(path.join(dir, 'server-process.json'), `${JSON.stringify(dedicatedGroupRecord(pgid))}\n`);
+
+    for (const bad of ['Infinity', 'NaN', '-500', 'abc', '0', '999999']) {
+      // Bounded execution: the current Infinity behaviour hangs forever, which
+      // is itself the defect under test — the watchdog turns a hang into the
+      // observable RED instead of stalling the suite.
+      const result = await new Promise<{ status: number | null; timedOut: boolean; stdout: string; stderr: string }>((resolve) => {
+        const child = spawn(process.execPath, [STOPPER, '--dir', dir, '--timeout-ms', bad], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        child.stdout?.on('data', (c: Buffer) => { stdout += c.toString(); });
+        child.stderr?.on('data', (c: Buffer) => { stderr += c.toString(); });
+        const watchdog = setTimeout(() => {
+          try { child.kill('SIGKILL'); } catch { /* already gone */ }
+          resolve({ status: null, timedOut: true, stdout, stderr });
+        }, 5000);
+        child.once('exit', (code) => {
+          clearTimeout(watchdog);
+          resolve({ status: code, timedOut: false, stdout, stderr });
+        });
+      });
+      const detail = `--timeout-ms ${bad}: status=${result.status} timedOut=${result.timedOut} stdout=${result.stdout} stderr=${result.stderr}`;
+      expect(result.timedOut, `stopper must reject ${bad} immediately, not hang: ${detail}`).toBe(false);
+      expect(result.status, `stopper must exit 2 (usage refusal) for ${bad}: ${detail}`).toBe(2);
+      expect(groupLeaderAlive(pgid), `live fixture must be untouched after refusing ${bad}: ${detail}`).toBe(true);
+      expect(existsSync(path.join(dir, 'server-process.json')), `record must be preserved after refusing ${bad}`).toBe(true);
+    }
+    try { process.kill(-pgid, 'SIGKILL'); } catch { /* already gone */ }
+    rmSync(dir, { recursive: true, force: true });
+  }, 60000);
 });

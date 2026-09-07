@@ -39,6 +39,7 @@ function findRepoRoot(start: string): string {
 const REPO = findRepoRoot(import.meta.dirname);
 const LAUNCHER = path.join(REPO, 'scripts/validation-server.ts');
 const STOPPER = path.join(REPO, 'scripts/validation-server-stop.mjs');
+const CHILD = path.join(REPO, 'scripts/validation-server-child.ts');
 
 /** Own pgid of the current (test-runner) process, so cleanup can never signal it. */
 function ownPgid(): number {
@@ -55,7 +56,7 @@ interface Launch {
 }
 
 /** Spawn the real launcher chain detached; the harness owns the whole group. */
-function launchServer(dir: string, extraEnv: Record<string, string> = {}): Launch {
+function launchServer(dir: string | undefined, extraEnv: Record<string, string> = {}): Launch {
   // Strip the runner's own silencing flags: the spawned launcher is a real
   // operator-style boot and must log its readiness banner like one (the central
   // logger self-silences when VITEST is set — see server/vitest.config.ts).
@@ -68,9 +69,10 @@ function launchServer(dir: string, extraEnv: Record<string, string> = {}): Launc
   // ONE process group — the innermost script is NOT the group leader. That is
   // precisely the chain shape where the old pid-as-pgid fallback produced a
   // false-success teardown, so the test boundary must not flatten it.
+  const launcherArgs = dir === undefined ? ['tsx', LAUNCHER] : ['tsx', LAUNCHER, '--dir', dir];
   const handle = spawn(
     'npx',
-    ['tsx', LAUNCHER, '--dir', dir],
+    launcherArgs,
     {
       detached: true,
       cwd: REPO,
@@ -279,6 +281,12 @@ describe('validation-server lifecycle (real launcher → real stopper)', () => {
       while (Date.now() < cancelDeadline && await listenerAlive(port)) {
         await new Promise((resolve) => setTimeout(resolve, 400));
       }
+      // The listener closes early in graceful shutdown; the leader (and its
+      // in-process exit-handler quiescence check) may need another moment.
+      // Await the verified drain instead of assuming a fixed delay.
+      while (Date.now() < cancelDeadline && groupAliveByPs(record!.pgid!)) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(await listenerAlive(port), 'cycle 2: listener gone after wrapper-forwarded cancel').toBe(false);
       expect(groupAliveByPs(record!.pgid!), 'cycle 2: dedicated group gone after cancel').toBe(false);
@@ -324,4 +332,166 @@ describe('validation-server lifecycle (real launcher → real stopper)', () => {
       expect(repeat.stdout, 'repeat stop must report the recorded stop, not a fresh teardown').toMatch(/already stopped/);
     }
   }, 420_000);
+
+  describe('rework (parent review 1): child-exit/tombstone honesty, noise lifetime, wrapper evidence preservation', () => {
+    /** Spawn the real child entry directly, detached, with validation-hook env. */
+    function spawnChildForExitTest(dir: string, extraEnv: Record<string, string>): ChildProcess {
+      const handle = spawn(
+        process.execPath,
+        ['--import', 'tsx', CHILD],
+        {
+          detached: true,
+          cwd: REPO,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: {
+            ...process.env,
+            VITEST: undefined,
+            VITEST_LOG: undefined,
+            PI_WEB_UI_VALIDATION_SERVER_CHILD: '1',
+            PI_WEB_UI_VALIDATION_RECORD_DIR: dir,
+            PI_WEB_UI_VALIDATION_BOUND_PORT: '29999',
+            ...extraEnv,
+          } as NodeJS.ProcessEnv,
+        },
+      );
+      return handle;
+    }
+
+    function killGroupBoundedByPid(pgid: number): void {
+      if (!Number.isInteger(pgid) || pgid <= 1 || pgid === MY_PGID) return;
+      const signal = (sig: NodeJS.Signals) => {
+        try { process.kill(-pgid, sig); } catch { /* ESRCH — already gone */ }
+      };
+      signal('SIGTERM');
+      const termDeadline = Date.now() + 2000;
+      while (groupAliveByPs(pgid) && Date.now() < termDeadline) {
+        spawnSync('sleep', ['0.2']);
+      }
+      if (groupAliveByPs(pgid)) {
+        signal('SIGKILL');
+        const killDeadline = Date.now() + 2000;
+        while (groupAliveByPs(pgid) && Date.now() < killDeadline) {
+          spawnSync('sleep', ['0.1']);
+        }
+      }
+    }
+
+    it('child exit with a remaining descendant preserves the live record and writes no success tombstone', async () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), 'vslife-child-exit-'));
+      const handle = spawnChildForExitTest(dir, { PI_WEB_UI_VALIDATION_TEST_NOISE: '1', PI_WEB_UI_VALIDATION_CHILD_EXIT_AFTER_RECORD: '1' });
+      let childOutput = '';
+      handle.stderr?.on('data', (chunk: Buffer) => { childOutput += chunk.toString(); });
+      onTestFinished(() => {
+        const record = readRecord(dir);
+        if (record?.pgid) killGroupBoundedByPid(record.pgid);
+        rmSync(dir, { recursive: true, force: true });
+      });
+
+      await waitFor(() => existsSync(recordPath(dir)), 30_000, 'child to write its identity record');
+      const record = readRecord(dir);
+      expect(record?.identityVersion).toBe(1);
+      expect(record?.pgid).toBe(record?.pid);
+
+      // The child exits immediately (validation hook); the TERM-ignoring noise
+      // member it spawned stays behind in the dedicated group.
+      await waitFor(() => handle.exitCode !== null || handle.signalCode !== null, 30_000, 'child process to exit');
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(groupAliveByPs(record!.pgid!), 'noise descendant remains in the group after leader exit').toBe(true);
+
+      // THE REGRESSION: a child exit must not delete the identity record nor
+      // write a tombstone that reads as a successful stop while an owned
+      // descendant is still live. Uncertain exit preserves evidence.
+      expect(existsSync(recordPath(dir)), 'live record must be preserved when descendants remain').toBe(true);
+      expect(existsSync(tombstonePath(dir)), 'no stop tombstone may be minted from an unverified exit').toBe(false);
+      expect(childOutput, 'child must state the preservation on stderr').toMatch(/PRESERVED/i);
+
+      killGroupBoundedByPid(record!.pgid!);
+      rmSync(dir, { recursive: true, force: true });
+    }, 90_000);
+
+    it('validation-only noise helper exits after its bounded lifetime', async () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), 'vslife-noise-ttl-'));
+      const handle = spawnChildForExitTest(dir, {
+        PI_WEB_UI_VALIDATION_TEST_NOISE: '1',
+        PI_WEB_UI_VALIDATION_CHILD_EXIT_AFTER_RECORD: '1',
+        PI_WEB_UI_VALIDATION_TEST_NOISE_TTL_MS: '1500',
+      });
+      onTestFinished(() => {
+        const record = readRecord(dir);
+        if (record?.pgid) killGroupBoundedByPid(record.pgid);
+        rmSync(dir, { recursive: true, force: true });
+      });
+
+      await waitFor(() => existsSync(recordPath(dir)), 30_000, 'child to write its identity record');
+      const record = readRecord(dir);
+      await waitFor(() => handle.exitCode !== null || handle.signalCode !== null, 30_000, 'child process to exit');
+      expect(groupAliveByPs(record!.pgid!), 'noise member is alive right after leader exit').toBe(true);
+
+      // A bounded helper must not outlive its configured lifetime: after the
+      // 1.5 s TTL (plus generous slack) no group member may remain.
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline && groupAliveByPs(record!.pgid!)) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      expect(groupAliveByPs(record!.pgid!), 'noise helper must exit after its bounded lifetime').toBe(false);
+      rmSync(dir, { recursive: true, force: true });
+    }, 90_000);
+
+    it('wrapper does not destroy implicit-dir evidence while owned descendants remain', async () => {
+      const implicitRoot = path.join(os.tmpdir(), 'pi-web-ui-validation');
+      const before = existsSync(implicitRoot) ? spawnSync('ls', ['-1', implicitRoot], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean) : [];
+      const launch = launchServer('', { PI_WEB_UI_VALIDATION_TEST_NOISE: '1' });
+      let implicitDir = '';
+      onTestFinished(() => {
+        killGroupBounded(launch.handle.pid!);
+        const record = readRecord(implicitDir);
+        if (record?.pgid && record.pgid !== launch.handle.pid) killGroupBounded(record.pgid);
+        if (implicitDir && existsSync(implicitDir)) rmSync(implicitDir, { recursive: true, force: true });
+      });
+
+      // No --dir: the wrapper creates its own run-* directory; find it by diff.
+      const deadline = Date.now() + 60_000;
+      while (Date.now() < deadline && !implicitDir) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const now = existsSync(implicitRoot) ? spawnSync('ls', ['-1', implicitRoot], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean) : [];
+        const fresh = now.filter((entry) => !before.includes(entry));
+        const candidate = fresh.map((entry) => path.join(implicitRoot, entry)).find((full) => existsSync(path.join(full, 'internal-api.sock')));
+        if (candidate) implicitDir = candidate;
+      }
+      expect(implicitDir, 'wrapper created a fresh implicit validation directory').not.toBe('');
+      await waitFor(() => /running on port (\d+)/.test(launch.output()), 120_000, 'server readiness banner');
+      const record = readRecord(implicitDir);
+      expect(record?.identityVersion).toBe(1);
+      const childPid = record!.pid!;
+
+      // Kill ONLY the group leader (the server child): the TERM-ignoring noise
+      // descendant survives. The wrapper learns of the child exit and must
+      // supervise its own group through its owned authority — never exiting in
+      // a state where evidence is destroyed while a descendant is still live.
+      try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ }
+      const chainExit = await Promise.race([
+        new Promise<'exited'>((resolve) => {
+          if (launch.handle.exitCode !== null || launch.handle.signalCode !== null) {
+            resolve('exited');
+            return;
+          }
+          launch.handle.once('exit', () => resolve('exited'));
+        }),
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 45_000)),
+      ]);
+      expect(chainExit, 'wrapper must exit after its child exits (not hang)').toBe('exited');
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      const membersAlive = groupAliveByPs(record!.pgid!);
+      const dirStillExists = existsSync(implicitDir);
+      // THE INVARIANT: never both "descendant alive" and "evidence destroyed".
+      expect(
+        !(membersAlive && !dirStillExists),
+        `invariant violated: membersAlive=${membersAlive} dirStillExists=${dirStillExists} (dir=${implicitDir})`,
+      ).toBe(true);
+
+      killGroupBounded(record!.pgid!);
+      if (existsSync(implicitDir)) rmSync(implicitDir, { recursive: true, force: true });
+    }, 240_000);
+  });
 });

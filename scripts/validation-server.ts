@@ -86,8 +86,25 @@ async function main(): Promise<void> {
   ]);
   const directoryLock = acquireValidationDirectoryLock(validationDir);
   process.once('exit', () => directoryLock.release());
+  // Supervised child state, assigned once the child is spawned inside the try
+  // block below; the exit hooks consult it.
+  let serverChild: ChildProcess | undefined;
+  let preserveDir = false;
   if (!explicitDir) {
-    process.once('exit', () => rmSync(validationDir, { recursive: true, force: true }));
+    process.once('exit', () => {
+      // The implicit directory is disposable ONLY once nothing owned is left
+      // running and no uncertain outcome needs its evidence. Deleting it while
+      // descendants remain (or while the stop outcome is unverified) would
+      // destroy the records recovery depends on.
+      const childGroupStillRunning = serverChild?.pid !== undefined && groupHasLiveMembers(serverChild.pid);
+      if (preserveDir || childGroupStillRunning) {
+        console.error(
+          `[validation-server] NOT removing validation directory (owned descendants remain or stop outcome unverified): ${validationDir}`,
+        );
+        return;
+      }
+      rmSync(validationDir, { recursive: true, force: true });
+    });
   }
   // Defect 12 (Part 3) / capacity review 2026-09-07 §3: the identity record is
   // NOT written here. This wrapper runs inside the caller's npm/tsx process
@@ -184,28 +201,37 @@ async function main(): Promise<void> {
     };
     let child: ChildProcess;
     try {
-      // The tsx loader runs in-process here (single process, like the previous
-      // single-file launcher), so the detached child IS the group leader.
-      // execArgv: [] is load-bearing: Node would otherwise inherit this
-      // wrapper's own tsx loader flags a second time into the child.
-      child = spawn(process.execPath, ['--import', 'tsx', childScript], { detached: true, stdio: 'inherit', env: childEnv, execArgv: [] });
+      // The tsx loader runs in-process for this entry shape (single process,
+      // like the previous single-file launcher), so the detached child IS the
+      // group leader. Note Node's spawn() does not inherit execArgv — that is
+      // a fork() behaviour — so no loader flags reach this child; an earlier
+      // double-loader failure here came from the child loading tsx's
+      // programmatic API itself, not from inherited flags.
+      child = spawn(process.execPath, ['--import', 'tsx', childScript], { detached: true, stdio: 'inherit', env: childEnv });
     } catch (spawnError) {
       throw new Error(`Failed to spawn the dedicated validation server child: ${spawnError instanceof Error ? spawnError.message : String(spawnError)}`);
     }
+    serverChild = child;
     let tearingDown = false;
     const forwardToStopper = (signal: NodeJS.Signals) => {
       if (tearingDown) return;
       tearingDown = true;
       try {
+        if (child.pid === undefined) return;
         const stop = spawnSync(process.execPath, [stopperScript, '--dir', validationDir, '--timeout-ms', '8000'], { stdio: 'inherit' });
         if ((stop.status ?? 1) !== 0) {
           // The stopper could not act (e.g. SIGINT arrived before the child
           // wrote its record). Fall back to the ONE group this wrapper
-          // unambiguously owns — the child it spawned detached. Bounded TERM
-          // then KILL; never broad process matching.
-          try { process.kill(-child.pid!, 'SIGTERM'); } catch { /* already gone */ }
-          blockingWait(2000);
-          try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* already gone */ }
+          // unambiguously owns — the child it spawned detached — and VERIFY
+          // the outcome instead of assuming it. An unverified outcome
+          // preserves the validation directory's evidence.
+          if (!boundedKillOwnedGroup(child.pid)) {
+            preserveDir = true;
+            console.error(
+              `[validation-server] fallback teardown could not verify group ${child.pid} is gone — ` +
+              `preserving ${validationDir} for investigation.`,
+            );
+          }
         }
       } finally {
         process.exit(128 + SIGNAL_EXIT_OFFSET[signal]);
@@ -217,11 +243,25 @@ async function main(): Promise<void> {
     child.once('exit', (code, signal) => {
       if (tearingDown) return;
       tearingDown = true;
-      process.exit(code ?? (signal === 'SIGTERM' ? 143 : signal === 'SIGKILL' ? 137 : 1));
+      const exitCode = code ?? (signal === 'SIGTERM' ? 143 : signal === 'SIGKILL' ? 137 : 1);
+      if (child.pid !== undefined && groupHasLiveMembers(child.pid)) {
+        // The child exited while owned descendants remain (crash, or a
+        // TERM-ignoring helper outliving it): supervise them through this
+        // wrapper's own authority, and preserve evidence on uncertainty.
+        if (!boundedKillOwnedGroup(child.pid)) {
+          preserveDir = true;
+          console.error(
+            `[validation-server] child exited with live group members (group ${child.pid}) that survived bounded cleanup — ` +
+            `preserving ${validationDir} for investigation.`,
+          );
+        }
+      }
+      process.exit(exitCode);
     });
     child.once('error', (childError) => {
       if (tearingDown) return;
       tearingDown = true;
+      preserveDir = true;
       console.error('[validation-server] dedicated server child failed:', childError);
       process.exit(1);
     });
@@ -236,6 +276,43 @@ const SIGNAL_EXIT_OFFSET: Record<string, number> = { SIGINT: 2, SIGTERM: 15, SIG
 /** Sleep without keeping the event loop involved — used only while tearing down. */
 function blockingWait(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Live non-zombie members of a process group, from the process table. */
+function groupHasLiveMembers(pgid: number): boolean {
+  if (!Number.isInteger(pgid) || pgid <= 1) return false;
+  try {
+    const probe = spawnSync('ps', ['-e', '-o', 'pgid=,stat='], { encoding: 'utf8' });
+    if (probe.status === 0) {
+      return probe.stdout.split('\n').some((line) => {
+        const match = line.trim().match(/^(\d+)\s+(\w+)/);
+        return match !== null && Number(match[1]) === pgid && !/^[ZX]/.test(match[2]);
+      });
+    }
+  } catch { /* fall through to the signal probe */ }
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+/**
+ * Bounded TERM→KILL for the one group this wrapper unambiguously owns: the
+ * child it spawned detached. Returns whether the group is verifiably gone.
+ */
+function boundedKillOwnedGroup(pgid: number): boolean {
+  if (!Number.isInteger(pgid) || pgid <= 1) return false;
+  try { process.kill(-pgid, 'SIGTERM'); } catch { /* already gone */ }
+  const termDeadline = Date.now() + 2000;
+  while (groupHasLiveMembers(pgid) && Date.now() < termDeadline) blockingWait(200);
+  if (groupHasLiveMembers(pgid)) {
+    try { process.kill(-pgid, 'SIGKILL'); } catch { /* already gone */ }
+    const killDeadline = Date.now() + 2000;
+    while (groupHasLiveMembers(pgid) && Date.now() < killDeadline) blockingWait(100);
+  }
+  return !groupHasLiveMembers(pgid);
 }
 
 main().catch((error) => {
