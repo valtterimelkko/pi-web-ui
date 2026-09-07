@@ -53,7 +53,7 @@ This is controlled-workload evidence, **not** a guarantee that four unbounded fu
 
 At the first integrated gate: guides, typecheck and build passed; **3403 server + 941 client + 197 shared tests** passed. Lint reported zero errors (existing warnings remain).
 
-Final gate after the additional stop-persistence regressions and documentation updates: **pending final run**.
+Final gate after the additional stop-persistence regressions and documentation updates: **PASS** — guides, 799 internal documentation links, lint (0 errors; 1685 warnings), typecheck and build; **3405 server + 941 client + 197 shared tests = 4543 passed**, zero failures. Tests ran with one worker; no skill evals were requested or performed.
 
 A worktree-only dependency mismatch was diagnosed rather than patched around: root-hoisted Zod differed from the server workspace version. Matching workspace package links while keeping generated caches local restored canonical dependency resolution; unrelated preferences/worktree source was not changed.
 
