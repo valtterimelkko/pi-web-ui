@@ -48,10 +48,10 @@ function blockingWait(ms: number): void {
 }
 
 /** Live non-zombie members of our group, excluding this process itself. */
-function liveGroupMembersExcludingSelf(pgid: number): number[] {
+function liveGroupMembersExcludingSelf(pgid: number): number[] | null {
   try {
     const probe = spawnSync('ps', ['-e', '-o', 'pid=,pgid=,stat='], { encoding: 'utf8' });
-    if (probe.status !== 0) return [];
+    if (probe.status !== 0) return null;
     const members: number[] = [];
     for (const line of probe.stdout.split('\n')) {
       const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\w+)$/);
@@ -64,7 +64,7 @@ function liveGroupMembersExcludingSelf(pgid: number): number[] {
     }
     return members;
   } catch {
-    return [];
+    return null; // Unknown is never evidence of an empty group.
   }
 }
 
@@ -123,13 +123,13 @@ process.once('exit', () => {
   // tombstone; an uncertain exit PRESERVES the identity record so recovery and
   // ownership investigation remain possible, and never mints a success file.
   let remaining = liveGroupMembersExcludingSelf(pgrp);
-  for (let attempt = 0; attempt < 3 && remaining.length > 0; attempt += 1) {
+  for (let attempt = 0; attempt < 3 && remaining !== null && remaining.length > 0; attempt += 1) {
     // Bounded grace for fast-dying members (e.g. esbuild services); sync waits
     // only — this runs inside the exit handler.
     blockingWait(300);
     remaining = liveGroupMembersExcludingSelf(pgrp);
   }
-  if (remaining.length === 0) {
+  if (remaining !== null && remaining.length === 0) {
     try {
       rmSync(liveRecordPath, { force: true });
     } catch { /* best effort */ }
@@ -147,7 +147,7 @@ process.once('exit', () => {
   }
   console.error(
     `[validation-server-child] exiting with live group members remaining ` +
-    `(pids ${remaining.join(', ')}) — live record and identity PRESERVED at ${liveRecordPath} ` +
+    `(pids ${remaining?.join(', ') ?? 'unknown: process inspection failed'}) — live record and identity PRESERVED at ${liveRecordPath} ` +
     'for recovery; no stop tombstone written (stop outcome unverified).',
   );
 });
