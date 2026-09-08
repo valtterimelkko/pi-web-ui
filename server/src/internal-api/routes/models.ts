@@ -160,6 +160,9 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
               selector: m.id,
               displayName: m.name || m.id,
               provider: m.provider,
+              // Slug-sibling-derived level axis (agy 1.1.27 stream integration);
+              // empty for axis-less models (claude / gpt-oss).
+              thinkingLevels: m.thinkingLevels ?? [],
             }));
           } catch {
             // agy models may not respond — return empty

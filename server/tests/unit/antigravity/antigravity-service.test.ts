@@ -226,29 +226,38 @@ describe('normalizeAgyModel', () => {
       return new AntigravityService({ registryPath: join(tmpdir(), `ag-models-${Date.now()}-${Math.random().toString(36).slice(2)}.json`) });
     }
 
-    it('exposes bare labels as ids when agy models prints tab-joined id<TAB>label lines (selector round-trip)', async () => {
+    it('exposes slugs as ids (1.1.27 selector contract) with labels as names and sibling-derived thinkingLevels', async () => {
       const modelSvc = freshService();
       ctrl.behavior = 'success';
       ctrl.stdout = [
         'gemini-3.7-flash-high\tGemini 3.7 Flash (High)',
         'gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)',
+        'gemini-3.7-flash-low\tGemini 3.7 Flash (Low)',
         'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
         '',
       ].join('\n');
 
       const models = await modelSvc.getAvailableModels();
 
-      // The Internal API copies `id` into the /models selector verbatim, and
-      // the contract says callers copy the selector into POST /sessions — so
-      // the id must be exactly what agy's --model resolves: the bare label.
+      // Live-validated 2026-09-08 (agy 1.1.27): both slug and label are
+      // accepted by --model and the slug is what init.model echoes back —
+      // so the canonical selector is the slug (plan Phase 2 / T2.2).
       expect(models.map((m) => m.id)).toEqual([
-        'Gemini 3.7 Flash (High)',
-        'Gemini 3.7 Flash (Medium)',
-        'Claude Sonnet 4.6 (Thinking)',
+        'gemini-3.7-flash-high',
+        'gemini-3.7-flash-medium',
+        'gemini-3.7-flash-low',
+        'claude-sonnet-4-6',
       ]);
       expect(models.every((m) => !m.id.includes('\t'))).toBe(true);
-      expect(models.every((m) => m.name === m.id)).toBe(true);
+      expect(models.map((m) => m.name)).toEqual([
+        'Gemini 3.7 Flash (High)',
+        'Gemini 3.7 Flash (Medium)',
+        'Gemini 3.7 Flash (Low)',
+        'Claude Sonnet 4.6 (Thinking)',
+      ]);
       expect(models.every((m) => m.provider === 'antigravity')).toBe(true);
+      expect(models.find((m) => m.id === 'gemini-3.7-flash-low')?.thinkingLevels).toEqual(['low', 'medium', 'high']);
+      expect(models.find((m) => m.id === 'claude-sonnet-4-6')?.thinkingLevels).toEqual([]);
     });
 
     it('passes label-only lines through unchanged (older agy output compatibility)', async () => {
@@ -259,6 +268,7 @@ describe('normalizeAgyModel', () => {
       const models = await modelSvc.getAvailableModels();
 
       expect(models.map((m) => m.id)).toEqual(['Gemini 3.5 Flash (Medium)', 'Gemini 3.1 Pro (High)']);
+      expect(models.every((m) => m.thinkingLevels.length === 0)).toBe(true);
     });
   });
 });

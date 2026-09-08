@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
-import type { AgyEnvelope, AgyInit, ParsedAgyLine, AgyUsage } from './agy-event-types.js';
+import type { AgyEnvelope, AgyInit, AgyStepUpdate, ParsedAgyLine, AgyUsage } from './agy-event-types.js';
 
 /**
  * Pure agy stream-json → NormalizedEvent translator with a per-turn
@@ -141,7 +141,7 @@ export class AgyEventNormalizer {
     return [];
   }
 
-  private onStep(step: ParsedAgyLine extends { kind: 'step' } ? import('./agy-event-types.js').AgyStepUpdate : never, timestamp: number): NormalizedEvent[] {
+  private onStep(step: AgyStepUpdate, timestamp: number): NormalizedEvent[] {
     const events: NormalizedEvent[] = [];
 
     if (step.step_type === 'agent_response') {

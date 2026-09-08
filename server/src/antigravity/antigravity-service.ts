@@ -12,6 +12,7 @@ import { getSessionRegistry } from '../session-registry.js';
 import type { RegistryEntry } from '../session-registry.js';
 import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
+import { parseAgyModelsOutput, toCatalogEntries, type AgyModelEntry } from './agy-models.js';
 
 const logger = createLogger('AntigravityService');
 
@@ -413,8 +414,8 @@ export class AntigravityService {
   private readonly heartbeatIntervalMs: number;
   private readonly stallTimeoutMs: number;
   private readonly maxAttempts: number;
-  private modelCache: { expiresAt: number; models: Array<{ id: string; name: string; provider: string }> } | null = null;
-  private modelRequest: Promise<Array<{ id: string; name: string; provider: string }>> | null = null;
+  private modelCache: { expiresAt: number; models: AgyModelEntry[] } | null = null;
+  private modelRequest: Promise<AgyModelEntry[]> | null = null;
 
   constructor(cfg: { registryPath: string }) {
     this.store = new AntigravitySessionStore(config.antigravitySessionDir);
@@ -1035,38 +1036,31 @@ export class AntigravityService {
     }
   }
 
-  async getAvailableModels(): Promise<Array<{ id: string; name: string; provider: string }>> {
+  async getAvailableModels(): Promise<AgyModelEntry[]> {
     if (!config.antigravityEnabled) return [];
     if (this.modelCache && this.modelCache.expiresAt > Date.now()) return this.modelCache.models;
     if (this.modelRequest) return this.modelRequest;
 
     this.modelRequest = (async () => {
-      let models: Array<{ id: string; name: string; provider: string }>;
+      let models: AgyModelEntry[];
       try {
         const result = await runAgy(['models'], process.cwd(), 10000);
         if (!result.ok) throw new Error('agy models failed');
-        models = result.stdout
-          .split('\n')
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0)
-          .map((line) => {
-            // agy 1.1.21 prints "<internal-id>\t<Label>" per line. The label
-            // is what agy's --model resolves (the id is not); expose it as the
-            // id so the /models selector round-trips through POST /sessions.
-            // Label-only output (older agy) passes through unchanged.
-            const tab = line.lastIndexOf('\t');
-            const label = tab >= 0 ? line.slice(tab + 1).trim() : line;
-            const name = label.length > 0 ? label : line;
-            return { id: name, name, provider: 'antigravity' as const };
-          });
+        models = toCatalogEntries(parseAgyModelsOutput(result.stdout));
       } catch {
-        models = [
-          { id: 'Gemini 3.5 Flash (Medium)', name: 'Gemini 3.5 Flash (Medium)', provider: 'antigravity' },
-          { id: 'Gemini 3.5 Flash (High)', name: 'Gemini 3.5 Flash (High)', provider: 'antigravity' },
-          { id: 'Gemini 3.5 Flash (Low)', name: 'Gemini 3.5 Flash (Low)', provider: 'antigravity' },
-          { id: 'Gemini 3.1 Pro (Low)', name: 'Gemini 3.1 Pro (Low)', provider: 'antigravity' },
-          { id: 'Gemini 3.1 Pro (High)', name: 'Gemini 3.1 Pro (High)', provider: 'antigravity' },
-        ];
+        // Conservative fallback when `agy models` cannot run: current-generation
+        // entries with empty thinkingLevels (derivation needs real sibling data).
+        models = toCatalogEntries(
+          parseAgyModelsOutput(
+            [
+              'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+              'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)',
+              'gemini-3.8-flash-low\tGemini 3.8 Flash (Low)',
+              'gemini-3.6-flash-low\tGemini 3.6 Flash (Low)',
+              'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+            ].join('\n'),
+          ),
+        );
       }
       this.modelCache = { expiresAt: Date.now() + 60_000, models };
       return models;

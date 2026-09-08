@@ -506,7 +506,8 @@ describe('createModelsRoutes — selector field (contract 1.26.0, round-2 defect
       antigravityService: {
         isAvailable: vi.fn().mockResolvedValue(true),
         getAvailableModels: vi.fn().mockResolvedValue([
-          { id: 'Gemini 3.5 Flash (Medium)', name: 'Gemini 3.5 Flash (Medium)', provider: 'antigravity' },
+          { id: 'gemini-3.6-flash-low', selector: 'gemini-3.6-flash-low', name: 'Gemini 3.6 Flash (Low)', provider: 'antigravity', thinkingLevels: ['low', 'medium', 'high'] },
+          { id: 'claude-sonnet-4-6', selector: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Thinking)', provider: 'antigravity', thinkingLevels: [] },
         ]),
       } as any,
       commandCodeService: {
@@ -529,7 +530,9 @@ describe('createModelsRoutes — selector field (contract 1.26.0, round-2 defect
     const profileEntry = models.claude.find((m: any) => m.id.startsWith('profile:'));
     expect(profileEntry.selector).toBe('profile:glm53-claude-sdk-native-profile');
     expect(models.opencode[0].selector).toBe('moonshotai/kimi-k2.5');
-    expect(models.antigravity[0].selector).toBe('Gemini 3.5 Flash (Medium)');
+    expect(models.antigravity[0].selector).toBe('gemini-3.6-flash-low');
+    expect(models.antigravity[0].thinkingLevels).toEqual(['low', 'medium', 'high']);
+    expect(models.antigravity[1].thinkingLevels).toEqual([]);
     expect(models.commandcode[0].selector).toBe('deepseek/deepseek-v4-pro');
   });
 });
