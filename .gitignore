@@ -86,3 +86,5 @@ tests/e2e_*_debug*.py
 
 # Generated benchmark run output
 tests/benchmarks/results/
+# Generated workload run output
+tests/workloads/results/
