@@ -270,6 +270,10 @@ export interface ServerConfig {
   claudeBackendDefault: 'sdk' | 'direct' | 'channel';
   piStaleStreamingMs: number;
   antigravityEnabled: boolean;
+  /** Use the agy 1.1.27 stream-json headless path (persistent stdin process).
+   *  `false` restores the legacy text print-mode wrapper (rollback hatch —
+   *  removed at Phase 10 of the JSON stream integration plan). */
+  antigravityStreamMode: boolean;
   antigravitySessionDir: string;
   /** Native direct-CLI session stores (read-only discovery). */
   commandCodeCliHomeDir: string;
@@ -428,6 +432,7 @@ export const config: ServerConfig = {
   claudeBackendDefault: (process.env.CLAUDE_BACKEND_DEFAULT as 'sdk' | 'direct' | 'channel') || 'direct',
   piStaleStreamingMs: parseInt(process.env.PI_STALE_STREAMING_MS || '900000', 10),
   antigravityEnabled: process.env.ANTIGRAVITY_ENABLED !== 'false',
+  antigravityStreamMode: process.env.ANTIGRAVITY_STREAM_MODE !== 'false',
   antigravitySessionDir: process.env.ANTIGRAVITY_SESSION_DIR || path.join(os.homedir(), '.pi-web-ui', 'antigravity-sessions'),
   // Native (direct-CLI) session stores scanned read-only by GET /api/v1/sessions/native.
   commandCodeCliHomeDir: process.env.COMMAND_CODE_CLI_HOME_DIR || path.join(os.homedir(), '.commandcode'),
