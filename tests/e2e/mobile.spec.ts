@@ -1,4 +1,5 @@
 import { test, expect, devices } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 test.describe('Mobile Viewport Tests', () => {
   test.beforeEach(async ({ page }) => {
@@ -9,13 +10,7 @@ test.describe('Mobile Viewport Tests', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
     
-    // Login if on login page
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
   });
 
   test('session switch should be fast on mobile', async ({ page }) => {
@@ -89,26 +84,23 @@ test.describe('Mobile Viewport Tests', () => {
 
   test('no console errors on mobile', async ({ page }) => {
     const consoleErrors: string[] = [];
-    
-    page.on('console', msg => {
-      if (msg.type() === 'error') {
-        consoleErrors.push(msg.text());
-      }
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
     });
-    
+
+    // Authenticate and settle first: pre-auth WebSocket handshake failures are
+    // expected (client retries /ws after login) and excluded by this reset.
+    await loginIfNeeded(page);
     await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 5000 });
+    await page.waitForTimeout(600);
+    consoleErrors.length = 0;
     await page.waitForTimeout(2000);
-    
-    // Filter out non-critical errors
-    const criticalErrors = consoleErrors.filter(err => 
-      !err.includes('Warning:') && 
-      !err.includes('DevTools') &&
-      !err.includes('network') &&
-      !err.includes('404')
-    );
-    
-    // Allow up to 2 non-critical errors
-    expect(criticalErrors.length).toBeLessThan(3);
+
+    // Narrow documented allowlist (framework dev warnings / DevTools noise);
+    // zero unexpected console errors after authentication.
+    const criticalErrors = consoleErrors.filter((err) =>
+      !err.includes('Warning:') && !err.includes('DevTools'));
+    expect(criticalErrors, `console errors: ${JSON.stringify(criticalErrors)}`).toEqual([]);
   });
 
   test('sidebar toggles correctly on mobile', async ({ page }) => {
@@ -158,13 +150,7 @@ test.describe('Mobile Performance', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
     
-    // Login
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
     
     const loadTime = Date.now() - start;
     
@@ -179,13 +165,7 @@ test.describe('Mobile Performance', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
     
-    // Login
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
     
     await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 5000 });
     

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 test.describe('Core Functionality', () => {
   test.beforeEach(async ({ page }) => {
@@ -6,13 +7,7 @@ test.describe('Core Functionality', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
     
-    // Login if on login page
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
   });
 
   test('health endpoint responds', async ({ request }) => {
@@ -61,23 +56,28 @@ test.describe('Core Functionality', () => {
 
   test('no critical console errors after load', async ({ page }) => {
     const consoleErrors: string[] = [];
-    
-    page.on('console', msg => {
-      if (msg.type() === 'error') {
-        consoleErrors.push(msg.text());
-      }
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
     });
-    
+
+    // Complete authentication first: the pre-auth phase legitimately logs
+    // WebSocket handshake failures (the client attempts /ws before the auth
+    // cookie exists and retries after login). Those are expected, not defects.
+    await loginIfNeeded(page);
+    // Settle window: the pre-auth /ws attempt may fail slightly after login
+    // completes (its console error arrives late). Give it a bounded window to
+    // land, then start the zero-error observation from a clean slate.
+    await page.waitForTimeout(600);
+    consoleErrors.length = 0;
+
     await page.waitForTimeout(3000);
-    
-    // Filter out non-critical errors
-    const criticalErrors = consoleErrors.filter(err => 
-      !err.includes('Warning:') && 
-      !err.includes('DevTools') &&
-      !err.includes('network') &&
-      !err.includes('404')
-    );
-    
-    expect(criticalErrors.length).toBeLessThan(3);
+
+    // Narrow documented allowlist — NOT a permissive count:
+    // - 'Warning:' React/framework dev warnings
+    // - 'DevTools' instrumentation noise
+    // A post-auth WebSocket failure is a real defect and fails this test.
+    const criticalErrors = consoleErrors.filter((err) =>
+      !err.includes('Warning:') && !err.includes('DevTools'));
+    expect(criticalErrors, `console errors: ${JSON.stringify(criticalErrors)}`).toEqual([]);
   });
 });

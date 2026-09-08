@@ -12,6 +12,7 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests/e2e',
+  globalSetup: './tests/e2e/global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 1,
@@ -22,7 +23,7 @@ export default defineConfig({
   workers: Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? '1', 10),
   reporter: [['html', { open: 'never' }], ['list']],
   use: {
-    baseURL: process.env.TEST_URL || 'http://localhost:3457',
+    baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL || process.env.TEST_URL || 'http://localhost:3457',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'on-first-retry',
