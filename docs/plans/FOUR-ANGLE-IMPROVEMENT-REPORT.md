@@ -4,6 +4,35 @@
 
 Owner authorised end-to-end execution on 8 September 2026, with TDD, live validation and low-noise Telegram updates. Production restart/deployment remains explicitly gated until the end. Agent OS consumer and canonical shared-skill edits require separate scope approval. Canonical intent and acceptance gates: [sequence](FOUR-ANGLE-IMPROVEMENT-SEQUENCE.md).
 
+## Final audit dispositions (all 22 findings, 2026-09-08)
+
+Every finding from PI-WEB-UI-FOUR-ANGLE-AUDIT-2026-09-07.md is dispositioned; per-step evidence lives in the rows below.
+
+| Finding | Disposition |
+|---|---|
+| O1 consistent log sanitisation | FIXED (Step2A `cbf1bed`): shared safe-record projection, credential/payload suffix redaction, tap isolation; 65 focused tests |
+| O2 byte-bounded diagnostics | FIXED (Step2A): 8KiB records, 1MiB HTTP cap with explicit omissions, ring 2MiB/1000 with loss counters; Step8 added replayStatus incompleteness |
+| O3 Command Code metrics | FIXED (Step2B): exhaustive five-runtime mapping, real RunReceiptManager idempotency, disposable fixture accepted1/completed1 verified |
+| O4 unreadable state honesty | FIXED (Step2B): preserve-bytes/refuse-write/retry, 503 DIAGNOSTIC_SOURCE_UNAVAILABLE, corrupt->repair->200 live proof |
+| O5 build provenance + lag history | FIXED (3A `677ee6f` + `c0bb077`): content-fingerprinted identity, boot ids, 120-sample/60s lag window |
+| O6 usable browser diagnostics | FIXED (Step4 `5bb79db`+`1e1e35c`): identity-validated export, zero-error console assertions, 128KiB export bound with explicit truncation |
+| S1 copied-implementation tests | FIXED (1A `6337f68`): real models-router handler tests |
+| S2 selector characterisation | FIXED (1A): real rendered-component behaviour tests |
+| S3 browser tests without feature | FIXED (Step4 infra `5bb79db` + specs `067a14e`): transient auth, identity precheck, expected capability assertions; two-tab persistence test present but env-blocked (diagnosis finding recorded) |
+| S4 benchmark harness honesty | FIXED (`94c5aae`/`bee6faa`): synthetic benches labelled, unsupported!=zero; real-path measurement runner landing (Step5) |
+| S5 dead/duplicate UI paths | FIXED (Step9 `a222b07`/`c8f6f79`): proven-non-use removals, OrchestrationPage marked inactive prototype, shared preference derivation |
+| S6 selective lint/complexity debt | FIXED (1B ratchet + no-new-warning policy across all commits; warnings 1,691 < ceiling 1,696 while adding thousands of test lines) |
+| P1 pre-debounce parsing | FIXED (6B `f274d55`): <=2 full reads per burst, oracle-equal metadata |
+| P2 registry amplification | FIXED (6A `b9deeb3`): exact-key indexes, coalesced snapshot saves |
+| P3 duplicate store updates | FIXED (7A `366cde2`): one atomic publication/delta, incremental size accounting |
+| P4 replay linear searches | FIXED (7B `dc94a1e`): zero targeted-event linear scans at 1k/10k |
+| P5 no aggregate broker budget | FIXED (8 `ccbeb7a`): 32MiB global budget, cold-key bound, incompleteness signalling |
+| V1 test discovery gaps | FIXED (1A `6337f68`): isolated workspace gates + sentinels |
+| V2 CI checks guides only | FIXED (1B `925f693`): application correctness workflow, hosted-verified |
+| V3 E2E identity convention | FIXED (3B `c15ab85` + Step4 `5bb79db`): enforced identity prechecks before login/mutation |
+| V4 source/compiled joining | FIXED (cb13932 + `c15ab85`): compiled selector with live negative-control proof, strict compiled acceptance verdict |
+| V5 skip/cleanup acceptance policy | FIXED (3B `c15ab85`): skipped/missing/uncertain -> failed or indeterminate, never clean |
+
 **Current: Steps 1A/1B pushed through `9910512`; Step2 + native catalogue repair in `cbf1bed`; Step3A build identity in `677ee6f`; compiled entrypoint selector in `cb13932`; O5 bounded lag history in `c0bb077` — all pushed, hosted CI green through `cbf1bed` (later runs pending check). Compiled-selector live proof verified from artifacts: baseline compiled run served contract1.36.0 with fixture smoke passing; injected dist sentinel failed visibly; source control passed while dist broken; dist restored to matching sha256; all groups/dirs cleaned. Step3B strict wrapper and Step3C proof record are COMMITTED `c15ab85` and proven end-to-end: real compiled disposable server (fixture Command Code), identity precheck bound to the exact candidate build, provider-free turn passed, proof record verdict=passed exit=0, stopper verified group gone with honest evidence-persistence failure preserved; 17 acceptance/wrapper tests + 118 live-validation suite green. Approximately 35-40% complete; three review/correction cycles completed. Production untouched.**
 
 ## Baseline and ownership

@@ -59,7 +59,7 @@ export function OrchestrationPage({ onSendMessage }: OrchestrationPageProps) {
               className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
               onClick={() => {
                 // TODO: File picker for plan
-                console.log('Select plan file');
+                void 'Select plan file'; // INACTIVE PROTOTYPE: placeholder handler, no-op
               }}
             >
               <span>📄</span>
@@ -69,7 +69,7 @@ export function OrchestrationPage({ onSendMessage }: OrchestrationPageProps) {
               className="w-full px-4 py-3 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors flex items-center justify-center gap-2"
               onClick={() => {
                 // TODO: Create new plan
-                console.log('Create new plan');
+                void 'Create new plan'; // INACTIVE PROTOTYPE: placeholder handler, no-op
               }}
             >
               <span>✏️</span>
@@ -90,7 +90,7 @@ export function OrchestrationPage({ onSendMessage }: OrchestrationPageProps) {
       <WorkspaceTabs
         onNewWorktree={() => {
           // TODO: Open new worktree dialog
-          console.log('New worktree');
+          void 'New worktree'; // INACTIVE PROTOTYPE: placeholder handler, no-op
         }}
       />
 
@@ -101,15 +101,15 @@ export function OrchestrationPage({ onSendMessage }: OrchestrationPageProps) {
           <OrchestrationSidebar
             onStartAll={() => {
               // TODO: Start all pending tasks
-              console.log('Start all');
+              void 'Start all'; // INACTIVE PROTOTYPE: placeholder handler, no-op
             }}
             onPauseAll={() => {
               // TODO: Pause running tasks
-              console.log('Pause all');
+              void 'Pause all'; // INACTIVE PROTOTYPE: placeholder handler, no-op
             }}
             onMergeReady={() => {
               // TODO: Open merge dialog
-              console.log('Merge ready');
+              void 'Merge ready'; // INACTIVE PROTOTYPE: placeholder handler, no-op
             }}
           />
         </div>
@@ -158,11 +158,11 @@ export function OrchestrationPage({ onSendMessage }: OrchestrationPageProps) {
                 }}
                 onMergeWorktree={(worktreeId) => {
                   // TODO: Open merge preview
-                  console.log('Merge worktree:', worktreeId);
+                  void worktreeId; // INACTIVE PROTOTYPE: placeholder handler, no-op
                 }}
                 onDeleteWorktree={(worktreeId) => {
                   // TODO: Delete worktree
-                  console.log('Delete worktree:', worktreeId);
+                  void worktreeId; // INACTIVE PROTOTYPE: placeholder handler, no-op
                 }}
               />
             </div>
@@ -183,7 +183,7 @@ export function OrchestrationPage({ onSendMessage }: OrchestrationPageProps) {
           hasConflicts={mergePreview.hasConflicts}
           onMerge={(strategy) => {
             // TODO: Execute merge
-            console.log('Merge with strategy:', strategy);
+            void strategy; // INACTIVE PROTOTYPE: placeholder handler, no-op
             clearMergePreview();
           }}
           onCancel={clearMergePreview}
