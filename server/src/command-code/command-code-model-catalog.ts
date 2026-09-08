@@ -30,6 +30,8 @@ export const COMMAND_CODE_EXCLUDED_MODELS = [
   'google/gemini-3.1-flash-lite',
   'sakana/fugu-ultra',
   'meta/muse-spark-1.1',
+  'claude-fable-5-1',
+  'gpt-6-astra',
 ] as const;
 
 export function isCommandCodeEligible(model: CommandCodeRuntimeModel): boolean {
@@ -121,7 +123,7 @@ function parseAdvertisedModelId(line: string): CommandCodeRuntimeModel | undefin
   // fixed multi-space description column. Headings, prose, aliases and
   // executable examples are not model advertisements.
   if (/^cmd\s+--model\b/i.test(trimmed)) return undefined;
-  const match = trimmed.match(/^([a-z0-9][a-z0-9._/-]{0,255})[ ]{2,}\S/u);
+  const match = trimmed.match(/^([a-z0-9][a-z0-9._/:-]{0,255})[ ]{2,}\S/u);
   return match?.[1];
 }
 

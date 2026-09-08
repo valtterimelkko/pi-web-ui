@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { SessionRegistryManager } from '../../src/session-registry.js';
@@ -147,15 +147,21 @@ describe('SessionRegistryManager', () => {
     expect(fetched).toBeUndefined();
   });
 
-  it('handles corrupted JSON file gracefully (rebuilds empty)', async () => {
-    // Write invalid JSON
-    await writeFile(registryPath, 'NOT VALID JSON {{{{', 'utf-8');
+  it('rejects corrupted JSON without overwriting the existing bytes', async () => {
+    const original = 'NOT VALID JSON {{{{';
+    await writeFile(registryPath, original, 'utf-8');
 
     const manager = new SessionRegistryManager(registryPath);
-    const registry = await manager.load();
+    await expect(manager.load()).rejects.toThrow(/unavailable/i);
+    await expect(manager.upsert({
+      sdkType: 'pi',
+      path: '/must-not-write',
+      cwd: '/cwd',
+      firstMessage: 'blocked',
+      messageCount: 0,
+    })).rejects.toThrow(/unavailable/i);
 
-    expect(registry.entries).toEqual([]);
-    expect(registry.version).toBe(1);
+    expect(await readFile(registryPath, 'utf-8')).toBe(original);
   });
 
   it('saves atomically (writes to tmp then renames)', async () => {

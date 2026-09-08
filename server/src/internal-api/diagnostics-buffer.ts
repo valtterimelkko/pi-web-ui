@@ -12,65 +12,51 @@
  * passwords, or bearer credentials — even under a memory dump.
  */
 
+import { randomUUID } from 'node:crypto';
+import type { DiagnosticsRetention } from './types.js';
 import type { LogLevel } from '../config.js';
-import type { LogRecord } from '../logging/logger.js';
+import { getLogTapFailures, type LogRecord } from '../logging/logger.js';
+import { safeLogRecord } from '../logging/safe-record.js';
 
 const MAX_RECORDS = 1000;
+const MAX_BYTES = 2 * 1024 * 1024;
+const processInstanceId = randomUUID();
+const processStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
 const LEVEL_ORDER: Record<LogLevel, number> = { error: 0, warn: 1, info: 2, debug: 3 };
 
 const buffer: LogRecord[] = [];
+const recordBytes: number[] = [];
+let retainedBytes = 0;
+let evictedRecords = 0;
+let truncatedRecords = 0;
+let insertionFailures = 0;
 
 // ─── Secret scrubbing ────────────────────────────────────────────────────────
 
-const SENSITIVE_NORMALIZED_KEY_RE =
-  /(?:password|passwd|secret|secrets|token|tokens|apikey|authtoken|authorization|cookie|cookies|bearer|credential|credentials|privatekey)$/;
-
-function isSensitiveKey(key: string): boolean {
-  const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
-  return normalized === 'auth' || SENSITIVE_NORMALIZED_KEY_RE.test(normalized);
-}
-
-const SECRET_VALUE_PATTERNS: ReadonlyArray<RegExp> = [
-  /Bearer\s+[A-Za-z0-9._~+/=-]+/gi, // Authorization: Bearer <token>
-  /\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}/g, // OpenAI-style keys
-  /\bAIza[0-9A-Za-z_-]{20,}\b/g, // Google API keys
-  /\bxox[bpoa]-[A-Za-z0-9-]{10,}/g, // Slack tokens
-];
-
-function scrubString(value: string): string {
-  let out = value;
-  for (const re of SECRET_VALUE_PATTERNS) {
-    out = out.replace(re, '[REDACTED]');
-  }
-  return out
-    .replace(/\b(?:access|refresh|auth|bot)?[_-]?(?:token|secret|password|api[_-]?key)\s*[=:]\s*[^\s,;&]+/gi, '[REDACTED]')
-    .replace(/([?&](?:access|refresh|auth|bot)?[_-]?(?:token|secret|password|api[_-]?key)=)[^&\s]+/gi, '$1[REDACTED]');
-}
-
-function scrubValue(value: unknown, key?: string): unknown {
-  if (key && isSensitiveKey(key)) return '[REDACTED]';
-  if (typeof value === 'string') return scrubString(value);
-  if (value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map((v) => scrubValue(v));
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = scrubValue(v, k);
-  }
-  return out;
-}
-
-/** Return a deep-cloned copy of `record` with secrets redacted. */
+/** Both normal logging and direct insertions share the same bounded projection. */
 export function scrubRecord(record: LogRecord): LogRecord {
-  return scrubValue(record) as LogRecord;
+  return safeLogRecord(record);
 }
 
 // ─── Buffer API ──────────────────────────────────────────────────────────────
 
 /** Add a (scrubbed) record to the ring buffer. Called by the logger tap. */
 export function pushDiagnosticsRecord(record: LogRecord): void {
-  buffer.push(scrubRecord(record));
-  if (buffer.length > MAX_RECORDS) {
-    buffer.splice(0, buffer.length - MAX_RECORDS);
+  try {
+    const safe = scrubRecord(record);
+    const bytes = Buffer.byteLength(JSON.stringify(safe));
+    buffer.push(safe);
+    recordBytes.push(bytes);
+    retainedBytes += bytes;
+    if ((safe.logSafety as { truncated?: boolean } | undefined)?.truncated) truncatedRecords++;
+    while (buffer.length > MAX_RECORDS || retainedBytes > MAX_BYTES) {
+      buffer.shift();
+      retainedBytes -= recordBytes.shift() ?? 0;
+      evictedRecords++;
+    }
+  } catch {
+    // Never recurse through the logger when diagnostic insertion itself fails.
+    insertionFailures++;
   }
 }
 
@@ -107,13 +93,13 @@ function filteredRecords(query: DiagnosticsQuery): LogRecord[] {
 /** Recent records, optionally filtered by correlation, source, time, and level. */
 export function getRecentLogs(query: DiagnosticsQuery = {}): LogRecord[] {
   const limit = clamp(query.limit ?? 200, 1, MAX_RECORDS);
-  return filteredRecords(query).slice(-limit);
+  return filteredRecords(query).slice(-limit).map(record => structuredClone(record));
 }
 
 /** Recent error-level records using the same filters as the main log list. */
 export function getRecentErrors(query: DiagnosticsQuery = {}): LogRecord[] {
   const limit = clamp(query.limit ?? 50, 1, MAX_RECORDS);
-  return filteredRecords(query).filter((r) => r.level === 'error').slice(-limit);
+  return filteredRecords(query).filter((r) => r.level === 'error').slice(-limit).map(record => structuredClone(record));
 }
 
 export interface DiagnosticsSummary {
@@ -122,6 +108,8 @@ export interface DiagnosticsSummary {
   warnCount: number;
   oldestTs?: string;
   newestTs?: string;
+  /** Global retained window/loss, deliberately separate from filtered counts. */
+  retention: DiagnosticsRetention;
 }
 
 export function getDiagnosticsSummary(query: DiagnosticsQuery = {}): DiagnosticsSummary {
@@ -132,12 +120,21 @@ export function getDiagnosticsSummary(query: DiagnosticsQuery = {}): Diagnostics
     warnCount: recs.filter((r) => r.level === 'warn').length,
     oldestTs: recs[0]?.ts,
     newestTs: recs[recs.length - 1]?.ts,
+    retention: { processInstanceId, processStartedAt, retainedRecords: buffer.length, retainedBytes,
+      maxRecords: MAX_RECORDS, maxBytes: MAX_BYTES, evictedRecords, truncatedRecords, insertionFailures, tapFailures: getLogTapFailures(),
+      oldestTs: buffer[0]?.ts, newestTs: buffer[buffer.length - 1]?.ts,
+    },
   };
 }
 
 /** Clear the buffer (test helper). */
 export function clearDiagnosticsBuffer(): void {
   buffer.length = 0;
+  recordBytes.length = 0;
+  retainedBytes = 0;
+  evictedRecords = 0;
+  truncatedRecords = 0;
+  insertionFailures = 0;
 }
 
 function clamp(n: number, min: number, max: number): number {

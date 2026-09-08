@@ -38,6 +38,7 @@ export const ErrorCode = {
   UNSUPPORTED_OPERATION: 'UNSUPPORTED_OPERATION',
   NOT_IMPLEMENTED: 'NOT_IMPLEMENTED',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
+  DIAGNOSTIC_SOURCE_UNAVAILABLE: 'DIAGNOSTIC_SOURCE_UNAVAILABLE',
   // Defect 9 (Part 3, 2026-08-19): an explicit model selector that the runtime
   // refused or could not apply. Additive code: the create now fails loudly and
   // cleans up instead of silently returning a session on a different model.
@@ -212,6 +213,13 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     cause: 'Unhandled exception in a route handler.',
     hint: 'This is a bug; inspect the server log and GET /api/v1/diagnostics for the stack.',
     docs: 'docs/OBSERVABILITY.md',
+  },
+  [ErrorCode.DIAGNOSTIC_SOURCE_UNAVAILABLE]: {
+    httpStatus: 503,
+    description: 'A required diagnostics source is unavailable.',
+    cause: 'Registry persistence could not be read or session visibility could not be established.',
+    hint: 'Inspect local source health, preserve unreadable registry bytes, and retry after repair.',
+    docs: 'docs/OBSERVABILITY.md#diagnostics',
   },
   [ErrorCode.WATCH_NOT_FOUND]: {
     httpStatus: 404,

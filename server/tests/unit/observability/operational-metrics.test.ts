@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { OperationalMetrics } from '../../../src/observability/operational-metrics.js';
+import type { SessionRuntime } from '../../../src/internal-api/types.js';
 
 describe('OperationalMetrics', () => {
   it('records bounded low-cardinality turn outcomes and latency buckets', () => {
@@ -25,6 +26,21 @@ describe('OperationalMetrics', () => {
         },
       },
     });
+  });
+
+  it('records accepted and terminal receipt outcomes for every supported runtime', () => {
+    const metrics = new OperationalMetrics();
+    const runtimes: readonly SessionRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode'];
+
+    for (const runtime of runtimes) {
+      metrics.recordTurnAccepted(runtime);
+      metrics.recordTurnFinished(runtime, 'completed');
+    }
+
+    expect(Object.keys(metrics.snapshot().turns).sort()).toEqual([...runtimes].sort());
+    for (const runtime of runtimes) {
+      expect(metrics.snapshot().turns[runtime]).toMatchObject({ accepted: 1, completed: 1 });
+    }
   });
 
   it('caps dynamic categories to keep memory and cardinality bounded', () => {

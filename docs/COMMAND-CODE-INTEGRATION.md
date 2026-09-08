@@ -42,7 +42,7 @@ NDJSON parser, event adapter, catalogue, effort table).
 
 ## The catalogue: one denylist, fails open
 
-Eligible models are **what the CLI advertises minus a committed 19-model
+Eligible models are **what the CLI advertises minus a maintained premium
 exclusion list** (`COMMAND_CODE_EXCLUDED_MODELS` in
 `command-code-model-catalog.ts`) — the premium models a GOAT subscription
 cannot use. Nothing else filters.
@@ -52,7 +52,31 @@ catalogue drift can never take the runtime down. Requesting an excluded id
 fails on that one model with `COMMANDCODE_PLAN_INELIGIBLE` (400).
 
 Startup discovery is exactly one `--version` plus one `--list-models` probe.
-The observed version is diagnostic only — never a gate.
+The observed version is diagnostic only — never a gate. Exact IDs may contain
+colons, for example `meituan/longcat-2.0:free`; discovery, argument validation
+and effort generation must preserve them. The effort generator uses the same
+catalogue parser as runtime discovery.
+
+### GOAT policy and future maintenance
+
+The operator uses **GOAT**, not unrestricted access to every advertised model.
+An advertised model is not proof of subscription eligibility. The exclusion
+list intentionally grows as new premium models appear; never freeze its size
+in a test, remove exclusions to make a gate pass, or confuse exclusion with
+model installation. Test known exclusions, usable models, unique valid IDs and
+fail-open handling of an unknown model instead. On 8 September 2026 the owner
+confirmed that `claude-fable-5-1` and `gpt-6-astra` are premium exclusions for
+this subscription. Routine maintenance of this policy does not require asking
+the owner to reconfirm the same subscription on every refresh.
+
+Official reference points (provider terms and availability can change):
+- [GOAT plan](https://commandcode.ai/docs/plans/goat) — subscription scope.
+- [Pricing and limits](https://commandcode.ai/docs/resources/pricing-limits) — current plan distinctions.
+- [Available models / CLI discovery](https://commandcode.ai/docs/reference/cli/models) — model IDs and discovery commands.
+
+These references guide investigation; the installed CLI's exact catalogue and
+conservative authenticated eligibility evidence remain the operational inputs.
+Timeouts, rate limits and authentication failures are not premium-plan verdicts.
 
 ## The effort table
 
@@ -110,6 +134,29 @@ Scheduling: `deploy/systemd/command-code-model-refresh.{service,timer}`
 (Mondays 04:45, `Persistent=true`). Install per the unit's header comment.
 Because the catalogue fails open, the runtime never depends on the timer; the
 timer only keeps selector metadata and exclusions current.
+
+**Interrupted refresh recovery:** the generator writes its two source artefacts
+before the typecheck/test/build gates. A later gate failure can therefore leave
+valid but uncommitted changes. This happened on 7 September 2026: two correct
+premium exclusions made an obsolete test expecting exactly 19 exclusions fail.
+Do not discard those files or rerun a production-restarting job blindly.
+Inspect the diff and failure, repair the gate's actual defect, regenerate the
+provider-free effort table if needed, run the focused Command Code suite and
+server typecheck/build, then explicitly review/stage only the intended files.
+A rerun with no unseen models currently returns early; that message alone does
+not prove the preceding failed run was validated, committed or deployed.
+`--dry-run` still performs billed eligibility probes; it is not read-only model
+discovery. Use `cmd --no-auto-update --list-models` for discovery only.
+
+**Pi-native Command Code models are a separate consumer**, not the Command Code
+runtime selector. Their canonical generator and verified route/thinking/vision
+inputs live in [pi-enhancement's provider](https://github.com/valtterimelkko/pi-enhancement/tree/master/commandcode-provider).
+That single Pi provider feeds Pi CLI, SDK, Internal API Pi models and the frontend.
+Do not copy lowercase CLI IDs or native effort adverts directly into Pi: canonical
+wire case and served capabilities need their existing verification gates. Extending
+Monday automation to that consumer is authorised work tracked in the
+[four-angle sequence](plans/FOUR-ANGLE-IMPROVEMENT-SEQUENCE.md#owner-authorised-catalogue-extension--8-september-2026),
+not yet a claim that those surfaces refresh automatically.
 
 
 ## Goal function (contract 1.27.0)

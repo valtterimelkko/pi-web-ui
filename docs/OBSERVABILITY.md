@@ -111,6 +111,26 @@ grep '"requestId":"req_…' /tmp/v-server.log
 
 ## Diagnostics
 
+The logger's ordinary sink and diagnostics tap share the same bounded safety
+projection: at most 8 KiB per record, 256 fields and six nested levels. Oversized
+strings are dropped whole rather than partially retaining a credential. Known
+credential/payload fields and token patterns are scrubbed; this is not a guarantee
+that arbitrary prose cannot contain sensitive information. Do not log payloads.
+
+The process-local ring retains at most 1,000 records / 2 MiB. `summary.retention`
+reports its process identity/start time, retained bytes/records, limits, window
+timestamps and eviction/truncation/insertion/tap-failure counters. These global
+window counters are distinct from the filtered summary. Read results are detached
+copies. Counters are not durable history across restart.
+
+Responses are capped at 1 MiB; optional `responseTruncation` states how many
+oldest log/error array entries were omitted and the byte limit. This does not
+remove retained entries or change matching summary counts. If required registry
+or visibility evidence is unavailable, the route returns **503
+`DIAGNOSTIC_SOURCE_UNAVAILABLE`** with source status, not healthy empty counts.
+Preserve corrupt registry bytes, investigate/repair the source, then retry; a
+successful subsequent read can recover without replacing the registry manager.
+
 Self-service recent logs over the Internal API (no `journalctl` needed). A
 bounded in-memory ring buffer captures recent structured log lines, secret-scrubbed
 on push (tokens/passwords/`Bearer …`/`sk-…`/sensitive keys → `[REDACTED]`;

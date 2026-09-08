@@ -367,7 +367,7 @@ Models are always queried live — new models appear immediately. Each entry car
 
 Pi model levels come from the Pi SDK catalogue. Claude's base `sonnet` and `opus` aliases and provider profiles that support the Claude/Z.AI effort ceiling advertise `max`; `haiku` keeps the legacy ceiling. A client should use the selected model's `thinkingLevels` before requesting `max`.
 
-When Command Code is enabled, its entries are what the CLI advertises minus a committed 19-model premium exclusion list (denylist, fails open); the observed CLI version is diagnostic rather than a readiness pin. Per-model `effortLevels`/`defaultEffort` come from the committed effort table (regenerate with `npm run commandcode:refresh-models`); a model without a table entry has no selector and stays runnable. Native `effort` is distinct from generic `thinkingLevel`. The runtime is excluded from MCP and disposable `--runtime all` validation.
+When Command Code is enabled, its entries are what the CLI advertises minus a maintained GOAT premium exclusion list (denylist, fails open); the observed CLI version is diagnostic rather than a readiness pin. Per-model `effortLevels`/`defaultEffort` come from the committed effort table (regenerate with `npm run commandcode:refresh-models`); a model without a table entry has no selector and stays runnable. Native `effort` is distinct from generic `thinkingLevel`. The runtime is excluded from MCP and disposable `--runtime all` validation.
 
 **Query parameters:**
 
@@ -1371,6 +1371,15 @@ watch, emit notifications, or change session state.
 ---
 
 ### Diagnostics (self-service logs)
+
+Contract 1.36.0 adds `summary.retention` (global process-window identity, retained
+bytes/records, limits and loss counters) and optional `responseTruncation`
+(`omittedLogs`, `omittedErrors`, `limitBytes`) when arrays exceed the 1 MiB response
+budget. Filtered summary counts remain independent of array omission. Registry
+or visibility source failure returns 503 `DIAGNOSTIC_SOURCE_UNAVAILABLE` with
+`sources` status, without fabricated session counts or raw filesystem errors.
+See [bounded diagnostics semantics](./OBSERVABILITY.md#diagnostics) and the
+[contract record](./INTERNAL-API-CONTRACT.md) for limits and migration notes.
 
 In-process observability over the same Unix socket agents already use — no need
 to shell out to `journalctl` (often unavailable in an agent sandbox). A bounded

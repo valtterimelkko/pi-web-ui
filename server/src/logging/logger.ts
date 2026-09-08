@@ -25,6 +25,7 @@
  */
 
 import { format } from 'node:util';
+import { safeLogRecord, safeLogValue } from './safe-record.js';
 import {
   config,
   type LogLevel,
@@ -83,7 +84,7 @@ export type LogTap = (record: LogRecord) => void;
  * ring buffer) would not see the app code's emits. globalThis keeps one source of
  * truth.
  */
-const G = (globalThis as unknown as { __PIWEBUI_LOGGER__?: { tap: LogTap | null } });
+const G = (globalThis as unknown as { __PIWEBUI_LOGGER__?: { tap: LogTap | null; tapFailures?: number } });
 if (!G.__PIWEBUI_LOGGER__) G.__PIWEBUI_LOGGER__ = { tap: null };
 const loggerGlobals = G.__PIWEBUI_LOGGER__;
 
@@ -95,6 +96,11 @@ const loggerGlobals = G.__PIWEBUI_LOGGER__;
  */
 export function setLogTap(tap: LogTap | null): void {
   loggerGlobals.tap = tap;
+}
+
+/** Process-local failures; reading this never invokes the failing tap. */
+export function getLogTapFailures(): number {
+  return loggerGlobals.tapFailures ?? 0;
 }
 
 // ─── Logger ──────────────────────────────────────────────────────────────────
@@ -156,12 +162,19 @@ export function createLogger(component: string, options?: Partial<LoggerOptions>
     if (!isLevelEnabled(msgLevel)) return;
 
     const correlation = getCorrelationContext() ?? {};
-    const errArg = args.find((a) => a instanceof Error) as Error | undefined;
+    let inputTruncated = args.length > 16;
+    const inputs = safeLogValue({ args: args.slice(0, 16), boundContext, explicitContext }, () => { inputTruncated = true; }) as {
+      args?: unknown[]; boundContext?: Record<string, unknown>; explicitContext?: Record<string, unknown>;
+    };
+    const safeArgs = Array.isArray(inputs.args) ? inputs.args : ['[TRUNCATED]'];
+    const errArg = safeArgs.find((value) => value && typeof value === 'object'
+      && typeof (value as LogRecordError).name === 'string'
+      && typeof (value as LogRecordError).message === 'string') as LogRecordError | undefined;
 
-    const rawMsg = format(...args);
+    const rawMsg = format(...safeArgs, ...(args.length > 16 ? ['[TRUNCATED]'] : []));
     const msg = stripComponentPrefix(rawMsg, component);
 
-    const record: LogRecord = {
+    const record = safeLogRecord({
       ts: clock().toISOString(),
       level: msgLevel,
       component,
@@ -174,18 +187,20 @@ export function createLogger(component: string, options?: Partial<LoggerOptions>
       ...(errArg
         ? { error: { name: errArg.name, message: errArg.message, stack: errArg.stack } }
         : {}),
-      ...boundContext,
-      ...(explicitContext ?? {}),
-    };
+      ...(inputs.boundContext && typeof inputs.boundContext === 'object' ? inputs.boundContext : {}),
+      ...(inputs.explicitContext && typeof inputs.explicitContext === 'object' ? inputs.explicitContext : {}),
+      ...(inputTruncated ? { logSafety: { truncated: true } } : {}),
+    });
 
     // Notify the diagnostics tap (if registered) with the structured record.
     try {
-      loggerGlobals.tap?.(record);
+      loggerGlobals.tap?.(structuredClone(record));
     } catch {
-      // A tap failure must never break logging.
+      // A tap failure must never break logging, or disappear silently.
+      loggerGlobals.tapFailures = (loggerGlobals.tapFailures ?? 0) + 1;
     }
 
-    const line = formatMode === 'json' ? renderJson(record, rawMsg) : renderPretty(record, rawMsg);
+    const line = formatMode === 'json' ? renderJson(record, record.msg) : renderPretty(record, record.msg);
     sink(line, msgLevel);
   }
 
@@ -196,10 +211,11 @@ export function createLogger(component: string, options?: Partial<LoggerOptions>
     info: (...a: unknown[]) => emit('info', a),
     debug: (...a: unknown[]) => emit('debug', a),
     errorObject: (message: string, err: unknown, context?: Record<string, unknown>) => {
-      const wrapped =
-        err instanceof Error
-          ? err
-          : new Error(typeof err === 'string' ? err : format(err));
+      const safeError = safeLogValue(err);
+      const wrapped = safeError && typeof safeError === 'object'
+        && typeof (safeError as LogRecordError).name === 'string'
+        && typeof (safeError as LogRecordError).message === 'string'
+        ? safeError : new Error(typeof safeError === 'string' ? safeError : format(safeError));
       emit('error', [`${message}:`, wrapped], context);
     },
     child: (ctx: Record<string, unknown>) =>
@@ -209,7 +225,7 @@ export function createLogger(component: string, options?: Partial<LoggerOptions>
         format: formatMode,
         sink,
         clock,
-        boundContext: { ...boundContext, ...ctx },
+        boundContext: { ...(safeLogValue(boundContext) as Record<string, unknown>), ...(safeLogValue(ctx) as Record<string, unknown>) },
       }),
     isLevelEnabled,
   };

@@ -1,6 +1,18 @@
 import type { SessionRuntime, RunReceiptStatus } from '../internal-api/types.js';
 
-const RUNTIMES: readonly SessionRuntime[] = ['pi', 'claude', 'opencode', 'antigravity'];
+/**
+ * Internal API receipt runtime labels (not a census of browser/native turns).
+ * The mapped type makes adding a SessionRuntime without adding its metrics
+ * projection a compile-time error.
+ */
+const RUNTIME_ORDER = {
+  pi: 'pi',
+  claude: 'claude',
+  opencode: 'opencode',
+  antigravity: 'antigravity',
+  commandcode: 'commandcode',
+} as const satisfies { [runtime in SessionRuntime]: runtime };
+const RUNTIMES = Object.values(RUNTIME_ORDER);
 
 type TerminalStatus = Extract<RunReceiptStatus, 'completed' | 'failed' | 'cancelled' | 'interrupted'>;
 

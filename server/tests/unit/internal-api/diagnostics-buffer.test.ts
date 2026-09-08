@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { LogRecord } from '../../../src/logging/logger.js';
 import {
   pushDiagnosticsRecord,
@@ -65,6 +65,31 @@ describe('diagnostics ring buffer — secret scrubbing (Task 10)', () => {
     const out = scrubRecord(rec({ msg: 'turn for session', requestId: 'req_abc-123', sessionId: '019ef4fd-a7df-7615-9e4a-bcafb5257de8' }));
     expect(out.requestId).toBe('req_abc-123');
     expect(out.sessionId).toBe('019ef4fd-a7df-7615-9e4a-bcafb5257de8');
+  });
+});
+
+describe('diagnostic retention byte and loss budgets', () => {
+  beforeEach(() => clearDiagnosticsBuffer());
+  it('keeps a 10000-record flood within count and serialized byte budgets with explicit loss', () => {
+    for (let i = 0; i < 10_000; i++) pushDiagnosticsRecord(rec({ msg: 'x'.repeat(3000), requestId: `req-${i}` }));
+    const logs = getRecentLogs({ limit: 1000 });
+    expect(logs.length).toBeLessThan(1000);
+    expect(logs.reduce((total, log) => total + Buffer.byteLength(JSON.stringify(log)), 0)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(getDiagnosticsSummary()).toMatchObject({ retention: {
+      maxRecords: 1000, maxBytes: 2 * 1024 * 1024, evictedRecords: 10_000 - logs.length,
+    } });
+  });
+  it('counts oversized projections and retains global loss information through an empty filter', () => {
+    pushDiagnosticsRecord(rec({ msg: '界'.repeat(1_000_000) }));
+    expect(getDiagnosticsSummary({ sessionId: 'no-match' })).toMatchObject({ bufferedRecords: 0,
+      retention: { retainedRecords: 1, truncatedRecords: 1, insertionFailures: 0 } });
+  });
+  it('counts insertion failure without recursive logging and accepts the next record', () => {
+    const spy = vi.spyOn(JSON, 'stringify').mockImplementationOnce(() => { throw new Error('synthetic serialization failure'); });
+    try { expect(() => pushDiagnosticsRecord(rec())).not.toThrow(); } finally { spy.mockRestore(); }
+    pushDiagnosticsRecord(rec({ msg: 'after failure' }));
+    expect(getDiagnosticsSummary()).toMatchObject({ bufferedRecords: 1, retention: { insertionFailures: 1 } });
+    expect(getRecentLogs()[0].msg).toBe('after failure');
   });
 });
 

@@ -21,13 +21,20 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.35.0",
+  "contractVersion": "1.36.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.36.0** (bounded diagnostics and explicit source failure; source candidate, not deployment):
+  - diagnostics summaries add `retention`: process-window identity/start time, retained record/byte counts and limits, eviction/truncation/insertion/tap-failure counters, and optional oldest/newest timestamps. These are global process-local window statistics, separate from filtered summary counts;
+  - HTTP diagnostic responses are capped at 1 MiB. If log/error arrays are reduced, `responseTruncation` reports `omittedLogs`, `omittedErrors`, and `limitBytes`; retained data and matching summary counts are unchanged;
+  - unreadable/invalid registry state or unavailable visibility checks return 503 `DIAGNOSTIC_SOURCE_UNAVAILABLE` with `sources` status, not fabricated healthy empty counts. Corrupt registry bytes are preserved and reads may recover after external repair;
+  - API receipt metrics include all five runtimes, including Command Code. Existing visibility restrictions still apply;
+  - Agent OS mirror migration remains an explicit final integration task, separately coordinated before production deployment. A source version bump does not imply consumer synchronisation or a running-server upgrade.
 
 - **1.35.0** (minor, additive watch-generation preconditions and Pi pause reasons):
   - watch responses carry a persisted opaque `generation`, distinct from the deterministic `watchId`; accepted replacement creates a fresh generation, while detached restart/migration preserves it and the existing ledger;
@@ -337,6 +344,7 @@ re-introduced.
 | `UNSUPPORTED_OPERATION` | 400 | Op not supported for this runtime/config | e.g. `steer` on OpenCode/Antigravity or a non-SDK Claude backend |
 | `NOT_IMPLEMENTED` | 501 | Endpoint exists but runtime path unimplemented | e.g. replay history for unsupported runtime |
 | `INTERNAL_ERROR` | 500 | Unexpected internal error | Unhandled exception in a route |
+| `DIAGNOSTIC_SOURCE_UNAVAILABLE` | 503 | Required diagnostics source unavailable | Registry cannot be read/validated, or visibility cannot be established |
 | `RETENTION_CLAIM_NOT_FOUND` | 404 | Retention lease absent | Wrong, expired, released, or different-session lease id |
 | `RETENTION_CLAIM_OWNER_MISMATCH` | 409 | Conditional owner check failed | Caller supplied a different owner id |
 | `RETENTION_RESIDENT_CAPACITY_EXHAUSTED` | 409 | Required residency could not be applied | Runtime could not materialise/retain the new session |

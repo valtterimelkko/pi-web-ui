@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseCommandCodeModelList } from '../server/src/command-code/command-code-model-catalog.js';
 
 const EXECUTABLE_PATH = process.env.COMMAND_CODE_EXECUTABLE_PATH ?? '/root/.npm-global/bin/cmd';
 const OUTPUT_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'src', 'command-code', 'command-code-model-efforts.ts');
@@ -43,17 +44,6 @@ function run(args: string[], timeoutMs = PROBE_TIMEOUT_MS): Promise<{ stdout: st
 function parseVersion(stdout: string): string {
   const match = stdout.trim().match(/v?(\d+(?:\.\d+){2})/);
   return match?.[1] ?? 'unknown';
-}
-
-function parseAdvertisedIds(stdout: string): string[] {
-  const ids: string[] = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (/^cmd\s+--model\b/i.test(trimmed)) continue;
-    const match = trimmed.match(/^([a-z0-9][a-z0-9._/-]{0,255})[ ]{2,}\S/u);
-    if (match && !ids.includes(match[1])) ids.push(match[1]);
-  }
-  return ids;
 }
 
 /** Parse the CLI's "supported values" rejection into an effort list. */
@@ -97,7 +87,7 @@ async function main(): Promise<void> {
   const versionProbe = await run(['--no-auto-update', '--version']);
   const version = parseVersion(versionProbe.stdout);
   const modelsProbe = await run(['--no-auto-update', '--list-models']);
-  const models = parseAdvertisedIds(modelsProbe.stdout);
+  const models = parseCommandCodeModelList(modelsProbe.stdout).models;
   if (models.length === 0) {
     console.error('--list-models produced no model ids; refusing to write an empty table.');
     process.exitCode = 1;

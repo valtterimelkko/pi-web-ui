@@ -72,7 +72,30 @@ export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 's
 // ─── API contract metadata ───────────────────────────────────────────────────
 
 export const INTERNAL_API_MAJOR_VERSION = 'v1' as const;
-export const INTERNAL_API_CONTRACT_VERSION = '1.35.0' as const;
+export const INTERNAL_API_CONTRACT_VERSION = '1.36.0' as const;
+
+/** Process-local diagnostics window; not durable history or filtered totals. */
+export interface DiagnosticsRetention {
+  processInstanceId: string;
+  processStartedAt: string;
+  retainedRecords: number;
+  retainedBytes: number;
+  maxRecords: number;
+  maxBytes: number;
+  evictedRecords: number;
+  truncatedRecords: number;
+  insertionFailures: number;
+  tapFailures: number;
+  oldestTs?: string;
+  newestTs?: string;
+}
+
+/** Present only when response arrays were reduced to fit the HTTP byte cap. */
+export interface DiagnosticsResponseTruncation {
+  omittedLogs: number;
+  omittedErrors: number;
+  limitBytes: number;
+}
 export const INTERNAL_API_CONTRACT_NAME = 'pi-web-ui-internal-api' as const;
 export const INTERNAL_API_CONTRACT_DOC = 'docs/INTERNAL-API-CONTRACT.md' as const;
 

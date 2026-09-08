@@ -299,7 +299,7 @@ export class ClaudeChannelService {
               });
             }).catch((err) => logger.debug('best-effort op failed:', err));
           }
-          this.registry.updateStatus(internalSid, 'idle').catch((err) => logger.debug('best-effort op failed:', err));
+          this.registry.updateStatus(internalSid, 'idle').catch(err => logger.errorObject('Failed to persist session status', err, { sessionId: internalSid }));
           this.sessionsWithHistory.add(internalSid);
           const p = this.pendingPrompts.get(internalSid);
           if (p) {
@@ -319,7 +319,7 @@ export class ClaudeChannelService {
           if (p) {
             clearTimeout(p.timer);
             this.pendingPrompts.delete(internalSid);
-            this.registry.updateStatus(internalSid, 'error').catch((err) => logger.debug('best-effort op failed:', err));
+            this.registry.updateStatus(internalSid, 'error').catch(err => logger.errorObject('Failed to persist session status', err, { sessionId: internalSid }));
             p.onComplete(new Error(msg));
           }
         }
@@ -553,7 +553,7 @@ export class ClaudeChannelService {
       clearTimeout(pending.timer);
       this.pendingPrompts.delete(sessionId);
       this.processManager.markPromptComplete();
-      this.registry.updateStatus(sessionId, 'idle').catch((err) => logger.debug('best-effort op failed:', err));
+      this.registry.updateStatus(sessionId, 'idle').catch(err => logger.errorObject('Failed to persist session status', err, { sessionId }));
       pending.onComplete(new Error('Aborted'));
     }
   }
@@ -915,7 +915,7 @@ export class ClaudeChannelService {
       // turn are forwarded to the UI instead of being silently dropped.
       // This mirrors handlePromptTimeout() behavior.
       this.startLatePromptListener(sessionId, pending.onEvent);
-      this.registry.updateStatus(sessionId, 'idle').catch((err) => logger.debug('best-effort op failed:', err));
+      this.registry.updateStatus(sessionId, 'idle').catch(err => logger.errorObject('Failed to persist session status', err, { sessionId }));
       this.sessionsWithHistory.add(sessionId);
 
       const agentEndEvent: NormalizedEvent = {
@@ -940,7 +940,7 @@ export class ClaudeChannelService {
     clearTimeout(pending.timer);
     this.pendingPrompts.delete(sessionId);
     this.startLatePromptListener(sessionId, pending.onEvent);
-    this.registry.updateStatus(sessionId, 'idle').catch((err) => logger.debug('best-effort op failed:', err));
+    this.registry.updateStatus(sessionId, 'idle').catch(err => logger.errorObject('Failed to persist session status', err, { sessionId }));
     this.sessionsWithHistory.add(sessionId);
 
     const errorMessage = `Claude Direct prompt timed out after ${PROMPT_TIMEOUT_MS / 1000}s. If Claude Code was waiting on re-authentication, run /login or \`claude auth login\` and the queued reply may still arrive.`;
@@ -961,7 +961,7 @@ export class ClaudeChannelService {
       clearTimeout(pending.timer);
       this.pendingPrompts.delete(sessionId);
       this.startLatePromptListener(sessionId, pending.onEvent);
-      this.registry.updateStatus(sessionId, 'error').catch((err) => logger.debug('best-effort op failed:', err));
+      this.registry.updateStatus(sessionId, 'error').catch(err => logger.errorObject('Failed to persist session status', err, { sessionId }));
       this.sessionsWithHistory.add(sessionId);
       this.emitPromptError(sessionId, pending, errorMessage, 'CLAUDE_AUTH_EXPIRED', 'auth_expired', true);
       const error = new Error(errorMessage) as PromptCompletionError;

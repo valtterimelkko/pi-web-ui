@@ -308,7 +308,7 @@ export class OpenCodeService {
             this.promptCallbacks.delete(sessionId);
             callback.onComplete(new Error('Session stale-streaming reset (pinned session kept alive)'));
           }
-          void this.registry.updateStatus(sessionId, 'idle');
+          void this.registry.updateStatus(sessionId, 'idle').catch(err => logger.errorObject('Failed to persist session status', err, { sessionId }));
         } else {
           meta.status = 'idle';
           this.runningSessions.delete(sessionId);
@@ -317,7 +317,7 @@ export class OpenCodeService {
             this.promptCallbacks.delete(sessionId);
             callback.onComplete(new Error('Session stale-streaming reset'));
           }
-          void this.registry.updateStatus(sessionId, 'idle');
+          void this.registry.updateStatus(sessionId, 'idle').catch(err => logger.errorObject('Failed to persist session status', err, { sessionId }));
         }
       }
     }
@@ -656,7 +656,7 @@ export class OpenCodeService {
       this.promptCallbacks.delete(sessionId);
       callback.onComplete(error);
     }
-    void this.registry.updateStatus(sessionId, error ? 'error' : 'idle');
+    void this.registry.updateStatus(sessionId, error ? 'error' : 'idle').catch(err => logger.errorObject('Failed to persist session status', err, { sessionId }));
   }
 
   abort(sessionId: string): void {

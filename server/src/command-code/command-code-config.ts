@@ -79,7 +79,7 @@ function isValidCommandCodeRuntimeModel(value: unknown): value is CommandCodeRun
   return typeof value === 'string'
     && value.length > 0
     && value.length <= 256
-    && /^[a-z0-9][a-z0-9._/-]*$/.test(value);
+    && /^[a-z0-9][a-z0-9._/:-]*$/.test(value);
 }
 
 export function defaultCommandCodeConfig(overrides: Partial<CommandCodeRuntimeConfig> = {}): CommandCodeRuntimeConfig {

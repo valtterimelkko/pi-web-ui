@@ -26,8 +26,16 @@ describe('Command Code model discovery', () => {
     expect(defaultCommandCodeConfig().maxTurns).toBe(100);
   });
 
-  it('excludes exactly the 19 premium models and nothing else', () => {
-    expect(COMMAND_CODE_EXCLUDED_MODELS).toHaveLength(19);
+  it('excludes the maintained GOAT premium denylist without freezing its size', () => {
+    // Weekly discovery intentionally grows this list. Pin known plan exclusions,
+    // not a historical count that would reject a valid automated refresh.
+    expect(COMMAND_CODE_EXCLUDED_MODELS).toEqual(expect.arrayContaining([
+      'claude-sonnet-5', 'claude-fable-5-1', 'gpt-6-astra',
+    ]));
+    expect(new Set(COMMAND_CODE_EXCLUDED_MODELS).size).toBe(COMMAND_CODE_EXCLUDED_MODELS.length);
+    for (const id of COMMAND_CODE_EXCLUDED_MODELS) {
+      expect(id).toMatch(/^\S+$/);
+    }
     expect(isCommandCodeEligible('qwen/qwen3.8-max')).toBe(true);
     expect(isCommandCodeEligible('gpt-5.6-luna')).toBe(true);
     expect(isCommandCodeEligible('google/gemini-3.7-flash')).toBe(true);
@@ -46,6 +54,17 @@ describe('Command Code model discovery', () => {
       models: ['qwen/qwen3.8-max', 'meta/muse-spark-1.2-contributor'],
       ambiguous: [],
     });
+  });
+
+  it('preserves colon-qualified advertised IDs through discovery and subprocess arguments', () => {
+    const model = 'meituan/longcat-2.0:free';
+    expect(parseCommandCodeModelList(`${model}  FREE agentic coding`).models).toEqual([model]);
+    expect(buildCommandCodeArgs({ executablePath: '/fixture/cmd', model, maxTurns: 1 }))
+      .toEqual(expect.arrayContaining(['--model', model]));
+  });
+
+  it.each(['--model=unsafe', 'provider/model;echo', 'provider/model with spaces', 'provider/model\nextra'])('rejects unsafe model argument %j', model => {
+    expect(() => buildCommandCodeArgs({ executablePath: '/fixture/cmd', model, maxTurns: 1 })).toThrow('valid exact runtime id');
   });
 
   it('accepts the current bare cmd --version format', () => {

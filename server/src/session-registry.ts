@@ -47,6 +47,42 @@ export interface SessionRegistry {
   entries: RegistryEntry[];
 }
 
+export type SessionRegistryUnavailableReason = 'unreadable' | 'invalid';
+
+export type SessionRegistryLoadStatus =
+  | { state: 'unloaded' }
+  | { state: 'missing' }
+  | { state: 'available'; source: 'disk' }
+  | { state: 'unavailable'; reason: SessionRegistryUnavailableReason; errorCode?: string };
+
+export type SessionRegistryReadFile = (filePath: string, encoding: BufferEncoding) => Promise<string>;
+
+export interface SessionRegistryManagerOptions {
+  /**
+   * Injectable read boundary for deterministic fault tests. Writes continue to
+   * use the real filesystem and retain the manager's atomic-save behaviour.
+   */
+  readFile?: SessionRegistryReadFile;
+}
+
+export class SessionRegistryUnavailableError extends Error {
+  readonly code = 'SESSION_REGISTRY_UNAVAILABLE' as const;
+  readonly reason: SessionRegistryUnavailableReason;
+  readonly causeCode?: string;
+
+  constructor(reason: SessionRegistryUnavailableReason, originalError?: unknown) {
+    super(`Session registry unavailable: ${reason}`);
+    this.name = 'SessionRegistryUnavailableError';
+    this.reason = reason;
+    const code = originalError && typeof originalError === 'object' && 'code' in originalError
+      ? (originalError as { code?: unknown }).code
+      : undefined;
+    if (typeof code === 'string') {
+      this.causeCode = code;
+    }
+  }
+}
+
 const REGISTRY_VERSION = 1;
 
 export class SessionRegistryManager {
@@ -54,9 +90,16 @@ export class SessionRegistryManager {
   private registry: SessionRegistry | null = null;
   private saveQueue: Promise<void> = Promise.resolve();
   private loadPromise: Promise<SessionRegistry> | null = null;
+  private loadStatus: SessionRegistryLoadStatus = { state: 'unloaded' };
+  private readonly readFile: SessionRegistryReadFile;
 
-  constructor(registryPath: string) {
+  constructor(registryPath: string, options: SessionRegistryManagerOptions = {}) {
     this.registryPath = registryPath;
+    this.readFile = options.readFile ?? ((filePath, encoding) => fs.readFile(filePath, encoding));
+  }
+
+  getLoadStatus(): SessionRegistryLoadStatus {
+    return { ...this.loadStatus };
   }
 
   async load(): Promise<SessionRegistry> {
@@ -82,24 +125,44 @@ export class SessionRegistryManager {
     }
 
     try {
-      const raw = await fs.readFile(this.registryPath, 'utf-8');
-      const parsed = JSON.parse(raw) as SessionRegistry;
-      if (typeof parsed.version !== 'number' || !Array.isArray(parsed.entries)) {
-        throw new Error('Invalid registry format');
+      const raw = await this.readFile(this.registryPath, 'utf-8');
+      let parsed: SessionRegistry;
+      try {
+        parsed = JSON.parse(raw) as SessionRegistry;
+      } catch (err: unknown) {
+        throw new SessionRegistryUnavailableError('invalid', err);
+      }
+      if (!parsed || typeof parsed !== 'object' || typeof parsed.version !== 'number' || !Array.isArray(parsed.entries)
+        || parsed.entries.some((entry: unknown) => !entry || typeof entry !== 'object' || Array.isArray(entry))) {
+        throw new SessionRegistryUnavailableError('invalid', new Error('Invalid registry format'));
       }
       this.registry = parsed;
+      this.loadStatus = { state: 'available', source: 'disk' };
       return this.registry;
     } catch (err: unknown) {
       const isNotFound = err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT';
-      if (!isNotFound) {
-        logger.warn('[SessionRegistry] Failed to load registry, starting fresh:', err instanceof Error ? err.message : String(err));
+      if (isNotFound) {
+        this.registry = {
+          version: REGISTRY_VERSION,
+          updatedAt: new Date().toISOString(),
+          entries: [],
+        };
+        this.loadStatus = { state: 'missing' };
+        return this.registry;
       }
-      this.registry = {
-        version: REGISTRY_VERSION,
-        updatedAt: new Date().toISOString(),
-        entries: [],
+
+      const unavailable = err instanceof SessionRegistryUnavailableError
+        ? err
+        : new SessionRegistryUnavailableError('unreadable', err);
+      this.loadStatus = {
+        state: 'unavailable',
+        reason: unavailable.reason,
+        ...(unavailable.causeCode ? { errorCode: unavailable.causeCode } : {}),
       };
-      return this.registry;
+      logger.warn('[SessionRegistry] Failed to load registry:', err instanceof Error ? err.message : String(err));
+      // Leave registry null: callers must not mutate or observe a fabricated
+      // healthy-empty registry, and a later retry can recover after repair.
+      throw unavailable;
     }
   }
 
@@ -111,6 +174,7 @@ export class SessionRegistryManager {
 
   private async _doSave(): Promise<void> {
     if (this.registry === null) {
+      if (this.loadStatus.state === 'unavailable') throw new SessionRegistryUnavailableError(this.loadStatus.reason);
       return;
     }
 
@@ -123,6 +187,7 @@ export class SessionRegistryManager {
     try {
       await fs.writeFile(tmpPath, JSON.stringify(this.registry, null, 2), 'utf-8');
       await fs.rename(tmpPath, this.registryPath);
+      this.loadStatus = { state: 'available', source: 'disk' };
     } catch (err) {
       try { await fs.unlink(tmpPath); } catch { /* ignore */ }
       throw err;
@@ -249,16 +314,12 @@ export class SessionRegistryManager {
   }
 
   async updateStatus(id: string, status: RegistryEntry['status']): Promise<void> {
-    try {
-      const registry = await this.load();
-      const entry = registry.entries.find(e => e.id === id);
-      if (entry) {
-        entry.status = status;
-        entry.lastActivity = new Date().toISOString();
-        await this.save();
-      }
-    } catch (err) {
-      logger.error(`[SessionRegistry] updateStatus failed for id=${id}:`, err instanceof Error ? err.message : String(err));
+    const registry = await this.load();
+    const entry = registry.entries.find(e => e.id === id);
+    if (entry) {
+      entry.status = status;
+      entry.lastActivity = new Date().toISOString();
+      await this.save();
     }
   }
 
