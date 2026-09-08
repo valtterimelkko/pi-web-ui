@@ -1,4 +1,3 @@
-export { ToolCallCard } from './ToolCallCard';
 export { CollapsibleToolCard } from './CollapsibleToolCard';
 export { SubagentToolCard } from './SubagentToolCard';
 export { TodoToolCard } from './TodoToolCard';

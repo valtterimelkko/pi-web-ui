@@ -1,4 +1,9 @@
 /**
+ * INACTIVE PROTOTYPE — not routed or mounted anywhere in the app.
+ * Retained deliberately (owner product decision pending); do not treat as
+ * shipped functionality or a live workflow.
+ */
+/**
  * OrchestrationPage Component
  *
  * Main view for parallel orchestration. Integrates all orchestration components.
