@@ -36,6 +36,7 @@
     "docs:check-agent-guides": "node scripts/check-agent-guides.mjs",
     "docs:check-links": "node scripts/check-doc-links.mjs",
     "lint": "eslint . --ext .ts,.tsx && eslint scripts/notify-client.mjs scripts/wait-for-internal-api.mjs",
+    "lint:ratchet": "node scripts/check-lint-ratchet.mjs",
     "typecheck": "npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client && npm run typecheck --workspace=shared && npm run typecheck --workspace=@pi-web-ui/internal-api-mcp",
     "validate:proxy": "npx tsx scripts/validation-logging-proxy.ts",
     "mcp:start": "npm run start --workspace=@pi-web-ui/internal-api-mcp",

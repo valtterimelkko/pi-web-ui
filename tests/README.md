@@ -94,6 +94,33 @@ path. Such a subset is not a substitute for the root inventory gate. Shared
 coverage includes all production source and uses the measured ratchet in
 `shared/vitest.config.ts`; other workspace thresholds are unchanged.
 
+### Warning ratchet and checked-in CI
+
+```bash
+npm run lint:ratchet -- --base HEAD
+```
+
+Use the branch base revision in CI/review, or HEAD for local uncommitted changes.
+The gate lints TS/JS source, compares changed implementation warning signatures
+against that revision, and preserves warning multiplicity across line shifts and
+detected renames. Existing warnings are not permission to add more. The broader
+whole-tree ceiling is 1,696: the reconciled 1,690 legacy warnings plus six existing
+warnings in the previously unchecked Node CLI-helper tests. Lower this ceiling
+when debt is removed; do not raise it to absorb new implementation warnings.
+
+`.github/workflows/application.yml` runs locked installation, docs, lint/ratchet,
+typecheck, build, all workspace tests and coverage without provider credentials.
+The deterministic compiled/browser smoke joins this workflow in sequence Step 3.
+Checked-in workflow coverage is not evidence that a hosted GitHub run passed.
+
+Root CLI-helper tests retain their native Node runner. The server's
+`root-cli-tools.test.ts` discovers every `tests/unit/**/*.{test,spec}.mjs`
+file, runs it with `node --test`, and requires non-skipped passing assertions
+and no failures/cancellations. Missing inventory and all-skipped files fail the
+root gate. For focused work, `node --test tests/unit/debug-where.test.mjs` is
+still available; its native assertion count is reported separately from the
+Vitest wrapper count.
+
 ### E2E tests
 ```bash
 npm run test:e2e
