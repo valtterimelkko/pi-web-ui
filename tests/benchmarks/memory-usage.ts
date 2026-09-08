@@ -10,15 +10,19 @@
 import { bench, describe, beforeAll, afterAll, expect } from 'vitest'
 import { MemoryTrackingCache, BASELINE, TARGETS, bytesToMB } from './index'
 
-// Get current memory usage (Chrome/Chromium only)
+// Get current memory usage (Chrome/Chromium only). Environments without
+// performance.memory report UNSUPPORTED_MEMORY (-1): a measurement of -1
+// means "not measured here" and must never be averaged, compared, or
+// presented as zero bytes.
+export const UNSUPPORTED_MEMORY = -1;
+
 function getMemoryUsage(): number {
   // @ts-expect-error - performance.memory is Chrome-specific
   if (typeof performance !== 'undefined' && performance.memory) {
     // @ts-expect-error - performance.memory is Chrome-specific
     return performance.memory.usedJSHeapSize
   }
-  // Fallback: estimate based on known data
-  return 0
+  return UNSUPPORTED_MEMORY;
 }
 
 // Session cache instance

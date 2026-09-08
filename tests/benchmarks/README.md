@@ -2,6 +2,17 @@
 
 This folder contains benchmark suites for Pi Web UI frontend performance.
 
+## Status: synthetic microbenchmarks — NOT application acceptance evidence
+
+These suites exercise mock caches with fixed delays, synthetic typing waits
+and hardcoded reference baselines/targets. They demonstrate harness behaviour
+and relative mock-path characteristics only. They do not measure the real
+parser, registry, store, browser transport or production paths, and their
+numbers must not appear in app acceptance claims. Real-path measurement
+workloads are defined separately (four-angle plan Step 5). Unsupported
+measurements (e.g. heap without performance.memory) are reported as
+unsupported, never as zero.
+
 ## What These Benchmarks Cover
 
 The current suites focus mainly on:

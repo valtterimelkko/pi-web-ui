@@ -3,6 +3,11 @@
  * 
  * Compares benchmark results against baseline metrics to show
  * improvement from mobile optimizations.
+ *
+ * HONESTY NOTE: baselines compared here are the SYNTHETIC reference numbers
+ * in index.ts (hardcoded), so any "improvement" printed is a comparison
+ * against a synthetic constant, not a measured before/after of the real
+ * application. Do not quote these figures as real speed-ups.
  */
 
 import { BASELINE, TARGETS } from './mobile-performance'

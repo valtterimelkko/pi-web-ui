@@ -24,14 +24,17 @@ export const BENCHMARK_CONFIG = {
   throws: false
 }
 
-// Baseline metrics from before mobile optimizations
+// SYNTHETIC REFERENCE NUMBERS — hardcoded, not a measured application
+// baseline. They exist only as fixed points for these mock-cache microbenches
+// and MUST NOT be quoted as application latency/memory acceptance evidence.
 export const BASELINE = {
   sessionSwitch: 3000,    // 3 seconds before optimization
   typingLatency: 500,     // 500ms before optimization
   memoryPerSession: 15,   // 15MB before optimization
 }
 
-// Target metrics after mobile optimizations
+// SYNTHETIC TARGETS — same status as BASELINE above: reference points for
+// the synthetic suite only, not an app acceptance gate.
 export const TARGETS = {
   sessionSwitch: 1000,    // Under 1 second
   typingLatency: 100,     // Under 100ms
