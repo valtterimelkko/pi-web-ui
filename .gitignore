@@ -83,3 +83,6 @@ tests/e2e_*_debug*.py
 
 # Whole-codebase review working ledger (local backlog artifact — never commit)
 .code-review-ledger.md
+
+# Generated benchmark run output
+tests/benchmarks/results/

@@ -33,6 +33,20 @@ Every finding from PI-WEB-UI-FOUR-ANGLE-AUDIT-2026-09-07.md is dispositioned; pe
 | V4 source/compiled joining | FIXED (cb13932 + `c15ab85`): compiled selector with live negative-control proof, strict compiled acceptance verdict |
 | V5 skip/cleanup acceptance policy | FIXED (3B `c15ab85`): skipped/missing/uncertain -> failed or indeterminate, never clean |
 
+## Final acceptance runbook (executed at programme close)
+
+Gates (all must pass on the final tree, evidence logged under baseline/final-acceptance/):
+1. `npm run docs:check-agent-guides` and link check
+2. `npm run lint` + `npm run lint:ratchet` (0 new warnings vs ceiling 1,696)
+3. `npm run typecheck` (all workspaces)
+4. `npm run build` (all workspaces; postbuild emits known-identity manifest)
+5. `npm test` (full workspace matrix via isolated gates)
+6. Strict compiled acceptance: build, `validate:server --compiled --command-code-fixture`, `validate:live --strict --expect-mode compiled --require commandcode-fixture-smoke --record-dir` → verdict passed, exit 0
+7. E2E core+mobile against the disposable server (zero unexpected console errors)
+8. Step 5 measurement runner (worker in flight) → all deterministic gates green, report recorded
+9. Ledger rows + 22-finding disposition table current; honest limitations section lists: two-tab E2E env-blocked, browser-transport workload deferred, 7B witness limitation, heap-plateau measurement deferred, Monday orchestrator first real --confirm owner-gated
+Operator-gated at close: production restart (only if wanted), catalogue real-backend refresh (bills), Agent OS mirror resync (separately coordinated).
+
 **Current: Steps 1A/1B pushed through `9910512`; Step2 + native catalogue repair in `cbf1bed`; Step3A build identity in `677ee6f`; compiled entrypoint selector in `cb13932`; O5 bounded lag history in `c0bb077` — all pushed, hosted CI green through `cbf1bed` (later runs pending check). Compiled-selector live proof verified from artifacts: baseline compiled run served contract1.36.0 with fixture smoke passing; injected dist sentinel failed visibly; source control passed while dist broken; dist restored to matching sha256; all groups/dirs cleaned. Step3B strict wrapper and Step3C proof record are COMMITTED `c15ab85` and proven end-to-end: real compiled disposable server (fixture Command Code), identity precheck bound to the exact candidate build, provider-free turn passed, proof record verdict=passed exit=0, stopper verified group gone with honest evidence-persistence failure preserved; 17 acceptance/wrapper tests + 118 live-validation suite green. Approximately 35-40% complete; three review/correction cycles completed. Production untouched.**
 
 ## Baseline and ownership
