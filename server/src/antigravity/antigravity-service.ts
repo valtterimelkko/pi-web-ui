@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
-import * as path from 'node:path';
-import * as os from 'node:os';
+import { stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { AntigravitySessionStore } from './antigravity-session-store.js';
@@ -82,7 +80,6 @@ export function runAgy(args: string[], cwd: string, timeoutMs: number, stallTime
     proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
 
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let stallPoll: ReturnType<typeof setInterval> | undefined;
     const onAbort = () => {
       proc.kill('SIGTERM');
@@ -90,12 +87,12 @@ export function runAgy(args: string[], cwd: string, timeoutMs: number, stallTime
       resolve({ stdout, stderr, ok: false, reason: 'aborted' });
     };
     const cleanup = () => {
-      if (timer) clearTimeout(timer);
+      if (hardTimer) clearTimeout(hardTimer);
       if (stallPoll) clearInterval(stallPoll);
       signal?.removeEventListener('abort', onAbort);
     };
 
-    timer = setTimeout(() => {
+    const hardTimer = setTimeout(() => {
       proc.kill('SIGTERM');
       cleanup();
       resolve({ stdout, stderr, ok: false, reason: 'timeout' });
@@ -465,7 +462,7 @@ export class AntigravityService {
         if (abortController?.signal.aborted) { outcome = { reason: 'aborted' }; break; }
         try {
           outcome = await proc.writeTurn(prompt);
-        } catch (writeError) {
+        } catch {
           // Process died between acquire and write (or rejected post-exit).
           const deadId = proc.conversationId ?? storedConversationId;
           if (attempt < this.maxAttempts) {

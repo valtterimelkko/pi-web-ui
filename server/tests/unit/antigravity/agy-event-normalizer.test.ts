@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { AgyEventNormalizer } from '../../../src/antigravity/agy-event-normalizer.js';
+
+/** Non-null access that throws instead of using lint-banned `!`. */
+function must<T>(value: T | null | undefined): T {
+  if (value === null || value === undefined) throw new Error('required value missing');
+  return value;
+}
+
 import { parseAgyLine } from '../../../src/antigravity/agy-event-types.js';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 
@@ -197,9 +204,9 @@ describe('AgyEventNormalizer', () => {
     });
     feed(n, [resultLine({}, 'c-actual')]);
     expect(mismatch).not.toBeNull();
-    expect(mismatch!.expected).toBe('c-expected');
-    expect(mismatch!.actual).toBe('c-actual');
-    expect(mismatch!.source).toBe('result');
+    expect(must(mismatch).expected).toBe('c-expected');
+    expect(must(mismatch).actual).toBe('c-actual');
+    expect(must(mismatch).source).toBe('result');
     expect(n.state.conversationId).toBe('c-actual');
   });
 
