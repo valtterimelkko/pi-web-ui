@@ -54,6 +54,7 @@ export type RuntimeResolver = (id: string, path: string) => SessionRuntime | nul
 // and `piSessionIdFromPath`; re-exported here so this module's existing public
 // API (consumed by preferences.ts) is unchanged. See shared/src/notification-identity.ts.
 import { piSessionIdFromPath } from '@pi-web-ui/shared';
+import { deriveLegacySessionArrays } from '@pi-web-ui/shared';
 export { piSessionIdFromPath };
 
 /**
@@ -131,16 +132,9 @@ export function deriveLegacyArrays(v2: PreferencesV2): {
   pinnedSessionPaths: string[];
   sessionDisplayNames: Record<string, string>;
 } {
-  const archivedSessionPaths: string[] = [];
-  const pinnedSessionPaths: string[] = [];
-  const sessionDisplayNames: Record<string, string> = {};
-  for (const [key, rec] of Object.entries(v2.sessions)) {
-    const legacy = rec.legacyKey ?? parseV2Key(key).id;
-    if (rec.archived) archivedSessionPaths.push(legacy);
-    if (rec.pinned) pinnedSessionPaths.push(legacy);
-    if (rec.displayName !== undefined) sessionDisplayNames[legacy] = rec.displayName;
-  }
-  return { archivedSessionPaths, pinnedSessionPaths, sessionDisplayNames };
+  // Delegates to the shared pure helper so the server's compatibility window
+  // and the client's optimistic projection cannot drift apart.
+  return deriveLegacySessionArrays(v2.sessions);
 }
 
 /**

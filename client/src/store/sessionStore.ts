@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { deriveLegacySessionArrays } from '@pi-web-ui/shared';
 import { persist, type PersistStorage } from 'zustand/middleware';
 import { useUIStore } from './uiStore';
 import {
@@ -550,16 +551,9 @@ function deriveLegacyFromMeta(meta: Record<string, SessionMeta>): {
   pinnedSessionPaths: string[];
   sessionDisplayNames: Record<string, string>;
 } {
-  const archivedSessionPaths: string[] = [];
-  const pinnedSessionPaths: string[] = [];
-  const sessionDisplayNames: Record<string, string> = {};
-  for (const [key, rec] of Object.entries(meta)) {
-    const legacy = rec.legacyKey ?? key.slice(key.indexOf(':') + 1);
-    if (rec.archived) archivedSessionPaths.push(legacy);
-    if (rec.pinned) pinnedSessionPaths.push(legacy);
-    if (rec.displayName !== undefined) sessionDisplayNames[legacy] = rec.displayName;
-  }
-  return { archivedSessionPaths, pinnedSessionPaths, sessionDisplayNames };
+  // Delegates to the shared pure helper so the client's optimistic projection
+  // and the server's compatibility window cannot drift apart.
+  return deriveLegacySessionArrays(meta);
 }
 
 /** Resolve a session path/id to its stable v2 key (falls back to unknown:<path>). */
