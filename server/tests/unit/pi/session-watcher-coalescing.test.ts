@@ -283,9 +283,19 @@ describe('coalesced reads across malformed lines and file replacement', () => {
     if (malformedDir) await rm(malformedDir, { recursive: true, force: true });
   });
 
-  async function drainUntil(condition: () => boolean, rounds = 2000): Promise<void> {
-    for (let spin = 0; spin < rounds && !condition(); spin++) {
-      await new Promise((resolve) => setImmediate(resolve));
+  async function drainUntil(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
+    // Time-bounded drain: setImmediate rounds alone can outrun pending fs
+    // I/O on loaded CI runners (thousands of immediates pass while one disk
+    // read is still in flight), so interleave real timer turns and use a
+    // wall-clock deadline rather than a spin count.
+    const deadline = Date.now() + timeoutMs;
+    let spin = 0;
+    while (!condition() && Date.now() < deadline) {
+      await new Promise((resolve) => {
+        spin += 1;
+        if (spin % 10 === 0) setTimeout(resolve, 10);
+        else setImmediate(resolve);
+      });
     }
   }
 
