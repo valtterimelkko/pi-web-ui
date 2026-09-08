@@ -1,6 +1,7 @@
 # Plan: Antigravity JSON Stream Integration (agy 1.1.27 stream-json)
 
-> **Status:** PROPOSED — awaiting owner go. No execution before approval.
+> **Status:** APPROVED — owner decisions D1–D7 and O1–O4 all recorded
+> (2026-09-08, defaults accepted). Execution awaits owner go.
 > **Evidence base:** live-validated 2026-09-08 against `agy` 1.1.27 on this
 > host; full capture with raw command outputs:
 > `/root/pi-enhancement/docs/research/2026-09-08-agy-json-headless-live-validation.md`
@@ -106,14 +107,14 @@ AntigravityService
   channel (`control_request`/`control_response` inputs are currently
   *rejected* — reserved names suggest future surface).
 
-### Open decisions for the owner (defaults marked ⭢)
+### Owner decisions (recorded 2026-09-08 — do not re-ask; defaults accepted verbatim)
 
-| # | Question | Default |
+| # | Decision | Outcome |
 |---|---|---|
-| O1 | Steer semantics to advertise: honest queue-only (`followUpSemantics: 'queue_while_busy'`, `supportsSteer: false`) vs Command-Code-style interrupt steer | ⭢ queue-only first; interrupt steer is a separable follow-up |
-| O2 | Permission posture: keep `--dangerously-skip-permissions` (current behaviour) vs scoped `permissions.allow` policy in `~/.gemini/antigravity-cli/settings.json` (safer, changes runtime behaviour) | ⭢ keep current flag (behaviour-preserving refactor); posture change is its own task |
-| O3 | Model/thinking-level switch while a turn runs: 409 vs queue-until-idle | ⭢ 409 `SESSION_BUSY` (matches Pi surface; simplest honest semantics) |
-| O4 | Expose `--json-schema` structured output through the Internal API now | ⭢ no — out of scope; normaliser just preserves the fields |
+| O1 | Steer semantics | **Queue-only.** Advertise `followUpSemantics: 'queue_while_busy'`, `supportsSteer: false`; steer branch returns a clean honest error. Interrupt-style steer rejected (kills session + warm state); revisit only if agy ships a real control channel. |
+| O2 | Permission posture | **Keep `--dangerously-skip-permissions`** for this refactor (behaviour-preserving). A scoped `permissions.allow` posture change is a separate future task, not part of this plan. |
+| O3 | Model/thinking-level switch while a turn runs | **409 `SESSION_BUSY`.** Apply on idle by restarting the process with `--model <slug> --conversation <id>`. |
+| O4 | `--json-schema` structured output via the Internal API | **Out of scope.** Normaliser preserves the fields on the accumulator only. |
 
 ## 3. Validated ground truth (summary — full detail in [LV-doc])
 
