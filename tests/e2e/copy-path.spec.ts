@@ -1,12 +1,10 @@
 import { test, expect } from '@playwright/test';
-
-const PASSWORD = 'Ey@U1U%d5D77J99F';
+import { loginIfNeeded } from './helpers/login';
 
 async function login(page: any) {
   await page.goto('/');
-  await page.waitForSelector('input[type="password"]', { timeout: 10000 });
-  await page.locator('input[type="password"]').fill(PASSWORD);
-  await page.locator('button[type="submit"]').click();
+  await page.waitForSelector('input[type="password"]', { timeout: 10000 }).catch(() => null);
+  await loginIfNeeded(page);
   // Wait until we are redirected and the main chat interface is visible
   await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 10000 });
 }

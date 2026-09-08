@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 /**
  * Session Worker E2E Tests
@@ -18,12 +19,7 @@ test.describe('Session Worker E2E', () => {
     await page.waitForTimeout(1000);
     
     // Login if on login page
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
   });
 
   test('should display worker status in sidebar', async ({ page }) => {
@@ -121,12 +117,7 @@ test.describe('Session Worker E2E', () => {
     await page.waitForTimeout(2000);
     
     // After reload, we may need to login again
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
     
     // Wait for chat interface to reappear
     await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 10000 });
@@ -168,12 +159,7 @@ test.describe('Session Worker E2E', () => {
     await page.waitForTimeout(2000);
     
     // Handle login if needed
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
     
     // Wait for reconnection
     await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 10000 });

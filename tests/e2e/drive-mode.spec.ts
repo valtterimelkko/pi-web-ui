@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 async function seedRecentFolder(page: import('@playwright/test').Page, path = '/tmp') {
   await page.evaluate((folderPath) => {
@@ -21,12 +22,7 @@ test.describe('Drive Mode', () => {
     await page.waitForTimeout(1000);
 
     // Login if needed
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
   });
 
   test('Drive Mode button is visible in header', async ({ page }) => {

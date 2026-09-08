@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -8,12 +9,7 @@ async function login(page: any) {
   await page.goto('/');
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(1000);
-  const passwordInput = page.locator('input[type="password"]');
-  if (await passwordInput.isVisible().catch(() => false)) {
-    await passwordInput.fill('Ey@U1U%d5D77J99F');
-    await page.locator('button[type="submit"]').click();
-    await page.waitForTimeout(3000);
-  }
+  await loginIfNeeded(page);
 }
 
 // ---------------------------------------------------------------------------

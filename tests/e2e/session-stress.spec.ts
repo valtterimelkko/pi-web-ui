@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 test.describe('Session Switching Stress Tests', () => {
   test.beforeEach(async ({ page }) => {
@@ -7,12 +8,7 @@ test.describe('Session Switching Stress Tests', () => {
     await page.waitForTimeout(1000);
     
     // Login if on login page
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
   });
 
   test('rapid session switches should not cause issues', async ({ page }) => {
@@ -198,12 +194,7 @@ test.describe('Session List Stability', () => {
     await page.waitForTimeout(1000);
     
     // Login
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
   });
 
   test('session list updates correctly', async ({ page }) => {
@@ -271,12 +262,7 @@ test.describe('WebSocket Stress Tests', () => {
     await page.waitForTimeout(1000);
     
     // Login
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
     
     await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 5000 });
     
@@ -316,12 +302,7 @@ test.describe('WebSocket Stress Tests', () => {
     await page.waitForTimeout(1000);
     
     // Login
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
     
     await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 5000 });
     

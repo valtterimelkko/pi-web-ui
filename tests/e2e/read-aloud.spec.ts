@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -8,14 +9,10 @@ async function login(page: any) {
   await page.goto('/');
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(1000);
-  const passwordInput = page.locator('input[type="password"]');
-  if (await passwordInput.isVisible().catch(() => false)) {
-    await passwordInput.fill('Ey@U1U%d5D77J99F');
-    await page.locator('button[type="submit"]').click();
-    // Wait for JWT cookie to be set and chat interface to mount
-    await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 15000 });
-    await page.waitForTimeout(1000);
-  }
+  await loginIfNeeded(page);
+  // Wait for JWT cookie to be set and chat interface to mount
+  await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 15000 });
+  await page.waitForTimeout(1000);
 }
 
 async function openNewSessionModal(page: any): Promise<boolean> {

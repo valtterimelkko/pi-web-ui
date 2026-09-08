@@ -1,3 +1,5 @@
+import { isWebSocketOriginAllowed } from './origin-check.js';
+
 import WebSocket, { WebSocketServer } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
@@ -699,7 +701,7 @@ export class WebSocketConnectionManager {
     const origin = req.headers.origin;
     logger.info(`WebSocket upgrade request from origin: ${origin}, allowed: ${config.allowedOrigins}`);
     
-    if (!origin || !config.allowedOrigins.includes(origin)) {
+    if (!isWebSocketOriginAllowed(origin, config.allowedOrigins, config.nodeEnv)) {
       logger.info(`Origin not allowed: ${origin}`);
       socket.destroy();
       return;

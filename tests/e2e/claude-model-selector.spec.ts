@@ -1,15 +1,11 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 async function login(page: import('@playwright/test').Page) {
   await page.goto('/');
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(1000);
-  const passwordInput = page.locator('input[type="password"]');
-  if (await passwordInput.isVisible().catch(() => false)) {
-    await passwordInput.fill('Ey@U1U%d5D77J99F');
-    await page.locator('button[type="submit"]').click();
-    await page.waitForTimeout(3000);
-  }
+  await loginIfNeeded(page);
   // Wait for WebSocket connection and claude_available message
   await page.waitForTimeout(2000);
 }

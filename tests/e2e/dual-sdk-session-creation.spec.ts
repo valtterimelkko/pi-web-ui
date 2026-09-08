@@ -1,16 +1,11 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
-// Login helper (reuse pattern from core.spec.ts)
 async function login(page: any) {
   await page.goto('/');
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(1000);
-  const passwordInput = page.locator('input[type="password"]');
-  if (await passwordInput.isVisible().catch(() => false)) {
-    await passwordInput.fill('Ey@U1U%d5D77J99F');
-    await page.locator('button[type="submit"]').click();
-    await page.waitForTimeout(3000);
-  }
+  await loginIfNeeded(page);
 }
 
 // Open the New Session modal — the trigger is a Plus icon with title="New session"
@@ -32,13 +27,11 @@ async function openNewSessionModal(page: any): Promise<boolean> {
     : (await textBtn.isVisible().catch(() => false)) ? textBtn
     : testIdBtn;
 
-  if (!(await btn.isVisible().catch(() => false))) {
-    return false;
-  }
+  await expect(btn, 'New Session control must be available after authentication').toBeVisible({ timeout: 5000 });
 
   await btn.click();
-  // Wait for modal
-  await page.waitForSelector('[data-testid="new-session-modal"]', { timeout: 5000 }).catch(() => null);
+  // Wait for modal; a missing required control is a test failure, not a capability skip.
+  await expect(page.locator('[data-testid="new-session-modal"]')).toBeVisible({ timeout: 5000 });
   await page.waitForTimeout(300);
   return true;
 }
@@ -84,44 +77,40 @@ test.describe('Dual-SDK Session Creation', () => {
     expect(classAttr).toMatch(/blue|violet/i);
   });
 
-  test('OpenCode Direct option respects availability state', async ({ page }) => {
-    const opened = await openNewSessionModal(page);
-    if (!opened) {
-      test.skip(true, 'Could not find new session button');
-      return;
-    }
+  test('OpenCode Direct is disabled with an unavailable-capability reason', async ({ page }) => {
+    await openNewSessionModal(page);
 
     const opencodeBtn = page.locator('button').filter({ hasText: /OpenCode Direct/i }).first();
     await expect(opencodeBtn).toBeVisible({ timeout: 5000 });
-
-    const isDisabled = await opencodeBtn.isDisabled().catch(() => false);
-    expect(typeof isDisabled).toBe('boolean');
-
-    if (isDisabled) {
-      const classAttr = await opencodeBtn.getAttribute('class');
-      expect(classAttr).toMatch(/cursor-not-allowed|disabled/i);
-    }
+    await expect(opencodeBtn).toBeDisabled();
+    await expect(opencodeBtn).toContainText(/not available|unavailable|not installed|auth/i);
   });
 
-  test('Claude Direct option respects availability state', async ({ page }) => {
-    const opened = await openNewSessionModal(page);
-    if (!opened) {
-      test.skip(true, 'Could not find new session button');
-      return;
-    }
+  test('Claude Direct is disabled with an unavailable-capability reason', async ({ page }) => {
+    await openNewSessionModal(page);
 
     const claudeBtn = page.locator('button').filter({ hasText: /Claude Direct/i }).first();
     await expect(claudeBtn).toBeVisible({ timeout: 5000 });
+    await expect(claudeBtn).toBeDisabled();
+    await expect(claudeBtn).toContainText(/not available|unavailable|not installed|auth/i);
+  });
 
-    // Either disabled (claude not available) or enabled (claude available) — both valid
-    const isDisabled = await claudeBtn.isDisabled().catch(() => false);
-    expect(typeof isDisabled).toBe('boolean');
+  test('Command Code capability enables its model controls in the fixture', async ({ page }) => {
+    await openNewSessionModal(page);
 
-    if (isDisabled) {
-      // When disabled it should have cursor-not-allowed styling
-      const classAttr = await claudeBtn.getAttribute('class');
-      expect(classAttr).toMatch(/cursor-not-allowed|disabled/i);
-    }
+    // The disposable fixture advertises Command Code. This is an expected
+    // capability assertion, not a type check on isDisabled().
+    const commandCodeBtn = page.locator('button').filter({ hasText: /^Command Code/i }).first();
+    await expect(commandCodeBtn).toBeVisible({ timeout: 5000 });
+    await expect(commandCodeBtn).toBeEnabled();
+    await expect(commandCodeBtn).toContainText(/model catalogue/i);
+    await commandCodeBtn.click();
+    await expect(commandCodeBtn).toHaveAttribute('aria-pressed', 'true');
+
+    const selector = page.locator('[data-testid="commandcode-model-selector"]');
+    await expect(selector).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="commandcode-model-select"]')).toBeEnabled();
+    await expect(page.locator('[data-testid="commandcode-model-select"] option')).not.toHaveCount(0);
   });
 
   test('SDK selector section shows "Session Type" label', async ({ page }) => {

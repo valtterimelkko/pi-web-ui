@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 test.describe('JSON-RPC Protocol', () => {
   test.beforeEach(async ({ page }) => {
@@ -7,12 +8,7 @@ test.describe('JSON-RPC Protocol', () => {
     await page.waitForTimeout(1000);
     
     // Login if on login page
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
   });
 
   test('WebSocket connection uses JSON-RPC 2.0 protocol', async ({ page }) => {
@@ -116,12 +112,7 @@ test.describe('JSON-RPC Request/Response Flow', () => {
     await page.waitForTimeout(1000);
     
     // Login
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
   });
 
   test('can send and receive JSON-RPC messages', async ({ page }) => {

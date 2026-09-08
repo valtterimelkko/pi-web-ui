@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 test.describe('Empty State UI', () => {
   test.beforeEach(async ({ page }) => {
@@ -7,12 +8,7 @@ test.describe('Empty State UI', () => {
     await page.waitForTimeout(1000);
     
     // Login if on login page
-    const passwordInput = page.locator('input[type="password"]');
-    if (await passwordInput.isVisible().catch(() => false)) {
-      await passwordInput.fill('Ey@U1U%d5D77J99F');
-      await page.locator('button[type="submit"]').click();
-      await page.waitForTimeout(3000);
-    }
+    await loginIfNeeded(page);
   });
 
   test('empty state shows correct content without duplication when no session', async ({ page }) => {

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 test.describe('Smoke Tests', () => {
   test('login page loads', async ({ page }) => {
@@ -15,8 +16,7 @@ test.describe('Smoke Tests', () => {
     await page.waitForLoadState('domcontentloaded');
     
     // Login
-    await page.locator('input[type="password"]').fill('Ey@U1U%d5D77J99F');
-    await page.locator('button[type="submit"]').click();
+    await loginIfNeeded(page);
     
     // Should load main app
     await page.waitForTimeout(2000);

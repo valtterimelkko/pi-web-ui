@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './helpers/login';
 
 test.describe('Authentication', () => {
   test.beforeEach(async ({ page }) => {
@@ -14,8 +15,7 @@ test.describe('Authentication', () => {
   });
 
   test('should login with valid credentials', async ({ page }) => {
-    await page.locator('input[type="password"]').fill('Ey@U1U%d5D77J99F');
-    await page.locator('button[type="submit"]').click();
+    await loginIfNeeded(page);
     
     // Wait for main app to load
     await page.waitForTimeout(3000);

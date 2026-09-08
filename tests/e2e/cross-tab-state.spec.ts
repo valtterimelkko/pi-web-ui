@@ -1,17 +1,11 @@
 import { test, expect } from '@playwright/test';
-
-const PASSWORD = 'Ey@U1U%d5D77J99F';
+import { loginIfNeeded } from './helpers/login';
 
 async function login(page: Parameters<typeof test.fn>[0]['page']) {
   await page.goto('/');
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(500);
-  const passwordInput = page.locator('input[type="password"]');
-  if (await passwordInput.isVisible().catch(() => false)) {
-    await passwordInput.fill(PASSWORD);
-    await page.locator('button[type="submit"]').click();
-    await page.waitForTimeout(2000);
-  }
+  await loginIfNeeded(page);
 }
 
 test.describe('Cross-Tab State', () => {
@@ -227,5 +221,63 @@ test.describe('Cross-Tab State', () => {
     const wsError = page.locator('text=/connection lost|disconnected|failed to connect/i');
     const hasWsError = await wsError.isVisible({ timeout: 1000 }).catch(() => false);
     expect(hasWsError).toBe(false);
+  });
+});
+
+
+test.describe('real two-tab persistence through the metadata route', () => {
+  test('pin in one tab converges in the second tab and survives reload', async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+    const pageA = await context.newPage();
+    const pageB = await context.newPage();
+    for (const page of [pageA, pageB]) {
+      await page.goto('/');
+      await loginIfNeeded(page);
+      await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 10_000 });
+    }
+
+    // Observe the REAL metadata API traffic the app uses for pin state.
+    let sawMetadataWrite = false;
+    pageA.on('response', (response) => {
+      if (response.url().includes('/api/preferences') && response.request().method() !== 'GET') {
+        sawMetadataWrite = true;
+      }
+    });
+
+    // A fresh disposable environment has no sessions: create one through the
+    // real modal so both tabs share an observable target.
+    await pageA.locator('button[title="New session"], button').filter({ hasText: /new session/i }).first().click();
+    // Pi is the native fixture-available runtime (Command Code is
+    // Internal-API-enabled only in the disposable env; its browser button is
+    // correctly disabled there).
+    await pageA.locator('button[aria-pressed]').filter({ hasText: /pi/i }).first().click();
+    await pageA.getByRole('button', { name: 'Create', exact: true }).click();
+    // Session creation is async (websocket -> server -> registry -> list
+    // refresh); poll the REAL observable instead of a fixed wait.
+    await pageA.locator('[aria-label="Sessions"][role="list"] > div').first()
+      .waitFor({ state: 'visible', timeout: 20_000 });
+
+    // Pin the first session row through page A's real context-menu control.
+    // The pin button's title flips to "Unpin session…" once pinned — that
+    // observable fact is the convergence oracle in BOTH tabs.
+    const firstRowA = pageA.locator('[aria-label="Sessions"][role="list"] > div').first();
+    await firstRowA.waitFor({ state: 'visible', timeout: 15_000 });
+    await firstRowA.click({ button: 'right' });
+    await pageA.locator('button', { hasText: 'Pin session' }).first().click();
+    await pageA.waitForTimeout(300);
+    await expect(pageA.locator('button', { hasText: 'Unpin session' }).first()).toBeVisible({ timeout: 10_000 });
+
+    // Page B converges WITHOUT reload (storage-event/metadata channel).
+    await pageB.locator('button', { hasText: 'Unpin session' }).first()
+      .waitFor({ state: 'visible', timeout: 10_000 });
+
+    // Reload page B: persistence comes from the server, not local state.
+    await pageB.reload();
+    await pageB.waitForSelector('[data-testid="chat-interface"]', { timeout: 10_000 });
+    await expect(pageB.locator('button', { hasText: 'Unpin session' }).first()).toBeVisible({ timeout: 10_000 });
+
+    // The pin actually went through the metadata route, not local setters.
+    expect(sawMetadataWrite).toBe(true);
+    await context.close();
   });
 });
