@@ -379,6 +379,8 @@ export interface SessionEventsSnapshotResponse {
   mode: 'snapshot';
   count: number;
   events: NormalizedEvent[];
+  /** Present only when retained replay history is known-incomplete. */
+  replayStatus?: { incomplete: true; evictedEvents: number };
 }
 
 export interface TranscriptResponse {

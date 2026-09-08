@@ -5141,11 +5141,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         attachPiObserverIfNeeded(entry.path);
       }
       const events = broker.getRecentEvents(brokerSessionId);
+      const replayStatus = broker.getReplayStatus(brokerSessionId);
       sendJson(res, 200, {
         sessionId: brokerSessionId,
         mode: 'snapshot',
         count: events.length,
         events,
+        ...(replayStatus.incomplete ? { replayStatus: { incomplete: true as const, evictedEvents: replayStatus.evictedEvents } } : {}),
       } satisfies SessionEventsSnapshotResponse);
       return;
     }

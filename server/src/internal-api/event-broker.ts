@@ -53,6 +53,10 @@ export interface EventBrokerOptions {
   replayBufferSize?: number;
   /** Max total bytes of the per-session replay buffer (defense against large-event memory growth). */
   replayBufferMaxBytes?: number;
+  /** Global cross-session budget on serialised retained replay bytes. */
+  replayBudgetMaxBytes?: number;
+  /** Max retained bookkeeping keys for subscriber-less (cold) sessions. */
+  coldKeyLimit?: number;
   /** Max serialized bytes delivered/buffered per event. 0 disables. */
   eventPayloadMaxBytes?: number;
   /** Sustained message-update rate; burst capacity is twice this value. */
@@ -71,6 +75,8 @@ export interface EventBrokerOptions {
 
 const DEFAULT_REPLAY_BUFFER_SIZE = 50;
 const DEFAULT_REPLAY_BUFFER_MAX_BYTES = 8 * 1024 * 1024;
+const DEFAULT_REPLAY_BUDGET_MAX_BYTES = 32 * 1024 * 1024;
+const DEFAULT_COLD_KEY_LIMIT = 1_000;
 
 export class InternalApiEventBroker {
   private subscribers: Map<string, Set<EventBrokerSubscriber>> = new Map();
@@ -82,6 +88,14 @@ export class InternalApiEventBroker {
   private pendingUpdates = new Map<string, PendingUpdate>();
   private readonly replayBufferSize: number;
   private readonly replayBufferMaxBytes: number;
+  /** Global cross-session budget on serialised retained replay bytes. */
+  private readonly replayBudgetMaxBytes: number;
+  /** Maximum retained bookkeeping keys for sessions with no subscribers. */
+  private readonly coldKeyLimit: number;
+  /** Serialised replay bytes retained across all sessions (running total). */
+  private retainedBytesTotal = 0;
+  /** Bounded record of sessions whose replay history was evicted. */
+  private readonly evictedEventsBySession = new Map<string, number>();
   private readonly eventPayloadMaxBytes: number;
   private readonly eventRateLimitPerSec: number;
   private readonly eventRateBurst: number;
@@ -93,6 +107,8 @@ export class InternalApiEventBroker {
   constructor(options: EventBrokerOptions = {}) {
     this.replayBufferSize = Math.max(0, options.replayBufferSize ?? DEFAULT_REPLAY_BUFFER_SIZE);
     this.replayBufferMaxBytes = Math.max(0, options.replayBufferMaxBytes ?? DEFAULT_REPLAY_BUFFER_MAX_BYTES);
+    this.replayBudgetMaxBytes = Math.max(0, options.replayBudgetMaxBytes ?? DEFAULT_REPLAY_BUDGET_MAX_BYTES);
+    this.coldKeyLimit = Math.max(1, options.coldKeyLimit ?? DEFAULT_COLD_KEY_LIMIT);
     this.eventPayloadMaxBytes = Math.max(0, options.eventPayloadMaxBytes ?? config.internalApiEventPayloadMaxBytes);
     this.eventRateLimitPerSec = Math.max(1, options.eventRateLimitPerSec ?? config.internalApiEventRateLimitPerSec);
     this.eventRateBurst = this.eventRateLimitPerSec * 2;
@@ -208,8 +224,17 @@ export class InternalApiEventBroker {
       // Bound by count AND bytes: trim oldest events using cached sizes.
       let bytes = (this.replayBufferBytes.get(sessionId) ?? 0) + measured.bytes;
       while (buffer.length > this.replayBufferSize) { const old = buffer.shift(); if (old) bytes -= old.bytes; }
-      while (bytes > this.replayBufferMaxBytes && buffer.length > 0) { const old = buffer.shift(); if (old) bytes -= old.bytes; }
+      while (bytes > this.replayBufferMaxBytes && buffer.length > 0) {
+        const old = buffer.shift();
+        if (old) {
+          bytes -= old.bytes;
+          this.retainedBytesTotal = Math.max(0, this.retainedBytesTotal - old.bytes);
+          this.markEvicted(sessionId, 1);
+        }
+      }
       this.replayBufferBytes.set(sessionId, Math.max(0, bytes));
+      this.retainedBytesTotal += measured.bytes;
+      this.enforceGlobalBounds();
     }
 
     const set = this.subscribers.get(sessionId);
@@ -224,14 +249,99 @@ export class InternalApiEventBroker {
     }
   }
 
-  /** Drop all subscribers and buffers for a session. */
-  clear(sessionId: string): void {
-    this.subscribers.delete(sessionId);
+  /** Number of cold (subscriber-less) sessions still holding bookkeeping. */
+  get debugColdKeyCount(): number {
+    let cold = 0;
+    for (const sessionId of this.replayBuffers.keys()) {
+      if (!this.subscribers.has(sessionId)) cold += 1;
+    }
+    return cold;
+  }
+
+  /** Pending coalesced deltas held for subscriber-less sessions. */
+  get debugPendingColdCount(): number {
+    let pending = 0;
+    for (const sessionId of this.pendingUpdates.keys()) {
+      if (!this.subscribers.has(sessionId)) pending += 1;
+    }
+    return pending;
+  }
+
+  /** Whether a session's retained replay history is known-incomplete. */
+  getReplayStatus(sessionId: string): { incomplete: boolean; evictedEvents: number } {
+    const evictedEvents = this.evictedEventsBySession.get(sessionId) ?? 0;
+    return { incomplete: evictedEvents > 0, evictedEvents };
+  }
+
+  /** Drop every bookkeeping entry owned by a session key. */
+  private dropSessionState(sessionId: string, evictedEvents: number): void {
+    const bytes = this.replayBufferBytes.get(sessionId) ?? 0;
+    const buffer = this.replayBuffers.get(sessionId);
+    const count = evictedEvents > 0 ? evictedEvents : (buffer?.length ?? 0);
     this.replayBuffers.delete(sessionId);
     this.replayBufferBytes.delete(sessionId);
-    this.warnedOversizedSessions.delete(sessionId);
     this.rateStates.delete(sessionId);
     this.pendingUpdates.delete(sessionId);
+    this.warnedOversizedSessions.delete(sessionId);
+    this.retainedBytesTotal = Math.max(0, this.retainedBytesTotal - bytes);
+    if (count > 0) this.markEvicted(sessionId, count);
+  }
+
+  private markEvicted(sessionId: string, events: number): void {
+    this.evictedEventsBySession.set(sessionId, (this.evictedEventsBySession.get(sessionId) ?? 0) + events);
+    this.metrics.recordBrokerReplayEviction(events);
+    // Bound the marker map itself; oldest markers age out (documented imprecision).
+    while (this.evictedEventsBySession.size > Math.max(this.coldKeyLimit, 1_000)) {
+      const oldest = this.evictedEventsBySession.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.evictedEventsBySession.delete(oldest);
+    }
+  }
+
+  /** Enforce the global replay budget and the cold-key bound after a publish. */
+  private enforceGlobalBounds(): void {
+    // 1. Global byte budget: evict cold sessions whole first, then trim oldest
+    //    events across sessions. Live delivery is never affected — only history.
+    let guard = 0;
+    while (this.retainedBytesTotal > this.replayBudgetMaxBytes && (this.replayBuffers.size > 0) && guard++ < 10_000) {
+      let coldKey: string | undefined;
+      for (const sessionId of this.replayBuffers.keys()) {
+        if (!this.subscribers.has(sessionId)) { coldKey = sessionId; break; }
+      }
+      if (coldKey !== undefined) {
+        this.dropSessionState(coldKey, 0);
+        continue;
+      }
+      // No cold sessions: trim the oldest buffered event of the first session.
+      const sessionId = this.replayBuffers.keys().next().value as string | undefined;
+      if (sessionId === undefined) break;
+      const buffer = this.replayBuffers.get(sessionId);
+      const old = buffer?.shift();
+      if (!buffer || !old) { this.replayBuffers.delete(sessionId); continue; }
+      const bytes = Math.max(0, (this.replayBufferBytes.get(sessionId) ?? 0) - old.bytes);
+      this.replayBufferBytes.set(sessionId, bytes);
+      this.retainedBytesTotal = Math.max(0, this.retainedBytesTotal - old.bytes);
+      this.markEvicted(sessionId, 1);
+    }
+    // 2. Cold-key bound: at most coldKeyLimit subscriber-less sessions may hold
+    //    replay/rate/pending bookkeeping. Oldest cold keys are dropped whole.
+    guard = 0;
+    while (this.debugColdKeyCount > this.coldKeyLimit && guard++ < 10_000) {
+      let coldKey: string | undefined;
+      for (const sessionId of this.replayBuffers.keys()) {
+        if (!this.subscribers.has(sessionId)) { coldKey = sessionId; break; }
+      }
+      if (coldKey === undefined) break;
+      this.dropSessionState(coldKey, 0);
+    }
+    this.metrics.setBrokerReplayState(this.retainedBytesTotal, this.replayBuffers.size);
+  }
+
+  clear(sessionId: string): void {
+    this.subscribers.delete(sessionId);
+    this.dropSessionState(sessionId, 0);
+    // Exact deletion clears owned state completely: no incompleteness marker.
+    this.evictedEventsBySession.delete(sessionId);
   }
 
   /** Return a copy of the recent buffered events for a session, oldest first. */

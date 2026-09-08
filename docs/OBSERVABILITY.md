@@ -131,6 +131,16 @@ zero, zero-valued aggregates are placeholders, not proof of a lag-free interval.
 This is process-local history, not durable telemetry. Latest-lag reporting and
 existing shed/admission thresholds are unchanged; no extra sampler is started.
 
+`operational.pipeline.brokerReplay*` gauges expose aggregate broker replay
+retention: `brokerReplayRetainedBytes` (serialised retained bytes across all
+sessions, bounded by a 32 MiB default global budget), `brokerReplayKeys`
+(retained session keys) and `brokerReplayEvictedEventsTotal`. Cold
+(subscriber-less) sessions are capped at 1,000 retained bookkeeping keys;
+their replay history may be evicted whole, and the affected sessions' event
+snapshot responses then carry `replayStatus: { incomplete: true }` so an
+evicted history is never mistaken for "nothing happened". Live terminal and
+control delivery is never suppressed to protect replay.
+
 Responses are capped at 1 MiB; optional `responseTruncation` states how many
 oldest log/error array entries were omitted and the byte limit. This does not
 remove retained entries or change matching summary counts. If required registry

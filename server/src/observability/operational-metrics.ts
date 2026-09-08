@@ -52,6 +52,9 @@ export interface OperationalSnapshot {
     brokerPublishBytesTotal: number;
     brokerEventsTruncatedTotal: number;
     brokerEventsCoalescedTotal: number;
+    brokerReplayRetainedBytes: number;
+    brokerReplayKeys: number;
+    brokerReplayEvictedEventsTotal: number;
     eventLoopLagMs: number;
     eventLoopLagWindow: {
       windowMs: number; maxSamples: number; sampleCount: number;
@@ -105,6 +108,9 @@ export class OperationalMetrics {
   private brokerPublishBytesTotal = 0;
   private brokerEventsTruncatedTotal = 0;
   private brokerEventsCoalescedTotal = 0;
+  private brokerReplayRetainedBytes = 0;
+  private brokerReplayKeys = 0;
+  private brokerReplayEvictedEventsTotal = 0;
   private eventLoopLagMs = 0;
   private readonly lagSamples: Array<{ at: number; value: number } | undefined> = new Array(LAG_MAX_SAMPLES);
   private lagCursor = 0;
@@ -185,6 +191,16 @@ export class OperationalMetrics {
     this.brokerEventsCoalescedTotal += Math.max(0, count);
   }
 
+  /** Aggregate broker replay retention (gauge, set by the broker owner). */
+  setBrokerReplayState(retainedBytes: number, keys: number): void {
+    this.brokerReplayRetainedBytes = Math.max(0, Math.round(retainedBytes));
+    this.brokerReplayKeys = Math.max(0, Math.round(keys));
+  }
+
+  recordBrokerReplayEviction(events = 1): void {
+    this.brokerReplayEvictedEventsTotal += Math.max(0, events);
+  }
+
   recordEventLoopLag(lagMs: number): void {
     this.eventLoopLagMs = Math.max(0, Math.round(lagMs));
     this.lagSamples[this.lagCursor] = { at: this.now(), value: this.eventLoopLagMs };
@@ -234,6 +250,9 @@ export class OperationalMetrics {
         brokerPublishBytesTotal: this.brokerPublishBytesTotal,
         brokerEventsTruncatedTotal: this.brokerEventsTruncatedTotal,
         brokerEventsCoalescedTotal: this.brokerEventsCoalescedTotal,
+        brokerReplayRetainedBytes: this.brokerReplayRetainedBytes,
+        brokerReplayKeys: this.brokerReplayKeys,
+        brokerReplayEvictedEventsTotal: this.brokerReplayEvictedEventsTotal,
         eventLoopLagMs: this.eventLoopLagMs,
         eventLoopLagWindow: this.lagWindowSnapshot(now),
         wsUpdatesQueuedTotal: this.wsUpdatesQueuedTotal,
