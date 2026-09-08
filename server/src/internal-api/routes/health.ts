@@ -11,6 +11,8 @@ import type { OpenCodeService } from '../../opencode/opencode-service.js';
 import type { AntigravityService } from '../../antigravity/antigravity-service.js';
 import { RuntimeHealthMonitor } from '../../observability/runtime-health.js';
 import type { CommandCodeService } from '../../command-code/command-code-service.js';
+import { getProcessBootIdentity, runtimeBuildIdentity, type ProcessBootIdentity } from '../../build-identity/runtime.js';
+import type { BuildIdentity } from '../../build-identity/manifest.js';
 
 export interface HealthRoutesDeps {
   claudeService: ClaudeService;
@@ -24,6 +26,7 @@ export interface HealthRoutesDeps {
 export function createHealthRoutes(deps: HealthRoutesDeps) {
   const { claudeService, opencodeService, antigravityService, commandCodeService, startTime } = deps;
   const monitor = new RuntimeHealthMonitor();
+  const bootIdentity = getProcessBootIdentity(startTime);
 
   async function handleHealth(
     _req: IncomingMessage,
@@ -69,13 +72,19 @@ export function createHealthRoutes(deps: HealthRoutesDeps) {
 
     const uptime = Math.floor((Date.now() - startTime) / 1000);
 
-    sendJson(res, 200, {
+    const response: HealthResponse & {
+      buildIdentity: BuildIdentity;
+      bootIdentity: ProcessBootIdentity;
+    } = {
       status: overallStatus,
       contract: getInternalApiContractInfo(),
       runtimes,
       runtimeHealth,
       uptime,
-    } satisfies HealthResponse);
+      buildIdentity: runtimeBuildIdentity,
+      bootIdentity,
+    };
+    sendJson(res, 200, response);
   }
 
   return { handleHealth };

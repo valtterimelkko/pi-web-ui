@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   clearBrowserDiagnostics,
   createBrowserDiagnosticBundle,
+  getBrowserBuildIdentity,
+  parseBrowserBuildIdentity,
   recordBrowserDiagnostic,
   recordProtocolDrift,
   type BrowserDiagnosticInput,
@@ -23,6 +25,38 @@ describe('browser diagnostics', () => {
     expect(JSON.stringify(bundle)).not.toContain('prompt');
     expect(JSON.stringify(bundle)).not.toContain('session-1');
     expect(bundle).toHaveProperty('buildVersion');
+    expect(bundle.buildVersion).toBe(bundle.buildIdentity.buildId);
+    expect(getBrowserBuildIdentity()).toMatchObject({
+      identityStatus: 'unknown',
+      buildId: 'unknown',
+    });
+  });
+
+  it('projects strict identity metadata without forwarding synthetic fields', () => {
+    const payload = {
+      manifestSchemaVersion: 1,
+      identityStatus: 'known',
+      buildMode: 'compiled',
+      buildId: 'build-0123456789abcdef0123456789abcdef',
+      buildFingerprint: `sha256:${'0123456789abcdef'.repeat(4)}`,
+      revision: 'revision-a',
+      sourceFingerprint: `sha256:${'1234567890abcdef'.repeat(4)}`,
+      configFingerprint: `sha256:${'abcdef0123456789'.repeat(4)}`,
+      lockfileFingerprint: `sha256:${'fedcba9876543210'.repeat(4)}`,
+      componentVersions: { app: '1.0.0' },
+      inputCounts: { source: 1, config: 1, lockfile: 1 },
+      unexpected: 'must not escape',
+    };
+
+    const identity = parseBrowserBuildIdentity(JSON.stringify(payload));
+
+    expect(identity).toMatchObject({ buildId: payload.buildId, identityStatus: 'known' });
+    expect(identity).not.toHaveProperty('unexpected');
+  });
+
+  it('rejects malformed or oversized embedded identities', () => {
+    expect(parseBrowserBuildIdentity('{"buildId":"known-but-incomplete"}').identityStatus).toBe('unknown');
+    expect(parseBrowserBuildIdentity('x'.repeat(100_000)).identityStatus).toBe('unknown');
   });
 
   it('scrubs sensitive close reasons and counts malformed protocol messages', () => {

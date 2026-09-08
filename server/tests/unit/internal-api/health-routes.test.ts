@@ -34,6 +34,15 @@ describe('Internal API health routes', () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       status: 'ok',
+      buildIdentity: {
+        buildMode: 'source',
+        identityStatus: 'known',
+        sourceFingerprint: expect.stringMatching(/^sha256:/),
+      },
+      bootIdentity: {
+        bootId: expect.any(String),
+        startedAt: expect.any(String),
+      },
       runtimes: {
         pi: 'available',
         claude: 'unavailable',
