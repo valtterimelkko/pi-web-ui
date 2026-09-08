@@ -59,10 +59,12 @@ export type SessionRegistryReadFile = (filePath: string, encoding: BufferEncodin
 
 export interface SessionRegistryManagerOptions {
   /**
-   * Injectable read boundary for deterministic fault tests. Writes continue to
-   * use the real filesystem and retain the manager's atomic-save behaviour.
+   * Injectable read/write boundaries for deterministic fault and coalescing
+   * tests. Writes default to the real filesystem with atomic-save behaviour.
    */
   readFile?: SessionRegistryReadFile;
+  writeFile?: (path: string, data: string, encoding: BufferEncoding) => Promise<void>;
+  rename?: (from: string, to: string) => Promise<void>;
 }
 
 export class SessionRegistryUnavailableError extends Error {
@@ -88,14 +90,32 @@ const REGISTRY_VERSION = 1;
 export class SessionRegistryManager {
   private registryPath: string;
   private registry: SessionRegistry | null = null;
-  private saveQueue: Promise<void> = Promise.resolve();
   private loadPromise: Promise<SessionRegistry> | null = null;
   private loadStatus: SessionRegistryLoadStatus = { state: 'unloaded' };
   private readonly readFile: SessionRegistryReadFile;
+  private readonly writeFile: (path: string, data: string, encoding: BufferEncoding) => Promise<void>;
+  private readonly rename: (from: string, to: string) => Promise<void>;
+  /** Exact-key indexes; the ordered entries array remains the source of truth. */
+  private readonly indexById = new Map<string, RegistryEntry>();
+  private readonly indexByPath = new Map<string, RegistryEntry>();
+  private readonly indexByClaudeSessionId = new Map<string, RegistryEntry>();
+  private readonly indexByOpencodeSessionId = new Map<string, RegistryEntry>();
+  private readonly indexByCommandCodeNativeSessionId = new Map<string, RegistryEntry>();
+  private linearScans = 0;
+  /** Coalesced-save state: one in-flight write plus at most one trailing follow-up. */
+  private inFlightSave: Promise<void> | null = null;
+  private followUpNeeded = false;
 
   constructor(registryPath: string, options: SessionRegistryManagerOptions = {}) {
     this.registryPath = registryPath;
     this.readFile = options.readFile ?? ((filePath, encoding) => fs.readFile(filePath, encoding));
+    this.writeFile = options.writeFile ?? ((filePath, data, encoding) => fs.writeFile(filePath, data, encoding));
+    this.rename = options.rename ?? ((from, to) => fs.rename(from, to));
+  }
+
+  /** Cost witness for exact lookups: counts remaining linear scans over entries. */
+  get debugLinearScanCount(): number {
+    return this.linearScans;
   }
 
   getLoadStatus(): SessionRegistryLoadStatus {
@@ -137,6 +157,7 @@ export class SessionRegistryManager {
         throw new SessionRegistryUnavailableError('invalid', new Error('Invalid registry format'));
       }
       this.registry = parsed;
+      this.rebuildIndexes();
       this.loadStatus = { state: 'available', source: 'disk' };
       return this.registry;
     } catch (err: unknown) {
@@ -147,6 +168,7 @@ export class SessionRegistryManager {
           updatedAt: new Date().toISOString(),
           entries: [],
         };
+        this.rebuildIndexes();
         this.loadStatus = { state: 'missing' };
         return this.registry;
       }
@@ -167,9 +189,33 @@ export class SessionRegistryManager {
   }
 
   async save(): Promise<void> {
-    const result = this.saveQueue.then(() => this._doSave());
-    this.saveQueue = result.then(undefined, () => {});
-    await result;
+    // Coalesced saves: while a write is in flight, compatible save requests
+    // join a single trailing follow-up write instead of queueing one disk
+    // snapshot each. A waiter resolves only after a snapshot that was
+    // serialised after its mutation has completed, and a failed write
+    // rejects the waiters it was carrying (their state stays in memory for
+    // a later retry).
+    if (this.inFlightSave) {
+      const current = this.inFlightSave;
+      this.followUpNeeded = true;
+      await current;
+      if (this.inFlightSave && this.inFlightSave !== current) {
+        // A follow-up write already started after ours landed; it covers us.
+        return this.inFlightSave;
+      }
+      if (!this.followUpNeeded) return;
+      this.followUpNeeded = false;
+      return this.startSave();
+    }
+    return this.startSave();
+  }
+
+  private startSave(): Promise<void> {
+    const attempt = this._doSave().finally(() => {
+      if (this.inFlightSave === attempt) this.inFlightSave = null;
+    });
+    this.inFlightSave = attempt;
+    return attempt;
   }
 
   private async _doSave(): Promise<void> {
@@ -185,8 +231,8 @@ export class SessionRegistryManager {
 
     const tmpPath = `${this.registryPath}.tmp`;
     try {
-      await fs.writeFile(tmpPath, JSON.stringify(this.registry, null, 2), 'utf-8');
-      await fs.rename(tmpPath, this.registryPath);
+      await this.writeFile(tmpPath, JSON.stringify(this.registry, null, 2), 'utf-8');
+      await this.rename(tmpPath, this.registryPath);
       this.loadStatus = { state: 'available', source: 'disk' };
     } catch (err) {
       try { await fs.unlink(tmpPath); } catch { /* ignore */ }
@@ -195,66 +241,95 @@ export class SessionRegistryManager {
   }
 
   async get(id: string): Promise<RegistryEntry | undefined> {
-    const registry = await this.load();
-    return registry.entries.find(e => e.id === id);
+    await this.load();
+    return this.indexById.get(id);
   }
 
   async getByPath(sessionPath: string): Promise<RegistryEntry | undefined> {
-    const registry = await this.load();
-    return registry.entries.find(e => e.path === sessionPath);
+    await this.load();
+    return this.indexByPath.get(sessionPath);
   }
 
   async getByClaudeSessionId(claudeSessionId: string): Promise<RegistryEntry | undefined> {
-    const registry = await this.load();
-    return registry.entries.find(e => e.claudeSessionId === claudeSessionId);
+    await this.load();
+    return this.indexByClaudeSessionId.get(claudeSessionId);
   }
 
   async getByOpencodeSessionId(opencodeSessionId: string): Promise<RegistryEntry | undefined> {
-    const registry = await this.load();
-    return registry.entries.find(e => e.opencodeSessionId === opencodeSessionId);
+    await this.load();
+    return this.indexByOpencodeSessionId.get(opencodeSessionId);
   }
 
   async getByCommandCodeNativeSessionId(commandCodeNativeSessionId: string): Promise<RegistryEntry | undefined> {
-    const registry = await this.load();
-    return registry.entries.find(e => e.commandCodeNativeSessionId === commandCodeNativeSessionId);
+    await this.load();
+    return this.indexByCommandCodeNativeSessionId.get(commandCodeNativeSessionId);
+  }
+
+  /** Rebuild all exact-key indexes from the ordered entries (first match wins). */
+  private rebuildIndexes(): void {
+    this.indexById.clear();
+    this.indexByPath.clear();
+    this.indexByClaudeSessionId.clear();
+    this.indexByOpencodeSessionId.clear();
+    this.indexByCommandCodeNativeSessionId.clear();
+    for (const entry of this.registry?.entries ?? []) this.addEntryToIndexes(entry);
+  }
+
+  private addEntryToIndexes(entry: RegistryEntry): void {
+    if (entry.id !== undefined && !this.indexById.has(entry.id)) this.indexById.set(entry.id, entry);
+    if (entry.path && !this.indexByPath.has(entry.path)) this.indexByPath.set(entry.path, entry);
+    if (entry.claudeSessionId && !this.indexByClaudeSessionId.has(entry.claudeSessionId)) this.indexByClaudeSessionId.set(entry.claudeSessionId, entry);
+    if (entry.opencodeSessionId && !this.indexByOpencodeSessionId.has(entry.opencodeSessionId)) this.indexByOpencodeSessionId.set(entry.opencodeSessionId, entry);
+    if (entry.commandCodeNativeSessionId && !this.indexByCommandCodeNativeSessionId.has(entry.commandCodeNativeSessionId)) this.indexByCommandCodeNativeSessionId.set(entry.commandCodeNativeSessionId, entry);
+  }
+
+  private removeEntryFromIndexes(entry: RegistryEntry): void {
+    if (this.indexById.get(entry.id) === entry) this.indexById.delete(entry.id);
+    if (entry.path && this.indexByPath.get(entry.path) === entry) this.indexByPath.delete(entry.path);
+    if (entry.claudeSessionId && this.indexByClaudeSessionId.get(entry.claudeSessionId) === entry) this.indexByClaudeSessionId.delete(entry.claudeSessionId);
+    if (entry.opencodeSessionId && this.indexByOpencodeSessionId.get(entry.opencodeSessionId) === entry) this.indexByOpencodeSessionId.delete(entry.opencodeSessionId);
+    if (entry.commandCodeNativeSessionId && this.indexByCommandCodeNativeSessionId.get(entry.commandCodeNativeSessionId) === entry) this.indexByCommandCodeNativeSessionId.delete(entry.commandCodeNativeSessionId);
+  }
+
+  /** After deleting an entry, a later duplicate may now be first for its keys. */
+  private restoreIndexesAfterDelete(removed: RegistryEntry): void {
+    this.linearScans += 1;
+    const entries = this.registry?.entries ?? [];
+    for (const candidate of entries) {
+      if (candidate.id === removed.id || candidate.path === removed.path
+        || candidate.claudeSessionId === removed.claudeSessionId
+        || candidate.opencodeSessionId === removed.opencodeSessionId
+        || candidate.commandCodeNativeSessionId === removed.commandCodeNativeSessionId) {
+        this.addEntryToIndexes(candidate);
+      }
+    }
   }
 
   async upsert(entry: Partial<RegistryEntry> & { sdkType: SdkType; cwd: string }): Promise<RegistryEntry> {
     const registry = await this.load();
 
-    // Find existing entry by id, path, or claudeSessionId
-    let existingIndex = -1;
-    if (entry.id) {
-      existingIndex = registry.entries.findIndex(e => e.id === entry.id);
-    }
-    if (existingIndex === -1 && entry.path) {
-      existingIndex = registry.entries.findIndex(e => e.path === entry.path);
-    }
-    if (existingIndex === -1 && entry.claudeSessionId) {
-      existingIndex = registry.entries.findIndex(e => e.claudeSessionId === entry.claudeSessionId);
-    }
-    if (existingIndex === -1 && entry.opencodeSessionId) {
-      existingIndex = registry.entries.findIndex(e => e.opencodeSessionId === entry.opencodeSessionId);
-    }
-    if (existingIndex === -1 && entry.commandCodeNativeSessionId) {
-      existingIndex = registry.entries.findIndex(e => e.commandCodeNativeSessionId === entry.commandCodeNativeSessionId);
-    }
+    // Resolve an existing entry by the same precedence as before (id, path,
+    // claudeSessionId, opencodeSessionId, commandCodeNativeSessionId), now via
+    // exact-key indexes instead of a linear scan per key.
+    let existing: RegistryEntry | undefined;
+    if (entry.id) existing = this.indexById.get(entry.id);
+    if (!existing && entry.path) existing = this.indexByPath.get(entry.path);
+    if (!existing && entry.claudeSessionId) existing = this.indexByClaudeSessionId.get(entry.claudeSessionId);
+    if (!existing && entry.opencodeSessionId) existing = this.indexByOpencodeSessionId.get(entry.opencodeSessionId);
+    if (!existing && entry.commandCodeNativeSessionId) existing = this.indexByCommandCodeNativeSessionId.get(entry.commandCodeNativeSessionId);
 
     if (entry.sdkType === 'commandcode' && entry.commandCodeNativeSessionId) {
-      const duplicate = registry.entries.find((candidate) => (
-        candidate.sdkType === 'commandcode'
-        && candidate.commandCodeNativeSessionId === entry.commandCodeNativeSessionId
-        && candidate.id !== entry.id
-        && candidate.path !== entry.path
-      ));
-      if (duplicate) throw new Error(`Command Code native session id is already bound to ${duplicate.id}`);
+      const duplicate = this.indexByCommandCodeNativeSessionId.get(entry.commandCodeNativeSessionId);
+      if (duplicate && duplicate.sdkType === 'commandcode'
+        && duplicate.id !== entry.id
+        && duplicate.path !== entry.path) {
+        throw new Error(`Command Code native session id is already bound to ${duplicate.id}`);
+      }
     }
 
     const now = new Date().toISOString();
 
-    if (existingIndex !== -1) {
-      // Update existing entry
-      const existing = registry.entries[existingIndex];
+    if (existing) {
       const updated: RegistryEntry = {
         ...existing,
         ...entry,
@@ -262,7 +337,10 @@ export class SessionRegistryManager {
         updatedAt: now,
         lastActivity: entry.lastActivity ?? now,
       } as RegistryEntry;
+      this.removeEntryFromIndexes(existing);
+      const existingIndex = registry.entries.indexOf(existing);
       registry.entries[existingIndex] = updated;
+      this.addEntryToIndexes(updated);
       await this.save();
       return updated;
     } else {
@@ -288,6 +366,7 @@ export class SessionRegistryManager {
         claudeProviderId: entry.claudeProviderId,
       };
       registry.entries.push(newEntry);
+      this.addEntryToIndexes(newEntry);
       await this.save();
       return newEntry;
     }
@@ -302,8 +381,8 @@ export class SessionRegistryManager {
     id: string,
     patch: { model?: string; thinkingLevel?: string; parentSessionId?: string },
   ): Promise<RegistryEntry | undefined> {
-    const registry = await this.load();
-    const entry = registry.entries.find(e => e.id === id);
+    await this.load();
+    const entry = this.indexById.get(id);
     if (!entry) return undefined;
     if (patch.model !== undefined) entry.model = patch.model;
     if (patch.thinkingLevel !== undefined) entry.thinkingLevel = patch.thinkingLevel;
@@ -314,8 +393,8 @@ export class SessionRegistryManager {
   }
 
   async updateStatus(id: string, status: RegistryEntry['status']): Promise<void> {
-    const registry = await this.load();
-    const entry = registry.entries.find(e => e.id === id);
+    await this.load();
+    const entry = this.indexById.get(id);
     if (entry) {
       entry.status = status;
       entry.lastActivity = new Date().toISOString();
@@ -335,11 +414,13 @@ export class SessionRegistryManager {
 
   async delete(id: string): Promise<void> {
     const registry = await this.load();
-    const before = registry.entries.length;
+    const entry = this.indexById.get(id);
+    if (!entry) return;
     registry.entries = registry.entries.filter(e => e.id !== id);
-    if (registry.entries.length !== before) {
-      await this.save();
-    }
+    this.linearScans += 1;
+    this.removeEntryFromIndexes(entry);
+    this.restoreIndexesAfterDelete(entry);
+    await this.save();
   }
 
   async rebuildFromPiSessions(piSessionDir: string): Promise<void> {
