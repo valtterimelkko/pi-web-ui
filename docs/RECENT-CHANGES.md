@@ -4,10 +4,10 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
-- **Antigravity stream-json integration (`2026-09-08`, no contract change)**
+- **Antigravity stream-json integration (`1.37.0`, `2026-09-08`)**
   - The Antigravity runtime moved from batch text print-mode (`agy -p`) to a persistent `agy --input-format stream-json --output-format stream-json` process per session: real `text_delta` streaming (~200 ms cadence), per-turn results, tool-call visibility (`tool_execution_start/end`), real token usage (context % now comes from agy, not char/4 estimates), and native follow-up queueing (a mid-turn write runs as the next turn — frontend composer shows a queue-only affordance; Internal API `mode:'follow_up'` queues on busy antigravity sessions).
   - Model + thinking-level selection is now reliable and live-validated against agy 1.1.27: canonical slug selectors with sibling-derived `thinkingLevels` per model, loud failures for unknown models (the historic silent downgrade is gone), sibling-slug level swaps (never an `--effort` flag), 409 for busy model changes, and crash recovery via `--conversation` resume.
-  - Rollback hatch: `ANTIGRAVITY_STREAM_MODE=false` restores the legacy text-mode wrapper. No Internal API wire-schema change (contract stays `1.27.0`); `backendMode` gains the `stream-json` value.
+  - Contract **1.37.0**: `RuntimeBackendMode` gains `stream-json`, antigravity `/models` entries gain `thinkingLevels` + slug selectors, and busy-antigravity `follow_up` prompts queue instead of `409` — additive wire changes mirrored to the Agent OS contract consumer. The legacy text-mode path was removed in the same release (no rollback hatch).
   - Canonical docs: [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md), [`docs/plans/ANTIGRAVITY-JSON-STREAM-INTEGRATION-PLAN.md`](./plans/ANTIGRAVITY-JSON-STREAM-INTEGRATION-PLAN.md).
 
 - **Child-orchestration surfacing (`1.34.0`, `2026-09-04`)**

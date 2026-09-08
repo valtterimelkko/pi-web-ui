@@ -14,7 +14,6 @@ import { Writable } from 'stream';
 
 process.env.HOME = mkdtempSync(join(tmpdir(), 'agy-stream-home-'));
 process.env.ANTIGRAVITY_SESSION_DIR = join(process.env.HOME, '.pi-web-ui', 'antigravity-sessions');
-process.env.ANTIGRAVITY_STREAM_MODE = 'true';
 
 class FakeStreamChild extends EventEmitter {
   readonly stdout = new EventEmitter();
@@ -25,14 +24,14 @@ class FakeStreamChild extends EventEmitter {
 
   constructor() {
     super();
-    const self = this;
+    const writes = this.stdinWrites;
     this.stdin = new Writable({
       write(chunk: Buffer, _enc, cb) {
-        self.stdinWrites.push(chunk.toString());
+        writes.push(chunk.toString());
         cb();
       },
       final(cb) {
-        self.stdinWrites.push('__END__');
+        writes.push('__END__');
         cb();
       },
     }) as Writable;
@@ -403,6 +402,28 @@ describe('AntigravityService — stream-json mode (plan phase 4)', () => {
   it('T6.2: setThinkingLevel rejects unsupported axes loudly', async () => {
     await svc.setModel(sessionId, 'claude-sonnet-4-6');
     await expect(svc.setThinkingLevel(sessionId, 'low')).rejects.toThrow(/not supported|unsupported/i);
+  });
+
+  it('API observers receive agent_end independent of the prompting client (ported origin-independence guarantee)', async () => {
+    const seen: string[] = [];
+    const obs = (e: { type: string }) => seen.push(e.type);
+    svc.addApiObserver(sessionId, obs);
+    const h = await startTurn(svc, sessionId);
+    h.child.writeStdout(resultLine('observed', 1));
+    await h.done;
+    expect(seen).toContain('agent_start');
+    expect(seen).toContain('agent_end');
+  });
+
+  it('stops delivering events after removeApiObserver', async () => {
+    const seen: string[] = [];
+    const obs = (e: { type: string }) => seen.push(e.type);
+    svc.addApiObserver(sessionId, obs);
+    svc.removeApiObserver(sessionId, obs);
+    const h = await startTurn(svc, sessionId);
+    h.child.writeStdout(resultLine('unobserved', 1));
+    await h.done;
+    expect(seen).not.toContain('agent_end');
   });
 
   it('getContextUsage uses real usage when present (no char/4 estimate in stream mode)', async () => {

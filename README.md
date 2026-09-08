@@ -15,7 +15,7 @@ Currently supported runtime paths:
 - **Pi Coding Agent**
 - **Claude Code** (SDK/profile-backed, direct `claude -p`, or channel-backed Claude Code)
 - **OpenCode**
-- **Antigravity** (`agy -p` / Gemini)
+- **Antigravity** (`agy` stream-json / Gemini)
 - **Command Code** (`cmdc`, behind the `COMMAND_CODE_ENABLED` gate, disabled by default)
 
 ## Why this exists
@@ -47,7 +47,7 @@ For the fuller origin story, read [`docs/PROJECT-STORY.md`](./docs/PROJECT-STORY
 | **Pi Coding Agent** | Native Pi Coding Agent integration via its SDK path | Pi Coding Agent workflows, extensions, custom tools, and now a much broader optional OpenRouter-backed model catalogue | Lowest |
 | **Claude Code** | Claude Agent SDK (profiles), `claude -p`, or channel-backed Claude Code | Harder coding work on Claude Code; multi-provider access via provider profiles | Medium–higher |
 | **OpenCode** | `opencode serve` + HTTP/SSE | OpenCode-backed workflows, especially OpenCode/Z.AI setups | Low–medium |
-| **Antigravity** | `agy -p` subprocess-per-turn | Gemini/Antigravity workflows in the same UI | Higher |
+| **Antigravity** | `agy` stream-json persistent process | Gemini/Antigravity workflows in the same UI | Higher |
 | **Command Code** | Server-owned `cmd` subprocess per session with exact live model/effort discovery and a private normalized replay journal | Command Code catalogue workflows with native effort where advertised | High |
 
 The important truth is that these paths are **not equally official in the eyes of their upstreams**:

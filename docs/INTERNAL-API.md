@@ -57,7 +57,7 @@ Under the hood, each runtime slot exists for a different reason:
 | **Pi Coding Agent** | [Pi Coding Agent](https://shittycodingagent.ai/) via its SDK path | The native path. When models are available through the Pi model registry and you want extensions, custom tools, and the full Pi experience. |
 | **Claude Code** | profile-driven SDK backend, legacy `claude -p`, **or** the channel-backed Claude Code path | Claude's monthly subscription does not allow external coding-agent harnesses to use Claude via the Anthropic API — Claude Code must be the agent environment. Pi Web UI therefore runs Claude Code directly, normalizes SDK messages, legacy NDJSON, or channel/plugin events into the common event model, and owns the replay/persistence layer so sessions survive restarts. Explicit provider profiles also let the same browser UI route Claude sessions through native Claude subscription or Anthropic-compatible providers such as GLM/Z.ai. |
 | **OpenCode** | `opencode serve` HTTP/SSE backend | Z.AI's GLM models (via the coding-plan provider) currently recognise OpenCode as a valid coding-agent harness but not Pi. Rather than bypass this, Pi Web UI integrates with the OpenCode server backend, adapting OpenCode SSE events into the same common event model. The OpenCode backend owns transcript storage; Pi Web UI stores registry metadata and replay transforms. |
-| **Antigravity** | `agy -p` subprocess-per-turn backend | Google Gemini via Antigravity CLI. Pi Web UI runs `agy` directly, stores Pi-owned turn logs for replay, and correlates them with agy-owned conversation SQLite DBs for follow-up continuity. |
+| **Antigravity** | `agy` stream-json persistent-process backend | Google Gemini via Antigravity CLI. Pi Web UI runs one warmed `agy --input-format stream-json --output-format stream-json` process per session, normalises its NDJSON events (streamed deltas, tool calls, real usage), and correlates the streamed `conversation_id` with agy-owned conversation SQLite DBs for continuity. |
 | **Command Code** | single-gated `cmd -p --output-format json` subprocess | One direct subprocess per session with ordinary host networking, identical for browser and Internal API callers. Creation (contract 1.20.0) requires only a model id returned by `/models` and a cwd under `COMMAND_CODE_ALLOWED_CWD_ROOTS`; the legacy `invocationRole`/`commandCodeAttestation` fields are accepted and ignored. Callers cannot choose executable paths, argv, environment, auth paths, or native ids. Eligible models are the CLI's advertised catalogue minus a committed premium-model exclusion list; per-model effort selectors come from a committed table. MCP and disposable `--runtime all` remain intentionally excluded. |
 
 All runtime paths are surfaced through a **unified session list** so the
@@ -341,7 +341,7 @@ No authentication required.
     "pi": { "enabled": true, "available": true, "backend": "native", "checkStatus": "ok", "checkedAt": "2026-07-18T12:00:00.000Z", "checkDurationMs": 1 },
     "claude": { "enabled": true, "available": true, "backend": "sdk", "checkStatus": "ok", "checkedAt": "2026-07-18T12:00:00.000Z", "checkDurationMs": 4 },
     "opencode": { "enabled": true, "available": true, "backend": "server", "checkStatus": "ok", "checkedAt": "2026-07-18T12:00:00.000Z", "checkDurationMs": 7 },
-    "antigravity": { "enabled": true, "available": true, "backend": "subprocess", "checkStatus": "ok", "checkedAt": "2026-07-18T12:00:00.000Z", "checkDurationMs": 3 }
+    "antigravity": { "enabled": true, "available": true, "backend": "stream-json", "checkStatus": "ok", "checkedAt": "2026-07-18T12:00:00.000Z", "checkDurationMs": 3 }
   },
   "uptime": 3600
 }
@@ -363,7 +363,7 @@ GET /api/v1/models?runtime=claude
 GET /api/v1/models?runtime=antigravity
 ```
 
-Models are always queried live — new models appear immediately. Each entry carries a `selector` field (since contract 1.26.0) whose value is exactly what `POST /sessions` accepts for that runtime — copy it rather than constructing `provider/id` strings yourself (`provider/id` for pi and opencode; the alias or `profile:<id>` form for claude; the native id for commandcode and antigravity). Each model may include `thinkingLevels`, the runtime-resolved levels accepted by that concrete model. Do not infer model-specific `max` support from the coarse `reasoning` flag.
+Models are always queried live — new models appear immediately. Each entry carries a `selector` field (since contract 1.26.0) whose value is exactly what `POST /sessions` accepts for that runtime — copy it rather than constructing `provider/id` strings yourself (`provider/id` for pi and opencode; the alias or `profile:<id>` form for claude; the native id for commandcode and antigravity — the slug for antigravity, canonical since contract 1.37.0). Each model may include `thinkingLevels`, the runtime-resolved levels accepted by that concrete model. Do not infer model-specific `max` support from the coarse `reasoning` flag.
 
 Pi model levels come from the Pi SDK catalogue. Claude's base `sonnet` and `opus` aliases and provider profiles that support the Claude/Z.AI effort ceiling advertise `max`; `haiku` keeps the legacy ceiling. A client should use the selected model's `thinkingLevels` before requesting `max`.
 
@@ -802,8 +802,8 @@ You can also set verbosity via header: `X-Verbosity: tasks`.
 | Mode | Meaning | Pi | Claude / OpenCode / Antigravity |
 |---|---|---|---|
 | `prompt` | Start a new turn | `409 SESSION_BUSY` if busy; else run | `409 SESSION_BUSY` if running; else run |
-| `follow_up` | Deliver after the current turn | busy → queue via `followUp()`, receipt status `queued`; idle → **promote** to a new turn, `dispatchMode:"prompt"` | no queue exists → running → `409 SESSION_BUSY` with `Retry-After`; idle → new turn |
-| `steer` | Interrupt the active turn | requires an active turn → idle gives `409 SESSION_NOT_STREAMING` | Claude SDK backend: joins the active turn at the next tool boundary (idle → `409 SESSION_NOT_STREAMING`; non-SDK backends and OpenCode/Antigravity → `UNSUPPORTED_OPERATION`). Contract 1.29.0. |
+| `follow_up` | Deliver after the current turn | busy → queue via `followUp()` (Pi), or write-through into the live agy stdin stream (Antigravity, contract 1.37.0 — agy buffers it and runs it as the next turn); idle → **promote** to a new turn, `dispatchMode:"prompt"` | no queue exists → running → `409 SESSION_BUSY` with `Retry-After`; idle → new turn |
+| `steer` | Interrupt the active turn | requires an active turn → idle gives `409 SESSION_NOT_STREAMING` | Claude SDK backend: joins the active turn at the next tool boundary (idle → `409 SESSION_NOT_STREAMING`; non-SDK backends and OpenCode → `UNSUPPORTED_OPERATION`; Antigravity → `409 SESSION_BUSY` — the agy stdin protocol has no mid-run join, use `follow_up` which queues natively). Contract 1.29.0; antigravity steer refusal per contract 1.37.0. |
 
 `requireActiveTurn: true` turns the `follow_up` idle-promotion into `409 SESSION_NOT_STREAMING` on every runtime. Capability-gate runtime differences with `followUpSemantics`, `supportsSteerWhileBusy`, `supportsInteractiveQuestions`, and `supportsStructuredQuestionResponse` from `/capabilities`.
 
@@ -1160,19 +1160,19 @@ For Claude, `backendMode` is broad (`sdk`, `direct`, or `channel`); use model/pr
     },
     "antigravity": {
       "available": true,
-      "backendMode": "subprocess",
+      "backendMode": "stream-json",
       "supportsFollowUp": true,
-      "followUpSemantics": "new_turn",
+      "followUpSemantics": "queue_while_busy",
       "supportsSteer": false,
       "supportsSteerWhileBusy": false,
       "supportsInteractiveQuestions": false,
       "supportsStructuredQuestionResponse": false,
       "supportsModelSwitch": true,
-      "supportsThinkingLevel": false,
+      "supportsThinkingLevel": true,
       "supportsPinning": true,
       "supportsReplayHistory": true,
       "supportsApprovals": false,
-      "supportsHeartbeat": true
+      "supportsHeartbeat": false
     }
   }
 }

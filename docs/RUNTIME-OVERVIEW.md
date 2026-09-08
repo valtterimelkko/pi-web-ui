@@ -22,7 +22,7 @@ Then add more runtimes only if they solve a real problem for you:
 | **Pi Coding Agent** | Pi Coding Agent | Native SDK/session integration | Medium | Richest Pi Coding Agent behaviour | Pi Coding Agent extensions, custom tools, Pi Coding Agent-first workflows, plus an optional broader OpenRouter-backed model catalogue | Low |
 | **Claude Code** | Claude Agent SDK, `claude -p`, or channel-backed Claude Code | Profile-driven SDK integration (preferred), direct CLI fallback, or PTY/plugin path | Medium-high | SDK and channel modes offer good tool visibility; legacy direct is weaker | Claude Code-centric workflows, multi-provider access (GLM 5.3 / Z.ai, etc.), and users who want backend flexibility | Medium–higher |
 | **OpenCode** | `opencode serve` | Local server/API integration | Medium | Strong normalized streaming via SSE adaptation | OpenCode-backed workflows and OpenCode/Z.AI setups | Low-medium |
-| **Antigravity** | `agy -p` | Subprocess-per-turn wrapper | Medium | No native response/tool streaming; synthetic heartbeat + replay/log driven | Gemini/Antigravity access in the same UI | Higher |
+| **Antigravity** | `agy` stream-json (persistent process per session) | Real streaming + tool visibility | Medium | Native `text_delta`/tool events and real token usage from the agy NDJSON stream; event-flow stall watchdog | Gemini/Antigravity access in the same UI | Higher |
 | **Command Code** | `cmd -p` | Direct subprocess, host networking | High | Normalized NDJSON streaming, replay and native effort where advertised | Feature-gated fifth runtime with denylist catalogue discovery | High |
 
 ## The important trust distinction

@@ -45,7 +45,7 @@ async function startStubBackend(options: StubOptions): Promise<{ socketPath: str
     }
     if (req.url === '/api/v1/capabilities') {
       send(200, {
-        contract: { contractVersion: '1.36.0' },
+        contract: { contractVersion: '1.37.0' },
         runtimes: {
           pi: { enabled: true, available: true },
           claude: { enabled: true, available: false },

@@ -110,7 +110,8 @@ Core architectural themes:
 - `server/src/claude/claude-profiles.ts` — provider profile schema, validation, and launch resolution
 - `server/src/claude/claude-sdk-service.ts` — SDK backend (preferred for profiles)
 - `server/src/opencode/opencode-service.ts` — OpenCode lifecycle / replay / permissions
-- `server/src/antigravity/antigravity-service.ts` — Antigravity lifecycle / replay
+- `server/src/antigravity/antigravity-service.ts` — Antigravity lifecycle, stream-json turn execution, follow-up queue, model/thinking-level changes
+- `server/src/antigravity/agy-stream-process.ts` + `agy-event-normalizer.ts` + `agy-models.ts` — persistent agy child, NDJSON→NormalizedEvent translation, model catalogue/thinking levels
 - `server/src/session-transfer/*` — cross-runtime transcript transfer
 - For broader discovery, use [`docs/CODEBASE-MAP.md`](./docs/CODEBASE-MAP.md)
 

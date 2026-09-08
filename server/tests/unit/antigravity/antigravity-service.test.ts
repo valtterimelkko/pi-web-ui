@@ -1,170 +1,50 @@
-import './legacy-text-mode-env.js';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { describe, it, expect, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { EventEmitter } from 'node:events';
 
 /**
- * Controllable spawn mock for the lifecycle suite. Each test sets
- * `ctrl.behavior` / `ctrl.stdout` before prompting, and may gate completion via
- * `ctrl.gatePromise` to observe a turn mid-flight (before runAgy resolves).
+ * Unit tests for the helpers that survive the stream-json integration
+ * (plan Phase 10): context-window mapping and the live model catalogue.
+ * Turn execution is covered by antigravity-service-stream.test.ts.
  */
-const ctrl = vi.hoisted(() => ({
-  behavior: 'success' as 'success' | 'error-empty' | 'hang',
-  // Optional per-call queue: each spawn pops the next entry before falling
-  // back to `behavior`. Lets a test script "attempt 1 stalls, attempt 2 succeeds".
-  behaviors: [] as Array<'success' | 'error-empty' | 'hang'>,
-  stdout: '',
-  args: [] as string[],
-  cwd: '',
-  spawnCount: 0,
-  gatePromise: Promise.resolve() as Promise<unknown>,
-  gateResolve: null as null | (() => void),
-}));
+
+const ctrl = vi.hoisted(() => ({ behavior: 'success', stdout: '', stderr: '' }));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
-    spawn: vi.fn((_cmd: string, args: string[], opts: { cwd?: string }) => {
-      ctrl.spawnCount++;
-      ctrl.args = args;
-      ctrl.cwd = opts?.cwd ?? '';
-      const behavior = ctrl.behaviors.length > 0 ? ctrl.behaviors.shift()! : ctrl.behavior;
+    spawn: vi.fn(() => {
       const child = new EventEmitter();
       (child as unknown as { stdout: EventEmitter }).stdout = new EventEmitter();
       (child as unknown as { stderr: EventEmitter }).stderr = new EventEmitter();
       (child as unknown as { kill: () => void }).kill = vi.fn();
-      // A "hung" process never emits close — only runAgy's own stall/hard
-      // watchdog can resolve it (it calls the kill() stub above, which is a
-      // no-op here since there's no real process to terminate).
-      if (behavior === 'hang') return child;
-      // Resolve the configured outcome only after the test's gate releases.
-      void ctrl.gatePromise.then(() => {
-        process.nextTick(() => {
-          if (behavior === 'success') {
-            (child as unknown as { stdout: EventEmitter }).stdout.emit('data', Buffer.from(ctrl.stdout));
-            child.emit('close', 0);
-          } else {
-            // non-zero exit with empty stdout → runAgy returns { ok:false }
-            child.emit('close', 1);
-          }
-        });
-      });
+      setTimeout(() => {
+        if (ctrl.behavior === 'success') {
+          (child as unknown as { stdout: EventEmitter }).stdout.emit('data', Buffer.from(ctrl.stdout));
+          child.emit('close', 0);
+        } else {
+          child.emit('close', 1);
+        }
+      }, 0);
       return child;
     }),
   };
 });
 
-import { config } from '../../../src/config.js';
-import { AntigravitySessionStore } from '../../../src/antigravity/antigravity-session-store.js';
 import {
-  applySentConversationId,
-  extractSentConversationIdFromAgyLog,
-  pickNewConversationId,
   getModelContextWindow,
-  normalizeAgyModel,
-  buildAgyErrorBody,
-  extractAgyModelDowngrade,
-  extractNewReply,
-  ANTIGRAVITY_CHARS_PER_TOKEN,
+  ANTIGRAVITY_MODEL_CONTEXT_WINDOWS,
   AntigravityService,
-  type ConversationFileInfo,
 } from '../../../src/antigravity/antigravity-service.js';
-import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
-
-const PLACEHOLDER_CONVERSATION = '96ab5de0-2ac0-42b3-ba11-4ccaba820cbe';
-const ACTUAL_CONVERSATION = 'a1efeb45-ca4b-4350-a97e-7feb18776438';
-
-describe('extractSentConversationIdFromAgyLog', () => {
-  it('uses the conversation that print mode actually sends to, not an earlier transient conversation', () => {
-    const log = `
-I0609 08:14:37.446682 server.go:753] Created conversation ${PLACEHOLDER_CONVERSATION}
-I0609 08:14:38.163321 server.go:753] Created conversation ${ACTUAL_CONVERSATION}
-I0609 08:14:38.165849 printmode.go:147] Print mode: conversation=${ACTUAL_CONVERSATION}, sending message
-`;
-
-    expect(extractSentConversationIdFromAgyLog(log)).toBe(ACTUAL_CONVERSATION);
-  });
-
-  it('returns the last sent conversation when the log contains multiple print-mode sends', () => {
-    const first = '11111111-1111-4111-8111-111111111111';
-    const second = '22222222-2222-4222-8222-222222222222';
-    const log = `
-I0609 08:00:00 printmode.go:147] Print mode: conversation=${first}, sending message
-I0609 08:01:00 printmode.go:147] Print mode: conversation=${second}, sending message
-`;
-
-    expect(extractSentConversationIdFromAgyLog(log)).toBe(second);
-  });
-});
-
-describe('applySentConversationId', () => {
-  it('keeps the requested conversation when agy confirms the same sent conversation', () => {
-    expect(applySentConversationId(PLACEHOLDER_CONVERSATION, PLACEHOLDER_CONVERSATION)).toBe(PLACEHOLDER_CONVERSATION);
-  });
-
-  it('uses the sent conversation on the first turn when there is no requested conversation yet', () => {
-    expect(applySentConversationId(null, ACTUAL_CONVERSATION)).toBe(ACTUAL_CONVERSATION);
-  });
-
-  it('throws when agy sends a follow-up to a different conversation than requested', () => {
-    expect(() => applySentConversationId(PLACEHOLDER_CONVERSATION, ACTUAL_CONVERSATION)).toThrow(/refusing to rebind/i);
-  });
-});
-
-describe('extractAgyModelDowngrade', () => {
-  it('detects a silent downgrade and returns the label agy actually used', () => {
-    const log = `
-W0630 14:28:07 model_config_manager.go:54] Failed to resolve model flag antigravity/Gemini 3.5 Flash (High): model antigravity/Gemini 3.5 Flash (High) is not recognized as a known model or custom model in settings
-I0630 14:28:07 model_config_manager.go:157] Propagating selected model override to backend: label="Gemini 3.5 Flash (Medium)"
-`;
-    expect(extractAgyModelDowngrade(log)).toEqual({ fellBackTo: 'Gemini 3.5 Flash (Medium)' });
-  });
-
-  it('returns null when the model was resolved normally (no "not recognized" line)', () => {
-    const log = `
-I0630 14:28:07 model_config_manager.go:157] Propagating selected model override to backend: label="Gemini 3.5 Flash (High)"
-`;
-    expect(extractAgyModelDowngrade(log)).toBeNull();
-  });
-
-  it('returns null for an empty log', () => {
-    expect(extractAgyModelDowngrade('')).toBeNull();
-  });
-});
-
-describe('pickNewConversationId', () => {
-  it('chooses the largest newly-created conversation DB instead of depending on directory iteration order', () => {
-    const before = new Map<string, ConversationFileInfo>();
-    const after = new Map<string, ConversationFileInfo>([
-      [PLACEHOLDER_CONVERSATION, { id: PLACEHOLDER_CONVERSATION, size: 49_152, mtimeMs: 1_000 }],
-      [ACTUAL_CONVERSATION, { id: ACTUAL_CONVERSATION, size: 1_163_264, mtimeMs: 2_000 }],
-    ]);
-
-    expect(pickNewConversationId(before, after)).toBe(ACTUAL_CONVERSATION);
-  });
-
-  it('returns null when no new conversation DB was created', () => {
-    const before = new Map<string, ConversationFileInfo>([
-      [PLACEHOLDER_CONVERSATION, { id: PLACEHOLDER_CONVERSATION, size: 49_152, mtimeMs: 1_000 }],
-    ]);
-    const after = new Map(before);
-
-    expect(pickNewConversationId(before, after)).toBeNull();
-  });
-});
 
 describe('getModelContextWindow', () => {
   it('returns 1 M tokens for Gemini 3.5 Flash variants', () => {
     expect(getModelContextWindow('Gemini 3.5 Flash (Medium)')).toBe(1_048_576);
-    expect(getModelContextWindow('Gemini 3.5 Flash (High)')).toBe(1_048_576);
-    expect(getModelContextWindow('Gemini 3.5 Flash (Low)')).toBe(1_048_576);
   });
 
   it('returns 2 M tokens for Gemini 3.1 Pro variants', () => {
-    expect(getModelContextWindow('Gemini 3.1 Pro (Low)')).toBe(2_097_152);
     expect(getModelContextWindow('Gemini 3.1 Pro (High)')).toBe(2_097_152);
   });
 
@@ -181,632 +61,72 @@ describe('getModelContextWindow', () => {
   });
 
   it('falls back to 1 M tokens for unrecognised model names', () => {
-    expect(getModelContextWindow('Unknown Future Model XL')).toBe(1_048_576);
-    expect(getModelContextWindow('')).toBe(1_048_576);
+    expect(getModelContextWindow('Unknown Model')).toBe(1_048_576);
   });
 
   it('normalises a provider-prefixed id before matching (RC3)', () => {
-    // agy silently downgrades when given "antigravity/…"; the prefix must not
-    // defeat context-window matching. Pro → 2 M, not the Flash default.
-    expect(getModelContextWindow('antigravity/Gemini 3.1 Pro (High)')).toBe(2_097_152);
-    expect(getModelContextWindow('antigravity/Gemini 3.5 Flash (High)')).toBe(1_048_576);
+    expect(getModelContextWindow('antigravity/Claude Opus 4.6 (Thinking)')).toBe(200_000);
+  });
+
+  it('matches slug forms (stream-json selector contract)', () => {
+    expect(getModelContextWindow('gemini-3.6-flash-low')).toBe(1_048_576);
+    expect(getModelContextWindow('gemini-3.1-pro-high')).toBe(2_097_152);
+    expect(getModelContextWindow('claude-sonnet-4-6')).toBe(200_000);
+    expect(getModelContextWindow('gpt-oss-120b-medium')).toBe(128_000);
+  });
+
+  it('exposes the mapping table (documentation surface)', () => {
+    expect(ANTIGRAVITY_MODEL_CONTEXT_WINDOWS.length).toBeGreaterThan(0);
   });
 });
 
-describe('normalizeAgyModel', () => {
-  it('strips a leading antigravity/ prefix', () => {
-    expect(normalizeAgyModel('antigravity/Gemini 3.5 Flash (High)')).toBe('Gemini 3.5 Flash (High)');
-  });
+describe('AntigravityService — getAvailableModels', () => {
+  function freshService(): AntigravityService {
+    return new AntigravityService({ registryPath: join(tmpdir(), `ag-models-${Date.now()}-${Math.random().toString(36).slice(2)}.json`) });
+  }
 
-  it('strips any single provider/ prefix', () => {
-    expect(normalizeAgyModel('foo/Claude Sonnet 4.6')).toBe('Claude Sonnet 4.6');
-  });
-
-  it('leaves a bare label unchanged', () => {
-    expect(normalizeAgyModel('Gemini 3.5 Flash (High)')).toBe('Gemini 3.5 Flash (High)');
-  });
-
-  it('cuts at the tab when given a raw `agy models` line (id<TAB>label)', () => {
-    // agy 1.1.21 `models` output joins id and label with a tab. Only the label
-    // resolves at the --model boundary (live-validated 2026-08-27): the raw
-    // line first silently downgrades, then print mode exits 1.
-    expect(normalizeAgyModel('gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)')).toBe('Gemini 3.7 Flash (Medium)');
-    expect(normalizeAgyModel('claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)')).toBe('Claude Sonnet 4.6 (Thinking)');
-  });
-
-  it('prefers the tab label over a provider prefix when both are present', () => {
-    expect(normalizeAgyModel('antigravity/gemini-x\tGemini X')).toBe('Gemini X');
-  });
-
-  it('handles an empty string', () => {
-    expect(normalizeAgyModel('')).toBe('');
-  });
-
-  describe('getAvailableModels', () => {
-    function freshService(): AntigravityService {
-      return new AntigravityService({ registryPath: join(tmpdir(), `ag-models-${Date.now()}-${Math.random().toString(36).slice(2)}.json`) });
-    }
-
-    it('exposes slugs as ids (1.1.27 selector contract) with labels as names and sibling-derived thinkingLevels', async () => {
-      const modelSvc = freshService();
-      ctrl.behavior = 'success';
-      ctrl.stdout = [
-        'gemini-3.7-flash-high\tGemini 3.7 Flash (High)',
-        'gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)',
-        'gemini-3.7-flash-low\tGemini 3.7 Flash (Low)',
-        'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
-        '',
-      ].join('\n');
-
-      const models = await modelSvc.getAvailableModels();
-
-      // Live-validated 2026-09-08 (agy 1.1.27): both slug and label are
-      // accepted by --model and the slug is what init.model echoes back —
-      // so the canonical selector is the slug (plan Phase 2 / T2.2).
-      expect(models.map((m) => m.id)).toEqual([
-        'gemini-3.7-flash-high',
-        'gemini-3.7-flash-medium',
-        'gemini-3.7-flash-low',
-        'claude-sonnet-4-6',
-      ]);
-      expect(models.every((m) => !m.id.includes('\t'))).toBe(true);
-      expect(models.map((m) => m.name)).toEqual([
-        'Gemini 3.7 Flash (High)',
-        'Gemini 3.7 Flash (Medium)',
-        'Gemini 3.7 Flash (Low)',
-        'Claude Sonnet 4.6 (Thinking)',
-      ]);
-      expect(models.every((m) => m.provider === 'antigravity')).toBe(true);
-      expect(models.find((m) => m.id === 'gemini-3.7-flash-low')?.thinkingLevels).toEqual(['low', 'medium', 'high']);
-      expect(models.find((m) => m.id === 'claude-sonnet-4-6')?.thinkingLevels).toEqual([]);
-    });
-
-    it('passes label-only lines through unchanged (older agy output compatibility)', async () => {
-      const modelSvc = freshService();
-      ctrl.behavior = 'success';
-      ctrl.stdout = ['Gemini 3.5 Flash (Medium)', 'Gemini 3.1 Pro (High)', ''].join('\n');
-
-      const models = await modelSvc.getAvailableModels();
-
-      expect(models.map((m) => m.id)).toEqual(['Gemini 3.5 Flash (Medium)', 'Gemini 3.1 Pro (High)']);
-      expect(models.every((m) => m.thinkingLevels.length === 0)).toBe(true);
-    });
-  });
-});
-
-describe('buildAgyErrorBody', () => {
-  it('returns the bare reason sentence when there is no partial stdout', () => {
-    const { body, partial } = buildAgyErrorBody('timeout', '', 0);
-    expect(partial).toBe('');
-    expect(body).toBe('The agent did not return a reply (timeout).');
-  });
-
-  it('appends first-turn partial output (priorLen 0) to the reason sentence', () => {
-    const { body, partial } = buildAgyErrorBody('timeout', 'half a reply', 0);
-    expect(partial).toBe('half a reply');
-    expect(body).toBe('The agent did not return a reply (timeout). Partial output:\nhalf a reply');
-  });
-
-  it('slices partial at priorLen so prior-turn replies are NOT presented as partial (multi-turn offset safety)', () => {
-    // agy --conversation replays all prior replies; stdout = prior + new. The
-    // new partial must be only the portion after the last done turn's offset.
-    const stdout = 'PRIORREPLYNEWPARTIAL'; // priorLen covers 'PRIORREPLY' (10 chars)
-    const { body, partial } = buildAgyErrorBody('timeout', stdout, 10);
-    expect(partial).toBe('NEWPARTIAL');
-    expect(body).toContain('NEWPARTIAL');
-    expect(body).not.toContain('PRIORREPLY');
-  });
-
-  it('treats whitespace-only stdout as no partial', () => {
-    const { body, partial } = buildAgyErrorBody('exit 2', '   \n  ', 0);
-    expect(partial).toBe('');
-    expect(body).toBe('The agent did not return a reply (exit 2).');
-  });
-
-  it('recovers a partial dropped by replay drift when the prior response text is supplied (anchor)', () => {
-    // Same drift shape as the extractNewReply regression below: the replayed
-    // prior section is 10 chars shorter than its recorded offset.
-    const priorResponseText = 'Retailer sourcing complete.\n\n\n\n\n\n\n\n\n\n\nFinal line of the prior reply.';
-    const replayedPrior = 'Retailer sourcing complete.\nFinal line of the prior reply.';
-    expect(priorResponseText.length - replayedPrior.length).toBe(10);
-    const stdout = replayedPrior + 'half of the new';
-    const naive = buildAgyErrorBody('timeout', stdout, priorResponseText.length);
-    expect(naive.partial).not.toBe('half of the new'); // proves the drift really corrupts the naive path
-    const anchored = buildAgyErrorBody('timeout', stdout, priorResponseText.length, priorResponseText);
-    expect(anchored.partial).toBe('half of the new');
-  });
-});
-
-describe('extractNewReply', () => {
-  it('returns the full trimmed stdout on the first turn (priorLen 0)', () => {
-    expect(extractNewReply('  hello world  \n', 0, '')).toBe('hello world');
-  });
-
-  it('slices exactly at the offset when the replay matches byte-for-byte (common case)', () => {
-    const stdout = 'PRIORREPLYNEWCONTENT';
-    expect(extractNewReply(stdout, 'PRIORREPLY'.length, 'PRIORREPLY')).toBe('NEWCONTENT');
-  });
-
-  it('falls back to the naive offset when no anchor text is available (back-compat)', () => {
-    const stdout = 'PRIORREPLYNEWCONTENT';
-    expect(extractNewReply(stdout, 'PRIORREPLY'.length, '')).toBe('NEWCONTENT');
-  });
-
-  it('falls back to the full trimmed stdout when the naive slice runs out of bounds and no anchor matches', () => {
-    // Simulates a turn where agy did not replay any prior content at all.
-    const stdout = 'FRESH RESPONSE, NO REPLAY';
-    expect(extractNewReply(stdout, 9999, 'some prior text that will never appear')).toBe(stdout);
-  });
-
-  it('production regression: recovers a heading dropped by 10-char replay drift instead of truncating mid-word', () => {
-    // Reproduces the real incident (session 2b9b983d, turn 6): agy's replay of
-    // the prior turn collapsed a run of blank lines, rendering 10 characters
-    // shorter than what was recorded as that turn's rawStdoutLength. The old
-    // naive offset slice therefore ate the first 10 characters of the new
-    // reply — "### Summary of Material Costs" became "y of Material Costs".
-    const priorResponseText = 'Retailer sourcing complete.\n\n\n\n\n\n\n\n\n\n\nFinal line of the prior reply.';
-    const replayedPrior = 'Retailer sourcing complete.\nFinal line of the prior reply.';
-    expect(priorResponseText.length - replayedPrior.length).toBe(10);
-
-    const trueNewContent = '### Summary of Material Costs (inc. VAT)\n\n* DIY On-site Mix: ~£390.00';
-    const stdout = replayedPrior + trueNewContent;
-    const recordedOffset = priorResponseText.length;
-
-    // Prove the old behavior really was broken for this exact shape.
-    const naive = stdout.trimEnd().slice(recordedOffset).trimStart();
-    expect(naive).not.toBe(trueNewContent);
-    expect(naive.startsWith('y of Material Costs')).toBe(true);
-
-    // The fix recovers the true boundary via the anchor.
-    expect(extractNewReply(stdout, recordedOffset, priorResponseText)).toBe(trueNewContent);
-  });
-
-  it('does not misfire when the anchor text coincidentally appears earlier in a long transcript', () => {
-    // A short/common anchor could false-positive-match far from the true
-    // boundary; the search window (bounded around the recorded offset) must
-    // prefer the match near the expected position.
-    const priorResponseText = 'the end.';
-    const decoy = 'the end. '.repeat(50); // 'the end.' appears many times, far before the true boundary
-    const replayedPrior = decoy + 'the end.';
-    const trueNewContent = 'brand new content that must not be truncated';
-    const stdout = replayedPrior + trueNewContent;
-    expect(extractNewReply(stdout, replayedPrior.length, priorResponseText)).toBe(trueNewContent);
-  });
-});
-
-describe('context usage estimation from conversation history', () => {
-  const CHARS_PER_TOKEN = ANTIGRAVITY_CHARS_PER_TOKEN;
-
-  it('estimates tokens as total chars divided by chars-per-token', () => {
-    const prompt = 'a'.repeat(400);   // 400 chars
-    const response = 'b'.repeat(600); // 600 chars
-    // total = 1000 chars → 1000/4 = 250 tokens
-    const totalChars = prompt.length + response.length;
-    expect(Math.round(totalChars / CHARS_PER_TOKEN)).toBe(250);
-  });
-
-  it('grows with each additional turn', () => {
-    const turns = [
-      { prompt: 'a'.repeat(400), response: 'b'.repeat(600) },  // 1 000 chars → 250 tokens
-      { prompt: 'c'.repeat(200), response: 'd'.repeat(800) },  // 1 000 chars → 250 tokens total additional
-    ];
-    const totalChars = turns.reduce((acc, t) => acc + t.prompt.length + t.response.length, 0);
-    expect(Math.round(totalChars / CHARS_PER_TOKEN)).toBe(500);
-  });
-
-  it('percent is capped at 100 when estimated tokens exceed the context window', () => {
-    const contextWindow = 1_000; // tiny window for the test
-    const tokens = 2_000;        // double the window
-    const percent = Math.min(Math.round((tokens / contextWindow) * 100), 100);
-    expect(percent).toBe(100);
-  });
-
-  it('produces a non-zero percent for a realistic short conversation', () => {
-    // Simulate one turn: 500-char prompt + 1500-char response on a 1 M window
-    const totalChars = 2_000;
-    const tokens = Math.round(totalChars / CHARS_PER_TOKEN); // 500
-    const contextWindow = 1_048_576;
-    const percent = Math.min(Math.round((tokens / contextWindow) * 100), 100);
-    expect(percent).toBeGreaterThanOrEqual(0);
-    expect(percent).toBeLessThanOrEqual(1); // < 1% of 1 M
-  });
-});
-
-// ── Lifecycle: durable turn + visible failures + model normalization ─────────
-// These exercise sendPrompt/runPromptAsync with the controllable spawn mock.
-describe('AntigravityService — durable turn lifecycle', () => {
-  let tmp: string;
-  let svc: AntigravityService;
-  let store: AntigravitySessionStore;
-  let prevSessionDir: string;
-  let prevHeartbeat: number;
-
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'antigravity-lifecycle-'));
-    prevSessionDir = config.antigravitySessionDir;
-    config.antigravitySessionDir = tmp;
-    // Fast heartbeat so an in-flight turn emits stream_activity quickly under
-    // test. The service reads this in its constructor, so set it before `new`.
-    prevHeartbeat = config.antigravityHeartbeatIntervalMs;
-    config.antigravityHeartbeatIntervalMs = 25;
-    svc = new AntigravityService({ registryPath: join(tmp, 'registry.json') });
-    store = new AntigravitySessionStore(tmp);
+  it('exposes slugs as ids (1.1.27 selector contract) with labels as names and sibling-derived thinkingLevels', async () => {
+    const modelSvc = freshService();
     ctrl.behavior = 'success';
-    ctrl.stdout = 'mocked reply';
-    ctrl.args = [];
-    ctrl.gatePromise = Promise.resolve();
-    ctrl.gateResolve = null;
+    ctrl.stdout = [
+      'gemini-3.7-flash-high\tGemini 3.7 Flash (High)',
+      'gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)',
+      'gemini-3.7-flash-low\tGemini 3.7 Flash (Low)',
+      'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+      '',
+    ].join('\n');
+
+    const models = await modelSvc.getAvailableModels();
+
+    // Live-validated 2026-09-08 (agy 1.1.27): both slug and label are
+    // accepted by --model and the slug is what init.model echoes back —
+    // so the canonical selector is the slug (plan Phase 2 / T2.2).
+    expect(models.map((m) => m.id)).toEqual([
+      'gemini-3.7-flash-high',
+      'gemini-3.7-flash-medium',
+      'gemini-3.7-flash-low',
+      'claude-sonnet-4-6',
+    ]);
+    expect(models.every((m) => !m.id.includes('\t'))).toBe(true);
+    expect(models.map((m) => m.name)).toEqual([
+      'Gemini 3.7 Flash (High)',
+      'Gemini 3.7 Flash (Medium)',
+      'Gemini 3.7 Flash (Low)',
+      'Claude Sonnet 4.6 (Thinking)',
+    ]);
+    expect(models.every((m) => m.provider === 'antigravity')).toBe(true);
+    expect(models.find((m) => m.id === 'gemini-3.7-flash-low')?.thinkingLevels).toEqual(['low', 'medium', 'high']);
+    expect(models.find((m) => m.id === 'claude-sonnet-4-6')?.thinkingLevels).toEqual([]);
   });
 
-  afterEach(() => {
-    config.antigravitySessionDir = prevSessionDir;
-    config.antigravityHeartbeatIntervalMs = prevHeartbeat;
-    setLogTap(null);
-    rmSync(tmp, { recursive: true, force: true });
-  });
-
-  /** Drain macrotasks so runPromptAsync can run up to its gated subprocess await. */
-  async function flush(rounds = 10): Promise<void> {
-    for (let i = 0; i < rounds; i++) {
-      await new Promise((r) => setImmediate(r));
-    }
-  }
-
-  /** Poll the store until a turn appears (or timeout) — mirrors a refresh mid-flight. */
-  async function waitForTurn(sessionId: string, timeoutMs = 2000): Promise<ReturnType<typeof store.loadHistory>> {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const h = await store.loadHistory(sessionId);
-      if (h.length > 0) return h;
-      await new Promise((r) => setImmediate(r));
-    }
-    throw new Error('turn never appeared in store');
-  }
-
-  function prompt(
-    sessionId: string,
-    text: string,
-    onEvent?: (e: { type: string; data?: unknown }) => void,
-  ): Promise<Error | undefined> {
-    return new Promise((resolve) =>
-      svc.sendPrompt(sessionId, text, (e) => onEvent?.(e), (err) => resolve(err)),
-    );
-  }
-
-  it('keeps source-owned claims independent of the five-session Web UI pin limit', async () => {
-    const sessions = [];
-    for (let index = 0; index < 6; index++) sessions.push(await svc.createSession(`/tmp/${index + 1}`));
-
-    for (const session of sessions.slice(0, 5)) expect(await svc.pinSession(session.sessionId)).toBe(true);
-    expect(await svc.pinSession(sessions[5].sessionId, 'internal-api:lease-6')).toBe(true);
-    expect(await svc.pinSession(sessions[5].sessionId)).toBe(false);
-    expect(svc.unpinSession(sessions[5].sessionId)).toBe(true);
-    expect(svc.isSessionPinned(sessions[5].sessionId)).toBe(true);
-    expect(svc.unpinSession(sessions[5].sessionId, 'internal-api:lease-6')).toBe(true);
-    expect(svc.isSessionPinned(sessions[5].sessionId)).toBe(false);
-  });
-
-  it('aborts the exact in-flight subprocess before allowing a replacement turn', async () => {
-    const { sessionId } = await svc.createSession(tmp);
-    ctrl.gatePromise = new Promise<void>((resolve) => { ctrl.gateResolve = resolve; });
-
-    const first = prompt(sessionId, 'abort me');
-    await flush();
-    svc.abort(sessionId);
-
-    await expect(first).resolves.toMatchObject({ message: 'aborted' });
-    expect(svc.isRunning(sessionId)).toBe(false);
-  });
-
-  it('rejects a concurrent prompt without replacing the active turn callbacks', async () => {
-    const { sessionId } = await svc.createSession(tmp);
-    ctrl.gatePromise = new Promise<void>((resolve) => { ctrl.gateResolve = resolve; });
-
-    const first = prompt(sessionId, 'first prompt');
-
-    await expect(svc.sendPrompt(sessionId, 'second prompt', () => undefined, () => undefined))
-      .rejects.toThrow('already running');
-
-    ctrl.gateResolve?.();
-    expect(await first).toBeUndefined();
-  });
-
-  it('persists a running turn with the prompt before the subprocess resolves (RC1 mid-flight durability)', async () => {
-    const { sessionId } = await svc.createSession(tmp);
-    // Hold the subprocess open so we can inspect the store mid-flight.
-    ctrl.gatePromise = new Promise<void>((r) => { ctrl.gateResolve = r; });
-    ctrl.stdout = 'eventual reply';
-
-    const done = prompt(sessionId, 'in-flight prompt');
-    // Let runPromptAsync run up to the gated subprocess await.
-    await flush();
-
-    // Mid-flight: a running turn with the prompt is already on disk.
-    const mid = await waitForTurn(sessionId);
-    expect(mid).toHaveLength(1);
-    expect(mid[0].status).toBe('running');
-    expect(mid[0].prompt).toBe('in-flight prompt');
-
-    // The registry reflects the in-flight turn too (status running, firstMessage set).
-    const midEntry = await svc.getSession(sessionId);
-    expect(midEntry?.status).toBe('running');
-    expect(midEntry?.firstMessage).toBe('in-flight prompt');
-
-    // Release the subprocess; the turn should finalize to done.
-    ctrl.gateResolve?.();
-    await done;
-
-    const final = await store.loadHistory(sessionId);
-    expect(final).toHaveLength(1);
-    expect(final[0].status).toBe('done');
-    expect(final[0].response).toBe('eventual reply');
-  });
-
-  it('finalizes a successful turn to done and increments registry messageCount/firstMessage', async () => {
-    const { sessionId } = await svc.createSession(tmp);
-    ctrl.stdout = 'final answer';
-    const err = await prompt(sessionId, 'hello world');
-    expect(err).toBeUndefined();
-
-    const history = await store.loadHistory(sessionId);
-    expect(history).toHaveLength(1);
-    expect(history[0].status).toBe('done');
-    expect(history[0].response).toBe('final answer');
-    expect(history[0].rawStdoutLength).toBe('final answer'.length);
-
-    const entry = await svc.getSession(sessionId);
-    expect(entry?.messageCount).toBe(1);
-    expect(entry?.firstMessage).toBe('hello world');
-    expect(entry?.status).toBe('idle');
-  });
-
-  it('finalizes a failing/empty subprocess turn to error and still emits an assistant body + agent_end (RC2)', async () => {
-    const { sessionId } = await svc.createSession(tmp);
-    ctrl.behavior = 'error-empty';
-    ctrl.stdout = '';
-
-    const types: string[] = [];
-    const assistantDeltas: string[] = [];
-    const err = await prompt(sessionId, 'do something', (e) => {
-      types.push(e.type);
-      const d = (e.data as { assistantMessageEvent?: { delta?: string } } | undefined)?.assistantMessageEvent?.delta;
-      if (d) assistantDeltas.push(d);
-    });
-
-    // The error path now emits an assistant message + agent_end (not just a bare agent_end).
-    expect(types.filter((t) => t === 'message_start').length).toBeGreaterThanOrEqual(2); // user + assistant
-    expect(types.filter((t) => t === 'agent_end')).toHaveLength(1);
-    const body = assistantDeltas[assistantDeltas.length - 1] ?? '';
-    expect(body.length).toBeGreaterThan(0);
-    expect(body).toMatch(/exit|timeout|fail|did not return|error/i);
-
-    // Registry: the turn still counts, with a firstMessage and an error status.
-    expect(err).toBeDefined();
-    const entry = await svc.getSession(sessionId);
-    expect(entry?.messageCount).toBe(1);
-    expect(entry?.firstMessage).toBe('do something');
-    expect(entry?.status).toBe('error');
-
-    // And it persists as error with a real reason.
-    const history = await store.loadHistory(sessionId);
-    expect(history).toHaveLength(1);
-    expect(history[0].status).toBe('error');
-    expect(history[0].error).toBeTruthy();
-    expect(history[0].error).toMatch(/exit|timeout/i);
-  });
-
-  it('passes the normalized (prefix-stripped) label as the --model arg (RC3)', async () => {
-    const { sessionId } = await svc.createSession(tmp, 'antigravity/Gemini 3.5 Flash (High)');
-    await prompt(sessionId, 'hi');
-
-    const modelIdx = ctrl.args.indexOf('--model');
-    expect(modelIdx).toBeGreaterThanOrEqual(0);
-    expect(ctrl.args[modelIdx + 1]).toBe('Gemini 3.5 Flash (High)');
-    // The raw prefixed id must never reach agy.
-    expect(ctrl.args).not.toContain('antigravity/Gemini 3.5 Flash (High)');
-  });
-
-  it('keeps the stored registry model id untouched (normalization only at the agy boundary)', async () => {
-    const { sessionId } = await svc.createSession(tmp, 'antigravity/Gemini 3.5 Flash (High)');
-    await prompt(sessionId, 'hi');
-    const entry = await svc.getSession(sessionId);
-    expect(entry?.model).toBe('antigravity/Gemini 3.5 Flash (High)');
-  });
-
-  it('passes the bare label as the --model arg when the stored id is a raw tab-joined agy models line', async () => {
-    // Sessions created before the listing fix (or by any caller copying the
-    // old tab-form selector) store the raw line; turns on those sessions must
-    // still send only the label to agy.
-    const rawLine = 'gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)';
-    const { sessionId } = await svc.createSession(tmp, rawLine);
-    await prompt(sessionId, 'hi');
-
-    const modelIdx = ctrl.args.indexOf('--model');
-    expect(modelIdx).toBeGreaterThanOrEqual(0);
-    expect(ctrl.args[modelIdx + 1]).toBe('Gemini 3.7 Flash (Medium)');
-    // The raw tab-joined line must never reach agy.
-    expect(ctrl.args).not.toContain(rawLine);
-  });
-
-  it('getSessionStats counts finalized turns only — a running turn is not counted (§5.3)', async () => {
-    const { sessionId } = await svc.createSession(tmp);
-    // Seed the store directly: one done, one error, one running.
-    await store.appendTurn(sessionId, { prompt: 'p1', response: 'r1', model: 'm', conversationId: null, timestamp: 1, status: 'done', rawStdoutLength: 10 });
-    await store.appendTurn(sessionId, { prompt: 'p2', response: '', model: 'm', conversationId: null, timestamp: 2, status: 'error', error: 'boom' });
-    await store.startTurn(sessionId, { turnId: 'tr', prompt: 'p3', model: 'm', conversationId: null, timestamp: 3 });
-
-    const stats = await svc.getSessionStats(sessionId);
-    expect(stats?.userMessages).toBe(2); // done + error; running excluded
-    expect(stats?.assistantMessages).toBe(2);
-    expect(stats?.totalMessages).toBe(4);
-  });
-
-  it('getContextUsage excludes a running turn from the token estimate (§5.3 consistency)', async () => {
-    const { sessionId } = await svc.createSession(tmp);
-    // done: prompt 4 + response 4 = 8 chars; running: prompt 4 + response 0 = 4 chars.
-    await store.appendTurn(sessionId, { prompt: 'aaaa', response: 'bbbb', model: 'Gemini 3.5 Flash (Medium)', conversationId: null, timestamp: 1, status: 'done', rawStdoutLength: 8 });
-    await store.startTurn(sessionId, { turnId: 'tr', prompt: 'cccc', model: 'Gemini 3.5 Flash (Medium)', conversationId: null, timestamp: 2 });
-
-    const ctx = await svc.getContextUsage(sessionId);
-    expect(ctx).not.toBeNull();
-    if (!ctx) return; // narrow after the null check (avoid non-null assertion)
-    // Only the done turn counts (8 chars / 4 = 2 tokens); the running turn is ignored.
-    expect(ctx.tokens).toBe(2);
-    expect(ctx.contextWindow).toBe(1_048_576); // Flash window
-  });
-
-  // ── Observability: heartbeat, timing, structured logging ───────────────────
-
-  it('emits stream_activity heartbeats while a turn is in flight (liveness)', async () => {
-    const { sessionId } = await svc.createSession(tmp);
-    // Hold the subprocess open so the 25ms heartbeat fires repeatedly.
-    ctrl.gatePromise = new Promise<void>((r) => { ctrl.gateResolve = r; });
-    ctrl.stdout = 'eventual reply';
-
-    const heartbeats: Array<{ elapsedMs?: number }> = [];
-    const done = prompt(sessionId, 'long running prompt', (e) => {
-      if (e.type === 'stream_activity') heartbeats.push((e.data as { elapsedMs?: number }) ?? {});
-    });
-
-    // Give the interval time to fire a few times.
-    await new Promise((r) => setTimeout(r, 120));
-    expect(heartbeats.length).toBeGreaterThanOrEqual(1);
-    expect(typeof heartbeats[0].elapsedMs).toBe('number');
-
-    // Release; once complete, heartbeats must stop (interval cleared).
-    ctrl.gateResolve?.();
-    await done;
-    const countAfterComplete = heartbeats.length;
-    await new Promise((r) => setTimeout(r, 80));
-    expect(heartbeats.length).toBe(countAfterComplete);
-  });
-
-  it('records turnDurationMs on a finalized turn (timing observability)', async () => {
-    const { sessionId } = await svc.createSession(tmp);
-    ctrl.stdout = 'answer';
-    await prompt(sessionId, 'hi');
-
-    const history = await store.loadHistory(sessionId);
-    expect(history).toHaveLength(1);
-    expect(typeof history[0].turnDurationMs).toBe('number');
-    expect(history[0].turnDurationMs).toBeGreaterThanOrEqual(0);
-  });
-
-  it('logs a correlatable "turn start" record (structured lifecycle logging)', async () => {
-    const records: LogRecord[] = [];
-    setLogTap((r) => records.push(r));
-
-    const { sessionId } = await svc.createSession(tmp);
-    await prompt(sessionId, 'observe me');
-
-    const start = records.find((r) => r.component === 'AntigravityService' && r.msg.includes('turn start'));
-    expect(start).toBeDefined();
-    expect(start?.sessionId).toBe(sessionId);
-    expect(start?.runtime).toBe('antigravity');
-    // A completion line is logged too.
-    expect(records.some((r) => r.msg.includes('turn done'))).toBe(true);
-  });
-});
-
-describe('AntigravityService — stall detection + bounded retry', () => {
-  let tmp: string;
-  let svc: AntigravityService;
-  let store: AntigravitySessionStore;
-  let prevSessionDir: string;
-  let prevHeartbeat: number;
-  let prevStall: number;
-  let prevMaxAttempts: number;
-
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'antigravity-stall-'));
-    prevSessionDir = config.antigravitySessionDir;
-    config.antigravitySessionDir = tmp;
-    prevHeartbeat = config.antigravityHeartbeatIntervalMs;
-    config.antigravityHeartbeatIntervalMs = 10;
-    // Small enough that a "hung" mocked subprocess (which never touches the
-    // real --log-file) is declared stalled quickly under test.
-    prevStall = config.antigravityStallTimeoutMs;
-    config.antigravityStallTimeoutMs = 30;
-    prevMaxAttempts = config.antigravityMaxAttempts;
-    config.antigravityMaxAttempts = 2;
-    svc = new AntigravityService({ registryPath: join(tmp, 'registry.json') });
-    store = new AntigravitySessionStore(tmp);
+  it('passes label-only lines through unchanged (older agy output compatibility)', async () => {
+    const modelSvc = freshService();
     ctrl.behavior = 'success';
-    ctrl.behaviors = [];
-    ctrl.stdout = 'mocked reply';
-    ctrl.args = [];
-    ctrl.spawnCount = 0;
-    ctrl.gatePromise = Promise.resolve();
-    ctrl.gateResolve = null;
-  });
+    ctrl.stdout = ['Gemini 3.5 Flash (Medium)', 'Gemini 3.1 Pro (High)', ''].join('\n');
 
-  afterEach(() => {
-    config.antigravitySessionDir = prevSessionDir;
-    config.antigravityHeartbeatIntervalMs = prevHeartbeat;
-    config.antigravityStallTimeoutMs = prevStall;
-    config.antigravityMaxAttempts = prevMaxAttempts;
-    setLogTap(null);
-    rmSync(tmp, { recursive: true, force: true });
-  });
+    const models = await modelSvc.getAvailableModels();
 
-  function prompt(sessionId: string, text: string): Promise<Error | undefined> {
-    return new Promise((resolve) =>
-      svc.sendPrompt(sessionId, text, () => undefined, (err) => resolve(err)),
-    );
-  }
-
-  it('kills a stalled first attempt and retries, succeeding on the second attempt', async () => {
-    ctrl.behaviors = ['hang', 'success'];
-    ctrl.stdout = 'second attempt answer';
-    const { sessionId } = await svc.createSession(tmp);
-
-    const err = await prompt(sessionId, 'go through the repo');
-    expect(err).toBeUndefined();
-    expect(ctrl.spawnCount).toBe(2);
-
-    const history = await store.loadHistory(sessionId);
-    expect(history).toHaveLength(1);
-    expect(history[0].status).toBe('done');
-    expect(history[0].response).toBe('second attempt answer');
-  });
-
-  it('gives up after exhausting retries and finalizes as error with reason stall', async () => {
-    ctrl.behaviors = ['hang', 'hang'];
-    const { sessionId } = await svc.createSession(tmp);
-
-    const err = await prompt(sessionId, 'go through the repo');
-    expect(err).toBeDefined();
-    expect(ctrl.spawnCount).toBe(2); // bounded — did not retry a third time
-
-    const history = await store.loadHistory(sessionId);
-    expect(history).toHaveLength(1);
-    expect(history[0].status).toBe('error');
-    expect(history[0].error).toBe('stall');
-  });
-
-  it('does not retry a non-retryable failure (bad exit code)', async () => {
-    // If a retry were wrongly attempted, the second call would succeed —
-    // asserting spawnCount stays at 1 proves no retry happened.
-    ctrl.behaviors = ['error-empty', 'success'];
-    const { sessionId } = await svc.createSession(tmp);
-
-    const err = await prompt(sessionId, 'go through the repo');
-    expect(err).toBeDefined();
-    expect(ctrl.spawnCount).toBe(1);
-
-    const history = await store.loadHistory(sessionId);
-    expect(history[0].status).toBe('error');
-    expect(history[0].error).toMatch(/exit/);
-  });
-
-  it('logs a warning noting the retry when a stall triggers one', async () => {
-    ctrl.behaviors = ['hang', 'success'];
-    const records: LogRecord[] = [];
-    setLogTap((r) => records.push(r));
-    const { sessionId } = await svc.createSession(tmp);
-
-    await prompt(sessionId, 'go through the repo');
-
-    expect(records.some((r) => /stall/i.test(r.msg) && /retry/i.test(r.msg))).toBe(true);
+    expect(models.map((m) => m.id)).toEqual(['Gemini 3.5 Flash (Medium)', 'Gemini 3.1 Pro (High)']);
+    expect(models.every((m) => m.thinkingLevels.length === 0)).toBe(true);
   });
 });

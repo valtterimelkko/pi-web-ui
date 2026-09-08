@@ -187,7 +187,7 @@ OpenCode provides SSE-backed events but requires deduplication and careful obser
 
 ### Antigravity
 
-Antigravity output is batch-shaped and currently relies on bounded log/activity evidence plus a stall watchdog and retry policy. Periodic `stream_activity` is live UI activity, not durable run progress; Antigravity's actual stall watchdog is grounded in subprocess/log activity. Contract `1.14.0` explicitly excludes `stream_activity` from the generic run-activity clock; older contracts counted every run-correlated normalized event. The UI signal must not be described as completion or become a blind keepalive. The distinction between subprocess/log movement and user-visible output is especially important here.
+Antigravity (contract 1.37.0, stream-json): turns stream real NDJSON events from a persistent agy process — `text_delta` fragments, `tool_execution_start/end`, and one `result` per turn — so liveness is grounded in actual event flow. The stall watchdog kills the child when no parsed events arrive for `ANTIGRAVITY_STALL_TIMEOUT_MS` while a turn is open; non-content steps (`system_message`, `unknown`, tool transitions) still surface as periodic `stream_activity`, which remains live UI activity, not durable run progress. Contract `1.14.0` explicitly excludes `stream_activity` from the generic run-activity clock; the UI signal must not be described as completion or become a blind keepalive.
 
 A future design may therefore expose a common minimum plus runtime-specific evidence metadata. Uniform field names are useful only when their semantics remain honest.
 

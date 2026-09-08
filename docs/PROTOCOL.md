@@ -242,10 +242,10 @@ are accepted. Preserve both layers when adding a route or proxy rule.
 - Permission requests are transformed into `extension_ui_request` so the browser can approve or reject them.
 
 ### Antigravity
-- Antigravity runs `agy -p` in subprocess-per-turn mode.
-- The server emits standard message lifecycle events even though `agy` itself returns batch output.
+- Antigravity runs one persistent `agy --input-format stream-json --output-format stream-json` process per session (contract 1.37.0).
+- The NDJSON stream (`init`/`step_update`/`result`) is normalised into the common event model: streamed `text_delta` fragments, `tool_execution_start/end`, `stream_activity` ticks, and a terminal `agent_end` carrying real token usage.
 - Availability is announced with `antigravity_available`.
-- Replay is rebuilt from Pi-owned Antigravity JSONL turn logs rather than a native streaming event source.
+- Replay is rebuilt from Pi-owned Antigravity JSONL turn logs (stream turns store compact tool-call records; legacy text-mode turns replay unchanged).
 
 This is important: the protocol is intentionally **more stable than any one runtime’s native event stream**.
 

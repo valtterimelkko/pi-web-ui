@@ -2913,7 +2913,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     error: typeof ErrorCode.SESSION_BUSY | typeof ErrorCode.SESSION_NOT_STREAMING;
   } {
     if (mode === 'steer') {
-      return busy ? { dispatchMode: 'steer' } : { error: ErrorCode.SESSION_NOT_STREAMING };
+      // Contract 1.37.0: only Pi and the SDK-backed Claude backend have a steer
+      // transport. Antigravity (no mid-run join in the agy stdin protocol) and
+      // other runtimes refuse with 409 instead of dispatching a doomed steer.
+      if (!busy) return { error: ErrorCode.SESSION_NOT_STREAMING };
+      return runtime === 'pi' || runtime === 'claude' ? { dispatchMode: 'steer' } : { error: ErrorCode.SESSION_BUSY };
     }
     if (mode === 'follow_up') {
       // Antigravity (stream-json): a mid-turn write queues inside the live agy

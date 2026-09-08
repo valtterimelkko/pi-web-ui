@@ -18,14 +18,14 @@ class FakeChild extends EventEmitter {
 
   constructor() {
     super();
-    const self = this;
+    const writes = this.stdinWrites;
     this.stdin = new Writable({
       write(chunk: Buffer, _enc, cb) {
-        self.stdinWrites.push(chunk.toString());
+        writes.push(chunk.toString());
         cb();
       },
       final(cb) {
-        self.stdinWrites.push('__END__');
+        writes.push('__END__');
         cb();
       },
     }) as Writable;

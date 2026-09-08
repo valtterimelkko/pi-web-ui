@@ -443,9 +443,13 @@ If your parent agent lives in the Pi Coding Agent runtime and wants to call thre
 agents on other runtimes:
 
 - **OpenCode child** — good fit for `/events` live monitoring
-- **Antigravity child** — good fit for `/wait` + `/transcript`; `/events`
-  exists but the runtime is subprocess-per-turn, so completion-style polling is
-  often enough
+- **Antigravity child** — since contract 1.37.0 the runtime streams real
+  events (text deltas, tool calls) from a persistent agy process, so `/events`
+  live monitoring works well too; `/wait` + `/transcript` remain fine for
+  completion-style collection. It is also a valid `onFire` wake **target**
+  (server-promptable; live-validated end-to-end 2026-09-08: antigravity child
+  `agent_end` → watch fired → wake turn delivered and answered by an
+  antigravity parent session)
 - **Claude child** — use `/events` only if you truly need live progress; for
   robustness prefer `/wait` + `/transcript`
 

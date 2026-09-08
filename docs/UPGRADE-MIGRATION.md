@@ -2,6 +2,12 @@
 
 Short, adopter-facing migration notes for the additive minor bumps that still need operator awareness. Everything here is **compatible** — no breaking `/api/v1` route change — but the behaviours below affect pin capacity, model selection, and goal handling.
 
+## Antigravity slug selectors + queueing (1.37.0, 2026-09-08)
+
+- **What changed:** Antigravity `/models` selectors are now canonical agy **slugs** (`gemini-3.6-flash-low`) and each entry carries sibling-derived `thinkingLevels`; `follow_up` on a busy antigravity session **queues** in the live agy process (previously `409`); `steer` on busy antigravity returns `409 SESSION_BUSY` (no mid-run join exists); `set_model` on a busy session is `409`. Turns stream real deltas/tool events and `agent_end` carries real token `usage`.
+- **Compatibility:** stored **label** model ids (`"Gemini 3.6 Flash (Low)"`) keep working — `set_model`/create canonicalise labels to slugs against the live catalogue; unknown models fail the turn loudly with agy's own error text. The legacy `agy -p` text-mode path was removed in the same release.
+- **Action:** copy the slug `selector` from `/api/v1/models` for new bindings; treat `supportsThinkingLevel: true` as slug-swap semantics (`set_thinking_level` read-back `model` carries the resolved slug). See [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md) and [`INTERNAL-API-CONTRACT.md`](./INTERNAL-API-CONTRACT.md) (1.37.0).
+
 ## Five human pins per runtime (2026-09-02, `d617d4b`)
 
 - **What changed:** the browser/UI human residency allowance is now **five sessions per runtime**; a 6th human claim is rejected with `SESSION_PIN_LIMIT` / `RETENTION_RESIDENT_CAPACITY_EXHAUSTED`. Command Code now enforces the same cap server-side instead of accepting unlimited human pins.

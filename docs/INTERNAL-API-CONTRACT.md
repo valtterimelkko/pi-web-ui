@@ -21,13 +21,20 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.36.0",
+  "contractVersion": "1.37.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
 ```
 
 ### Changelog
+
+- **1.37.0** (minor, additive antigravity stream-json integration) — the Antigravity runtime moves from batch text print-mode to a persistent `agy --input-format stream-json --output-format stream-json` process per session. Everything is additive; existing consumers keep working unchanged:
+  - `capabilities.runtimes.antigravity`: `backendMode` gains the `"stream-json"` value (the `RuntimeBackendMode` union extends); `followUpSemantics` becomes `"queue_while_busy"` (a mid-turn write queues inside the live agy process and runs as the next turn — live-validated); `supportsThinkingLevel` becomes `true` (level = gemini slug sibling swap); `supportsHeartbeat` becomes `false` (real stream events replace the synthetic heartbeat).
+  - `GET /api/v1/models?runtime=antigravity` entries gain additive `thinkingLevels` (derived from actual catalogue sibling slugs; `[]` for axis-less models). Selectors become canonical agy slugs (what `init.model` echoes); label forms still accepted at the `--model` boundary.
+  - `POST /sessions/:id/prompt` with `mode:"follow_up"` now queues on a **busy antigravity** session (write-through into the agy stdin stream) instead of `409`; plain prompts on busy antigravity keep `409 SESSION_BUSY`, and control `set_model` on busy antigravity returns `409 SESSION_BUSY`. `set_thinking_level` resolves to the sibling slug (read-back `model` field carries the resolved slug).
+  - Turn events gain streamed `message_update` text deltas, `tool_execution_start/end` pairs, and `agent_end` additive fields (`usage` real token counts, `agyStatus`, `numTurns`). Replay renders stored tool calls; legacy text-mode turns replay unchanged.
+  - Rollback: none (legacy text-mode path removed in the same release); the runtime requires agy ≥ 1.1.x with stream-json headless flags.
 
 - **1.36.0** (bounded diagnostics and explicit source failure; source candidate, not deployment):
   - diagnostics summaries add `retention`: process-window identity/start time, retained record/byte counts and limits, eviction/truncation/insertion/tap-failure counters, and optional oldest/newest timestamps. These are global process-local window statistics, separate from filtered summary counts;

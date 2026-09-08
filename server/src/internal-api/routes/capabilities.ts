@@ -139,8 +139,8 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsStructuredQuestionResponse: false,
         },
         antigravity: (() => {
-          // agy 1.1.27 stream-json persistent process (default) vs the legacy
-          // text print-mode wrapper (ANTIGRAVITY_STREAM_MODE=false rollback).
+          // agy 1.1.27 stream-json persistent process (the only mode since the
+          // JSON stream integration; mocks without getBackendMode stay legacy).
           const backendMode = typeof antigravityService.getBackendMode === 'function'
             ? antigravityService.getBackendMode()
             : 'subprocess';

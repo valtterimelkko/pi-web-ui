@@ -6,7 +6,7 @@ Use this matrix to distinguish behavior owned by this repository from behavior s
 |---|---:|---:|---:|---|
 | Browser login and shell | Yes | No | No | Core server/client behavior |
 | Unified session sidebar | Yes | Yes | No | Runtime adapters provide underlying sessions |
-| Streaming chat | Yes | Yes | No | Antigravity is batch-oriented with synthetic liveness rather than native token streaming |
+| Streaming chat | Yes | Yes | Yes | Antigravity streams native `text_delta` events (~200 ms cadence) via the agy stream-json process (contract 1.37.0) |
 | Mid-run steer / follow-up | Yes | Yes | No | Pi native (steer joins before the next model call; follow-up runs when the run finishes); Claude SDK delivers steer at the next tool boundary and queues follow-up as its own turn; Command Code steer interrupts the turn and re-delivers as the next prompt, follow-up queued server-side. Channel-backed and cli-direct Claude sessions do **not** steer. See [`PROTOCOL.md`](./PROTOCOL.md) |
 | Transcript replay | Yes | Yes | No | Storage ownership differs by runtime |
 | Session pin/archive/display name | Yes | No | No | Stored through core metadata/preferences paths |
@@ -32,7 +32,7 @@ Use this matrix to distinguish behavior owned by this repository from behavior s
 | Pi Coding Agent | SDK-native path | Lowest adapter caveat level; strongest extension/tool integration |
 | Claude Code | SDK profiles, direct CLI, or channel-backed path | Multiple intentional backends; behavior and auth differ by backend |
 | OpenCode | `opencode serve` HTTP/SSE | Supported server integration with OpenCode-owned transcript storage |
-| Antigravity | `agy -p` subprocess per turn | Wrapper-oriented, batch output, runtime-owned conversation DB plus Pi Web UI turn logs |
+| Antigravity | persistent `agy --input-format stream-json --output-format stream-json` process per session | Real token streaming, tool-call events, real token usage, native follow-up queueing; runtime-owned conversation DB plus Pi Web UI turn logs |
 | Command Code | `cmd -p --output-format json` subprocess per session | Single `COMMAND_CODE_ENABLED` gate; NDJSON event stream normalized into a private replay journal; centrally managed model catalogue denylist |
 
 ## Documentation rule

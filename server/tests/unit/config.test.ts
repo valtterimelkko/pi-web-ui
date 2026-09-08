@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   config,
   parseLogLevel,
@@ -150,47 +150,5 @@ describe('LOG_FORMAT parsing (Task 4)', () => {
   it('exports the format list and config has a valid logFormat', () => {
     expect(LOG_FORMATS).toEqual(['pretty', 'json']);
     expect(LOG_FORMATS).toContain(config.logFormat as LogFormat);
-  });
-});
-
-describe('antigravityStreamMode config knob (ANTIGRAVITY_STREAM_MODE)', () => {
-  const originalValue = process.env.ANTIGRAVITY_STREAM_MODE;
-
-  beforeEach(() => {
-    vi.resetModules();
-    delete process.env.ANTIGRAVITY_STREAM_MODE;
-  });
-
-  afterEach(() => {
-    if (originalValue === undefined) delete process.env.ANTIGRAVITY_STREAM_MODE;
-    else process.env.ANTIGRAVITY_STREAM_MODE = originalValue;
-  });
-
-  async function importConfig(): Promise<typeof import('../../src/config.js').config> {
-    const mod = await import('../../src/config.js');
-    return mod.config;
-  }
-
-  it('defaults to true (stream-json path is the default)', async () => {
-    const fresh = await importConfig();
-    expect(fresh.antigravityStreamMode).toBe(true);
-  });
-
-  it("accepts 'false' as the legacy escape hatch", async () => {
-    process.env.ANTIGRAVITY_STREAM_MODE = 'false';
-    const fresh = await importConfig();
-    expect(fresh.antigravityStreamMode).toBe(false);
-  });
-
-  it("accepts 'true' explicitly", async () => {
-    process.env.ANTIGRAVITY_STREAM_MODE = 'true';
-    const fresh = await importConfig();
-    expect(fresh.antigravityStreamMode).toBe(true);
-  });
-
-  it('treats junk values as true (default-on)', async () => {
-    process.env.ANTIGRAVITY_STREAM_MODE = 'banana';
-    const fresh = await importConfig();
-    expect(fresh.antigravityStreamMode).toBe(true);
   });
 });

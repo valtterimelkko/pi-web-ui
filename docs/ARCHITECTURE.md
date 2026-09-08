@@ -45,7 +45,7 @@ Express server
   ├─ Pi Coding Agent service + worker/session lifecycle
   ├─ Claude service + (SDK/profile backend, direct CLI backend, or channel-backed PTY/plugin backend)
   ├─ OpenCode service + process manager/client/SSE adapter
-  ├─ Antigravity service + subprocess-per-turn `agy` adapter
+  ├─ Antigravity service + persistent stream-json `agy` process adapter
   └─ Command Code service + denylist catalogue discovery, private journal, and subprocess adapter
 ```
 

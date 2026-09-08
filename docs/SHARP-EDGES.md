@@ -126,16 +126,21 @@ Even with `OPENCODE_TRUSTED_PERMISSIONS=true`, shell patterns like `rm -rf /`, `
 
 ## Antigravity
 
-### Subprocess output is batch-shaped
-`agy -p` does not provide native tool visibility or response streaming. The UI
-gets one response batch plus synthetic `stream_activity` heartbeats; a heartbeat
-is liveness only, never completion. Diagnose a silent turn through the per-turn
-`agy-logs/` mtime/watchdog evidence and the Antigravity conversation id, not by
-assuming the browser has seen every tool call.
+### The agy stdin protocol queues mid-turn writes; it cannot steer
+A user event written while a turn streams is buffered by agy and runs as the
+next turn — there is NO mid-run join. Steering into a busy antigravity session
+refuses (`409`); use `follow_up`. SIGTERM/SIGINT kill the whole session process
+(agy emits a closing `result` with the generic `timeout waiting for response`
+string — the parent must disambiguate from what it sent). Never pass an empty
+or unvalidated `--conversation` id: empty resumes an *unrelated recent*
+conversation, invalid ids silently start a fresh one (the service warns and
+persists the actual id).
 
 ### Stall retries are bounded and abortable
-`ANTIGRAVITY_STALL_TIMEOUT_MS` kills a silent attempt and
-`ANTIGRAVITY_MAX_ATTEMPTS` bounds retries. Aborting a session must cancel pending
+`ANTIGRAVITY_STALL_TIMEOUT_MS` (no parsed stream events) and
+`ANTIGRAVITY_PROMPT_TIMEOUT_MS` (per-turn ceiling) each SIGTERM the child;
+`ANTIGRAVITY_MAX_ATTEMPTS` bounds retries, and the retry respawns with
+`--conversation` to preserve continuity. Aborting a session must cancel pending
 retry work; if a supposedly aborted turn starts again, inspect retry cancellation
 in `antigravity-service.ts` before changing timeout values.
 

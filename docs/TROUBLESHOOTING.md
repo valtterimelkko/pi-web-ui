@@ -216,7 +216,7 @@ If the Internal API is unavailable:
 | **Claude native session state** | `~/.claude/projects/-<encoded-cwd>/<claudeSessionId>.jsonl` | `journalctl -u pi-web-ui -f` | Used by Claude Code itself for resume/follow-up state. |
 | **Claude channel hook config** | `~/.claude/settings.json` | `journalctl -u pi-web-ui -f \| grep ClaudeChannel` | Relevant only when channel-backed Claude mode is enabled. |
 | **OpenCode** | Registry metadata in `~/.pi-web-ui/session-registry.json`; transcript storage is OpenCode-owned | `journalctl -u opencode-serve -f` if separate service, otherwise the main service log | Pi Web UI does not own the full OpenCode transcript. |
-| **Antigravity (agy)** | `~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl` (Pi-owned JSONL turn log) plus per-turn logs under `~/.pi-web-ui/antigravity-sessions/agy-logs/` | `journalctl -u pi-web-ui -f \| grep -i antigravity` | Each turn is one JSON line: prompt, response, model, conversationId, rawStdoutLength. The per-turn agy log records the actual `Print mode: conversation=<uuid>` target. |
+| **Antigravity (agy)** | `~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl` (Pi-owned JSONL turn log) plus per-turn logs under `~/.pi-web-ui/antigravity-sessions/agy-logs/` | `journalctl -u pi-web-ui -f \| grep -i antigravity` | Each turn is one JSON line: prompt, response, model, conversationId (from the stream), and — stream turns since contract 1.37.0 — usage/numTurns/agyStatus/tools. Legacy rows may carry `rawStdoutLength`; `agy-logs/` holds historical text-mode run logs only. |
 | **Antigravity conversation state** | `~/.gemini/antigravity-cli/conversations/<uuid>.db` (SQLite, agy-owned) | `agy --version`, `agy models` | The conversation UUID in the JSONL must match a `.db` file here for continuity to work. |
 | **Command Code (Pi Web UI-owned)** | `~/.pi-web-ui/command-code/sessions/<internal-id>.json` (session record) and `~/.pi-web-ui/command-code/events/<internal-id>.jsonl` (normalized event journal, the replay source) | `journalctl -u pi-web-ui -f \| grep -i commandcode` | Journal survives API session deletion (`nativeTranscriptRetained`); the record and native home do not. |
 | **Command Code native transcripts** | `~/.pi-web-ui/command-code-native-home/<internal-id>/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl` for server-spawned sessions; `~/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl` for plain `cmdc` CLI runs (plus `.meta.json`/`.checkpoints.jsonl` siblings) | — | cwd encoding joins path segments with dashes and strips dots (`/root/pi-web-ui` → `root-pi-web-ui`). Server default from `commandCodeNativeHomeDir` in `server/src/config.ts`; `COMMAND_CODE_NATIVE_HOME_DIR` overrides. |
@@ -514,6 +514,10 @@ curl "http://localhost:<server-port>/api/models?sdkType=opencode"
 ### Check first
 
 - `server/src/antigravity/antigravity-service.ts`
+- `server/src/antigravity/agy-stream-process.ts`
+- `server/src/antigravity/agy-event-normalizer.ts`
+- `server/src/antigravity/agy-event-types.ts`
+- `server/src/antigravity/agy-models.ts`
 - `server/src/antigravity/antigravity-session-store.ts`
 - `server/src/antigravity/antigravity-history-replay.ts`
 
@@ -528,13 +532,14 @@ jq -c '.' ~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl
 # agy-owned conversation SQLite DBs (one per agy conversation UUID)
 ls -la ~/.gemini/antigravity-cli/conversations/
 
-# Pi-owned per-turn agy logs (best for conversation-id diagnosis)
-ls -lt ~/.pi-web-ui/antigravity-sessions/agy-logs/ | head
-
-# agy CLI logs
+# agy CLI logs (native diagnostics)
 ls -lt ~/.gemini/antigravity-cli/log/cli-*.log | head
 tail -n 50 $(ls -t ~/.gemini/antigravity-cli/log/cli-*.log | head -1)
 ```
+
+Legacy text-mode sessions may also have `~/.pi-web-ui/antigravity-sessions/agy-logs/`
+per-run logs (historical evidence only; the stream-json path does not create them).
+
 
 ### Useful commands
 
@@ -557,10 +562,11 @@ curl "http://localhost:<server-port>/api/models?sdkType=antigravity"
 ### Typical symptoms
 
 - **agy not available** → `agy --version` fails; check `AGY_BINARY` env var (default: `/root/.local/bin/agy`)
-- **Reply starts mid-sentence** → inspect `rawStdoutLength` and the prior completed response in the session JSONL. The current extractor uses the stored prior-response suffix as an anchor within a bounded window to correct agy replay drift before slicing; if the anchor cannot be verified, compare the per-turn stdout/log evidence and the stored turn offsets rather than blindly editing the byte count.
-- **Model forgets earlier turns** → conversation ID mismatch; confirm all JSONL entries share the same `conversationId`, that UUID exists in `~/.gemini/antigravity-cli/conversations/`, and that the first turn's per-run log contains the same `Print mode: conversation=<uuid>, sending message` line. If the log shows a different UUID than the JSONL, the session was bound to the wrong agy conversation.
-- **Conversation ID is null after first turn** → the per-run log did not contain a sent-conversation line and the `.db` fallback failed to detect the new file; check the conversations directory for a file newer than the turn's timestamp.
-- **agy hangs / timeout** → inspect `--print-timeout` setting (default 10m); check the latest agy log file in `~/.gemini/antigravity-cli/log/`
+- **Stream-json capability missing** (contract pre-1.37.0 behaviour) → `agy --help` must list `--input-format` and `--output-format`; upgrade the CLI (`agy update`).
+- **Model not applied / turn errors with "invalid model selection"** → agy loud-fails unknown models with the valid list embedded in the error; rebind via control `set_model` with a slug from `/api/v1/models?runtime=antigravity`. Silent downgrades no longer exist.
+- **Model forgets earlier turns** → the streamed `conversation_id` (persisted per turn and in the registry) must match a `.db` in `~/.gemini/antigravity-cli/conversations/`. A mismatch warning in the logs means agy silently started a fresh conversation (invalid stored id); the actual id is persisted automatically.
+- **Turns stuck `running` / process died** → the service respawns with `--conversation` and retries; check the server log for `respawning`/`process exited`. A crashed turn finalises as an error turn — retry the prompt.
+- **Turn ends immediately with `timeout waiting for response`** → this agy error string covers both the `ANTIGRAVITY_PROMPT_TIMEOUT_MS` ceiling and SIGTERM-initiated aborts; check whether the server (not a client) signalled the child, and the stall watchdog window (`ANTIGRAVITY_STALL_TIMEOUT_MS`).
 - **Auth expired** → `agy -p "Reply OK"` will prompt to re-login; complete auth via `agy` interactively
 
 ## Command Code (`cmd`)
