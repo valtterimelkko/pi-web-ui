@@ -75,3 +75,36 @@ describe('browser diagnostics', () => {
     expect(JSON.stringify(createBrowserDiagnosticBundle())).not.toContain('do-not-keep');
   });
 });
+
+describe('diagnostics export byte bound', () => {
+  it('bounds the exported bundle to 128 KiB with an explicit truncation marker', () => {
+    clearBrowserDiagnostics();
+    for (let index = 0; index < 200; index++) {
+      recordBrowserDiagnostic({
+        kind: 'error',
+        errorName: 'Error',
+        closeReason: 'x'.repeat(160),
+        operation: `op-${index}`,
+      });
+    }
+    // Default bound holds trivially for legal input (per-field caps keep
+    // 200 events ≈ 100 KiB); exercise the trim path with an injected tiny
+    // bound so oldest-event dropping + marker are deterministic.
+    const bundle = createBrowserDiagnosticBundle(8 * 1024);
+    expect(JSON.stringify(bundle).length).toBeLessThanOrEqual(8 * 1024);
+    expect(bundle.truncation?.applied).toBe(true);
+    expect(bundle.truncation?.droppedEvents).toBeGreaterThan(0);
+    // The default call stays within the plan's 128 KiB export bound.
+    expect(JSON.stringify(createBrowserDiagnosticBundle()).length).toBeLessThanOrEqual(128 * 1024);
+    // Retained events are the newest; oldest were dropped first.
+    expect(bundle.events.at(-1)?.operation).toBe('op-199');
+  });
+
+  it('does not mark truncation for a small bundle', () => {
+    clearBrowserDiagnostics();
+    recordBrowserDiagnostic({ kind: 'open' });
+    const bundle = createBrowserDiagnosticBundle();
+    expect(bundle.truncation).toBeUndefined();
+    expect(bundle.events.length).toBe(1);
+  });
+});

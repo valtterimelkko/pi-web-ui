@@ -96,15 +96,16 @@ export function getBrowserBuildIdentity(): BrowserBuildIdentity {
   };
 }
 
-export function createBrowserDiagnosticBundle(): {
+export function createBrowserDiagnosticBundle(maxBytes = 128 * 1024): {
   generatedAt: string;
   /** Compatibility field retained for older support bundles. */
   buildVersion: string;
   buildIdentity: BrowserBuildIdentity;
   protocolDrift: { malformed: number; unknown: number; unknownTypes: Record<string, number> };
   events: BrowserDiagnosticEvent[];
+  truncation?: { applied: true; droppedEvents: number };
 } {
-  return {
+  const base = {
     generatedAt: new Date().toISOString(),
     buildVersion: browserBuildIdentity.buildId,
     buildIdentity: getBrowserBuildIdentity(),
@@ -113,8 +114,23 @@ export function createBrowserDiagnosticBundle(): {
       unknown: unknownCount,
       unknownTypes: Object.fromEntries(unknownTypes),
     },
-    events: events.map((event) => ({ ...event })),
   };
+  // Explicit byte bound on the exported bundle (128 KiB): trim OLDEST events
+  // first and mark the truncation — never silently drop or exceed the bound.
+  let retained = events.map((event) => ({ ...event }));
+  let dropped = 0;
+  let bundle = { ...base, events: retained };
+  while (JSON.stringify(bundle).length > maxBytes && retained.length > 0) {
+    const removeCount = Math.max(1, Math.ceil(retained.length / 8));
+    retained = retained.slice(removeCount);
+    dropped += removeCount;
+    bundle = {
+      ...base,
+      events: retained,
+      ...(dropped > 0 ? { truncation: { applied: true as const, droppedEvents: dropped } } : {}),
+    };
+  }
+  return bundle;
 }
 
 export async function copyBrowserDiagnostics(): Promise<void> {
