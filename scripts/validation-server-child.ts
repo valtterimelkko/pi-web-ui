@@ -37,6 +37,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
+import { loadValidationEntrypoint } from './load-validation-entrypoint.mjs';
 
 function fail(message: string, code = 2): never {
   console.error(`[validation-server-child] ${message}`);
@@ -191,7 +192,7 @@ if (process.env.PI_WEB_UI_VALIDATION_CHILD_EXIT_AFTER_RECORD === '1') {
   // launcher did. The wrapper's flags never reach this argv, so the server
   // sees a clean command line. (No top-level await: tsx transpiles
   // scripts/*.ts as CJS.)
-  import('../server/src/index.js').catch((error) => {
+  loadValidationEntrypoint(new URL('../', import.meta.url), process.env.PI_WEB_UI_VALIDATION_ENTRYPOINT ?? 'source').catch((error: unknown) => {
     console.error('[validation-server-child] server boot failed:', error instanceof Error ? (error.stack ?? error.message) : String(error));
     process.exit(1);
   });

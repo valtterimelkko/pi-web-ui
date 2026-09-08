@@ -78,6 +78,14 @@ This guardrail exists because validation agents can run with broad tool permissi
 
 ## Canonical entrypoint
 
+The existing launcher also accepts `--compiled` to load
+`server/dist/index.js` from the same checkout instead of `server/src/index.ts`.
+Build the isolated candidate first. Missing or broken compiled output fails;
+there is no automatic source fallback. The CLI selection overrides an inherited
+entrypoint-mode environment label. Both modes retain the existing dedicated
+process group and stopper. An entrypoint banner is not functional proof: verify
+the served identity and run the required authenticated HTTP/WS/runtime scenarios.
+
 Start an isolated validation server in one terminal/background task:
 
 ```bash

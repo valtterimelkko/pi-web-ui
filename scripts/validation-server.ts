@@ -165,6 +165,7 @@ async function main(): Promise<void> {
     console.error(' Pi Web UI — EPHEMERAL VALIDATION SERVER');
     console.error(' (isolated & disposable; your real server is untouched)');
     console.error('────────────────────────────────────────────────────────');
+    console.error(` entrypoint  : ${validationArgs.includes('--compiled') ? 'compiled (server/dist/index.js)' : 'source (server/src/index.ts)'}`);
     console.error(` port        : ${port}`);
     console.error(` socket      : ${socketPath}`);
     console.error(` token       : ${tokenPath}`);
@@ -196,6 +197,9 @@ async function main(): Promise<void> {
     const childEnv: NodeJS.ProcessEnv = {
       ...process.env,
       PI_WEB_UI_VALIDATION_SERVER_CHILD: '1',
+      // Explicit CLI selection wins over ambient labels; the child imports
+      // exactly this entrypoint, with no source fallback for compiled failures.
+      PI_WEB_UI_VALIDATION_ENTRYPOINT: validationArgs.includes('--compiled') ? 'compiled' : 'source',
       PI_WEB_UI_VALIDATION_RECORD_DIR: validationDir,
       PI_WEB_UI_VALIDATION_BOUND_PORT: port,
     };
