@@ -67,7 +67,7 @@ test.describe('Core Functionality', () => {
     // Settle window: the pre-auth /ws attempt may fail slightly after login
     // completes (its console error arrives late). Give it a bounded window to
     // land, then start the zero-error observation from a clean slate.
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(1000);
     consoleErrors.length = 0;
 
     await page.waitForTimeout(3000);

@@ -92,7 +92,7 @@ test.describe('Mobile Viewport Tests', () => {
     // expected (client retries /ws after login) and excluded by this reset.
     await loginIfNeeded(page);
     await page.waitForSelector('[data-testid="chat-interface"]', { timeout: 5000 });
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(1000);
     consoleErrors.length = 0;
     await page.waitForTimeout(2000);
 
