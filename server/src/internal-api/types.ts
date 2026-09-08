@@ -67,7 +67,7 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 // ─── Session runtime ─────────────────────────────────────────────────────────
 
 export type SessionRuntime = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
-export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 'subprocess' | 'sdk';
+export type RuntimeBackendMode = 'native' | 'direct' | 'channel' | 'server' | 'subprocess' | 'sdk' | 'stream-json';
 
 // ─── API contract metadata ───────────────────────────────────────────────────
 

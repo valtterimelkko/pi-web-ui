@@ -138,25 +138,39 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
           supportsInteractiveQuestions: false,
           supportsStructuredQuestionResponse: false,
         },
-        antigravity: {
-          available: antigravityAvailable,
-          enabled: true,
-          backendMode: 'subprocess',
-          supportsFollowUp: true,
-          followUpSemantics: 'new_turn',
-          supportsSteer: false,
-          supportsSteerWhileBusy: false,
-          supportsModelSwitch: true,
-          supportsThinkingLevel: false,
-          supportsPinning: true,
-          supportsReplayHistory: true,
-          supportsApprovals: false,
-          // Synthetic liveness heartbeat emitted during an in-flight turn (agy is
-          // a batch subprocess with no native streaming).
-          supportsHeartbeat: true,
-          supportsInteractiveQuestions: false,
-          supportsStructuredQuestionResponse: false,
-        },
+        antigravity: (() => {
+          // agy 1.1.27 stream-json persistent process (default) vs the legacy
+          // text print-mode wrapper (ANTIGRAVITY_STREAM_MODE=false rollback).
+          const backendMode = typeof antigravityService.getBackendMode === 'function'
+            ? antigravityService.getBackendMode()
+            : 'subprocess';
+          const stream = backendMode === 'stream-json';
+          return {
+            available: antigravityAvailable,
+            enabled: true,
+            backendMode,
+            supportsFollowUp: true,
+            // Stream mode: a mid-turn write queues natively inside the agy
+            // process (live-validated). Legacy mode: idle-promoted new turn.
+            followUpSemantics: stream ? 'queue_while_busy' as const : 'new_turn' as const,
+            // No mid-run join exists in the agy stdin protocol (live-validated:
+            // signals kill the whole session process, so no interrupt-steer).
+            supportsSteer: false,
+            supportsSteerWhileBusy: false,
+            supportsModelSwitch: true,
+            // Thinking level = gemini slug sibling swap (live-validated effort
+            // conflict semantics); level axis exposed per model via /models.
+            supportsThinkingLevel: stream,
+            supportsPinning: true,
+            supportsReplayHistory: true,
+            supportsApprovals: false,
+            // Real step events stream during turns; the synthetic heartbeat
+            // only exists for the legacy batch subprocess path.
+            supportsHeartbeat: !stream,
+            supportsInteractiveQuestions: false,
+            supportsStructuredQuestionResponse: false,
+          };
+        })(),
         commandcode: {
           available: commandCodeEnabled && commandCodeAvailable,
           enabled: commandCodeEnabled,

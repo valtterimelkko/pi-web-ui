@@ -34,6 +34,10 @@ export interface AgyNormalizerOptions {
   /** Conversation id expected from the store/registry; mismatches fire the callback (T1.7). */
   expectedConversationId?: string | null;
   onConversationIdMismatch?: (info: { expected: string | null; actual: string; source: 'init' | 'result' }) => void;
+  /** When true the result event does NOT emit message_end/agent_end: the
+   *  caller (AntigravityService) emits terminal events itself after durable
+   *  persistence, preserving the legacy ordering invariant. */
+  suppressTerminalEvents?: boolean;
 }
 
 export interface AgyNormalizerState {
@@ -42,6 +46,8 @@ export interface AgyNormalizerState {
   permissionMode: string | null;
   /** True while an assistant message_start has no matching message_end. */
   assistantMessageOpen: boolean;
+  /** Id of the open (or most recently closed) assistant message. */
+  assistantMessageId: string | null;
   /** Concatenated text_delta content for the current turn. */
   turnText: string;
   /** Tool calls recorded during the current turn. */
@@ -74,14 +80,17 @@ export class AgyEventNormalizer {
     initModel: null,
     permissionMode: null,
     assistantMessageOpen: false,
+    assistantMessageId: null,
     turnText: '',
     turnTools: [],
   };
+  private readonly suppressTerminalEvents: boolean;
 
   constructor(options: AgyNormalizerOptions) {
     this.sessionId = options.sessionId;
     this.expectedConversationId = options.expectedConversationId ?? null;
     this.onConversationIdMismatch = options.onConversationIdMismatch;
+    this.suppressTerminalEvents = options.suppressTerminalEvents ?? false;
   }
 
   /** Terminal envelope of the most recent completed turn (null before one). */
@@ -148,6 +157,7 @@ export class AgyEventNormalizer {
       if (typeof step.text_delta === 'string' && step.text_delta.length > 0) {
         if (!this.state.assistantMessageOpen) {
           this.assistantMessageId = randomUUID();
+          this.state.assistantMessageId = this.assistantMessageId;
           this.state.assistantMessageOpen = true;
           events.push(this.ev('message_start', timestamp, { id: this.assistantMessageId, role: 'assistant' }));
         }
@@ -243,6 +253,16 @@ export class AgyEventNormalizer {
     this._lastResult = result;
 
     const events: NormalizedEvent[] = [];
+    if (this.suppressTerminalEvents) {
+      // Caller owns terminal emission ordering; just close the bookkeeping.
+      this.state.assistantMessageOpen = false;
+      this._lastResult = result;
+      this.noteConversationId(parsed.conversationId, 'result');
+      this._lastTurn = { text: this.state.turnText, tools: [...this.state.turnTools], result };
+      this.state.turnText = '';
+      this.state.turnTools = [];
+      return events;
+    }
     if (this.state.assistantMessageOpen && this.assistantMessageId) {
       events.push(this.ev('message_end', timestamp, { id: this.assistantMessageId }));
       this.state.assistantMessageOpen = false;

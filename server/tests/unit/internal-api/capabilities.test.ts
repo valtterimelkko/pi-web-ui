@@ -124,6 +124,25 @@ describe('createCapabilitiesRoutes', () => {
   });
 
   /* eslint-disable @typescript-eslint/no-explicit-any -- focused service doubles expose only capability methods */
+  it('27b. antigravity stream-json mode: queue_while_busy follow-ups, thinking levels, no synthetic heartbeat', async () => {
+    const routes = createCapabilitiesRoutes({
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false), getBackendMode: vi.fn().mockResolvedValue('sdk'), getProfiles: vi.fn().mockReturnValue([]) } as any,
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(true) } as any,
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(true), getBackendMode: vi.fn().mockReturnValue('stream-json') } as any,
+    });
+    const res = createMockRes();
+    await routes.handleGetCapabilities(createMockReq(), res);
+    const runtimes = JSON.parse(res.body).runtimes;
+    expect(runtimes.antigravity).toMatchObject({
+      backendMode: 'stream-json',
+      supportsFollowUp: true,
+      followUpSemantics: 'queue_while_busy',
+      supportsSteer: false,
+      supportsThinkingLevel: true,
+      supportsHeartbeat: false,
+    });
+  });
+
   it('27. reports structured interactive-question support only for the Claude SDK backend', async () => {
     const routes = createCapabilitiesRoutes({
       claudeService: {

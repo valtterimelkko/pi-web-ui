@@ -362,6 +362,39 @@ describe('createSessionRoutes orchestration endpoints', () => {
       await eventsDone;
     });
 
+    it('queues an antigravity follow_up on a busy session via the service (stream-json queue semantics)', async () => {
+      registry.get.mockResolvedValue(antigravityEntry('agy-fu'));
+      antigravityService.isRunning.mockReturnValue(true);
+      antigravityService.followUp = vi.fn(async (_sid: string, _msg: string, _onEvent: (e: unknown) => void, onComplete: (e?: Error) => void) => {
+        onComplete();
+        return true;
+      });
+      const routes = makeRoutes();
+      const promptReq = createJsonReq('POST', '/api/v1/sessions/agy-fu/prompt', {
+        message: 'queued behind the running turn', verbosity: 'answers', mode: 'follow_up',
+      });
+      const promptRes = createMockRes();
+      await routes.handleSendPrompt(promptReq, promptRes, 'agy-fu');
+      if (promptRes.statusCode !== 200) (await import('node:fs')).appendFileSync('/tmp/agy-debug.log', 'BODY: ' + promptRes.body + '\n');
+      expect(promptRes.statusCode).toBe(200);
+      expect(antigravityService.followUp).toHaveBeenCalledWith('agy-fu', 'queued behind the running turn', expect.any(Function), expect.any(Function));
+      expect(antigravityService.sendPrompt).not.toHaveBeenCalled();
+    });
+
+    it('refuses an antigravity plain prompt on a busy session with 409 (queue goes through follow_up only)', async () => {
+      registry.get.mockResolvedValue(antigravityEntry('agy-busy'));
+      antigravityService.isRunning.mockReturnValue(true);
+      antigravityService.followUp = vi.fn();
+      const routes = makeRoutes();
+      const promptRes = createMockRes();
+      await routes.handleSendPrompt(createJsonReq('POST', '/api/v1/sessions/agy-busy/prompt', {
+        message: 'x', verbosity: 'answers',
+      }), promptRes, 'agy-busy');
+      expect(promptRes.statusCode).toBe(409);
+      expect(antigravityService.followUp).not.toHaveBeenCalled();
+      expect(antigravityService.sendPrompt).not.toHaveBeenCalled();
+    });
+
     it('mode=snapshot resolves Pi events published under the session path key (regression)', async () => {
       // Pi publishes broker events under entry.path (the long-lived observer),
       // not the registry id. Both snapshot and the stream must read that key.

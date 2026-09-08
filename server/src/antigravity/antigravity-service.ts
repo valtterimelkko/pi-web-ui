@@ -12,7 +12,11 @@ import { getSessionRegistry } from '../session-registry.js';
 import type { RegistryEntry } from '../session-registry.js';
 import { config } from '../config.js';
 import { createLogger } from '../logging/logger.js';
-import { parseAgyModelsOutput, toCatalogEntries, type AgyModelEntry } from './agy-models.js';
+import { parseAgyModelsOutput, toCatalogEntries, canonicalizeAgyModelId, type AgyModelEntry } from './agy-models.js';
+import { AgyStreamProcess, type AgyTurnOutcome } from './agy-stream-process.js';
+import { AgyEventNormalizer } from './agy-event-normalizer.js';
+import type { AgyStoredToolCall, AgyStoredUsage } from './antigravity-session-store.js';
+import { AGY_STORED_TOOL_LIMIT, AGY_STORED_TOOL_OUTPUT_LIMIT } from './antigravity-session-store.js';
 
 const logger = createLogger('AntigravityService');
 
@@ -24,13 +28,21 @@ const AGY_BINARY = process.env.AGY_BINARY || '/root/.local/bin/agy';
 // other LLMs for mixed English + code content (~4 chars per token on average).
 export const ANTIGRAVITY_CHARS_PER_TOKEN = 4;
 
-// Maps agy model-name prefixes to their known context window sizes (in tokens).
-// agy uses its own internal naming scheme; these are best-effort mappings.
+// Maps agy model identifiers to their known context window sizes (in tokens).
+// Both slug prefixes (canonical since the 1.1.27 stream integration) and
+// legacy label prefixes (old sessions) are matched; best-effort mapping.
 export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: ReadonlyArray<readonly [prefix: string, tokens: number]> = [
-  ['Gemini 3.5 Flash', 1_048_576],   // Gemini 2.5 Flash series → 1 M
-  ['Gemini 3.1 Pro',   2_097_152],   // Gemini 1.5 Pro series  → 2 M
+  ['gemini-3.8-flash', 1_048_576],
+  ['gemini-3.7-flash', 1_048_576],
+  ['gemini-3.6-flash', 1_048_576],
+  ['Gemini 3.5 Flash', 1_048_576],   // legacy label form
+  ['gemini-3.1-pro',   2_097_152],
+  ['Gemini 3.1 Pro',   2_097_152],   // legacy label form
+  ['claude-sonnet',      200_000],
   ['Claude Sonnet',      200_000],
+  ['claude-opus',        200_000],
   ['Claude Opus',        200_000],
+  ['gpt-oss',            128_000],
   ['GPT-OSS',            128_000],
 ];
 
@@ -399,6 +411,12 @@ export class AntigravityService {
   private runningSessions: Set<string> = new Set();
   private startingSessions: Set<string> = new Set();
   private promptAbortControllers = new Map<string, AbortController>();
+  /** Persistent agy stream-json processes, one per live session (stream mode). */
+  private streamProcesses = new Map<string, AgyStreamProcess>();
+  /** Stream event normalizers, keyed with their process. */
+  private streamNormalizers = new Map<string, AgyEventNormalizer>();
+  /** Injectable spawn for stream processes (tests); production uses real spawn. */
+  private readonly streamSpawnFn: typeof import('node:child_process').spawn | undefined;
   private promptCallbacks: Map<string, {
     onEvent: (e: NormalizedEvent) => void;
     onComplete: (err?: Error) => void;
@@ -417,10 +435,11 @@ export class AntigravityService {
   private modelCache: { expiresAt: number; models: AgyModelEntry[] } | null = null;
   private modelRequest: Promise<AgyModelEntry[]> | null = null;
 
-  constructor(cfg: { registryPath: string }) {
+  constructor(cfg: { registryPath: string; streamSpawnFn?: typeof import('node:child_process').spawn }) {
     this.store = new AntigravitySessionStore(config.antigravitySessionDir);
     this.subscribers = new AntigravitySessionSubscribers();
     this.registry = getSessionRegistry(cfg.registryPath);
+    this.streamSpawnFn = cfg.streamSpawnFn;
 
     this.idleTimeoutMs = config.antigravityIdleTimeoutMs;
     this.maxSessions = config.antigravityMaxSessions;
@@ -460,6 +479,12 @@ export class AntigravityService {
     } catch {
       return false;
     }
+  }
+
+  /** Backend projection for the capabilities route: stream-json persistent
+   *  process (agy ≥1.1.x) vs the legacy text print-mode wrapper. */
+  getBackendMode(): 'stream-json' | 'subprocess' {
+    return config.antigravityStreamMode ? 'stream-json' : 'subprocess';
   }
 
   async validateSetup(): Promise<{ ok: boolean; error?: string }> {
@@ -542,10 +567,50 @@ export class AntigravityService {
         throw error;
       }
 
-      void this.runPromptAsync(sessionId, entry, prompt, meta, onEvent, onComplete, abortController);
+      if (config.antigravityStreamMode) {
+        void this.runStreamTurn(sessionId, entry, prompt, meta, onEvent, onComplete, abortController);
+      } else {
+        void this.runPromptAsync(sessionId, entry, prompt, meta, onEvent, onComplete, abortController);
+      }
     } finally {
       this.startingSessions.delete(sessionId);
     }
+  }
+
+  /**
+   * Queue a follow-up prompt on a BUSY stream-mode session (plan Phase 5).
+   * The prompt is written through to the agy stdin stream; agy buffers it and
+   * executes it as the next turn (live-validated queue semantics). Durable
+   * like any turn: persisted as `running` immediately (RC1).
+   *
+   * Returns false when the session is not running a turn — the caller should
+   * send a normal prompt instead.
+   */
+  async followUp(
+    sessionId: string,
+    prompt: string,
+    onEvent: (event: NormalizedEvent) => void,
+    onComplete: (error?: Error) => void,
+  ): Promise<boolean> {
+    if (!config.antigravityEnabled) throw new Error('Antigravity is disabled');
+    if (!config.antigravityStreamMode) return false;
+    const proc = this.streamProcesses.get(sessionId);
+    if (!proc || proc.hasExited || !proc.hasPendingTurns) return false;
+    if (this.runningSessions.has(sessionId) || this.startingSessions.has(sessionId)) {
+      // Busy is the expected state here, but a racing prompt path may have
+      // flagged starting; refuse politely instead of double-writing.
+    }
+    const entry = await this.registry.get(sessionId);
+    if (!entry) throw new Error(`Antigravity session not found: ${sessionId}`);
+
+    let meta = this.sessionMeta.get(sessionId);
+    if (!meta) {
+      meta = { lastActivity: Date.now(), pinned: false, pinClaims: new Set(), status: 'running' };
+      this.sessionMeta.set(sessionId, meta);
+    }
+    meta.lastActivity = Date.now();
+    void this.runStreamTurn(sessionId, entry, prompt, meta, onEvent, onComplete, null);
+    return true;
   }
 
   private async runPromptAsync(
@@ -754,6 +819,323 @@ export class AntigravityService {
   }
 
   /**
+   * Stream-mode turn runner (plan Phase 4): reuses the persistent agy stream
+   * process when alive, respawns with `--conversation` otherwise, and feeds
+   * the normalizer's events straight through to subscribers + API observers.
+   * Durable ordering invariant preserved from the legacy path: the turn is
+   * persisted BEFORE the terminal `agent_end` is emitted.
+   */
+  private async runStreamTurn(
+    sessionId: string,
+    entry: RegistryEntry,
+    prompt: string,
+    meta: ActiveSessionMeta,
+    onEvent: (event: NormalizedEvent) => void,
+    onComplete: (error?: Error) => void,
+    abortController: AbortController | null,
+  ): Promise<void> {
+    const turnId = randomUUID();
+    const userId = randomUUID();
+    const assistantId = randomUUID();
+    const ts = Date.now();
+    const tlog = logger.child({ sessionId, turnId, runtime: 'antigravity' });
+
+    const emit = (event: NormalizedEvent) => {
+      try { onEvent(event); } catch { /* non-fatal */ }
+      this.emitApiObserverEvent(sessionId, event);
+    };
+
+    const cleanupRunState = (error?: Error) => {
+      this.runningSessions.delete(sessionId);
+      this.promptCallbacks.delete(sessionId);
+      if (abortController) this.promptAbortControllers.delete(sessionId);
+      onComplete(error);
+    };
+
+    const historyBefore = await this.store.loadHistory(sessionId);
+    const isFirstMessage = historyBefore.length === 0;
+    const storedModel = entry.model || config.antigravityDefaultModel;
+    let storedConversationId = entry.antigravityConversationId ?? null;
+    if (!storedConversationId) {
+      for (let i = historyBefore.length - 1; i >= 0; i--) {
+        if (isTurnDone(historyBefore[i]) && historyBefore[i].conversationId) {
+          storedConversationId = historyBefore[i].conversationId;
+          break;
+        }
+      }
+    }
+
+    // RC1 durability: persist the prompt the instant it is accepted.
+    await this.store.startTurn(sessionId, {
+      turnId,
+      prompt,
+      model: storedModel,
+      conversationId: storedConversationId,
+      timestamp: ts,
+    });
+    await this.registry.upsert({
+      ...entry,
+      id: sessionId,
+      sdkType: 'antigravity',
+      firstMessage: isFirstMessage ? prompt.slice(0, 200) : entry.firstMessage,
+      messageCount: entry.messageCount ?? 0,
+      status: 'running',
+    });
+    tlog.info('stream turn start: model=%s conversationId=%s promptChars=%d', storedModel, storedConversationId ?? 'none', prompt.length);
+
+    emit({ type: 'agent_start', sessionId, timestamp: ts, data: { sessionId } });
+    emit({ type: 'message_start', sessionId, timestamp: ts, data: { id: userId, role: 'user' } });
+    emit({
+      type: 'message_update', sessionId, timestamp: ts,
+      data: { id: userId, assistantMessageEvent: { type: 'text_delta', delta: prompt } },
+    });
+    emit({ type: 'message_end', sessionId, timestamp: ts, data: { id: userId } });
+
+    const startedAt = Date.now();
+    try {
+      const modelSlug = canonicalizeAgyModelId(storedModel);
+      let proc = this.streamProcesses.get(sessionId);
+      let normalizer = this.streamNormalizers.get(sessionId);
+      let norm = normalizer ?? new AgyEventNormalizer({ sessionId, suppressTerminalEvents: true });
+
+      const spawnProcess = async (conversationId: string | null): Promise<AgyStreamProcess> => {
+        norm = new AgyEventNormalizer({ sessionId, suppressTerminalEvents: true });
+        const fresh = new AgyStreamProcess({
+          sessionId,
+          cwd: entry.cwd,
+          model: modelSlug,
+          conversationId,
+          timeoutMs: this.promptTimeoutMs,
+          stallTimeoutMs: this.stallTimeoutMs,
+          idleTimeoutMs: this.idleTimeoutMs,
+          onEvent: (parsed) => {
+            for (const ev of norm.onParsed(parsed, Date.now())) emit(ev);
+          },
+          ...(this.streamSpawnFn ? { spawnFn: this.streamSpawnFn } : {}),
+        });
+        await fresh.start();
+        this.streamProcesses.set(sessionId, fresh);
+        this.streamNormalizers.set(sessionId, norm);
+        return fresh;
+      };
+      if (!proc || proc.hasExited || !normalizer) {
+        proc = await spawnProcess(storedConversationId);
+        normalizer = norm;
+      }
+
+      // Bounded retry: stall/timeout die with the process (SIGTERM) → respawn
+      // with the conversation the dead process reported; a plain agy ERROR or
+      // SUCCESS never retries.
+      let outcome: AgyTurnOutcome | null = null;
+      for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+        if (abortController?.signal.aborted) { outcome = { reason: 'aborted' }; break; }
+        try {
+          outcome = await proc.writeTurn(prompt);
+        } catch (writeError) {
+          // Process died between acquire and write (or rejected post-exit).
+          const deadId = proc.conversationId ?? storedConversationId;
+          if (attempt < this.maxAttempts) {
+            tlog.warn('stream process exited before/during turn (attempt %d/%d); respawning', attempt, this.maxAttempts);
+            proc = await spawnProcess(deadId);
+            normalizer = norm;
+            continue;
+          }
+          outcome = { reason: 'process-exited' };
+          break;
+        }
+        if (outcome.reason === 'process-exited' && attempt < this.maxAttempts) {
+          proc = await spawnProcess(outcome.conversationId ?? proc.conversationId ?? storedConversationId);
+          normalizer = norm;
+          continue;
+        }
+        break;
+      }
+      outcome = outcome ?? { reason: 'process-exited' };
+
+      const durationMs = Date.now() - startedAt;
+      const tools: AgyStoredToolCall[] = (normalizer.lastTurn?.tools ?? []).slice(0, AGY_STORED_TOOL_LIMIT)
+        .map((t) => ({
+          toolName: t.toolName,
+          ...(t.args !== undefined ? { args: t.args } : {}),
+          ...(t.output !== undefined ? { output: t.output.length > AGY_STORED_TOOL_OUTPUT_LIMIT ? `${t.output.slice(0, AGY_STORED_TOOL_OUTPUT_LIMIT)}… [truncated]` : t.output } : {}),
+          isError: t.isError,
+          ...(t.errorMessage ? { errorMessage: t.errorMessage } : {}),
+        }));
+
+      // Conversation ledger: prefer what the result reported. A mismatch means
+      // agy silently started a new conversation (invalid stored id) — surface
+      // a warning, then persist the ACTUAL id so the next resume stays coherent.
+      const actualConversationId = outcome.conversationId ?? normalizer.lastTurn?.result.conversation_id ?? proc.conversationId ?? storedConversationId;
+      if (storedConversationId && actualConversationId && storedConversationId !== actualConversationId) {
+        tlog.warn('agy rebound conversation: stored=%s actual=%s (invalid id creates a fresh conversation — persisted actual)', storedConversationId, actualConversationId);
+      }
+
+      const success = !outcome.reason && outcome.status === 'SUCCESS';
+      if (success) {
+        const response = outcome.response ?? normalizer.lastTurn?.text ?? '';
+        const usage: AgyStoredUsage | undefined = outcome.usage
+          ? {
+              input: outcome.usage.input ?? 0,
+              output: outcome.usage.output ?? 0,
+              thinking: outcome.usage.thinking ?? 0,
+              cacheRead: outcome.usage.cacheRead ?? 0,
+              total: outcome.usage.total ?? 0,
+            }
+          : undefined;
+        tlog.info('stream turn done in %dms: responseChars=%d conversationId=%s tools=%d', durationMs, response.length, actualConversationId ?? 'none', tools.length);
+        await this.finalizeStreamSuccess(sessionId, entry, turnId, prompt, isFirstMessage, response, actualConversationId, usage, outcome.numTurns, outcome.status, tools, durationMs, normalizer, assistantId, emit, meta);
+        cleanupRunState();
+        return;
+      }
+
+      const partial = outcome.response ?? '';
+      const reason = outcome.reason ?? `agy ${outcome.status ?? 'ERROR'}`;
+      const body = outcome.error
+        ? `The agent run failed (${reason}): ${outcome.error}`
+        : `The agent did not return a reply (${reason}).`;
+      tlog.warn('stream turn failed in %dms: reason=%s agyError=%s', durationMs, reason, outcome.error?.slice(0, 120) ?? 'none');
+      await this.finalizeStreamError(sessionId, entry, turnId, prompt, isFirstMessage, partial, reason, outcome.error ?? reason, actualConversationId, body, durationMs, normalizer, assistantId, emit, meta);
+      cleanupRunState(new Error(reason));
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      const reason = error.message || 'error';
+      tlog.error('stream turn errored before completion: %s', reason);
+      const body = `The agent run failed (${reason}).`;
+      await this.finalizeStreamError(sessionId, entry, turnId, prompt, isFirstMessage, '', reason, reason, storedConversationId, body, Date.now() - startedAt, this.streamNormalizers.get(sessionId) ?? null, assistantId, emit, meta)
+        .catch(() => undefined);
+      cleanupRunState(error);
+    }
+  }
+
+  /**
+   * Stream-mode success finalisation: persist (with real usage/tools), then
+   * emit message_end for the streamed assistant message + agent_end.
+   */
+  private async finalizeStreamSuccess(
+    sessionId: string,
+    entry: RegistryEntry,
+    turnId: string,
+    prompt: string,
+    isFirstMessage: boolean,
+    response: string,
+    conversationId: string | null,
+    usage: AgyStoredUsage | undefined,
+    numTurns: number | undefined,
+    agyStatus: string | undefined,
+    tools: AgyStoredToolCall[],
+    durationMs: number,
+    normalizer: AgyEventNormalizer,
+    _assistantId: string,
+    emit: (event: NormalizedEvent) => void,
+    meta: ActiveSessionMeta,
+  ): Promise<void> {
+    const turnTs = Date.now();
+    await this.store.finalizeTurn(sessionId, turnId, {
+      status: 'done',
+      response,
+      conversationId,
+      turnDurationMs: durationMs,
+      ...(usage ? { usage } : {}),
+      ...(numTurns !== undefined ? { numTurns } : {}),
+      ...(agyStatus ? { agyStatus } : {}),
+      tools,
+    });
+    await this.registry.upsert({
+      ...entry,
+      id: sessionId,
+      sdkType: 'antigravity',
+      firstMessage: isFirstMessage ? prompt.slice(0, 200) : entry.firstMessage,
+      messageCount: (entry.messageCount || 0) + 1,
+      status: 'idle',
+      antigravityConversationId: conversationId ?? undefined,
+    });
+
+    const streamedId = normalizer.state.assistantMessageId;
+    if (normalizer.state.assistantMessageOpen && streamedId) {
+      emit({ type: 'message_end', sessionId, timestamp: turnTs, data: { id: streamedId } });
+      normalizer.state.assistantMessageOpen = false;
+    } else {
+      // Nothing streamed (rare): emit the legacy single-shot assistant triple.
+      emit({ type: 'message_start', sessionId, timestamp: turnTs, data: { id: _assistantId, role: 'assistant' } });
+      emit({
+        type: 'message_update', sessionId, timestamp: turnTs,
+        data: { id: _assistantId, assistantMessageEvent: { type: 'text_delta', delta: response } },
+      });
+      emit({ type: 'message_end', sessionId, timestamp: turnTs, data: { id: _assistantId } });
+    }
+    emit({ type: 'agent_end', sessionId, timestamp: turnTs, data: { result: null, usage: usage ?? {}, agyStatus, numTurns } });
+
+    meta.status = 'idle';
+    meta.lastActivity = Date.now();
+    await this.registry.updateStatus(sessionId, 'idle');
+  }
+
+  /**
+   * Stream-mode error finalisation: persist the error turn (response = the
+   * streamed partial, if any), close any streamed message, emit a visible
+   * error-body assistant message + agent_end (RC2: failures are never blank).
+   */
+  private async finalizeStreamError(
+    sessionId: string,
+    entry: RegistryEntry,
+    turnId: string,
+    prompt: string,
+    isFirstMessage: boolean,
+    partial: string,
+    reason: string,
+    errorText: string,
+    conversationId: string | null,
+    body: string,
+    durationMs: number,
+    normalizer: AgyEventNormalizer | null,
+    assistantId: string,
+    emit: (event: NormalizedEvent) => void,
+    meta: ActiveSessionMeta,
+  ): Promise<void> {
+    const turnTs = Date.now();
+    await this.store.finalizeTurn(sessionId, turnId, {
+      status: 'error',
+      response: partial || errorText || reason,
+      error: errorText || reason,
+      conversationId,
+      turnDurationMs: durationMs,
+      agyStatus: normalizer?.lastTurn?.result.status,
+      tools: (normalizer?.lastTurn?.tools ?? []).slice(0, AGY_STORED_TOOL_LIMIT).map((t) => ({
+        toolName: t.toolName,
+        isError: t.isError,
+        ...(t.output !== undefined ? { output: t.output.slice(0, AGY_STORED_TOOL_OUTPUT_LIMIT) } : {}),
+        ...(t.errorMessage ? { errorMessage: t.errorMessage } : {}),
+      })),
+    });
+    await this.registry.upsert({
+      ...entry,
+      id: sessionId,
+      sdkType: 'antigravity',
+      firstMessage: isFirstMessage ? prompt.slice(0, 200) : entry.firstMessage,
+      messageCount: (entry.messageCount || 0) + 1,
+      status: 'error',
+      antigravityConversationId: conversationId ?? undefined,
+    });
+
+    const streamedId = normalizer?.state.assistantMessageId;
+    if (normalizer?.state.assistantMessageOpen && streamedId) {
+      emit({ type: 'message_end', sessionId, timestamp: turnTs, data: { id: streamedId } });
+      normalizer.state.assistantMessageOpen = false;
+    }
+    emit({ type: 'message_start', sessionId, timestamp: turnTs, data: { id: assistantId, role: 'assistant' } });
+    emit({
+      type: 'message_update', sessionId, timestamp: turnTs,
+      data: { id: assistantId, assistantMessageEvent: { type: 'text_delta', delta: body } },
+    });
+    emit({ type: 'message_end', sessionId, timestamp: turnTs, data: { id: assistantId } });
+    emit({ type: 'agent_end', sessionId, timestamp: turnTs, data: { result: null, usage: {}, error: errorText || reason } });
+
+    meta.status = 'error';
+    meta.lastActivity = Date.now();
+    await this.registry.updateStatus(sessionId, 'error');
+  }
+
+  /**
    * Finalize an in-flight turn as done: emit the assistant reply + agent_end,
    * persist the finalized turn, and update the registry (turn counted, idle).
    */
@@ -889,14 +1271,22 @@ export class AntigravityService {
   }
 
   abort(sessionId: string): void {
-    // Keep the session marked running until the exact in-flight invocation
-    // observes the abort and finalises; this prevents a replacement turn from
-    // racing with a still-live agy subprocess.
+    // Legacy text path: keep the session marked running until the exact
+    // in-flight invocation observes the abort and finalises.
     this.promptAbortControllers.get(sessionId)?.abort();
+    // Stream path: SIGTERM the child; the closing result / exit resolves the
+    // pending turn(s) with reason 'aborted'.
+    this.streamProcesses.get(sessionId)?.abort();
   }
 
   disposeSession(sessionId: string): void {
     this.abort(sessionId);
+    const proc = this.streamProcesses.get(sessionId);
+    if (proc && !proc.hasExited) {
+      try { proc.abort(); } catch { /* non-fatal on dispose */ }
+    }
+    this.streamProcesses.delete(sessionId);
+    this.streamNormalizers.delete(sessionId);
     this.sessionMeta.delete(sessionId);
     this.runningSessions.delete(sessionId);
     this.startingSessions.delete(sessionId);
@@ -998,16 +1388,19 @@ export class AntigravityService {
     const history = await this.store.loadHistory(sessionId);
     // Count finalized turns (done + error + legacy) only; a `running` turn is an
     // in-flight exchange with no assistant reply yet and must not inflate stats.
-    const finalized = history.filter((t) => t.status !== 'running').length;
+    const finalizedCount = history.filter((t) => t.status !== 'running').length;
+    const finalized = history.filter((t) => t.status !== 'running');
+    // Stream mode: real stored tool-call counts (legacy text turns store none).
+    const toolCalls = finalized.reduce((acc, t) => acc + (t.tools?.length ?? 0), 0);
     return {
       sessionId,
       cwd: entry.cwd,
       model: entry.model,
-      userMessages: finalized,
-      assistantMessages: finalized,
-      toolCalls: 0,
-      toolResults: 0,
-      totalMessages: finalized * 2,
+      userMessages: finalizedCount,
+      assistantMessages: finalizedCount,
+      toolCalls,
+      toolResults: toolCalls,
+      totalMessages: finalizedCount * 2,
       pinned: this.sessionMeta.get(sessionId)?.pinned ?? false,
     };
   }
@@ -1017,11 +1410,18 @@ export class AntigravityService {
       const entry = await this.registry.get(sessionId).catch(() => null);
       if (!entry || entry.sdkType !== 'antigravity') return null;
       const history = await this.store.loadHistory(sessionId);
-      // Consistent with getSessionStats: ignore an in-flight `running` turn. It
-      // has no assistant reply yet, and if orphaned by a crash it may not be in
-      // agy's conversation view, so it must not skew the context estimate.
       const finalized = history.filter((t) => t.status !== 'running');
       if (finalized.length === 0) return null;
+
+      // Stream mode: the latest real cumulative usage from agy's result
+      // envelope is the honest signal (char/4 estimates are legacy-only).
+      for (let i = finalized.length - 1; i >= 0; i--) {
+        const usage = finalized[i].usage;
+        if (usage) {
+          const contextWindow = getModelContextWindow(entry.model ?? config.antigravityDefaultModel);
+          return { contextWindow, tokens: usage.total, percent: Math.min(Math.round((usage.total / contextWindow) * 100), 100) };
+        }
+      }
 
       const totalChars = finalized.reduce(
         (acc, turn) => acc + turn.prompt.length + turn.response.length,
