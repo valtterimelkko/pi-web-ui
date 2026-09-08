@@ -68,7 +68,31 @@ These focus on UI performance and memory-related scenarios.
 ### All tests
 ```bash
 npm test
+npm run test:coverage
 ```
+
+These root commands run all four required workspaces sequentially with at most
+two workers: shared, server, client and the retained MCP package. The fixed
+recipe in `scripts/test-workspaces.mjs` gives children a private HOME/TMPDIR,
+both Pi agent-directory overrides and an allowlisted environment. Vitest env
+file loading is disabled; server tests mock only `dotenv.config` (explicit
+`dotenv.parse` fixtures stay real). Production env loading is unchanged. This
+is test isolation, not a filesystem/network sandbox: external services must
+still be mocked at the proper boundary.
+
+After each successful workspace, `scripts/check-test-discovery.mjs` joins its
+filesystem-derived source/tests inventory to the freshly generated Vitest JSON
+report. Missing, empty, all-skipped, failed, duplicate or unexpected required
+file results cannot produce a clean root verdict. No optional unit files are
+currently declared. E2E and synthetic benchmarks remain separate gates; they
+are not silently included in a unit-test pass. Ignored `test-results.json` and
+`test-inventory.json` files are workspace-local and overwritten on later runs;
+preserve them privately when collecting revision-specific proof.
+
+For a focused development run use the workspace's existing command with a test
+path. Such a subset is not a substitute for the root inventory gate. Shared
+coverage includes all production source and uses the measured ratchet in
+`shared/vitest.config.ts`; other workspace thresholds are unchanged.
 
 ### E2E tests
 ```bash

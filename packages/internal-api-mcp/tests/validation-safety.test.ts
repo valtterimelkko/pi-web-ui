@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   assertDisposableTarget,
   chooseValidationModel,
@@ -8,6 +10,9 @@ import {
   withValidationCleanup,
 } from '../src/validation-safety.js';
 
+// Honour the actual temporary root, including the isolated root test runner.
+const fixtureSocket = join(tmpdir(), 'validation', 'internal-api.sock');
+const fixtureToken = join(tmpdir(), 'validation', 'internal-api-token');
 const productionSocket = '/home/operator/.pi-web-ui/internal-api.sock';
 const productionToken = '/home/operator/.pi-web-ui/internal-api-token';
 
@@ -32,18 +37,18 @@ describe('MCP validator target safety', () => {
   });
 
   it('requires the socket and token to share one disposable directory', () => {
-    expect(() => assertDisposableTarget('/tmp/validation/internal-api.sock', '/tmp/other/internal-api-token', '/home/operator')).toThrow(/same|directory/i);
+    expect(() => assertDisposableTarget(fixtureSocket, join(tmpdir(), 'other', 'internal-api-token'), '/home/operator')).toThrow(/same|directory/i);
   });
 
   it('accepts explicit temporary paths and parses a disposable runtime', () => {
     const result = parseValidationArgs([
-      '--socket', '/tmp/validation/internal-api.sock',
-      '--token-path', '/tmp/validation/internal-api-token',
+      '--socket', fixtureSocket,
+      '--token-path', fixtureToken,
       '--runtime', 'pi',
     ], '/home/operator');
     expect(result).toEqual({
-      socketPath: '/tmp/validation/internal-api.sock',
-      tokenPath: '/tmp/validation/internal-api-token',
+      socketPath: fixtureSocket,
+      tokenPath: fixtureToken,
       runtime: 'pi',
     });
   });

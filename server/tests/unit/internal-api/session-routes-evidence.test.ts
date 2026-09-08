@@ -11,6 +11,13 @@ import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-rece
 import type { RegistryEntry } from '../../../src/session-registry.js';
 import type { LogRecord } from '../../../src/logging/logger.js';
 
+// The byte-budget assertions describe the documented default fixture, not an
+// arbitrary host's HOME length. Registry access itself is mocked below.
+vi.mock('../../../src/config.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../../src/config.js')>();
+  return { ...original, config: { ...original.config, sessionRegistryPath: '/fixture/session-registry.json' } };
+});
+
 function jsonReq(body: unknown): any {
   const req = new PassThrough();
   req.method = 'POST';
@@ -344,6 +351,16 @@ describe('GET /sessions/:id/evidence', () => {
     expect(body.runChronology[0].outputEvidence).toEqual({ disposition: 'no-text' });
     expect(Buffer.byteLength(res.body)).toBeLessThan(5_000);
     expect(res.body).not.toContain('hidden-');
+  });
+
+  it('preserves exact long session locators rather than truncating identities to meet the fixture budget', async () => {
+    const locator = `/fixture/${'long-directory/'.repeat(50)}session.jsonl`;
+    const { routes } = buildRoutes([entry({ path: locator })]);
+    const res = await callEvidence(routes, 'internal-pi-id');
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.aliases.path).toBe(locator);
+    expect(body.sources.runtime.sessionPath).toBe(locator);
   });
 
   it('returns a stable not-found error for an unknown identifier', async () => {

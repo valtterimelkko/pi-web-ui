@@ -10,6 +10,7 @@ import react from '@vitejs/plugin-react';
 const showAppConsoleLogs = process.env.VITEST_LOG === '1';
 
 export default defineConfig({
+  envDir: false,
   plugins: [react()],
   resolve: {
     conditions: ['development', 'import', 'browser', 'default'],

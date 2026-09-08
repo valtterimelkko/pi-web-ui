@@ -17,7 +17,9 @@ import { defineConfig } from 'vitest/config';
 const showAppConsoleLogs = process.env.VITEST_LOG === '1';
 
 export default defineConfig({
+  envDir: false,
   test: {
+    setupFiles: ['./tests/setup-env.ts'],
     globals: true,
     environment: 'node',
     onConsoleLog: showAppConsoleLogs ? undefined : () => false,
@@ -31,7 +33,7 @@ export default defineConfig({
       // Measure production source explicitly (truthful coverage of src/**, not
       // just whatever the test runner happens to instrument).
       include: ['src/**/*.ts'],
-      exclude: ['node_modules/', 'tests/', 'dist/', 'src/**/*.d.ts'],
+      exclude: ['node_modules/', 'tests/', 'dist/', 'src/**/*.d.ts', 'src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
       // Truthful ratchet (Q4): the explicit `include` now measures ALL of src/**,
       // so the previous 80/80/70/80 thresholds (which silently ignored
       // unmeasured bootstrap/wiring files) were inflated. The measured baseline
@@ -46,6 +48,6 @@ export default defineConfig({
         statements: 74,
       },
     },
-    include: ['tests/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
+    include: ['{src,tests}/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
   },
 });

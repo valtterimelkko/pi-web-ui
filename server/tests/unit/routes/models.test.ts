@@ -1,142 +1,75 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { generateSessionToken } from '../../../src/security/auth.js';
+import modelsRouter from '../../../src/routes/models.js';
 
-// Mock the pi service
-vi.mock('../../../src/pi/pi-service.js', () => ({
-  getPiService: vi.fn().mockReturnValue({
-    getAvailableModels: vi.fn().mockResolvedValue([
-      { id: 'openai/gpt-4', name: 'GPT-4', provider: 'openai' },
-      { id: 'github-copilot/gpt-5.4', name: 'GPT-5.4', provider: 'github-copilot' },
-      { id: 'kimi/k2.5', name: 'Kimi K2.5', provider: 'kimi' },
-    ]),
-  }),
+// Real router and cookie verification; only external services/config are fixtures.
+vi.mock('../../../src/config.js', () => ({ config: { jwtSecret: 'isolated-model-route-test-signing-key', jwtExpiresIn: '1h' } }));
+const services = vi.hoisted(() => ({
+  pi: { getAvailableModels: vi.fn() },
+  opencode: { isEnabled: vi.fn(), getAvailableModels: vi.fn() },
+  commandcode: { init: vi.fn(), isEnabled: vi.fn(), getModels: vi.fn() },
 }));
+vi.mock('../../../src/pi/index.js', () => ({ getPiService: () => services.pi }));
+vi.mock('../../../src/opencode/index.js', () => ({ getOpenCodeService: () => services.opencode }));
+vi.mock('../../../src/command-code/command-code-instance.js', () => ({ getCommandCodeService: () => services.commandcode }));
+vi.mock('../../../src/antigravity/index.js', () => ({ getAntigravityService: vi.fn() }));
+vi.mock('../../../src/claude/index.js', () => ({ getClaudeProfiles: () => [] }));
 
-describe('Models API', () => {
+const model = { id: 'fixture', name: 'Fixture', provider: 'fixture', reasoning: false };
+describe('Models API production router', () => {
   let app: express.Application;
-  let mockPiService: {
-    getAvailableModels: ReturnType<typeof vi.fn>;
-  };
-
-  beforeEach(async () => {
+  let cookie: string;
+  beforeEach(() => {
+    vi.resetAllMocks();
+    services.pi.getAvailableModels.mockResolvedValue([model]);
+    services.opencode.isEnabled.mockReturnValue(false);
+    services.commandcode.isEnabled.mockReturnValue(false);
+    services.commandcode.init.mockResolvedValue(undefined);
     app = express();
     app.use(express.json());
-
-    const { getPiService } = await import('../../../src/pi/pi-service.js');
-    mockPiService = getPiService() as unknown as typeof mockPiService;
-
-    // GET /api/models - List available models
-    app.get('/api/models', async (_req, res) => {
-      try {
-        const { getPiService } = await import('../../../src/pi/pi-service.js');
-        const models = await getPiService().getAvailableModels();
-        res.json({ models });
-      } catch (error) {
-        console.error('Error listing models:', error);
-        res.status(500).json({ error: 'Failed to list models' });
-      }
-    });
-
-    // PUT /api/models/current - Set current model
-    app.put('/api/models/current', async (req, res) => {
-      try {
-        const { modelId } = req.body;
-
-        if (!modelId) {
-          res.status(400).json({ error: 'modelId is required' });
-          return;
-        }
-
-        // Parse model ID (format: provider/model-name)
-        const [provider, ...modelParts] = modelId.split('/');
-        const modelName = modelParts.join('/');
-
-        if (!provider || !modelName) {
-          res.status(400).json({ error: 'Invalid model ID format. Expected: provider/model-name' });
-          return;
-        }
-
-        // Note: Actual model setting happens per-session via WebSocket
-        // This endpoint just validates and returns the model info
-
-        res.json({
-          success: true,
-          modelId,
-          provider,
-          model: modelName,
-        });
-      } catch (error) {
-        console.error('Error setting model:', error);
-        res.status(500).json({ error: 'Failed to set model' });
-      }
-    });
+    app.use('/api/models', modelsRouter);
+    cookie = `accessToken=${generateSessionToken('fixture-user')}`;
   });
 
-  describe('GET /api/models', () => {
-    it('should return a list of available models', async () => {
-      const response = await request(app).get('/api/models').expect(200);
-
-      expect(response.body).toHaveProperty('models');
-      expect(Array.isArray(response.body.models)).toBe(true);
-      expect(response.body.models.length).toBe(3);
-      expect(response.body.models[0]).toHaveProperty('id');
-      expect(response.body.models[0]).toHaveProperty('name');
-      expect(response.body.models[0]).toHaveProperty('provider');
-    });
-
-    it('should handle errors gracefully', async () => {
-      mockPiService.getAvailableModels.mockRejectedValue(new Error('Service unavailable'));
-
-      const response = await request(app).get('/api/models').expect(500);
-
-      expect(response.body).toHaveProperty('error');
-      expect(response.body.error).toBe('Failed to list models');
-    });
+  it.each([undefined, 'accessToken=not-a-valid-token'])('rejects missing/invalid auth before runtime access: %s', async value => {
+    const get = request(app).get('/api/models');
+    const put = request(app).put('/api/models/current').send({ modelId: 'fixture/model' });
+    if (value) { get.set('Cookie', value); put.set('Cookie', value); }
+    await get.expect(401);
+    await put.expect(401);
+    expect(services.pi.getAvailableModels).not.toHaveBeenCalled();
   });
-
-  describe('PUT /api/models/current', () => {
-    it('should validate modelId is required', async () => {
-      const response = await request(app)
-        .put('/api/models/current')
-        .send({})
-        .expect(400);
-
-      expect(response.body).toHaveProperty('error');
-      expect(response.body.error).toContain('modelId is required');
-    });
-
-    it('should validate model ID format', async () => {
-      const response = await request(app)
-        .put('/api/models/current')
-        .send({ modelId: 'invalid-format' })
-        .expect(400);
-
-      expect(response.body).toHaveProperty('error');
-      expect(response.body.error).toContain('Invalid model ID format');
-    });
-
-    it('should accept valid provider/model format', async () => {
-      const response = await request(app)
-        .put('/api/models/current')
-        .send({ modelId: 'github-copilot/gpt-5.4' })
-        .expect(200);
-
-      expect(response.body).toHaveProperty('success', true);
-      expect(response.body).toHaveProperty('modelId', 'github-copilot/gpt-5.4');
-      expect(response.body).toHaveProperty('provider', 'github-copilot');
-      expect(response.body).toHaveProperty('model', 'gpt-5.4');
-    });
-
-    it('should handle model IDs with multiple slashes', async () => {
-      const response = await request(app)
-        .put('/api/models/current')
-        .send({ modelId: 'provider/sub/model-name' })
-        .expect(200);
-
-      expect(response.body).toHaveProperty('success', true);
-      expect(response.body).toHaveProperty('provider', 'provider');
-      expect(response.body).toHaveProperty('model', 'sub/model-name');
-    });
+  it('returns Pi models with SDK-derived thinking capability', async () => {
+    const response = await request(app).get('/api/models').set('Cookie', cookie).expect(200);
+    expect(response.body.models).toEqual([{ ...model, thinkingLevels: ['off'] }]);
+    expect(services.pi.getAvailableModels).toHaveBeenCalledOnce();
+  });
+  it('reports service failure through the real route', async () => {
+    services.pi.getAvailableModels.mockRejectedValue(new Error('fixture service unavailable'));
+    const response = await request(app).get('/api/models').set('Cookie', cookie).expect(500);
+    expect(response.body).toEqual({ error: 'Failed to list models' });
+  });
+  it.each(['opencode', 'commandcode'])('does not query a disabled %s catalogue', async runtime => {
+    const response = await request(app).get(`/api/models?sdkType=${runtime}`).set('Cookie', cookie).expect(200);
+    expect(response.body).toEqual({ models: [] });
+    expect(services.opencode.getAvailableModels).not.toHaveBeenCalled();
+    expect(services.commandcode.getModels).not.toHaveBeenCalled();
+    expect(services.pi.getAvailableModels).not.toHaveBeenCalled();
+  });
+  it.each([
+    [{}, 'modelId is required'],
+    [{ modelId: 'invalid-format' }, 'Invalid model ID format'],
+    [{ modelId: '/model' }, 'Invalid model ID format'],
+  ])('validates the actual PUT contract for %j', async (body, error) => {
+    const response = await request(app).put('/api/models/current').set('Cookie', cookie).send(body).expect(400);
+    expect(response.body.error).toContain(error);
+  });
+  it.each(['github-copilot/gpt-5.4', 'provider/sub/model-name'])('validates without applying %s', async modelId => {
+    const response = await request(app).put('/api/models/current').set('Cookie', cookie).send({ modelId }).expect(200);
+    const [provider, ...parts] = modelId.split('/');
+    expect(response.body).toEqual({ success: true, modelId, provider, model: parts.join('/') });
+    expect(services.pi.getAvailableModels).not.toHaveBeenCalled();
   });
 });
