@@ -61,7 +61,10 @@ Typical uses:
 Located in:
 - `tests/benchmarks/`
 
-These focus on UI performance and memory-related scenarios.
+Synthetic microbenchmarks over mock caches with fixed delays and hardcoded
+reference numbers — NOT application acceptance evidence (see the README in
+that directory). Unsupported measurements report unsupported, never zero.
+Real-path workload measurement lives in the four-angle plan Step 5.
 
 ## Running Tests
 
