@@ -96,7 +96,11 @@
 - `opencode/opencode-types.ts` — OpenCode-specific type definitions.
 
 ### Antigravity Path (`server/src/antigravity/`)
-- `antigravity/antigravity-service.ts` — Antigravity lifecycle, `agy -p` subprocess dispatch, conversation-id tracking, session cleanup, model listing, liveness heartbeat, and inactivity stall watchdog (configurable via `ANTIGRAVITY_STALL_TIMEOUT_MS` and `ANTIGRAVITY_MAX_ATTEMPTS`).
+- `antigravity/antigravity-service.ts` — Antigravity lifecycle, persistent stream-json turn execution + follow-up queue, conversation-id ledger, session cleanup, model/thinking-level changes, model listing (stream mode; legacy text mode behind `ANTIGRAVITY_STREAM_MODE=false`).
+- `antigravity/agy-stream-process.ts` — persistent agy child: NDJSON framing, FIFO turn queue, stall/timeout watchdogs, abort, idle shutdown.
+- `antigravity/agy-event-normalizer.ts` — stream events → NormalizedEvents with a per-turn accumulator (text, tools, usage).
+- `antigravity/agy-event-types.ts` — lenient Zod schemas for the agy wire surface + stream capability probe.
+- `antigravity/agy-models.ts` — `agy models` parsing, slug canonicalisation, sibling-derived thinking levels, effort validation.
 - `antigravity/antigravity-session-store.ts` — JSONL turn persistence at `~/.pi-web-ui/antigravity-sessions/`.
 - `antigravity/antigravity-history-replay.ts` — Converts stored Antigravity turns into replay events.
 - `antigravity/antigravity-session-subscribers.ts` — Multi-viewer fanout for Antigravity sessions.

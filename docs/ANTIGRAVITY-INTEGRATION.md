@@ -2,7 +2,9 @@
 
 > Read this when working on the Antigravity / `agy` runtime path. For first-stop debugging, start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and `npm run debug:where -- <session-id-or-runtime-session-id-or-path>`.
 
-Pi Web UI integrates Google's Antigravity agent (Gemini Flash 3.5 and others) as a fourth runtime path, alongside Pi Coding Agent, the Claude runtime family, and OpenCode.
+Pi Web UI integrates Google's Antigravity agent (Gemini Flash tiers, Claude
+models, GPT-OSS) as a fourth runtime path, alongside Pi Coding Agent, the
+Claude runtime family, and OpenCode.
 
 ## Adopter quick take
 
@@ -11,97 +13,125 @@ Read this doc if Gemini/Antigravity access is one of the reasons you want Pi Web
 Recommended public framing:
 - **Who this path is for:** users who specifically want Antigravity/Gemini available in the same browser shell as the other runtimes
 - **Setup difficulty:** medium
-- **Current shape:** subprocess-per-turn wrapper integration
-- **Main caveats:** no true streaming today, no approval UI path, and the runtime currently runs with a higher-trust permission posture than Pi or richer Claude/OpenCode paths
+- **Current shape:** persistent `agy` process in structured stream-json mode per session — real token streaming, tool-call visibility, real token usage, native follow-up queueing
+- **Main caveats:** no mid-run steering join (queue-only), no approval UI path, and the runtime runs with a higher-trust permission posture than Pi or richer Claude/OpenCode paths
 
 ## Architecture
 
 ```
 Browser → WebSocket /ws → WebSocketConnectionManager → AntigravityService
-                                                            ↓
-                                                   agy CLI subprocess
-                                                   (print mode: -p)
-                                                            ↓
-                                              ~/.gemini/antigravity-cli/
-                                              conversations/<uuid>.db
+                                                            │
+                          AgyStreamProcess (1 per live session, respawn on demand)
+                                                            │  stdin:  {"event":"user",…} NDJSON
+                                                            ▼
+                                              agy --input-format stream-json
+                                                  --output-format stream-json
+                                                  [--model <slug>] [--conversation <uuid>]
+                                                            │  stdout: init / step_update / result NDJSON
+                                                            ▼
+                                                     AgyEventNormalizer
+                                                            ▼
+                                            NormalizedEvent pipeline (WS + /events)
 ```
 
-The runtime uses **subprocess-per-turn** execution: each user prompt spawns `agy -p ...` as a child process, waits for completion, then emits all events in a single batch.
+The runtime uses a **persistent process per session** in agy's structured
+headless mode (agy ≥ 1.1.27): one warmed conversation, one `result` event per
+turn, streamed `text_delta` fragments (~200 ms cadence), per-step tool events,
+and real token usage. Setting `ANTIGRAVITY_STREAM_MODE=false` restores the
+legacy text print-mode wrapper (rollback hatch).
+
+Validated protocol facts behind this design (live-validated 2026-09-08 against
+agy 1.1.27; full capture in the pi-enhancement research doc
+`2026-09-08-agy-json-headless-live-validation.md`):
+
+- **Streaming invariant:** the concatenation of all `text_delta` fragments in
+  a turn equals `result.response` byte-for-byte.
+- **Queue semantics:** a user event written while a turn runs is buffered by
+  agy and executed as the next turn (native follow-up queueing). There is no
+  mid-run join: signals kill the whole session process.
+- **Resume:** `--conversation <id>` (into one-shot or persistent processes)
+  carries full context without replaying old events; `result.response` is only
+  the new turn's reply.
+- **Loud failures:** unknown `--model` values, effort conflicts, and unsupported
+  effort axes fail fast with a structured ERROR envelope (exit 1, zero usage,
+  no model call) — the historic silent-downgrade behaviour no longer exists.
+- **Conversation-id hazards:** an invalid conversation id silently creates a
+  new conversation (detected via `result.conversation_id` mismatch, surfaced as
+  a warning, actual id persisted); an *empty* id resumes an unrelated recent
+  conversation and is never sent.
 
 ## Key Files
 
 | File | Purpose |
 |---|---|
-| `server/src/antigravity/antigravity-service.ts` | Main service — session management, prompt execution, model listing |
-| `server/src/antigravity/antigravity-session-store.ts` | JSONL turn store at `~/.pi-web-ui/antigravity-sessions/<id>.jsonl` |
-| `server/src/antigravity/antigravity-history-replay.ts` | Converts stored turns to normalized replay events |
+| `server/src/antigravity/antigravity-service.ts` | Main service — session management, stream turn execution, follow-up queue, model/thinking-level changes, model listing |
+| `server/src/antigravity/agy-stream-process.ts` | Child lifecycle: spawn args, NDJSON framing, FIFO turn queue, stall/timeout watchdogs, abort, idle shutdown |
+| `server/src/antigravity/agy-event-normalizer.ts` | Pure stream→NormalizedEvent translator with per-turn accumulator (text, tools, usage) |
+| `server/src/antigravity/agy-event-types.ts` | Lenient Zod schemas for the agy wire surface + `helpTextSupportsStream` capability probe |
+| `server/src/antigravity/agy-models.ts` | `agy models` parsing, slug canonicalisation, sibling-derived thinking levels, effort validation |
+| `server/src/antigravity/antigravity-session-store.ts` | JSONL turn store at `~/.pi-web-ui/antigravity-sessions/<id>.jsonl` (turns carry usage/tools in stream mode) |
+| `server/src/antigravity/antigravity-history-replay.ts` | Converts stored turns into normalized replay events (incl. stored tool calls) |
 | `server/src/antigravity/antigravity-session-subscribers.ts` | Tracks which WebSocket clients subscribe to which sessions |
-| `server/src/antigravity/index.ts` | Barrel exports |
 
 ## Subprocess Invocation
 
 ```bash
 agy \
-  --dangerously-skip-permissions \
-  --print-timeout 10m \
-  --model "Gemini 3.5 Flash (Medium)" \
-  --conversation <uuid> \          # omitted on first turn
-  -p "<user prompt>"
+  --input-format stream-json \
+  --output-format stream-json \
+  --model gemini-3.8-flash-medium \      # canonical slug (init.model echoes it)
+  --conversation <uuid>                  # omitted on first turn; never empty
 ```
 
-The binary path defaults to `/root/.local/bin/agy`, overridable via `AGY_BINARY` env var.
+The binary path defaults to `/root/.local/bin/agy`, overridable via `AGY_BINARY`.
+Prompts are written to stdin as `{"event":"user","message":{"content":…}}`, one
+line per turn. The process is spawned lazily on the first prompt, kept warm
+across turns (spawn cost ~2.5 s is paid once), and shut down after the idle
+timeout (`antigravityIdleTimeoutMs`) by closing stdin (agy exits 0 cleanly).
 
 ## Conversation Continuity
 
-Antigravity conversations are tracked via the conversation UUID stored in:
-- `RegistryEntry.antigravityConversationId` (session registry)
-- `AntigravityTurn.conversationId` (JSONL history)
+The conversation UUID lives in `RegistryEntry.antigravityConversationId` and in
+each stored turn. It now comes from the stream itself (`init`/`result` events)
+— no filesystem diffing, no log scraping. A mismatch between the stored id and
+the id the result reports is surfaced as a warning and the *actual* id is
+persisted (an invalid stored id makes agy start a fresh conversation).
 
-**First turn**: pass a per-run `--log-file`, then parse the `Print mode: conversation=<uuid>, sending message` line to capture the conversation that actually received the prompt. A filesystem snapshot of `~/.gemini/antigravity-cli/conversations/*.db` is only a fallback, because `agy` can create small transient conversation DBs before switching to the real print-mode conversation.
+Crash recovery: a killed process finalises its in-flight turn as an error, and
+the next prompt respawns with `--conversation <last-known-id>` and retries.
 
-**Subsequent turns**: pass `--conversation <uuid>` to resume, and keep parsing the per-run log as a sanity check for the actual conversation used.
+## Model + Thinking-Level Selection
 
-**Output extraction quirk**: resumed calls include prior assistant replies before the newest reply in stdout. `extractNewReply()` slices near the accumulated prior trimmed stdout length (`AntigravitySessionStore.priorReplyAnchor()`) to isolate the new response — but agy's replay of prior turns is **not always byte-stable** across invocations (observed: a run of blank lines collapsed on replay, 10 characters shorter than what the prior turn originally captured). Trusting the recorded byte offset blindly in that case truncates the start of the new reply. `extractNewReply()` therefore verifies/corrects the offset by anchoring on a suffix of the prior turn's actual stored response text (`priorReplyAnchor().text`) near the expected position, searching a ±400 char window and preferring the match closest to the recorded offset (guards against a short/common anchor false-matching earlier in a long transcript). It falls back to the raw offset when no anchor is found within tolerance (agy replayed nothing at all, or replayed content that differs too much to verify) — never worse than offset-only slicing. `buildAgyErrorBody()` (partial output on a timeout/error turn) uses the same shared `sliceAfterPriorReply()` helper.
-
-## Turn durability and failure visibility
-
-A prompt is written to the Pi-owned JSONL store as a `running` turn before the
-`agy` subprocess is spawned, and the registry is updated to `status: running`.
-A browser refresh therefore retains the user prompt and in-flight state instead
-of showing an empty history. Successful turns are finalized as `done`; timeout,
-stall, non-zero exit, and spawn failures are finalized as `error` with a
-non-empty reason and any safely isolated partial output. Both terminal paths
-emit `agent_end`, so the failure is visible in replay and can trigger an
-opted-in notification.
-
-If the process crashes while a turn is still `running`, startup deliberately
-leaves that turn as an in-flight historical record: replay shows the user prompt
-without inventing an assistant reply or `agent_end`. It is evidence of an
-interrupted turn, not proof that the model completed. The service does not
-silently reconcile it into success; inspect the per-turn `agy-logs/` file,
-conversation DB, and diagnostics before deciding whether to retry.
-
-The registry keeps the selected model label intact for UI/metadata. At the agy
-boundary the service strips one leading provider prefix such as
-`antigravity/` before passing `--model`, and logs a warning if agy still reports
-a silent downgrade to another label.
+- `agy models` prints `<slug>\t<Label>`; both forms are accepted by `--model`,
+  but the **slug is canonical** (init.model echoes it; `/models` selectors
+  expose the slug).
+- **Thinking level = sibling slug swap** (`gemini-3.6-flash-low` →
+  `…-high`), derived per model from actual catalogue siblings. Models without
+  a level axis (Claude, GPT-OSS) expose `thinkingLevels: []` and reject level
+  changes loudly. `--effort` is never passed (live-validated: it conflicts with
+  baked-level slugs and is unsupported for non-Gemini families).
+- Model/thinking changes while a turn runs return 409 `SESSION_BUSY`; when
+  idle, the warm process is dropped and the next turn respawns with the new
+  `--model`, resuming the same conversation.
 
 ## Event Format
 
-Antigravity emits normalized events in the same format as other runtimes:
+Per turn (normalized, same pipeline as other runtimes):
 
 ```
-agent_start
-  message_start (role: user)
-  message_update (text_delta: prompt text)
-  message_end
-  message_start (role: assistant)
-  message_update (text_delta: agy response)
-  message_end
-agent_end
+agent_start                                   (service, on prompt accept)
+  message_start/user … message_end            (service)
+  message_start(assistant)                    (normalizer, first text delta)
+  message_update (text_delta …)               (streamed, ~200 ms cadence)
+  tool_execution_start / tool_execution_end   (per tool step; tool_info)
+  stream_activity                             (non-content steps: liveness)
+  message_end(assistant)                      (service, after durable persist)
+agent_end {usage:{input,output,thinking,cacheRead,total}, agyStatus, numTurns}
 ```
 
-Events use `{ type: 'text_delta', delta: '<text>' }` as `assistantMessageEvent`, matching the Claude runtime convention.
+Failed turns emit a visible assistant error body + `agent_end` (no blank
+screen). `agyStatus` carries the raw agy terminal status
+(SUCCESS/ERROR/WAITING/…).
 
 ## Session Registry
 
@@ -116,6 +146,7 @@ All config lives in `server/src/config.ts`:
 | Variable | Default | Env override |
 |---|---|---|
 | `antigravityEnabled` | `true` | `ANTIGRAVITY_ENABLED` |
+| `antigravityStreamMode` | `true` | `ANTIGRAVITY_STREAM_MODE` (`false` = legacy text mode) |
 | `antigravitySessionDir` | `~/.pi-web-ui/antigravity-sessions` | `ANTIGRAVITY_SESSION_DIR` |
 | `antigravityDefaultModel` | `'Gemini 3.5 Flash (Medium)'` | `ANTIGRAVITY_DEFAULT_MODEL` |
 | `antigravityPromptTimeoutMs` | `600000` (10m) | `ANTIGRAVITY_PROMPT_TIMEOUT_MS` |
@@ -123,90 +154,93 @@ All config lives in `server/src/config.ts`:
 | `antigravityMaxSessions` | `4` | `ANTIGRAVITY_MAX_SESSIONS` |
 | `antigravityMaxPinnedSessions` | `5` | `ANTIGRAVITY_MAX_PINNED_SESSIONS` |
 | `antigravityCleanupIntervalMs` | `60000` (1m) | `ANTIGRAVITY_CLEANUP_INTERVAL_MS` |
-| `antigravityHeartbeatIntervalMs` | `5000` (5s) | `ANTIGRAVITY_HEARTBEAT_INTERVAL_MS` |
-| `antigravityStallTimeoutMs` | `300000` (5m) | `ANTIGRAVITY_STALL_TIMEOUT_MS` |
+| `antigravityHeartbeatIntervalMs` | `5000` (5s; legacy mode only) | `ANTIGRAVITY_HEARTBEAT_INTERVAL_MS` |
+| `antigravityStallTimeoutMs` | `300000` (5m; stream mode = no-events gap) | `ANTIGRAVITY_STALL_TIMEOUT_MS` |
 | `antigravityMaxAttempts` | `2` | `ANTIGRAVITY_MAX_ATTEMPTS` |
 
 ## Capabilities
 
-Reported via Internal API `/api/v1/capabilities`:
+Reported via Internal API `/api/v1/capabilities` (stream mode):
 
 ```json
 {
   "antigravity": {
     "available": true,
-    "backendMode": "subprocess",
+    "enabled": true,
+    "backendMode": "stream-json",
     "supportsFollowUp": true,
+    "followUpSemantics": "queue_while_busy",
     "supportsSteer": false,
     "supportsModelSwitch": true,
-    "supportsThinkingLevel": false,
+    "supportsThinkingLevel": true,
     "supportsPinning": true,
     "supportsReplayHistory": true,
     "supportsApprovals": false,
-    "supportsHeartbeat": true
+    "supportsHeartbeat": false,
+    "supportsInteractiveQuestions": false,
+    "supportsStructuredQuestionResponse": false
   }
 }
 ```
 
 ## Available Models
 
-Fetched live via `agy models`. Fallback list (from `agy` 1.0.6):
-- `Gemini 3.5 Flash (Medium)`
-- `Gemini 3.5 Flash (High)`
-- `Gemini 3.5 Flash (Low)`
-- `Gemini 3.1 Pro (Low)`
-- `Gemini 3.1 Pro (High)`
+Fetched live via `agy models` (60 s cache). Each `/models` entry carries
+`selector` (the slug), `displayName` (label), and `thinkingLevels` derived from
+catalogue siblings. When `agy models` cannot run, a small static fallback list
+is served.
 
 ## Frontend
 
-The `NewSessionModal` shows an Antigravity button (violet theme) when `antigravity_available: true` is received from the server. Availability is broadcast on WebSocket connect.
+- `NewSessionModal` shows an Antigravity button (violet theme) when
+  `antigravity_available: true` arrives over WebSocket.
+- Streaming compose is enabled for antigravity in **queue-only** mode: the
+  composer shows a single "Queue — runs after the current turn" affordance;
+  the steer option is deliberately absent (no mid-run join exists).
 
-`sdkType: 'antigravity'` flows through `createNewSession()` → `WebSocketConnectionManager.handleNewSession()` → `AntigravityService.createSession()`.
+## Turn durability and failure visibility
+
+A prompt (and a follow-up queue write) is persisted as a `running` turn before
+it is handed to the agy process (RC1). Successes finalise `done` with real
+`usage`, `numTurns`, `agyStatus`, and compact `tools` records; timeouts, stalls,
+aborts, and process deaths finalise `error` with a non-empty body. Every
+terminal path emits `agent_end`, so failures are visible on replay and can
+trigger opted-in notifications.
+
+Watchdogs (stream mode):
+- **Hard ceiling** per turn: `antigravityPromptTimeoutMs` → SIGTERM.
+- **Stall**: no parsed stream events for `antigravityStallTimeoutMs` → SIGTERM.
+- **Abort**: SIGTERM, consume agy's closing `result`, escalate to SIGKILL after
+  a 5 s grace window. Reason comes from what WE sent (agy reports the same
+  "timeout waiting for response" string for signals and print-timeout expiry).
+- A stall/timeout retries within `antigravityMaxAttempts` after a respawn with
+  `--conversation`; plain agy ERROR results never retry.
 
 ## Live Validation
 
-The disposable validation server intentionally disables Antigravity because
-`agy` has no supported conversation-data directory override. Do not include it
-in the normal `--runtime all` disposable matrix. Run an Antigravity scenario
-only against an explicitly authorised target and record that it may touch the
-real `~/.gemini` state:
+agy has no conversation-data directory override, so Antigravity is excluded
+from the disposable `--runtime all` matrix. Run the antigravity scenarios
+against an explicitly authorised server (isolated antigravity-capable instance
+or production with `--allow-production`); it touches the real `~/.gemini`
+state:
 
 ```bash
-npm run validate:live -- --allow-production \
-  --runtime antigravity --scenario smoke
-npm run validate:live -- --allow-production \
-  --runtime antigravity --scenario follow-up
-npm run validate:live -- --allow-production \
-  --runtime antigravity --scenario session-info
+npm run validate:live -- --socket <sock> --token-path <token> \
+  --runtime antigravity --scenario <smoke|follow-up|session-info>
 ```
 
-When using a separately isolated Antigravity-capable server, pass its printed
-`--socket` and `--token-path` instead of `--allow-production`. The generic
-scenarios work because the runtime reports capabilities correctly and emits
-standard normalized events, but the subprocess/credential boundary is not
-made disposable by the runner.
-
-## Observability
-
-Because `agy -p` is a batch subprocess with no native streaming, the server adds its own observability so an in-flight turn is never a silent black box:
-
-- **Liveness heartbeat** (`supportsHeartbeat: true`): while the subprocess runs, the service emits a synthetic `stream_activity` event every `antigravityHeartbeatIntervalMs` (default 5s) carrying `{ turnId, elapsedMs }`. It flows through `/events` and the WebSocket exactly like the Claude channel heartbeat, keeps the UI heartbeat fresh during multi-minute turns, is **live-only** (never persisted), and is always cleared when the turn ends.
-- **Structured lifecycle logging**: each turn logs through a per-turn child logger bound with `sessionId` / `turnId` / `runtime=antigravity`, so lines are correlatable and land in the `/diagnostics` ring buffer. Emitted: `turn start` (model, conversationId, promptChars), `turn done in <ms>` (responseChars) or `turn failed in <ms>` (reason), a `warn` when the model id is normalized for agy, and a `warn` when agy is detected to have silently downgraded the model.
-- **Per-turn timing**: finalized turns persist `turnDurationMs` (wall-clock subprocess time) in the JSONL store.
-- **Silent-downgrade detection**: `extractAgyModelDowngrade()` parses the per-run agy log for the "not recognized → propagating override" pattern and surfaces it as a warning, so a fallback to a different model is observable even though the `antigravity/` prefix case is already prevented at the `--model` boundary.
-- **Stall watchdog + bounded retry**: root-caused 2026-07-01 by inspecting agy's own internal conversation databases across a stalled production session and a stress-test comparing bare `agy -p` against the Internal API path across all three Flash effort tiers — a turn can go completely silent (no backend calls at all) because agy sometimes loses track of its own workspace root: it calls `list_permissions` looking for it, falls back to poking around its internal `~/.gemini/antigravity-cli/scratch` directory, and when that's empty, runs an unscoped `find / -name "*bike*" ...`-style full-filesystem scan while it "waits for the search to complete" — a local shell command our wrapper can't see progress on (no tool visibility, see below), not a live backend call. This reproduced identically via bare `agy -p` and via the Internal API, and was not clearly tied to one reasoning effort tier, so it's an upstream agy behavior, not something specific to this integration. Since `--log-file` is written incrementally throughout a real turn (unlike stdout, which is only flushed once at the end), `runAgy()` polls its mtime: if it stops advancing for `antigravityStallTimeoutMs` (default 5m — chosen from observed data to sit above a recovered 234s inactivity gap and below a fatal 345s+ one), the subprocess is killed with reason `stall` instead of waiting out the full `antigravityPromptTimeoutMs` (10m). A stall or hard timeout is retried up to `antigravityMaxAttempts` (default 2 total) times; a plain non-zero exit is not retried. Each retry reuses whatever conversation state agy already resolved (a first turn stays fresh unless agy already registered one; a follow-up turn keeps resuming the same conversation) — no special "fresh conversation" logic needed since the anchor-based reply extraction already ignores non-done turns.
-
-## Known Limitations
-
-- **No native streaming**: `agy -p` returns batch output. The entire response is emitted as a single `message_update` after the subprocess completes — but a synthetic `stream_activity` heartbeat (see [Observability](#observability)) provides liveness during the turn.
-- **No tool visibility**: agy tool calls are not surfaced as individual events. This is also why a stalled turn's *cause* (e.g. a runaway `find /`) can't be shown directly to the user — only its *symptom* (log-file inactivity) is observable, which is what the stall watchdog above acts on.
-- **No approvals**: agy runs with `--dangerously-skip-permissions`.
-- **Resumed output accumulation**: if `rawStdoutLength` is missing or corrupted in the JSONL turn log, `priorReplyAnchor()` falls back to summing done turns' response lengths (imprecise but non-zero). If a turn's *replay* of a prior reply also isn't byte-stable (see the output-extraction quirk above), `extractNewReply()`'s anchor search corrects for a bounded drift (±400 chars) using the prior turn's actual response text; a drift larger than that, or a prior response too short to anchor on (< 6 chars), still falls back to the raw offset and can start mid-sentence.
-- **Conversation DB ambiguity**: `agy` may create transient `.db` files during a first turn. Pi Web UI should trust the per-run log's `Print mode: conversation=...` line before falling back to filesystem detection.
+Stream-mode specific checks (L1–L11 in
+`docs/plans/ANTIGRAVITY-JSON-STREAM-INTEGRATION-PLAN.md`): incremental
+`text_delta` streaming, mid-turn follow-up queueing, model-slug echo in
+`init.model`, loud model failures, abort/timeout behaviour, crash recovery with
+`--conversation` resume, parallel sessions, Internal-API follow-up receipts,
+and legacy-session resume.
 
 ## Authentication
 
-`agy` uses the local user's Antigravity Google OAuth credentials from `~/.gemini/antigravity-cli/`. No API key required — the server runs as the same OS user that logged in with `agy`.
+`agy` uses the local user's Antigravity Google OAuth credentials from
+`~/.gemini/antigravity-cli/`. **No API keys** — the server runs as the same OS
+user that logged in with `agy`, and no credentials are read into this repo.
 
 ## Troubleshooting
 
@@ -215,8 +249,12 @@ Start with [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) and:
 ```bash
 npm run debug:where -- <session-id-or-runtime-session-id-or-path>
 
-# Check binary
+# Check binary + stream capability
 agy --version
+agy --help | grep -E "input-format|output-format"
+
+# Free model probe (no quota): current effective model
+agy -p /model
 
 # Check auth
 agy -p "Reply OK"
@@ -227,7 +265,7 @@ curl -s --unix-socket ~/.pi-web-ui/internal-api.sock \
   -H "Authorization: Bearer $TOKEN" \
   http://localhost/api/v1/capabilities | python3 -m json.tool
 
-# Check session logs
+# Session logs
 journalctl -u pi-web-ui -f | grep -i antigravity
 ```
 
@@ -235,3 +273,4 @@ Related docs:
 - [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md)
 - [`CODEBASE-MAP.md`](./CODEBASE-MAP.md)
+- [`docs/plans/ANTIGRAVITY-JSON-STREAM-INTEGRATION-PLAN.md`](./plans/ANTIGRAVITY-JSON-STREAM-INTEGRATION-PLAN.md)

@@ -4,6 +4,12 @@ Short rolling summary of major doc-relevant changes. Use this as a delta guide, 
 
 ## Current highlights
 
+- **Antigravity stream-json integration (`2026-09-08`, no contract change)**
+  - The Antigravity runtime moved from batch text print-mode (`agy -p`) to a persistent `agy --input-format stream-json --output-format stream-json` process per session: real `text_delta` streaming (~200 ms cadence), per-turn results, tool-call visibility (`tool_execution_start/end`), real token usage (context % now comes from agy, not char/4 estimates), and native follow-up queueing (a mid-turn write runs as the next turn — frontend composer shows a queue-only affordance; Internal API `mode:'follow_up'` queues on busy antigravity sessions).
+  - Model + thinking-level selection is now reliable and live-validated against agy 1.1.27: canonical slug selectors with sibling-derived `thinkingLevels` per model, loud failures for unknown models (the historic silent downgrade is gone), sibling-slug level swaps (never an `--effort` flag), 409 for busy model changes, and crash recovery via `--conversation` resume.
+  - Rollback hatch: `ANTIGRAVITY_STREAM_MODE=false` restores the legacy text-mode wrapper. No Internal API wire-schema change (contract stays `1.27.0`); `backendMode` gains the `stream-json` value.
+  - Canonical docs: [`ANTIGRAVITY-INTEGRATION.md`](./ANTIGRAVITY-INTEGRATION.md), [`docs/plans/ANTIGRAVITY-JSON-STREAM-INTEGRATION-PLAN.md`](./plans/ANTIGRAVITY-JSON-STREAM-INTEGRATION-PLAN.md).
+
 - **Child-orchestration surfacing (`1.34.0`, `2026-09-04`)**
   - Background subagents, Internal-API children, and durable watches are now visible on the parent session's surfaces. Five additive normalized events (`background_child_state`, `child_dispatched`, `child_turn_ended`, `watch_registered`, `watch_fired`) reach `/events`, durable watches, and the browser (cards + live "children running"/"watches armed" strips with runtime/model).
   - Parent linkage: `X-Parent-Session` header (or `parentSessionId` body field) on create and watch registration; unresolvable values are ignored; in-flight bash-tool correlation is the automatic fallback. Linked children persist `parentSessionId`; `GET /sessions/:id` gains additive `children`.

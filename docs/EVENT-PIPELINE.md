@@ -21,9 +21,11 @@
 └─────────────────┘     └─────────────────────────────┘     └──────────────────┘
 
 ┌─────────────────┐     ┌─────────────────────────────┐
-│ Antigravity     │────▶│ antigravity-service.ts       │────▶ same broker/router
-│ (agy -p/logs)   │     │ (normalized turn + heartbeat)│
-└─────────────────┘     └─────────────────────────────┘
+│ Antigravity     │────▶│ agy-stream-process.ts        │────▶ same broker/router
+│ (agy stream-json│     │ → agy-event-normalizer.ts    │
+│  stdin process) │     │ (streamed turns, tool events,│
+└─────────────────┘     │  real usage)                 │
+                        └─────────────────────────────┘
 ```
 
 ## The NormalizedEvent Contract
@@ -137,10 +139,19 @@ when output is available, and emits synthetic `stream_activity` heartbeats while
 the subprocess runs. A per-turn log-file mtime watchdog kills a silent attempt
 and retries up to `ANTIGRAVITY_MAX_ATTEMPTS`; abort cancels pending retry work.
 
-After a turn, the conversation UUID is reconciled with the agy-owned SQLite DB
-so subsequent turns resume the same conversation. For diagnostics, correlate
-the registry's `antigravityConversationId` with the Pi-owned JSONL, the per-turn
-`agy-logs/` file, and the matching `.db` rather than searching all of `~/.gemini`.
+Stream-json mode (default): the persistent process emits `init`, `step_update`
+(text deltas at ~200 ms cadence, `tool` steps with call+result info,
+`system_message`/`unknown` liveness steps) and one `result` per turn. The
+normalizer maps these to `message_update` deltas, `tool_execution_start/end`,
+`stream_activity`, and a terminal `message_end`+`agent_end` that the service
+emits only after durable persistence.
+
+After a turn, the conversation UUID comes from the stream's
+`init`/`result` events (a mismatch with the stored id is warned and the actual
+id persisted). For diagnostics, correlate the registry's
+`antigravityConversationId` with the Pi-owned JSONL, the native
+`~/.gemini/antigravity-cli/log/cli-*.log`, and the matching conversation `.db`
+rather than searching all of `~/.gemini`.
 
 ## Server-side observers and replay
 
