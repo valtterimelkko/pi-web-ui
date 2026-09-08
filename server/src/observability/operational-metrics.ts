@@ -32,6 +32,9 @@ export interface TurnMetricsSnapshot extends Record<TerminalStatus | 'accepted',
   latency: LatencySnapshot;
 }
 
+const LAG_WINDOW_MS = 60_000;
+const LAG_MAX_SAMPLES = 120;
+
 export interface OperationalSnapshot {
   generatedAt: string;
   turns: Partial<Record<SessionRuntime, TurnMetricsSnapshot>>;
@@ -50,6 +53,10 @@ export interface OperationalSnapshot {
     brokerEventsTruncatedTotal: number;
     brokerEventsCoalescedTotal: number;
     eventLoopLagMs: number;
+    eventLoopLagWindow: {
+      windowMs: number; maxSamples: number; sampleCount: number;
+      maxMs: number; p95Ms: number; resetAt: string;
+    };
     /** WS-path memory robustness (2026-09-05): bounded-send + shed observability. */
     wsUpdatesQueuedTotal: number;
     wsSlowClientsClosedTotal: number;
@@ -99,6 +106,9 @@ export class OperationalMetrics {
   private brokerEventsTruncatedTotal = 0;
   private brokerEventsCoalescedTotal = 0;
   private eventLoopLagMs = 0;
+  private readonly lagSamples: Array<{ at: number; value: number } | undefined> = new Array(LAG_MAX_SAMPLES);
+  private lagCursor = 0;
+  private readonly lagResetAt: string;
   private wsUpdatesQueuedTotal = 0;
   private wsSlowClientsClosedTotal = 0;
   private memoryShedActive = false;
@@ -106,6 +116,7 @@ export class OperationalMetrics {
 
   constructor(options: OperationalMetricsOptions = {}) {
     this.now = options.now ?? Date.now;
+    this.lagResetAt = new Date(this.now()).toISOString();
   }
 
   recordTurnAccepted(runtime: SessionRuntime): void {
@@ -176,6 +187,8 @@ export class OperationalMetrics {
 
   recordEventLoopLag(lagMs: number): void {
     this.eventLoopLagMs = Math.max(0, Math.round(lagMs));
+    this.lagSamples[this.lagCursor] = { at: this.now(), value: this.eventLoopLagMs };
+    this.lagCursor = (this.lagCursor + 1) % LAG_MAX_SAMPLES;
   }
 
   /** WS-path memory robustness: a browser message_update was queued under backpressure. */
@@ -222,6 +235,7 @@ export class OperationalMetrics {
         brokerEventsTruncatedTotal: this.brokerEventsTruncatedTotal,
         brokerEventsCoalescedTotal: this.brokerEventsCoalescedTotal,
         eventLoopLagMs: this.eventLoopLagMs,
+        eventLoopLagWindow: this.lagWindowSnapshot(now),
         wsUpdatesQueuedTotal: this.wsUpdatesQueuedTotal,
         wsSlowClientsClosedTotal: this.wsSlowClientsClosedTotal,
         memoryShedActive: this.memoryShedActive,
@@ -232,6 +246,24 @@ export class OperationalMetrics {
             }
           : {}),
       },
+    };
+  }
+
+  private lagWindowSnapshot(now: number): OperationalSnapshot['pipeline']['eventLoopLagWindow'] {
+    const values: number[] = [];
+    for (let index = 0; index < this.lagSamples.length; index++) {
+      const sample = this.lagSamples[index];
+      if (!sample) continue;
+      if (sample.at <= now - LAG_WINDOW_MS) {
+        this.lagSamples[index] = undefined;
+      } else if (sample.at <= now) values.push(sample.value);
+    }
+    values.sort((a, b) => a - b);
+    return {
+      windowMs: LAG_WINDOW_MS, maxSamples: LAG_MAX_SAMPLES,
+      sampleCount: values.length, maxMs: values.at(-1) ?? 0,
+      p95Ms: values[Math.ceil(values.length * 0.95) - 1] ?? 0,
+      resetAt: this.lagResetAt,
     };
   }
 

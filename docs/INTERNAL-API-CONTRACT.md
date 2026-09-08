@@ -34,6 +34,7 @@ Current contract:
   - HTTP diagnostic responses are capped at 1 MiB. If log/error arrays are reduced, `responseTruncation` reports `omittedLogs`, `omittedErrors`, and `limitBytes`; retained data and matching summary counts are unchanged;
   - unreadable/invalid registry state or unavailable visibility checks return 503 `DIAGNOSTIC_SOURCE_UNAVAILABLE` with `sources` status, not fabricated healthy empty counts. Corrupt registry bytes are preserved and reads may recover after external repair;
   - API receipt metrics include all five runtimes, including Command Code. Existing visibility restrictions still apply;
+  - `operational.pipeline.eventLoopLagWindow` adds a bounded60-second/120-sample history from the existing monitor, with count/max/nearest-rank p95 and reset/limit metadata; it does not change shed thresholds or add a sampler;
   - Agent OS mirror migration remains an explicit final integration task, separately coordinated before production deployment. A source version bump does not imply consumer synchronisation or a running-server upgrade.
 
 - **1.35.0** (minor, additive watch-generation preconditions and Pi pause reasons):

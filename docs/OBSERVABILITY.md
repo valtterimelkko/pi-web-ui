@@ -123,6 +123,14 @@ timestamps and eviction/truncation/insertion/tap-failure counters. These global
 window counters are distinct from the filtered summary. Read results are detached
 copies. Counters are not durable history across restart.
 
+`operational.pipeline.eventLoopLagWindow` retains at most 120 samples from the
+existing 500 ms monitor over 60 seconds. It reports `sampleCount`, `maxMs`,
+nearest-rank `p95Ms`, `windowMs`, `maxSamples`, and the metrics owner's `resetAt`.
+Samples at least 60 seconds old expire; a new owner starts empty. When count is
+zero, zero-valued aggregates are placeholders, not proof of a lag-free interval.
+This is process-local history, not durable telemetry. Latest-lag reporting and
+existing shed/admission thresholds are unchanged; no extra sampler is started.
+
 Responses are capped at 1 MiB; optional `responseTruncation` states how many
 oldest log/error array entries were omitted and the byte limit. This does not
 remove retained entries or change matching summary counts. If required registry
