@@ -442,6 +442,35 @@ function estimateMessagesSize(messages: Message[]): number {
   return messages.reduce((total, msg) => total + estimateMessageSize(msg), 0);
 }
 
+/**
+ * Account for a message change without walking the complete transcript.
+ *
+ * Cache metadata is deliberately best-effort and is not persisted. A missing
+ * or zero-sized record has no trustworthy baseline, so rebuild it once; after
+ * that, every add/update is a constant-time delta from the changed message.
+ */
+function accountMessageSize(
+  currentMeta: SessionCacheMeta | undefined,
+  messages: Message[],
+  previousMessage: Message | undefined,
+  nextMessage: Message,
+  debugSizeScanCount: number,
+): { sizeBytes: number; debugSizeScanCount: number } {
+  if (!currentMeta?.sizeBytes) {
+    return {
+      sizeBytes: estimateMessagesSize(messages),
+      debugSizeScanCount: debugSizeScanCount + 1,
+    };
+  }
+
+  return {
+    sizeBytes: currentMeta.sizeBytes
+      - (previousMessage ? estimateMessageSize(previousMessage) : 0)
+      + estimateMessageSize(nextMessage),
+    debugSizeScanCount,
+  };
+}
+
 function extractToolResultText(result: unknown): string {
   if (typeof result === 'string') return result;
   if (result && typeof result === 'object') {
@@ -711,6 +740,8 @@ interface SessionState {
   // Session cache with metadata for intelligent invalidation
   sessionMessages: Record<string, Message[]>;
   sessionCacheMeta: Record<string, SessionCacheMeta>;
+  /** Debug witness: number of complete-transcript size scans in this store instance. */
+  debugSizeScanCount: number;
   // Track which sessions are streaming (for background processing)
   streamingSessions: Record<string, boolean>;
   // Loading state to prevent duplicate adds during initial session load
@@ -866,6 +897,7 @@ export const useSessionStore = create<SessionState>()(
       // Session cache with metadata
       sessionMessages: {},
       sessionCacheMeta: {},
+      debugSizeScanCount: 0,
       streamingSessions: {},
       isLoadingSessions: false,
       // Auto-compaction state
@@ -1103,11 +1135,27 @@ export const useSessionStore = create<SessionState>()(
             currentStep: 0,
             model: null,
           };
-          const newMessages = [...existingData.messages, message];
+          const isCurrentSession = state.currentSessionId === sessionId;
+          // A current session may have been populated through the legacy
+          // projection before sessionData was created. Keep whichever current
+          // projection already contains the visible transcript as the base.
+          const baseMessages = isCurrentSession && state.messages.length > 0
+            ? state.messages
+            : existingData.messages;
+          const newMessages = [...baseMessages, message];
+          const now = Date.now();
+          const accounting = accountMessageSize(
+            state.sessionCacheMeta[sessionId],
+            newMessages,
+            undefined,
+            message,
+            state.debugSizeScanCount,
+          );
+          const currentMeta = state.sessionCacheMeta[sessionId];
           const newCache = new Map(state.sessionCache);
           newCache.set(sessionId, {
             messages: newMessages,
-            lastAccess: Date.now(),
+            lastAccess: now,
           });
           return {
             sessionData: {
@@ -1115,7 +1163,7 @@ export const useSessionStore = create<SessionState>()(
               [sessionId]: {
                 ...existingData,
                 messages: newMessages,
-                lastEventTimestamp: Date.now(),
+                lastEventTimestamp: now,
               },
             },
             // Also update legacy sessionMessages cache for backward compatibility
@@ -1124,6 +1172,19 @@ export const useSessionStore = create<SessionState>()(
               [sessionId]: newMessages,
             },
             sessionCache: newCache,
+            sessionCacheMeta: {
+              ...state.sessionCacheMeta,
+              [sessionId]: {
+                ...(currentMeta ?? {}),
+                fileTimestamp: currentMeta?.fileTimestamp ?? 0,
+                lastLocalUpdate: now,
+                isStreaming: currentMeta?.isStreaming ?? (isCurrentSession && state.isStreaming),
+                messageCount: newMessages.length,
+                sizeBytes: accounting.sizeBytes,
+              },
+            },
+            debugSizeScanCount: accounting.debugSizeScanCount,
+            ...(isCurrentSession ? { messages: newMessages } : {}),
           };
         });
       },
@@ -1132,14 +1193,31 @@ export const useSessionStore = create<SessionState>()(
         set((state) => {
           const existingData = state.sessionData[sessionId];
           if (!existingData) return state;
-          
-          const newMessages = existingData.messages.map((msg) =>
-            msg.id === messageId ? { ...msg, ...updates } : msg
+
+          const isCurrentSession = state.currentSessionId === sessionId;
+          // Once a session is current, all four projections are deliberately
+          // folded from one canonical array. The fallback keeps late events
+          // useful when a switch has only populated sessionData so far.
+          const baseMessages = isCurrentSession && state.messages.some((msg) => msg.id === messageId)
+            ? state.messages
+            : existingData.messages;
+          const previousMessage = baseMessages.find((msg) => msg.id === messageId);
+          if (!previousMessage) return state;
+          const nextMessage = { ...previousMessage, ...updates };
+          const newMessages = baseMessages.map((msg) => msg.id === messageId ? nextMessage : msg);
+          const now = Date.now();
+          const accounting = accountMessageSize(
+            state.sessionCacheMeta[sessionId],
+            newMessages,
+            previousMessage,
+            nextMessage,
+            state.debugSizeScanCount,
           );
+          const currentMeta = state.sessionCacheMeta[sessionId];
           const newCache = new Map(state.sessionCache);
           newCache.set(sessionId, {
             messages: newMessages,
-            lastAccess: Date.now(),
+            lastAccess: now,
           });
           return {
             sessionData: {
@@ -1147,7 +1225,7 @@ export const useSessionStore = create<SessionState>()(
               [sessionId]: {
                 ...existingData,
                 messages: newMessages,
-                lastEventTimestamp: Date.now(),
+                lastEventTimestamp: now,
               },
             },
             // Also update legacy sessionMessages cache for backward compatibility
@@ -1156,6 +1234,22 @@ export const useSessionStore = create<SessionState>()(
               [sessionId]: newMessages,
             },
             sessionCache: newCache,
+            sessionCacheMeta: {
+              ...state.sessionCacheMeta,
+              [sessionId]: {
+                ...(currentMeta ?? {}),
+                fileTimestamp: currentMeta?.fileTimestamp ?? 0,
+                lastLocalUpdate: now,
+                isStreaming: currentMeta?.isStreaming ?? (isCurrentSession && state.isStreaming),
+                messageCount: newMessages.length,
+                sizeBytes: accounting.sizeBytes,
+              },
+            },
+            debugSizeScanCount: accounting.debugSizeScanCount,
+            ...(isCurrentSession ? {
+              messages: newMessages,
+              lastStreamEventAt: now,
+            } : {}),
           };
         });
       },
@@ -1438,127 +1532,195 @@ export const useSessionStore = create<SessionState>()(
 
       setCurrentSession: (sessionId) => {
         const state = get();
-        
-        // First, save current session's messages to cache with metadata (if any)
+
+        // First, save current session's messages to cache with metadata (if any).
+        // Reuse a valid baseline when one exists; only a genuinely missing cache
+        // meta record needs a complete-transcript scan.
         if (state.currentSessionId && state.messages.length > 0) {
           const oldMessages = state.messages;
           set((s) => {
+            const currentId = s.currentSessionId;
+            if (!currentId) return s;
+            const now = Date.now();
+            const previousMeta = s.sessionCacheMeta[currentId];
+            let sizeBytes = previousMeta?.sizeBytes;
+            let debugSizeScanCount = s.debugSizeScanCount;
+            if (!sizeBytes) {
+              sizeBytes = estimateMessagesSize(oldMessages);
+              debugSizeScanCount++;
+            }
             const newCache = new Map(s.sessionCache);
-            newCache.set(s.currentSessionId!, {
+            newCache.set(currentId, {
               messages: oldMessages,
-              lastAccess: Date.now(),
+              lastAccess: now,
             });
             return {
               sessionCache: newCache,
               sessionMessages: {
                 ...s.sessionMessages,
-                [s.currentSessionId!]: oldMessages,
+                [currentId]: oldMessages,
               },
               sessionCacheMeta: {
                 ...s.sessionCacheMeta,
-                [s.currentSessionId!]: {
-                  fileTimestamp: s.sessionCacheMeta[s.currentSessionId!]?.fileTimestamp || 0,
-                  lastLocalUpdate: Date.now(),
+                [currentId]: {
+                  ...(previousMeta ?? {}),
+                  fileTimestamp: previousMeta?.fileTimestamp ?? 0,
+                  lastLocalUpdate: now,
                   isStreaming: s.isStreaming,
                   messageCount: oldMessages.length,
-                  sizeBytes: estimateMessagesSize(oldMessages),
+                  sizeBytes,
                 },
               },
+              debugSizeScanCount,
             };
           });
         }
-        
-        // Then, switch to new session and load its cached messages (if any)
+
+        // Then, switch to new session and load its cached messages (if any).
+        // The visible projection and LRU entry must point at the same array so
+        // a later delta cannot make a just-switched session disagree with its
+        // background cache.
         const cachedMessages = sessionId ? get().sessionMessages[sessionId] || [] : [];
         set((s) => {
           const newCache = new Map(s.sessionCache);
+          let messages = cachedMessages;
           if (sessionId) {
             const existingCache = newCache.get(sessionId);
+            messages = existingCache?.messages ?? cachedMessages;
             newCache.set(sessionId, {
-              messages: existingCache?.messages || cachedMessages,
+              messages,
               lastAccess: Date.now(),
             });
           }
           return {
             currentSessionId: sessionId,
             currentSessionSdkType: s.sessions.find((session) => session.id === sessionId)?.sdkType ?? null,
-            messages: cachedMessages,
+            messages,
             sessionCache: newCache,
           };
         });
-        
+
         // Trigger eviction after session switch
         get().evictIfNeeded();
       },
 
       addMessage: (message) => {
         set((state) => {
-          const newMessages = [...state.messages, message];
-          // Also update the session caches
           const sessionId = state.currentSessionId;
-          const newSessionMessages = sessionId 
-            ? { ...state.sessionMessages, [sessionId]: newMessages }
-            : state.sessionMessages;
+          const newMessages = [...state.messages, message];
+          if (!sessionId) return { messages: newMessages };
+
+          const now = Date.now();
+          const accounting = accountMessageSize(
+            state.sessionCacheMeta[sessionId],
+            newMessages,
+            undefined,
+            message,
+            state.debugSizeScanCount,
+          );
+          const currentMeta = state.sessionCacheMeta[sessionId];
           const newCache = new Map(state.sessionCache);
-          if (sessionId) {
-            newCache.set(sessionId, {
-              messages: newMessages,
-              lastAccess: Date.now(),
-            });
-          }
-          const newSessionCacheMeta = sessionId 
+          newCache.set(sessionId, {
+            messages: newMessages,
+            lastAccess: now,
+          });
+          const existingData = state.sessionData[sessionId];
+          const newSessionData = existingData
             ? {
-                ...state.sessionCacheMeta,
+                ...state.sessionData,
                 [sessionId]: {
-                  ...state.sessionCacheMeta[sessionId],
-                  messageCount: newMessages.length,
-                  sizeBytes: estimateMessagesSize(newMessages),
-                  lastLocalUpdate: Date.now(),
+                  ...existingData,
+                  messages: newMessages,
+                  lastEventTimestamp: now,
                 },
               }
-            : state.sessionCacheMeta;
-          return { 
+            : state.sessionData;
+          return {
             messages: newMessages,
-            sessionMessages: newSessionMessages,
+            sessionMessages: {
+              ...state.sessionMessages,
+              [sessionId]: newMessages,
+            },
             sessionCache: newCache,
-            sessionCacheMeta: newSessionCacheMeta,
+            sessionCacheMeta: {
+              ...state.sessionCacheMeta,
+              [sessionId]: {
+                ...(currentMeta ?? {}),
+                fileTimestamp: currentMeta?.fileTimestamp ?? 0,
+                lastLocalUpdate: now,
+                isStreaming: currentMeta?.isStreaming ?? state.isStreaming,
+                messageCount: newMessages.length,
+                sizeBytes: accounting.sizeBytes,
+              },
+            },
+            sessionData: newSessionData,
+            debugSizeScanCount: accounting.debugSizeScanCount,
           };
         });
       },
 
       updateMessage: (id, updates) => {
         set((state) => {
-          const newMessages = state.messages.map((msg) =>
-            msg.id === id ? { ...msg, ...updates } : msg
-          );
-          // Also update the session caches
+          const previousMessage = state.messages.find((msg) => msg.id === id);
+          const now = Date.now();
+          // Keep the liveness signal from the old handler even if a late delta
+          // arrives after its target has been evicted.
+          if (!previousMessage) {
+            return state.currentSessionId ? { lastStreamEventAt: now } : state;
+          }
+
+          const nextMessage = { ...previousMessage, ...updates };
+          const newMessages = state.messages.map((msg) => msg.id === id ? nextMessage : msg);
           const sessionId = state.currentSessionId;
-          const newSessionMessages = sessionId 
-            ? { ...state.sessionMessages, [sessionId]: newMessages }
-            : state.sessionMessages;
           const newCache = new Map(state.sessionCache);
+          const currentMeta = sessionId ? state.sessionCacheMeta[sessionId] : undefined;
+          const accounting = sessionId
+            ? accountMessageSize(
+                currentMeta,
+                newMessages,
+                previousMessage,
+                nextMessage,
+                state.debugSizeScanCount,
+              )
+            : { sizeBytes: 0, debugSizeScanCount: state.debugSizeScanCount };
           if (sessionId) {
             newCache.set(sessionId, {
               messages: newMessages,
-              lastAccess: Date.now(),
+              lastAccess: now,
             });
           }
-          const newSessionCacheMeta = sessionId 
-            ? {
-                ...state.sessionCacheMeta,
-                [sessionId]: {
-                  ...state.sessionCacheMeta[sessionId],
-                  messageCount: newMessages.length,
-                  sizeBytes: estimateMessagesSize(newMessages),
-                  lastLocalUpdate: Date.now(),
-                },
-              }
-            : state.sessionCacheMeta;
-          return { 
+          const existingData = sessionId ? state.sessionData[sessionId] : undefined;
+          return {
             messages: newMessages,
-            sessionMessages: newSessionMessages,
+            sessionMessages: sessionId
+              ? { ...state.sessionMessages, [sessionId]: newMessages }
+              : state.sessionMessages,
             sessionCache: newCache,
-            sessionCacheMeta: newSessionCacheMeta,
+            sessionCacheMeta: sessionId
+              ? {
+                  ...state.sessionCacheMeta,
+                  [sessionId]: {
+                    ...(currentMeta ?? {}),
+                    fileTimestamp: currentMeta?.fileTimestamp ?? 0,
+                    lastLocalUpdate: now,
+                    isStreaming: currentMeta?.isStreaming ?? state.isStreaming,
+                    messageCount: newMessages.length,
+                    sizeBytes: accounting.sizeBytes,
+                  },
+                }
+              : state.sessionCacheMeta,
+            sessionData: sessionId && existingData
+              ? {
+                  ...state.sessionData,
+                  [sessionId]: {
+                    ...existingData,
+                    messages: newMessages,
+                    lastEventTimestamp: now,
+                  },
+                }
+              : state.sessionData,
+            debugSizeScanCount: accounting.debugSizeScanCount,
+            ...(sessionId ? { lastStreamEventAt: now } : {}),
           };
         });
       },
@@ -1932,7 +2094,8 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'message_update': {
-            set({ lastStreamEventAt: Date.now() });
+            // A valid target update below sets the liveness timestamp in the
+            // same atomic store write as its message/projection change.
             // Update streaming content
             const { message: msgData, assistantMessageEvent } = msg as {
               message?: { id: string; content?: Message['content'] };
@@ -1976,6 +2139,12 @@ export const useSessionStore = create<SessionState>()(
                   get().updateMessage(msgData.id, { content: contentArray });
                 }
               }
+            }
+            // Preserve the old liveness behaviour for malformed/late updates
+            // that had no target to update; valid deltas already touched it in
+            // updateMessage's single write above.
+            if (!msgData?.id || !assistantMessageEvent || !get().messages.some((message) => message.id === msgData.id)) {
+              set({ lastStreamEventAt: Date.now() });
             }
             break;
           }
@@ -2643,11 +2812,9 @@ export const useSessionStore = create<SessionState>()(
                 // events (which may arrive without IDs from raw SDK events) can
                 // be routed to the correct message.
                 currentMessageIdBySession.set(sessionId, newMessage.id);
+                // addMessageToSession updates the current-session projection
+                // atomically; a second addMessage here duplicated the message.
                 get().addMessageToSession(sessionId, newMessage);
-                // Also update current session if it matches
-                if (get().currentSessionId === sessionId) {
-                  get().addMessage(newMessage);
-                }
                 break;
               }
               
@@ -2669,46 +2836,43 @@ export const useSessionStore = create<SessionState>()(
                 
                 if (messageId && assistantMessageEvent) {
                   const sessionData = get().sessionData[sessionId];
-                  if (sessionData) {
-                    const existingMsg = sessionData.messages.find(m => m.id === messageId);
-                    if (existingMsg) {
-                      let contentArray: ContentPart[];
-                      if (Array.isArray(existingMsg.content)) {
-                        contentArray = [...existingMsg.content];
-                      } else if (typeof existingMsg.content === 'string') {
-                        contentArray = existingMsg.content ? [{ type: 'text' as const, text: existingMsg.content }] : [];
+                  const existingMsg = sessionData?.messages.find((m) => m.id === messageId);
+                  const delta = assistantMessageEvent.delta;
+                  if (existingMsg && typeof delta === 'string') {
+                    // Copy only the changed content part before appending. A
+                    // shallow array copy alone would mutate the previous
+                    // message version and defeat memoised rendering.
+                    const contentArray: ContentPart[] = Array.isArray(existingMsg.content)
+                      ? [...existingMsg.content]
+                      : typeof existingMsg.content === 'string'
+                        ? (existingMsg.content ? [{ type: 'text' as const, text: existingMsg.content }] : [])
+                        : [];
+                    const lastIndex = contentArray.length - 1;
+                    const lastEntry = contentArray[lastIndex];
+
+                    if (assistantMessageEvent.type === 'text_delta') {
+                      if (lastEntry?.type === 'text') {
+                        contentArray[lastIndex] = {
+                          ...lastEntry,
+                          text: (lastEntry.text || '') + delta,
+                        };
                       } else {
-                        contentArray = [];
+                        contentArray.push({ type: 'text', text: delta });
                       }
-
-                      const eventType = assistantMessageEvent.type;
-                      const delta = assistantMessageEvent.delta;
-
-                      if (eventType === 'text_delta') {
-                        const lastEntry = contentArray[contentArray.length - 1];
-                        if (lastEntry && lastEntry.type === 'text') {
-                          lastEntry.text = (lastEntry.text || '') + delta;
-                        } else {
-                          contentArray.push({ type: 'text' as const, text: delta });
-                        }
-                        get().updateMessageInSession(sessionId, messageId, { content: contentArray });
-                        // Also update current session if it matches
-                        if (get().currentSessionId === sessionId) {
-                          get().updateMessage(messageId, { content: contentArray });
-                        }
-                      } else if (eventType === 'thinking_delta') {
-                        const lastEntry = contentArray[contentArray.length - 1];
-                        if (lastEntry && lastEntry.type === 'thinking') {
-                          lastEntry.thinking = (lastEntry.thinking || '') + delta;
-                        } else {
-                          contentArray.push({ type: 'thinking' as const, thinking: delta });
-                        }
-                        get().updateMessageInSession(sessionId, messageId, { content: contentArray });
-                        // Also update current session if it matches
-                        if (get().currentSessionId === sessionId) {
-                          get().updateMessage(messageId, { content: contentArray });
-                        }
+                      // This action updates sessionData, the visible current
+                      // projection (when applicable), sessionMessages and the
+                      // LRU entry in one synchronous set().
+                      get().updateMessageInSession(sessionId, messageId, { content: contentArray });
+                    } else if (assistantMessageEvent.type === 'thinking_delta') {
+                      if (lastEntry?.type === 'thinking') {
+                        contentArray[lastIndex] = {
+                          ...lastEntry,
+                          thinking: (lastEntry.thinking || '') + delta,
+                        };
+                      } else {
+                        contentArray.push({ type: 'thinking', thinking: delta });
                       }
+                      get().updateMessageInSession(sessionId, messageId, { content: contentArray });
                     }
                   }
                 }
@@ -2729,10 +2893,6 @@ export const useSessionStore = create<SessionState>()(
                   toolCall: { id: toolCallId, name: toolName, args },
                 };
                 get().addMessageToSession(sessionId, toolMessage);
-                // Also update current session if it matches
-                if (get().currentSessionId === sessionId) {
-                  get().addMessage(toolMessage);
-                }
                 break;
               }
               
@@ -2742,17 +2902,10 @@ export const useSessionStore = create<SessionState>()(
                   partialResult?: { content: Array<{ type: string; text?: string }> };
                 };
                 const content = partialResult?.content?.[0]?.text || '';
-                get().updateMessageInSession(sessionId, toolCallId, { 
+                get().updateMessageInSession(sessionId, toolCallId, {
                   content,
                   toolResult: { output: content, isError: false },
                 });
-                // Also update current session if it matches
-                if (get().currentSessionId === sessionId) {
-                  get().updateMessage(toolCallId, { 
-                    content,
-                    toolResult: { output: content, isError: false },
-                  });
-                }
                 break;
               }
               
@@ -2768,13 +2921,6 @@ export const useSessionStore = create<SessionState>()(
                   content,
                   toolResult: { output: content, isError, summary: resultSummary },
                 });
-                // Also update current session if it matches
-                if (get().currentSessionId === sessionId) {
-                  get().updateMessage(toolCallId, {
-                    content,
-                    toolResult: { output: content, isError, summary: resultSummary },
-                  });
-                }
                 break;
               }
               
