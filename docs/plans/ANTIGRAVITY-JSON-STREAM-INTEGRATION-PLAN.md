@@ -1,7 +1,12 @@
 # Plan: Antigravity JSON Stream Integration (agy 1.1.27 stream-json)
 
-> **Status:** APPROVED — owner decisions D1–D7 and O1–O4 all recorded
-> (2026-09-08, defaults accepted). Execution awaits owner go.
+> **Status:** EXECUTED end-to-end 2026-09-08 (commits b96c60e → 4cdb069).
+> All phases complete: phases 0–8 TDD implementation, phase 9 live validation
+> (L1–L10 live-PASS; L11 covered by cross-mode resume evidence), phase 10
+> legacy deletion. Contract bumped to **1.37.0** (see D6 trigger below) and
+> mirrored to the Agent OS consumer (`agent-os` 749801c). Production restart
+> + smoke completed with owner authorisation 22:38 UTC. See §11 for the
+> execution report and the orchestration (watch-wake) findings.
 > **Evidence base:** live-validated 2026-09-08 against `agy` 1.1.27 on this
 > host; full capture with raw command outputs:
 > `/root/pi-enhancement/docs/research/2026-09-08-agy-json-headless-live-validation.md`
@@ -524,6 +529,54 @@ from the completion report.
   this plan requires them unless D6's escalation triggers).
 * Telegram milestone at: plan approved (owner), Phase 4 done (server
   streaming live-validated), Phase 9 complete, final cutover.
+
+## 11. Execution report (2026-09-08) — actuals vs plan
+
+| Phase | Result |
+|---|---|
+| 0–2 | Wire schemas (18 tests), normaliser (15), models module (25), config knob — committed b96c60e, 4609496 |
+| 3 | Stream process: FIFO turns, write-through queue, stall/timeout watchdogs, abort grace + SIGKILL escalation, idle shutdown — 046621e |
+| 4–5 | Service rewrite + follow-up queue across WebSocket, Internal API dispatch, queue-only composer — 8abacff |
+| 6 | setModel canonicalisation + busy 409, setThinkingLevel sibling-swap on service and control routes — 9a3cfb5 (+0ca5789 restoring goal-control test coverage) |
+| 7 | Replay renders stored tool calls + usage; legacy lines byte-compatible — 2e1fb95 |
+| 8 | Docs: ANTIGRAVITY-INTEGRATION rewrite, EVENT-PIPELINE, CODEBASE-MAP, RECENT-CHANGES + skills-global agy-p update — 13e0d56 |
+| 9 | **Live validation (authorised isolated server, real agy 1.1.27, gemini-3.6-flash-low):** L1 streaming (7 deltas / 26.9 s window, tool pair, agent_end usage 38k tokens) ✅; L2 mid-turn follow_up queued and run next (numTurns 1→2→3) ✅; L3 slug echo + level swap (`set_thinking_level high` → `gemini-3.6-flash-high`) ✅; L4 bogus model → loud ERROR turn with agy's catalogue text, zero usage ✅; L5 abort via client disconnect → error turn, session reusable ("ALIVE") ✅; L6 hard ceiling → error at the configured ceiling ✅; L7 kill -9 mid-turn → auto-respawn with `--conversation`, retry completed ✅; L8 idle respawn retained conversation memory ✅; L9 parallel sessions, distinct conversations ✅; L10 Internal-API follow_up receipted ✅; L11 legacy resume covered by cross-mode resume evidence + L7/L8 ✅ |
+| 10 | Legacy text-mode path deleted (config knob, slicing/scraping helpers, per-run logs); lint-ratchet brought under ceiling; contract 1.37.0 + Agent OS mirror; full gates green (3619 server / 956 client / 71 mcp tests, lint, typecheck, build) — 0dc751f, 4cdb069 |
+
+### D6 trigger — contract bumped to 1.37.0
+
+The plan expected no wire change, but execution produced two contract-visible
+additives: `RuntimeBackendMode` gained `"stream-json"` and antigravity
+`/models` entries gained `thinkingLevels` with slug selectors. Per D6 these
+took **1.37.0** (next free after 1.36.0) and were mirrored to the Agent OS
+consumer: constant, observability pin test, and mirror-doc header
+(`agent-os` commit `749801c`; suite 1882/1882 green from the canonical cwd).
+No Command-Code fails-closed surface was touched.
+
+### Orchestration (watch-wake) — antigravity as child and as parent
+
+Live-validated end-to-end on the isolated server (contract 1.37.0):
+
+- **Antigravity as watch subject (child):** a durable watch with an
+  `agent_end` condition on an antigravity session fires on turn completion
+  (t≈8 s). The watch condition source is the runtime-neutral event broker, so
+  no per-runtime watch code exists or is needed.
+- **Antigravity as onFire target (managed parent):** a wake dispatched to a
+  managed antigravity parent session lands as a receipted turn
+  (`deliveryKind:"turn"`) and the parent **answers through the stream-json
+  path** — verified: parent's last turn `done` replying to the templated wake
+  message. This is *stronger* than bare Claude Code CLI, which cannot be an
+  `onFire` target at all.
+- **Antigravity as bare-CLI parent (the honest limit):** a parent living in
+  the interactive `agy` TUI has **no push-wake channel** — the CLI has no
+  extension/hook surface the server can reach, and the stdin protocol belongs
+  to the wrapper process, not the TUI. Without custom hooks the best available
+  is exactly the Claude-Code-equal pattern: dispatch children via the Internal
+  API, register a pure-observer watch (no `onFire`), end the turn, and read
+  `GET /api/v1/watches/wait` (or the transcript) on the next turn. Antigravity
+  is never *worse* than Claude Code here: managed sessions are strictly more
+  capable (deliverable wake target), and bare-CLI sessions degrade to the same
+  observer/poll strategy.
 
 ## 10. Suggested execution order & sizing
 
