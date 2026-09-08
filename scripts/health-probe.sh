@@ -3,6 +3,7 @@
 set -uo pipefail
 
 CURL_BIN="${PI_WEB_UI_HEALTH_CURL:-/usr/bin/curl}"
+NODE_BIN="${PI_WEB_UI_HEALTH_NODE:-/usr/bin/node}"
 LOGGER_BIN="${PI_WEB_UI_HEALTH_LOGGER:-/usr/bin/logger}"
 NOTIFY_BIN="${PI_WEB_UI_HEALTH_NOTIFY:-/root/pi-web-ui/scripts/notify.sh}"
 SOCKET_PATH="${PI_WEB_UI_INTERNAL_API_SOCKET:-/root/.pi-web-ui/internal-api.sock}"
@@ -15,7 +16,7 @@ if [[ -S "$SOCKET_PATH" && -r "$TOKEN_PATH" ]]; then
   response="$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
     "$CURL_BIN" --config - --silent --show-error --fail --max-time 5 \
       --unix-socket "$SOCKET_PATH" http://localhost/api/v1/health 2>/dev/null)" || response=""
-  if printf '%s' "$response" | /usr/bin/node -e '
+  if printf '%s' "$response" | "$NODE_BIN" -e '
     let input = "";
     process.stdin.on("data", chunk => { input += chunk; });
     process.stdin.on("end", () => {

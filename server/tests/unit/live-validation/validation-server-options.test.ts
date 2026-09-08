@@ -20,9 +20,12 @@ afterEach(() => {
 
 describe('validation server concurrent launch options', () => {
   it('rejects using the production state root as a validation directory', () => {
-    expect(() => assertSafeValidationDirectory('/root/.pi-web-ui', ['/root/.pi-web-ui/internal-api.sock']))
+    const production = mkdtempSync(join(tmpdir(), 'production-fixture-'));
+    cleanupPaths.push(production);
+    const socket = join(production, 'internal-api.sock');
+    expect(() => assertSafeValidationDirectory(production, [socket]))
       .toThrow(/production state directory/i);
-    expect(() => assertSafeValidationDirectory('/root/.pi-web-ui/validation/run-1', ['/root/.pi-web-ui/internal-api.sock']))
+    expect(() => assertSafeValidationDirectory(join(production, 'validation/run-1'), [socket]))
       .not.toThrow();
   });
 

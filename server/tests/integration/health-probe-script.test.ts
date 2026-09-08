@@ -1,10 +1,19 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it } from 'vitest';
 
-const probeScript = path.resolve(process.cwd(), '../scripts/health-probe.sh');
+const temporaryDirectories: string[] = [];
+afterEach(() => { for (const dir of temporaryDirectories.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+function fixtureDirectory(prefix: string) {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  temporaryDirectories.push(dir);
+  return dir;
+}
+
+const probeScript = fileURLToPath(new URL('../../../scripts/health-probe.sh', import.meta.url));
 
 function executable(file: string, body: string): string {
   writeFileSync(file, `#!/usr/bin/env bash\n${body}\n`);
@@ -13,12 +22,16 @@ function executable(file: string, body: string): string {
 }
 
 function runProbe(dir: string, curl: string): ReturnType<typeof spawnSync> {
-  spawnSync('python3', ['-c', 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()', path.join(dir, 'api.sock')]);
+  if (!existsSync(path.join(dir, 'api.sock'))) {
+    const setup = spawnSync(process.execPath, ['-e', 'require("node:net").createServer().listen(process.argv[1], () => process.exit(0))', path.join(dir, 'api.sock')], { encoding: 'utf8' });
+    expect(setup.status, setup.stderr).toBe(0);
+  }
   return spawnSync('bash', [probeScript], {
     encoding: 'utf8',
     env: {
       ...process.env,
       PI_WEB_UI_HEALTH_CURL: curl,
+      PI_WEB_UI_HEALTH_NODE: executable(path.join(dir, 'node'), `printf used > '${path.join(dir, 'node-used')}'; exec '${process.execPath}' "$@"`),
       PI_WEB_UI_HEALTH_STATE_FILE: path.join(dir, 'failures'),
       PI_WEB_UI_HEALTH_NOTIFY: executable(path.join(dir, 'notify'), `printf '%s\\n' "$*" >> '${path.join(dir, 'notifications')}'`),
       PI_WEB_UI_HEALTH_LOGGER: executable(path.join(dir, 'logger'), `printf '%s\\n' "$*" >> '${path.join(dir, 'journal')}'`),
@@ -30,7 +43,7 @@ function runProbe(dir: string, curl: string): ReturnType<typeof spawnSync> {
 
 describe('health-probe.sh', () => {
   it('ships alert-only systemd units with watchdog notification enabled', () => {
-    const deployDir = path.resolve(process.cwd(), '../deploy/systemd');
+    const deployDir = fileURLToPath(new URL('../../../deploy/systemd/', import.meta.url));
     const webService = readFileSync(path.join(deployDir, 'pi-web-ui.service'), 'utf8');
     const probeService = readFileSync(path.join(deployDir, 'pi-web-ui-health-probe.service'), 'utf8');
     const probeTimer = readFileSync(path.join(deployDir, 'pi-web-ui-health-probe.timer'), 'utf8');
@@ -44,7 +57,7 @@ describe('health-probe.sh', () => {
   });
 
   it('accepts only a successful authenticated Internal API health response', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'pi-health-probe-ok-'));
+    const dir = fixtureDirectory('ph-ok-');
     writeFileSync(path.join(dir, 'token'), 'fixture-token');
     const curl = executable(path.join(dir, 'curl'), "printf '%s' '{\"status\":\"ok\",\"contract\":{\"contractVersion\":\"1.31.0\"}}'");
 
@@ -52,10 +65,11 @@ describe('health-probe.sh', () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
+    expect(readFileSync(path.join(dir, 'node-used'), 'utf8')).toBe('used');
   });
 
   it('rejects the SPA HTML false-positive even when curl succeeds', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'pi-health-probe-html-'));
+    const dir = fixtureDirectory('ph-html-');
     writeFileSync(path.join(dir, 'token'), 'fixture-token');
     const curl = executable(path.join(dir, 'curl'), "printf '%s' '<!doctype html><title>Pi Web UI</title>'");
 
@@ -63,7 +77,7 @@ describe('health-probe.sh', () => {
   });
 
   it('alerts once after three consecutive failures and never restarts the service', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'pi-health-probe-fail-'));
+    const dir = fixtureDirectory('ph-fail-');
     writeFileSync(path.join(dir, 'token'), 'fixture-token');
     const curl = executable(path.join(dir, 'curl'), 'exit 7');
 

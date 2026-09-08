@@ -12,6 +12,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 import { ClaudeService } from '../../../src/claude/claude-service.js';
+import { ClaudeSdkService } from '../../../src/claude/claude-sdk-service.js';
 
 function makeAsyncGenerator(messages: any[]) {
   return async function* () {
@@ -38,6 +39,8 @@ describe('ClaudeService AskUserQuestion delegation', () => {
   let svc: ClaudeService;
 
   beforeEach(() => {
+    // This suite tests delegation, not whether the host installed claude.
+    vi.spyOn(ClaudeSdkService.prototype, 'isHealthy').mockResolvedValue(true);
     tmpDir = mkdtempSync(join(tmpdir(), 'claude-svc-auq-'));
     const profilesPath = join(tmpDir, 'profiles.json');
     writeFileSync(profilesPath, JSON.stringify({
@@ -69,6 +72,7 @@ describe('ClaudeService AskUserQuestion delegation', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 

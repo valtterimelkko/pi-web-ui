@@ -1,9 +1,9 @@
-import { chmodSync, existsSync, lstatSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bindOwnerOnlyUnixSocket, UnixSocketOwner } from '../../../src/internal-api/unix-socket-owner.js';
 
 const cleanupPaths: string[] = [];
@@ -107,16 +107,19 @@ describe('UnixSocketOwner', () => {
   });
 
   it('does not treat a permission error as proof that a socket is stale', async () => {
-    const { dir, socketPath } = tempSocket();
+    const { socketPath } = tempSocket();
     const server = await listen(socketPath);
-    chmodSync(dir, 0o000);
+    const before = lstatSync(socketPath);
+    const owner = new UnixSocketOwner(socketPath, 50);
+    const probe = vi.spyOn(owner as unknown as { probe(): Promise<string> }, 'probe')
+      .mockRejectedValue(Object.assign(new Error('fixture permission denied'), { code: 'EACCES' }));
     try {
-      const owner = new UnixSocketOwner(socketPath, 50);
-      // Root may still connect despite directory mode; either outcome must preserve the live path.
-      await owner.prepareForBind().catch(() => undefined);
-      expect(existsSync(socketPath)).toBe(true);
+      // Exercise the actual ownership path with a deterministic transport fault,
+      // not a chmod whose meaning changes when the test runs as root.
+      await expect(owner.prepareForBind()).rejects.toMatchObject({ code: 'EACCES' });
+      expect(lstatSync(socketPath).ino).toBe(before.ino);
     } finally {
-      chmodSync(dir, 0o700);
+      probe.mockRestore();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });

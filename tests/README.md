@@ -112,6 +112,11 @@ when debt is removed; do not raise it to absorb new implementation warnings.
 typecheck, build, all workspace tests and coverage without provider credentials.
 The deterministic compiled/browser smoke joins this workflow in sequence Step 3.
 Checked-in workflow coverage is not evidence that a hosted GitHub run passed.
+Clean-runner fixtures must not assume root permissions, `/root` paths, Python,
+or a globally installed Claude CLI. SDK delegation tests control backend health
+at the SDK boundary. The health-probe fixture uses Node sockets and explicitly
+sets `PI_WEB_UI_HEALTH_NODE` to the test Node executable; the operational shell
+probe retains `/usr/bin/node` as its default unless that override is configured.
 
 Root CLI-helper tests retain their native Node runner. The server's
 `root-cli-tools.test.ts` discovers every `tests/unit/**/*.{test,spec}.mjs`

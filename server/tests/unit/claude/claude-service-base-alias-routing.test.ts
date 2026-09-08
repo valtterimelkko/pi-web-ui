@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ClaudeService } from '../../../src/claude/claude-service.js';
+import { ClaudeSdkService } from '../../../src/claude/claude-sdk-service.js';
 import { join } from 'node:path';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +16,8 @@ describe('ClaudeService base-alias routing', () => {
   let profilesPath: string;
 
   beforeEach(() => {
+    // Explicit fixture capability; clean CI need not install a native CLI.
+    vi.spyOn(ClaudeSdkService.prototype, 'isHealthy').mockResolvedValue(true);
     tmpDir = mkdtempSync(join(tmpdir(), 'claude-alias-test-'));
     registryPath = join(tmpDir, 'registry.json');
     sessionDir = join(tmpDir, 'sessions');
@@ -35,6 +38,7 @@ describe('ClaudeService base-alias routing', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
